@@ -27,7 +27,7 @@ export type SheetAttendance = {
 };
 
 export type AuditEvent = {
-  eventType: 'SCAN_SUCCESS' | 'UNKNOWN_CARD' | 'INACTIVE_USER' | 'DUPLICATE_SCAN' | 'ATTENDANCE_COMPLETED' | 'API_ERROR' | 'VALIDATION_ERROR' | 'ADMIN_USER_CREATED' | 'ADMIN_USER_UPDATED' | 'ADMIN_ATTENDANCE_UPDATED';
+  eventType: 'SCAN_SUCCESS' | 'UNKNOWN_CARD' | 'INACTIVE_USER' | 'DUPLICATE_SCAN' | 'ATTENDANCE_COMPLETED' | 'API_ERROR' | 'VALIDATION_ERROR' | 'ADMIN_USER_CREATED' | 'ADMIN_USER_UPDATED' | 'ADMIN_USER_DELETED' | 'ADMIN_ATTENDANCE_UPDATED' | 'ADMIN_ATTENDANCE_DELETED';
   rfidUid?: string;
   userId?: string;
   message: string;
@@ -40,10 +40,12 @@ export interface GoogleSheetsService {
   findUserByUid(uid: string): Promise<SheetUser | null>;
   findUserById(userId: string): Promise<SheetUser | null>;
   upsertUser(user: SheetUser): Promise<SheetUser>;
+  deleteUser(userId: string): Promise<void>;
   findAttendance(userId: string, attendanceDate: string): Promise<SheetAttendance | null>;
   createAttendance(attendance: SheetAttendance): Promise<SheetAttendance>;
   completeAttendance(attendance: SheetAttendance, timeOut: string): Promise<SheetAttendance>;
   updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance>;
+  deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void>;
   writeAudit(event: AuditEvent): Promise<void>;
   healthCheck(): Promise<void>;
 }
@@ -87,6 +89,12 @@ export class InMemorySheetsService implements GoogleSheetsService {
     return { ...(existing ?? this.users[this.users.length - 1]) };
   }
 
+  async deleteUser(userId: string): Promise<void> {
+    const index = this.users.findIndex((user) => user.userId === userId);
+    if (index < 0) throw new Error('User row was not found');
+    this.users.splice(index, 1);
+  }
+
   async findAttendance(userId: string, attendanceDate: string): Promise<SheetAttendance | null> {
     const matches = this.attendance.filter((row) => row.userId === userId && row.attendanceDate === attendanceDate);
     if (matches.length > 1) throw new Error('Duplicate attendance rows for user and date');
@@ -111,6 +119,12 @@ export class InMemorySheetsService implements GoogleSheetsService {
     if (!row || (row.timeIn || null) !== expected.timeIn || (row.timeOut || null) !== expected.timeOut) throw new Error('Attendance row has changed');
     Object.assign(row, attendance);
     return { ...row };
+  }
+
+  async deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void> {
+    const index = this.attendance.findIndex((row) => row.attendanceId === attendanceId && row.attendanceDate === attendanceDate);
+    if (index < 0) throw new Error('Attendance row was not found');
+    this.attendance.splice(index, 1);
   }
 
   async writeAudit(event: AuditEvent): Promise<void> {
@@ -238,6 +252,14 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return { ...user, rfidUid: uid };
   }
 
+  async deleteUser(userId: string): Promise<void> {
+    const { headers, rows } = await this.table(this.options.usersRange, 'Users');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.userid] === userId ? [offset + 2] : []);
+    if (matches.length !== 1) throw new Error('User row was not found or is duplicated');
+    await this.deleteRow(this.options.usersRange, matches[0]);
+  }
+
   async findAttendance(userId: string, attendanceDate: string): Promise<SheetAttendance | null> {
     const { headers, rows } = await this.table(this.options.attendanceRange, 'Attendance');
     const index = indexMap(headers);
@@ -303,6 +325,26 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       requestBody: { values: [valuesForAttendance(headers, attendance, existing)] },
     });
     return attendance;
+  }
+
+  async deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void> {
+    const { headers, rows } = await this.table(this.options.attendanceRange, 'Attendance');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.attendanceid] === attendanceId && row[index.attendancedate] === attendanceDate ? [offset + 2] : []);
+    if (matches.length !== 1) throw new Error('Attendance row was not found or is duplicated');
+    await this.deleteRow(this.options.attendanceRange, matches[0]);
+  }
+
+  private async deleteRow(range: string, rowNumber: number): Promise<void> {
+    const title = sheetName(range);
+    const metadata = await this.api.spreadsheets.get({ spreadsheetId: this.options.spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
+    const sheet = metadata.data.sheets?.find((item) => item.properties?.title === title);
+    const sheetId = sheet?.properties?.sheetId;
+    if (sheetId === undefined) throw new Error(`Sheet ${title} was not found`);
+    await this.api.spreadsheets.batchUpdate({
+      spreadsheetId: this.options.spreadsheetId,
+      requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: rowNumber - 1, endIndex: rowNumber } } }] },
+    });
   }
 
   async writeAudit(event: AuditEvent): Promise<void> {

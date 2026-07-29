@@ -188,6 +188,9 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .admin-tabs { display: flex; gap: 8px; margin: 24px 0; border-bottom: 1px solid var(--line); }
 .admin-tabs button { padding: 13px 14px; color: var(--muted); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: .75rem; }
 .admin-tabs button.is-active { color: var(--gold-bright); border-color: var(--gold); }
+.danger-button { color: #b94a42; }
+.danger-button:hover { color: #d96b61; }
+.danger-button:disabled { opacity: .55; cursor: wait; }
 .admin-grid { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 28px; }
 .admin-form { padding: 22px; border: 1px solid var(--line); background: var(--surface); } .admin-form h2 { margin: 0 0 18px; font-family: 'Orbitron', sans-serif; font-size: 1rem; }
 @media (max-width: 700px) { .dashboard-shell { width: min(100% - 32px, 1220px); padding: 28px 0; } .dashboard-header { align-items: flex-start; flex-direction: column; } .admin-grid { grid-template-columns: 1fr; } }

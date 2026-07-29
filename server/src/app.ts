@@ -87,14 +87,16 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.post('/api/admin/unlock', (req, res) => {
     try { const result = admin.unlock((req.body as { pin?: unknown } | undefined)?.pin); res.setHeader('Set-Cookie', `rfid_admin=${result.token}; Max-Age=${(options.config.adminSessionMinutes ?? 15) * 60}; Path=/; HttpOnly; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); res.json({ success: true, requestId: req.requestId, expiresAt: result.expiresAt }); } catch (error) { sendAdminError(req, res, error); }
   });
-  app.get('/api/admin/session', (req, res) => { try { requireAdmin(req); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
+  app.get('/api/admin/session', (req, res) => { try { const token = cookieValue(req, 'rfid_admin'); requireAdmin(req); res.json({ success: true, requestId: req.requestId, expiresAt: new Date(Number(token!.split('.')[0])).toISOString() }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/lock', (req, res) => { res.setHeader('Set-Cookie', 'rfid_admin=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'); res.json({ success: true, requestId: req.requestId }); });
   const requireAdmin = (req: Request) => admin.verify(cookieValue(req, 'rfid_admin'));
   app.get('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, users: await admin.users() }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body)) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/users/:userId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body, req.params.userId)) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.delete('/api/admin/users/:userId', async (req, res) => { try { requireAdmin(req); await admin.deleteUser(req.params.userId); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
   app.get('/api/admin/attendance', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date()); res.json({ success: true, date, attendance: await admin.attendance(date, true), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, attendance: await admin.updateAttendance(req.params.attendanceId, req.body) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.delete('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : ''; await admin.deleteAttendance(req.params.attendanceId, date); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
 
   app.post('/api/setup/unlock', (req, res) => {
     try {

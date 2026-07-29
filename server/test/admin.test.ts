@@ -18,6 +18,8 @@ describe('admin and live attendance API', () => {
     await request(app).get('/api/admin/users').expect(401);
     const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+    const session = await agent.get('/api/admin/session').expect(200);
+    expect(session.body.expiresAt).toEqual(expect.any(String));
     const users = await agent.get('/api/admin/users').expect(200);
     expect(users.body.users[0]).toMatchObject({ userId: 'u1', rfidUid: 'AABB' });
     await agent.patch('/api/admin/users/u1').send({ userId: 'u1', rfidUid: 'CCDD', fullName: 'Ada Updated', department: 'Platform', status: 'ACTIVE' }).expect(200);
@@ -25,6 +27,10 @@ describe('admin and live attendance API', () => {
     expect(live.body.attendance[0]).toMatchObject({ fullName: 'Ada Updated', status: 'OPEN' });
     await agent.patch('/api/admin/attendance/att-1').send({ attendanceDate: '2026-07-29', timeIn: '2026-07-29T09:00:00+08:00', timeOut: '2026-07-29T17:00:00+08:00', expectedTimeIn: '2026-07-29T09:00:00+08:00', expectedTimeOut: null }).expect(200);
     expect((await request(app).get('/api/attendance?date=2026-07-29')).body.attendance[0].status).toBe('COMPLETED');
+    await agent.delete('/api/admin/attendance/att-1?date=2026-07-29').expect(200);
+    expect((await request(app).get('/api/attendance?date=2026-07-29')).body.attendance).toHaveLength(0);
+    await agent.delete('/api/admin/users/u1').expect(200);
+    expect((await agent.get('/api/admin/users')).body.users).toHaveLength(0);
   });
 
   it('rejects stale attendance edits and conflicting RFID assignments', async () => {

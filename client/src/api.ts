@@ -97,11 +97,13 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
 }
 
 export async function lockAdmin(): Promise<void> { await fetch('/api/admin/lock', { method: 'POST' }); }
-export async function checkAdminSession(): Promise<boolean> { try { const response = await fetch('/api/admin/session'); return response.ok; } catch { return false; } }
+export async function checkAdminSession(): Promise<string | null> { try { const response = await fetch('/api/admin/session'); if (!response.ok) return null; const data = (await response.json()) as { expiresAt?: string }; return data.expiresAt ?? null; } catch { return null; } }
 export async function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> { return (await fetch('/api/admin/users', { signal })).json() as Promise<AdminUsersResponse>; }
 export async function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> { return (await fetch(`/api/admin/attendance?date=${encodeURIComponent(date)}`, { signal })).json() as Promise<AdminAttendanceResponse>; }
 export async function saveAdminUser(user: unknown, userId?: string): Promise<unknown> { const response = await fetch(userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users', { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) }); return response.json(); }
 export async function saveAdminAttendance(attendanceId: string, payload: unknown): Promise<unknown> { const response = await fetch(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return response.json(); }
+export async function deleteAdminUser(userId: string): Promise<unknown> { const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }); return response.json(); }
+export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<unknown> { const response = await fetch(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`, { method: 'DELETE' }); return response.json(); }
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {

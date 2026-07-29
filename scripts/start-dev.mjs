@@ -36,8 +36,8 @@ const environment = {
 
 const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const children = [
-  spawn(command, ['run', 'dev', '-w', 'server'], { cwd: root, env: environment, stdio: 'inherit' }),
-  spawn(command, ['run', 'dev', '-w', 'client'], { cwd: root, env: environment, stdio: 'inherit' }),
+  spawn(command, ['run', 'dev', '-w', 'server'], { cwd: root, env: environment, stdio: 'inherit', shell: process.platform === 'win32' }),
+  spawn(command, ['run', 'dev', '-w', 'client'], { cwd: root, env: environment, stdio: 'inherit', shell: process.platform === 'win32' }),
 ];
 let shuttingDown = false;
 

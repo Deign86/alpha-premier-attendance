@@ -52,6 +52,15 @@ export class AdminService {
     } catch (error) { if (error instanceof AdminError) throw error; throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'User data is temporarily unavailable.', 503); }
   }
 
+  async deleteUser(userId: string): Promise<void> {
+    if (!userId.trim()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user ID is required.');
+    if (!await this.sheets.findUserById(userId)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User was not found.', 404);
+    try {
+      await this.sheets.deleteUser(userId);
+      await this.sheets.writeAudit({ eventType: 'ADMIN_USER_DELETED', userId, message: `User ${userId} deleted by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
+    } catch { throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'User data is temporarily unavailable.', 503); }
+  }
+
   async attendance(date: string, includeBlank = false): Promise<AttendanceListItem[]> {
     const rows = await this.sheets.listAttendance(date);
     const users = await this.sheets.listUsers();
@@ -76,6 +85,17 @@ export class AdminService {
       await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_UPDATED', userId: row.userId, message: `Attendance ${attendanceId} corrected by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
       return toAttendance(saved);
     } catch { throw new AdminError('ATTENDANCE_CONFLICT', 'Attendance changed before it could be saved.', 409); }
+  }
+
+  async deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void> {
+    if (!attendanceId.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid attendance record is required.');
+    const rows = await this.sheets.listAttendance(attendanceDate);
+    const row = rows.find((item) => item.attendanceId === attendanceId);
+    if (!row) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Attendance record was not found.', 404);
+    try {
+      await this.sheets.deleteAttendance(attendanceId, attendanceDate);
+      await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_DELETED', userId: row.userId, rfidUid: row.rfidUid, message: `Attendance ${attendanceId} deleted by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
+    } catch { throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503); }
   }
 
   private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
