@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, CircleAlert, CreditCard, Keyboard, LoaderCircle, LockKeyhole, ShieldCheck, UserRound, Volume2, VolumeX, X } from 'lucide-react';
-import type { ScanErrorResponse, ScanSuccessResponse, SetupUser } from '@rfid-attendance/shared';
-import { DEFAULT_CONFIG, loadConfig, lockSetup, lookupSetupCard, submitScan, unlockSetup, upsertSetupUser } from './api';
+import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem } from '@rfid-attendance/shared';
+import { DEFAULT_CONFIG, checkAdminSession, loadConfig, loadAttendance, loadAdminAttendance, loadAdminUsers, lockAdmin, lockSetup, lookupSetupCard, saveAdminAttendance, saveAdminUser, submitScan, unlockAdmin, unlockSetup, upsertSetupUser } from './api';
 import './styles.css';
 
 type KioskState = 'ready' | 'processing' | 'success' | 'error';
@@ -16,6 +16,9 @@ const stateCopy: Record<KioskState, { eyebrow: string; title: string }> = {
 };
 
 export default function App() {
+  const path = window.location.pathname;
+  if (path === '/attendance') return <LiveAttendance />;
+  if (path === '/admin') return <AdminPanel />;
   const [state, setState] = useState<KioskState>('ready');
   const [uid, setUid] = useState('');
   const [manualMode, setManualMode] = useState(false);
@@ -72,6 +75,12 @@ export default function App() {
   useEffect(() => {
     focusActiveInput();
   }, [focusActiveInput]);
+
+  useEffect(() => {
+    const reclaim = () => { if (!manualMode && document.visibilityState === 'visible' && stateRef.current === 'ready' && !setupDialogOpen) focusActiveInput(); };
+    window.addEventListener('focus', reclaim); document.addEventListener('visibilitychange', reclaim);
+    return () => { window.removeEventListener('focus', reclaim); document.removeEventListener('visibilitychange', reclaim); };
+  }, [focusActiveInput, manualMode, setupDialogOpen]);
 
   useEffect(() => () => {
     if (idleTimer.current) clearTimeout(idleTimer.current);
@@ -360,6 +369,7 @@ export default function App() {
                   autoComplete="off"
                   spellCheck={false}
                   disabled={state !== 'ready'}
+                  autoFocus={!manualMode}
                 />
                 {manualMode && <button className="submit-button" type="button" onClick={() => void submit(manualUid, 'MANUAL_TEST')} disabled={!manualUid.trim()}><ArrowRight size={18} /> Record attendance</button>}
               </div>
@@ -379,6 +389,8 @@ export default function App() {
             {config.enableScanSounds ? <Volume2 size={16} /> : <VolumeX size={16} />}
             {config.enableScanSounds ? 'Sounds on' : 'Sounds off'}
           </span>
+          <a className="admin-button" href="/attendance">Live attendance</a>
+          {config.enableAdmin && <a className="admin-button" href="/admin">Admin panel</a>}
           {config.enableCardSetup && <button className="admin-button" type="button" onClick={() => openSetup()}><LockKeyhole size={15} /> Admin setup</button>}
         </div>
         </div>
@@ -497,4 +509,53 @@ function formatTime(value: string, timezone: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat('en-PH', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }).format(date);
+}
+
+function localDate(timezone = 'Asia/Manila') { return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date()); }
+
+function LiveAttendance() {
+  const [rows, setRows] = useState<AttendanceListItem[]>([]);
+  const [stale, setStale] = useState(false);
+  const [fetchedAt, setFetchedAt] = useState('');
+  const [error, setError] = useState('');
+  const refresh = useCallback(async () => {
+    try { const response = await loadAttendance(); if (response.success) { setRows(response.attendance); setFetchedAt(response.fetchedAt); setStale(false); setError(''); } else throw new Error('Unable to load attendance'); } catch { setStale(true); setError('Live attendance is temporarily unavailable.'); }
+  }, []);
+  useEffect(() => { void refresh(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 5_000); const onFocus = () => void refresh(); window.addEventListener('focus', onFocus); return () => { window.clearInterval(timer); window.removeEventListener('focus', onFocus); }; }, [refresh]);
+  return <main className="dashboard-shell"><header className="dashboard-header"><div><p className="section-kicker">Live attendance</p><h1>Today’s timing</h1><p className="section-description">{localDate()} · updates every five seconds</p></div><nav><a href="/">Scanner</a><a href="/admin">Admin</a></nav></header>{error && <p className="dashboard-alert">{error}</p>}<div className="dashboard-status">{stale ? 'Showing last successful update' : `Last updated ${fetchedAt ? formatTime(fetchedAt, 'Asia/Manila') : 'just now'}`}</div><AttendanceTable rows={rows} timezone="Asia/Manila" /></main>;
+}
+
+function AttendanceTable({ rows, timezone }: { rows: AttendanceListItem[]; timezone: string }) {
+  if (!rows.length) return <div className="empty-state">No attendance has been recorded today.</div>;
+  return <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Time in</th><th>Time out</th><th>Status</th></tr></thead><tbody>{rows.map((row) => <tr key={row.attendanceId}><td><strong>{row.fullName}</strong><small>{row.userId}</small></td><td>{row.department || '—'}</td><td>{row.timeIn ? formatTime(row.timeIn, timezone) : '—'}</td><td>{row.timeOut ? formatTime(row.timeOut, timezone) : '—'}</td><td><span className={`status-pill status-${row.status.toLowerCase()}`}>{row.status}</span></td></tr>)}</tbody></table></div>;
+}
+
+function AdminPanel() {
+  const [unlocked, setUnlocked] = useState(false); const [pin, setPin] = useState(''); const [error, setError] = useState(''); const [tab, setTab] = useState<'users' | 'attendance'>('users');
+  const [users, setUsers] = useState<AdminUser[]>([]); const [rows, setRows] = useState<AttendanceListItem[]>([]); const [date, setDate] = useState(localDate());
+  const [editing, setEditing] = useState<AdminUser | null>(null); const [busy, setBusy] = useState(false);
+  const unlock = async (event: React.FormEvent) => { event.preventDefault(); setBusy(true); const response = await unlockAdmin(pin); setBusy(false); if (!response.success) { setError(response.error.message); return; } setUnlocked(true); setError(''); };
+  const load = useCallback(async () => { try { const [userResponse, attendanceResponse] = await Promise.all([loadAdminUsers(), loadAdminAttendance(date)]); if (userResponse.success) setUsers(userResponse.users); if (attendanceResponse.success) setRows(attendanceResponse.attendance); } catch { setError('Unable to load administrator data.'); } }, [date]);
+  useEffect(() => { void checkAdminSession().then(setUnlocked); }, []);
+  useEffect(() => { if (unlocked) void load(); }, [unlocked, load]);
+  if (!unlocked) return <main className="dashboard-shell admin-login"><a href="/">← Scanner</a><form onSubmit={unlock}><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><label>Administrator PIN<input autoFocus type="password" value={pin} onChange={(event) => setPin(event.target.value)} /></label>{error && <p className="dashboard-alert">{error}</p>}<button className="submit-button" disabled={busy || !pin}>Unlock admin</button></form></main>;
+  return <main className="dashboard-shell"><header className="dashboard-header"><div><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1></div><nav><a href="/">Scanner</a><a href="/attendance">Live view</a><button className="text-button" type="button" onClick={() => { void lockAdmin(); setUnlocked(false); }}>Lock</button></nav></header><div className="admin-tabs"><button className={tab === 'users' ? 'is-active' : ''} onClick={() => setTab('users')}>Users and RFID</button><button className={tab === 'attendance' ? 'is-active' : ''} onClick={() => setTab('attendance')}>Attendance corrections</button></div>{error && <p className="dashboard-alert">{error}</p>}{tab === 'users' ? <UserEditor users={users} editing={editing} setEditing={setEditing} onSaved={load} /> : <AdminAttendance rows={rows} date={date} setDate={setDate} onSaved={load} />}</main>;
+}
+
+type AdminUser = { userId: string; rfidUid: string; fullName: string; department: string | null; status: 'ACTIVE' | 'INACTIVE' };
+function UserEditor({ users, editing, setEditing, onSaved }: { users: AdminUser[]; editing: AdminUser | null; setEditing: (user: AdminUser | null) => void; onSaved: () => void }) {
+  const [form, setForm] = useState<AdminUser>(editing ?? { userId: '', rfidUid: '', fullName: '', department: '', status: 'ACTIVE' }); const [message, setMessage] = useState('');
+  useEffect(() => setForm(editing ?? { userId: '', rfidUid: '', fullName: '', department: '', status: 'ACTIVE' }), [editing]);
+  const save = async (event: React.FormEvent) => { event.preventDefault(); const response = await saveAdminUser(form, editing?.userId); if ((response as { success?: boolean }).success) { setMessage('Saved.'); setEditing(null); onSaved(); } else setMessage((response as { error?: { message?: string } }).error?.message ?? 'Unable to save user.'); };
+  return <div className="admin-grid"><section className="admin-form"><h2>{editing ? 'Edit user' : 'Add user'}</h2><form onSubmit={save}><label>User ID<input required disabled={Boolean(editing)} value={form.userId} onChange={(e) => setForm({ ...form, userId: e.target.value })} /></label><label>RFID UID<input required value={form.rfidUid} onChange={(e) => setForm({ ...form, rfidUid: e.target.value })} /></label><label>Full name<input required value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></label><label>Department<input value={form.department ?? ''} onChange={(e) => setForm({ ...form, department: e.target.value })} /></label><label>Status<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as AdminUser['status'] })}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>{message && <p className="dashboard-alert">{message}</p>}<button className="submit-button" type="submit">Save user</button></form></section><section><div className="table-wrap"><table><thead><tr><th>User</th><th>RFID</th><th>Status</th><th /></tr></thead><tbody>{users.map((user) => <tr key={user.userId}><td><strong>{user.fullName}</strong><small>{user.userId}</small></td><td>{user.rfidUid}</td><td>{user.status}</td><td><button className="text-button" onClick={() => setEditing(user)}>Edit</button></td></tr>)}</tbody></table></div></section></div>;
+}
+
+function AdminAttendance({ rows, date, setDate, onSaved }: { rows: AttendanceListItem[]; date: string; setDate: (value: string) => void; onSaved: () => void }) {
+  return <section><label className="date-filter">Attendance date<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><div className="table-wrap"><table><thead><tr><th>Employee</th><th>Time in</th><th>Time out</th><th>Status</th><th /></tr></thead><tbody>{rows.map((row) => <AttendanceEditRow key={row.attendanceId} row={row} onSaved={onSaved} />)}</tbody></table></div></section>;
+}
+
+function AttendanceEditRow({ row, onSaved }: { row: AttendanceListItem; onSaved: () => void }) {
+  const [timeIn, setTimeIn] = useState(row.timeIn ? row.timeIn.slice(11, 16) : ''); const [timeOut, setTimeOut] = useState(row.timeOut ? row.timeOut.slice(11, 16) : ''); const [message, setMessage] = useState('');
+  const save = async () => { const toIso = (value: string) => value ? `${row.attendanceDate}T${value}:00+08:00` : null; const response = await saveAdminAttendance(row.attendanceId, { attendanceDate: row.attendanceDate, timeIn: toIso(timeIn), timeOut: toIso(timeOut), expectedTimeIn: row.timeIn || null, expectedTimeOut: row.timeOut || null }); if ((response as { success?: boolean }).success) { setMessage('Saved'); onSaved(); } else setMessage((response as { error?: { message?: string } }).error?.message ?? 'Conflict'); };
+  return <tr><td><strong>{row.fullName}</strong><small>{row.userId}</small></td><td><input aria-label={`Time in for ${row.fullName}`} type="time" value={timeIn} onChange={(e) => setTimeIn(e.target.value)} /></td><td><input aria-label={`Time out for ${row.fullName}`} type="time" value={timeOut} onChange={(e) => setTimeOut(e.target.value)} /></td><td>{row.status}</td><td><button className="text-button" onClick={() => void save()}>Save</button>{message && <small>{message}</small>}</td></tr>;
 }

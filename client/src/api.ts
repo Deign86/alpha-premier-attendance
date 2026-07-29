@@ -9,6 +9,9 @@ import type {
   SetupUnlockResponse,
   SetupUpsertRequest,
   SetupUpsertResponse,
+  AttendanceListResponse,
+  AdminAttendanceResponse,
+  AdminUsersResponse,
 } from '@rfid-attendance/shared';
 
 export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
@@ -17,6 +20,7 @@ export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   enableScanSounds: false,
   resultResetDelayMs: 4_000,
   enableCardSetup: false,
+  enableAdmin: false,
 };
 
 export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigResponse, 'success'>> {
@@ -30,6 +34,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
       enableScanSounds: data.enableScanSounds ?? DEFAULT_CONFIG.enableScanSounds,
       resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
       enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
+      enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
     };
   } catch {
     return DEFAULT_CONFIG;
@@ -80,6 +85,23 @@ export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: s
 export async function lockSetup(setupToken: string, signal?: AbortSignal): Promise<void> {
   await setupRequest<unknown>('/api/setup/lock', { method: 'POST', setupToken, signal });
 }
+
+export async function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
+  const response = await fetch(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`, { signal });
+  return (await response.json()) as AttendanceListResponse;
+}
+
+export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | { success: false; error: { message: string } }> {
+  const response = await fetch('/api/admin/unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+  return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
+}
+
+export async function lockAdmin(): Promise<void> { await fetch('/api/admin/lock', { method: 'POST' }); }
+export async function checkAdminSession(): Promise<boolean> { try { const response = await fetch('/api/admin/session'); return response.ok; } catch { return false; } }
+export async function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> { return (await fetch('/api/admin/users', { signal })).json() as Promise<AdminUsersResponse>; }
+export async function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> { return (await fetch(`/api/admin/attendance?date=${encodeURIComponent(date)}`, { signal })).json() as Promise<AdminAttendanceResponse>; }
+export async function saveAdminUser(user: unknown, userId?: string): Promise<unknown> { const response = await fetch(userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users', { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) }); return response.json(); }
+export async function saveAdminAttendance(attendanceId: string, payload: unknown): Promise<unknown> { const response = await fetch(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return response.json(); }
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {

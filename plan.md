@@ -358,7 +358,45 @@ Use [docs/deployment.md](docs/deployment.md) for Windows commands and firewall s
 - Card setup is protected by one server-side static PIN and short-lived in-memory sessions; it is not a full identity or role system.
 - Enrollment/reconfiguration is intentionally limited to `Users`; replacement-card history, approvals, and self-service administration are not modeled.
 
-## 15. Future Enhancements
+## 15. Approved Expansion: Admin, Live Dashboard, and Scanner Focus
+
+**Implementation status:** Complete in the current workspace. Verification is recorded by the passing root typecheck, lint, build, and test commands.
+
+This section supersedes the original MVP limitations where they conflict with the approved implementation request.
+
+### Product behavior
+
+- `/` remains the RFID reader kiosk for the reader PC.
+- `/attendance` is a public live dashboard for the viewing PC. It shows users who have scanned for the selected/current Manila date and refreshes from the shared API every five seconds.
+- `/admin` is a PIN-protected management view for saved Users/RFIDs and attendance corrections.
+- Google Sheets remains the shared source of truth, so a scan made on the reader PC is visible to the viewing PC through the API polling cycle.
+
+### Admin rules
+
+- Users can be listed, searched, created, and edited. RFID UID, full name, department, and active status are editable. Existing User IDs remain fixed so historical attendance links remain valid.
+- Attendance can be listed for any date and edited by `attendanceId`. Time-in and time-out may be cleared or replaced. Status is derived as `COMPLETED` when both exist, `OPEN` when only time-in exists, and `INCOMPLETE` otherwise.
+- Times are entered in `Asia/Manila`, must belong to the attendance date, and time-out cannot precede time-in. No user or attendance deletion is included.
+- Mutations are protected by the admin session and use optimistic conflict checks so a newer scan/edit cannot be silently overwritten. All admin mutations are audit logged.
+
+### Live refresh and failure behavior
+
+- Polling runs immediately and every five seconds, pauses while the tab is hidden, and refreshes when the tab regains focus. Overlapping requests are prevented.
+- The last successful dashboard data remains visible after a failed refresh with a stale/offline indicator.
+- Admin authentication uses a signed, expiring, HTTP-only cookie backed by `ADMIN_SESSION_SECRET` so it works across Vercel function instances. Existing setup environment names remain compatibility aliases.
+
+### Scanner focus acceptance
+
+- On first load of `/`, the RFID input is focused automatically so a user can tap a card without clicking the field.
+- Focus is restored after a scan result resets, after returning to the browser tab/window, and after closing scanner-side controls.
+- Focus recovery must not steal focus from Manual UID, Admin, date, time, or other interactive controls.
+
+### Verification additions
+
+- Test public dashboard empty/data/stale states, five-second polling, hidden-tab pause, and two-browser propagation within five seconds.
+- Test admin authentication, user/RFID uniqueness, immutable User IDs, attendance timestamp validation, status derivation, and optimistic conflicts.
+- Test first-load RFID autofocus, focus recovery after scan/error, and no focus theft while editing another field.
+
+## 16. Future Enhancements
 
 - Add an authenticated operator dashboard and protected `GET /api/attendance/today` with filters/export.
 - Move transactional attendance state to a database while retaining Sheets export/audit integration.

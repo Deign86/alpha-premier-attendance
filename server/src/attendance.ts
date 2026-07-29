@@ -82,6 +82,16 @@ export class AttendanceService {
           }
           action = 'TIME_IN';
         } else {
+          if (!attendance.timeIn && !attendance.timeOut) {
+            const restarted: SheetAttendance = { ...attendance, rfidUid: uid, fullName: user.fullName, department: user.department, timeIn: timestamp, timeOut: null, status: 'OPEN', source: request.source };
+            try { saved = await this.sheets.updateAttendance(restarted, { timeIn: null, timeOut: null }); }
+            catch { throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data changed before the scan was saved.', 409); }
+            action = 'TIME_IN';
+            this.lastScans.set(uid, currentMs);
+            await this.writeAudit({ eventType: 'SCAN_SUCCESS', rfidUid: uid, userId: user.userId, message: 'TIME_IN recorded in a cleared row', requestId });
+            return this.successResponse(requestId, action, saved, user);
+          }
+          if (!attendance.timeIn && attendance.timeOut) throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance has a time-out but no time-in.', 409);
           if (!attendance.timeIn || attendance.attendanceDate !== attendanceDate || (attendance.status === 'COMPLETED' && !attendance.timeOut) || (attendance.status === 'OPEN' && attendance.timeOut)) {
             throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
           }

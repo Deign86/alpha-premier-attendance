@@ -37,6 +37,11 @@ beforeEach(() => {
 });
 
 describe('RFID kiosk', () => {
+  it('focuses the RFID field on first load without a mouse click', async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText(/scanner card id/i)).toHaveFocus());
+  });
+
   it('submits an RFID scan when the scanner sends Enter', async () => {
     const user = userEvent.setup();
     render(<App />);

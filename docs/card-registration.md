@@ -18,12 +18,14 @@ The server also needs the normal Google Sheets variables: `GOOGLE_SHEET_ID`, `GO
 
 ## 2. Associate a card with an employee
 
-1. Open the kiosk and select `Admin setup`.
+1. Open the site and select `Admin` (or visit `/admin`).
 2. Enter the setup PIN.
 3. Scan the employee's RFID card. If it is unknown, the form opens blank.
 4. Enter the employee's `User ID`, `Full name`, and `Department / role`.
 5. Set `Status` to `Active`, then select `Save user`.
-6. Lock setup and scan the same card on the normal attendance screen.
+6. Lock the admin session and scan the same card on the normal attendance screen.
+
+The kiosk RFID input is focused automatically when `/` opens and regains focus after each scan result, so operators can tap cards without clicking the field.
 
 For Deign Lazaro, the profile should look like:
 

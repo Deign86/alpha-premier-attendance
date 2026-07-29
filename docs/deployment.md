@@ -28,9 +28,15 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n<private-key>\n-----END PRIVATE
 TIMEZONE=Asia/Manila
 CLIENT_ORIGIN=http://localhost:5173
 PORT=3001
+ENABLE_ADMIN=true
+ADMIN_PIN=<server-only-admin-pin>
+ADMIN_SESSION_SECRET=<long-random-server-secret>
+ADMIN_SESSION_MINUTES=15
 ```
 
 Google service-account credentials are passed directly to the backend through environment variables. Do not commit `.env`, JSON keys, browser profiles, or captured card data. The React client must never receive these values.
+
+The deployed site has three views: `/` for the RFID reader kiosk, `/attendance` for a public live attendance display, and `/admin` for PIN-protected user/RFID and attendance corrections. The live view polls the shared API every five seconds, so both PCs must use the same deployed origin and spreadsheet. `ADMIN_SESSION_SECRET` must be a long random value shared by all server instances. The older `ENABLE_CARD_SETUP`, `SETUP_ADMIN_PIN`, and `SETUP_SESSION_MINUTES` names remain accepted as compatibility aliases.
 
 ## Build and Validate
 

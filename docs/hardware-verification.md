@@ -23,7 +23,7 @@ Prepare one active test user, one inactive test user, one unknown card, and a di
 1. **Inspect the physical connection.** Plug the reader directly into the kiosk PC, avoid an unpowered hub, and confirm the reader's status light. In Device Manager, confirm it is listed under keyboards or HID devices.
 2. **Confirm keyboard mode.** Open Notepad outside the kiosk and scan the active test card. The UID should appear as printable characters. Verify whether the reader sends Enter. Delete the test text afterward.
 3. **Check UID formatting.** Compare the captured string with the `Users.rfid_uid` value. Confirm case, separators, leading zeros, and length. Normalize the roster or scanner configuration once; do not maintain multiple spellings.
-4. **Open the kiosk.** Load the configured kiosk URL, click once in the scan area, and verify that focus remains there after a page refresh.
+4. **Open the kiosk.** Load the configured kiosk URL and verify that the RFID field is already focused after the first page load and after a refresh; no mouse click should be required.
 5. **Test Enter-suffixed scans.** Scan the active card. Confirm one request, a `TIME_IN` result, and one `OPEN` Attendance row. Note the `requestId`.
 6. **Test cooldown.** Present the same card again immediately. Confirm the UI reports cooldown/duplicate behavior and no second row is created.
 7. **Complete attendance.** After the cooldown, scan the same card once. Confirm one `TIME_OUT` result and that the original row has `time_out` populated and `status=COMPLETED`.

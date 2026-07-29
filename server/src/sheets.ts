@@ -20,14 +20,14 @@ export type SheetAttendance = {
   department: string | null;
   timeIn: string;
   timeOut: string | null;
-  status: 'OPEN' | 'COMPLETED';
+  status: 'OPEN' | 'COMPLETED' | 'INCOMPLETE';
   source: 'RFID' | 'MANUAL_TEST';
   notes: string;
   rowNumber?: number;
 };
 
 export type AuditEvent = {
-  eventType: 'SCAN_SUCCESS' | 'UNKNOWN_CARD' | 'INACTIVE_USER' | 'DUPLICATE_SCAN' | 'ATTENDANCE_COMPLETED' | 'API_ERROR' | 'VALIDATION_ERROR';
+  eventType: 'SCAN_SUCCESS' | 'UNKNOWN_CARD' | 'INACTIVE_USER' | 'DUPLICATE_SCAN' | 'ATTENDANCE_COMPLETED' | 'API_ERROR' | 'VALIDATION_ERROR' | 'ADMIN_USER_CREATED' | 'ADMIN_USER_UPDATED' | 'ADMIN_ATTENDANCE_UPDATED';
   rfidUid?: string;
   userId?: string;
   message: string;
@@ -35,12 +35,15 @@ export type AuditEvent = {
 };
 
 export interface GoogleSheetsService {
+  listUsers(): Promise<SheetUser[]>;
+  listAttendance(attendanceDate: string): Promise<SheetAttendance[]>;
   findUserByUid(uid: string): Promise<SheetUser | null>;
   findUserById(userId: string): Promise<SheetUser | null>;
   upsertUser(user: SheetUser): Promise<SheetUser>;
   findAttendance(userId: string, attendanceDate: string): Promise<SheetAttendance | null>;
   createAttendance(attendance: SheetAttendance): Promise<SheetAttendance>;
   completeAttendance(attendance: SheetAttendance, timeOut: string): Promise<SheetAttendance>;
+  updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance>;
   writeAudit(event: AuditEvent): Promise<void>;
   healthCheck(): Promise<void>;
 }
@@ -59,6 +62,12 @@ export class InMemorySheetsService implements GoogleSheetsService {
     const matches = this.users.filter((user) => user.rfidUid === uid);
     if (matches.length > 1) throw new Error('Duplicate RFID UID in Users sheet');
     return matches[0] ?? null;
+  }
+
+  async listUsers(): Promise<SheetUser[]> { return this.users.map((user) => ({ ...user })); }
+
+  async listAttendance(attendanceDate: string): Promise<SheetAttendance[]> {
+    return this.attendance.filter((row) => row.attendanceDate === attendanceDate).map((row) => ({ ...row }));
   }
 
   async findUserById(userId: string): Promise<SheetUser | null> {
@@ -94,6 +103,13 @@ export class InMemorySheetsService implements GoogleSheetsService {
     if (!row || row.status !== 'OPEN' || row.timeOut) throw new Error('Attendance row is no longer open');
     row.timeOut = timeOut;
     row.status = 'COMPLETED';
+    return { ...row };
+  }
+
+  async updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance> {
+    const row = this.attendance.find((item) => item.attendanceId === attendance.attendanceId);
+    if (!row || (row.timeIn || null) !== expected.timeIn || (row.timeOut || null) !== expected.timeOut) throw new Error('Attendance row has changed');
+    Object.assign(row, attendance);
     return { ...row };
   }
 
@@ -171,6 +187,18 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     };
   }
 
+  async listUsers(): Promise<SheetUser[]> {
+    const { headers, rows } = await this.table(this.options.usersRange, 'Users');
+    const index = indexMap(headers);
+    return rows.map((row) => userFromRow(row, index));
+  }
+
+  async listAttendance(attendanceDate: string): Promise<SheetAttendance[]> {
+    const { headers, rows } = await this.table(this.options.attendanceRange, 'Attendance');
+    const index = indexMap(headers);
+    return rows.flatMap((row, offset) => row[index.attendancedate] === attendanceDate ? [attendanceFromRow(row, index, offset + 2)] : []);
+  }
+
   async findUserById(userId: string): Promise<SheetUser | null> {
     const { headers, rows } = await this.table(this.options.usersRange, 'Users');
     const index = indexMap(headers);
@@ -227,7 +255,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       department: row[index.department] || null,
       timeIn: row[index.timein] ?? '',
       timeOut: row[index.timeout] || null,
-      status: String(row[index.status] ?? '').trim().toUpperCase() === 'COMPLETED' ? 'COMPLETED' : 'OPEN',
+      status: normalizeAttendanceStatus(row[index.status]),
       source: String(row[index.source] ?? '').trim().toUpperCase() === 'MANUAL_TEST' ? 'MANUAL_TEST' : 'RFID',
       notes: row[index.notes] ?? '',
       rowNumber: match.rowNumber,
@@ -260,6 +288,21 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       requestBody: { values: [valuesForAttendance(headers, updated, existing)] },
     });
     return updated;
+  }
+
+  async updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance> {
+    if (!attendance.rowNumber) throw new Error('Attendance row number unavailable');
+    const { headers, rows } = await this.table(this.options.attendanceRange, 'Attendance');
+    const index = indexMap(headers);
+    const existing = rows[attendance.rowNumber - 2];
+    if (!existing || existing[index.attendanceid] !== attendance.attendanceId || (existing[index.timein] || null) !== expected.timeIn || (existing[index.timeout] || null) !== expected.timeOut) throw new Error('Attendance row has changed');
+    await this.api.spreadsheets.values.update({
+      spreadsheetId: this.options.spreadsheetId,
+      range: `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [valuesForAttendance(headers, attendance, existing)] },
+    });
+    return attendance;
   }
 
   async writeAudit(event: AuditEvent): Promise<void> {
@@ -314,6 +357,18 @@ function userFromRow(row: string[], index: Record<string, number>): SheetUser {
     fullName: row[index.fullname] ?? '',
     department: row[index.department] || null,
     active: String(row[index.status] ?? '').trim().toUpperCase() === 'ACTIVE',
+  };
+}
+function normalizeAttendanceStatus(value: string | undefined): SheetAttendance['status'] {
+  const status = String(value ?? '').trim().toUpperCase();
+  return status === 'COMPLETED' ? 'COMPLETED' : status === 'INCOMPLETE' ? 'INCOMPLETE' : 'OPEN';
+}
+function attendanceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetAttendance {
+  return {
+    attendanceId: row[index.attendanceid] ?? '', attendanceDate: row[index.attendancedate] ?? '', userId: row[index.userid] ?? '',
+    rfidUid: row[index.rfiduid] ?? '', fullName: row[index.fullname] ?? '', department: row[index.department] || null,
+    timeIn: row[index.timein] ?? '', timeOut: row[index.timeout] || null, status: normalizeAttendanceStatus(row[index.status]),
+    source: String(row[index.source] ?? '').trim().toUpperCase() === 'MANUAL_TEST' ? 'MANUAL_TEST' : 'RFID', notes: row[index.notes] ?? '', rowNumber,
   };
 }
 function valuesForUser(headers: string[], user: SheetUser, existing: string[] = []): string[] {

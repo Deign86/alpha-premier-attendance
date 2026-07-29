@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 const root = path.resolve(import.meta.dirname, '..');
 const credentialsPath = path.join(root, 'credentials', 'rfid-attendance-api.json');
 const pinPath = path.join(root, 'credentials', 'rfid-attendance-admin-pin.txt');
+const secretPath = path.join(root, 'credentials', 'rfid-attendance-admin-secret.txt');
 
 if (!fs.existsSync(credentialsPath)) {
   throw new Error(`Missing ${credentialsPath}. Provision the Google service account key before starting the kiosk.`);
@@ -13,6 +14,7 @@ if (!fs.existsSync(credentialsPath)) {
 
 const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
 const adminPin = process.env.SETUP_ADMIN_PIN?.trim() || readOrCreatePin();
+const adminSessionSecret = process.env.ADMIN_SESSION_SECRET?.trim() || readOrCreateSecret();
 
 const environment = {
   ...process.env,
@@ -26,6 +28,10 @@ const environment = {
   ENABLE_CARD_SETUP: 'true',
   SETUP_ADMIN_PIN: adminPin,
   SETUP_SESSION_MINUTES: '15',
+  ENABLE_ADMIN: 'true',
+  ADMIN_PIN: adminPin,
+  ADMIN_SESSION_SECRET: adminSessionSecret,
+  ADMIN_SESSION_MINUTES: '15',
 };
 
 const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -51,4 +57,11 @@ function readOrCreatePin() {
   const pin = String(crypto.randomInt(100000, 1000000));
   fs.writeFileSync(pinPath, `${pin}\n`, { encoding: 'utf8', mode: 0o600 });
   return pin;
+}
+
+function readOrCreateSecret() {
+  if (fs.existsSync(secretPath)) return fs.readFileSync(secretPath, 'utf8').trim();
+  const secret = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(secretPath, `${secret}\n`, { encoding: 'utf8', mode: 0o600 });
+  return secret;
 }

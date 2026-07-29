@@ -1,0 +1,86 @@
+import crypto from 'node:crypto';
+import type { AdminUser, AttendanceListItem } from '@rfid-attendance/shared';
+import { normalizeRfidUid } from './rfid.js';
+import type { GoogleSheetsService, SheetAttendance, SheetUser } from './sheets.js';
+import { manilaTimestamp } from './time.js';
+
+export type AdminConfig = { enableAdmin?: boolean; adminPin?: string; adminSessionSecret?: string; adminSessionMinutes?: number; timezone: string };
+export class AdminError extends Error {
+  constructor(readonly code: 'ADMIN_DISABLED' | 'INVALID_ADMIN_PIN' | 'ADMIN_AUTH_REQUIRED' | 'ADMIN_SESSION_EXPIRED' | 'ADMIN_VALIDATION_ERROR' | 'USER_CONFLICT' | 'ATTENDANCE_CONFLICT' | 'GOOGLE_SHEETS_UNAVAILABLE', message: string, readonly status = 400) { super(message); }
+}
+
+export class AdminService {
+  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AdminConfig) {}
+
+  unlock(pin: unknown): { token: string; expiresAt: string } {
+    this.assertEnabled();
+    if (typeof pin !== 'string' || !this.equal(pin, this.config.adminPin ?? '')) throw new AdminError('INVALID_ADMIN_PIN', 'The administrator PIN is invalid.', 401);
+    const expiresAt = Date.now() + (this.config.adminSessionMinutes ?? 15) * 60_000;
+    const payload = `${expiresAt}.${crypto.randomBytes(16).toString('hex')}`;
+    const signature = crypto.createHmac('sha256', this.config.adminSessionSecret!).update(payload).digest('base64url');
+    return { token: `${payload}.${signature}`, expiresAt: new Date(expiresAt).toISOString() };
+  }
+
+  verify(token: string | undefined): void {
+    this.assertEnabled();
+    if (!token) throw new AdminError('ADMIN_AUTH_REQUIRED', 'Administrator authentication is required.', 401);
+    const parts = token.split('.');
+    if (parts.length !== 3 || !/^\d+$/.test(parts[0])) throw new AdminError('ADMIN_AUTH_REQUIRED', 'Administrator session is invalid.', 401);
+    const expected = crypto.createHmac('sha256', this.config.adminSessionSecret!).update(`${parts[0]}.${parts[1]}`).digest('base64url');
+    const actual = Buffer.from(parts[2]); const expectedBuffer = Buffer.from(expected);
+    if (actual.length !== expectedBuffer.length || !crypto.timingSafeEqual(expectedBuffer, actual) || Date.now() >= Number(parts[0])) throw new AdminError('ADMIN_SESSION_EXPIRED', 'Administrator session has expired.', 401);
+  }
+
+  async users(): Promise<AdminUser[]> { return (await this.sheets.listUsers()).map(toAdminUser); }
+
+  async saveUser(input: unknown, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
+    const value = input as Partial<{ userId: string; rfidUid: string; fullName: string; department: string; status: 'ACTIVE' | 'INACTIVE' }>;
+    const userId = existingUserId ?? value.userId?.trim();
+    if (!userId || typeof value.rfidUid !== 'string' || !value.rfidUid.trim() || !value.fullName?.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
+    if (existingUserId && value.userId && value.userId !== existingUserId) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
+    let rfidUid: string;
+    try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new AdminError('ADMIN_VALIDATION_ERROR', 'RFID UID is invalid.'); }
+    const current = await this.sheets.findUserById(userId);
+    const byUid = await this.sheets.findUserByUid(rfidUid);
+    if (byUid && byUid.userId !== userId) throw new AdminError('USER_CONFLICT', 'That RFID card is assigned to another user.', 409);
+    const user: SheetUser = { userId, rfidUid, fullName: value.fullName.trim(), department: value.department?.trim() || null, active: value.status === 'ACTIVE' };
+    try {
+      const saved = await this.sheets.upsertUser(user);
+      await this.sheets.writeAudit({ eventType: current ? 'ADMIN_USER_UPDATED' : 'ADMIN_USER_CREATED', userId: user.userId, rfidUid: user.rfidUid, message: current ? 'User profile updated by administrator' : 'User profile created by administrator', requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
+      return { user: toAdminUser(saved), created: !current };
+    } catch (error) { if (error instanceof AdminError) throw error; throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'User data is temporarily unavailable.', 503); }
+  }
+
+  async attendance(date: string, includeBlank = false): Promise<AttendanceListItem[]> {
+    const rows = await this.sheets.listAttendance(date);
+    const users = await this.sheets.listUsers();
+    const byId = new Map(users.map((user) => [user.userId, user]));
+    return rows.filter((row) => includeBlank || row.timeIn || row.timeOut).map((row) => toAttendance(row, byId.get(row.userId)));
+  }
+
+  async updateAttendance(attendanceId: string, input: unknown): Promise<AttendanceListItem> {
+    if (!input || typeof input !== 'object') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Attendance values are required.');
+    const value = input as Partial<{ timeIn: string | null; timeOut: string | null; expectedTimeIn: string | null; expectedTimeOut: string | null; attendanceDate: string }>;
+    if (typeof value.attendanceDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid attendance date is required.');
+    const rows = await this.sheets.listAttendance(value.attendanceDate);
+    const row = rows.find((item) => item.attendanceId === attendanceId);
+    if (!row) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Attendance record was not found.', 404);
+    const timeIn = value.timeIn || null; const timeOut = value.timeOut || null;
+    if (timeIn && !validTimestamp(timeIn, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-in must be a valid timestamp on the attendance date.');
+    if (timeOut && !validTimestamp(timeOut, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out must be a valid timestamp on the attendance date.');
+    if (timeIn && timeOut && new Date(timeOut).getTime() < new Date(timeIn).getTime()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out cannot precede time-in.');
+    const updated: SheetAttendance = { ...row, timeIn: timeIn ?? '', timeOut, status: timeIn && timeOut ? 'COMPLETED' : timeIn ? 'OPEN' : 'INCOMPLETE' };
+    try {
+      const saved = await this.sheets.updateAttendance(updated, { timeIn: value.expectedTimeIn ?? null, timeOut: value.expectedTimeOut ?? null });
+      await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_UPDATED', userId: row.userId, message: `Attendance ${attendanceId} corrected by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
+      return toAttendance(saved);
+    } catch { throw new AdminError('ATTENDANCE_CONFLICT', 'Attendance changed before it could be saved.', 409); }
+  }
+
+  private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
+  private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
+}
+function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE' }; }
+function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department }; }
+function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }

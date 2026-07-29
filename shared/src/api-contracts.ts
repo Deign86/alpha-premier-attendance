@@ -4,7 +4,7 @@ export type ScanSource = (typeof scanSources)[number];
 export const attendanceActions = ['TIME_IN', 'TIME_OUT'] as const;
 export type AttendanceAction = (typeof attendanceActions)[number];
 
-export const attendanceStatuses = ['OPEN', 'COMPLETED'] as const;
+export const attendanceStatuses = ['OPEN', 'COMPLETED', 'INCOMPLETE'] as const;
 export type AttendanceStatus = (typeof attendanceStatuses)[number];
 
 export type ScanRequest = {
@@ -25,6 +25,25 @@ export type AttendanceSummary = {
   timeOut: string | null;
   status: AttendanceStatus;
 };
+
+export type AttendanceListItem = AttendanceSummary & {
+  userId: string;
+  fullName: string;
+  department: string | null;
+};
+
+export type AttendanceListResponse = { success: true; date: string; attendance: AttendanceListItem[]; fetchedAt: string };
+
+export type AdminUser = SetupUser;
+export type AdminUsersResponse = { success: true; users: AdminUser[] };
+export type AdminAttendanceResponse = { success: true; date: string; attendance: AttendanceListItem[]; fetchedAt: string };
+export type AdminAttendanceUpdateRequest = {
+  timeIn: string | null;
+  timeOut: string | null;
+  expectedTimeIn: string | null;
+  expectedTimeOut: string | null;
+};
+export type AdminUnlockResponse = { success: true; expiresAt: string };
 
 export type ScanSuccessResponse = {
   success: true;
@@ -75,6 +94,7 @@ export type SafeConfigResponse = {
   enableScanSounds: boolean;
   resultResetDelayMs: number;
   enableCardSetup?: boolean;
+  enableAdmin?: boolean;
 };
 
 export type SetupUser = {
@@ -128,3 +148,10 @@ export type SetupErrorResponse = {
   success: false;
   error: { code: SetupErrorCode; message: string };
 };
+
+export const adminErrorCodes = [
+  'ADMIN_DISABLED', 'INVALID_ADMIN_PIN', 'ADMIN_AUTH_REQUIRED', 'ADMIN_SESSION_EXPIRED',
+  'ADMIN_VALIDATION_ERROR', 'USER_CONFLICT', 'ATTENDANCE_CONFLICT', 'GOOGLE_SHEETS_UNAVAILABLE',
+] as const;
+export type AdminErrorCode = (typeof adminErrorCodes)[number];
+export type AdminErrorResponse = { success: false; error: { code: AdminErrorCode; message: string } };

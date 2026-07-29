@@ -17,6 +17,10 @@ export type AppConfig = {
   enableCardSetup: boolean;
   setupAdminPin?: string;
   setupSessionMinutes: number;
+  enableAdmin?: boolean;
+  adminPin?: string;
+  adminSessionSecret?: string;
+  adminSessionMinutes?: number;
 };
 
 function numberEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0): number {
@@ -59,6 +63,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     enableCardSetup: boolEnv(env, 'ENABLE_CARD_SETUP', false),
     setupAdminPin: env.SETUP_ADMIN_PIN,
     setupSessionMinutes: numberEnv(env, 'SETUP_SESSION_MINUTES', 15, 1),
+    enableAdmin: boolEnv(env, 'ENABLE_ADMIN', boolEnv(env, 'ENABLE_CARD_SETUP', false)),
+    adminPin: env.ADMIN_PIN || env.SETUP_ADMIN_PIN,
+    adminSessionSecret: env.ADMIN_SESSION_SECRET || env.SETUP_SESSION_SECRET,
+    adminSessionMinutes: numberEnv(env, 'ADMIN_SESSION_MINUTES', numberEnv(env, 'SETUP_SESSION_MINUTES', 15, 1), 1),
   };
   if (sheetsMode === 'google') {
     if (!config.googleSheetsId || !config.googleServiceAccountEmail || !config.googlePrivateKey) {
@@ -71,6 +79,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (config.enableCardSetup && !config.setupAdminPin) {
     throw new Error('ENABLE_CARD_SETUP requires SETUP_ADMIN_PIN');
   }
+  if (config.enableAdmin && (!config.adminPin || !config.adminSessionSecret)) {
+    throw new Error('ENABLE_ADMIN requires ADMIN_PIN and ADMIN_SESSION_SECRET');
+  }
   return config;
 }
 
@@ -82,5 +93,6 @@ export function safeConfig(config: AppConfig) {
     enableScanSounds: config.enableScanSounds,
     resultResetDelayMs: config.resultResetDelayMs,
     enableCardSetup: config.enableCardSetup,
+    enableAdmin: config.enableAdmin ?? config.enableCardSetup,
   };
 }

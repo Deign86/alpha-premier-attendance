@@ -12,6 +12,7 @@ import { safeConfig, type AppConfig } from './config.js';
 import type { GoogleSheetsService } from './sheets.js';
 import { manilaTimestamp } from './time.js';
 import { SetupError, SetupService, setupTokenFromRequest } from './setup.js';
+import { AdminError, AdminService } from './admin.js';
 
 export type CreateAppOptions = { sheets: GoogleSheetsService; config: AppConfig; logger?: boolean; staticDir?: string };
 
@@ -24,6 +25,7 @@ export function createApp(options: CreateAppOptions): express.Express {
   const app = express();
   const attendance = new AttendanceService(options.sheets, options.config);
   const setup = new SetupService(options.sheets, options.config);
+  const admin = new AdminService(options.sheets, options.config);
 
   app.disable('x-powered-by');
   app.use(helmet());
@@ -74,6 +76,25 @@ export function createApp(options: CreateAppOptions): express.Express {
   };
   app.post('/api/attendance/scan', scanHandler);
   app.post('/api/scan', scanHandler);
+
+  app.get('/api/attendance', async (req, res) => {
+    try {
+      const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date());
+      res.json({ success: true, date, attendance: await admin.attendance(date), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) });
+    } catch { res.status(503).json({ success: false, requestId: req.requestId, error: { code: 'GOOGLE_SHEETS_UNAVAILABLE', message: 'Attendance data is temporarily unavailable.' } }); }
+  });
+
+  app.post('/api/admin/unlock', (req, res) => {
+    try { const result = admin.unlock((req.body as { pin?: unknown } | undefined)?.pin); res.setHeader('Set-Cookie', `rfid_admin=${result.token}; Max-Age=${(options.config.adminSessionMinutes ?? 15) * 60}; Path=/; HttpOnly; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); res.json({ success: true, requestId: req.requestId, expiresAt: result.expiresAt }); } catch (error) { sendAdminError(req, res, error); }
+  });
+  app.get('/api/admin/session', (req, res) => { try { requireAdmin(req); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
+  app.post('/api/admin/lock', (req, res) => { res.setHeader('Set-Cookie', 'rfid_admin=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'); res.json({ success: true, requestId: req.requestId }); });
+  const requireAdmin = (req: Request) => admin.verify(cookieValue(req, 'rfid_admin'));
+  app.get('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, users: await admin.users() }); } catch (error) { sendAdminError(req, res, error); } });
+  app.post('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body)) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.patch('/api/admin/users/:userId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body, req.params.userId)) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.get('/api/admin/attendance', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date()); res.json({ success: true, date, attendance: await admin.attendance(date, true), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.patch('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, attendance: await admin.updateAttendance(req.params.attendanceId, req.body) }); } catch (error) { sendAdminError(req, res, error); } });
 
   app.post('/api/setup/unlock', (req, res) => {
     try {
@@ -140,6 +161,16 @@ function statusForError(code: string): number {
 function sendSetupError(req: Request, res: Response, error: unknown): void {
   const setupError = error instanceof SetupError ? error : new SetupError('GOOGLE_SHEETS_UNAVAILABLE', 'Setup service is temporarily unavailable.', 503);
   res.status(setupError.status).json(setupError.toResponse(req.requestId));
+}
+
+function sendAdminError(req: Request, res: Response, error: unknown): void {
+  const adminError = error instanceof AdminError ? error : new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'Administrator service is temporarily unavailable.', 503);
+  res.status(adminError.status).json({ success: false, requestId: req.requestId, error: { code: adminError.code, message: adminError.message } });
+}
+
+function cookieValue(req: Request, name: string): string | undefined {
+  const value = req.header('cookie')?.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
+  return value?.slice(name.length + 1);
 }
 
 declare global {
