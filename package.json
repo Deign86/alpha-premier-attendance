@@ -1,0 +1,22 @@
+{
+  "name": "rfid-time-in-out",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "workspaces": ["client", "server", "shared"],
+  "scripts": {
+    "dev": "node scripts/start-dev.mjs",
+    "build": "npm run build -w shared && npm run build -w client && npm run build -w server",
+    "lint": "npm run lint -w shared && npm run lint -w client && npm run lint -w server",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
+    "test": "npm run test -w shared && npm run test -w client && npm run test -w server",
+    "validate:sheets": "npm run validate:sheets -w server"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@typescript-eslint/eslint-plugin": "^8.19.1",
+    "@typescript-eslint/parser": "^8.19.1",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.17.0"
+  }
+}

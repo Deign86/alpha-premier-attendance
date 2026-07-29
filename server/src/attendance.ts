@@ -1,0 +1,141 @@
+import crypto from 'node:crypto';
+import { attendanceActions, type ScanRequest, type ScanResponse, type ScanSuccessResponse, type UserSummary } from '@rfid-attendance/shared';
+import { asScanError, ScanError } from './errors.js';
+import { KeyedMutex } from './mutex.js';
+import { normalizeRfidUid } from './rfid.js';
+import { manilaDate, manilaTimestamp } from './time.js';
+import type { AuditEvent, GoogleSheetsService, SheetAttendance } from './sheets.js';
+
+export type AttendanceServiceConfig = { timezone: string; scanCooldownMs: number };
+type Clock = () => Date;
+
+export class AttendanceService {
+  private readonly mutex = new KeyedMutex();
+  private readonly lastScans = new Map<string, number>();
+  private now: Clock;
+
+  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AttendanceServiceConfig, now: Clock = () => new Date()) {
+    this.now = now;
+  }
+
+  setNowProvider(now: Clock): void { this.now = now; }
+
+  async scan(request: ScanRequest, requestId: string): Promise<ScanResponse> {
+    let uid: string;
+    try {
+      if (!request || typeof request.rfidUid !== 'string' || !['RFID', 'MANUAL_TEST'].includes(request.source)) throw new Error('Invalid scan request');
+      uid = normalizeRfidUid(request.rfidUid);
+    } catch {
+      return new ScanError('INVALID_SCAN_INPUT', 'rfidUid and source are required.', 400).toResponse(requestId);
+    }
+
+    try {
+      return await this.mutex.runExclusive(uid, async () => {
+        const now = this.now();
+        const currentMs = now.getTime();
+        const previousMs = this.lastScans.get(uid);
+        if (previousMs !== undefined && currentMs - previousMs < this.config.scanCooldownMs) {
+          const retryAfterSeconds = Math.max(1, Math.ceil((this.config.scanCooldownMs - (currentMs - previousMs)) / 1000));
+          throw new ScanError('DUPLICATE_SCAN', 'This card was scanned too recently.', 429, retryAfterSeconds);
+        }
+
+        let user;
+        try {
+          user = await this.sheets.findUserByUid(uid);
+        } catch {
+          throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
+        }
+        if (!user) throw new ScanError('UNKNOWN_RFID_CARD', 'This RFID card is not registered.', 404);
+        if (!user.active) throw new ScanError('INACTIVE_USER', 'This user is inactive.', 403);
+
+        const attendanceDate = manilaDate(now, this.config.timezone);
+        const timestamp = manilaTimestamp(now, this.config.timezone);
+        let attendance: SheetAttendance | null;
+        try {
+          attendance = await this.sheets.findAttendance(user.userId, attendanceDate);
+        } catch {
+          throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
+        }
+
+        let action: (typeof attendanceActions)[number];
+        let saved: SheetAttendance;
+        if (!attendance) {
+          const newAttendance: SheetAttendance = {
+            attendanceId: crypto.randomUUID(),
+            attendanceDate,
+            userId: user.userId,
+            rfidUid: uid,
+            fullName: user.fullName,
+            department: user.department,
+            timeIn: timestamp,
+            timeOut: null,
+            status: 'OPEN',
+            source: request.source,
+            notes: '',
+          };
+          try {
+            saved = await this.sheets.createAttendance(newAttendance);
+          } catch {
+            const reconciled = await this.sheets.findAttendance(user.userId, attendanceDate).catch(() => null);
+            if (reconciled?.attendanceId === newAttendance.attendanceId) saved = reconciled;
+            else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
+          }
+          action = 'TIME_IN';
+        } else {
+          if (!attendance.timeIn || attendance.attendanceDate !== attendanceDate || (attendance.status === 'COMPLETED' && !attendance.timeOut) || (attendance.status === 'OPEN' && attendance.timeOut)) {
+            throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
+          }
+          if (attendance.status === 'COMPLETED') throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
+          try {
+            saved = await this.sheets.completeAttendance(attendance, timestamp);
+          } catch {
+            const reconciled = await this.sheets.findAttendance(user.userId, attendanceDate).catch(() => null);
+            if (reconciled?.attendanceId === attendance.attendanceId && reconciled.status === 'COMPLETED' && reconciled.timeOut) saved = reconciled;
+            else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
+          }
+          action = 'TIME_OUT';
+        }
+
+        this.lastScans.set(uid, currentMs);
+        await this.writeAudit({ eventType: 'SCAN_SUCCESS', rfidUid: uid, userId: user.userId, message: `${action} recorded`, requestId });
+        return this.successResponse(requestId, action, saved, user);
+      });
+    } catch (error) {
+      await this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
+      return asScanError(error).toResponse(requestId);
+    }
+  }
+
+  private async writeAudit(event: AuditEvent): Promise<void> {
+    await this.sheets.writeAudit(event).catch(() => undefined);
+  }
+
+  private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null }): ScanSuccessResponse {
+    const userSummary: UserSummary = { userId: user.userId, fullName: user.fullName, department: user.department };
+    return {
+      success: true,
+      requestId,
+      action,
+      message: action === 'TIME_IN' ? 'Time In recorded successfully.' : 'Time Out recorded successfully.',
+      attendance: {
+        attendanceId: attendance.attendanceId,
+        attendanceDate: attendance.attendanceDate,
+        timeIn: attendance.timeIn,
+        timeOut: attendance.timeOut,
+        status: attendance.status,
+      },
+      user: userSummary,
+    };
+  }
+}
+
+function auditEventFor(error: unknown): AuditEvent['eventType'] {
+  if (error instanceof ScanError) {
+    if (error.code === 'UNKNOWN_RFID_CARD') return 'UNKNOWN_CARD';
+    if (error.code === 'INACTIVE_USER') return 'INACTIVE_USER';
+    if (error.code === 'DUPLICATE_SCAN') return 'DUPLICATE_SCAN';
+    if (error.code === 'ATTENDANCE_ALREADY_COMPLETED') return 'ATTENDANCE_COMPLETED';
+    if (error.code === 'INVALID_SCAN_INPUT') return 'VALIDATION_ERROR';
+  }
+  return 'API_ERROR';
+}
