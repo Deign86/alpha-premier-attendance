@@ -1,4 +1,18 @@
-import { scanErrorCodes, type ScanErrorCode, type ScanErrorResponse } from '@rfid-attendance/shared';
+import type { ScanErrorCode, ScanErrorResponse } from '@rfid-attendance/shared';
+
+const scanErrorCodeSet = new Set<ScanErrorCode>([
+  'INVALID_SCAN_INPUT',
+  'UNKNOWN_RFID_CARD',
+  'INACTIVE_USER',
+  'DUPLICATE_SCAN',
+  'ATTENDANCE_ALREADY_COMPLETED',
+  'ATTENDANCE_DATA_CONFLICT',
+  'GOOGLE_SHEETS_UNAVAILABLE',
+  'PAYROLL_GENERATION_FAILED',
+  'RATE_LIMITED',
+  'INTERNAL_SERVER_ERROR',
+  'CONFIGURATION_ERROR',
+]);
 
 export class ScanError extends Error {
   readonly code: ScanErrorCode;
@@ -39,7 +53,7 @@ function isScanErrorLike(error: unknown): error is { code: ScanErrorCode; messag
   if (!error || typeof error !== 'object') return false;
   const value = error as Partial<{ code: string; message: string; status: number; retryAfterSeconds?: number }>;
   return typeof value.code === 'string'
-    && scanErrorCodes.includes(value.code as ScanErrorCode)
+    && scanErrorCodeSet.has(value.code as ScanErrorCode)
     && typeof value.message === 'string'
     && typeof value.status === 'number';
 }
