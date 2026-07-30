@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, CircleAlert, CreditCard, Keyboard, LoaderCircle, LockKeyhole, ShieldCheck, UserRound, Volume2, VolumeX, X } from 'lucide-react';
 import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem } from '@rfid-attendance/shared';
-import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, loadConfig, loadAttendance, loadAdminAttendance, loadAdminUsers, lockAdmin, lockSetup, lookupSetupCard, saveAdminAttendance, saveAdminUser, submitScan, unlockAdmin, unlockSetup, upsertSetupUser } from './api';
+import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, loadConfig, loadAttendance, loadAdminAttendance, loadAdminUsers, lockAdmin, lockSetup, lookupSetupCard, saveAdminAttendance, saveAdminUser, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
 
 type KioskState = 'ready' | 'processing' | 'success' | 'error';
 type Result = ScanSuccessResponse | ScanErrorResponse;
 type SetupStep = 'scan' | 'edit';
+type SetupForm = { userId: string; fullName: string; department: string; status: SetupUser['status']; employeeType: SetupUser['employeeType']; dailyRate: string; photoUrl: string };
+const emptySetupForm: SetupForm = { userId: '', fullName: '', department: '', status: 'ACTIVE', employeeType: 'INTERN', dailyRate: '', photoUrl: '' };
 
 const stateCopy: Record<KioskState, { eyebrow: string; title: string }> = {
   ready: { eyebrow: 'Scanner ready', title: 'Tap your card to begin' },
@@ -46,7 +48,7 @@ export default function App() {
   const [adminPin, setAdminPin] = useState('');
   const [setupUid, setSetupUid] = useState('');
   const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
-  const [setupForm, setSetupForm] = useState({ userId: '', fullName: '', department: '', status: 'ACTIVE' as SetupUser['status'] });
+  const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
   const setupInputRef = useRef<HTMLInputElement>(null);
   const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setupSessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,7 +187,7 @@ export default function App() {
     setSetupUser(null);
     setSetupError('');
     setAdminPin('');
-    setSetupForm({ userId: '', fullName: '', department: '', status: 'ACTIVE' });
+    setSetupForm(emptySetupForm);
     focusActiveInput();
   };
 
@@ -208,7 +210,10 @@ export default function App() {
       fullName: response.user.fullName,
       department: response.user.department ?? '',
       status: response.user.status,
-    } : { userId: '', fullName: '', department: '', status: 'ACTIVE' });
+      employeeType: response.user.employeeType ?? 'INTERN',
+      dailyRate: response.user.dailyRate === null ? '' : String(response.user.dailyRate),
+      photoUrl: response.user.photoUrl ?? '',
+    } : emptySetupForm);
     setSetupStep('edit');
   };
 
@@ -229,6 +234,9 @@ export default function App() {
       fullName: setupForm.fullName.trim(),
       department: setupForm.department.trim() || undefined,
       status: setupForm.status,
+      employeeType: setupForm.employeeType,
+      dailyRate: setupForm.employeeType === 'EMPLOYEE' ? Number(setupForm.dailyRate) : null,
+      photoUrl: setupForm.photoUrl || null,
     }, setupToken);
     setSetupBusy(false);
     if (!response.success) {
@@ -239,8 +247,19 @@ export default function App() {
     setSetupError(response.created ? 'Card enrolled successfully.' : 'Card configuration updated successfully.');
     setSetupStep('scan');
     setSetupUid('');
-    setSetupForm({ userId: '', fullName: '', department: '', status: 'ACTIVE' });
+    setSetupForm(emptySetupForm);
     window.setTimeout(focusSetupInput, 0);
+  };
+
+  const uploadSetupPhotoFile = async (file: File) => {
+    if (!setupToken || !setupForm.userId.trim()) { setSetupError('Enter the User ID before uploading a photo.'); return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5_000_000) { setSetupError('Choose a JPEG, PNG, or WebP photo up to 5 MB.'); return; }
+    const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Unable to read photo')); reader.readAsDataURL(file); });
+    setSetupBusy(true); setSetupError('Uploading photo…');
+    const response = await uploadSetupPhoto(setupForm.userId.trim(), dataUrl, setupToken);
+    setSetupBusy(false);
+    if (!response.success) { setSetupError(response.error.message); return; }
+    setSetupForm((current) => ({ ...current, photoUrl: response.photoUrl })); setSetupError('Photo uploaded.');
   };
 
   const submit = useCallback(async (rawUid: string, source: 'RFID' | 'MANUAL_TEST') => {
@@ -343,10 +362,11 @@ export default function App() {
 
           {state === 'success' && success ? (
             <div className="result-details" role="status" aria-live="polite">
+              {success.user.photoUrl ? <img className="result-photo" src={success.user.photoUrl} alt={`${success.user.fullName} ID`} /> : <div className="result-photo result-photo-fallback" aria-label="ID photo unavailable"><UserRound size={72} /></div>}
               <h2>{success.user.fullName}</h2>
               <p>{success.message}</p>
               <p className="result-user-id">{success.user.userId}{success.user.department ? ` · ${success.user.department}` : ''}</p>
-              <div className="result-meta"><span>{formatAction(success.action)}</span><span>{formatTime(success.attendance.timeOut ?? success.attendance.timeIn, config.timezone)}</span></div>
+              <div className="result-meta"><span className="employee-badge">{success.user.employeeType}</span><span>{formatAction(success.action)}</span><span>{formatTime(success.attendance.timeOut ?? success.attendance.timeIn, config.timezone)}</span></div>
             </div>
           ) : state === 'error' && error ? (
             <div className="result-details" role="alert" aria-live="assertive">
@@ -361,6 +381,7 @@ export default function App() {
                 <input
                   ref={manualMode ? manualRef : scannerRef}
                   id={manualMode ? 'manual-uid' : 'scanner-uid'}
+                  className={manualMode ? undefined : 'rfid-capture-input'}
                   aria-label={manualMode ? 'Manual card ID' : 'Scanner card ID'}
                   value={manualMode ? manualUid : uid}
                   onChange={(event) => manualMode ? setManualUid(event.target.value) : handleScannerChange(event.target.value)}
@@ -373,7 +394,7 @@ export default function App() {
                 />
                 {manualMode && <button className="submit-button" type="button" onClick={() => void submit(manualUid, 'MANUAL_TEST')} disabled={!manualUid.trim()}><ArrowRight size={18} /> Record attendance</button>}
               </div>
-              <p className="input-hint"><Keyboard size={14} /> {manualMode ? 'Press Enter or use the button to submit' : 'Scan a card, then wait for the confirmation chime'}</p>
+              {manualMode && <p className="input-hint"><Keyboard size={14} /> Press Enter or use the button to submit</p>}
             </div>
           )}
 
@@ -426,9 +447,10 @@ export default function App() {
         onPinChange={setAdminPin}
         onUnlock={handleUnlock}
         onUidChange={handleSetupInput}
-        onScanAnother={() => { setSetupStep('scan'); setSetupUid(''); setSetupUser(null); setSetupError(''); setSetupForm({ userId: '', fullName: '', department: '', status: 'ACTIVE' }); window.setTimeout(focusSetupInput, 0); }}
+         onScanAnother={() => { setSetupStep('scan'); setSetupUid(''); setSetupUser(null); setSetupError(''); setSetupForm(emptySetupForm); window.setTimeout(focusSetupInput, 0); }}
         onUidEnter={(event) => { if (event.key === 'Enter') { event.preventDefault(); void lookupCardForSetup(setupUid); } }}
-        onFormChange={(field, value) => setSetupForm((current) => ({ ...current, [field]: value }))}
+         onFormChange={(field, value) => setSetupForm((current) => ({ ...current, [field]: value }))}
+         onPhotoFile={(file) => void uploadSetupPhotoFile(file)}
         onUpsert={submitSetupUser}
         onClose={closeSetup}
       />}
@@ -448,14 +470,15 @@ type SetupDialogProps = {
   pin: string;
   uid: string;
   user: SetupUser | null;
-  form: { userId: string; fullName: string; department: string; status: SetupUser['status'] };
+  form: SetupForm;
   inputRef: React.Ref<HTMLInputElement>;
   onPinChange: (value: string) => void;
   onUnlock: (event: React.FormEvent) => void;
   onUidChange: (value: string) => void;
   onScanAnother: () => void;
   onUidEnter: (event: React.KeyboardEvent<HTMLInputElement>) => void;
-  onFormChange: (field: 'userId' | 'fullName' | 'department' | 'status', value: string) => void;
+  onFormChange: (field: keyof SetupForm, value: string) => void;
+  onPhotoFile: (file: File) => void;
   onUpsert: (event: React.FormEvent) => void;
   onClose: () => void;
 };
@@ -494,10 +517,13 @@ function SetupDialog(props: SetupDialogProps) {
               <label>User ID<input value={props.form.userId} onChange={(event) => props.onFormChange('userId', event.target.value)} autoComplete="off" required /></label>
               <label>Full name<input value={props.form.fullName} onChange={(event) => props.onFormChange('fullName', event.target.value)} autoComplete="name" required /></label>
               <label>Department / role <span className="optional">optional</span><input placeholder="IT / Admin" value={props.form.department} onChange={(event) => props.onFormChange('department', event.target.value)} autoComplete="organization" /></label>
-              <label>Status<select value={props.form.status} onChange={(event) => props.onFormChange('status', event.target.value)}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
+               <label>Status<select value={props.form.status} onChange={(event) => props.onFormChange('status', event.target.value)}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
+               <label className="employee-type-toggle">Employee type <button type="button" role="switch" aria-checked={props.form.employeeType === 'EMPLOYEE'} onClick={() => props.onFormChange('employeeType', props.form.employeeType === 'INTERN' ? 'EMPLOYEE' : 'INTERN')}><span>INTERN</span><strong>{props.form.employeeType === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN'}</strong></button></label>
+               {props.form.employeeType === 'EMPLOYEE' && <label>Daily rate (PHP)<input type="number" min="0.01" step="0.01" required value={props.form.dailyRate} onChange={(event) => props.onFormChange('dailyRate', event.target.value)} /></label>}
+               <label>ID photo<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) props.onPhotoFile(file); }} />{props.form.photoUrl && <small className="setup-success">Photo ready</small>}</label>
             </div>
             {props.error && <p className={props.error.includes('successfully') ? 'setup-success' : 'setup-error'} role="status">{props.error}</p>}
-            <div className="setup-footer"><button className="text-button" type="button" onClick={props.onScanAnother}>Scan another card</button><button className="submit-button" type="submit" disabled={props.busy || !props.form.userId.trim() || !props.form.fullName.trim()}>{props.busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} Save user</button></div>
+            <div className="setup-footer"><button className="text-button" type="button" onClick={props.onScanAnother}>Scan another card</button><button className="submit-button" type="submit" disabled={props.busy || !props.form.userId.trim() || !props.form.fullName.trim() || (props.form.employeeType === 'EMPLOYEE' && Number(props.form.dailyRate) <= 0)}>{props.busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} Save user</button></div>
           </form>
         )}
       </section>

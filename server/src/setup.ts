@@ -35,6 +35,9 @@ export type SetupUserInput = {
   rfidUid: string;
   department?: string | null;
   status?: 'ACTIVE' | 'INACTIVE';
+  employeeType?: 'INTERN' | 'EMPLOYEE';
+  dailyRate?: number | null;
+  photoUrl?: string | null;
 };
 
 type TokenRecord = { expiresAtMs: number };
@@ -49,6 +52,7 @@ export class SetupService {
   }
 
   setNowProvider(now: Clock): void { this.now = now; }
+  authorize(token: string | undefined): void { this.requireToken(token); }
 
   unlock(pin: unknown): { setupToken: string; expiresAt: string } {
     this.assertEnabled();
@@ -87,15 +91,22 @@ export class SetupService {
     }
     let rfidUid: string;
     try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new SetupError('SETUP_VALIDATION_ERROR', 'rfidUid must be a valid hexadecimal UID.', 400); }
+    const existing = await this.sheets.findUserById(value.userId.trim());
+    const employeeType = value.employeeType ?? existing?.employeeType ?? 'INTERN';
+    const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
+    if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Employees require a positive daily rate.', 400);
+    if (value.photoUrl !== undefined && value.photoUrl !== null && !isPhotoUrl(value.photoUrl)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Photo URL must be HTTPS.', 400);
     const user: SheetUser = {
       userId: value.userId.trim(),
       fullName: value.fullName.trim(),
       rfidUid,
       department: typeof value.department === 'string' && value.department.trim() ? value.department.trim() : null,
       active: value.status === 'ACTIVE',
+      employeeType,
+      dailyRate,
+      photoUrl: value.photoUrl === undefined ? existing?.photoUrl ?? null : isPhotoUrl(value.photoUrl) ? value.photoUrl : null,
     };
     try {
-      const existing = await this.sheets.findUserById(user.userId);
       const saved = await this.sheets.upsertUser(user);
       return { user: saved, created: existing === null };
     } catch (error) {
@@ -128,6 +139,8 @@ export class SetupService {
     return crypto.timingSafeEqual(inputHash, expectedHash);
   }
 }
+
+function isPhotoUrl(value: unknown): value is string { return typeof value === 'string' && /^https:\/\//i.test(value); }
 
 export function setupTokenFromRequest(headers: { authorization?: string; 'x-setup-token'?: string }): string | undefined {
   const bearer = headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];

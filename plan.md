@@ -406,3 +406,163 @@ This section supersedes the original MVP limitations where they conflict with th
 - Replace the static setup PIN with named operator accounts, MFA or an identity-aware proxy, and durable session/revocation auditing.
 - Add reader diagnostics, device health, kiosk watchdog, and Windows service packaging.
 - Add TLS, identity-aware proxy, central secret storage, metrics, alerts, and immutable audit retention for broader deployments.
+
+---
+
+# Plan Update: Payroll, Enrollment Photos, and Kiosk UX
+
+> **Status:** This block supersedes conflicting statements above and is part of the complete plan. Existing Phases 1–7 and Section 15 remain required; the new implementation order is Phase 8, Phase 9, then Phase 10.
+>
+> **Markers:** `[AMENDED]` changes existing behavior. `[NEW]` adds behavior.
+
+## Updated Scope and Decisions [AMENDED]
+
+- Add `INTERN`/`EMPLOYEE` classification, employee daily rates, enrollment photos, intern payroll, and employee payroll scaffolding.
+- Use Vercel Blob for photos. `Users.photo_url` stores the returned HTTPS URL; migrated users may remain blank until enrollment.
+- New enrollment defaults to `INTERN`; employee mode requires a positive `daily_rate` with at most two decimals and an uploaded photo.
+- Authorized admin attendance corrections keep Payroll synchronized. Completing a corrected row creates payroll; changing a completed row back to open or deleting it removes payroll. Intern weeks are replayed chronologically so the single free late remains deterministic.
+- Historical payroll is not created automatically. Provide a dry-run-first, explicit `--execute` backfill command.
+- Employee late rules remain pending client input; preserve this exact source comment in the employee service:
+
+```ts
+// TODO: Employee late rules TBD by client
+```
+
+## Updated Google Sheets Schema [AMENDED]
+
+`Users` must have this exact header row:
+
+```text
+user_id,rfid_uid,full_name,department,status,created_at,employee_type,daily_rate,photo_url
+```
+
+Existing blank `employee_type` values are migrated to `INTERN`. Intern `daily_rate` is blank; employee `daily_rate` is numeric and positive.
+
+Add an `InternGrace` tab with:
+
+```text
+grace_id,user_id,week_start,attendance_id,used_at
+```
+
+There is at most one row for `(user_id, week_start)`. `week_start` is the Monday date in `Asia/Manila`, and `attendance_id` identifies the late that consumed grace.
+
+Add a `Payroll` tab with:
+
+```text
+payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_time_in,actual_time_out,computed_time_in,computed_time_out,grace_used,late_hours,late_deduction,base_pay,daily_pay,notes
+```
+
+`attendance_id` is unique. `actual_*` values always copy raw Attendance values. `grace_used` is `TRUE` only for the intern row that consumed weekly grace, `FALSE` for other intern rows, and blank for employees.
+
+## Updated Payroll Rules [NEW]
+
+Payroll is created only after attendance becomes `COMPLETED`; a `TIME_IN` never creates payroll, and an attendance left `OPEN` never creates payroll. Payroll creation is idempotent by `attendance_id`; a completed attendance missing payroll triggers recovery before the ordinary already-completed response.
+
+For interns, official start is 8:00 AM Manila. `late_hours = Math.ceil((actual_time_in - official_start) / 1 hour)` when late, otherwise zero. The first late from Monday through Sunday claims `InternGrace`, keeps exact `computed_time_in`, and has zero deduction. Later lates snap `computed_time_in` to the next full hour and charge `late_hours * 10`. `computed_time_out` always equals the exact time-out. `base_pay = 80` and `daily_pay = Math.max(0, 80 - late_deduction)`.
+
+For employees, preserve raw timestamps, round `computed_time_in` up to the next full hour when needed, round `computed_time_out` down to the current full hour, set deductions and late hours to zero, and set `base_pay` and `daily_pay` to the user’s daily rate. Employee deduction logic remains the TODO above.
+
+Intern grace claims must be linked to the attendance row. If a Payroll write fails after Attendance completes, retrying finds the same grace claim and creates the missing row without charging the free late or duplicating payroll.
+
+## Updated API and Data Contracts [AMENDED]
+
+Extend `shared/src/api-contracts.ts` user summaries and setup/admin users with:
+
+```ts
+type EmployeeType = 'INTERN' | 'EMPLOYEE';
+
+employeeType: EmployeeType;
+dailyRate: number | null;
+photoUrl: string | null;
+```
+
+`POST /api/attendance/scan` returns employee type and photo URL in its user payload. Add a typed `PAYROLL_GENERATION_FAILED` error for an Attendance completion whose Payroll row cannot be confirmed.
+
+Extend protected setup/admin upserts with `employeeType`, `dailyRate`, and `photoUrl`. Creation defaults omitted type to `INTERN`; employee rows require a valid rate; new enrollment requires a photo; switching to intern clears the rate.
+
+Add a protected Vercel Blob upload-token route authorized by the existing setup token or signed admin cookie. Restrict uploads to JPEG, PNG, or WebP, a server-generated user path, and a processed image no larger than 512×512 and 500 KB. Never expose Blob credentials or unrestricted upload tokens to the browser.
+
+## Updated Folder Structure [AMENDED]
+
+Add these focused modules to the existing flat server layout:
+
+```text
+server/src/employee-payroll.ts
+server/src/intern-payroll.ts
+server/src/payroll.ts
+server/src/payroll-reconciliation.ts
+server/src/photo-storage.ts
+server/src/migrate-payroll-sheets.ts
+server/src/backfill-payroll.ts
+server/test/employee-payroll.test.ts
+server/test/intern-payroll.test.ts
+server/test/payroll.test.ts
+server/test/payroll-reconciliation.test.ts
+server/test/photo-storage.test.ts
+client/src/components/EmployeeTypeToggle.tsx
+client/src/components/PhotoEnrollmentField.tsx
+client/src/components/ScanResult.tsx
+client/src/hooks/useRfidScanner.ts
+```
+
+`intern-payroll.ts` and `employee-payroll.ts` are pure policy calculations. `payroll.ts` coordinates Sheets writes and idempotency. `payroll-reconciliation.ts` replays intern weeks after corrections. `photo-storage.ts` authorizes and validates Blob uploads. Existing route handlers remain thin.
+
+## Phase 8 – Intern Payroll Foundation [NEW, PRIORITY 1]
+
+- Extend Users types, adapters, validators, setup, admin, and in-memory fixtures.
+- Add a backup-first schema migration that creates the two tabs and appends the three Users columns without reordering existing data.
+- Implement `InternGrace` week calculation, unique claim, linked attendance ID, and reconciliation.
+- Implement intern late, grace, deduction, floor-at-zero, and Payroll-row formulas.
+- Invoke payroll only after successful time-out completion and add read-back/idempotent recovery.
+- Synchronize payroll when authorized admin corrections complete, reopen, edit, or delete attendance.
+- Add `npm run migrate:payroll -w server -- --dry-run|--execute`.
+- Add `npm run backfill:payroll -w server -- --dry-run|--execute [--from YYYY-MM-DD --to YYYY-MM-DD]`; dry-run is the default and only completed rows without payroll are eligible.
+- Mark backfilled values in `notes`; skip invalid historical rows with an operator-readable report.
+
+Definition of done: time-in/open rows never create payroll; all intern examples pass; Monday resets grace in Manila; retries cannot duplicate payroll or consume grace twice; admin corrections replay the affected week deterministically.
+
+## Phase 9 – UI/UX Overhaul [NEW, PRIORITY 2]
+
+- Set minimum rendered body/control text to 18px and headings to 32px or larger across kiosk, setup, dashboard, and admin.
+- Remove the visible RFID field from the kiosk ready screen. Keep a clipped, focusable DOM input; never use `display:none` or `disabled` while scanning.
+- Restore focus after load, result reset, browser focus/visibility, and modal close, while never stealing focus from setup/admin/manual controls.
+- Make `SCANNER READY` a large ambient status element.
+- Add a stable scan result with prominent ID photo, full name, employee-type badge, action, and Manila timestamp. Use a fallback avatar for migrated users without photos.
+- Replace employee-type select/text controls with an accessible large `INTERN ↔ EMPLOYEE` switch. Default new users to intern and reveal/require daily rate only for employees.
+- Add photo selection, client resize/crop, preview, protected Blob upload, progress, retry, and validation states. Require photos for new enrollment.
+- Add responsive visual tests at desktop and mobile sizes; assert no text overlap, clipping, or focus theft.
+
+Definition of done: the reader works without clicking a visible input; all text meets the hard size requirement; scan results show photo/type/action/time; setup uses a toggle and cannot save an invalid employee profile.
+
+## Phase 10 – Employee Payroll [NEW, PRIORITY 3]
+
+- Implement employee hour ceiling/floor in `employee-payroll.ts` while preserving actual timestamps.
+- Create idempotent employee Payroll rows with zero late hours/deductions and daily-rate pay.
+- Preserve the exact `// TODO: Employee late rules TBD by client` comment.
+- Extend correction synchronization and optional backfill to employees.
+- Test exact-hour, partial-hour, timezone, missing-rate, retry, and correction behavior.
+
+## Updated Testing Checklist [NEW]
+
+- [ ] Schema validator requires all five tabs and exact headers.
+- [ ] Migration dry-run is read-only; execute mode preserves existing rows.
+- [ ] New users default to `INTERN`; employee mode requires a positive daily rate.
+- [ ] Intern 7:50 AM and 8:00 AM are on time; first 8:17 AM late is free and claims grace.
+- [ ] A later 8:17 AM late computes to 9:00 AM and deducts ₱10; deductions never make pay negative.
+- [ ] Grace resets Monday Manila time and concurrent scans cannot create two grace claims.
+- [ ] Payroll is absent for time-in/open attendance and unique after time-out.
+- [ ] Partial Sheets failure and retry recover payroll without duplicate rows or incorrect deductions.
+- [ ] Admin correction/deletion replays intern grace and synchronizes Payroll.
+- [ ] Employee 7:50 AM rounds to 8:00 AM; 5:10 PM rounds to 5:00 PM; raw values remain unchanged.
+- [ ] Employee pay equals daily rate and employee deductions remain zero pending client rules.
+- [ ] Photos reject invalid formats/size, upload only with setup/admin authorization, and never expose Blob credentials.
+- [ ] Scan response/result displays photo, name, type, action, and timestamp.
+- [ ] RFID input is present but invisible, remains focused, and does not steal focus from interactive forms.
+- [ ] Computed UI text is at least 18px; headings are at least 32px; desktop/mobile screenshots have no overlap.
+- [ ] Existing root typecheck, lint, build, and all attendance/admin/dashboard tests remain green.
+
+## Updated Rollout and Operations [AMENDED]
+
+Back up the spreadsheet, run migration dry-run, review and execute migration, classify users, enter employee rates, provision `BLOB_READ_WRITE_TOKEN`, and test one disposable photo upload before enabling setup. Deploy in the exact order Phase 8, Phase 9, Phase 10. Run the intern and employee acceptance cases, then optionally execute the approved payroll backfill.
+
+Update `docs/google-sheets-setup.md`, `docs/card-registration.md`, `docs/deployment.md`, and add `docs/payroll-operations.md`. Future work now includes payroll-period summaries, approval/disbursement, employee late rules, private photo delivery, and payroll exports; payroll generation itself is no longer an MVP limitation.

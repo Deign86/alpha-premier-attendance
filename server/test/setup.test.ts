@@ -51,6 +51,7 @@ describe('card setup HTTP API', () => {
     expect(lookup.body.user).toBeNull();
     await request(app).post('/api/setup/users').set('x-setup-token', token).send({ userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', status: 'ACTIVE' }).expect(200);
     await request(app).post('/api/attendance/scan').send({ rfidUid: 'AABB', source: 'RFID' }).expect(200);
-    expect((await sheets.findAttendance('u1', '2026-07-29')).userId).toBe('u1');
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+    expect((await sheets.findAttendance('u1', today))?.userId).toBe('u1');
   });
 });

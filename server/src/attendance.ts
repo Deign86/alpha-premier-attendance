@@ -5,6 +5,7 @@ import { KeyedMutex } from './mutex.js';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { AuditEvent, GoogleSheetsService, SheetAttendance } from './sheets.js';
+import { PayrollService } from './payroll.js';
 
 export type AttendanceServiceConfig = { timezone: string; scanCooldownMs: number };
 type Clock = () => Date;
@@ -14,7 +15,7 @@ export class AttendanceService {
   private readonly lastScans = new Map<string, number>();
   private now: Clock;
 
-  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AttendanceServiceConfig, now: Clock = () => new Date()) {
+  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AttendanceServiceConfig, now: Clock = () => new Date(), private readonly payroll = new PayrollService(sheets)) {
     this.now = now;
   }
 
@@ -95,7 +96,13 @@ export class AttendanceService {
           if (!attendance.timeIn || attendance.attendanceDate !== attendanceDate || (attendance.status === 'COMPLETED' && !attendance.timeOut) || (attendance.status === 'OPEN' && attendance.timeOut)) {
             throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
           }
-          if (attendance.status === 'COMPLETED') throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
+          if (attendance.status === 'COMPLETED') {
+            if (!await this.sheets.findPayrollByAttendanceId(attendance.attendanceId)) {
+              try { await this.payroll.ensureForCompletedAttendance(attendance, user); }
+              catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance is complete but payroll could not be generated.', 503); }
+            }
+            throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
+          }
           try {
             saved = await this.sheets.completeAttendance(attendance, timestamp);
           } catch {
@@ -104,6 +111,8 @@ export class AttendanceService {
             else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
           }
           action = 'TIME_OUT';
+          try { await this.payroll.ensureForCompletedAttendance(saved, user); }
+          catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance was completed but payroll could not be generated.', 503); }
         }
 
         this.lastScans.set(uid, currentMs);
@@ -120,8 +129,8 @@ export class AttendanceService {
     await this.sheets.writeAudit(event).catch(() => undefined);
   }
 
-  private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null }): ScanSuccessResponse {
-    const userSummary: UserSummary = { userId: user.userId, fullName: user.fullName, department: user.department };
+  private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null; employeeType?: 'INTERN' | 'EMPLOYEE'; photoUrl?: string | null }): ScanSuccessResponse {
+    const userSummary: UserSummary = { userId: user.userId, fullName: user.fullName, department: user.department, employeeType: user.employeeType ?? 'INTERN', photoUrl: user.photoUrl ?? null };
     return {
       success: true,
       requestId,

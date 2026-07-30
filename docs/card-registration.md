@@ -11,6 +11,7 @@ $env:SHEETS_MODE = "google"
 $env:ENABLE_CARD_SETUP = "true"
 $env:SETUP_ADMIN_PIN = "choose-a-private-pin"
 $env:SETUP_SESSION_MINUTES = "15"
+$env:BLOB_READ_WRITE_TOKEN = "server-only-vercel-blob-token"
 npm run dev
 ```
 
@@ -21,9 +22,10 @@ The server also needs the normal Google Sheets variables: `GOOGLE_SHEET_ID`, `GO
 1. Open the site and select `Admin` (or visit `/admin`).
 2. Enter the setup PIN.
 3. Scan the employee's RFID card. If it is unknown, the form opens blank.
-4. Enter the employee's `User ID`, `Full name`, and `Department / role`.
-5. Set `Status` to `Active`, then select `Save user`.
-6. Lock the admin session and scan the same card on the normal attendance screen.
+4. Enter the person's `User ID`, `Full name`, and `Department / role`.
+5. Leave the employee type toggle at `INTERN` unless the person is an employee. For `EMPLOYEE`, enter a positive `daily_rate`; attach the ID photo before saving.
+6. Set `Status` to `Active`, then select `Save user`.
+7. Lock the admin session and scan the same card on the normal attendance screen.
 
 The kiosk RFID input is focused automatically when `/` opens and regains focus after each scan result, so operators can tap cards without clicking the field.
 
@@ -42,7 +44,7 @@ RFID UID:         the UID read from Deign's physical card
 The `Users` tab must contain these headers:
 
 ```text
-userid | rfiduid | fullname | department | status | createdat
+userid | rfiduid | fullname | department | status | createdat | employeetype | dailyrate | photourl
 ```
 
 Do not manually create an `Attendance` row for enrollment. The first normal scan creates the employee's time-in record.

@@ -194,3 +194,15 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .admin-grid { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 28px; }
 .admin-form { padding: 22px; border: 1px solid var(--line); background: var(--surface); } .admin-form h2 { margin: 0 0 18px; font-family: 'Orbitron', sans-serif; font-size: 1rem; }
 @media (max-width: 700px) { .dashboard-shell { width: min(100% - 32px, 1220px); padding: 28px 0; } .dashboard-header { align-items: flex-start; flex-direction: column; } .admin-grid { grid-template-columns: 1fr; } }
+
+/* Kiosk distance accessibility: the production UI never renders text below 18px. */
+p, span, label, small, a, button, input, select, td, th { font-size: 18px !important; }
+h1, h2 { font-size: 32px !important; }
+.rfid-capture-input { position: fixed; width: 1px !important; height: 1px !important; opacity: 0; clip-path: inset(50%); }
+.input-area:has(.rfid-capture-input) { display: none; }
+.result-photo { display: block; width: min(220px, 54vw); aspect-ratio: 1; object-fit: cover; margin: 22px auto; border: 3px solid var(--gold); border-radius: 6px; }
+.result-photo-fallback { display: grid; place-items: center; color: var(--gold-bright); background: var(--surface-raised); }
+.employee-badge { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright) !important; font-weight: 700; }
+.employee-type-toggle { grid-column: 1 / -1; }
+.employee-type-toggle button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 58px; padding: 10px 16px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--gold); border-radius: 4px; }
+.employee-type-toggle button[aria-checked="true"] { background: var(--gold); color: #11100c; }

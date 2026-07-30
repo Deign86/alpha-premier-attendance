@@ -17,12 +17,12 @@ This runbook provisions the service account and spreadsheet used by the RFID att
 
 ## 3. Create the Spreadsheet
 
-Create one spreadsheet and add tabs named exactly `Users`, `Attendance`, and `AuditLogs`. Put the following headers in row 1, in this exact order. Do not add a title row above them.
+Create one spreadsheet and add tabs named exactly `Users`, `Attendance`, `AuditLogs`, `Payroll`, and `InternGrace`. Put the following headers in row 1, in this exact order. Do not add a title row above them.
 
 ### Users
 
 ```text
-user_id,rfid_uid,full_name,department,status,created_at
+user_id,rfid_uid,full_name,department,status,created_at,employee_type,daily_rate,photo_url
 ```
 
 ### Attendance
@@ -36,6 +36,20 @@ attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time
 ```text
 log_id,timestamp,event_type,rfid_uid,user_id,message,request_id
 ```
+
+### Payroll
+
+```text
+payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_time_in,actual_time_out,computed_time_in,computed_time_out,grace_used,late_hours,late_deduction,base_pay,daily_pay,notes
+```
+
+### InternGrace
+
+```text
+grace_id,user_id,week_start,attendance_id,used_at
+```
+
+`employee_type` is `INTERN` or `EMPLOYEE`; enrollment defaults to `INTERN`. `daily_rate` is a positive peso amount for employees and may be blank for interns. `photo_url` is the public Vercel Blob URL returned by the protected setup photo upload. Payroll is appended only after a `COMPLETED` attendance row has a time-out; open attendance never creates payroll.
 
 Freeze row 1. Keep data values as plain text/ISO timestamps; do not insert formulas into columns written by the service. Avoid sorting a live sheet while a kiosk is processing a scan.
 
@@ -73,6 +87,7 @@ PORT=3000
 ENABLE_CARD_SETUP=false
 SETUP_ADMIN_PIN=<server-only-pin-when-setup-is-needed>
 SETUP_SESSION_MINUTES=15
+BLOB_READ_WRITE_TOKEN=<server-only-vercel-blob-token>
 ```
 
 If the implementation uses a key path instead of inline JSON, set that variable according to the server config module and ACL the file so ordinary kiosk users cannot read it. Keep a non-secret `.env.example` with variable names only.
@@ -88,7 +103,7 @@ npm install
 npm run validate:sheets -w server
 ```
 
-The validator must confirm the spreadsheet ID is reachable, all three tabs exist, and every header matches exactly. It should fail closed for a missing tab, renamed header, duplicate header, or insufficient permission.
+The validator must confirm the spreadsheet ID is reachable, all five tabs exist, and every header matches exactly. It should fail closed for a missing tab, renamed header, duplicate header, or insufficient permission. Run `npm run migrate:payroll -w server` once for the payroll schema preflight, then perform the printed header migration with the spreadsheet owner before enabling payroll.
 
 Then start the API and check:
 

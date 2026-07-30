@@ -9,7 +9,18 @@ export type SheetUser = {
   rfidUid: string;
   department: string | null;
   active: boolean;
+  employeeType?: 'INTERN' | 'EMPLOYEE';
+  dailyRate?: number | null;
+  photoUrl?: string | null;
 };
+
+export type SheetPayroll = {
+  payrollId: string; attendanceId: string; userId: string; fullName: string; employeeType: 'INTERN' | 'EMPLOYEE'; attendanceDate: string;
+  actualTimeIn: string; actualTimeOut: string; computedTimeIn: string; computedTimeOut: string; graceUsed: boolean | null;
+  lateHours: number; lateDeduction: number; basePay: number; dailyPay: number; notes: string; rowNumber?: number;
+};
+
+export type SheetInternGrace = { graceId: string; userId: string; weekStart: string; attendanceId: string; usedAt: string; rowNumber?: number };
 
 export type SheetAttendance = {
   attendanceId: string;
@@ -46,6 +57,11 @@ export interface GoogleSheetsService {
   completeAttendance(attendance: SheetAttendance, timeOut: string): Promise<SheetAttendance>;
   updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance>;
   deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void>;
+  findPayrollByAttendanceId(attendanceId: string): Promise<SheetPayroll | null>;
+  createPayroll(payroll: SheetPayroll): Promise<SheetPayroll>;
+  deletePayrollByAttendanceId(attendanceId: string): Promise<void>;
+  findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null>;
+  claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace>;
   writeAudit(event: AuditEvent): Promise<void>;
   healthCheck(): Promise<void>;
 }
@@ -53,6 +69,8 @@ export interface GoogleSheetsService {
 export class InMemorySheetsService implements GoogleSheetsService {
   private readonly users: SheetUser[];
   private readonly attendance: SheetAttendance[];
+  private readonly payroll: SheetPayroll[] = [];
+  private readonly grace: SheetInternGrace[] = [];
   readonly audits: AuditEvent[] = [];
 
   constructor(users: SheetUser[] = [], attendance: SheetAttendance[] = []) {
@@ -127,6 +145,31 @@ export class InMemorySheetsService implements GoogleSheetsService {
     this.attendance.splice(index, 1);
   }
 
+  async findPayrollByAttendanceId(attendanceId: string): Promise<SheetPayroll | null> {
+    const matches = this.payroll.filter((row) => row.attendanceId === attendanceId);
+    if (matches.length > 1) throw new Error('Duplicate payroll rows for attendance');
+    return matches[0] ? { ...matches[0] } : null;
+  }
+
+  async createPayroll(payroll: SheetPayroll): Promise<SheetPayroll> {
+    if (await this.findPayrollByAttendanceId(payroll.attendanceId)) throw new Error('Payroll already exists for attendance');
+    this.payroll.push({ ...payroll });
+    return { ...payroll };
+  }
+  async deletePayrollByAttendanceId(attendanceId: string): Promise<void> { const index = this.payroll.findIndex((row) => row.attendanceId === attendanceId); if (index >= 0) this.payroll.splice(index, 1); }
+
+  async findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null> {
+    const matches = this.grace.filter((row) => row.userId === userId && row.weekStart === weekStart);
+    if (matches.length > 1) throw new Error('Duplicate intern grace rows');
+    return matches[0] ? { ...matches[0] } : null;
+  }
+
+  async claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace> {
+    if (await this.findInternGrace(grace.userId, grace.weekStart)) throw new Error('Intern grace already claimed');
+    this.grace.push({ ...grace });
+    return { ...grace };
+  }
+
   async writeAudit(event: AuditEvent): Promise<void> {
     this.audits.push({ ...event });
   }
@@ -141,14 +184,18 @@ type GoogleSheetsOptions = {
   usersRange?: string;
   attendanceRange?: string;
   auditRange?: string;
+  payrollRange?: string;
+  internGraceRange?: string;
 };
 
 type Table = { headers: string[]; rows: string[][] };
 
 const requiredHeaders = {
-  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat'],
+  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'photourl'],
   Attendance: ['attendanceid', 'attendancedate', 'userid', 'rfiduid', 'fullname', 'department', 'timein', 'timeout', 'status', 'source', 'notes'],
   AuditLogs: ['logid', 'timestamp', 'eventtype', 'rfiduid', 'userid', 'message', 'requestid'],
+  Payroll: ['payrollid', 'attendanceid', 'userid', 'fullname', 'employeetype', 'attendancedate', 'actualtimein', 'actualtimeout', 'computedtimein', 'computedtimeout', 'graceused', 'latehours', 'latededuction', 'basepay', 'dailypay', 'notes'],
+  InternGrace: ['graceid', 'userid', 'weekstart', 'attendanceid', 'usedat'],
 } as const;
 
 export class GoogleSheetsAdapter implements GoogleSheetsService {
@@ -160,6 +207,8 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       usersRange: 'Users',
       attendanceRange: 'Attendance',
       auditRange: 'AuditLogs',
+      payrollRange: 'Payroll',
+      internGraceRange: 'InternGrace',
       ...options,
     };
     if (api) this.api = api;
@@ -198,6 +247,9 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       fullName: row[index.fullname] ?? '',
       department: row[index.department] || null,
       active: String(row[index.status] ?? '').trim().toUpperCase() === 'ACTIVE',
+      employeeType: String(row[index.employeetype] ?? '').trim().toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN',
+      dailyRate: parseRate(row[index.dailyrate]),
+      photoUrl: row[index.photourl] || null,
     };
   }
 
@@ -335,6 +387,41 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     await this.deleteRow(this.options.attendanceRange, matches[0]);
   }
 
+  async findPayrollByAttendanceId(attendanceId: string): Promise<SheetPayroll | null> {
+    const { headers, rows } = await this.table(this.options.payrollRange, 'Payroll');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.attendanceid] === attendanceId ? [payrollFromRow(row, index, offset + 2)] : []);
+    if (matches.length > 1) throw new Error('Duplicate payroll rows for attendance');
+    return matches[0] ?? null;
+  }
+
+  async createPayroll(payroll: SheetPayroll): Promise<SheetPayroll> {
+    const { headers } = await this.table(this.options.payrollRange, 'Payroll');
+    await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [valuesForPayroll(headers, payroll)] } });
+    return payroll;
+  }
+  async deletePayrollByAttendanceId(attendanceId: string): Promise<void> {
+    const { rows } = await this.table(this.options.payrollRange, 'Payroll');
+    const { headers } = await this.table(this.options.payrollRange, 'Payroll');
+    const index = indexMap(headers);
+    const match = rows.findIndex((row) => row[index.attendanceid] === attendanceId);
+    if (match >= 0) await this.deleteRow(this.options.payrollRange, match + 2);
+  }
+
+  async findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null> {
+    const { headers, rows } = await this.table(this.options.internGraceRange, 'InternGrace');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.userid] === userId && row[index.weekstart] === weekStart ? [graceFromRow(row, index, offset + 2)] : []);
+    if (matches.length > 1) throw new Error('Duplicate intern grace rows');
+    return matches[0] ?? null;
+  }
+
+  async claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace> {
+    const { headers } = await this.table(this.options.internGraceRange, 'InternGrace');
+    await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.internGraceRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [valuesForGrace(headers, grace)] } });
+    return grace;
+  }
+
   private async deleteRow(range: string, rowNumber: number): Promise<void> {
     const title = sheetName(range);
     const metadata = await this.api.spreadsheets.get({ spreadsheetId: this.options.spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
@@ -367,6 +454,8 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       this.table(this.options.usersRange, 'Users'),
       this.table(this.options.attendanceRange, 'Attendance'),
       this.table(this.options.auditRange, 'AuditLogs'),
+      this.table(this.options.payrollRange, 'Payroll'),
+      this.table(this.options.internGraceRange, 'InternGrace'),
     ]);
   }
 }
@@ -399,6 +488,9 @@ function userFromRow(row: string[], index: Record<string, number>): SheetUser {
     fullName: row[index.fullname] ?? '',
     department: row[index.department] || null,
     active: String(row[index.status] ?? '').trim().toUpperCase() === 'ACTIVE',
+    employeeType: String(row[index.employeetype] ?? '').trim().toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN',
+    dailyRate: parseRate(row[index.dailyrate]),
+    photoUrl: row[index.photourl] || null,
   };
 }
 function normalizeAttendanceStatus(value: string | undefined): SheetAttendance['status'] {
@@ -423,9 +515,40 @@ function valuesForUser(headers: string[], user: SheetUser, existing: string[] = 
     department: user.department ?? '',
     status: user.active ? 'ACTIVE' : 'INACTIVE',
     createdat: row[headers.indexOf('createdat')] || manilaTimestamp(new Date()),
+    employeetype: user.employeeType ?? 'INTERN',
+    dailyrate: user.dailyRate == null ? '' : String(user.dailyRate),
+    photourl: user.photoUrl ?? '',
   };
   headers.forEach((header, offset) => { if (values[header] !== undefined) row[offset] = values[header]; });
   return row.slice(0, headers.length);
+}
+function parseRate(value: string | undefined): number | null {
+  const rate = Number(value);
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+function payrollFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetPayroll {
+  return {
+    payrollId: row[index.payrollid] ?? '', attendanceId: row[index.attendanceid] ?? '', userId: row[index.userid] ?? '', fullName: row[index.fullname] ?? '',
+    employeeType: String(row[index.employeetype] ?? '').toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN', attendanceDate: row[index.attendancedate] ?? '',
+    actualTimeIn: row[index.actualtimein] ?? '', actualTimeOut: row[index.actualtimeout] ?? '', computedTimeIn: row[index.computedtimein] ?? '', computedTimeOut: row[index.computedtimeout] ?? '',
+    graceUsed: row[index.graceused] === '' ? null : String(row[index.graceused]).toUpperCase() === 'TRUE', lateHours: Number(row[index.latehours] ?? 0), lateDeduction: Number(row[index.latededuction] ?? 0),
+    basePay: Number(row[index.basepay] ?? 0), dailyPay: Number(row[index.dailypay] ?? 0), notes: row[index.notes] ?? '', rowNumber,
+  };
+}
+function valuesForPayroll(headers: string[], payroll: SheetPayroll): string[] {
+  const values: Record<string, string> = {
+    payrollid: payroll.payrollId, attendanceid: payroll.attendanceId, userid: payroll.userId, fullname: payroll.fullName, employeetype: payroll.employeeType,
+    attendancedate: payroll.attendanceDate, actualtimein: payroll.actualTimeIn, actualtimeout: payroll.actualTimeOut, computedtimein: payroll.computedTimeIn, computedtimeout: payroll.computedTimeOut,
+    graceused: payroll.graceUsed === null ? '' : payroll.graceUsed ? 'TRUE' : 'FALSE', latehours: String(payroll.lateHours), latededuction: String(payroll.lateDeduction), basepay: String(payroll.basePay), dailypay: String(payroll.dailyPay), notes: payroll.notes,
+  };
+  return headers.map((header) => values[header] ?? '');
+}
+function graceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetInternGrace {
+  return { graceId: row[index.graceid] ?? '', userId: row[index.userid] ?? '', weekStart: row[index.weekstart] ?? '', attendanceId: row[index.attendanceid] ?? '', usedAt: row[index.usedat] ?? '', rowNumber };
+}
+function valuesForGrace(headers: string[], grace: SheetInternGrace): string[] {
+  const values: Record<string, string> = { graceid: grace.graceId, userid: grace.userId, weekstart: grace.weekStart, attendanceid: grace.attendanceId, usedat: grace.usedAt };
+  return headers.map((header) => values[header] ?? '');
 }
 function columnName(index: number): string {
   let value = index + 1; let result = '';

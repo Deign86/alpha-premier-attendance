@@ -13,6 +13,7 @@ import type { GoogleSheetsService } from './sheets.js';
 import { manilaTimestamp } from './time.js';
 import { SetupError, SetupService, setupTokenFromRequest } from './setup.js';
 import { AdminError, AdminService } from './admin.js';
+import { uploadPhotoDataUrl } from './photo-storage.js';
 
 export type CreateAppOptions = { sheets: GoogleSheetsService; config: AppConfig; logger?: boolean; staticDir?: string };
 
@@ -34,7 +35,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     req.requestId = requestId(req);
     next();
   });
-  app.use(express.json({ limit: '8kb', strict: true }));
+  app.use(express.json({ limit: '1mb', strict: true }));
   if (options.logger !== false) app.use(morgan('combined'));
   app.use(rateLimit({
     windowMs: options.config.rateLimitWindowMs,
@@ -132,6 +133,17 @@ export function createApp(options: CreateAppOptions): express.Express {
   };
   app.post('/api/setup/user', upsertUserHandler);
   app.post('/api/setup/users', upsertUserHandler);
+  app.post('/api/setup/photo', async (req, res) => {
+    try {
+      const token = setupTokenFromRequest(req.headers as { authorization?: string; 'x-setup-token'?: string });
+      setup.authorize(token);
+      const userId = String((req.body as { userId?: unknown })?.userId ?? '').trim();
+      const dataUrl = String((req.body as { dataUrl?: unknown })?.dataUrl ?? '');
+      if (!userId || !dataUrl) throw new SetupError('SETUP_VALIDATION_ERROR', 'userId and dataUrl are required.', 400);
+      const photoUrl = await uploadPhotoDataUrl(userId, dataUrl);
+      res.status(200).json({ success: true, requestId: req.requestId, photoUrl });
+    } catch (error) { sendSetupError(req, res, error); }
+  });
 
   const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     const scanError = error instanceof SyntaxError ? new ScanError('INVALID_SCAN_INPUT', 'Request body must be valid JSON.', 400) : asScanError(error);
@@ -154,6 +166,7 @@ function statusForError(code: string): number {
     case 'ATTENDANCE_ALREADY_COMPLETED':
     case 'ATTENDANCE_DATA_CONFLICT': return 409;
     case 'GOOGLE_SHEETS_UNAVAILABLE': return 503;
+    case 'PAYROLL_GENERATION_FAILED': return 503;
     case 'CONFIGURATION_ERROR':
     case 'INTERNAL_SERVER_ERROR': return 500;
     default: return 400;

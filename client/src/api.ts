@@ -86,6 +86,10 @@ export async function lockSetup(setupToken: string, signal?: AbortSignal): Promi
   await setupRequest<unknown>('/api/setup/lock', { method: 'POST', setupToken, signal });
 }
 
+export async function uploadSetupPhoto(userId: string, dataUrl: string, setupToken: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
+  return setupRequest<{ success: true; photoUrl: string }>('/api/setup/photo', { method: 'POST', setupToken, body: JSON.stringify({ userId, dataUrl }) });
+}
+
 export async function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
   const response = await fetch(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`, { signal });
   return (await response.json()) as AttendanceListResponse;

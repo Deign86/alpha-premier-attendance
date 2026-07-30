@@ -16,6 +16,8 @@ export type UserSummary = {
   userId: string;
   fullName: string;
   department: string | null;
+  employeeType: 'INTERN' | 'EMPLOYEE';
+  photoUrl: string | null;
 };
 
 export type AttendanceSummary = {
@@ -62,6 +64,7 @@ export const scanErrorCodes = [
   'ATTENDANCE_ALREADY_COMPLETED',
   'ATTENDANCE_DATA_CONFLICT',
   'GOOGLE_SHEETS_UNAVAILABLE',
+  'PAYROLL_GENERATION_FAILED',
   'RATE_LIMITED',
   'INTERNAL_SERVER_ERROR',
   'CONFIGURATION_ERROR'
@@ -103,6 +106,9 @@ export type SetupUser = {
   fullName: string;
   department: string | null;
   status: 'ACTIVE' | 'INACTIVE';
+  employeeType: 'INTERN' | 'EMPLOYEE';
+  dailyRate: number | null;
+  photoUrl: string | null;
 };
 
 export type SetupUnlockRequest = { pin: string };
@@ -125,6 +131,9 @@ export type SetupUpsertRequest = {
   fullName: string;
   department?: string;
   status: 'ACTIVE' | 'INACTIVE';
+  employeeType?: 'INTERN' | 'EMPLOYEE';
+  dailyRate?: number | null;
+  photoUrl?: string | null;
 };
 
 export type SetupUpsertResponse = {

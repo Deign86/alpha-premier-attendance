@@ -13,9 +13,12 @@
     "lint": "eslint src",
     "test": "vitest run",
     "validate:sheets": "tsx src/validate-sheets.ts"
+    ,"migrate:payroll": "tsx src/migrate-payroll-sheets.ts"
+    ,"backfill:payroll": "tsx src/backfill-payroll.ts"
   },
   "dependencies": {
     "@rfid-attendance/shared": "file:../shared",
+    "@vercel/blob": "^2.6.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
