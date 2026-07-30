@@ -46,11 +46,8 @@ export function asScanError(error: unknown): ScanError {
   if (isScanErrorLike(error)) {
     return new ScanError(error.code, error.message, error.status, error.retryAfterSeconds);
   }
-  if (process.env.DEBUG_SCAN_ERRORS === 'true') {
-    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    return new ScanError('INTERNAL_SERVER_ERROR', `Scan failed: ${detail}`, 500);
-  }
-  return new ScanError('INTERNAL_SERVER_ERROR', 'An unexpected server error occurred.', 500);
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return new ScanError('INTERNAL_SERVER_ERROR', `Scan failed: ${detail}`, 500);
 }
 
 function isScanErrorLike(error: unknown): error is { code: ScanErrorCode; message: string; status: number; retryAfterSeconds?: number } {
