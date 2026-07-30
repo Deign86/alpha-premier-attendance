@@ -198,8 +198,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 /* Kiosk distance accessibility: the production UI never renders text below 18px. */
 p, span, label, small, a, button, input, select, td, th { font-size: 18px !important; }
 h1, h2 { font-size: 32px !important; }
-.rfid-capture-input { position: fixed; width: 1px !important; height: 1px !important; opacity: 0; clip-path: inset(50%); }
-.input-area:has(.rfid-capture-input) { display: none; }
+.rfid-capture-input { caret-color: var(--gold-bright); }
 .result-photo { display: block; width: min(220px, 54vw); aspect-ratio: 1; object-fit: cover; margin: 22px auto; border: 3px solid var(--gold); border-radius: 6px; }
 .result-photo-fallback { display: grid; place-items: center; color: var(--gold-bright); background: var(--surface-raised); }
 .employee-badge { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright) !important; font-weight: 700; }
