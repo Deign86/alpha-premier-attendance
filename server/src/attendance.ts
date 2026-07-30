@@ -120,13 +120,21 @@ export class AttendanceService {
         return this.successResponse(requestId, action, saved, user);
       });
     } catch (error) {
-      await this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
+      try {
+        await this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
+      } catch {
+        // Audit logging must not replace the scan result when the audit sheet is unavailable.
+      }
       return asScanError(error).toResponse(requestId);
     }
   }
 
   private async writeAudit(event: AuditEvent): Promise<void> {
-    await this.sheets.writeAudit(event).catch(() => undefined);
+    try {
+      await this.sheets.writeAudit(event);
+    } catch {
+      // Audit logging is best effort; attendance results remain authoritative.
+    }
   }
 
   private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null; employeeType?: 'INTERN' | 'EMPLOYEE'; photoUrl?: string | null }): ScanSuccessResponse {
