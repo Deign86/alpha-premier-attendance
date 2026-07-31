@@ -47,6 +47,69 @@ export type AdminAttendanceUpdateRequest = {
 };
 export type AdminUnlockResponse = { success: true; expiresAt: string };
 
+export const payrollFrequencies = ['SEMI_MONTHLY'] as const;
+export type PayrollFrequency = (typeof payrollFrequencies)[number];
+export type PayrollProfileId = 'JEAN_TENURED' | 'BEA_STANDARD' | string;
+
+export type PayrollCalculationProfile = {
+  profileId: PayrollProfileId;
+  label: string;
+  payrollFrequency: PayrollFrequency;
+  standardWorkingDaysPerCutoff: number;
+  incentivesAllowance: number;
+  specialAllowance: number;
+  specialHolidayMultiplier: number;
+  regularHolidayMultiplier: number;
+  halfDayFraction: number;
+  overtimeRate: number;
+};
+
+export type PayrollCutoffRecord = {
+  payrollId: string;
+  employeeId: string;
+  employeeName: string;
+  payrollProfileId: PayrollProfileId;
+  payrollCutoffLabel: string;
+  cutoffStart: string;
+  cutoffEnd: string;
+  payrollFrequency: PayrollFrequency;
+  dailyRate: number;
+  standardWorkingDays: number;
+  actualWorkingDays: number;
+  basicPay: number;
+  specialHolidayDays: number;
+  specialHolidayMultiplier: number;
+  specialHolidayPay: number;
+  regularHolidayDays: number;
+  regularHolidayMultiplier: number;
+  regularHolidayPay: number;
+  incentivesAllowance: number;
+  specialAllowance: number;
+  totalCompensation: number;
+  totalAllowance: number;
+  lateUnits: number;
+  lateDeduction: number;
+  halfDayCount: number;
+  halfDayDeduction: number;
+  absentDays: number;
+  absenceDeduction: number;
+  overtimeHours: number;
+  overtimeRate: number;
+  overtimePay: number;
+  manualAdjustment: number;
+  adjustmentReason: string | null;
+  grossCompensation: number;
+  netPay: number;
+  signaturePlaceholder: string;
+  calculationBreakdown: string;
+  approvedWorkingDayOverage: boolean;
+  status: 'DRAFT' | 'FINALIZED';
+  finalizedAt: string | null;
+};
+
+export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculationProfile[] };
+export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
+
 export type ScanSuccessResponse = {
   success: true;
   requestId: string;
@@ -108,6 +171,7 @@ export type SetupUser = {
   status: 'ACTIVE' | 'INACTIVE';
   employeeType: 'INTERN' | 'EMPLOYEE';
   dailyRate: number | null;
+  payrollProfileId?: PayrollProfileId | null;
   photoUrl: string | null;
 };
 
@@ -133,6 +197,7 @@ export type SetupUpsertRequest = {
   status: 'ACTIVE' | 'INACTIVE';
   employeeType?: 'INTERN' | 'EMPLOYEE';
   dailyRate?: number | null;
+  payrollProfileId?: PayrollProfileId | null;
   photoUrl?: string | null;
 };
 

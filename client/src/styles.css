@@ -205,3 +205,15 @@ h1, h2 { font-size: 32px !important; }
 .employee-type-toggle { grid-column: 1 / -1; }
 .employee-type-toggle button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 58px; padding: 10px 16px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--gold); border-radius: 4px; }
 .employee-type-toggle button[aria-checked="true"] { background: var(--gold); color: #11100c; }
+
+.payroll-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 18px; }
+.payroll-workspace .admin-grid { grid-template-columns: minmax(300px, 390px) minmax(0, 1fr); }
+.payroll-table { min-width: 0; }
+.payroll-detail td { background: var(--surface-input); }
+.payroll-detail p { color: var(--muted); line-height: 1.55; }
+.checkbox-label { display: flex !important; align-items: center; gap: 10px; }
+.checkbox-label input { width: 20px; height: 20px; }
+.profile-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+.profile-toggle button { min-height: 48px; padding: 8px 10px; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; font-weight: 700; }
+.profile-toggle button.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
+@media print { body { background: #fff; color: #111; } .print-hidden, .dashboard-header, .admin-tabs, .payroll-actions { display: none !important; } .dashboard-shell { width: 100%; padding: 0; color: #111; } .table-wrap, .payroll-detail td { border-color: #999; background: #fff; } th, td { color: #111 !important; font-size: 10px !important; padding: 6px !important; } .payroll-print { overflow: visible; } }

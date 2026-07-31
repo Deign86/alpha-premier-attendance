@@ -10,6 +10,21 @@ const config = {
 };
 
 describe('admin and live attendance API', () => {
+  it('creates, finalizes, and exports cutoff payroll without changing daily payroll', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'APGCO-0013', fullName: 'CHICO, JEAN ASHLEY', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705, payrollProfileId: 'JEAN_TENURED' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+    const profiles = await agent.get('/api/admin/payroll/profiles').expect(200);
+    expect(profiles.body.profiles.map((profile: { profileId: string }) => profile.profileId)).toContain('JEAN_TENURED');
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15', actualWorkingDays: 11, specialHolidayDays: 1, manualAdjustment: 1500, adjustmentReason: 'Legacy payroll adjustment / needs verification' }).expect(200);
+    expect(created.body.payroll.grossCompensation).toBe(16216.5);
+    const payrollId = created.body.payroll.payrollId as string;
+    await agent.post(`/api/admin/payroll/cutoffs/${payrollId}/finalize`).expect(200);
+    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll[0]).toMatchObject({ payrollId, status: 'FINALIZED', netPay: 16216.5 });
+    const exported = await agent.get('/api/admin/payroll/export').expect(200);
+    expect(exported.text).toContain('CHICO, JEAN ASHLEY');
+  });
+
   it('protects users, edits profiles, lists attendance, and applies time corrections', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: 'Engineering', active: true },

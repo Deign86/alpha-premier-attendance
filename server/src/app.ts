@@ -98,6 +98,22 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.get('/api/admin/attendance', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date()); res.json({ success: true, date, attendance: await admin.attendance(date, true), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, attendance: await admin.updateAttendance(req.params.attendanceId, req.body) }); } catch (error) { sendAdminError(req, res, error); } });
   app.delete('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : ''; await admin.deleteAttendance(req.params.attendanceId, date); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
+  app.get('/api/admin/payroll/profiles', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profiles: await admin.payrollProfiles() }); } catch (error) { sendAdminError(req, res, error); } });
+  app.put('/api/admin/payroll/profiles/:profileId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profile: await admin.savePayrollProfile({ ...(req.body as object), profileId: req.params.profileId }) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.get('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.cutoffPayroll() }); } catch (error) { sendAdminError(req, res, error); } });
+  app.post('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.patch('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body, req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.post('/api/admin/payroll/cutoffs/:payrollId/finalize', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.finalizeCutoffPayroll(req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.get('/api/admin/payroll/export', async (req, res) => {
+    try {
+      requireAdmin(req);
+      const rows = await admin.cutoffPayroll();
+      const headers = ['Employee #', 'Employee Name', 'Cut Off Rate', 'Daily Rate', 'Standard Working Days', 'Actual Working Days', 'Basic Rate', 'Special Holidays (30%)', 'Regular Holiday (100%)', 'Total Compensation', 'Incentives Allowance', 'Special Allowance', 'Total Allowance', 'Late', 'Halfday', 'Absent', 'Overtime', 'Gross Compensation', 'Signature'];
+      const values = rows.map((item) => [item.employeeId, item.employeeName, item.payrollCutoffLabel, item.dailyRate, item.standardWorkingDays, item.actualWorkingDays, item.basicPay, item.specialHolidayPay, item.regularHolidayPay, item.totalCompensation, item.incentivesAllowance, item.specialAllowance, item.totalAllowance, item.lateDeduction, item.halfDayDeduction, item.absenceDeduction, item.overtimePay, item.grossCompensation, item.signaturePlaceholder]);
+      const csv = [headers, ...values].map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      res.type('text/csv').attachment('payroll-cutoffs.csv').send(csv);
+    } catch (error) { sendAdminError(req, res, error); }
+  });
 
   app.post('/api/setup/unlock', (req, res) => {
     try {

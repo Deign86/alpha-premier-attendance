@@ -17,12 +17,12 @@ This runbook provisions the service account and spreadsheet used by the RFID att
 
 ## 3. Create the Spreadsheet
 
-Create one spreadsheet and add tabs named exactly `Users`, `Attendance`, `AuditLogs`, `Payroll`, and `InternGrace`. Put the following headers in row 1, in this exact order. Do not add a title row above them.
+Create one spreadsheet and add tabs named exactly `Users`, `Attendance`, `AuditLogs`, `Payroll`, `InternGrace`, `PayrollProfiles`, and `PayrollCutoffs`. Put the following headers in row 1, in this exact order. Do not add a title row above them.
 
 ### Users
 
 ```text
-user_id,rfid_uid,full_name,department,status,created_at,employee_type,daily_rate,photo_url
+user_id,rfid_uid,full_name,department,status,created_at,employee_type,daily_rate,payroll_profile_id,photo_url
 ```
 
 ### Attendance
@@ -48,6 +48,22 @@ payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_
 ```text
 grace_id,user_id,week_start,attendance_id,used_at
 ```
+
+### PayrollProfiles
+
+```text
+profile_id,label,payroll_frequency,standard_working_days_per_cutoff,incentives_allowance,special_allowance,special_holiday_multiplier,regular_holiday_multiplier,half_day_fraction,overtime_rate
+```
+
+Create the reusable `JEAN_TENURED` and `BEA_STANDARD` profiles through the administrator payroll workspace. These are payroll rules only; do not add employee rows unless the administrator is enrolling an employee.
+
+### PayrollCutoffs
+
+```text
+payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,payroll_frequency,daily_rate,standard_working_days,actual_working_days,basic_pay,special_holiday_days,special_holiday_multiplier,special_holiday_pay,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay,incentives_allowance,special_allowance,total_compensation,total_allowance,late_units,late_deduction,half_day_count,half_day_deduction,absent_days,absence_deduction,overtime_hours,overtime_rate,overtime_pay,manual_adjustment,adjustment_reason,gross_compensation,net_pay,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,finalized_at
+```
+
+`PayrollCutoffs` is the editable semi-monthly payroll report. The existing `Payroll` tab remains the attendance-linked daily payroll ledger and is not replaced. Currency is stored as two-decimal peso values; the service calculates in centavos before writing values. A non-zero `manual_adjustment` requires `adjustment_reason`.
 
 `employee_type` is `INTERN` or `EMPLOYEE`; enrollment defaults to `INTERN`. `daily_rate` is a positive peso amount for employees and may be blank for interns. `photo_url` is the public Vercel Blob URL returned by the protected setup photo upload. Payroll is appended only after a `COMPLETED` attendance row has a time-out; open attendance never creates payroll.
 

@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import { google, type sheets_v4 } from 'googleapis';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaTimestamp } from './time.js';
+import type { PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
+import { defaultPayrollProfiles } from './cutoff-payroll.js';
 
 export type SheetUser = {
   userId: string;
@@ -11,6 +13,7 @@ export type SheetUser = {
   active: boolean;
   employeeType?: 'INTERN' | 'EMPLOYEE';
   dailyRate?: number | null;
+  payrollProfileId?: string | null;
   photoUrl?: string | null;
 };
 
@@ -19,6 +22,8 @@ export type SheetPayroll = {
   actualTimeIn: string; actualTimeOut: string; computedTimeIn: string; computedTimeOut: string; graceUsed: boolean | null;
   lateHours: number; lateDeduction: number; basePay: number; dailyPay: number; notes: string; rowNumber?: number;
 };
+export type SheetPayrollProfile = PayrollCalculationProfile & { rowNumber?: number };
+export type SheetPayrollCutoff = PayrollCutoffRecord & { rowNumber?: number };
 
 export type SheetInternGrace = { graceId: string; userId: string; weekStart: string; attendanceId: string; usedAt: string; rowNumber?: number };
 
@@ -60,6 +65,11 @@ export interface GoogleSheetsService {
   findPayrollByAttendanceId(attendanceId: string): Promise<SheetPayroll | null>;
   createPayroll(payroll: SheetPayroll): Promise<SheetPayroll>;
   deletePayrollByAttendanceId(attendanceId: string): Promise<void>;
+  listPayrollProfiles(): Promise<SheetPayrollProfile[]>;
+  upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile>;
+  listPayrollCutoffs(): Promise<SheetPayrollCutoff[]>;
+  findPayrollCutoff(payrollId: string): Promise<SheetPayrollCutoff | null>;
+  upsertPayrollCutoff(payroll: SheetPayrollCutoff): Promise<SheetPayrollCutoff>;
   findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null>;
   claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace>;
   writeAudit(event: AuditEvent): Promise<void>;
@@ -71,11 +81,14 @@ export class InMemorySheetsService implements GoogleSheetsService {
   private readonly attendance: SheetAttendance[];
   private readonly payroll: SheetPayroll[] = [];
   private readonly grace: SheetInternGrace[] = [];
+  private readonly payrollProfiles: SheetPayrollProfile[] = [];
+  private readonly payrollCutoffs: SheetPayrollCutoff[] = [];
   readonly audits: AuditEvent[] = [];
 
   constructor(users: SheetUser[] = [], attendance: SheetAttendance[] = []) {
     this.users = users.map((user) => ({ ...user, rfidUid: normalizeRfidUid(user.rfidUid) }));
     this.attendance = attendance.map((row) => ({ ...row }));
+    this.payrollProfiles.push(...defaultPayrollProfiles.map((profile) => ({ ...profile })));
   }
 
   async findUserByUid(uid: string): Promise<SheetUser | null> {
@@ -157,6 +170,11 @@ export class InMemorySheetsService implements GoogleSheetsService {
     return { ...payroll };
   }
   async deletePayrollByAttendanceId(attendanceId: string): Promise<void> { const index = this.payroll.findIndex((row) => row.attendanceId === attendanceId); if (index >= 0) this.payroll.splice(index, 1); }
+  async listPayrollProfiles(): Promise<SheetPayrollProfile[]> { return this.payrollProfiles.map((row) => ({ ...row })); }
+  async upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile> { const existing = this.payrollProfiles.find((row) => row.profileId === profile.profileId); if (existing) Object.assign(existing, profile); else this.payrollProfiles.push({ ...profile }); return { ...(existing ?? this.payrollProfiles[this.payrollProfiles.length - 1]) }; }
+  async listPayrollCutoffs(): Promise<SheetPayrollCutoff[]> { return this.payrollCutoffs.map((row) => ({ ...row })); }
+  async findPayrollCutoff(payrollId: string): Promise<SheetPayrollCutoff | null> { const row = this.payrollCutoffs.find((item) => item.payrollId === payrollId); return row ? { ...row } : null; }
+  async upsertPayrollCutoff(payroll: SheetPayrollCutoff): Promise<SheetPayrollCutoff> { const existing = this.payrollCutoffs.find((row) => row.payrollId === payroll.payrollId); if (existing) Object.assign(existing, payroll); else this.payrollCutoffs.push({ ...payroll }); return { ...(existing ?? this.payrollCutoffs[this.payrollCutoffs.length - 1]) }; }
 
   async findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null> {
     const matches = this.grace.filter((row) => row.userId === userId && row.weekStart === weekStart);
@@ -186,16 +204,20 @@ type GoogleSheetsOptions = {
   auditRange?: string;
   payrollRange?: string;
   internGraceRange?: string;
+  payrollProfilesRange?: string;
+  payrollCutoffsRange?: string;
 };
 
 type Table = { headers: string[]; rows: string[][] };
 
 const requiredHeaders = {
-  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'photourl'],
+  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'payrollprofileid', 'photourl'],
   Attendance: ['attendanceid', 'attendancedate', 'userid', 'rfiduid', 'fullname', 'department', 'timein', 'timeout', 'status', 'source', 'notes'],
   AuditLogs: ['logid', 'timestamp', 'eventtype', 'rfiduid', 'userid', 'message', 'requestid'],
   Payroll: ['payrollid', 'attendanceid', 'userid', 'fullname', 'employeetype', 'attendancedate', 'actualtimein', 'actualtimeout', 'computedtimein', 'computedtimeout', 'graceused', 'latehours', 'latededuction', 'basepay', 'dailypay', 'notes'],
   InternGrace: ['graceid', 'userid', 'weekstart', 'attendanceid', 'usedat'],
+  PayrollProfiles: ['profileid', 'label', 'payrollfrequency', 'standardworkingdayspercutoff', 'incentivesallowance', 'specialallowance', 'specialholidaymultiplier', 'regularholidaymultiplier', 'halfdayfraction', 'overtimerate'],
+  PayrollCutoffs: ['payrollid', 'employeeid', 'employeename', 'payrollprofileid', 'payrollcutofflabel', 'cutoffstart', 'cutoffend', 'payrollfrequency', 'dailyrate', 'standardworkingdays', 'actualworkingdays', 'basicpay', 'specialholidaydays', 'specialholidaymultiplier', 'specialholidaypay', 'regularholidaydays', 'regularholidaymultiplier', 'regularholidaypay', 'incentivesallowance', 'specialallowance', 'totalcompensation', 'totalallowance', 'lateunits', 'latededuction', 'halfdaycount', 'halfdaydeduction', 'absentdays', 'absencededuction', 'overtimehours', 'overtimerate', 'overtimepay', 'manualadjustment', 'adjustmentreason', 'grosscompensation', 'netpay', 'signatureplaceholder', 'calculationbreakdown', 'approvedworkingdayoverage', 'status', 'finalizedat'],
 } as const;
 
 export class GoogleSheetsAdapter implements GoogleSheetsService {
@@ -209,6 +231,8 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       auditRange: 'AuditLogs',
       payrollRange: 'Payroll',
       internGraceRange: 'InternGrace',
+      payrollProfilesRange: 'PayrollProfiles',
+      payrollCutoffsRange: 'PayrollCutoffs',
       ...options,
     };
     if (api) this.api = api;
@@ -249,6 +273,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       active: String(row[index.status] ?? '').trim().toUpperCase() === 'ACTIVE',
       employeeType: String(row[index.employeetype] ?? '').trim().toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN',
       dailyRate: parseRate(row[index.dailyrate]),
+      payrollProfileId: row[index.payrollprofileid] || null,
       photoUrl: row[index.photourl] || null,
     };
   }
@@ -408,6 +433,44 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     if (match >= 0) await this.deleteRow(this.options.payrollRange, match + 2);
   }
 
+  async listPayrollProfiles(): Promise<SheetPayrollProfile[]> {
+    const { headers, rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
+    const index = indexMap(headers);
+    return rows.map((row, offset) => payrollProfileFromRow(row, index, offset + 2));
+  }
+
+  async upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile> {
+    const { headers, rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.profileid] === profile.profileId ? [offset + 2] : []);
+    if (matches.length > 1) throw new Error('Duplicate payroll profile');
+    const values = valuesForPayrollProfile(headers, profile);
+    if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${sheetName(this.options.payrollProfilesRange)}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
+    else await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollProfilesRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [values] } });
+    return profile;
+  }
+
+  async listPayrollCutoffs(): Promise<SheetPayrollCutoff[]> {
+    const { headers, rows } = await this.table(this.options.payrollCutoffsRange, 'PayrollCutoffs');
+    const index = indexMap(headers);
+    return rows.map((row, offset) => payrollCutoffFromRow(row, index, offset + 2));
+  }
+
+  async findPayrollCutoff(payrollId: string): Promise<SheetPayrollCutoff | null> {
+    return (await this.listPayrollCutoffs()).find((row) => row.payrollId === payrollId) ?? null;
+  }
+
+  async upsertPayrollCutoff(payroll: SheetPayrollCutoff): Promise<SheetPayrollCutoff> {
+    const { headers, rows } = await this.table(this.options.payrollCutoffsRange, 'PayrollCutoffs');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.payrollid] === payroll.payrollId ? [offset + 2] : []);
+    if (matches.length > 1) throw new Error('Duplicate cutoff payroll');
+    const values = valuesForPayrollCutoff(headers, payroll);
+    if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${sheetName(this.options.payrollCutoffsRange)}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
+    else await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollCutoffsRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [values] } });
+    return payroll;
+  }
+
   async findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null> {
     const { headers, rows } = await this.table(this.options.internGraceRange, 'InternGrace');
     const index = indexMap(headers);
@@ -456,6 +519,8 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       this.table(this.options.auditRange, 'AuditLogs'),
       this.table(this.options.payrollRange, 'Payroll'),
       this.table(this.options.internGraceRange, 'InternGrace'),
+      this.table(this.options.payrollProfilesRange, 'PayrollProfiles'),
+      this.table(this.options.payrollCutoffsRange, 'PayrollCutoffs'),
     ]);
   }
 }
@@ -517,6 +582,7 @@ function valuesForUser(headers: string[], user: SheetUser, existing: string[] = 
     createdat: row[headers.indexOf('createdat')] || manilaTimestamp(new Date()),
     employeetype: user.employeeType ?? 'INTERN',
     dailyrate: user.dailyRate == null ? '' : String(user.dailyRate),
+    payrollprofileid: user.payrollProfileId ?? '',
     photourl: user.photoUrl ?? '',
   };
   headers.forEach((header, offset) => { if (values[header] !== undefined) row[offset] = values[header]; });
@@ -541,6 +607,29 @@ function valuesForPayroll(headers: string[], payroll: SheetPayroll): string[] {
     attendancedate: payroll.attendanceDate, actualtimein: payroll.actualTimeIn, actualtimeout: payroll.actualTimeOut, computedtimein: payroll.computedTimeIn, computedtimeout: payroll.computedTimeOut,
     graceused: payroll.graceUsed === null ? '' : payroll.graceUsed ? 'TRUE' : 'FALSE', latehours: String(payroll.lateHours), latededuction: String(payroll.lateDeduction), basepay: String(payroll.basePay), dailypay: String(payroll.dailyPay), notes: payroll.notes,
   };
+  return headers.map((header) => values[header] ?? '');
+}
+function payrollProfileFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetPayrollProfile {
+  return {
+    profileId: row[index.profileid] ?? '', label: row[index.label] ?? '', payrollFrequency: 'SEMI_MONTHLY',
+    standardWorkingDaysPerCutoff: Number(row[index.standardworkingdayspercutoff] ?? 0), incentivesAllowance: Number(row[index.incentivesallowance] ?? 0), specialAllowance: Number(row[index.specialallowance] ?? 0),
+    specialHolidayMultiplier: Number(row[index.specialholidaymultiplier] ?? 0), regularHolidayMultiplier: Number(row[index.regularholidaymultiplier] ?? 0), halfDayFraction: Number(row[index.halfdayfraction] ?? 0), overtimeRate: Number(row[index.overtimerate] ?? 0), rowNumber,
+  };
+}
+function valuesForPayrollProfile(headers: string[], profile: SheetPayrollProfile): string[] {
+  const values: Record<string, string> = {
+    profileid: profile.profileId, label: profile.label, payrollfrequency: profile.payrollFrequency, standardworkingdayspercutoff: String(profile.standardWorkingDaysPerCutoff), incentivesallowance: String(profile.incentivesAllowance), specialallowance: String(profile.specialAllowance), specialholidaymultiplier: String(profile.specialHolidayMultiplier), regularholidaymultiplier: String(profile.regularHolidayMultiplier), halfdayfraction: String(profile.halfDayFraction), overtimerate: String(profile.overtimeRate),
+  };
+  return headers.map((header) => values[header] ?? '');
+}
+function payrollCutoffFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetPayrollCutoff {
+  const number = (key: string) => Number(row[index[key]] ?? 0);
+  return {
+    payrollId: row[index.payrollid] ?? '', employeeId: row[index.employeeid] ?? '', employeeName: row[index.employeename] ?? '', payrollProfileId: row[index.payrollprofileid] ?? '', payrollCutoffLabel: row[index.payrollcutofflabel] ?? '', cutoffStart: row[index.cutoffstart] ?? '', cutoffEnd: row[index.cutoffend] ?? '', payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyrate'), standardWorkingDays: number('standardworkingdays'), actualWorkingDays: number('actualworkingdays'), basicPay: number('basicpay'), specialHolidayDays: number('specialholidaydays'), specialHolidayMultiplier: number('specialholidaymultiplier'), specialHolidayPay: number('specialholidaypay'), regularHolidayDays: number('regularholidaydays'), regularHolidayMultiplier: number('regularholidaymultiplier'), regularHolidayPay: number('regularholidaypay'), incentivesAllowance: number('incentivesallowance'), specialAllowance: number('specialallowance'), totalCompensation: number('totalcompensation'), totalAllowance: number('totalallowance'), lateUnits: number('lateunits'), lateDeduction: number('latededuction'), halfDayCount: number('halfdaycount'), halfDayDeduction: number('halfdaydeduction'), absentDays: number('absentdays'), absenceDeduction: number('absencededuction'), overtimeHours: number('overtimehours'), overtimeRate: number('overtimerate'), overtimePay: number('overtimepay'), manualAdjustment: number('manualadjustment'), adjustmentReason: row[index.adjustmentreason] || null, grossCompensation: number('grosscompensation'), netPay: number('netpay'), signaturePlaceholder: row[index.signatureplaceholder] ?? '', calculationBreakdown: row[index.calculationbreakdown] ?? '', approvedWorkingDayOverage: String(row[index.approvedworkingdayoverage] ?? '').toUpperCase() === 'TRUE', status: String(row[index.status] ?? '').toUpperCase() === 'FINALIZED' ? 'FINALIZED' : 'DRAFT', finalizedAt: row[index.finalizedat] || null, rowNumber,
+  };
+}
+function valuesForPayrollCutoff(headers: string[], payroll: SheetPayrollCutoff): string[] {
+  const values: Record<string, string> = { payrollid: payroll.payrollId, employeeid: payroll.employeeId, employeename: payroll.employeeName, payrollprofileid: payroll.payrollProfileId, payrollcutofflabel: payroll.payrollCutoffLabel, cutoffstart: payroll.cutoffStart, cutoffend: payroll.cutoffEnd, payrollfrequency: payroll.payrollFrequency, dailyrate: String(payroll.dailyRate), standardworkingdays: String(payroll.standardWorkingDays), actualworkingdays: String(payroll.actualWorkingDays), basicpay: String(payroll.basicPay), specialholidaydays: String(payroll.specialHolidayDays), specialholidaymultiplier: String(payroll.specialHolidayMultiplier), specialholidaypay: String(payroll.specialHolidayPay), regularholidaydays: String(payroll.regularHolidayDays), regularholidaymultiplier: String(payroll.regularHolidayMultiplier), regularholidaypay: String(payroll.regularHolidayPay), incentivesallowance: String(payroll.incentivesAllowance), specialallowance: String(payroll.specialAllowance), totalcompensation: String(payroll.totalCompensation), totalallowance: String(payroll.totalAllowance), lateunits: String(payroll.lateUnits), latededuction: String(payroll.lateDeduction), halfdaycount: String(payroll.halfDayCount), halfdaydeduction: String(payroll.halfDayDeduction), absentdays: String(payroll.absentDays), absencededuction: String(payroll.absenceDeduction), overtimehours: String(payroll.overtimeHours), overtimerate: String(payroll.overtimeRate), overtimepay: String(payroll.overtimePay), manualadjustment: String(payroll.manualAdjustment), adjustmentreason: payroll.adjustmentReason ?? '', grosscompensation: String(payroll.grossCompensation), netpay: String(payroll.netPay), signatureplaceholder: payroll.signaturePlaceholder, calculationbreakdown: payroll.calculationBreakdown, approvedworkingdayoverage: payroll.approvedWorkingDayOverage ? 'TRUE' : 'FALSE', status: payroll.status, finalizedat: payroll.finalizedAt ?? '' };
   return headers.map((header) => values[header] ?? '');
 }
 function graceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetInternGrace {

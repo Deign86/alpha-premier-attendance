@@ -566,3 +566,32 @@ Definition of done: the reader works without clicking a visible input; all text 
 Back up the spreadsheet, run migration dry-run, review and execute migration, classify users, enter employee rates, provision `BLOB_READ_WRITE_TOKEN`, and test one disposable photo upload before enabling setup. Deploy in the exact order Phase 8, Phase 9, Phase 10. Run the intern and employee acceptance cases, then optionally execute the approved payroll backfill.
 
 Update `docs/google-sheets-setup.md`, `docs/card-registration.md`, `docs/deployment.md`, and add `docs/payroll-operations.md`. Future work now includes payroll-period summaries, approval/disbursement, employee late rules, private photo delivery, and payroll exports; payroll generation itself is no longer an MVP limitation.
+
+## Configurable Cutoff Payroll Profiles [CURRENT EXECUTION]
+
+### Goal
+
+Add administrator-managed, semi-monthly cutoff payroll without changing the existing attendance-linked `Payroll` rows. Employees are never seeded by the application. The administrator creates employees and assigns a reusable calculation profile.
+
+### Temporary calculation profiles
+
+- `JEAN_TENURED`: daily rate and cutoff defaults from the supplied Jean Ashley example, including PHP 6,600.00 incentives, PHP 150.00 special allowance, and configurable holiday multipliers.
+- `BEA_STANDARD`: the same calculation formulas with allowance and manual-adjustment defaults of PHP 0.00 until Bea's policy is defined.
+- Profiles are rule records, not employee records. Their labels, rates, and policies remain editable so future employee policies do not require code changes.
+
+### Implementation
+
+- Add integer-centavo money helpers and a pure cutoff calculator with explicit breakdown fields.
+- Add `PayrollProfiles` and `PayrollCutoffs` Google Sheets tabs plus in-memory adapter support; preserve existing `Payroll`, `Attendance`, and `Users` behavior.
+- Store the assigned profile on employee records and expose profile selection in the admin user editor.
+- Add protected admin endpoints for profile CRUD, cutoff payroll CRUD/finalization, details, and CSV export.
+- Add an Admin Payroll workspace with the required payroll columns, PHP formatting, expandable details, manual-adjustment reason, print view, and signature placeholder.
+- Validate required employee/cutoff data, non-negative money/day values, approved working-day overages, adjustment reasons, and finalization state.
+- Keep `netPay` equal to finalized gross after the supported attendance deductions; preserve the field for future statutory deductions.
+
+### Acceptance tests
+
+- Jean July 1-15, 2026 calculates PHP 7,755.00 basic pay, PHP 211.50 special holiday pay, PHP 7,966.50 total compensation, PHP 6,750.00 total allowance, PHP 14,716.50 gross before adjustment, and PHP 16,216.50 with an explicit PHP 1,500.00 adjustment.
+- Bea profile calculates the same formulas with zero allowance defaults.
+- Money serialization, profile assignment, validation, Sheets round-trips, admin endpoints, print data, and CSV export are covered.
+- Existing attendance, intern, employee, setup, and admin tests remain green.

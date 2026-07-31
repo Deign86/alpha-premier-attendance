@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
-import type { AdminUser, AttendanceListItem } from '@rfid-attendance/shared';
+import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
-import type { GoogleSheetsService, SheetAttendance, SheetUser } from './sheets.js';
+import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { manilaTimestamp } from './time.js';
 import { PayrollService } from './payroll.js';
+import { calculateCutoffPayroll, defaultPayrollProfiles, type CutoffInput } from './cutoff-payroll.js';
 
 export type AdminConfig = { enableAdmin?: boolean; adminPin?: string; adminSessionSecret?: string; adminSessionMinutes?: number; timezone: string };
 export class AdminError extends Error {
@@ -36,7 +37,7 @@ export class AdminService {
 
   async saveUser(input: unknown, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
-    const value = input as Partial<{ userId: string; rfidUid: string; fullName: string; department: string; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; dailyRate: number | null; photoUrl: string | null }>;
+    const value = input as Partial<{ userId: string; rfidUid: string; fullName: string; department: string; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; dailyRate: number | null; payrollProfileId: string | null; photoUrl: string | null }>;
     const userId = existingUserId ?? value.userId?.trim();
     if (!userId || typeof value.rfidUid !== 'string' || !value.rfidUid.trim() || !value.fullName?.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
     if (existingUserId && value.userId && value.userId !== existingUserId) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
@@ -48,7 +49,7 @@ export class AdminService {
     const employeeType = value.employeeType ?? current?.employeeType ?? 'INTERN';
     const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
     if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Employees require a positive daily rate.');
-    const user: SheetUser = { userId, rfidUid, fullName: value.fullName.trim(), department: value.department?.trim() || null, active: value.status === 'ACTIVE', employeeType, dailyRate, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
+    const user: SheetUser = { userId, rfidUid, fullName: value.fullName.trim(), department: value.department?.trim() || null, active: value.status === 'ACTIVE', employeeType, dailyRate, payrollProfileId: value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
     try {
       const saved = await this.sheets.upsertUser(user);
       await this.sheets.writeAudit({ eventType: current ? 'ADMIN_USER_UPDATED' : 'ADMIN_USER_CREATED', userId: user.userId, rfidUid: user.rfidUid, message: current ? 'User profile updated by administrator' : 'User profile created by administrator', requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
@@ -106,9 +107,55 @@ export class AdminService {
     } catch { throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503); }
   }
 
+  async payrollProfiles(): Promise<PayrollCalculationProfile[]> {
+    const stored = await this.sheets.listPayrollProfiles();
+    return stored.length ? stored : defaultPayrollProfiles;
+  }
+
+  async savePayrollProfile(input: unknown): Promise<PayrollCalculationProfile> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A payroll profile is required.');
+    const profile = input as PayrollCalculationProfile;
+    const numbers = [profile.standardWorkingDaysPerCutoff, profile.incentivesAllowance, profile.specialAllowance, profile.specialHolidayMultiplier, profile.regularHolidayMultiplier, profile.halfDayFraction, profile.overtimeRate];
+    if (!profile.profileId?.trim() || !profile.label?.trim() || profile.payrollFrequency !== 'SEMI_MONTHLY' || numbers.some((value) => !Number.isFinite(value) || value < 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll profile fields are invalid.');
+    return this.sheets.upsertPayrollProfile({ ...profile, profileId: profile.profileId.trim(), label: profile.label.trim() });
+  }
+
+  async cutoffPayroll(): Promise<SheetPayrollCutoff[]> { return (await this.sheets.listPayrollCutoffs()).sort((a, b) => b.cutoffStart.localeCompare(a.cutoffStart)); }
+
+  async saveCutoffPayroll(input: unknown, existingPayrollId?: string): Promise<SheetPayrollCutoff> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll values are required.');
+    const value = input as Partial<CutoffInput>;
+    const employeeId = String(value.employeeId ?? '').trim();
+    const employee = await this.sheets.findUserById(employeeId);
+    if (!employee) throw new AdminError('ADMIN_VALIDATION_ERROR', 'The employee was not found.');
+    if (employee.employeeType !== 'EMPLOYEE' || !employee.dailyRate) throw new AdminError('ADMIN_VALIDATION_ERROR', 'An employee daily rate is required before cutoff payroll can be saved.');
+    const profiles = await this.payrollProfiles();
+    const profileId = String(value.payrollProfileId ?? employee.payrollProfileId ?? 'BEA_STANDARD');
+    const profile = profiles.find((item) => item.profileId === profileId) ?? defaultPayrollProfiles.find((item) => item.profileId === profileId);
+    if (!profile) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Select a valid payroll calculation profile.');
+    const number = (field: keyof CutoffInput, fallback: number) => value[field] === undefined || value[field] === null || value[field] === '' ? fallback : Number(value[field]);
+    const existing = existingPayrollId ? await this.sheets.findPayrollCutoff(existingPayrollId) : null;
+    if (existingPayrollId && !existing) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
+    if (existing?.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be edited.');
+    try {
+      const calculated = calculateCutoffPayroll({
+        employeeId, employeeName: employee.fullName, payrollProfileId: profile.profileId, payrollCutoffLabel: String(value.payrollCutoffLabel ?? '').trim() || `${value.cutoffStart ?? ''} to ${value.cutoffEnd ?? ''}`,
+        cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate), standardWorkingDays: number('standardWorkingDays', profile.standardWorkingDaysPerCutoff), actualWorkingDays: number('actualWorkingDays', profile.standardWorkingDaysPerCutoff), specialHolidayDays: number('specialHolidayDays', 0), specialHolidayMultiplier: number('specialHolidayMultiplier', profile.specialHolidayMultiplier), regularHolidayDays: number('regularHolidayDays', 0), regularHolidayMultiplier: number('regularHolidayMultiplier', profile.regularHolidayMultiplier), incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance), lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0), halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0), overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate), manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''), approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
+      });
+      return this.sheets.upsertPayrollCutoff({ ...calculated, payrollId: existingPayrollId ?? crypto.randomUUID(), finalizedAt: null });
+    } catch (error) { throw new AdminError('ADMIN_VALIDATION_ERROR', error instanceof Error ? error.message : 'Payroll values are invalid.'); }
+  }
+
+  async finalizeCutoffPayroll(payrollId: string): Promise<SheetPayrollCutoff> {
+    const record = await this.sheets.findPayrollCutoff(payrollId);
+    if (!record) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
+    if (record.status === 'FINALIZED') return record;
+    return this.sheets.upsertPayrollCutoff({ ...record, status: 'FINALIZED', finalizedAt: new Date().toISOString() });
+  }
+
   private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
   private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
 }
-function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', dailyRate: user.dailyRate ?? null, photoUrl: user.photoUrl ?? null }; }
+function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null }; }
 function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department }; }
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }

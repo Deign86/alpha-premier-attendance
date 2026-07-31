@@ -12,6 +12,9 @@ import type {
   AttendanceListResponse,
   AdminAttendanceResponse,
   AdminUsersResponse,
+  PayrollCalculationProfile,
+  PayrollCutoffsResponse,
+  PayrollProfilesResponse,
 } from '@rfid-attendance/shared';
 
 export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
@@ -108,6 +111,11 @@ export async function saveAdminUser(user: unknown, userId?: string): Promise<unk
 export async function saveAdminAttendance(attendanceId: string, payload: unknown): Promise<unknown> { const response = await fetch(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return response.json(); }
 export async function deleteAdminUser(userId: string): Promise<unknown> { const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }); return response.json(); }
 export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<unknown> { const response = await fetch(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`, { method: 'DELETE' }); return response.json(); }
+export async function loadPayrollProfiles(): Promise<PayrollProfilesResponse> { return (await fetch('/api/admin/payroll/profiles')).json() as Promise<PayrollProfilesResponse>; }
+export async function savePayrollProfile(profile: PayrollCalculationProfile): Promise<unknown> { const response = await fetch(`/api/admin/payroll/profiles/${encodeURIComponent(profile.profileId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) }); return response.json(); }
+export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> { return (await fetch('/api/admin/payroll/cutoffs')).json() as Promise<PayrollCutoffsResponse>; }
+export async function savePayrollCutoff(payroll: unknown, payrollId?: string): Promise<unknown> { const response = await fetch(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs', { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) }); return response.json(); }
+export async function finalizePayrollCutoff(payrollId: string): Promise<unknown> { const response = await fetch(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`, { method: 'POST' }); return response.json(); }
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {
