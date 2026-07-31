@@ -195,9 +195,14 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .admin-form { padding: 22px; border: 1px solid var(--line); background: var(--surface); } .admin-form h2 { margin: 0 0 18px; font-family: 'Orbitron', sans-serif; font-size: 1rem; }
 @media (max-width: 700px) { .dashboard-shell { width: min(100% - 32px, 1220px); padding: 28px 0; } .dashboard-header { align-items: flex-start; flex-direction: column; } .admin-grid { grid-template-columns: 1fr; } }
 
-/* Kiosk distance accessibility: the production UI never renders text below 18px. */
-p, span, label, small, a, button, input, select, td, th { font-size: 18px !important; }
-h1, h2 { font-size: 32px !important; }
+/* Scoped kiosk readability: keep the primary scanner readable without flattening admin hierarchy. */
+.kiosk-shell .input-row input { font-size: 1rem; }
+.kiosk-shell .input-area label { font-size: .82rem; }
+.kiosk-shell .mode-button, .kiosk-shell .admin-button, .kiosk-shell .sound-indicator { font-size: .78rem; }
+.kiosk-shell .aside-copy { font-size: .82rem; }
+.kiosk-shell .aside-facts span { font-size: .64rem; }
+.kiosk-shell .aside-facts strong { font-size: .74rem; }
+.kiosk-shell .footer-note { font-size: .72rem; }
 .rfid-capture-input { caret-color: var(--gold-bright); }
 .result-photo { display: block; width: min(220px, 54vw); aspect-ratio: 1; object-fit: cover; margin: 22px auto; border: 3px solid var(--gold); border-radius: 6px; }
 .result-photo-fallback { display: grid; place-items: center; color: var(--gold-bright); background: var(--surface-raised); }
@@ -217,3 +222,158 @@ h1, h2 { font-size: 32px !important; }
 .profile-toggle button { min-height: 48px; padding: 8px 10px; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; font-weight: 700; }
 .profile-toggle button.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
 @media print { body { background: #fff; color: #111; } .print-hidden, .dashboard-header, .admin-tabs, .payroll-actions { display: none !important; } .dashboard-shell { width: 100%; padding: 0; color: #111; } .table-wrap, .payroll-detail td { border-color: #999; background: #fff; } th, td { color: #111 !important; font-size: 10px !important; padding: 6px !important; } .payroll-print { overflow: visible; } }
+
+/* Product UI refinement: dense, calm, and consistent across kiosk, attendance, and admin. */
+:root {
+  --page-width: 1240px;
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 44px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --shadow-panel: 0 18px 50px rgba(0, 0, 0, .22);
+}
+
+body { background: var(--black); }
+button, input, select { border-radius: var(--radius-sm); }
+button, a, input, select { transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease; }
+button:active:not(:disabled), a:active { transform: translateY(1px); }
+
+/* Kiosk */
+.kiosk-shell { overflow-x: hidden; }
+.topbar { width: min(var(--page-width), calc(100% - 48px)); min-height: 82px; }
+.brand-lockup { gap: 11px; }
+.brand-mark { width: 42px; height: 42px; border-radius: var(--radius-sm); }
+.brand-name { font-size: .76rem; letter-spacing: .015em; }
+.brand-subtitle { font-size: .58rem; }
+.clock strong { font-size: .86rem; }
+.kiosk-content { width: min(var(--page-width), calc(100% - 48px)); padding: 62px 0 34px; }
+.intro-copy { max-width: 760px; }
+.section-kicker, .aside-kicker { letter-spacing: .06em; }
+.kiosk-content h1 { max-width: 760px; margin-bottom: 12px; font-size: clamp(2.6rem, 5vw, 4.25rem); line-height: 1.03; letter-spacing: -.02em; }
+.section-description { max-width: 56ch; font-size: .92rem; }
+.kiosk-grid { grid-template-columns: minmax(0, 1fr) 260px; gap: 34px; margin-top: 38px; }
+.scanner-panel { padding: 42px clamp(22px, 5vw, 70px) 34px; border-top-width: 3px; border-radius: var(--radius-md); box-shadow: var(--shadow-panel); }
+.status-icon { width: 76px; height: 76px; margin-bottom: 18px; }
+.status-eyebrow { font-size: .62rem; letter-spacing: .04em; }
+.input-area { margin-top: 28px; }
+.input-row input { height: 54px; border-radius: var(--radius-sm); }
+.submit-button { min-height: 50px; height: 50px; border-radius: var(--radius-sm); }
+.input-hint { font-size: .72rem; }
+.panel-actions { flex-wrap: wrap; gap: 10px 16px; margin-top: 13px; }
+.panel-actions .sound-indicator { margin-right: auto; }
+.admin-button { min-height: 42px; border-radius: var(--radius-sm); }
+.mode-button { min-height: 42px; }
+.terminal-aside { padding-left: 26px; }
+.terminal-aside h2 { font-size: 1.2rem; line-height: 1.34; }
+.aside-facts { gap: 14px; margin-top: 26px; padding: 17px 0; }
+.aside-admin { margin-top: 25px; }
+.footer-note { padding-bottom: 20px; }
+.setup-dialog { border-radius: var(--radius-md); box-shadow: 0 24px 80px rgba(0, 0, 0, .58); }
+.setup-dialog-header { padding: 19px 22px 17px; }
+.setup-form { gap: 12px; padding: 22px; }
+
+/* Shared admin shell */
+.dashboard-shell { width: min(var(--page-width), calc(100% - 48px)); padding: 38px 0 52px; }
+.dashboard-header { align-items: center; padding-bottom: 20px; }
+.dashboard-header h1 { margin: 6px 0 0; font-size: clamp(2rem, 4vw, 3.15rem); line-height: 1.05; }
+.dashboard-header nav { gap: 8px; }
+.dashboard-header nav a, .dashboard-header nav button { min-height: 38px; padding: 8px 11px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .78rem; }
+.dashboard-header nav a:hover, .dashboard-header nav button:hover { background: var(--surface-raised); border-color: var(--line-bright); }
+.dashboard-header nav a { color: var(--gold-bright); text-decoration: none; }
+.dashboard-status { margin: 17px 0 12px; font-size: .76rem; }
+.dashboard-alert { margin: 14px 0; padding: 11px 13px; border: 1px solid var(--line-bright); border-left: 3px solid var(--danger); background: var(--surface); font-size: .78rem; }
+.table-wrap { border-radius: var(--radius-md); box-shadow: 0 10px 32px rgba(0, 0, 0, .14); }
+table { min-width: 680px; }
+th, td { padding: 13px 15px; font-size: .79rem; }
+th { font-size: .62rem; letter-spacing: .08em; }
+td strong { color: var(--ink); font-size: .82rem; }
+td small { font-size: .7rem; }
+.status-pill { padding: 4px 8px; border-radius: 999px; font-size: .64rem; font-weight: 700; letter-spacing: .04em; }
+.empty-state { margin-top: 18px; padding: 42px 24px; border: 1px dashed var(--line-bright); border-radius: var(--radius-md); background: var(--surface); font-size: .85rem; }
+.admin-login { min-height: 100dvh; align-content: center; justify-items: center; padding: 28px 0; }
+.admin-login > a { position: absolute; top: 30px; left: max(24px, calc(50% - 620px)); color: var(--gold-bright); font-size: .8rem; text-decoration: none; }
+.admin-login > a:hover { color: var(--ink); }
+.admin-login form { width: min(460px, 100%); padding: 30px; border: 1px solid var(--line); border-top: 3px solid var(--gold); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-panel); }
+.admin-login h1 { margin: 7px 0 20px; font-size: 2rem; line-height: 1.1; }
+.admin-login label, .admin-form label, .date-filter { gap: 7px; margin: 14px 0; font-size: .78rem; }
+.admin-login input, .admin-form input, .admin-form select, .date-filter input, td input { height: 44px; border-radius: var(--radius-sm); }
+.admin-tabs { gap: 4px; margin: 22px 0 20px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.admin-tabs button { min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .75rem; }
+.admin-tabs button:hover { color: var(--ink); background: var(--surface-raised); }
+.admin-tabs button.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
+.admin-grid { grid-template-columns: minmax(280px, 350px) minmax(0, 1fr); gap: 24px; }
+.admin-form { padding: 20px; border-radius: var(--radius-md); box-shadow: 0 10px 32px rgba(0, 0, 0, .14); }
+.admin-form h2 { margin-bottom: 15px; font-size: 1rem; }
+.admin-form .submit-button { width: 100%; margin-top: 5px; }
+.text-button { min-height: 36px; padding: 6px 9px; border-radius: var(--radius-sm); }
+.text-button:hover { background: var(--surface-raised); }
+.danger-button:hover { background: #2a1b18; }
+.payroll-actions { gap: 8px; margin-bottom: 14px; }
+.payroll-actions .admin-button { font-size: .74rem; }
+.payroll-workspace .admin-grid { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr); }
+.payroll-workspace .admin-form { max-height: calc(100dvh - 180px); overflow: auto; }
+.payroll-workspace .setup-fields { gap: 10px; }
+.payroll-workspace .setup-fields label { margin: 8px 0; }
+.payroll-table .table-wrap { overflow: auto; }
+.payroll-table table { min-width: 1480px; }
+.payroll-table th:first-child, .payroll-table td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+.payroll-table th:first-child { z-index: 2; }
+.payroll-detail td { position: static !important; }
+
+@media (max-width: 920px) {
+  .kiosk-grid { grid-template-columns: 1fr; gap: 28px; }
+  .terminal-aside { padding: 24px 0 0; border-top: 1px solid var(--line); border-left: 0; }
+  .dashboard-header { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .dashboard-header nav { width: 100%; flex-wrap: wrap; }
+  .payroll-workspace .admin-grid { grid-template-columns: 1fr; }
+  .payroll-workspace .admin-form { max-height: none; }
+}
+
+@media (max-width: 600px) {
+  .topbar, .kiosk-content, .footer-note, .dashboard-shell { width: min(100% - 32px, var(--page-width)); }
+  .topbar { min-height: 72px; }
+  .brand-mark { width: 38px; height: 38px; }
+  .brand-name { font-size: .68rem; }
+  .brand-subtitle { font-size: .54rem; }
+  .clock span { display: none; }
+  .clock strong { font-size: .76rem; }
+  .kiosk-content { padding: 42px 0 28px; }
+  .kiosk-content h1 { max-width: 14ch; font-size: clamp(2.1rem, 10vw, 3rem); }
+  .section-description { font-size: .84rem; }
+  .kiosk-grid { margin-top: 30px; }
+  .scanner-panel { padding: 32px 16px 28px; }
+  .input-row { flex-direction: column; }
+  .submit-button { width: 100%; }
+  .panel-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 7px; }
+  .panel-actions .mode-button, .panel-actions .sound-indicator { min-width: 0; justify-content: flex-start; }
+  .panel-actions .sound-indicator { grid-column: 1 / -1; }
+  .panel-actions .admin-button { width: 100%; min-width: 0; padding: 8px 7px; font-size: .7rem; }
+  .panel-actions .mode-button { font-size: .73rem; }
+  .terminal-aside h2 { font-size: 1.3rem; }
+  .aside-facts { grid-template-columns: 1fr 1fr; }
+  .setup-backdrop { padding: 0; align-items: end; }
+  .setup-dialog { width: 100%; max-height: 92dvh; border-radius: var(--radius-md) var(--radius-md) 0 0; }
+  .setup-dialog-header { padding: 17px 16px 15px; }
+  .setup-form { padding: 18px 16px 22px; }
+  .dashboard-shell { padding: 25px 0 34px; }
+  .dashboard-header h1 { font-size: 2.1rem; }
+  .dashboard-header nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-header nav a, .dashboard-header nav button { text-align: center; }
+  .admin-tabs { overflow-x: auto; margin-top: 17px; }
+  .admin-tabs button { flex: 0 0 auto; white-space: nowrap; }
+  .admin-grid { gap: 16px; }
+  .admin-form { padding: 17px; }
+  .table-wrap { margin-right: -1px; }
+  .empty-state { padding: 30px 18px; }
+  .payroll-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .payroll-actions .admin-button { width: 100%; padding: 8px 6px; font-size: .68rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button, a, input, select { transition: none; }
+}
