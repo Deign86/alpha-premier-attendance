@@ -22,7 +22,7 @@ Create one spreadsheet and add tabs named exactly `Users`, `Attendance`, `AuditL
 ### Users
 
 ```text
-user_id,rfid_uid,full_name,department,status,created_at,employee_type,daily_rate,payroll_profile_id,photo_url
+user_id,rfid_uid,full_name,department,status,created_at,employee_type,daily_rate,photo_url,payroll_profile_id
 ```
 
 ### Attendance

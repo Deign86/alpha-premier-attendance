@@ -211,7 +211,7 @@ type GoogleSheetsOptions = {
 type Table = { headers: string[]; rows: string[][] };
 
 const requiredHeaders = {
-  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'payrollprofileid', 'photourl'],
+  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'photourl'],
   Attendance: ['attendanceid', 'attendancedate', 'userid', 'rfiduid', 'fullname', 'department', 'timein', 'timeout', 'status', 'source', 'notes'],
   AuditLogs: ['logid', 'timestamp', 'eventtype', 'rfiduid', 'userid', 'message', 'requestid'],
   Payroll: ['payrollid', 'attendanceid', 'userid', 'fullname', 'employeetype', 'attendancedate', 'actualtimein', 'actualtimeout', 'computedtimein', 'computedtimeout', 'graceused', 'latehours', 'latededuction', 'basepay', 'dailypay', 'notes'],
@@ -219,6 +219,7 @@ const requiredHeaders = {
   PayrollProfiles: ['profileid', 'label', 'payrollfrequency', 'standardworkingdayspercutoff', 'incentivesallowance', 'specialallowance', 'specialholidaymultiplier', 'regularholidaymultiplier', 'halfdayfraction', 'overtimerate'],
   PayrollCutoffs: ['payrollid', 'employeeid', 'employeename', 'payrollprofileid', 'payrollcutofflabel', 'cutoffstart', 'cutoffend', 'payrollfrequency', 'dailyrate', 'standardworkingdays', 'actualworkingdays', 'basicpay', 'specialholidaydays', 'specialholidaymultiplier', 'specialholidaypay', 'regularholidaydays', 'regularholidaymultiplier', 'regularholidaypay', 'incentivesallowance', 'specialallowance', 'totalcompensation', 'totalallowance', 'lateunits', 'latededuction', 'halfdaycount', 'halfdaydeduction', 'absentdays', 'absencededuction', 'overtimehours', 'overtimerate', 'overtimepay', 'manualadjustment', 'adjustmentreason', 'grosscompensation', 'netpay', 'signatureplaceholder', 'calculationbreakdown', 'approvedworkingdayoverage', 'status', 'finalizedat'],
 } as const;
+const optionalHeaders = { Users: ['payrollprofileid'] } as const;
 
 export class GoogleSheetsAdapter implements GoogleSheetsService {
   private readonly api: sheets_v4.Sheets;
@@ -434,9 +435,11 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   async listPayrollProfiles(): Promise<SheetPayrollProfile[]> {
-    const { headers, rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
-    const index = indexMap(headers);
-    return rows.map((row, offset) => payrollProfileFromRow(row, index, offset + 2));
+    try {
+      const { headers, rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
+      const index = indexMap(headers);
+      return rows.map((row, offset) => payrollProfileFromRow(row, index, offset + 2));
+    } catch { return []; }
   }
 
   async upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile> {
@@ -451,9 +454,11 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   async listPayrollCutoffs(): Promise<SheetPayrollCutoff[]> {
-    const { headers, rows } = await this.table(this.options.payrollCutoffsRange, 'PayrollCutoffs');
-    const index = indexMap(headers);
-    return rows.map((row, offset) => payrollCutoffFromRow(row, index, offset + 2));
+    try {
+      const { headers, rows } = await this.table(this.options.payrollCutoffsRange, 'PayrollCutoffs');
+      const index = indexMap(headers);
+      return rows.map((row, offset) => payrollCutoffFromRow(row, index, offset + 2));
+    } catch { return []; }
   }
 
   async findPayrollCutoff(payrollId: string): Promise<SheetPayrollCutoff | null> {
@@ -519,8 +524,6 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       this.table(this.options.auditRange, 'AuditLogs'),
       this.table(this.options.payrollRange, 'Payroll'),
       this.table(this.options.internGraceRange, 'InternGrace'),
-      this.table(this.options.payrollProfilesRange, 'PayrollProfiles'),
-      this.table(this.options.payrollCutoffsRange, 'PayrollCutoffs'),
     ]);
   }
 }
@@ -531,7 +534,11 @@ function normalizeCell(value: string | undefined): string {
 }
 function validateHeaders(sheet: keyof typeof requiredHeaders, headers: string[]): void {
   const expected = requiredHeaders[sheet];
-  if (headers.length !== expected.length || expected.some((header, index) => headers[index] !== header)) throw new Error(`${sheet} sheet headers are missing or out of order`);
+  const optional = sheet === 'Users' ? optionalHeaders.Users : [];
+  const validLength = headers.length === expected.length || headers.length === expected.length + optional.length;
+  const prefixMatches = expected.every((header, index) => headers[index] === header);
+  const optionalMatches = headers.length === expected.length || optional.every((header, index) => headers[expected.length + index] === header);
+  if (!validLength || !prefixMatches || !optionalMatches) throw new Error(`${sheet} sheet headers are missing or out of order`);
   if (new Set(headers).size !== headers.length) throw new Error(`${sheet} sheet has duplicate headers`);
 }
 function indexMap(headers: string[]): Record<string, number> { return Object.fromEntries(headers.map((header, index) => [header, index])); }
