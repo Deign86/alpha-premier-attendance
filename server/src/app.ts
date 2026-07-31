@@ -35,7 +35,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     req.requestId = requestId(req);
     next();
   });
-  app.use(express.json({ limit: '1mb', strict: true }));
+  app.use(express.json({ limit: '2mb', strict: true }));
   if (options.logger !== false) app.use(morgan('combined'));
   app.use(rateLimit({
     windowMs: options.config.rateLimitWindowMs,
@@ -158,7 +158,13 @@ export function createApp(options: CreateAppOptions): express.Express {
       if (!userId || !dataUrl) throw new SetupError('SETUP_VALIDATION_ERROR', 'userId and dataUrl are required.', 400);
       const photoUrl = await uploadPhotoDataUrl(userId, dataUrl);
       res.status(200).json({ success: true, requestId: req.requestId, photoUrl });
-    } catch (error) { sendSetupError(req, res, error); }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Photo storage is not configured') {
+        sendSetupError(req, res, new SetupError('GOOGLE_SHEETS_UNAVAILABLE', 'Photo storage is not configured. Set BLOB_READ_WRITE_TOKEN before uploading photos.', 503));
+        return;
+      }
+      sendSetupError(req, res, error);
+    }
   });
 
   const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {

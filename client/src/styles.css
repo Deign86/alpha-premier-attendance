@@ -210,6 +210,17 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .employee-type-toggle { grid-column: 1 / -1; }
 .employee-type-toggle button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 58px; padding: 10px 16px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--gold); border-radius: 4px; }
 .employee-type-toggle button[aria-checked="true"] { background: var(--gold); color: #11100c; }
+.photo-field { display: grid; gap: 7px; grid-column: 1 / -1; }
+.field-label { color: var(--ink); font-size: .75rem; font-weight: 600; }
+.photo-input { position: absolute; width: 1px !important; height: 1px !important; opacity: 0; pointer-events: none; }
+.photo-dropzone { position: relative; display: grid; place-items: center; gap: 7px; min-height: 150px; padding: 18px; color: var(--muted); background: repeating-linear-gradient(135deg, rgba(198, 162, 84, .035) 0 2px, transparent 2px 8px), var(--surface-input); border: 1px dashed var(--gold-soft); border-radius: var(--radius-sm); text-align: center; cursor: pointer; overflow: hidden; }
+.photo-dropzone:hover, .photo-dropzone:focus-within { color: var(--gold-bright); border-color: var(--gold-bright); background-color: #17150f; }
+.photo-dropzone strong { color: var(--ink); font-size: .8rem; }
+.photo-dropzone small { color: var(--quiet); font-size: .66rem; font-weight: 400; }
+.photo-upload-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 3px; color: var(--gold-bright); font-size: .7rem; font-weight: 700; }
+.photo-dropzone.has-photo { min-height: 180px; padding: 0; border-style: solid; }
+.photo-dropzone.has-photo img { width: 100%; height: 180px; object-fit: cover; }
+.photo-overlay { position: absolute; inset: auto 0 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; color: #11100c; background: rgba(225, 196, 119, .94); font-size: .72rem; font-weight: 700; }
 
 .payroll-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 18px; }
 .payroll-workspace .admin-grid { grid-template-columns: minmax(300px, 390px) minmax(0, 1fr); }
