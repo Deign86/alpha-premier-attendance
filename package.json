@@ -11,8 +11,14 @@
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
     "test": "npm run test -w shared && npm run test -w client && npm run test -w server",
     "validate:sheets": "npm run validate:sheets -w server"
+    ,"tauri:dev": "npm run build -w client && tauri dev"
+    ,"tauri:build": "npm run build -w client && tauri build"
+    ,"rust:check": "cargo check --manifest-path src-tauri/Cargo.toml"
+    ,"rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"
+    ,"migrate:from-sheets": "cargo run --manifest-path src-tauri/Cargo.toml --bin migrate_from_sheets --"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
     "@eslint/js": "^9.17.0",
     "@typescript-eslint/eslint-plugin": "^8.19.1",
     "@typescript-eslint/parser": "^8.19.1",

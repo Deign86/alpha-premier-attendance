@@ -3,6 +3,7 @@ import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, Loader
 import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
 import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, finalizePayrollCutoff, loadConfig, loadAttendance, loadAdminAttendance, loadAdminUsers, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, saveAdminAttendance, saveAdminUser, savePayrollCutoff, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
+import { listenForGlobalRfid } from './tauri-api';
 
 type KioskState = 'ready' | 'processing' | 'success' | 'error';
 type Result = ScanSuccessResponse | ScanErrorResponse;
@@ -282,6 +283,13 @@ export default function App() {
     if (resetTimer.current) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
   }, [config.resultResetDelayMs, playTone, resetToReady]);
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    let unlisten: (() => void) | undefined;
+    void listenForGlobalRfid((value) => void submit(value, 'RFID')).then((cleanup) => { unlisten = cleanup; });
+    return () => { unlisten?.(); };
+  }, [submit]);
 
   const handleScannerChange = (value: string) => {
     setUid(value);

@@ -36,6 +36,69 @@ export type AttendanceListItem = AttendanceSummary & {
 
 export type AttendanceListResponse = { success: true; date: string; attendance: AttendanceListItem[]; fetchedAt: string };
 
+export type LanAttendanceSnapshotResponse = {
+  success: true;
+  serverInstanceId: string;
+  snapshotVersion: number;
+  date: string;
+  attendance: AttendanceListItem[];
+  fetchedAt: string;
+};
+
+export type LanAttendanceUpdatedEvent = {
+  type: 'attendance-updated';
+  eventId: string;
+  serverInstanceId: string;
+  sequence: number;
+  occurredAt: string;
+  requestId: string;
+  attendanceDate: string;
+  attendanceId: string;
+  cause: 'TIME_IN' | 'TIME_OUT' | 'ADMIN_CORRECTION' | 'ADMIN_DELETE' | 'PAYROLL_RECONCILIATION';
+  mutation: 'upsert' | 'delete' | 'refetch';
+  attendance: AttendanceListItem | null;
+};
+
+export type LanConnectionStatusEvent = {
+  type: 'connection-status';
+  eventId: string;
+  serverInstanceId: string;
+  sequence: number;
+  occurredAt: string;
+  status: 'connected';
+  connectionId: string;
+};
+
+export type LanStaleDataEvent = {
+  type: 'stale-data';
+  eventId: string;
+  serverInstanceId: string;
+  sequence: number;
+  occurredAt: string;
+  reason: 'event-gap' | 'database-read-failed' | 'server-restarted';
+  shouldRefetch: true;
+};
+
+export type LanAttendanceEvent = LanAttendanceUpdatedEvent | LanConnectionStatusEvent | LanStaleDataEvent;
+
+export type LanHealthResponse = {
+  success: true;
+  service: 'alpha-premier-attendance-lan';
+  status: 'healthy' | 'degraded';
+  serverInstanceId: string;
+  timestamp: string;
+  timezone: 'Asia/Manila';
+  sqlite: 'connected' | 'unavailable';
+  lan: { bindAddress: string; port: number; viewerMode: 'read-only'; connectedSseClients: number; uptimeSeconds: number };
+  googleSheetsExport: 'connected' | 'offline' | 'disabled';
+};
+
+export type LanErrorResponse = {
+  success: false;
+  requestId: string;
+  error: { code: 'INVALID_DATE' | 'VIEWER_AUTH_REQUIRED' | 'VIEWER_AUTH_INVALID' | 'SOURCE_NOT_ALLOWED' | 'DATABASE_UNAVAILABLE' | 'INTERNAL_SERVER_ERROR'; message: string };
+};
+
 export type AdminUser = SetupUser;
 export type AdminUsersResponse = { success: true; users: AdminUser[] };
 export type AdminAttendanceResponse = { success: true; date: string; attendance: AttendanceListItem[]; fetchedAt: string };

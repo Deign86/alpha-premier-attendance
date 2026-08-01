@@ -16,3 +16,7 @@ Thumbs.db
 
 .vercel
 .env*.local
+
+# Generated Tauri build artifacts and editor schemas
+src-tauri/target/
+src-tauri/gen/

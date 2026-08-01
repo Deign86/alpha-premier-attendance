@@ -1,0 +1,36 @@
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import type { ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
+
+/** Native command bridge. The existing HTTP API remains available during cutover. */
+export const tauriApi = {
+  getConfig: () => invoke<SafeConfigResponse>('get_config'),
+  getHealth: () => invoke<Record<string, unknown>>('get_health'),
+  getAttendance: (date?: string) => invoke('get_attendance', { date }),
+  scanRfid: (request: ScanRequest) => invoke<ScanResponse>('scan_rfid', { request }),
+  setupUnlock: (pin: string) => invoke<{ success: true; token: string; expiresAt: string }>('setup_unlock', { pin }),
+  setupLock: () => invoke<{ success: true }>('setup_lock'),
+  setupLookupCard: (token: string, rfidUid: string) => invoke('setup_lookup_card', { token, rfidUid }),
+  setupUpsertUser: (token: string, user: unknown) => invoke('setup_upsert_user', { token, user }),
+  adminGetSession: (token: string) => invoke('admin_get_session', { token }),
+  adminUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_users', { token }),
+  adminListUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_list_users', { token }),
+  adminUpsertUser: (token: string, user: unknown) => invoke('admin_upsert_user', { token, user }),
+  adminDeleteUser: (token: string, userId: string) => invoke('admin_delete_user', { token, userId }),
+  adminAttendance: (token: string, date: string) => invoke('admin_attendance', { token, date }),
+  adminListAttendance: (token: string, date: string) => invoke('admin_list_attendance', { token, date }),
+  adminUpdateAttendance: (token: string, attendanceId: string, payload: unknown) => invoke('admin_update_attendance', { token, attendanceId, payload }),
+  adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke('admin_delete_attendance', { token, attendanceId, date }),
+  payrollProfiles: (token: string) => invoke('payroll_list_profiles', { token }),
+  payrollUpsertProfile: (token: string, profile: unknown) => invoke('payroll_upsert_profile', { token, profile }),
+  payrollCutoffs: (token: string) => invoke('payroll_list_cutoffs', { token }),
+  payrollCreateCutoff: (token: string, input: unknown) => invoke('payroll_create_cutoff', { token, input }),
+  payrollUpdateCutoff: (token: string, input: unknown) => invoke('payroll_update_cutoff', { token, input }),
+  payrollFinalizeCutoff: (token: string, payrollId: string) => invoke('payroll_finalize_cutoff', { token, payrollId }),
+  payrollExportCsv: (token: string) => invoke<string>('payroll_export_csv', { token }),
+  syncStatus: (token: string) => invoke('admin_get_sync_status', { token }),
+  syncNow: (token: string) => invoke('admin_sync_now', { token }),
+  uploadPhoto: (token: string, userId: string, base64Data: string) => invoke<{ success: true; photoUrl: string }>('upload_photo', { token, userId, base64Data }),
+};
+
+export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));

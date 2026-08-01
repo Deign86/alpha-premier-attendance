@@ -1,0 +1,23 @@
+# Copy to the Tauri app config directory as config.toml on the front-desk laptop.
+# Keep this file private. The LAN server is disabled unless explicitly enabled.
+
+[lan]
+enabled = true
+bind_address = "192.168.1.25"
+port = 4173
+allow_wildcard_bind = false
+allowed_subnets = ["192.168.1.0/24"]
+auth_mode = "password"
+# SHA-256 hex digest of the viewer token sent as X-Viewer-Token.
+viewer_password_hash = ""
+viewer_session_minutes = 480
+sse_keep_alive_seconds = 15
+
+# Local admin PIN; never bundle this into the binary.
+admin_pin = ""
+admin_session_minutes = 15
+
+# Optional HTTPS exporter endpoint used by the bounded sync worker.
+sheets_sync_endpoint = ""
+google_service_account_json_path = ""
+google_spreadsheet_id = ""
