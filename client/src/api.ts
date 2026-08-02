@@ -18,10 +18,24 @@ import type {
   PayrollCutoffsResponse,
   PayrollProfilesResponse,
 } from '@rfid-attendance/shared';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { tauriApi } from './tauri-api';
 
 const runningInTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 let nativeAdminToken: string | null = null;
+
+export function photoSource(photoUrl: string | null | undefined): string | undefined {
+  if (!photoUrl || !runningInTauri()) return photoUrl || undefined;
+  try {
+    if (photoUrl.startsWith('asset://localhost/')) {
+      return convertFileSrc(decodeURIComponent(photoUrl.slice('asset://localhost/'.length)));
+    }
+    if (/^[A-Za-z]:[\\/]/.test(photoUrl) || photoUrl.startsWith('\\\\')) return convertFileSrc(photoUrl);
+  } catch {
+    return photoUrl;
+  }
+  return photoUrl;
+}
 
 export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   timezone: 'Asia/Manila',
