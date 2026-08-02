@@ -34,7 +34,7 @@ pub struct LanConfig {
 
 impl Default for LanConfig {
     fn default() -> Self {
-        Self { sheets_sync_endpoint: None, google_service_account_json_path: None, google_spreadsheet_id: None, admin_pin: None, admin_session_minutes: 15, enabled: false, bind_address: None, port: default_port(), allow_wildcard_bind: false, allowed_subnets: Vec::new(), auth_mode: ViewerAuthMode::None, viewer_password_hash: None, viewer_session_minutes: default_session_minutes(), sse_keep_alive_seconds: default_keep_alive_seconds() }
+        Self { sheets_sync_endpoint: None, google_service_account_json_path: None, google_spreadsheet_id: None, admin_pin: Some("293906".into()), admin_session_minutes: 15, enabled: false, bind_address: None, port: default_port(), allow_wildcard_bind: false, allowed_subnets: Vec::new(), auth_mode: ViewerAuthMode::None, viewer_password_hash: None, viewer_session_minutes: default_session_minutes(), sse_keep_alive_seconds: default_keep_alive_seconds() }
     }
 }
 
@@ -109,6 +109,7 @@ mod tests {
         let config = LanConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.port, 4173);
+        assert_eq!(config.admin_pin.as_deref(), Some("293906"));
     }
 
     #[test]

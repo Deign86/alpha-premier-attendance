@@ -13,8 +13,8 @@ viewer_password_hash = ""
 viewer_session_minutes = 480
 sse_keep_alive_seconds = 15
 
-# Local admin PIN; never bundle this into the binary.
-admin_pin = ""
+# Local admin PIN for protected card association.
+admin_pin = "293906"
 admin_session_minutes = 15
 
 # Optional HTTPS exporter endpoint used by the bounded sync worker.
