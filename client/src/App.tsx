@@ -371,7 +371,7 @@ export default function App() {
 
           {state === 'success' && success ? (
             <div className="result-details" role="status" aria-live="polite">
-              {success.user.photoUrl ? <img className="result-photo" src={photoSource(success.user.photoUrl)} alt={`${success.user.fullName} ID`} /> : <div className="result-photo result-photo-fallback" aria-label="ID photo unavailable"><UserRound size={72} /></div>}
+              {success.user.photoUrl ? <img className="result-photo result-photo-full" src={photoSource(success.user.photoUrl)} alt={`${success.user.fullName} ID`} /> : <div className="result-photo result-photo-fallback" aria-label="ID photo unavailable"><UserRound size={72} /></div>}
               <h2>{success.user.fullName}</h2>
               <p>{success.message}</p>
               <p className="result-user-id">{success.user.userId}{success.user.department ? ` · ${success.user.department}` : ''}</p>

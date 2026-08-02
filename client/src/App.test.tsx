@@ -15,7 +15,7 @@ const successResponse = {
     timeOut: null,
     status: 'OPEN',
   },
-  user: { userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering' },
+  user: { userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', photoUrl: 'asset://localhost/C:/photos/ada.webp' },
 };
 
 function mockFetch(response: unknown = successResponse) {
@@ -58,6 +58,7 @@ describe('RFID kiosk', () => {
       }),
     ));
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
   });
 
   it('submits a rapid scanner input after the idle fallback delay', async () => {
