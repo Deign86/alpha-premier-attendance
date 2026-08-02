@@ -1322,11 +1322,11 @@ async fn upload_photo(
                 .unwrap_or(&base64_data),
         )
         .map_err(|_| "INVALID_IMAGE".to_string())?;
-    if bytes.len() > 500 * 1024 {
+    if bytes.len() > 5 * 1024 * 1024 {
         return Err("IMAGE_TOO_LARGE".into());
     }
     let image = image::load_from_memory(&bytes).map_err(|_| "INVALID_IMAGE_FORMAT".to_string())?;
-    if image.width() > 512 || image.height() > 512 {
+    if !photo_is_within_limits(image.width(), image.height(), bytes.len()) {
         return Err("IMAGE_DIMENSIONS_EXCEEDED".into());
     }
     let photos = state.data_dir.join("photos");
@@ -1337,6 +1337,10 @@ async fn upload_photo(
         .map_err(|e| e.to_string())?;
     let asset_path = path.to_string_lossy().replace('\\', "/");
     Ok(serde_json::json!({"success":true,"photoUrl":format!("asset://localhost/{asset_path}")}))
+}
+
+fn photo_is_within_limits(width: u32, height: u32, bytes: usize) -> bool {
+    width <= 4096 && height <= 4096 && bytes <= 5 * 1024 * 1024
 }
 
 pub fn run() {
@@ -1421,7 +1425,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::php_to_centavos;
+    use super::{php_to_centavos, photo_is_within_limits};
+
+    #[test]
+    fn accepts_large_id_photo_dimensions_and_file_size() {
+        assert!(photo_is_within_limits(1993, 3137, 3_277_122));
+    }
 
     #[test]
     fn php_to_centavos_preserves_fractional_pesos() {

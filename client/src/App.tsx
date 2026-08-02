@@ -542,7 +542,7 @@ function SetupDialog(props: SetupDialogProps) {
 
 async function preparePhotoDataUrl(file: File): Promise<string> {
   const source = await createImageBitmap(file);
-  const scale = Math.min(1, 1200 / Math.max(source.width, source.height));
+  const scale = Math.min(1, 4096 / Math.max(source.width, source.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(source.width * scale));
   canvas.height = Math.max(1, Math.round(source.height * scale));
@@ -552,7 +552,7 @@ async function preparePhotoDataUrl(file: File): Promise<string> {
   source.close();
   for (const quality of [0.82, 0.68, 0.55, 0.42]) {
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
-    if (dataUrl.length * 0.75 <= 450_000) return dataUrl;
+    if (dataUrl.length * 0.75 <= 4_500_000) return dataUrl;
   }
   throw new Error('This photo could not be compressed below the 500 KB upload limit.');
 }
