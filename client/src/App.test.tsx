@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import App from './App';
+import App, { shouldRouteGlobalRfidToSetup } from './App';
 
 const successResponse = {
   success: true,
@@ -37,6 +37,12 @@ beforeEach(() => {
 });
 
 describe('RFID kiosk', () => {
+  it('routes global RFID scans to the registration dialog while setup is active', () => {
+    expect(shouldRouteGlobalRfidToSetup(true, 'setup-token', 'scan')).toBe(true);
+    expect(shouldRouteGlobalRfidToSetup(true, 'setup-token', 'edit')).toBe(false);
+    expect(shouldRouteGlobalRfidToSetup(false, 'setup-token', 'scan')).toBe(false);
+  });
+
   it('focuses the RFID field on first load without a mouse click', async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByLabelText(/scanner card id/i)).toHaveFocus());

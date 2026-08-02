@@ -11,6 +11,10 @@ type SetupStep = 'scan' | 'edit';
 type SetupForm = { userId: string; fullName: string; department: string; status: SetupUser['status']; employeeType: SetupUser['employeeType']; dailyRate: string; photoUrl: string };
 const emptySetupForm: SetupForm = { userId: '', fullName: '', department: '', status: 'ACTIVE', employeeType: 'INTERN', dailyRate: '', photoUrl: '' };
 
+export function shouldRouteGlobalRfidToSetup(dialogOpen: boolean, token: string, step: SetupStep): boolean {
+  return dialogOpen && Boolean(token) && step === 'scan';
+}
+
 const stateCopy: Record<KioskState, { eyebrow: string; title: string }> = {
   ready: { eyebrow: 'Scanner ready', title: 'Tap your card to begin' },
   processing: { eyebrow: 'Reading card', title: 'Checking your attendance' },
@@ -192,7 +196,7 @@ export default function App() {
     focusActiveInput();
   };
 
-  const lookupCardForSetup = async (rawUid: string) => {
+  const lookupCardForSetup = useCallback(async (rawUid: string) => {
     const normalizedUid = rawUid.trim();
     if (!normalizedUid || !setupToken || setupBusy) return;
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
@@ -216,13 +220,13 @@ export default function App() {
       photoUrl: response.user.photoUrl ?? '',
     } : emptySetupForm);
     setSetupStep('edit');
-  };
+  }, [setupBusy, setupToken]);
 
-  const handleSetupInput = (value: string) => {
+  const handleSetupInput = useCallback((value: string) => {
     setSetupUid(value);
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
     if (value.trim()) setupIdleTimer.current = setTimeout(() => void lookupCardForSetup(value), config.rfidAutoSubmitDelayMs);
-  };
+  }, [config.rfidAutoSubmitDelayMs, lookupCardForSetup]);
 
   const submitSetupUser = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -284,13 +288,6 @@ export default function App() {
     resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
   }, [config.resultResetDelayMs, playTone, resetToReady]);
 
-  useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
-    let unlisten: (() => void) | undefined;
-    void listenForGlobalRfid((value) => void submit(value, 'RFID')).then((cleanup) => { unlisten = cleanup; });
-    return () => { unlisten?.(); };
-  }, [submit]);
-
   const handleScannerChange = (value: string) => {
     setUid(value);
     if (idleTimer.current) clearTimeout(idleTimer.current);
@@ -308,6 +305,19 @@ export default function App() {
     event.preventDefault();
     void submit(uid, 'RFID');
   };
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    let unlisten: (() => void) | undefined;
+    void listenForGlobalRfid((value) => {
+      if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
+        handleSetupInput(value);
+      } else if (!setupDialogOpen || !setupToken) {
+        void submit(value, 'RFID');
+      }
+    }).then((cleanup) => { unlisten = cleanup; });
+    return () => { unlisten?.(); };
+  }, [handleSetupInput, setupDialogOpen, setupStep, setupToken, submit]);
 
   const toggleManualMode = () => {
     if (state !== 'ready') return;
