@@ -172,6 +172,8 @@ export type PayrollCutoffRecord = {
 
 export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculationProfile[] };
 export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
+export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number };
+export type ArtifactExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount?: number; status?: string };
 
 export type ScanSuccessResponse = {
   success: true;

@@ -1,4 +1,6 @@
 import type {
+  ArtifactExportResponse,
+  AttendanceXlsxExportResponse,
   SafeConfigResponse,
   ScanErrorResponse,
   ScanRequest,
@@ -132,6 +134,10 @@ export async function savePayrollProfile(profile: PayrollCalculationProfile): Pr
 export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> { if (runningInTauri()) return await tauriApi.payrollCutoffs(nativeAdminToken ?? '') as PayrollCutoffsResponse; return (await fetch('/api/admin/payroll/cutoffs')).json() as Promise<PayrollCutoffsResponse>; }
 export async function savePayrollCutoff(payroll: unknown, payrollId?: string): Promise<unknown> { if (runningInTauri()) return payrollId ? tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', { ...(payroll as object), payrollId }) : tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll); const response = await fetch(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs', { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) }); return response.json(); }
 export async function finalizePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`, { method: 'POST' }); return response.json(); }
+export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }
+export async function exportPayrollXlsx(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportPayrollXlsx(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll workbook.' } }; } } return { success: false, error: { message: 'Payroll workbooks are available in the desktop application.' } }; }
+export async function generatePayrollPayslipPdf(payrollId: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollPayslipPdf(nativeAdminToken ?? '', payrollId); } catch { return { success: false, error: { message: 'Unable to generate the payslip PDF.' } }; } } return { success: false, error: { message: 'Payslip PDFs are available in the desktop application.' } }; }
+export async function generatePayrollRegisterPdf(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollRegisterPdf(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll register PDF.' } }; } } return { success: false, error: { message: 'Payroll register PDFs are available in the desktop application.' } }; }
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {

@@ -29,7 +29,7 @@ SQLite is the source of truth. Google Sheets is an optional write-only export ta
 - Windows 10 or Windows 11 for the packaged application
 - Node.js 20 or newer and npm for development
 - Rust stable with the Windows desktop toolchain for Tauri development
-- Microsoft WebView2 Runtime on the target Windows machine
+- Microsoft WebView2 Runtime on the target Windows machine when using the portable executable
 - A USB RFID reader that behaves as a keyboard wedge
 
 ## Install And Run
@@ -73,7 +73,7 @@ src-tauri/target/release/alpha-premier-attendance.exe
 src-tauri/target/release/bundle/nsis/Alpha Premier Attendance_0.1.0_x64-setup.exe
 ```
 
-The portable executable requires no installer, but the NSIS package is preferred for operator deployment because it creates the application installation and shortcut structure.
+The NSIS package includes the offline WebView2 Runtime installer and installs it machine-wide, so it works on machines that do not already have WebView2. Windows will request Administrator approval during installation. The portable executable is a single application binary and requires WebView2 to already be installed on the target machine; use the NSIS package for a self-contained deployment.
 
 ## Front-Desk Configuration
 

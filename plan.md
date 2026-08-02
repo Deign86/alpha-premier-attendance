@@ -1,644 +1,246 @@
-# Alpha Premier Attendance Tauri v2 Implementation Plan
+# Attendance Exports and Payroll Documents Implementation Plan
 
-> **For agentic workers:** Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to execute this plan task by task. Every phase must leave the application buildable and testable.
+> **For agentic workers:** Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task by task. Preserve the existing Tauri/SQLite architecture and keep the test suite green after every phase.
 
-**Goal:** Replace the Vercel/Express web deployment with a Windows-first Tauri v2 application whose SQLite database is authoritative, whose Rust core owns all writes, and whose embedded private-LAN dashboard lets a boss view live attendance from another office PC without installing Tauri.
+**Goal:** Add reliable Excel workbooks, optional idempotent Google Sheets projections, and professional payroll PDFs while SQLite remains the only source of truth.
 
-**Architecture:** The front-desk Windows laptop is the only machine connected to the RFID reader and the only attendance writer. Tauri embeds the React kiosk, Rust services, SQLite, an Axum read-only LAN server, and an asynchronous Google Sheets export worker.
+**Architecture:** Tauri commands read a stable SQLite snapshot into canonical Rust DTOs. Excel and PDF artifacts are generated locally after the read transaction closes. Google Sheets receives committed local outbox rows asynchronously and never participates in attendance or payroll transactions.
 
-**Tech Stack:** Tauri v2, Rust, Tokio, Axum, SQLx, SQLite, `tauri-plugin-sql`, `rdev`, `google-sheets4`, `yup-oauth2`, `chrono-tz`, `image`, React, Vite, TypeScript, NSIS.
+**Tech Stack:** Tauri v2, Rust 1.88, SQLx/SQLite WAL, React/Vite/TypeScript, `rust_xlsxwriter`, `printpdf`, Google Sheets API v4, `Asia/Manila`, Windows NSIS.
 
 ---
 
-## 1. Scope and Locked Decisions
+## 1. Executive Summary
 
-- Preserve every existing attendance, payroll, setup, admin, photo, audit, migration, and Google Sheets behavior.
-- Store all operational data in SQLite first; Google Sheets is an optional write-only export and backup target.
-- Run the RFID reader only on the front-desk Windows laptop.
-- Run one embedded Axum server in the Tauri process for read-only LAN viewing.
-- Serve the boss dashboard at `http://FRONTDESK-LAPTOP-IP:4173/attendance`.
-- Use SSE as the primary live update channel and five-second polling as the disconnect fallback.
-- Keep all admin, payroll, setup, user, photo, correction, backup, and sync mutations inside Tauri IPC.
-- Bind the LAN server only to a configured private address. Reject public addresses and reject `0.0.0.0` unless explicitly enabled with an allowed subnet.
-- Use NSIS for the Windows installer.
-- During the parallel pay period, Tauri is the only writer; the old web app is read-only.
-- Defer auto-update, public hosting, remote access, multi-writer operation, statutory deductions, approval workflows, and browser admin.
+Build three local-admin capabilities:
 
-## 2. Architecture Overview
+- Downloadable `.xlsx` attendance, daily-register, payroll-register, payslip, audit, and optional master workbooks.
+- Correctly ordered, typed, formatted, retryable, deduplicated Google Sheets projections for `Users`, `Attendance`, `AuditLogs`, `InternGrace`, `Payroll`, `PayrollProfiles`, and `PayrollCutoffs`.
+- A4 payslip, management-register, and optional cutoff-cover PDFs with visible DRAFT, FINALIZED, and VOID states.
 
-```text
-[USB RFID reader: HID keyboard wedge]
-                   |
-                   v
-[Front-desk Windows laptop]
-  focused input + rdev global input fallback
-                   |
-                   v
-[Tauri v2 Rust core]
-  RFID deduplication, attendance, payroll,
-  admin, setup, photo, audit, configuration
-                   |
-                   v
-[SQLite primary store]
-  attendance + payroll + grace + audit + queue
-         |                         |
-         |                         v
-         |              [Tokio Sheets sync worker]
-         |                         |
-         |                         v
-         |                [Optional Google Sheets export]
-         |
-         +-----------------------+
-         |                       |
-         v                       v
-[Local Tauri event bus]   [Embedded Axum LAN server]
-         |                 read-only SQLx queries
-         |                 JSON snapshot + SSE
-         v                       |
-[Kiosk/admin Tauri windows]      v
-                         [Boss PC browser]
-                         http://FRONTDESK-IP:4173/attendance
+SQLite remains authoritative. Attendance, payroll, audit, and outbox writes commit before event publication or external I/O. Google failure, PDF failure, disk failure, LAN failure, or printer failure must never make RFID scanning depend on an external service.
+
+Non-goals: cloud database migration; public file/API exposure; LAN mutation/admin/file routes; Google Sheets as an attendance write dependency; cloud PDF APIs; statutory deductions not already implemented; and invention of employee late rules while `src-tauri/src/services/employee_payroll.rs` marks them TBD.
+
+## 2. Current-System Assessment
+
+Verified current paths and symbols:
+
+| Area | Existing implementation |
+| --- | --- |
+| Tauri startup/state | `src-tauri/src/lib.rs:423` `run`; `src-tauri/src/state.rs` `AppState::new` |
+| SQLite migrations | `src-tauri/db/migrations/0001_core.sql`, `0002_sync_queue.sql`, `0003_seed_profiles.sql` |
+| Core entities | `users`, `attendance`, `audit_logs`, `intern_grace`, `payroll`, `payroll_profiles`, `payroll_cutoffs` |
+| Attendance writer | `src-tauri/src/lib.rs:304` `scan_rfid` |
+| Payroll services | `services/intern_payroll.rs`, `employee_payroll.rs`, `cutoff_payroll.rs` |
+| Payroll commands | `payroll_list_profiles`, `payroll_create_cutoff`, `payroll_update_cutoff`, `payroll_finalize_cutoff`, `payroll_export_csv` in `src-tauri/src/lib.rs:143-218` |
+| Existing queue | `src-tauri/src/lib.rs:297` `enqueue_sync`; `src-tauri/src/services/sheets_sync.rs` |
+| Existing Sheets config | `src-tauri/src/config.rs` `LanConfig`; legacy values under `[lan]` in `src-tauri/config.example.toml` |
+| Legacy Sheets contract | `server/src/sheets.ts` `requiredHeaders`, `GoogleSheetsAdapter`; setup documented in `docs/google-sheets-setup.md` |
+| Sheets migration | `src-tauri/src/bin/migrate_from_sheets.rs` |
+| LAN boundary | `src-tauri/src/lan_server.rs` exposes only read-only attendance/health/SSE routes |
+| Admin UI | `client/src/App.tsx:585` `AdminPanel`, `PayrollWorkspace`, `PayrollTable` |
+| Native bridge | `client/src/tauri-api.ts`, `client/src/api.ts` |
+| Shared contracts | `shared/src/api-contracts.ts:117-174` payroll types |
+| CSV | Rust `payroll_export_csv`; legacy HTTP export at `server/src/app.ts:107` |
+| Tests | 35 JS/TS tests and 8 Rust tests currently pass |
+
+Important verified gaps to fix:
+
+- The Tauri scan path uses separate SQL statements; transactionally group attendance/payroll/audit/outbox and publish events only after commit.
+- `enqueue_sync` currently ignores insertion errors.
+- `sheets_sync.rs` writes one attendance-shaped row for every table and has no schema/version/idempotency/formatting/batch layer.
+- Retry is capped at five attempts with generic errors and no leases.
+- No Excel/PDF artifact service, snapshot table, generated-file metadata, or export history exists.
+- The current payroll UI still links to HTTP CSV and calls `window.print()`.
+
+`NEW COMPONENT REQUIRED`: canonical report DTOs/query layer; export jobs/artifacts; finalized payroll snapshots; Excel generator; PDF renderer/templates; versioned Sheets writer; admin export history/actions; migrations `0004+`.
+
+## 3. Architecture Principles
+
+- SQLite WAL is authoritative; reports read from a short transaction-safe snapshot.
+- Payroll finalization creates an immutable canonical snapshot/hash. Final exports use that snapshot; draft exports read current draft data and show DRAFT.
+- All dates, week boundaries, cutoffs, and labels use `Asia/Manila`.
+- Money is `i64` centavos internally and `PHP #,##0.00` at presentation boundaries.
+- External Sheets writes are a retryable projection, never a transaction participant.
+- Local files are generated under a managed export root using temp-file plus atomic rename.
+- No artifact, log, UI error, LAN response, or source file contains credentials, PINs, tokens, spreadsheet IDs, local paths, or session data.
+- The LAN dashboard stays read-only and receives no payroll/export capability.
+
+```mermaid
+flowchart LR
+  DB[(SQLite WAL authoritative)] --> R[Canonical report read model]
+  R --> X[Excel generator]
+  R --> P[Payroll snapshot/PDF generator]
+  DB --> Q[Transactional Sheets outbox]
+  Q --> G[Google Sheets writer]
+  X --> F[Managed local artifacts]
+  P --> F
+  F --> A[Tauri open/save/print workflow]
+  UI[Local admin UI] --> C[Tauri admin commands]
+  C --> DB
+  DB --> LAN[Read-only LAN dashboard]
 ```
 
-The Rust core is in-process; Express is removed from the desktop runtime. Every accepted or rejected scan is validated, keyed-locked, audited, and committed in SQLite before the command returns. After commit, the event bus notifies local Tauri windows and connected LAN browsers. A LAN server failure, disconnected viewer, or Sheets outage never rolls back a committed local scan.
+## 4. Canonical Data Contract
 
-### 2.1 LAN server lifecycle
+Create `src-tauri/src/reporting/models.rs`, `queries.rs`, and matching additions in `shared/src/api-contracts.ts`.
 
-1. Load `config.toml`, resolve `appLocalDataDir`, open SQLite, and apply migrations.
-2. Start RFID, Tauri commands, and local windows.
-3. If LAN mode is enabled, validate the private bind address, port, and subnet policy.
-4. Start Axum on a supervised Tokio task with graceful cancellation.
-5. Retry binding every 30 seconds if the interface is unavailable or the port is occupied.
-6. Report LAN status locally without blocking attendance.
-7. Shut down SSE streams and the listener when Tauri exits.
+Canonical records:
 
-### 2.2 LAN routes
+- `ExportUser`: stable user ID, RFID UID, historical/current name, department, status, employee type, rate/profile IDs, revision, created/updated timestamps.
+- `ExportAttendanceRecord`: attendance ID/date, user ID, denormalized historical name, raw RFC3339 time-in/out, status/source/notes, revision, current-user state.
+- `AttendanceDailySummary`: date, counts by status, total computed hours.
+- `ExportPayrollProfile`: profile values from `payroll_profiles` without recalculation.
+- `ExportPayrollCutoff`: every stored `payroll_cutoffs` input/output, employee/profile identity snapshot, status, revision, finalization/void fields, snapshot hash.
+- `PayrollLineItem`, `AllowanceItem`, `IncentiveItem`, `ManualAdjustmentItem`, and `GraceLateItem`: deterministic display decomposition of existing stored columns.
+- `PayrollTotals`: all totals in centavos.
+- `ExportOperation`, `GeneratedArtifact`, and `SheetProjectionEvent`: job status, artifact metadata, idempotency, hash, safe errors.
 
-| Route | Purpose | Access |
-| --- | --- | --- |
-| `GET /attendance` | Browser-safe read-only dashboard | Viewer session when enabled |
-| `GET /api/attendance/today?date=YYYY-MM-DD` | Selected Manila-date snapshot | Viewer session when enabled |
-| `GET /api/events/attendance` | Server-Sent Events stream | Viewer session when enabled |
-| `GET /api/health` | Minimal local/LAN health | Allowed private subnet |
-| `GET /login` | Optional viewer login page | Allowed private subnet |
-| `POST /api/viewer/session` | Create opaque viewer session | Rate-limited password check |
-| `POST /api/viewer/logout` | Invalidate viewer session | Viewer session |
+Rules: dates `YYYY-MM-DD`; raw timestamps retain offsets; display values are Manila-local; optional values are `null`; sort by date/time/name/ID; missing current users remain historical; finalized records never re-read mutable user/profile fields. Report code must not call payroll calculators or invent employee late rules.
 
-No `/admin`, `/setup`, `/payroll`, `/api/admin/*`, `/api/setup/*`, photo mutation, user mutation, attendance correction, or sync mutation route is exposed by Axum. Unknown paths return 404 and unsupported methods return 405.
+## 5. Excel Design
 
-## 3. Technology Decisions
+Use `rust_xlsxwriter` pinned to `0.97.0`, with `chrono` and `constant_memory`. Pin Rust to 1.88 because that crate version requires it. It supports tables, formatting, formulas, page setup, filters, freeze panes, conditional formatting, validation, and printer settings, but writes new workbooks only, which is acceptable for reproducible reports.
 
-- Tauri v2 with `tauri-plugin-sql` registered for SQLite integration, but no raw SQL capability granted to the webview.
-- SQLx `SqlitePool` is the application database API; use `query!` and `query_file!` for every query.
-- `sqlx::migrate!()` applies numbered migrations at startup. Commit SQLx offline metadata and run `cargo sqlx prepare --check` in CI.
-- SQLite uses WAL, foreign keys, a five-second busy timeout, and a bounded pool.
-- `rdev` captures arbitrary global HID keyboard events on Windows; the global-shortcut plugin is not sufficient for a UID stream.
-- Axum provides the embedded HTTP server; `tower-http` supplies timeout, request limits, and security headers.
-- `tokio::sync::broadcast` carries post-commit attendance events to SSE clients.
-- `rust-embed` embeds the separate LAN viewer bundle so production does not depend on a writable web directory.
-- `google-sheets4` and `yup-oauth2` implement the write-only export worker.
-- The `image` crate validates and transcodes JPEG/PNG/WebP photos to local WebP files.
-- `chrono-tz` enforces `Asia/Manila` for all calendar calculations.
+Default folder: `Documents\\Alpha Premier Attendance\\Exports\\YYYY\\MM`; fallback to app-local data. Use sanitized IDs, never employee names, in filenames. Write a random same-directory temp file, flush, hash, and atomically rename.
 
-## 4. SQLite Schema and Migrations
+Common style: title/metadata block, readable wrapped headers, frozen header/ID columns, Excel tables/autofilters, static audited totals, Manila display dates/times, PHP currency format, A4 print area, repeating headers, fit-to-width, page numbers, generated timestamp, app version, job/document ID. Status is always text; colors are supplemental. Draft/void bands repeat in print headers.
 
-Migrations live in `src-tauri/db/migrations/` and are numbered `0001_core.sql`, `0002_sync_queue.sql`, and `0003_seed_profiles.sql`. Monetary columns store integer centavos; DTOs and Sheets exports convert to PHP decimal numbers.
+Workbook types:
 
-```sql
-PRAGMA foreign_keys = ON;
+1. Attendance range: `Attendance`, `Daily Summary`, `Report Info`. Columns: Employee ID, Employee Name, Department, Date, Time In, Time Out, Total Hours, Status, Source, Notes. Landscape A4.
+2. Daily register: `Daily Register`, one Manila date, same operational columns, summary counts, landscape A4.
+3. Payroll register: `Payroll Register`, `Line Item Detail`, `Report Info`. Columns: Employee ID, Employee Name, Position/Profile, Cutoff Period, Working Days, Basic Pay, Holiday Pay, Allowances, Incentives, Overtime Pay, Late Deductions, Half-Day Deductions, Absence Deductions, Manual Adjustment, Gross Compensation, Net Pay, Payroll Status, Document ID. Landscape A4.
+4. Individual payslip workbook: `Payslip`, `Calculation Detail`, `Report Info`; portrait A4 and no employee photo by default.
+5. Audit/export history workbook: safe job metadata only, no secrets or payloads.
+6. Optional master workbook: Users, Attendance, Daily Summary, Payroll Register, Export History, Report Info; payroll inclusion requires confirmation.
 
-CREATE TABLE users (
-  user_id TEXT PRIMARY KEY NOT NULL,
-  rfid_uid TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  full_name TEXT NOT NULL,
-  department TEXT,
-  status TEXT NOT NULL CHECK (status IN ('ACTIVE','INACTIVE')),
-  created_at TEXT NOT NULL,
-  employee_type TEXT NOT NULL DEFAULT 'INTERN' CHECK (employee_type IN ('INTERN','EMPLOYEE')),
-  daily_rate_centavos INTEGER,
-  payroll_profile_id TEXT,
-  photo_url TEXT,
-  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
-  updated_at TEXT NOT NULL,
-  CHECK ((employee_type = 'INTERN' AND daily_rate_centavos IS NULL) OR
-         (employee_type = 'EMPLOYEE' AND daily_rate_centavos > 0))
-) STRICT;
+Detail values and totals are static values from SQLite/snapshot data. Do not embed payroll formulas. Formula-like text is written as explicit strings.
 
-CREATE TABLE attendance (
-  attendance_id TEXT PRIMARY KEY NOT NULL,
-  attendance_date TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  rfid_uid TEXT NOT NULL,
-  full_name TEXT NOT NULL,
-  department TEXT,
-  time_in TEXT,
-  time_out TEXT,
-  status TEXT NOT NULL CHECK (status IN ('OPEN','COMPLETED','INCOMPLETE')),
-  source TEXT NOT NULL CHECK (source IN ('RFID','MANUAL_TEST')),
-  notes TEXT NOT NULL DEFAULT '',
-  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK ((status = 'OPEN' AND time_in IS NOT NULL AND time_out IS NULL) OR
-         (status = 'COMPLETED' AND time_in IS NOT NULL AND time_out IS NOT NULL) OR
-         (status = 'INCOMPLETE' AND time_in IS NULL AND time_out IS NULL))
-) STRICT;
+## 6. Google Sheets Design
 
-CREATE UNIQUE INDEX ux_attendance_user_date ON attendance(user_id, attendance_date);
-CREATE INDEX ix_attendance_date_status ON attendance(attendance_date, status);
+Add `[google_sheets]` configuration while accepting existing `[lan]` service-account/spreadsheet keys as compatibility aliases. Missing/invalid configuration disables syncing only. Credentials remain local and direct service-account access is write-only.
 
-CREATE TABLE audit_logs (
-  log_id TEXT PRIMARY KEY NOT NULL,
-  timestamp TEXT NOT NULL,
-  event_type TEXT NOT NULL,
-  rfid_uid TEXT,
-  user_id TEXT,
-  message TEXT NOT NULL,
-  request_id TEXT NOT NULL
-) STRICT;
-CREATE INDEX ix_audit_request ON audit_logs(request_id);
-CREATE INDEX ix_audit_timestamp ON audit_logs(timestamp);
+Managed tabs and semantics:
 
-CREATE TABLE intern_grace (
-  grace_id TEXT PRIMARY KEY NOT NULL,
-  user_id TEXT NOT NULL,
-  week_start TEXT NOT NULL,
-  attendance_id TEXT NOT NULL UNIQUE,
-  used_at TEXT NOT NULL,
-  FOREIGN KEY (attendance_id) REFERENCES attendance(attendance_id) ON DELETE CASCADE
-) STRICT;
-CREATE UNIQUE INDEX ux_grace_user_week ON intern_grace(user_id, week_start);
+| Tab | Semantics |
+| --- | --- |
+| Users | Latest-state projection; deleted rows become `record_state=DELETED` |
+| Attendance | Latest-state projection with raw ISO and formatted display columns |
+| AuditLogs | Append-only |
+| InternGrace | State projection plus audit history |
+| Payroll | Latest-state daily ledger |
+| PayrollProfiles | Latest-state projection |
+| PayrollCutoffs | Latest-state draft/final/void management register |
+| `_SyncEvents` | Hidden/protected append-only change/idempotency history |
+| `_ExportMeta` | Hidden/protected schema/header metadata |
 
-CREATE TABLE payroll (
-  payroll_id TEXT PRIMARY KEY NOT NULL,
-  attendance_id TEXT NOT NULL UNIQUE,
-  user_id TEXT NOT NULL,
-  full_name TEXT NOT NULL,
-  employee_type TEXT NOT NULL CHECK (employee_type IN ('INTERN','EMPLOYEE')),
-  attendance_date TEXT NOT NULL,
-  actual_time_in TEXT NOT NULL,
-  actual_time_out TEXT NOT NULL,
-  computed_time_in TEXT NOT NULL,
-  computed_time_out TEXT NOT NULL,
-  grace_used INTEGER CHECK (grace_used IS NULL OR grace_used IN (0,1)),
-  late_hours INTEGER NOT NULL CHECK (late_hours >= 0),
-  late_deduction_centavos INTEGER NOT NULL CHECK (late_deduction_centavos >= 0),
-  base_pay_centavos INTEGER NOT NULL CHECK (base_pay_centavos >= 0),
-  daily_pay_centavos INTEGER NOT NULL CHECK (daily_pay_centavos >= 0),
-  notes TEXT NOT NULL DEFAULT '',
-  revision INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (attendance_id) REFERENCES attendance(attendance_id) ON DELETE CASCADE
-) STRICT;
-CREATE INDEX ix_payroll_attendance ON payroll(attendance_id);
+Version 2 headers must be defined as constants in `services/sheets_sync/schema.rs` and validated in stable order. Preserve the seven legacy tabs and provide an explicit admin migration that backs up old tabs before conversion. Manually renamed tabs, changed headers, duplicate stable IDs, or inaccessible spreadsheets fail closed for that tab.
 
-CREATE TABLE payroll_profiles (
-  profile_id TEXT PRIMARY KEY NOT NULL,
-  label TEXT NOT NULL,
-  payroll_frequency TEXT NOT NULL CHECK (payroll_frequency = 'SEMI_MONTHLY'),
-  standard_working_days_per_cutoff REAL NOT NULL,
-  incentives_allowance_centavos INTEGER NOT NULL,
-  special_allowance_centavos INTEGER NOT NULL,
-  special_holiday_multiplier REAL NOT NULL,
-  regular_holiday_multiplier REAL NOT NULL,
-  half_day_fraction REAL NOT NULL,
-  overtime_rate_centavos INTEGER NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-) STRICT;
+Use stable row IDs and idempotency keys `v2:<entity>:<row-id>:<operation>:<revision>:<payload-hash>`. Update exactly one matching row; append only when missing; never guess among duplicates. Finalized payroll values are immutable; corrections use void plus replacement. Use batchGet/batchUpdate/append APIs, one validation pass per connection/schema version, row leases, bounded exponential backoff, `Retry-After`, and persistent attempt/error state. Retry network/408/429/5xx, refresh one 401, and block auth/schema/permission failures.
 
-CREATE TABLE payroll_cutoffs (
-  payroll_id TEXT PRIMARY KEY NOT NULL,
-  employee_id TEXT NOT NULL,
-  employee_name TEXT NOT NULL,
-  payroll_profile_id TEXT NOT NULL,
-  payroll_cutoff_label TEXT NOT NULL,
-  cutoff_start TEXT NOT NULL,
-  cutoff_end TEXT NOT NULL,
-  payroll_frequency TEXT NOT NULL CHECK (payroll_frequency = 'SEMI_MONTHLY'),
-  daily_rate_centavos INTEGER NOT NULL,
-  standard_working_days REAL NOT NULL,
-  actual_working_days REAL NOT NULL,
-  basic_pay_centavos INTEGER NOT NULL,
-  special_holiday_days REAL NOT NULL,
-  special_holiday_multiplier REAL NOT NULL,
-  special_holiday_pay_centavos INTEGER NOT NULL,
-  regular_holiday_days REAL NOT NULL,
-  regular_holiday_multiplier REAL NOT NULL,
-  regular_holiday_pay_centavos INTEGER NOT NULL,
-  incentives_allowance_centavos INTEGER NOT NULL,
-  special_allowance_centavos INTEGER NOT NULL,
-  total_compensation_centavos INTEGER NOT NULL,
-  total_allowance_centavos INTEGER NOT NULL,
-  late_units REAL NOT NULL,
-  late_deduction_centavos INTEGER NOT NULL,
-  half_day_count REAL NOT NULL,
-  half_day_deduction_centavos INTEGER NOT NULL,
-  absent_days REAL NOT NULL,
-  absence_deduction_centavos INTEGER NOT NULL,
-  overtime_hours REAL NOT NULL,
-  overtime_rate_centavos INTEGER NOT NULL,
-  overtime_pay_centavos INTEGER NOT NULL,
-  manual_adjustment_centavos INTEGER NOT NULL DEFAULT 0,
-  adjustment_reason TEXT,
-  gross_compensation_centavos INTEGER NOT NULL,
-  net_pay_centavos INTEGER NOT NULL,
-  signature_placeholder TEXT NOT NULL DEFAULT '',
-  calculation_breakdown TEXT NOT NULL CHECK (json_valid(calculation_breakdown)),
-  approved_working_day_overage INTEGER NOT NULL CHECK (approved_working_day_overage IN (0,1)),
-  status TEXT NOT NULL CHECK (status IN ('DRAFT','FINALIZED')),
-  finalized_at TEXT,
-  revision INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (cutoff_start <= cutoff_end),
-  CHECK (manual_adjustment_centavos = 0 OR length(trim(adjustment_reason)) > 0),
-  CHECK (actual_working_days <= standard_working_days OR approved_working_day_overage = 1)
-) STRICT;
-CREATE UNIQUE INDEX ux_cutoff_employee_period ON payroll_cutoffs(employee_id, cutoff_start, cutoff_end);
-
-CREATE TABLE sync_queue (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  table_name TEXT NOT NULL,
-  row_id TEXT NOT NULL,
-  operation TEXT NOT NULL CHECK (operation IN ('UPSERT','DELETE')),
-  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
-  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
-  last_error TEXT,
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','RETRY','PROCESSING','DEAD')),
-  next_attempt_at TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  locked_at TEXT
-) STRICT;
-CREATE INDEX ix_sync_ready ON sync_queue(status, next_attempt_at, id);
-
-CREATE TABLE sync_state (
-  table_name TEXT NOT NULL,
-  row_id TEXT NOT NULL,
-  last_synced_hash TEXT NOT NULL,
-  sheet_row_number INTEGER,
-  last_synced_at TEXT NOT NULL,
-  PRIMARY KEY (table_name, row_id)
-) STRICT;
+```mermaid
+sequenceDiagram
+  participant R as RFID
+  participant T as Tauri
+  participant D as SQLite
+  participant E as Event bus
+  participant Q as Outbox worker
+  participant G as Google Sheets
+  R->>T: scan_rfid
+  T->>D: transaction: attendance/payroll/audit/outbox
+  D-->>T: commit
+  T-->>R: local success
+  T->>E: publish after commit
+  Q->>D: lease ready rows
+  Q->>G: batch validate/update/append
+  G-->>Q: success or retryable/blocked error
+  Q->>D: checkpoint or backoff/error
 ```
 
-Seed `JEAN_TENURED` with PHP 6,600 incentives, PHP 150 special allowance, 11 standard days, 0.3 special-holiday multiplier, 1.0 regular-holiday multiplier, 0.5 half-day fraction, and zero overtime. Seed `BEA_STANDARD` with the same formulas and zero allowances.
+## 7. Payroll PDF Design
 
-## 5. Tauri Command and LAN Contract Surface
+Primary renderer: `printpdf` `0.12.5` with a constrained XHTML/table layout, embedded licensed font, A4 page helpers, and PDF status overlays. It is offline and Rust-native. Fallback: a pinned bundled Typst CLI sidecar if objective golden tests fail for pagination, Unicode, or typography. Frontend printing is preview/manual-print only, not the official artifact path.
 
-Preserve the existing shared request/response shapes for scans, setup, users, attendance, payroll profiles, and cutoff payroll. Replace `fetch('/api/...')` with `invoke()` in `client/src/tauri-api.ts`.
+Payslip PDF: A4 portrait; company header; employee/profile; cutoff/status/document ID; attendance summary; earnings; deductions; gross/net emphasis; optional signature lines; generated time; confidentiality footer. One employee per document.
 
-Required Tauri commands include `get_config`, `get_health`, `scan_rfid`, `get_attendance`, `setup_unlock`, `setup_lock`, `setup_lookup_card`, `setup_upsert_user`, `upload_photo`, `admin_unlock`, `admin_get_session`, `admin_lock`, `admin_list_users`, `admin_create_user`, `admin_update_user`, `admin_delete_user`, `admin_list_attendance`, `admin_update_attendance`, `admin_delete_attendance`, `payroll_list_profiles`, `payroll_upsert_profile`, `payroll_list_cutoffs`, `payroll_create_cutoff`, `payroll_update_cutoff`, `payroll_finalize_cutoff`, `payroll_export_csv`, `admin_get_sync_status`, `admin_retry_sync_item`, and `admin_sync_now`.
+Management register PDF: A4 landscape; repeated table headers; static totals; mixed-status warning; approval lines kept together.
 
-Use an internal `AppError` enum with serialized public error codes. Keep the existing scan/setup/admin error codes; local database failures map to the existing typed internal/configuration responses. LAN errors are separate and never returned by local scan commands.
+Optional cover sheet: A4 portrait; cutoff, employee count, aggregate totals, exceptions, finalization coverage, approvals; no employee-level amounts.
 
-The LAN server adds these explicit DTOs:
+Draft documents have a repeated top banner and watermark. Final documents use FINALIZED. Void documents use `VOID - NOT VALID FOR PAYMENT`. Employee photos are excluded. Open PDF and let the local viewer present the print workflow; never silently print.
 
-```ts
-export type LanAttendanceSnapshotResponse = {
-  success: true;
-  serverInstanceId: string;
-  snapshotVersion: number;
-  date: string;
-  attendance: AttendanceListItem[];
-  fetchedAt: string;
-};
+## 8. UX and Permissions
 
-export type LanAttendanceEvent =
-  | { type: 'attendance-updated'; eventId: string; serverInstanceId: string; sequence: number; occurredAt: string; requestId: string; attendanceDate: string; cause: 'TIME_IN' | 'TIME_OUT' | 'ADMIN_CORRECTION' | 'ADMIN_DELETE' | 'PAYROLL_RECONCILIATION'; mutation: 'upsert' | 'delete' | 'refetch'; attendanceId: string; attendance: AttendanceListItem | null }
-  | { type: 'connection-status'; eventId: string; serverInstanceId: string; sequence: number; occurredAt: string; status: 'connected'; connectionId: string }
-  | { type: 'stale-data'; eventId: string; serverInstanceId: string; sequence: number; occurredAt: string; reason: 'event-gap' | 'database-read-failed' | 'server-restarted'; shouldRefetch: true };
+Add an authenticated Exports section to `client/src/App.tsx`. Workflows: attendance Excel, payroll Excel, one payslip, all finalized payslips, PDF register/cover, history, retry Sheets jobs, validate/repair schema, open artifact/folder, save-as, and print-preview.
 
-export type LanHealthResponse = {
-  success: true;
-  service: 'alpha-premier-attendance-lan';
-  status: 'healthy' | 'degraded';
-  serverInstanceId: string;
-  timestamp: string;
-  timezone: 'Asia/Manila';
-  sqlite: 'connected' | 'unavailable';
-  lan: { bindAddress: string; port: number; viewerMode: 'read-only'; connectedSseClients: number; uptimeSeconds: number };
-  googleSheetsExport: 'connected' | 'offline' | 'disabled';
-};
-```
+Every operation requires `admin_authorized`. Bulk operations confirm counts/status, show progress and cancellation, continue per-document failures, and report sanitized errors. No LAN route or generic filesystem permission is added. Default retention: drafts 30 days, operational exports 90 days, final payroll indefinitely; snapshots/audit metadata indefinitely.
 
-## 6. RFID Input and Live Event Mechanics
+## 9. Database and Migrations
 
-Extract the current inline scanner into `client/src/hooks/useRfidScanner.ts`. Preserve Enter detection, 150 ms idle fallback, 75 ms rapid-character detection, 4-64 hexadecimal validation, focus recovery, manual-mode protection, and the ten-second cooldown.
+`0004_export_jobs_artifacts.sql`: `export_jobs`, `export_job_attempts`, `generated_artifacts`, indexes, status checks, safe error fields, progress, cancellation, managed relative paths, hashes, and retention timestamps.
 
-The Windows `rdev` listener runs on a dedicated thread. Both focused and global paths feed one coordinator. Coalesce identical normalized UIDs for 500 ms and return one shared result; the physical ten-second cooldown remains separate. Never log incomplete global keyboard buffers.
+`0005_sync_idempotency.sql`: additive `sync_queue.idempotency_key`, sanitized error code, unique retry identity, and `sheet_schema_state`; preserve legacy rows and allow nullable backfill.
 
-After a successful SQLite commit:
+`0006_payroll_snapshots.sql`: immutable `payroll_snapshots` JSON/hash rows keyed by payroll revision; support DRAFT/FINALIZED/VOID while keeping existing rows valid.
 
-1. Emit a local Tauri event for kiosk/admin windows.
-2. Publish an `attendance-updated` message to a `tokio::sync::broadcast` channel.
-3. Let Axum convert the message to named SSE with `id`, `event`, `retry: 2000`, and JSON `data` fields.
-4. Send a 15-second SSE keep-alive comment.
+Never store binary XLSX/PDF data in SQLite. Preserve WAL, foreign keys, short read transactions, and additive backward-compatible migrations.
 
-If a viewer disconnects, broadcasts lag, or no viewers are connected, the scan remains successful. A lagged SSE client receives `stale-data` and refetches the full snapshot.
+## 10. Security and Privacy
 
-The LAN browser fetches its initial snapshot, opens `EventSource`, applies matching-date upserts/deletes, refetches on `refetch` or `stale-data`, reconnects automatically, and starts five-second polling when SSE is unavailable. It keeps the last successful rows visible and marks the view stale after 15 seconds and offline after 30 seconds or three failed polls.
+Canonicalize and ACL service-account/config paths; require regular local JSON files under config; redact JWTs, keys, tokens, spreadsheet IDs, payloads, and paths. Resolve artifact operations by DB artifact ID, reject traversal/UNC/device paths, sanitize Windows filenames, use atomic writes, and do not serve export directories through Axum/Vite/LAN. Use explicit string cells to prevent Excel/Sheets formula injection. Audit IDs/status/errors, not payroll values or secrets.
 
-## 7. Attendance, Payroll, and Reconciliation Rules
-
-Port the current rules as pure Rust functions and preserve the exact employee comment:
-
-```rust
-// TODO: Employee late rules TBD by client
-```
-
-- Compute the attendance date only from the Rust clock in `Asia/Manila`.
-- Use one row per `(user_id, attendance_date)`: no row means Time In, open means Time Out, completed means already complete, inconsistent data means conflict.
-- Intern official start is 08:00 Manila; late hours are ceiling hours; the first Monday-Sunday late claims one `intern_grace` row; later lates round computed Time In up and charge PHP 10 per late hour; daily pay floors at zero from PHP 80.
-- Employee raw timestamps remain unchanged; computed Time In rounds up and computed Time Out rounds down; late hours and deductions remain zero pending client rules; base and daily pay use the employee daily rate.
-- Payroll writes are idempotent by `attendance_id` and occur only after completed attendance.
-- Admin corrections use expected timestamps/revisions and deterministically replay affected intern weeks.
-- `JEAN_TENURED`, `BEA_STANDARD`, manual adjustments, approvals, finalization, CSV export, and PHP centavo rounding remain unchanged.
-
-## 8. Google Sheets Sync
-
-Sheets remains write-only from SQLite. Preserve these tabs and headers: `Users`, `Attendance`, `AuditLogs`, `InternGrace`, `Payroll`, `PayrollProfiles`, and `PayrollCutoffs`.
-
-Every domain mutation, audit row, payroll row, grace claim, profile update, cutoff update, and delete is enqueued in the same SQLite transaction. A Tokio worker polls every 30 seconds, processes ordered batches of 100, retries with exponential backoff up to five attempts, and dead-letters failed items. SQLite wins conflicts: compare canonical row hashes, record a conflict audit, and overwrite the remote row. Dead-letter counts are visible locally; they are never exposed through the boss dashboard.
-
-## 9. Photos, Sessions, and Security
-
-Store photos under `{appLocalDataDir}/photos/{user_id}.webp`. Accept only JPEG/PNG/WebP, decoded input at most 500 KB, dimensions at most 512x512, and valid magic bytes. Transcode atomically to WebP and return a scoped `asset://` URL to Tauri windows. Do not expose the local photo directory through Axum.
-
-Use in-memory `State<Mutex<AdminSession>>` for admin access and opaque expiring setup tokens for setup mode. Store Argon2id PIN hashes and the Google service-account secret in ACL-protected `config.toml`/config files. Never expose these values to the LAN browser.
-
-LAN configuration is explicit:
-
-```toml
-[lan]
-enabled = true
-bind_address = "192.168.1.50"
-port = 4173
-allow_wildcard_bind = false
-allowed_subnets = ["192.168.1.0/24"]
-auth_mode = "password"
-viewer_password_hash = "$argon2id$v=19$..."
-viewer_session_minutes = 480
-sse_keep_alive_seconds = 15
-poll_fallback_seconds = 5
-```
-
-Reject public unicast binds. Reject wildcard binds unless explicitly enabled and constrained by `allowed_subnets`. Support `auth_mode = "none"` only when the operator explicitly chooses it. Password mode uses a rate-limited login and an opaque in-memory HttpOnly/SameSite viewer cookie. This HTTP gate is access control for a trusted LAN, not transport encryption.
-
-Require a Windows Defender Firewall inbound rule for TCP 4173 on the Private profile and office subnet only. Do not create a public-profile rule, router port forward, UPnP mapping, public DNS record, or cloud tunnel.
-
-## 10. Folder Structure
-
-```text
-client/src/
-|- App.tsx
-|- tauri-api.ts
-|- hooks/useRfidScanner.ts
-|- components/PhotoEnrollmentField.tsx
-|- components/AttendanceTable.tsx
-`- lan/
-   |- main.tsx
-   |- LanAttendanceApp.tsx
-   |- lan-api.ts
-   |- useAttendanceEvents.ts
-   `- lan-styles.css
-
-shared/src/
-|- api-contracts.ts
-`- lan-contracts.test.ts
-
-src-tauri/
-|- Cargo.toml
-|- tauri.conf.json
-|- capabilities/desktop.json
-|- db/migrations/{0001_core.sql,0002_sync_queue.sql,0003_seed_profiles.sql}
-`- src/
-   |- main.rs
-   |- lib.rs
-   |- config.rs
-   |- error.rs
-   |- state.rs
-   |- commands/{system,attendance,setup,admin,payroll,photo,sync}.rs
-   |- models/{api,lan,attendance,payroll,sync}.rs
-   |- services/{attendance,payroll,intern_payroll,employee_payroll,payroll_reconciliation,sheets_sync,photo_storage,attendance_notifications}.rs
-   `- lan_server/{mod,routes,sse,auth,state,middleware,static_assets}.rs
-
-docs/
-|- lan-dashboard-deployment.md
-|- lan-dashboard-troubleshooting.md
-|- hardware-verification.md
-|- payroll-operations.md
-`- migration-cutover.md
-```
-
-The LAN viewer is a separate browser bundle and reuses `AttendanceListItem` and the shared LAN contracts. It never imports Tauri APIs.
+Threats to test: credential disclosure, path traversal, formula injection, duplicate retries, manual sheet schema changes, Google outage/quota, finalized-data mutation, draft misdistribution, LAN access, temp-file exposure, concurrent workers, and malicious logo/font assets.
 
 ## 11. Implementation Phases
 
-### Phase 1 - Tauri scaffold, SQLite, migrations, and health
-
-**Files:** Tauri crate, config/state/error modules, migrations, build scripts.
-
-**Tasks:** Scaffold Tauri v2, register plugins, open SQLite, apply SQLx migrations, seed profiles, load config, and implement `get_health`/`get_config`.
-
-**Definition of done:** `npm run tauri:dev`, `cargo test`, `cargo sqlx prepare --check`, and client builds pass; startup fails safely on invalid config/migrations.
-
-**Manual tests:** Launch offline, restart with an existing database, and verify local health.
-
-### Phase 2 - Atomic attendance state machine
-
-**Files:** Attendance commands/service/repositories and integration tests.
-
-**Tasks:** Port normalization, Manila dates, keyed locks, cooldown, conflict handling, audit IDs, and transactional scan writes.
-
-**Definition of done:** Concurrent scans cannot duplicate rows; every accepted/rejected scan is audited; Sheets is not consulted.
-
-**Manual tests:** Active, unknown, inactive, duplicate, completed, malformed, and Manila-midnight scans.
-
-### Phase 3 - Intern payroll and grace
-
-**Files:** `intern_payroll.rs`, payroll/grace repositories, reconciliation tests.
-
-**Tasks:** Port weekly grace, late rounding, PHP 10 deductions, floor-at-zero, idempotent payroll, and atomic completion.
-
-**Definition of done:** Existing intern tests and retry/concurrency tests pass.
-
-**Manual tests:** First and later weekly lates, week reset, and payroll recovery.
-
-### Phase 4 - Employee payroll and cutoff profiles
-
-**Files:** Employee/cutoff services, payroll commands, CSV exporter.
-
-**Tasks:** Preserve raw timestamps and the exact TODO comment; port both profiles, centavo arithmetic, finalization, adjustments, and CSV export.
-
-**Definition of done:** Existing employee, cutoff, Jean, Bea, validation, and CSV tests pass.
-
-**Manual tests:** Create/edit/finalize/export representative employee payroll.
-
-### Phase 5 - Admin commands and reconciliation
-
-**Files:** Admin services/commands/repositories and tests.
-
-**Tasks:** Port user CRUD, attendance corrections, optimistic revisions, profile/cutoff CRUD, and deterministic intern-week replay.
-
-**Definition of done:** Stale edits conflict; corrections synchronize payroll and grace; deleting users preserves history.
-
-**Manual tests:** Edit users, correct/reopen/delete attendance, and replay a week.
-
-### Phase 6 - Setup mode and photo authorization
-
-**Files:** Setup/session/photo commands and tests.
-
-**Tasks:** Port PIN unlock, opaque expiry tokens, enrollment/reconfiguration, local photo validation, and scoped asset URLs.
-
-**Definition of done:** Setup is disabled by default; tokens expire/lock; normal scans cannot enroll; photos meet every limit.
-
-**Manual tests:** Wrong/correct PIN, expiry, enrollment, reconfiguration, conflicts, and invalid photos.
-
-### Phase 7 - Global RFID fallback
-
-**Files:** `src-tauri/src/rfid/*`, scanner hook, parser/deduper tests.
-
-**Tasks:** Add Windows `rdev`, Enter/idle buffering, focus-independent delivery, shared-result deduplication, and shutdown handling.
-
-**Definition of done:** Focused and unfocused scans process once; human typing is discarded; hook failure does not stop focused scanning.
-
-**Manual tests:** Real reader with/without Enter, minimized window, reconnect, and rapid typing.
-
-### Phase 8 - Sheets async export
-
-**Files:** Sync queue/service, Sheets adapter, status commands, tests.
-
-**Tasks:** Add durable queue, exact header validation, batch worker, retry/dead-letter, hash conflicts, and operator status.
-
-**Definition of done:** Offline scans queue locally and drain after reconnection within 30 seconds; SQLite wins conflicts.
-
-**Manual tests:** Disconnect network, mutate Sheets externally, restore network, and inspect dead letters.
-
-### Phase 9 - Client IPC migration
-
-**Files:** `client/src/tauri-api.ts`, `App.tsx`, extracted components/hooks, invoke mocks.
-
-**Tasks:** Replace every fetch call, preserve `/`, `/attendance`, `/admin`, preserve five-second local dashboard fallback, and keep setup/admin UX unchanged.
-
-**Definition of done:** No application fetches `/api`; all client tests use mocked `invoke`; kiosk/admin workflows pass.
-
-**Manual tests:** Run every kiosk, setup, admin, live, photo, payroll, print, and export workflow.
-
-### Phase 10 - Browser-safe LAN viewer bundle
-
-**Files:** `client/src/lan/*`, Vite multi-entry configuration, shared contracts.
-
-**Tasks:** Build `/attendance` as a separate browser bundle using fetch/EventSource, snapshot rendering, incremental events, reconnect, polling, stale/offline states, and no Tauri imports.
-
-**Definition of done:** Bundle contains no admin mutation UI or Tauri API dependency.
-
-**Manual tests:** Open the bundle in a normal browser with the Axum server.
-
-### Phase 11 - LAN Live Attendance Dashboard
-
-**Objective:** Run the private read-only browser dashboard from the front-desk Tauri process.
-
-**Files:** `src-tauri/src/lan_server/{mod,routes,sse,auth,state,middleware,static_assets}.rs`, `attendance_notifications.rs`, LAN DTOs, viewer client, docs, tests.
-
-**Tasks:**
-
-- Implement private-address validation, subnet filtering, optional password sessions, and response hardening.
-- Implement `GET /attendance`, snapshot JSON, health JSON, and SSE.
-- Publish post-commit events to both Tauri and SSE consumers.
-- Add 15-second SSE keep-alives, lag-to-stale conversion, automatic reconnect, and five-second polling fallback.
-- Supervise LAN startup/retry/shutdown without affecting RFID.
-- Document DHCP reservation, firewall, connectivity, and latency verification.
-
-**Definition of done:**
-
-- [ ] Front-desk scan appears on boss PC within two seconds while connected.
-- [ ] Browser reconnects after temporary network loss.
-- [ ] Dashboard shows stale/offline state when laptop is unreachable.
-- [ ] Unauthorized/public-network access is blocked.
-- [ ] No admin/setup/payroll mutation route is reachable through Axum.
-- [ ] Scanning continues when dashboard is offline or LAN server is stopped.
-- [ ] Three simultaneous viewers receive consistent updates.
-
-**Manual tests:** Real two-PC office test, disconnect/reconnect, wrong password, blocked subnet, Public firewall profile, server restart, port collision, and offline Sheets.
-
-### Phase 12 - Windows NSIS packaging
-
-**Files:** Tauri bundle config, icons, installer docs, firewall instructions.
-
-**Tasks:** Build per-machine NSIS, preserve app data on upgrade, package the embedded viewer, document Private-profile firewall configuration, and never silently open a public port.
-
-**Definition of done:** Clean install, upgrade, uninstall/data retention, offline launch, and viewer URL all work.
-
-**Manual tests:** Windows 10/11 clean VM and the real front-desk laptop.
-
-### Phase 13 - Acceptance, cutover, and handoff
-
-**Files:** Migration, deployment, hardware, payroll, LAN troubleshooting, and operator documents.
-
-**Tasks:** Execute migration, run one Tauri-primary pay period, compare Sheets, perform restore drills, collect LAN latency evidence, and retire the web writer.
-
-**Definition of done:** All Section 12 acceptance checks pass and operator sign-off is recorded.
-
-**Manual tests:** Full real-reader, two-PC, offline, recovery, payroll, photo, and backup/restore runbook.
-
-## 12. Testing Strategy and Acceptance Checklist
-
-### Automated tests
-
-- [ ] Rust unit tests cover UID normalization, Manila dates, RFID parser timing, deduplication, intern payroll, employee payroll, cutoff payroll, centavo rounding, PIN/session expiry, photo validation, IP/subnet validation, and SSE serialization.
-- [ ] `sqlx::test` integration tests use isolated migrated SQLite databases for attendance concurrency, payroll idempotency, grace reconciliation, optimistic conflicts, queue recovery, and delete cascades.
-- [ ] `tauri::test` verifies command registration, DTO casing, authorization, and error serialization.
-- [ ] Axum router tests verify all required routes, read-only methods, subnet denial, auth, headers, snapshot data, health, and missing admin paths.
-- [ ] SSE tests verify connection status, attendance events, keep-alive, event gaps, stale-data, multiple clients, shutdown, and broadcast failure isolation.
-- [ ] Client tests mock `invoke`, `fetch`, `EventSource`, visibility changes, polling, reconnect, stale/offline states, and asset URLs.
-
-### Hardware and office acceptance
-
-- [ ] Reader appears as Windows HID and emits the expected UID/Enter behavior.
-- [ ] Focused and unfocused scans each process once.
-- [ ] Time In, Time Out, cooldown, unknown/inactive, and payroll outcomes are correct.
-- [ ] Boss browser opens the LAN URL without Tauri installation.
-- [ ] A scan reaches the boss browser within two seconds for ten consecutive scans.
-- [ ] SSE reconnects and polling fallback work after network interruption.
-- [ ] Dashboard retains rows and marks stale/offline when the laptop is unreachable.
-- [ ] Attendance continues while no viewer is connected.
-- [ ] Public profile and non-office subnet access are blocked.
-- [ ] Google and public internet disconnection do not stop local attendance or LAN viewing.
-- [ ] Admin/setup/payroll are inaccessible from the LAN browser.
-- [ ] SQLite/photo backup and restore succeed on a second Windows machine.
-
-## 13. Migration, Deployment, and Future Work
-
-### 13.1 Sheets migration
-
-Export all seven tabs to CSV, run `npm run migrate:from-sheets -- --dry-run`, review duplicate IDs, dates, timestamps, payroll relationships, and photo URLs, then run `--execute`. Verify row counts, stable IDs, payroll calculations, photo conversions, and canonical hashes. The migration is transactional and never mutates Sheets.
-
-### 13.2 Office deployment
-
-Give the front-desk laptop a DHCP reservation such as `192.168.1.50`. Set Windows Network Profile to Private. Configure `allowed_subnets = ["192.168.1.0/24"]`. Allow TCP 4173 with a Private-profile, office-subnet-only Defender Firewall rule. From the boss PC run:
-
-```powershell
-Test-NetConnection -ComputerName 192.168.1.50 -Port 4173
-Invoke-RestMethod http://192.168.1.50:4173/api/health
-```
-
-Then open `http://192.168.1.50:4173/attendance`. Verify one `text/event-stream` request and measure scan-to-display latency. Do not use router forwarding, UPnP, public DNS, or cloud tunnels.
-
-### 13.3 Parallel cutover
-
-Tauri is the only live writer for one pay period. Keep the old Vercel application read-only for comparison. Confirm zero unexplained discrepancies, zero dead-letter sync items, successful SQLite/photo restore, LAN latency evidence, and operator approval before disabling the web writer and revoking its credentials.
-
-### 13.4 Explicit non-goals
-
-- Public internet hosting and remote access outside the office LAN.
-- Multi-writer or multi-master attendance deployment.
-- Sharing SQLite over SMB.
-- Browser-based admin, payroll editing, setup, photo enrollment, or attendance corrections.
-- Auto-updater, statutory deductions, payroll approval workflow, and employee late rules.
-- LAN delivery of photos, RFID UIDs, secrets, logs, or backups.
-
-Future multi-PC work must use one authenticated Rust host with TLS and role-based APIs; it must not create independent SQLite writers. The front-desk laptop remains the single source of truth until that separate design is approved.
+1. **Reconnaissance/transaction foundation:** pin Rust, add failing transaction/outbox tests, group scan writes and publish events after commit.
+2. **Canonical query layer:** add `reporting/models.rs`, `queries.rs`, `format.rs`, filename tests, and shared contracts.
+3. **Jobs/artifacts/snapshots:** add migrations 0004/0006, finalization snapshots, atomic storage, artifact metadata, and retention.
+4. **Excel attendance:** add `rust_xlsxwriter`, common styles, attendance/daily/audit workbooks, native commands, tests.
+5. **Excel payroll/CSV:** add payroll register/payslip/master workbooks and refactor CSV through canonical DTOs without changing columns.
+6. **Sheets V2:** split `services/sheets_sync.rs` into auth/schema/client/mapper/retry/worker; add migration, formatting, leases, idempotency, status, and admin replay.
+7. **PDF foundation:** add `printpdf`, embedded fonts/templates, company config, A4 renderer, overlays, metadata redaction, and golden tests.
+8. **Payroll PDFs:** implement payslips, register, cover, bulk generation, snapshots, status labels, and partial-failure handling.
+9. **Admin UX:** add contracts, Tauri bridge, exports/history UI, progress/cancel/open/save/print controls, and authorization tests.
+10. **Hardening/deployment:** update README/docs/config examples, run Windows 10/11 packaging, migration rehearsal, offline/reboot/large-run QA, and acceptance sign-off.
+
+Each phase must identify modified/new files, migration work, Rust/backend work, TypeScript/UI work, unit/integration/manual tests, completion evidence, and rollback flag. Keep the current 43-test baseline green after each phase.
+
+## 12. Test Strategy
+
+Unit tests: Manila boundaries; currency/date/hour formatting; intern grace/PHP 10 deduction; employee TBD zero deduction; draft/final/void labels; filenames; idempotency; retry/backoff; empty/malformed data; redaction.
+
+Integration tests: SQLite commit with Sheets failure; retry/replay; duplicate prevention; header/version validation; batch request construction; XLSX structure/print settings; PDF content/page size; snapshot reproducibility; disk failure; authorization; LAN mutation rejection.
+
+Golden tests: canonical DTO JSON, normalized XLSX XML, PDF extracted text/page geometry/raster where available, controlled payroll totals, and redacted Google batch JSON. Fixtures live under `src-tauri/tests/fixtures/reporting`, `src-tauri/tests/fixtures/google_sheets`, `src-tauri/tests/golden`, and `client/src/test/fixtures`.
+
+Manual QA: Windows 10/11 installer, Excel repair-warning check, A4 color/grayscale printing, long/Unicode names, large payroll runs, offline scans, Google outage/quota, restart with queued work, reconnect, renamed tabs, and Microsoft Print to PDF.
+
+## 13. Acceptance Criteria
+
+- RFID scans succeed when Google Sheets is down.
+- Local commit precedes events and outbox processing.
+- Excel opens without repair warnings and preserves Manila dates/payroll figures.
+- Sheets data is ordered, formatted, versioned, deduplicated, and retry-safe.
+- PDFs are legible on A4 in grayscale; DRAFT/FINALIZED/VOID are unmistakable.
+- Final payroll exports reproduce from immutable stored snapshots.
+- LAN remains read-only and cannot reach payroll/export/files.
+- No secrets occur in exports, PDFs, logs, UI errors, or source control.
+- Existing CSV/payroll/attendance behavior remains compatible unless explicitly migrated.
+- Full Windows-compatible automated test/build suite passes.
+
+## 14. Open Questions and Defaults
+
+| Decision | Secure default |
+| --- | --- |
+| Company address/logo/signatories | Omit unset values; default company name `Alpha Premier`; blank signature lines |
+| Employee acknowledgment | Disabled |
+| Export folder | Local Documents export root |
+| Retention | Draft 30 days, operational 90 days, final indefinite |
+| Google payroll detail | Preserve current full tabs for compatibility; no new statutory/private fields |
+| Final files | Retain managed final copies plus immutable snapshots; allow verified regeneration |
+| Document numbers | `PAY-<cutoff-end>-<payroll-id-prefix>-R<revision>` |
+| Photos | Excluded |
+| Employee late rules | Remain TBD; no new deduction |

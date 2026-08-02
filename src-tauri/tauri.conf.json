@@ -24,6 +24,10 @@
     "active": true,
     "targets": ["nsis"],
     "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
       "nsis": {
         "installMode": "perMachine"
       }
