@@ -258,7 +258,7 @@ export default function App() {
 
   const uploadSetupPhotoFile = async (file: File) => {
     if (!setupToken || !setupForm.userId.trim()) { setSetupError('Enter the User ID before uploading a photo.'); return; }
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5_000_000) { setSetupError('Choose a JPEG, PNG, or WebP photo up to 5 MB.'); return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > PHOTO_UPLOAD_MAX_BYTES) { setSetupError('Choose a JPEG, PNG, or WebP photo up to 500 KB.'); return; }
     let dataUrl: string;
     try { dataUrl = await preparePhotoDataUrl(file); } catch (error) { setSetupBusy(false); setSetupError(error instanceof Error ? error.message : 'Unable to prepare this photo.'); return; }
     setSetupBusy(true); setSetupError('Uploading photo…');
@@ -562,10 +562,12 @@ async function preparePhotoDataUrl(file: File): Promise<string> {
   source.close();
   for (const quality of [0.82, 0.68, 0.55, 0.42]) {
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
-    if (dataUrl.length * 0.75 <= 4_500_000) return dataUrl;
+    if (dataUrl.length * 0.75 <= PHOTO_UPLOAD_MAX_BYTES) return dataUrl;
   }
   throw new Error('This photo could not be compressed below the 500 KB upload limit.');
 }
+
+const PHOTO_UPLOAD_MAX_BYTES = 500 * 1024;
 
 function formatTime(value: string, timezone: string) {
   const date = new Date(value);

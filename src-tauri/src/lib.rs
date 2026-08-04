@@ -1340,7 +1340,7 @@ async fn upload_photo(
 }
 
 fn photo_is_within_limits(width: u32, height: u32, bytes: usize) -> bool {
-    width <= 4096 && height <= 4096 && bytes <= 5 * 1024 * 1024
+    width <= 4096 && height <= 4096 && bytes <= 500 * 1024
 }
 
 pub fn run() {
@@ -1434,7 +1434,13 @@ mod tests {
 
     #[test]
     fn accepts_large_id_photo_dimensions_and_file_size() {
-        assert!(photo_is_within_limits(1993, 3137, 3_277_122));
+        assert!(!photo_is_within_limits(1993, 3137, 3_277_122));
+    }
+
+    #[test]
+    fn accepts_photos_at_or_below_500_kib() {
+        assert!(photo_is_within_limits(512, 512, 500 * 1024));
+        assert!(!photo_is_within_limits(512, 512, 500 * 1024 + 1));
     }
 
     #[test]
