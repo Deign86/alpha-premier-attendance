@@ -207,6 +207,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .kiosk-shell .aside-copy { font-size: .82rem; }
 .kiosk-shell .aside-facts span { font-size: .64rem; }
 .kiosk-shell .aside-facts strong { font-size: .74rem; }
+.kiosk-shell .aside-facts .office-location { font-family: var(--font-sans, system-ui); letter-spacing: 0; text-transform: none; font-size: .72rem; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; word-break: break-word; }
 .kiosk-shell .footer-note { font-size: .72rem; }
 .rfid-capture-input { caret-color: var(--gold-bright); }
 .result-photo { display: block; width: min(220px, 54vw); margin: 22px auto; border: 3px solid var(--gold); border-radius: 6px; }
@@ -229,6 +230,23 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .photo-overlay { position: absolute; inset: auto 0 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; color: #11100c; background: rgba(225, 196, 119, .94); font-size: .72rem; font-weight: 700; }
 
 .payroll-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 18px; }
+.file-result-card { display: grid; gap: 8px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line-bright); border-radius: var(--radius-sm); background: var(--surface); }
+.file-result-label { margin: 0; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.file-result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .92rem; font-weight: 600; }
+.file-result-path { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.5; overflow-wrap: anywhere; word-break: break-word; }
+.file-result-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.file-action { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
+.file-action-primary { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright); font-weight: 700; }
+.file-result-mode { margin: 0; color: var(--quiet); font-size: .66rem; }
+.file-result-notice { display: flex; align-items: center; gap: 6px; margin: 0; font-size: .74rem; }
+.file-result-notice.is-success { color: var(--success, #6fbf73); }
+.file-result-notice.is-error { color: var(--danger, #e06c5c); }
+.report-header { margin-bottom: 18px; }
+.report-company { margin: 0 0 4px; font-family: 'Orbitron', sans-serif; font-size: 1.25rem; font-weight: 700; letter-spacing: .04em; }
+.report-office { margin: 0 0 4px; color: var(--muted); font-size: .85rem; }
+.report-meta { margin: 0; color: var(--quiet); font-size: .75rem; }
+.print-only { display: none; }
+@media print { .print-only { display: block; } }
 .payroll-workspace .admin-grid { grid-template-columns: minmax(300px, 390px) minmax(0, 1fr); }
 .payroll-table { min-width: 0; }
 .payroll-detail td { background: var(--surface-input); }

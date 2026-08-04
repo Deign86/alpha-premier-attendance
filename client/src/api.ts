@@ -1,6 +1,8 @@
 import type {
   ArtifactExportResponse,
   AttendanceXlsxExportResponse,
+  OfficeIdentity,
+  PayrollCsvExportResponse,
   SafeConfigResponse,
   ScanErrorResponse,
   ScanRequest,
@@ -18,6 +20,7 @@ import type {
   PayrollCutoffsResponse,
   PayrollProfilesResponse,
 } from '@rfid-attendance/shared';
+import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { tauriApi } from './tauri-api';
 
@@ -44,13 +47,33 @@ export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   resultResetDelayMs: 4_000,
   enableCardSetup: false,
   enableAdmin: false,
+  office: DEFAULT_OFFICE_IDENTITY,
 };
+
+/** Merge a partial office payload from the backend with canonical defaults. */
+export function normalizeOffice(office: Partial<OfficeIdentity> | undefined): OfficeIdentity {
+  const merged = { ...DEFAULT_OFFICE_IDENTITY, ...(office ?? {}) };
+  return {
+    ...merged,
+    // Display strings derive from the same source of truth when not configured.
+    officeDisplayShort: resolveOfficeDisplay(merged, 'short'),
+    officeDisplayFull: resolveOfficeDisplay(merged, 'full'),
+  };
+}
 
 export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigResponse, 'success'>> {
   try {
     if (runningInTauri()) {
       const data = await tauriApi.getConfig();
-      return { timezone: data.timezone || DEFAULT_CONFIG.timezone, rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs), enableScanSounds: data.enableScanSounds ?? DEFAULT_CONFIG.enableScanSounds, resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs), enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup, enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin };
+      return {
+        timezone: data.timezone || DEFAULT_CONFIG.timezone,
+        rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs),
+        enableScanSounds: data.enableScanSounds ?? DEFAULT_CONFIG.enableScanSounds,
+        resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
+        enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
+        enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
+        office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
+      };
     }
     const response = await fetch('/api/config', { signal });
     if (!response.ok) return DEFAULT_CONFIG;
@@ -62,6 +85,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
       resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
       enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
       enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
+      office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
     };
   } catch {
     return DEFAULT_CONFIG;
@@ -153,17 +177,18 @@ export async function savePayrollCutoff(payroll: unknown, payrollId?: string): P
 export async function finalizePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`, { method: 'POST' }); return response.json(); }
 export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }
 export async function exportPayrollXlsx(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportPayrollXlsx(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll workbook.' } }; } } return { success: false, error: { message: 'Payroll workbooks are available in the desktop application.' } }; }
-export async function exportPayrollCsv(): Promise<{ success: true; fileName: string } | { success: false; error: { message: string } }> {
+export async function exportPayrollCsv(): Promise<PayrollCsvExportResponse | { success: false; error: { message: string } }> {
   try {
-    const response = runningInTauri()
-      ? await tauriApi.payrollExportCsv(nativeAdminToken ?? '')
-      : await (async () => {
-          const result = await fetch('/api/admin/payroll/export');
-          if (!result.ok) throw new Error('Unable to export payroll CSV.');
-          return result.text();
-        })();
+    if (runningInTauri()) {
+      // The desktop app writes the CSV next to the other generated files and
+      // returns exact paths so the UI can offer Open / Show in folder actions.
+      return await tauriApi.payrollExportCsv(nativeAdminToken ?? '');
+    }
+    const response = await fetch('/api/admin/payroll/export');
+    if (!response.ok) throw new Error('Unable to export payroll CSV.');
+    const text = await response.text();
     const fileName = `payroll-${new Date().toISOString().slice(0, 10)}.csv`;
-    const url = URL.createObjectURL(new Blob([response], { type: 'text/csv;charset=utf-8' }));
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
     link.download = fileName;
@@ -171,10 +196,45 @@ export async function exportPayrollCsv(): Promise<{ success: true; fileName: str
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    return { success: true, fileName };
+    return { success: true, fileName, filePath: null, directoryPath: null, fileKind: 'csv', isPortableMode: false };
   } catch (error) {
     return { success: false, error: { message: error instanceof Error ? error.message : 'Unable to export payroll CSV.' } };
   }
+}
+
+export type FileActionResult = { ok: boolean; message: string };
+
+function fileActionError(error: unknown, fallback: string): FileActionResult {
+  const code = typeof error === 'string' ? error : '';
+  if (code === 'FILE_NOT_FOUND') return { ok: false, message: 'The file could not be found. It may have been moved or deleted.' };
+  if (code === 'DIRECTORY_NOT_FOUND') return { ok: false, message: 'The folder could not be found. It may have been moved or deleted.' };
+  if (code === 'ADMIN_AUTH_REQUIRED') return { ok: false, message: 'Administrator session expired. Unlock admin to continue.' };
+  return { ok: false, message: fallback };
+}
+
+async function runFileAction(action: (token: string) => Promise<unknown>): Promise<FileActionResult> {
+  if (!runningInTauri()) return { ok: false, message: 'File actions are available in the desktop application.' };
+  try {
+    await action(nativeAdminToken ?? '');
+    return { ok: true, message: '' };
+  } catch (error) {
+    return fileActionError(error, 'The file action could not be completed.');
+  }
+}
+
+/** Open a generated file with the system default application. */
+export function openGeneratedFile(filePath: string): Promise<FileActionResult> {
+  return runFileAction((token) => tauriApi.openGeneratedFile(token, filePath));
+}
+
+/** Reveal the exact generated file in the OS file explorer. */
+export function revealGeneratedFile(filePath: string): Promise<FileActionResult> {
+  return runFileAction((token) => tauriApi.revealGeneratedFile(token, filePath));
+}
+
+/** Open a generated-file directory in the OS file explorer. */
+export function openGeneratedDirectory(directoryPath: string): Promise<FileActionResult> {
+  return runFileAction((token) => tauriApi.openGeneratedDirectory(token, directoryPath));
 }
 export async function generatePayrollPayslipPdf(payrollId: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollPayslipPdf(nativeAdminToken ?? '', payrollId); } catch { return { success: false, error: { message: 'Unable to generate the payslip PDF.' } }; } } return { success: false, error: { message: 'Payslip PDFs are available in the desktop application.' } }; }
 export async function generatePayrollRegisterPdf(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollRegisterPdf(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll register PDF.' } }; } } return { success: false, error: { message: 'Payroll register PDFs are available in the desktop application.' } }; }

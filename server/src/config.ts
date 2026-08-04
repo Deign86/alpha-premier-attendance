@@ -1,4 +1,5 @@
 import { isValidTimezone } from './time.js';
+import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, type OfficeIdentity } from '@rfid-attendance/shared';
 
 export type AppConfig = {
   timezone: string;
@@ -21,6 +22,8 @@ export type AppConfig = {
   adminPin?: string;
   adminSessionSecret?: string;
   adminSessionMinutes?: number;
+  /** Canonical office identity used for place labels, exports, and reports. */
+  office?: OfficeIdentity;
 };
 
 function numberEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0): number {
@@ -37,6 +40,28 @@ function boolEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boole
   if (['1', 'true', 'yes', 'on'].includes(raw.toLowerCase())) return true;
   if (['0', 'false', 'no', 'off'].includes(raw.toLowerCase())) return false;
   throw new Error(`${name} must be true or false`);
+}
+
+function officeEnv(env: NodeJS.ProcessEnv): OfficeIdentity {
+  const read = (name: string) => env[name]?.trim() ?? '';
+  const office = {
+    ...DEFAULT_OFFICE_IDENTITY,
+    companyName: read('COMPANY_NAME') || DEFAULT_OFFICE_IDENTITY.companyName,
+    officeLabel: read('OFFICE_LABEL') || DEFAULT_OFFICE_IDENTITY.officeLabel,
+    officeAddressLine1: read('OFFICE_ADDRESS_LINE_1') || DEFAULT_OFFICE_IDENTITY.officeAddressLine1,
+    officeBuilding: read('OFFICE_BUILDING') || DEFAULT_OFFICE_IDENTITY.officeBuilding,
+    officeDistrict: read('OFFICE_DISTRICT') || DEFAULT_OFFICE_IDENTITY.officeDistrict,
+    officeCity: read('OFFICE_CITY') || DEFAULT_OFFICE_IDENTITY.officeCity,
+    officeRegion: read('OFFICE_REGION') || DEFAULT_OFFICE_IDENTITY.officeRegion,
+    officeCountry: read('OFFICE_COUNTRY') || DEFAULT_OFFICE_IDENTITY.officeCountry,
+    officePostalCode: read('OFFICE_POSTAL_CODE'),
+    officeDisplayShort: read('OFFICE_DISPLAY_SHORT'),
+    officeDisplayFull: read('OFFICE_DISPLAY_FULL'),
+  };
+  // Display strings are derived from the same source of truth when not configured.
+  office.officeDisplayShort = resolveOfficeDisplay(office, 'short');
+  office.officeDisplayFull = resolveOfficeDisplay(office, 'full');
+  return office;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -67,6 +92,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     adminPin: env.ADMIN_PIN || env.SETUP_ADMIN_PIN,
     adminSessionSecret: env.ADMIN_SESSION_SECRET || env.SETUP_SESSION_SECRET,
     adminSessionMinutes: numberEnv(env, 'ADMIN_SESSION_MINUTES', numberEnv(env, 'SETUP_SESSION_MINUTES', 15, 1), 1),
+    office: officeEnv(env),
   };
   if (sheetsMode === 'google') {
     if (!config.googleSheetsId || !config.googleServiceAccountEmail || !config.googlePrivateKey) {
@@ -94,5 +120,6 @@ export function safeConfig(config: AppConfig) {
     resultResetDelayMs: config.resultResetDelayMs,
     enableCardSetup: config.enableCardSetup,
     enableAdmin: config.enableAdmin ?? config.enableCardSetup,
+    office: config.office ?? DEFAULT_OFFICE_IDENTITY,
   };
 }

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
@@ -29,6 +30,7 @@ futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 ipnet = { version = "2", features = ["serde"] }
 jsonwebtoken = "9"
+log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rdev = "0.5"
 rust_xlsxwriter = { version = "0.97.0", features = ["chrono", "constant_memory"] }
@@ -44,3 +46,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 urlencoding = "2"
 tauri-plugin-mcp-bridge = "0.12.0"
+
+[dev-dependencies]
+# Used only by tests to read back generated XLSX metadata.
+zip = "8"

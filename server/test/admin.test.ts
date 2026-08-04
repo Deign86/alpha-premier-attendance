@@ -23,6 +23,8 @@ describe('admin and live attendance API', () => {
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll[0]).toMatchObject({ payrollId, status: 'FINALIZED', netPay: 16216.5 });
     const exported = await agent.get('/api/admin/payroll/export').expect(200);
     expect(exported.text).toContain('CHICO, JEAN ASHLEY');
+    expect(exported.text).toContain('"Company","Alpha Premier"');
+    expect(exported.text).toContain('"Office","Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"');
   });
 
   it('protects users, edits profiles, lists attendance, and applies time corrections', async () => {

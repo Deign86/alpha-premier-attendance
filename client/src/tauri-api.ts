@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, PayrollCsvExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
@@ -27,11 +27,14 @@ export const tauriApi = {
   payrollCreateCutoff: (token: string, input: unknown) => invoke('payroll_create_cutoff', { token, input }),
   payrollUpdateCutoff: (token: string, input: unknown) => invoke('payroll_update_cutoff', { token, input }),
   payrollFinalizeCutoff: (token: string, payrollId: string) => invoke('payroll_finalize_cutoff', { token, payrollId }),
-  payrollExportCsv: (token: string) => invoke<string>('payroll_export_csv', { token }),
+  payrollExportCsv: (token: string) => invoke<PayrollCsvExportResponse>('payroll_export_csv', { token }),
   exportAttendanceXlsx: (token: string, date: string) => invoke<AttendanceXlsxExportResponse>('export_attendance_xlsx', { token, date }),
   exportPayrollXlsx: (token: string, cutoff?: string) => invoke<ArtifactExportResponse>('export_payroll_xlsx', { token, cutoff }),
   generatePayrollPayslipPdf: (token: string, payrollId: string) => invoke<ArtifactExportResponse>('generate_payroll_payslip_pdf', { token, payrollId }),
   generatePayrollRegisterPdf: (token: string, cutoff?: string) => invoke<ArtifactExportResponse>('generate_payroll_register_pdf', { token, cutoff }),
+  openGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('open_generated_file', { token, filePath }),
+  revealGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('reveal_generated_file', { token, filePath }),
+  openGeneratedDirectory: (token: string, directoryPath: string) => invoke<{ success: true; message: string }>('open_generated_directory', { token, directoryPath }),
   openGeneratedArtifact: (token: string, artifactId: string) => invoke<{ success: true; artifactId: string }>('open_generated_artifact', { token, artifactId }),
   syncStatus: (token: string) => invoke('admin_get_sync_status', { token }),
   syncNow: (token: string) => invoke('admin_sync_now', { token }),

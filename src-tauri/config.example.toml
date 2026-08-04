@@ -1,5 +1,9 @@
 # Copy to the Tauri app config directory as config.toml on the front-desk laptop.
 # Keep this file private. The LAN server is disabled unless explicitly enabled.
+#
+# Portable mode: create an empty `portable.dat` next to the portable .exe and
+# data (SQLite, photos, exports) moves to `Data/` beside the executable; a
+# `config.toml` next to the executable is used when present.
 
 [lan]
 enabled = true
@@ -16,6 +20,22 @@ sse_keep_alive_seconds = 15
 # Local admin PIN for protected card association.
 admin_pin = "293906"
 admin_session_minutes = 15
+
+# Canonical company office identity shown across the kiosk, dashboard, exports,
+# and printed references. All values are configurable; the defaults are the real
+# office. office_postal_code is optional and intentionally unset until confirmed.
+[office]
+company_name = "Alpha Premier"
+office_label = "Main Office"
+office_address_line_1 = "Unit 3104C"
+office_building = "Tektite East Tower"
+office_district = "Ortigas Center"
+office_city = "Pasig"
+office_region = "Metro Manila"
+office_country = "Philippines"
+office_postal_code = ""
+office_display_short = "Tektite East Tower, Ortigas Center, Pasig"
+office_display_full = "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"
 
 # Optional HTTPS exporter endpoint used by the bounded sync worker.
 sheets_sync_endpoint = ""

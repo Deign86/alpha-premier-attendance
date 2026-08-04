@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import type { ScanRequest } from '@rfid-attendance/shared';
+import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { AttendanceService } from './attendance.js';
 import { asScanError, ScanError } from './errors.js';
 import { safeConfig, type AppConfig } from './config.js';
@@ -107,10 +108,16 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.get('/api/admin/payroll/export', async (req, res) => {
     try {
       requireAdmin(req);
+      const office = options.config.office ?? DEFAULT_OFFICE_IDENTITY;
       const rows = await admin.cutoffPayroll();
       const headers = ['Employee #', 'Employee Name', 'Cut Off Rate', 'Daily Rate', 'Standard Working Days', 'Actual Working Days', 'Basic Rate', 'Special Holidays (30%)', 'Regular Holiday (100%)', 'Total Compensation', 'Incentives Allowance', 'Special Allowance', 'Total Allowance', 'Late', 'Halfday', 'Absent', 'Overtime', 'Gross Compensation', 'Signature'];
       const values = rows.map((item) => [item.employeeId, item.employeeName, item.payrollCutoffLabel, item.dailyRate, item.standardWorkingDays, item.actualWorkingDays, item.basicPay, item.specialHolidayPay, item.regularHolidayPay, item.totalCompensation, item.incentivesAllowance, item.specialAllowance, item.totalAllowance, item.lateDeduction, item.halfDayDeduction, item.absenceDeduction, item.overtimePay, item.grossCompensation, item.signaturePlaceholder]);
-      const csv = [headers, ...values].map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const csv = [
+        ['Company', office.companyName],
+        ['Office', resolveOfficeDisplay(office, 'full')],
+        headers,
+        ...values,
+      ].map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
       res.type('text/csv').attachment('payroll-cutoffs.csv').send(csv);
     } catch (error) { sendAdminError(req, res, error); }
   });

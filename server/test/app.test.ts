@@ -21,6 +21,15 @@ describe('HTTP API', () => {
     });
     const config = await request(app).get('/api/config').expect(200);
     expect(config.body.timezone).toBe('Asia/Manila');
+    expect(config.body.office).toMatchObject({
+      companyName: 'Alpha Premier',
+      officeAddressLine1: 'Unit 3104C',
+      officeBuilding: 'Tektite East Tower',
+      officeCity: 'Pasig',
+      officeRegion: 'Metro Manila',
+      officeDisplayShort: 'Tektite East Tower, Ortigas Center, Pasig',
+      officeDisplayFull: 'Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila',
+    });
     const scan = await request(app).post('/api/scan').send({ rfidUid: 'aa:bb', source: 'RFID' }).expect(200);
     expect(scan.body.success).toBe(true);
     expect(scan.body.action).toBe('TIME_IN');

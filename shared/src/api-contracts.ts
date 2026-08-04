@@ -1,3 +1,7 @@
+import type { OfficeIdentity } from './office.js';
+export type { OfficeIdentity, OfficeDisplayVariant } from './office.js';
+export { DEFAULT_OFFICE_IDENTITY, OFFICE_FALLBACK_DISPLAY, composeOfficeAddress, officeCompanyName, officeMetadataLines, resolveOfficeDisplay } from './office.js';
+
 export const scanSources = ['RFID', 'MANUAL_TEST'] as const;
 export type ScanSource = (typeof scanSources)[number];
 
@@ -170,10 +174,28 @@ export type PayrollCutoffRecord = {
   finalizedAt: string | null;
 };
 
+export const generatedFileKinds = ['csv', 'xlsx', 'pdf', 'backup', 'report', 'other'] as const;
+export type GeneratedFileKind = (typeof generatedFileKinds)[number];
+
+/** Structured metadata returned by every file-generating action so the UI can offer Open/Reveal actions. */
+export type GeneratedFileMetadata = {
+  /** Absolute path to the generated file, or null when only a directory is available. */
+  filePath: string | null;
+  /** Absolute path to the containing folder. */
+  directoryPath: string | null;
+  fileName: string | null;
+  fileKind: GeneratedFileKind;
+  /** True when the app is running in portable mode (files stored next to the executable). */
+  isPortableMode: boolean;
+  /** Human-readable summary of what was created. */
+  message?: string;
+};
+
 export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculationProfile[] };
 export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
-export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number };
-export type ArtifactExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount?: number; status?: string };
+export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number } & GeneratedFileMetadata;
+export type ArtifactExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount?: number; status?: string } & GeneratedFileMetadata;
+export type PayrollCsvExportResponse = { success: true; fileName: string } & GeneratedFileMetadata;
 
 export type ScanSuccessResponse = {
   success: true;
@@ -227,6 +249,8 @@ export type SafeConfigResponse = {
   resultResetDelayMs: number;
   enableCardSetup?: boolean;
   enableAdmin?: boolean;
+  /** Office identity used for production-facing place labels, exports, and reports. */
+  office?: OfficeIdentity;
 };
 
 export type SetupUser = {

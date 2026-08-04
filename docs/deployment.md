@@ -34,6 +34,23 @@ ADMIN_SESSION_SECRET=<long-random-server-secret>
 ADMIN_SESSION_MINUTES=15
 ```
 
+Office identity is optional in the web-compatible server; when unset the canonical defaults are used. Configure the same values as the desktop `[office]` section when the server must show a different office:
+
+```text
+COMPANY_NAME=Alpha Premier
+OFFICE_LABEL=Main Office
+OFFICE_ADDRESS_LINE_1=Unit 3104C
+OFFICE_BUILDING=Tektite East Tower
+OFFICE_DISTRICT=Ortigas Center
+OFFICE_CITY=Pasig
+OFFICE_REGION=Metro Manila
+OFFICE_COUNTRY=Philippines
+# Optional; leave unset until the postal code is confirmed.
+OFFICE_POSTAL_CODE=
+OFFICE_DISPLAY_SHORT=Tektite East Tower, Ortigas Center, Pasig
+OFFICE_DISPLAY_FULL=Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila
+```
+
 Google service-account credentials are passed directly to the backend through environment variables. Do not commit `.env`, JSON keys, browser profiles, or captured card data. The React client must never receive these values.
 
 The deployed site has three views: `/` for the RFID reader kiosk, `/attendance` for a public live attendance display, and `/admin` for PIN-protected user/RFID and attendance corrections. The live view polls the shared API every five seconds, so both PCs must use the same deployed origin and spreadsheet. `ADMIN_SESSION_SECRET` must be a long random value shared by all server instances. The older `ENABLE_CARD_SETUP`, `SETUP_ADMIN_PIN`, and `SETUP_SESSION_MINUTES` names remain accepted as compatibility aliases.

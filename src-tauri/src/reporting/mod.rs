@@ -52,7 +52,12 @@ pub fn format_php(centavos: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OfficeConfig;
     use std::path::PathBuf;
+
+    fn office() -> OfficeConfig {
+        OfficeConfig::default()
+    }
 
     #[test]
     fn sanitizes_windows_filename_components_without_losing_identity() {
@@ -93,7 +98,7 @@ mod tests {
             source: "RFID".into(),
             notes: String::new(),
         }];
-        generate_attendance_workbook(&rows, "2026-08-01", &path).unwrap();
+        generate_attendance_workbook(&rows, "2026-08-01", &office(), &path).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(b"PK"));
         assert!(bytes.len() > 1_000);
@@ -101,21 +106,64 @@ mod tests {
     }
 
     #[test]
-    fn builds_managed_artifact_filename_without_employee_pii() {
-        assert_eq!(
-            attendance_artifact_filename("2026-08-01", "job-123"),
-            "AlphaPremier_Attendance_20260801_job-123.xlsx"
-        );
+    fn attendance_workbook_metadata_contains_the_canonical_office_address() {
+        let path = std::env::temp_dir()
+            .join(format!("attendance-office-{}.xlsx", uuid::Uuid::new_v4()));
+        let rows = vec![AttendanceExportRow {
+            employee_id: "E-1".into(),
+            employee_name: "Ana Santos".into(),
+            department: None,
+            date: "2026-08-01".into(),
+            time_in: None,
+            time_out: None,
+            total_hours: 0.0,
+            status: "OPEN".into(),
+            source: "RFID".into(),
+            notes: String::new(),
+        }];
+        generate_attendance_workbook(&rows, "2026-08-01", &office(), &path).unwrap();
+        let shared = read_xlsx_shared_strings(&path);
+        assert!(shared.contains("Company: Alpha Premier"));
+        assert!(shared.contains("Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn builds_payslip_filename_without_employee_pii() {
-        let filename = payroll_pdf_filename("payroll-123", "1st Half 2026", "job-123");
-        assert_eq!(
-            filename,
-            "AlphaPremier_Payslip_payroll-123_1st-Half-2026_job-123.pdf"
-        );
-        assert!(!filename.contains("Ana-Santos"));
+    fn payroll_workbook_metadata_contains_the_canonical_office_address() {
+        let row = PayrollExportRow {
+            payroll_id: "P-1".into(),
+            employee_id: "E-1".into(),
+            employee_name: "Ana Santos".into(),
+            profile: "BEA_STANDARD".into(),
+            cutoff_label: "1st Half".into(),
+            cutoff_start: "2026-08-01".into(),
+            cutoff_end: "2026-08-15".into(),
+            basic_pay_centavos: 100_000,
+            allowances_centavos: 2_000,
+            incentives_centavos: 500,
+            late_deduction_centavos: 100,
+            other_adjustments_centavos: 0,
+            gross_centavos: 102_500,
+            net_centavos: 102_400,
+            status: "FINALIZED".into(),
+        };
+        let path = std::env::temp_dir().join(format!("payroll-office-{}.xlsx", uuid::Uuid::new_v4()));
+        generate_payroll_workbook(std::slice::from_ref(&row), "1st-Half-2026", &office(), &path)
+            .unwrap();
+        let shared = read_xlsx_shared_strings(&path);
+        assert!(shared.contains("Company: Alpha Premier"));
+        assert!(shared.contains("Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn read_xlsx_shared_strings(path: &std::path::Path) -> String {
+        let file = std::fs::File::open(path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut shared = archive.by_name("xl/sharedStrings.xml").unwrap();
+        let mut contents = String::new();
+        use std::io::Read;
+        shared.read_to_string(&mut contents).unwrap();
+        contents
     }
 
     #[test]
@@ -140,18 +188,37 @@ mod tests {
         let base = std::env::temp_dir().join(format!("payroll-report-{}", uuid::Uuid::new_v4()));
         let xlsx = base.with_extension("xlsx");
         let pdf = base.with_extension("pdf");
-        generate_payroll_workbook(std::slice::from_ref(&row), "1st-Half-2026", &xlsx).unwrap();
-        generate_payroll_pdf(&row, &pdf).unwrap();
+        generate_payroll_workbook(std::slice::from_ref(&row), "1st-Half-2026", &office(), &xlsx).unwrap();
+        generate_payroll_pdf(&row, &office(), &pdf).unwrap();
         assert!(std::fs::read(&xlsx).unwrap().starts_with(b"PK"));
         assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
         let register = base.with_extension("register.pdf");
-        generate_payroll_register_pdf(std::slice::from_ref(&row), "1st-Half-2026", &register)
+        generate_payroll_register_pdf(std::slice::from_ref(&row), "1st-Half-2026", &office(), &register)
             .unwrap();
         assert!(std::fs::read(&register).unwrap().starts_with(b"%PDF"));
         let _ = std::fs::remove_file(xlsx);
         let _ = std::fs::remove_file(pdf);
         let _ = std::fs::remove_file(register);
     }
+
+    #[test]
+    fn builds_managed_artifact_filename_without_employee_pii() {
+        assert_eq!(
+            attendance_artifact_filename("2026-08-01", "job-123"),
+            "AlphaPremier_Attendance_20260801_job-123.xlsx"
+        );
+    }
+
+    #[test]
+    fn builds_payslip_filename_without_employee_pii() {
+        let filename = payroll_pdf_filename("payroll-123", "1st Half 2026", "job-123");
+        assert_eq!(
+            filename,
+            "AlphaPremier_Payslip_payroll-123_1st-Half-2026_job-123.pdf"
+        );
+        assert!(!filename.contains("Ana-Santos"));
+    }
+
 }
 use printpdf::{
     BuiltinFont, Mm, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt, TextItem,
@@ -240,6 +307,7 @@ fn elapsed_hours(start: &str, end: &str) -> f64 {
 pub fn generate_attendance_workbook(
     rows: &[AttendanceExportRow],
     report_date: &str,
+    office: &crate::config::OfficeConfig,
     path: &std::path::Path,
 ) -> Result<(), XlsxError> {
     let mut workbook = Workbook::new();
@@ -278,6 +346,13 @@ pub fn generate_attendance_workbook(
     worksheet.write_string_with_format(
         1,
         0,
+        format!("Company: {}", office.company_name),
+        &metadata_format,
+    )?;
+    worksheet.write_string_with_format(2, 0, office.display_full(), &metadata_format)?;
+    worksheet.write_string_with_format(
+        3,
+        0,
         "Timezone: Asia/Manila | Status: FINAL DATA FROM SQLITE",
         &metadata_format,
     )?;
@@ -294,10 +369,10 @@ pub fn generate_attendance_workbook(
         "NOTES",
     ];
     for (column, header) in headers.iter().enumerate() {
-        worksheet.write_string_with_format(3, column as u16, *header, &header_format)?;
+        worksheet.write_string_with_format(5, column as u16, *header, &header_format)?;
     }
     for (index, row) in rows.iter().enumerate() {
-        let excel_row = (index + 4) as u32;
+        let excel_row = (index + 6) as u32;
         let values = [
             row.employee_id.as_str(),
             row.employee_name.as_str(),
@@ -324,10 +399,10 @@ pub fn generate_attendance_workbook(
         };
         worksheet.write_number_with_format(excel_row, 6, row.total_hours, number_fill)?;
     }
-    let last_row = (rows.len() + 3) as u32;
+    let last_row = (rows.len() + 5) as u32;
     if !rows.is_empty() {
         let table = Table::new().set_style(TableStyle::Medium2);
-        worksheet.add_table(3, 0, last_row, 9, &table)?;
+        worksheet.add_table(5, 0, last_row, 9, &table)?;
     }
     let mut widths = [0usize; 10];
     for (column, header) in headers.iter().enumerate() {
@@ -353,12 +428,12 @@ pub fn generate_attendance_workbook(
     for (column, width) in widths.iter().enumerate() {
         worksheet.set_column_width(column as u16, (*width as f64) + 2.0)?;
     }
-    worksheet.set_freeze_panes(4, 0)?;
-    worksheet.set_repeat_rows(0, 3)?;
+    worksheet.set_freeze_panes(6, 0)?;
+    worksheet.set_repeat_rows(0, 5)?;
     worksheet.set_landscape();
     worksheet.set_paper_size(9);
     worksheet.set_margins(0.35, 0.35, 0.5, 0.5, 0.3, 0.3);
-    worksheet.set_print_area(0, 0, last_row.max(3), 9)?;
+    worksheet.set_print_area(0, 0, last_row.max(5), 9)?;
     workbook.save(path)
 }
 
@@ -419,6 +494,7 @@ pub fn payroll_artifact_filename(cutoff: &str, job_id: &str) -> String {
 pub fn generate_payroll_workbook(
     rows: &[PayrollExportRow],
     cutoff: &str,
+    office: &crate::config::OfficeConfig,
     path: &std::path::Path,
 ) -> Result<(), XlsxError> {
     let mut workbook = Workbook::new();
@@ -463,6 +539,13 @@ pub fn generate_payroll_workbook(
     sheet.write_string_with_format(
         1,
         0,
+        format!("Company: {}", office.company_name),
+        &metadata_format,
+    )?;
+    sheet.write_string_with_format(2, 0, office.display_full(), &metadata_format)?;
+    sheet.write_string_with_format(
+        3,
+        0,
         "Currency: PHP | Timezone: Asia/Manila | Source: SQLite finalized/draft records",
         &metadata_format,
     )?;
@@ -484,10 +567,10 @@ pub fn generate_payroll_workbook(
         "PAYROLL_ID",
     ];
     for (column, header) in headers.iter().enumerate() {
-        sheet.write_string_with_format(3, column as u16, *header, &header_format)?;
+        sheet.write_string_with_format(5, column as u16, *header, &header_format)?;
     }
     for (index, row) in rows.iter().enumerate() {
-        let r = (index + 4) as u32;
+        let r = (index + 6) as u32;
         let strings = [
             &row.employee_id,
             &row.employee_name,
@@ -529,9 +612,9 @@ pub fn generate_payroll_workbook(
         sheet.write_string_with_format(r, 13, &row.status, fill)?;
         sheet.write_string_with_format(r, 14, &row.payroll_id, fill)?;
     }
-    let last = (rows.len() + 3) as u32;
+    let last = (rows.len() + 5) as u32;
     if !rows.is_empty() {
-        sheet.add_table(3, 0, last, 14, &Table::new().set_style(TableStyle::Medium2))?;
+        sheet.add_table(5, 0, last, 14, &Table::new().set_style(TableStyle::Medium2))?;
     }
     let mut widths = [0usize; 15];
     for (column, header) in headers.iter().enumerate() {
@@ -562,12 +645,12 @@ pub fn generate_payroll_workbook(
     for (column, width) in widths.iter().enumerate() {
         sheet.set_column_width(column as u16, (*width as f64) + 2.0)?;
     }
-    sheet.set_freeze_panes(4, 0)?;
-    sheet.set_repeat_rows(0, 3)?;
+    sheet.set_freeze_panes(6, 0)?;
+    sheet.set_repeat_rows(0, 5)?;
     sheet.set_landscape();
     sheet.set_paper_size(9);
     sheet.set_margins(0.35, 0.35, 0.5, 0.5, 0.3, 0.3);
-    sheet.set_print_area(0, 0, last.max(3), 14)?;
+    sheet.set_print_area(0, 0, last.max(5), 14)?;
     workbook.save(path)
 }
 
@@ -580,7 +663,11 @@ pub fn payroll_pdf_filename(payroll_id: &str, cutoff: &str, job_id: &str) -> Str
     )
 }
 
-pub fn generate_payroll_pdf(row: &PayrollExportRow, path: &std::path::Path) -> Result<(), String> {
+pub fn generate_payroll_pdf(
+    row: &PayrollExportRow,
+    office: &crate::config::OfficeConfig,
+    path: &std::path::Path,
+) -> Result<(), String> {
     let mut document = PdfDocument::new("Alpha Premier Payroll Payslip");
     let mut ops = Vec::new();
     let mut add = |text: String, x: f32, y: f32, size: f32, bold: bool| {
@@ -604,6 +691,7 @@ pub fn generate_payroll_pdf(row: &PayrollExportRow, path: &std::path::Path) -> R
         ]);
     };
     add("ALPHA PREMIER".to_string(), 20.0, 276.0, 18.0, true);
+    add(office.display_full(), 20.0, 269.0, 9.0, false);
     add(
         format!(
             "PAYSLIP - {}",
@@ -616,7 +704,7 @@ pub fn generate_payroll_pdf(row: &PayrollExportRow, path: &std::path::Path) -> R
             }
         ),
         20.0,
-        264.0,
+        258.0,
         12.0,
         true,
     );
@@ -740,6 +828,7 @@ pub fn payroll_register_pdf_filename(cutoff: &str, job_id: &str) -> String {
 pub fn generate_payroll_register_pdf(
     rows: &[PayrollExportRow],
     cutoff: &str,
+    office: &crate::config::OfficeConfig,
     path: &std::path::Path,
 ) -> Result<(), String> {
     let mut document = PdfDocument::new("Alpha Premier Payroll Register");
@@ -779,9 +868,16 @@ pub fn generate_payroll_register_pdf(
             true,
         );
         add(
+            format!("Office: {}", office.display_full()),
+            12.0,
+            278.0,
+            8.0,
+            false,
+        );
+        add(
             format!("Cutoff: {cutoff} | Timezone: Asia/Manila | Static report values"),
             12.0,
-            277.0,
+            271.0,
             8.0,
             false,
         );

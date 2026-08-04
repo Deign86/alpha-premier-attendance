@@ -1,4 +1,4 @@
-use crate::{config::LanConfig, error::AppError};
+use crate::{config::{LanConfig, OfficeConfig}, error::AppError};
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{
     collections::HashMap,
@@ -34,9 +34,12 @@ impl AttendanceEventBus {
 pub struct AppState {
     pub db: SqlitePool,
     pub lan: LanConfig,
+    pub office: OfficeConfig,
     pub bus: AttendanceEventBus,
     pub server_instance_id: Uuid,
     pub data_dir: PathBuf,
+    pub exports_dir: PathBuf,
+    pub is_portable: bool,
     pub scan_guard: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
     pub physical_cooldown: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
     pub connected_sse_clients: Arc<AtomicU64>,
@@ -51,8 +54,16 @@ pub struct AdminSession {
 }
 
 impl AppState {
-    pub async fn new(data_dir: PathBuf, lan: LanConfig) -> Result<Self, AppError> {
+    pub async fn new(
+        data_dir: PathBuf,
+        exports_dir: PathBuf,
+        is_portable: bool,
+        lan: LanConfig,
+        office: OfficeConfig,
+    ) -> Result<Self, AppError> {
         std::fs::create_dir_all(&data_dir).map_err(|e| AppError::Configuration(e.to_string()))?;
+        std::fs::create_dir_all(&exports_dir)
+            .map_err(|e| AppError::Configuration(e.to_string()))?;
         let db_path = data_dir.join("attendance.db");
         let options = SqliteConnectOptions::new()
             .filename(db_path)
@@ -66,9 +77,12 @@ impl AppState {
         Ok(Self {
             db,
             lan,
+            office,
             bus: AttendanceEventBus::new(),
             server_instance_id: Uuid::new_v4(),
             data_dir,
+            exports_dir,
+            is_portable,
             scan_guard: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             physical_cooldown: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             connected_sse_clients: Arc::new(AtomicU64::new(0)),
@@ -93,7 +107,8 @@ mod tests {
     #[tokio::test]
     async fn migrations_create_required_indexes_and_queue() {
         let data_dir = std::env::temp_dir().join(format!("alpha-data-{}", Uuid::new_v4()));
-        let state = AppState::new(data_dir.clone(), LanConfig::default())
+        let exports_dir = data_dir.join("exports");
+        let state = AppState::new(data_dir.clone(), exports_dir, false, LanConfig::default(), OfficeConfig::default())
             .await
             .unwrap();
         let names: Vec<String> =

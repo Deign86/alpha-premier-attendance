@@ -110,6 +110,45 @@ describe('RFID kiosk', () => {
     await waitFor(() => expect(screen.getByLabelText(/scanner card id/i)).toHaveFocus());
   });
 
+  it('shows the canonical office short address on the kiosk', async () => {
+    render(<App />);
+    expect(await screen.findByText('Tektite East Tower, Ortigas Center, Pasig')).toBeInTheDocument();
+  });
+
+  it('uses the configured office identity when the backend provides one', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === '/api/config') {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            timezone: 'Asia/Manila',
+            rfidAutoSubmitDelayMs: 30,
+            enableScanSounds: false,
+            resultResetDelayMs: 500,
+            office: {
+              companyName: 'Alpha Premier',
+              officeLabel: 'Main Office',
+              officeAddressLine1: 'Unit 3104C',
+              officeBuilding: 'Tektite East Tower',
+              officeDistrict: 'Ortigas Center',
+              officeCity: 'Pasig',
+              officeRegion: 'Metro Manila',
+              officeCountry: 'Philippines',
+              officePostalCode: '',
+              officeDisplayShort: 'Tektite East Tower, Ortigas Center, Pasig',
+              officeDisplayFull: 'Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila',
+            },
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({ success: false, error: { code: 'UNKNOWN_RFID_CARD', message: 'Card is not registered.' } }) } as Response;
+    });
+    render(<App />);
+    expect(await screen.findByText('Tektite East Tower, Ortigas Center, Pasig')).toBeInTheDocument();
+  });
+
   it('enrolls an unknown card through the protected setup flow', async () => {
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

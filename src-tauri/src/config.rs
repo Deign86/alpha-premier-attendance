@@ -53,24 +53,7 @@ fn default_admin_session_minutes() -> u64 { 15 }
 
 impl LanConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        let path = config_dir.join("config.toml");
-        if !path.exists() { return Ok(Self::default()); }
-        let contents = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig }
-        let root: Root = toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
-        let mut lan = root.lan;
-        if lan.sheets_sync_endpoint.as_deref().is_some_and(str::is_empty) { lan.sheets_sync_endpoint = None; }
-        if lan.google_service_account_json_path.as_deref().is_some_and(str::is_empty) { lan.google_service_account_json_path = None; }
-        if lan.google_spreadsheet_id.as_deref().is_some_and(str::is_empty) { lan.google_spreadsheet_id = None; }
-        if lan.admin_pin.as_deref().is_some_and(str::is_empty) { lan.admin_pin = None; }
-        if lan.viewer_password_hash.as_deref().is_some_and(str::is_empty) { lan.viewer_password_hash = None; }
-        lan.validate()?;
-        if let Some(secret_path) = lan.google_service_account_json_path.clone() {
-            let path_value = Path::new(&secret_path);
-            if path_value.is_absolute() && !path_value.starts_with(config_dir) { return Err("google service-account path must remain under the application config directory".into()); }
-            if path_value.is_relative() { lan.google_service_account_json_path = Some(config_dir.join(path_value).to_string_lossy().into_owned()); }
-        }
-        Ok(lan)
+        load_config(config_dir).map(|(lan, _)| lan)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -90,6 +73,163 @@ impl LanConfig {
         }
         Ok(())
     }
+}
+
+/// Canonical company office identity shown across the kiosk, dashboard, exports,
+/// and printed references. All fields are configurable through the `[office]`
+/// section of `config.toml`; the defaults below are the real office.
+///
+/// The canonical address is:
+///   Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila
+///
+/// `office_postal_code` is optional and configurable only. It is intentionally
+/// left unset because no verified postal code should be hardcoded.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OfficeConfig {
+    #[serde(default = "default_company_name")]
+    pub company_name: String,
+    #[serde(default = "default_office_label")]
+    pub office_label: String,
+    #[serde(default = "default_address_line_1")]
+    pub office_address_line_1: String,
+    #[serde(default = "default_building")]
+    pub office_building: String,
+    #[serde(default = "default_district")]
+    pub office_district: String,
+    #[serde(default = "default_city")]
+    pub office_city: String,
+    #[serde(default = "default_region")]
+    pub office_region: String,
+    #[serde(default = "default_country")]
+    pub office_country: String,
+    #[serde(default)]
+    pub office_postal_code: String,
+    #[serde(default = "default_display_short")]
+    pub office_display_short: String,
+    #[serde(default = "default_display_full")]
+    pub office_display_full: String,
+}
+
+const OFFICE_FALLBACK_DISPLAY: &str = "Alpha Premier Office";
+
+fn default_company_name() -> String { "Alpha Premier".into() }
+fn default_office_label() -> String { "Main Office".into() }
+fn default_address_line_1() -> String { "Unit 3104C".into() }
+fn default_building() -> String { "Tektite East Tower".into() }
+fn default_district() -> String { "Ortigas Center".into() }
+fn default_city() -> String { "Pasig".into() }
+fn default_region() -> String { "Metro Manila".into() }
+fn default_country() -> String { "Philippines".into() }
+fn default_display_short() -> String { "Tektite East Tower, Ortigas Center, Pasig".into() }
+fn default_display_full() -> String { "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".into() }
+
+impl Default for OfficeConfig {
+    fn default() -> Self {
+        Self {
+            company_name: default_company_name(),
+            office_label: default_office_label(),
+            office_address_line_1: default_address_line_1(),
+            office_building: default_building(),
+            office_district: default_district(),
+            office_city: default_city(),
+            office_region: default_region(),
+            office_country: default_country(),
+            office_postal_code: String::new(),
+            office_display_short: default_display_short(),
+            office_display_full: default_display_full(),
+        }
+    }
+}
+
+/// Join non-empty, trimmed address parts; never emits broken comma chains.
+fn join_address_parts(parts: Vec<String>) -> String {
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+impl OfficeConfig {
+    pub fn load(config_dir: &Path) -> Result<Self, String> {
+        load_config(config_dir).map(|(_, office)| office)
+    }
+
+    fn compose_short(&self) -> String {
+        join_address_parts(vec![
+            self.office_building.clone(),
+            self.office_district.clone(),
+            self.office_city.clone(),
+        ])
+    }
+
+    fn compose_full(&self) -> String {
+        let city = self.office_city.trim();
+        let postal = self.office_postal_code.trim();
+        let city_with_postal = if postal.is_empty() {
+            city.to_string()
+        } else if city.is_empty() {
+            postal.to_string()
+        } else {
+            format!("{city} {postal}")
+        };
+        join_address_parts(vec![
+            self.office_address_line_1.clone(),
+            self.office_building.clone(),
+            self.office_district.clone(),
+            city_with_postal,
+            self.office_region.clone(),
+        ])
+    }
+
+    /// Short display for compact UI, badges, and narrow cards.
+    pub fn display_short(&self) -> String {
+        let configured = self.office_display_short.trim();
+        if !configured.is_empty() { return configured.to_string(); }
+        let composed = self.compose_short();
+        if !composed.is_empty() { return composed; }
+        OFFICE_FALLBACK_DISPLAY.to_string()
+    }
+
+    /// Full display for settings, setup, exports, and printed headers.
+    pub fn display_full(&self) -> String {
+        let configured = self.office_display_full.trim();
+        if !configured.is_empty() { return configured.to_string(); }
+        let composed = self.compose_full();
+        if !composed.is_empty() { return composed; }
+        OFFICE_FALLBACK_DISPLAY.to_string()
+    }
+
+    /// `Company: X` / `Office: Y` metadata lines used by exports and headers.
+    pub fn metadata_lines(&self) -> Vec<String> {
+        vec![
+            format!("Company: {}", self.company_name.trim()), 
+            format!("Office: {}", self.display_full()),
+        ]
+    }
+}
+
+/// Load both LAN and office sections from `config.toml` (defaults when absent).
+pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig), String> {
+    let path = config_dir.join("config.toml");
+    if !path.exists() { return Ok((LanConfig::default(), OfficeConfig::default())); }
+    let contents = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig, #[serde(default)] office: OfficeConfig }
+    let root: Root = toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let mut lan = root.lan;
+    if lan.sheets_sync_endpoint.as_deref().is_some_and(str::is_empty) { lan.sheets_sync_endpoint = None; }
+    if lan.google_service_account_json_path.as_deref().is_some_and(str::is_empty) { lan.google_service_account_json_path = None; }
+    if lan.google_spreadsheet_id.as_deref().is_some_and(str::is_empty) { lan.google_spreadsheet_id = None; }
+    if lan.admin_pin.as_deref().is_some_and(str::is_empty) { lan.admin_pin = None; }
+    if lan.viewer_password_hash.as_deref().is_some_and(str::is_empty) { lan.viewer_password_hash = None; }
+    lan.validate()?;
+    if let Some(secret_path) = lan.google_service_account_json_path.clone() {
+        let path_value = Path::new(&secret_path);
+        if path_value.is_absolute() && !path_value.starts_with(config_dir) { return Err("google service-account path must remain under the application config directory".into()); }
+        if path_value.is_relative() { lan.google_service_account_json_path = Some(config_dir.join(path_value).to_string_lossy().into_owned()); }
+    }
+    Ok((lan, root.office))
 }
 
 fn is_private(address: IpAddr) -> bool {
@@ -116,5 +256,69 @@ mod tests {
     fn wildcard_requires_explicit_subnet() {
         let config = LanConfig { enabled: true, bind_address: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), allow_wildcard_bind: true, ..Default::default() };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn office_defaults_match_the_canonical_address() {
+        let office = OfficeConfig::default();
+        assert_eq!(office.company_name, "Alpha Premier");
+        assert_eq!(office.display_full(), "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila");
+        assert_eq!(office.display_short(), "Tektite East Tower, Ortigas Center, Pasig");
+        assert!(office.office_postal_code.is_empty(), "postal code must stay unset until confirmed");
+    }
+
+    #[test]
+    fn office_composes_displays_from_structured_fields_when_unset() {
+        let office = OfficeConfig {
+            office_display_short: String::new(),
+            office_display_full: String::new(),
+            office_postal_code: "1600".into(),
+            ..OfficeConfig::default()
+        };
+        assert_eq!(
+            office.display_full(),
+            "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig 1600, Metro Manila"
+        );
+        assert_eq!(office.display_short(), "Tektite East Tower, Ortigas Center, Pasig");
+    }
+
+    #[test]
+    fn office_falls_back_without_broken_comma_chains() {
+        let empty = OfficeConfig {
+            office_address_line_1: String::new(),
+            office_building: String::new(),
+            office_district: String::new(),
+            office_city: String::new(),
+            office_region: String::new(),
+            office_display_short: String::new(),
+            office_display_full: String::new(),
+            ..OfficeConfig::default()
+        };
+        assert_eq!(empty.display_full(), "Alpha Premier Office");
+        assert_eq!(empty.display_short(), "Alpha Premier Office");
+        let partial = OfficeConfig {
+            office_address_line_1: String::new(),
+            office_building: String::new(),
+            office_district: String::new(),
+            office_city: "Pasig".into(),
+            office_region: "Metro Manila".into(),
+            office_display_short: String::new(),
+            office_display_full: String::new(),
+            ..OfficeConfig::default()
+        };
+        assert_eq!(partial.display_full(), "Pasig, Metro Manila");
+        assert_eq!(partial.display_short(), "Pasig");
+    }
+
+    #[test]
+    fn office_metadata_lines_carry_company_and_full_address() {
+        let office = OfficeConfig::default();
+        assert_eq!(
+            office.metadata_lines(),
+            vec![
+                "Company: Alpha Premier".to_string(),
+                "Office: Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".to_string(),
+            ]
+        );
     }
 }

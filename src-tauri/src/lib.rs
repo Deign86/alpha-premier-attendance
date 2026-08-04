@@ -1,18 +1,19 @@
 mod config;
 mod error;
 mod lan_server;
+mod paths;
 pub mod reporting;
 mod services;
 mod state;
 
 use chrono::Datelike;
 use chrono_tz::Asia::Manila;
-use config::LanConfig;
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqliteRow, Row};
 use state::{AdminSession, AppState};
-use std::{path::PathBuf, time::Instant};
+use std::{path::{Path, PathBuf}, time::Instant};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 fn get_health(state: State<'_, AppState>) -> serde_json::Value {
@@ -21,7 +22,7 @@ fn get_health(state: State<'_, AppState>) -> serde_json::Value {
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"enableScanSounds":false,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled})
+    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"enableScanSounds":false,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
 }
 
 #[tauri::command]
@@ -687,12 +688,15 @@ async fn payroll_finalize_cutoff(
 }
 
 #[tauri::command]
-async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result<String, String> {
+async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result<serde_json::Value, String> {
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end,gross_compensation_centavos,net_pay_centavos,status FROM payroll_cutoffs ORDER BY cutoff_start,employee_name").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let mut output = String::from("PAYROLL_ID,EMPLOYEE_ID,EMPLOYEE_NAME,CUTOFF_LABEL,CUTOFF_START,CUTOFF_END,GROSS_PAY_PHP,NET_PAY_PHP,STATUS\n");
+    let mut output = String::new();
+    output.push_str(&format!("\"Company\",\"{}\"\n", state.office.company_name.replace('"', "\"\"")));
+    output.push_str(&format!("\"Office\",\"{}\"\n", state.office.display_full().replace('"', "\"\"")));
+    output.push_str("PAYROLL_ID,EMPLOYEE_ID,EMPLOYEE_NAME,CUTOFF_LABEL,CUTOFF_START,CUTOFF_END,GROSS_PAY_PHP,NET_PAY_PHP,STATUS\n");
     for row in rows {
         let name = row.get::<String, _>("employee_name").replace('"', "\"\"");
         let label = row
@@ -711,7 +715,22 @@ async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result
             row.get::<String, _>("status")
         ));
     }
-    Ok(output)
+    let date = chrono::Utc::now().with_timezone(&Manila).format("%Y-%m-%d").to_string();
+    let file_name = format!("payroll-{date}.csv");
+    let output_path = state.exports_dir.join(&file_name);
+    std::fs::create_dir_all(&state.exports_dir).map_err(|e| e.to_string())?;
+    std::fs::write(&output_path, &output).map_err(|e| {
+        log::error!("payroll CSV write to {} failed: {e}", output_path.display());
+        "EXPORT_WRITE_FAILED".to_string()
+    })?;
+    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'EXPORT_GENERATED', ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(chrono::Utc::now().to_rfc3339()).bind("Payroll CSV generated").bind(format!("export-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
+    Ok(generated_file_metadata(
+        &state,
+        &file_name,
+        &output_path,
+        "csv",
+        format!("Payroll CSV generated: {file_name}."),
+    ))
 }
 
 async fn enrich_cutoff_input(
@@ -817,6 +836,133 @@ fn cutoff_input(value: &serde_json::Value) -> crate::services::cutoff_payroll::C
 
 fn php_to_centavos(value: f64) -> i64 {
     (value * 100.0).round() as i64
+}
+
+/// Structured file metadata returned by every file-generating action so the UI
+/// can offer Open / Show in folder / Open folder actions.
+fn generated_file_metadata(
+    state: &AppState,
+    file_name: &str,
+    file_path: &Path,
+    file_kind: &str,
+    message: String,
+) -> serde_json::Value {
+    serde_json::json!({
+        "success": true,
+        "filePath": file_path.to_string_lossy(),
+        "directoryPath": state.exports_dir.to_string_lossy(),
+        "fileName": file_name,
+        "fileKind": file_kind,
+        "isPortableMode": state.is_portable,
+        "message": message,
+    })
+}
+
+/// Canonicalize a candidate path and require it to live inside the exports
+/// directory. Rejects traversal and arbitrary paths outside the export root.
+fn canonical_exports_path(state: &AppState, candidate: &Path) -> Result<PathBuf, String> {
+    let root = std::fs::canonicalize(&state.exports_dir)
+        .map_err(|_| "EXPORT_DIR_UNAVAILABLE".to_string())?;
+    let canonical =
+        std::fs::canonicalize(candidate).map_err(|_| "FILE_NOT_FOUND".to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err("PATH_OUTSIDE_EXPORTS".into());
+    }
+    Ok(canonical)
+}
+
+/// Canonicalize a directory path inside the application data root.
+fn canonical_data_path(state: &AppState, candidate: &Path) -> Result<PathBuf, String> {
+    let root =
+        std::fs::canonicalize(&state.data_dir).map_err(|_| "DATA_DIR_UNAVAILABLE".to_string())?;
+    let canonical =
+        std::fs::canonicalize(candidate).map_err(|_| "DIRECTORY_NOT_FOUND".to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err("PATH_OUTSIDE_DATA".into());
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
+async fn open_generated_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    file_path: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let path = canonical_exports_path(&state, Path::new(&file_path))?;
+    if !path.is_file() {
+        return Err("FILE_NOT_FOUND".into());
+    }
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| {
+            log::error!("open file {} failed: {error}", path.display());
+            "OPEN_FAILED".to_string()
+        })?;
+    Ok(serde_json::json!({"success":true,"message":"File opened."}))
+}
+
+#[tauri::command]
+async fn reveal_generated_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    file_path: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let path = canonical_exports_path(&state, Path::new(&file_path))?;
+    if !path.is_file() {
+        return Err("FILE_NOT_FOUND".into());
+    }
+    match app.opener().reveal_item_in_dir(&path) {
+        Ok(()) => Ok(serde_json::json!({"success":true,"message":"File revealed in folder."})),
+        Err(reveal_error) => {
+            log::warn!(
+                "reveal file {} failed: {reveal_error}; falling back to opening the folder",
+                path.display()
+            );
+            let directory = path.parent().ok_or_else(|| "PATH_ERROR".to_string())?;
+            app.opener()
+                .open_path(directory.to_string_lossy().into_owned(), None::<&str>)
+                .map_err(|open_error| {
+                    log::error!(
+                        "fallback folder open {} failed: {open_error}",
+                        directory.display()
+                    );
+                    "REVEAL_FAILED".to_string()
+                })?;
+            Ok(serde_json::json!({"success":true,"message":"Opened the containing folder."}))
+        }
+    }
+}
+
+#[tauri::command]
+async fn open_generated_directory(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    directory_path: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let path = canonical_data_path(&state, Path::new(&directory_path))?;
+    if !path.is_dir() {
+        return Err("DIRECTORY_NOT_FOUND".into());
+    }
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| {
+            log::error!("open directory {} failed: {error}", path.display());
+            "OPEN_FAILED".to_string()
+        })?;
+    Ok(serde_json::json!({"success":true,"message":"Folder opened."}))
 }
 
 #[tauri::command]
@@ -994,8 +1140,8 @@ async fn export_attendance_xlsx(
     let job_id = uuid::Uuid::new_v4().to_string();
     let artifact_id = uuid::Uuid::new_v4().to_string();
     let file_name = crate::reporting::attendance_artifact_filename(&date, &job_id[..8]);
+    let output_path = state.exports_dir.join(&file_name);
     let relative_path = std::path::PathBuf::from("exports").join(&file_name);
-    let output_path = state.data_dir.join(&relative_path);
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)")
         .bind(&job_id).bind("ATTENDANCE_XLSX").bind(serde_json::json!({"date":date}).to_string()).bind("XLSX").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(rows.len() as i64).bind(rows.len() as i64)
@@ -1003,7 +1149,7 @@ async fn export_attendance_xlsx(
     if let Err(error) = (|| {
         std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
             .map_err(|e| e.to_string())?;
-        crate::reporting::generate_attendance_workbook(&rows, &date, &output_path)
+        crate::reporting::generate_attendance_workbook(&rows, &date, &state.office, &output_path)
             .map_err(|e| e.to_string())
     })() {
         let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
@@ -1017,9 +1163,20 @@ async fn export_attendance_xlsx(
         .execute(&state.db).await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'EXPORT_GENERATED', ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&completed).bind(format!("Attendance XLSX generated for {date}")).bind(format!("export-{job_id}")).execute(&state.db).await;
-    Ok(
-        serde_json::json!({"success":true,"jobId":job_id,"artifactId":artifact_id,"fileName":file_name,"sizeBytes":bytes.len(),"sha256":hash,"rowCount":rows.len()}),
-    )
+    let metadata = generated_file_metadata(
+        &state,
+        &file_name,
+        &output_path,
+        "xlsx",
+        format!("Attendance workbook generated for {date}."),
+    );
+    let mut response = metadata.as_object().cloned().unwrap_or_default();
+    response.insert("jobId".into(), serde_json::json!(job_id));
+    response.insert("artifactId".into(), serde_json::json!(artifact_id));
+    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
+    response.insert("sha256".into(), serde_json::json!(hash));
+    response.insert("rowCount".into(), serde_json::json!(rows.len()));
+    Ok(serde_json::Value::Object(response))
 }
 
 #[tauri::command]
@@ -1051,15 +1208,15 @@ async fn export_payroll_xlsx(
     let artifact_id = uuid::Uuid::new_v4().to_string();
     let scope = cutoff.clone().unwrap_or_else(|| "all-cutoffs".to_string());
     let file_name = crate::reporting::payroll_artifact_filename(&scope, &job_id[..8]);
+    let output_path = state.exports_dir.join(&file_name);
     let relative_path = std::path::PathBuf::from("exports").join(&file_name);
-    let output_path = state.data_dir.join(&relative_path);
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)")
         .bind(&job_id).bind("PAYROLL_XLSX").bind(serde_json::json!({"cutoff":cutoff}).to_string()).bind("XLSX").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(filtered.len() as i64).bind(filtered.len() as i64).execute(&state.db).await.map_err(|e| e.to_string())?;
     if let Err(error) = (|| {
         std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
             .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_workbook(&filtered, &scope, &output_path)
+        crate::reporting::generate_payroll_workbook(&filtered, &scope, &state.office, &output_path)
             .map_err(|e| e.to_string())
     })() {
         let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
@@ -1070,9 +1227,20 @@ async fn export_payroll_xlsx(
     let completed = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&job_id).bind("PAYROLL_XLSX").bind("XLSX").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({"success":true,"jobId":job_id,"artifactId":artifact_id,"fileName":file_name,"sizeBytes":bytes.len(),"sha256":hash,"rowCount":filtered.len()}),
-    )
+    let metadata = generated_file_metadata(
+        &state,
+        &file_name,
+        &output_path,
+        "xlsx",
+        format!("Payroll workbook generated for {scope}."),
+    );
+    let mut response = metadata.as_object().cloned().unwrap_or_default();
+    response.insert("jobId".into(), serde_json::json!(job_id));
+    response.insert("artifactId".into(), serde_json::json!(artifact_id));
+    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
+    response.insert("sha256".into(), serde_json::json!(hash));
+    response.insert("rowCount".into(), serde_json::json!(filtered.len()));
+    Ok(serde_json::Value::Object(response))
 }
 
 #[tauri::command]
@@ -1110,13 +1278,13 @@ async fn generate_payroll_payslip_pdf(
         &job_id[..8],
     );
     let relative_path = std::path::PathBuf::from("exports").join(&file_name);
-    let output_path = state.data_dir.join(&relative_path);
+    let output_path = state.exports_dir.join(&file_name);
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)").bind(&job_id).bind("PAYSLIP_PDF").bind(serde_json::json!({"payrollId":payroll_id}).to_string()).bind("PDF").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(1_i64).bind(1_i64).execute(&state.db).await.map_err(|e| e.to_string())?;
     if let Err(error) = (|| {
         std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
             .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_pdf(&payroll, &output_path)
+        crate::reporting::generate_payroll_pdf(&payroll, &state.office, &output_path)
     })() {
         let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
         return Err(error);
@@ -1126,9 +1294,20 @@ async fn generate_payroll_payslip_pdf(
     let completed = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&payroll.payroll_id).bind("PAYSLIP_PDF").bind("PDF").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({"success":true,"jobId":job_id,"artifactId":artifact_id,"fileName":file_name,"sizeBytes":bytes.len(),"sha256":hash,"status":payroll.status}),
-    )
+    let metadata = generated_file_metadata(
+        &state,
+        &file_name,
+        &output_path,
+        "pdf",
+        format!("Payslip PDF generated for {}.", payroll.employee_name),
+    );
+    let mut response = metadata.as_object().cloned().unwrap_or_default();
+    response.insert("jobId".into(), serde_json::json!(job_id));
+    response.insert("artifactId".into(), serde_json::json!(artifact_id));
+    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
+    response.insert("sha256".into(), serde_json::json!(hash));
+    response.insert("status".into(), serde_json::json!(payroll.status));
+    Ok(serde_json::Value::Object(response))
 }
 
 #[tauri::command]
@@ -1160,14 +1339,14 @@ async fn generate_payroll_register_pdf(
     let job_id = uuid::Uuid::new_v4().to_string();
     let artifact_id = uuid::Uuid::new_v4().to_string();
     let file_name = crate::reporting::payroll_register_pdf_filename(&scope, &job_id[..8]);
+    let output = state.exports_dir.join(&file_name);
     let relative = std::path::PathBuf::from("exports").join(&file_name);
-    let output = state.data_dir.join(&relative);
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)").bind(&job_id).bind("PAYROLL_REGISTER_PDF").bind(serde_json::json!({"cutoff":scope}).to_string()).bind("PDF").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(filtered.len() as i64).bind(filtered.len() as i64).execute(&state.db).await.map_err(|e| e.to_string())?;
     if let Err(error) = (|| {
         std::fs::create_dir_all(output.parent().ok_or("EXPORT_PATH_ERROR")?)
             .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_register_pdf(&filtered, &scope, &output)
+        crate::reporting::generate_payroll_register_pdf(&filtered, &scope, &state.office, &output)
     })() {
         let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
         return Err(error);
@@ -1177,9 +1356,20 @@ async fn generate_payroll_register_pdf(
     let completed = chrono::Utc::now().to_rfc3339();
     sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&job_id).bind("PAYROLL_REGISTER_PDF").bind("PDF").bind(&file_name).bind(relative.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({"success":true,"jobId":job_id,"artifactId":artifact_id,"fileName":file_name,"sizeBytes":bytes.len(),"sha256":hash,"rowCount":filtered.len()}),
-    )
+    let metadata = generated_file_metadata(
+        &state,
+        &file_name,
+        &output,
+        "pdf",
+        format!("Payroll register PDF generated for {scope}."),
+    );
+    let mut response = metadata.as_object().cloned().unwrap_or_default();
+    response.insert("jobId".into(), serde_json::json!(job_id));
+    response.insert("artifactId".into(), serde_json::json!(artifact_id));
+    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
+    response.insert("sha256".into(), serde_json::json!(hash));
+    response.insert("rowCount".into(), serde_json::json!(filtered.len()));
+    Ok(serde_json::Value::Object(response))
 }
 
 #[tauri::command]
@@ -1545,6 +1735,7 @@ fn photo_is_within_limits(width: u32, height: u32, bytes: usize) -> bool {
 
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::default().build());
@@ -1554,18 +1745,18 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let data_dir: PathBuf = app
-                .path()
-                .app_local_data_dir()
-                .expect("application data directory");
-            let config_dir = app
-                .path()
-                .app_config_dir()
-                .expect("application config directory");
-            std::fs::create_dir_all(&config_dir).expect("create application config directory");
-            let lan = LanConfig::load(&config_dir).expect("valid config.toml");
-            let state = tauri::async_runtime::block_on(AppState::new(data_dir, lan))
-                .expect("SQLite initialization");
+            let paths = crate::paths::resolve(app.handle())
+                .expect("resolve application paths");
+            std::fs::create_dir_all(&paths.config_dir).expect("create application config directory");
+            let (lan, office) = config::load_config(&paths.config_dir).expect("valid config.toml");
+            let state = tauri::async_runtime::block_on(AppState::new(
+                paths.data_dir.clone(),
+                paths.exports_dir.clone(),
+                paths.is_portable,
+                lan,
+                office,
+            ))
+            .expect("SQLite initialization");
             if state.lan.enabled {
                 let server_state = state.clone();
                 tauri::async_runtime::spawn(async move {
@@ -1612,6 +1803,9 @@ pub fn run() {
             export_payroll_xlsx,
             generate_payroll_payslip_pdf,
             generate_payroll_register_pdf,
+            open_generated_file,
+            reveal_generated_file,
+            open_generated_directory,
             open_generated_artifact,
             setup_unlock,
             setup_lock,
@@ -1631,7 +1825,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{enrich_cutoff_input, php_to_centavos, photo_is_within_limits};
+    use super::{canonical_exports_path, enrich_cutoff_input, generated_file_metadata, php_to_centavos, photo_is_within_limits};
+    use crate::config::{LanConfig, OfficeConfig};
+    use crate::state::AppState;
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[tokio::test]
@@ -1682,5 +1878,64 @@ mod tests {
         assert_eq!(php_to_centavos(12.344), 1_234);
         assert_eq!(php_to_centavos(12.345), 1_235);
         assert_eq!(php_to_centavos(12.346), 1_235);
+    }
+
+    #[test]
+    fn generated_file_metadata_is_structured_and_absolute() {
+        let temp = std::env::temp_dir().join(format!("alpha-meta-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let data_dir = temp.clone();
+        let exports_dir = temp.join("exports");
+        let state = tauri::async_runtime::block_on(AppState::new(
+            data_dir.clone(),
+            exports_dir.clone(),
+            true,
+            LanConfig::default(),
+            OfficeConfig::default(),
+        ))
+        .unwrap();
+        let file_path = exports_dir.join("payroll-2026-08-04.csv");
+        let metadata = generated_file_metadata(
+            &state,
+            "payroll-2026-08-04.csv",
+            &file_path,
+            "csv",
+            "Payroll CSV generated.".into(),
+        );
+        assert_eq!(metadata["success"], true);
+        assert_eq!(metadata["fileKind"], "csv");
+        assert_eq!(metadata["isPortableMode"], true);
+        assert_eq!(metadata["fileName"], "payroll-2026-08-04.csv");
+        assert_eq!(metadata["directoryPath"], exports_dir.to_string_lossy().as_ref());
+        assert_eq!(metadata["filePath"], file_path.to_string_lossy().as_ref());
+        assert!(metadata["message"].as_str().unwrap().contains("Payroll CSV generated"));
+        tauri::async_runtime::block_on(state.db.close());
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn export_path_validation_rejects_paths_outside_the_exports_root() {
+        let temp = std::env::temp_dir().join(format!("alpha-paths-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let data_dir = temp.clone();
+        let exports_dir = temp.join("exports");
+        let state = AppState::new(
+            data_dir.clone(),
+            exports_dir.clone(),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+        )
+        .await
+        .unwrap();
+        let inside = exports_dir.join("sample.csv");
+        std::fs::write(&inside, "a,b\n").unwrap();
+        assert!(canonical_exports_path(&state, &inside).is_ok());
+        let outside = data_dir.join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        assert!(canonical_exports_path(&state, &outside).is_err());
+        assert!(canonical_exports_path(&state, &exports_dir.join("missing.csv")).is_err());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
