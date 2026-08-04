@@ -71,6 +71,13 @@ mod tests {
     }
 
     #[test]
+    fn formats_timestamps_as_manila_hhmmss() {
+        assert_eq!(display_timestamp("2026-08-01T08:30:00+08:00"), "08:30:00");
+        assert_eq!(display_timestamp("2026-08-01T00:05:00Z"), "08:05:00");
+        assert_eq!(display_timestamp("not-a-timestamp"), "not-a-timestamp");
+    }
+
+    #[test]
     fn generates_an_attendance_workbook_with_expected_headers() {
         let path =
             std::env::temp_dir().join(format!("attendance-report-{}.xlsx", uuid::Uuid::new_v4()));
@@ -214,7 +221,7 @@ fn display_timestamp(value: &str) -> String {
         .map(|timestamp| {
             timestamp
                 .with_timezone(&chrono_tz::Asia::Manila)
-                .format("%b %e, %Y %I:%M %p")
+                .format("%H:%M:%S")
                 .to_string()
         })
         .unwrap_or_else(|_| value.to_string())
@@ -248,12 +255,22 @@ pub fn generate_attendance_workbook(
     let header_format = Format::new()
         .set_bold()
         .set_font_color(Color::White)
-        .set_background_color(Color::RGB(0x4472C4))
+        .set_background_color(Color::RGB(0x1A4E3F))
         .set_border(FormatBorder::Thin)
         .set_text_wrap();
-    let body_format = Format::new().set_border(FormatBorder::Thin);
+    let body_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::White);
+    let alt_body_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xF2F2F2));
     let number_format = Format::new()
         .set_border(FormatBorder::Thin)
+        .set_background_color(Color::White)
+        .set_num_format("0.00");
+    let alt_number_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xF2F2F2))
         .set_num_format("0.00");
     let worksheet = workbook.add_worksheet().set_name("Attendance")?;
     let title = format!("Attendance Register - {report_date}");
@@ -265,16 +282,16 @@ pub fn generate_attendance_workbook(
         &metadata_format,
     )?;
     let headers = [
-        "Employee ID",
-        "Employee Name",
-        "Department",
-        "Date",
-        "Time In",
-        "Time Out",
-        "Total Hours",
-        "Status",
-        "Source",
-        "Notes",
+        "EMPLOYEE_ID",
+        "EMPLOYEE_NAME",
+        "DEPARTMENT",
+        "DATE",
+        "TIME_IN",
+        "TIME_OUT",
+        "TOTAL_HOURS",
+        "STATUS",
+        "SOURCE",
+        "NOTES",
     ];
     for (column, header) in headers.iter().enumerate() {
         worksheet.write_string_with_format(3, column as u16, *header, &header_format)?;
@@ -292,21 +309,51 @@ pub fn generate_attendance_workbook(
             row.source.as_str(),
             row.notes.as_str(),
         ];
+        let fill = if index % 2 == 1 {
+            &alt_body_format
+        } else {
+            &body_format
+        };
         for (column, value) in values.iter().enumerate() {
-            worksheet.write_string_with_format(excel_row, column as u16, *value, &body_format)?;
+            worksheet.write_string_with_format(excel_row, column as u16, *value, fill)?;
         }
-        worksheet.write_number_with_format(excel_row, 6, row.total_hours, &number_format)?;
+        let number_fill = if index % 2 == 1 {
+            &alt_number_format
+        } else {
+            &number_format
+        };
+        worksheet.write_number_with_format(excel_row, 6, row.total_hours, number_fill)?;
     }
     let last_row = (rows.len() + 3) as u32;
     if !rows.is_empty() {
         let table = Table::new().set_style(TableStyle::Medium2);
         worksheet.add_table(3, 0, last_row, 9, &table)?;
     }
-    let widths = [16.0, 30.0, 20.0, 14.0, 14.0, 14.0, 13.0, 15.0, 12.0, 36.0];
-    for (column, width) in widths.iter().enumerate() {
-        worksheet.set_column_width(column as u16, *width)?;
+    let mut widths = [0usize; 10];
+    for (column, header) in headers.iter().enumerate() {
+        widths[column] = header.len();
     }
-    worksheet.set_freeze_panes(4, 2)?;
+    for row in rows {
+        let values = [
+            row.employee_id.len(),
+            row.employee_name.len(),
+            row.department.as_deref().unwrap_or("").len(),
+            row.date.len(),
+            row.time_in.as_deref().unwrap_or("").len(),
+            row.time_out.as_deref().unwrap_or("").len(),
+            format!("{:.2}", row.total_hours).len(),
+            row.status.len(),
+            row.source.len(),
+            row.notes.len(),
+        ];
+        for (column, length) in values.iter().enumerate() {
+            widths[column] = widths[column].max(*length);
+        }
+    }
+    for (column, width) in widths.iter().enumerate() {
+        worksheet.set_column_width(column as u16, (*width as f64) + 2.0)?;
+    }
+    worksheet.set_freeze_panes(4, 0)?;
     worksheet.set_repeat_rows(0, 3)?;
     worksheet.set_landscape();
     worksheet.set_paper_size(9);
@@ -387,13 +434,23 @@ pub fn generate_payroll_workbook(
     let header_format = Format::new()
         .set_bold()
         .set_font_color(Color::White)
-        .set_background_color(Color::RGB(0x4472C4))
+        .set_background_color(Color::RGB(0x1A4E3F))
         .set_border(FormatBorder::Thin)
         .set_text_wrap();
-    let body_format = Format::new().set_border(FormatBorder::Thin);
+    let body_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::White);
+    let alt_body_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xF2F2F2));
     let currency_format = Format::new()
         .set_border(FormatBorder::Thin)
-        .set_num_format("₱#,##0.00;[Red]-₱#,##0.00");
+        .set_background_color(Color::White)
+        .set_num_format("0.00");
+    let alt_currency_format = Format::new()
+        .set_border(FormatBorder::Thin)
+        .set_background_color(Color::RGB(0xF2F2F2))
+        .set_num_format("0.00");
     let sheet = workbook.add_worksheet().set_name("Payroll Register")?;
     sheet.merge_range(
         0,
@@ -410,21 +467,21 @@ pub fn generate_payroll_workbook(
         &metadata_format,
     )?;
     let headers = [
-        "Employee ID",
-        "Employee Name",
-        "Profile",
-        "Cutoff",
-        "Start",
-        "End",
-        "Basic Pay",
-        "Allowances",
-        "Incentives",
-        "Late Deductions",
-        "Other Adjustments",
-        "Gross Pay",
-        "Net Pay",
-        "Status",
-        "Payroll ID",
+        "EMPLOYEE_ID",
+        "EMPLOYEE_NAME",
+        "PROFILE",
+        "CUTOFF_LABEL",
+        "CUTOFF_START",
+        "CUTOFF_END",
+        "BASIC_PAY_PHP",
+        "ALLOWANCES_PHP",
+        "INCENTIVES_PHP",
+        "LATE_DEDUCTIONS_PHP",
+        "OTHER_ADJUSTMENTS_PHP",
+        "GROSS_PAY_PHP",
+        "NET_PAY_PHP",
+        "STATUS",
+        "PAYROLL_ID",
     ];
     for (column, header) in headers.iter().enumerate() {
         sheet.write_string_with_format(3, column as u16, *header, &header_format)?;
@@ -439,8 +496,18 @@ pub fn generate_payroll_workbook(
             &row.cutoff_start,
             &row.cutoff_end,
         ];
+        let fill = if index % 2 == 1 {
+            &alt_body_format
+        } else {
+            &body_format
+        };
+        let money_fill = if index % 2 == 1 {
+            &alt_currency_format
+        } else {
+            &currency_format
+        };
         for (c, value) in strings.iter().enumerate() {
-            sheet.write_string_with_format(r, c as u16, (*value).clone(), &body_format)?;
+            sheet.write_string_with_format(r, c as u16, (*value).clone(), fill)?;
         }
         let money = [
             row.basic_pay_centavos,
@@ -456,25 +523,46 @@ pub fn generate_payroll_workbook(
                 r,
                 (offset + 6) as u16,
                 *value as f64 / 100.0,
-                &currency_format,
+                money_fill,
             )?;
         }
-        sheet.write_string_with_format(r, 13, &row.status, &body_format)?;
-        sheet.write_string_with_format(r, 14, &row.payroll_id, &body_format)?;
+        sheet.write_string_with_format(r, 13, &row.status, fill)?;
+        sheet.write_string_with_format(r, 14, &row.payroll_id, fill)?;
     }
     let last = (rows.len() + 3) as u32;
     if !rows.is_empty() {
         sheet.add_table(3, 0, last, 14, &Table::new().set_style(TableStyle::Medium2))?;
     }
-    for (c, width) in [
-        16.0, 28.0, 18.0, 20.0, 12.0, 12.0, 15.0, 15.0, 15.0, 17.0, 18.0, 15.0, 15.0, 13.0, 38.0,
-    ]
-    .iter()
-    .enumerate()
-    {
-        sheet.set_column_width(c as u16, *width)?;
+    let mut widths = [0usize; 15];
+    for (column, header) in headers.iter().enumerate() {
+        widths[column] = header.len();
     }
-    sheet.set_freeze_panes(4, 2)?;
+    for row in rows {
+        let values = [
+            row.employee_id.len(),
+            row.employee_name.len(),
+            row.profile.len(),
+            row.cutoff_label.len(),
+            row.cutoff_start.len(),
+            row.cutoff_end.len(),
+            format!("{:.2}", row.basic_pay_centavos as f64 / 100.0).len(),
+            format!("{:.2}", row.allowances_centavos as f64 / 100.0).len(),
+            format!("{:.2}", row.incentives_centavos as f64 / 100.0).len(),
+            format!("{:.2}", row.late_deduction_centavos as f64 / 100.0).len(),
+            format!("{:.2}", row.other_adjustments_centavos as f64 / 100.0).len(),
+            format!("{:.2}", row.gross_centavos as f64 / 100.0).len(),
+            format!("{:.2}", row.net_centavos as f64 / 100.0).len(),
+            row.status.len(),
+            row.payroll_id.len(),
+        ];
+        for (column, length) in values.iter().enumerate() {
+            widths[column] = widths[column].max(*length);
+        }
+    }
+    for (column, width) in widths.iter().enumerate() {
+        sheet.set_column_width(column as u16, (*width as f64) + 2.0)?;
+    }
+    sheet.set_freeze_panes(4, 0)?;
     sheet.set_repeat_rows(0, 3)?;
     sheet.set_landscape();
     sheet.set_paper_size(9);

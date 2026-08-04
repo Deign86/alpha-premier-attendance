@@ -179,6 +179,11 @@ export async function exportPayrollCsv(): Promise<{ success: true; fileName: str
 export async function generatePayrollPayslipPdf(payrollId: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollPayslipPdf(nativeAdminToken ?? '', payrollId); } catch { return { success: false, error: { message: 'Unable to generate the payslip PDF.' } }; } } return { success: false, error: { message: 'Payslip PDFs are available in the desktop application.' } }; }
 export async function generatePayrollRegisterPdf(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollRegisterPdf(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll register PDF.' } }; } } return { success: false, error: { message: 'Payroll register PDFs are available in the desktop application.' } }; }
 
+export async function nukeSheetsResync(confirm: boolean): Promise<unknown> {
+  if (runningInTauri()) return tauriApi.sheetsNukeResync(nativeAdminToken ?? '', confirm);
+  return { success: false, error: { message: 'Sheet resync is only available in the desktop application.' } };
+}
+
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {
     const response = await fetch(url, {

@@ -246,6 +246,23 @@ async fn admin_update_attendance(
     if updated.rows_affected() != 1 {
         return Err("ATTENDANCE_CONFLICT".into());
     }
+    // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
+    let payroll_ids: Vec<String> = sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
+        .bind(&attendance_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|row| row.get::<String, _>("payroll_id"))
+        .collect();
+    let grace_rows: Vec<(String, String)> = sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
+        .bind(&attendance_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|row| (row.get::<String, _>("grace_id"), row.get::<String, _>("user_id")))
+        .collect();
     let _ = sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
         .bind(&attendance_id)
         .execute(&state.db)
@@ -254,6 +271,26 @@ async fn admin_update_attendance(
         .bind(&attendance_id)
         .execute(&state.db)
         .await;
+    for payroll_id in payroll_ids {
+        enqueue_sync(
+            &state,
+            "Payroll",
+            &payroll_id,
+            "DELETE",
+            &serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id}),
+        )
+        .await;
+    }
+    for (grace_id, user_id) in grace_rows {
+        enqueue_sync(
+            &state,
+            "InternGrace",
+            &user_id,
+            "DELETE",
+            &serde_json::json!({"userId":user_id,"attendanceId":attendance_id,"graceId":grace_id}),
+        )
+        .await;
+    }
     if let (Some(actual_in), Some(actual_out)) = (time_in, time_out) {
         if let Some(user_row) = sqlx::query("SELECT user_id,full_name,employee_type,daily_rate_centavos FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
             ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), user_row.get("employee_type"), user_row.get("daily_rate_centavos"), date, actual_in, actual_out).await?;
@@ -276,6 +313,23 @@ async fn admin_delete_attendance(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
+    // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
+    let payroll_ids: Vec<String> = sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
+        .bind(&attendance_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|row| row.get::<String, _>("payroll_id"))
+        .collect();
+    let grace_rows: Vec<(String, String)> = sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
+        .bind(&attendance_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|row| (row.get::<String, _>("grace_id"), row.get::<String, _>("user_id")))
+        .collect();
     let result = sqlx::query("DELETE FROM attendance WHERE attendance_id=? AND attendance_date=?")
         .bind(&attendance_id)
         .bind(&date)
@@ -301,6 +355,26 @@ async fn admin_delete_attendance(
         &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date}),
     )
     .await;
+    for payroll_id in payroll_ids {
+        enqueue_sync(
+            &state,
+            "Payroll",
+            &payroll_id,
+            "DELETE",
+            &serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id}),
+        )
+        .await;
+    }
+    for (grace_id, user_id) in grace_rows {
+        enqueue_sync(
+            &state,
+            "InternGrace",
+            &user_id,
+            "DELETE",
+            &serde_json::json!({"userId":user_id,"attendanceId":attendance_id,"graceId":grace_id}),
+        )
+        .await;
+    }
     Ok(serde_json::json!({"success":true,"attendanceId":attendance_id}))
 }
 
@@ -618,7 +692,7 @@ async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end,gross_compensation_centavos,net_pay_centavos,status FROM payroll_cutoffs ORDER BY cutoff_start,employee_name").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let mut output = String::from("payrollId,employeeId,employeeName,cutoffLabel,cutoffStart,cutoffEnd,grossCompensation,netPay,status\n");
+    let mut output = String::from("PAYROLL_ID,EMPLOYEE_ID,EMPLOYEE_NAME,CUTOFF_LABEL,CUTOFF_START,CUTOFF_END,GROSS_PAY_PHP,NET_PAY_PHP,STATUS\n");
     for row in rows {
         let name = row.get::<String, _>("employee_name").replace('"', "\"\"");
         let label = row
@@ -875,6 +949,33 @@ async fn admin_sync_now(
         crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
             .await?;
     Ok(serde_json::json!({"success":true,"processed":processed}))
+}
+
+/// Dev/test utility (hidden admin action): wipes every managed Google Sheets
+/// tab and re-enqueues the current SQLite state for a from-scratch re-export.
+/// Gated behind the admin session and an explicit confirmation flag.
+#[tauri::command]
+async fn admin_sheets_nuke_resync(
+    state: State<'_, AppState>,
+    token: String,
+    confirm: bool,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    if !confirm {
+        return Err("RESYNC_CONFIRMATION_REQUIRED".into());
+    }
+    let result = crate::services::sheets_sync::nuke_and_resync(&state).await?;
+    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind("SHEETS_RESYNC")
+        .bind("Google Sheets wiped and re-exported from SQLite by administrator")
+        .bind(format!("admin-{}", uuid::Uuid::new_v4()))
+        .execute(&state.db)
+        .await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1521,7 +1622,8 @@ pub fn run() {
             admin_lock,
             admin_get_sync_status,
             admin_retry_sync_item,
-            admin_sync_now
+            admin_sync_now,
+            admin_sheets_nuke_resync
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alpha Premier Attendance");

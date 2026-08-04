@@ -35,6 +35,7 @@ export const tauriApi = {
   openGeneratedArtifact: (token: string, artifactId: string) => invoke<{ success: true; artifactId: string }>('open_generated_artifact', { token, artifactId }),
   syncStatus: (token: string) => invoke('admin_get_sync_status', { token }),
   syncNow: (token: string) => invoke('admin_sync_now', { token }),
+  sheetsNukeResync: (token: string, confirm: boolean) => invoke('admin_sheets_nuke_resync', { token, confirm }),
   uploadPhoto: (token: string, userId: string, base64Data: string) => invoke<{ success: true; photoUrl: string }>('upload_photo', { token, userId, base64Data }),
 };
 
