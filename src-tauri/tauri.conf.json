@@ -8,6 +8,7 @@
     "frontendDist": "../client/dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Alpha Premier Attendance",

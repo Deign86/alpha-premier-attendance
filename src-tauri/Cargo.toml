@@ -1,5 +1,6 @@
 [package]
 name = "alpha-premier-attendance"
+default-run = "alpha-premier-attendance"
 version = "0.1.0"
 description = "Alpha Premier Attendance desktop application"
 authors = ["Alpha Premier"]
