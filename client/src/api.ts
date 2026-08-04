@@ -70,16 +70,19 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
 
 export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanSuccessResponse | ScanErrorResponse> {
   try {
-    if (runningInTauri()) return await tauriApi.scanRfid(request);
-    const response = await fetch('/api/attendance/scan', {
+    const scanRequest = runningInTauri()
+      ? tauriApi.scanRfid(request)
+      : fetch('/api/attendance/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
       signal,
+    }).then(async (response) => {
+      const data = (await response.json()) as ScanResponse;
+      if (data && typeof data === 'object' && 'success' in data) return data;
+      return networkError('The attendance service returned an invalid response.');
     });
-    const data = (await response.json()) as ScanResponse;
-    if (data && typeof data === 'object' && 'success' in data) return data;
-    return networkError('The attendance service returned an invalid response.');
+    return await scanRequest;
   } catch {
     return networkError('Unable to reach the attendance service. Please try again.');
   }

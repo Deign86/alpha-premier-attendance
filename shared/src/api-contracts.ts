@@ -185,6 +185,7 @@ export type ScanSuccessResponse = {
 };
 
 export const scanErrorCodes = [
+  'SCAN_TIMEOUT',
   'INVALID_SCAN_INPUT',
   'UNKNOWN_RFID_CARD',
   'INACTIVE_USER',
