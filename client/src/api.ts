@@ -153,6 +153,29 @@ export async function savePayrollCutoff(payroll: unknown, payrollId?: string): P
 export async function finalizePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`, { method: 'POST' }); return response.json(); }
 export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }
 export async function exportPayrollXlsx(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportPayrollXlsx(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll workbook.' } }; } } return { success: false, error: { message: 'Payroll workbooks are available in the desktop application.' } }; }
+export async function exportPayrollCsv(): Promise<{ success: true; fileName: string } | { success: false; error: { message: string } }> {
+  try {
+    const response = runningInTauri()
+      ? await tauriApi.payrollExportCsv(nativeAdminToken ?? '')
+      : await (async () => {
+          const result = await fetch('/api/admin/payroll/export');
+          if (!result.ok) throw new Error('Unable to export payroll CSV.');
+          return result.text();
+        })();
+    const fileName = `payroll-${new Date().toISOString().slice(0, 10)}.csv`;
+    const url = URL.createObjectURL(new Blob([response], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    return { success: true, fileName };
+  } catch (error) {
+    return { success: false, error: { message: error instanceof Error ? error.message : 'Unable to export payroll CSV.' } };
+  }
+}
 export async function generatePayrollPayslipPdf(payrollId: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollPayslipPdf(nativeAdminToken ?? '', payrollId); } catch { return { success: false, error: { message: 'Unable to generate the payslip PDF.' } }; } } return { success: false, error: { message: 'Payslip PDFs are available in the desktop application.' } }; }
 export async function generatePayrollRegisterPdf(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollRegisterPdf(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll register PDF.' } }; } } return { success: false, error: { message: 'Payroll register PDFs are available in the desktop application.' } }; }
 

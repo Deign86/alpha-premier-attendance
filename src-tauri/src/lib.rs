@@ -9,7 +9,7 @@ use chrono::Datelike;
 use chrono_tz::Asia::Manila;
 use config::LanConfig;
 use sha2::{Digest, Sha256};
-use sqlx::Row;
+use sqlx::{sqlite::SqliteRow, Row};
 use state::{AdminSession, AppState};
 use std::{path::PathBuf, time::Instant};
 use tauri::{Emitter, Manager, State};
@@ -426,10 +426,54 @@ async fn payroll_list_cutoffs(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,net_pay_centavos,status,finalized_at,revision FROM payroll_cutoffs ORDER BY cutoff_start DESC").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({"success":true,"payroll":rows.into_iter().map(|r| serde_json::json!({"payrollId":r.get::<String,_>("payroll_id"),"employeeId":r.get::<String,_>("employee_id"),"employeeName":r.get::<String,_>("employee_name"),"payrollProfileId":r.get::<String,_>("payroll_profile_id"),"payrollCutoffLabel":r.get::<String,_>("payroll_cutoff_label"),"cutoffStart":r.get::<String,_>("cutoff_start"),"cutoffEnd":r.get::<String,_>("cutoff_end"),"netPay":r.get::<i64,_>("net_pay_centavos") as f64 / 100.0,"status":r.get::<String,_>("status"),"finalizedAt":r.get::<Option<String>,_>("finalized_at"),"revision":r.get::<i64,_>("revision")})).collect::<Vec<_>>() }),
-    )
+    let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,daily_rate_centavos,standard_working_days,actual_working_days,basic_pay_centavos,special_holiday_days,special_holiday_multiplier,special_holiday_pay_centavos,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay_centavos,incentives_allowance_centavos,special_allowance_centavos,total_compensation_centavos,total_allowance_centavos,late_units,late_deduction_centavos,half_day_count,half_day_deduction_centavos,absent_days,absence_deduction_centavos,overtime_hours,overtime_rate_centavos,overtime_pay_centavos,manual_adjustment_centavos,adjustment_reason,gross_compensation_centavos,net_pay_centavos,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,finalized_at,revision FROM payroll_cutoffs ORDER BY cutoff_start DESC").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"success":true,"payroll":rows.iter().map(payroll_cutoff_json).collect::<Vec<_>>() }))
+}
+
+fn payroll_cutoff_json(row: &SqliteRow) -> serde_json::Value {
+    serde_json::json!({
+        "payrollId": row.get::<String, _>("payroll_id"),
+        "employeeId": row.get::<String, _>("employee_id"),
+        "employeeName": row.get::<String, _>("employee_name"),
+        "payrollProfileId": row.get::<String, _>("payroll_profile_id"),
+        "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
+        "cutoffStart": row.get::<String, _>("cutoff_start"),
+        "cutoffEnd": row.get::<String, _>("cutoff_end"),
+        "payrollFrequency": "SEMI_MONTHLY",
+        "dailyRate": row.get::<i64, _>("daily_rate_centavos") as f64 / 100.0,
+        "standardWorkingDays": row.get::<f64, _>("standard_working_days"),
+        "actualWorkingDays": row.get::<f64, _>("actual_working_days"),
+        "basicPay": row.get::<i64, _>("basic_pay_centavos") as f64 / 100.0,
+        "specialHolidayDays": row.get::<f64, _>("special_holiday_days"),
+        "specialHolidayMultiplier": row.get::<f64, _>("special_holiday_multiplier"),
+        "specialHolidayPay": row.get::<i64, _>("special_holiday_pay_centavos") as f64 / 100.0,
+        "regularHolidayDays": row.get::<f64, _>("regular_holiday_days"),
+        "regularHolidayMultiplier": row.get::<f64, _>("regular_holiday_multiplier"),
+        "regularHolidayPay": row.get::<i64, _>("regular_holiday_pay_centavos") as f64 / 100.0,
+        "incentivesAllowance": row.get::<i64, _>("incentives_allowance_centavos") as f64 / 100.0,
+        "specialAllowance": row.get::<i64, _>("special_allowance_centavos") as f64 / 100.0,
+        "totalCompensation": row.get::<i64, _>("total_compensation_centavos") as f64 / 100.0,
+        "totalAllowance": row.get::<i64, _>("total_allowance_centavos") as f64 / 100.0,
+        "lateUnits": row.get::<f64, _>("late_units"),
+        "lateDeduction": row.get::<i64, _>("late_deduction_centavos") as f64 / 100.0,
+        "halfDayCount": row.get::<f64, _>("half_day_count"),
+        "halfDayDeduction": row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0,
+        "absentDays": row.get::<f64, _>("absent_days"),
+        "absenceDeduction": row.get::<i64, _>("absence_deduction_centavos") as f64 / 100.0,
+        "overtimeHours": row.get::<f64, _>("overtime_hours"),
+        "overtimeRate": row.get::<i64, _>("overtime_rate_centavos") as f64 / 100.0,
+        "overtimePay": row.get::<i64, _>("overtime_pay_centavos") as f64 / 100.0,
+        "manualAdjustment": row.get::<i64, _>("manual_adjustment_centavos") as f64 / 100.0,
+        "adjustmentReason": row.get::<Option<String>, _>("adjustment_reason"),
+        "grossCompensation": row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0,
+        "netPay": row.get::<i64, _>("net_pay_centavos") as f64 / 100.0,
+        "signaturePlaceholder": row.get::<String, _>("signature_placeholder"),
+        "calculationBreakdown": row.get::<String, _>("calculation_breakdown"),
+        "approvedWorkingDayOverage": row.get::<i64, _>("approved_working_day_overage") != 0,
+        "status": row.get::<String, _>("status"),
+        "finalizedAt": row.get::<Option<String>, _>("finalized_at"),
+        "revision": row.get::<i64, _>("revision")
+    })
 }
 
 #[tauri::command]
@@ -441,6 +485,7 @@ async fn payroll_create_cutoff(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
+    let input = enrich_cutoff_input(&state.db, &input).await?;
     let parsed = cutoff_input(&input);
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -521,6 +566,7 @@ async fn payroll_update_cutoff(
         .get("payrollId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
+    let input = enrich_cutoff_input(&state.db, &input).await?;
     let parsed = cutoff_input(&input);
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -592,6 +638,57 @@ async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result
         ));
     }
     Ok(output)
+}
+
+async fn enrich_cutoff_input(
+    db: &sqlx::SqlitePool,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let employee_id = input
+        .get("employeeId")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim();
+    let needs_name = input
+        .get("employeeName")
+        .and_then(|value| value.as_str())
+        .is_none_or(|value| value.trim().is_empty());
+    let needs_rate = input
+        .get("dailyRate")
+        .and_then(|value| value.as_f64())
+        .is_none_or(|value| value <= 0.0);
+    if employee_id.is_empty() || (!needs_name && !needs_rate) {
+        return Ok(input.clone());
+    }
+    let employee = sqlx::query(
+        "SELECT full_name, daily_rate_centavos FROM users WHERE user_id = ?",
+    )
+    .bind(employee_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(employee) = employee else {
+        return Ok(input.clone());
+    };
+    let mut enriched = input.clone();
+    let Some(object) = enriched.as_object_mut() else {
+        return Ok(input.clone());
+    };
+    if needs_name {
+        object.insert(
+            "employeeName".into(),
+            serde_json::Value::String(employee.get("full_name")),
+        );
+    }
+    if needs_rate {
+        if let Some(daily_rate_centavos) = employee.get::<Option<i64>, _>("daily_rate_centavos") {
+            object.insert(
+                "dailyRate".into(),
+                serde_json::json!(daily_rate_centavos as f64 / 100.0),
+            );
+        }
+    }
+    Ok(enriched)
 }
 
 fn cutoff_input(value: &serde_json::Value) -> crate::services::cutoff_payroll::CutoffInput {
@@ -1322,7 +1419,7 @@ async fn upload_photo(
                 .unwrap_or(&base64_data),
         )
         .map_err(|_| "INVALID_IMAGE".to_string())?;
-    if bytes.len() > 5 * 1024 * 1024 {
+    if bytes.len() > MAX_PHOTO_BYTES {
         return Err("IMAGE_TOO_LARGE".into());
     }
     let image = image::load_from_memory(&bytes).map_err(|_| "INVALID_IMAGE_FORMAT".to_string())?;
@@ -1339,8 +1436,10 @@ async fn upload_photo(
     Ok(serde_json::json!({"success":true,"photoUrl":format!("asset://localhost/{asset_path}")}))
 }
 
+const MAX_PHOTO_BYTES: usize = 500 * 1024;
+
 fn photo_is_within_limits(width: u32, height: u32, bytes: usize) -> bool {
-    width <= 4096 && height <= 4096 && bytes <= 500 * 1024
+    width <= 4096 && height <= 4096 && bytes <= MAX_PHOTO_BYTES
 }
 
 pub fn run() {
@@ -1430,7 +1529,34 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{php_to_centavos, photo_is_within_limits};
+    use super::{enrich_cutoff_input, php_to_centavos, photo_is_within_limits};
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn enriches_cutoff_input_from_the_selected_employee() {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, full_name TEXT NOT NULL, daily_rate_centavos INTEGER)")
+            .execute(&db)
+            .await
+            .expect("users table");
+        sqlx::query("INSERT INTO users (user_id, full_name, daily_rate_centavos) VALUES (?, ?, ?)")
+            .bind("EMP-1")
+            .bind("Ada Lovelace")
+            .bind(50_000_i64)
+            .execute(&db)
+            .await
+            .expect("employee row");
+
+        let input = serde_json::json!({"employeeId":"EMP-1","cutoffStart":"2026-08-01","cutoffEnd":"2026-08-15"});
+        let enriched = enrich_cutoff_input(&db, &input).await.expect("enriched input");
+
+        assert_eq!(enriched["employeeName"], "Ada Lovelace");
+        assert_eq!(enriched["dailyRate"], 500.0);
+    }
 
     #[test]
     fn accepts_large_id_photo_dimensions_and_file_size() {

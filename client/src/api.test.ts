@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { submitScan } from './api';
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { invoke } from '@tauri-apps/api/core';
+import { exportPayrollCsv, submitScan } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -23,5 +25,27 @@ describe('scan requests', () => {
       success: false,
       error: { code: 'INTERNAL_SERVER_ERROR' },
     });
+  });
+});
+
+describe('payroll exports', () => {
+  it('uses the native payroll export command and downloads its CSV response', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce('payrollId,employeeId\n');
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    const createObjectUrl = vi.fn(() => 'blob:payroll');
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+    const result = await exportPayrollCsv();
+
+    expect(result.success).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('payroll_export_csv', { token: '' });
+    expect(createObjectUrl).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:payroll');
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    click.mockRestore();
   });
 });
