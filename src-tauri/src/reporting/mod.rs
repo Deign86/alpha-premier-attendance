@@ -117,7 +117,7 @@ mod tests {
             time_in: None,
             time_out: None,
             total_hours: 0.0,
-            status: "OPEN".into(),
+            status: "WORKING".into(),
             source: "RFID".into(),
             notes: String::new(),
         }];
@@ -191,6 +191,14 @@ mod tests {
         generate_payroll_workbook(std::slice::from_ref(&row), "1st-Half-2026", &office(), &xlsx).unwrap();
         generate_payroll_pdf(&row, &office(), &pdf).unwrap();
         assert!(std::fs::read(&xlsx).unwrap().starts_with(b"PK"));
+        // The official brand mark is embedded as a workbook media file.
+        {
+            let archive = zip::ZipArchive::new(std::fs::File::open(&xlsx).unwrap()).unwrap();
+            assert!(
+                archive.file_names().any(|name| name.starts_with("xl/media/")),
+                "payroll workbook should embed the brand mark media file"
+            );
+        }
         assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
         let register = base.with_extension("register.pdf");
         generate_payroll_register_pdf(std::slice::from_ref(&row), "1st-Half-2026", &office(), &register)
@@ -210,6 +218,21 @@ mod tests {
     }
 
     #[test]
+    fn brand_mark_decodes_and_registers_on_a_document() {
+        let mut document = PdfDocument::new("brand mark test");
+        let mark = brand_mark_image(&mut document, 15.0);
+        assert!(mark.is_some(), "embedded phoenix PNG should decode from the repo asset");
+        let (id, dpi) = mark.expect("brand mark");
+        let op = brand_mark_op(id, dpi, 10.0, 10.0);
+        assert!(matches!(op, Op::UseXobject { .. }));
+        // The mark is registered in the document resources so saving succeeds.
+        let bytes = document
+            .with_pages(vec![PdfPage::new(Mm(210.0), Mm(297.0), vec![op])])
+            .save(&PdfSaveOptions::default(), &mut Vec::new());
+        assert!(bytes.starts_with(b"%PDF"));
+    }
+
+    #[test]
     fn builds_payslip_filename_without_employee_pii() {
         let filename = payroll_pdf_filename("payroll-123", "1st Half 2026", "job-123");
         assert_eq!(
@@ -221,10 +244,49 @@ mod tests {
 
 }
 use printpdf::{
-    BuiltinFont, Mm, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt, TextItem,
+    BuiltinFont, Mm, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt, RawImage,
+    TextItem, XObjectTransform,
 };
+
+/// Phoenix brand mark embedded at compile time so PDF reports never depend on
+/// runtime asset paths. The mark is transparent-backed and works on white paper.
+const BRAND_PHOENIX_PNG: &[u8] = include_bytes!("../../../assets/logo_phoenix.png");
+
+/// Decodes and registers the phoenix mark on the document, returning the image
+/// id plus the dpi that renders the square mark `size_mm` tall. Registered once
+/// per document and reused on every page. Returns `None` (and logs) if the
+/// embedded PNG cannot be decoded so a decorative mark never fails a document.
+fn brand_mark_image(document: &mut PdfDocument, size_mm: f32) -> Option<(printpdf::XObjectId, f32)> {
+    match RawImage::decode_from_bytes(BRAND_PHOENIX_PNG, &mut Vec::new()) {
+        Ok(image) => {
+            // PDF maps the image to its natural size at `dpi`; choose the dpi
+            // that renders the mark at the requested millimeter size.
+            let dpi = image.width as f32 / (size_mm / 25.4);
+            let id = document.add_image(&image);
+            Some((id, dpi))
+        }
+        Err(error) => {
+            log::warn!("Brand mark skipped for PDF: {error}");
+            None
+        }
+    }
+}
+
+/// Builds the `UseXobject` op that paints the registered mark at `(x_mm, y_mm)`
+/// (bottom-left origin, PDF space).
+fn brand_mark_op(id: printpdf::XObjectId, dpi: f32, x_mm: f32, y_mm: f32) -> Op {
+    Op::UseXobject {
+        id,
+        transform: XObjectTransform {
+            translate_x: Some(Pt(x_mm)),
+            translate_y: Some(Pt(y_mm)),
+            dpi: Some(dpi),
+            ..Default::default()
+        },
+    }
+}
 use rust_xlsxwriter::{
-    Color, Format, FormatAlign, FormatBorder, Table, TableStyle, Workbook, XlsxError,
+    Color, Format, FormatAlign, FormatBorder, Image, Table, TableStyle, Workbook, XlsxError,
 };
 use sqlx::Row;
 
@@ -528,6 +590,14 @@ pub fn generate_payroll_workbook(
         .set_background_color(Color::RGB(0xF2F2F2))
         .set_num_format("0.00");
     let sheet = workbook.add_worksheet().set_name("Payroll Register")?;
+    // Official brand mark in the header corner (embedded at compile time).
+    match Image::new_from_buffer(BRAND_PHOENIX_PNG) {
+        Ok(mut logo) => {
+            logo = logo.set_scale_to_size(28u32, 28u32, true);
+            sheet.insert_image(0, 13, &logo)?;
+        }
+        Err(error) => log::warn!("Payroll workbook brand mark skipped: {error}"),
+    }
     sheet.merge_range(
         0,
         0,
@@ -669,7 +739,11 @@ pub fn generate_payroll_pdf(
     path: &std::path::Path,
 ) -> Result<(), String> {
     let mut document = PdfDocument::new("Alpha Premier Payroll Payslip");
+    let mark = brand_mark_image(&mut document, 15.0);
     let mut ops = Vec::new();
+    if let Some((id, dpi)) = &mark {
+        ops.push(brand_mark_op(id.clone(), *dpi, 191.0, 264.0));
+    }
     let mut add = |text: String, x: f32, y: f32, size: f32, bold: bool| {
         ops.extend([
             Op::StartTextSection,
@@ -832,6 +906,7 @@ pub fn generate_payroll_register_pdf(
     path: &std::path::Path,
 ) -> Result<(), String> {
     let mut document = PdfDocument::new("Alpha Premier Payroll Register");
+    let mark = brand_mark_image(&mut document, 13.0);
     let mut pages = Vec::new();
     let chunks: Vec<&[PayrollExportRow]> = if rows.is_empty() {
         vec![&[]]
@@ -840,6 +915,9 @@ pub fn generate_payroll_register_pdf(
     };
     for chunk in chunks {
         let mut ops = Vec::new();
+        if let Some((id, dpi)) = &mark {
+            ops.push(brand_mark_op(id.clone(), *dpi, 193.0, 278.0));
+        }
         let mut add = |text: String, x: f32, y: f32, size: f32, bold: bool| {
             ops.extend([
                 Op::StartTextSection,

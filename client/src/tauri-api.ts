@@ -55,6 +55,8 @@ export type ScannerStatus = {
   message: string;
   detail?: string | null;
   mode: string;
+  /** True while the operator types in admin/setup/manual-entry screens. */
+  paused: boolean;
 };
 
 /** Native scanner status changes (`scanner-status` events). */

@@ -3,7 +3,7 @@ import type { AttendanceListItem, LanAttendanceEvent, LanAttendanceSnapshotRespo
 
 const row: AttendanceListItem = {
   attendanceId: 'a1', attendanceDate: '2026-07-31', userId: 'u1', fullName: 'Ada', department: null,
-  timeIn: '2026-07-31T08:00:00+08:00', timeOut: null, status: 'OPEN',
+  timeIn: '2026-07-31T08:00:00+08:00', timeOut: null, status: 'WORKING',
 };
 
 describe('LAN contracts', () => {

@@ -70,7 +70,13 @@ async fn import_attendance(db: &SqlitePool, path: &PathBuf) -> Result<(), Box<dy
         let row = record?;
         if row.len() < 8 { continue; }
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("INSERT OR IGNORE INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(&row[0]).bind(&row[1]).bind(&row[2]).bind(&row[3]).bind(&row[4]).bind(Some(&row[5])).bind(row.get(6).filter(|v| !v.is_empty())).bind(row.get(7).filter(|v| !v.is_empty())).bind(row.get(8).filter(|v| !v.is_empty()).unwrap_or("OPEN")).bind(row.get(9).filter(|v| !v.is_empty()).unwrap_or("RFID")).bind(row.get(10).unwrap_or("")).bind(&now).bind(&now).execute(db).await?;
+        // Legacy sheets use OPEN/INCOMPLETE; normalize to the current attendance statuses.
+        let status: &str = match row.get(8).filter(|v| !v.is_empty()).unwrap_or("OPEN").to_ascii_uppercase().as_str() {
+            "COMPLETED" => "COMPLETED",
+            "MISSED" | "INCOMPLETE" => "MISSED",
+            _ => "WORKING",
+        };
+        sqlx::query("INSERT OR IGNORE INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(&row[0]).bind(&row[1]).bind(&row[2]).bind(&row[3]).bind(&row[4]).bind(Some(&row[5])).bind(row.get(6).filter(|v| !v.is_empty())).bind(row.get(7).filter(|v| !v.is_empty())).bind(status).bind(row.get(9).filter(|v| !v.is_empty()).unwrap_or("RFID")).bind(row.get(10).unwrap_or("")).bind(&now).bind(&now).execute(db).await?;
     }
     Ok(())
 }

@@ -46,7 +46,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .kiosk-shell { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr auto; background: var(--black); }
 .kiosk-topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: min(1220px, calc(100% - 56px)); min-height: 72px; margin: 0 auto; border-bottom: 1px solid var(--line); }
 .brand-lockup { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.brand-mark { display: grid; place-items: center; width: 40px; height: 40px; color: var(--gold-bright); border: 1px solid var(--gold); background: var(--surface); font-family: 'Orbitron', sans-serif; font-size: .7rem; font-weight: 700; flex: 0 0 auto; }
+.brand-mark { display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 auto; overflow: hidden; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .brand-name, .brand-subtitle, .section-kicker, .hero-sub, .input-hint, .clock span { margin: 0; }
 .brand-text { min-width: 0; }
 .brand-name { color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .76rem; font-weight: 700; letter-spacing: .015em; white-space: nowrap; }
@@ -107,7 +108,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .kiosk-action:hover:not(:disabled) { color: #11100c; border-color: var(--gold-bright); background: var(--gold-bright); }
 .kiosk-action:disabled { opacity: .5; }
 .kiosk-action[aria-pressed="true"] { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
-.sound-indicator { display: inline-flex; align-items: center; gap: 6px; margin: 0 4px; color: var(--quiet); font-size: .7rem; }
 .admin-button, .setup-card-button, .icon-button, .text-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; }
 .admin-button { min-height: 42px; padding: 8px 12px; color: var(--gold-bright); background: transparent; border: 1px solid var(--gold-soft); border-radius: 3px; font-size: .72rem; font-weight: 700; transition: background 180ms ease, border-color 180ms ease, color 180ms ease; }
 .admin-button:hover, .setup-card-button:hover { color: #11100c; border-color: var(--gold-bright); background: var(--gold-bright); }
@@ -129,6 +129,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-steps span { padding: 10px 8px; color: var(--quiet); border-bottom: 1px solid var(--line); font-size: .62rem; font-weight: 700; text-align: center; }
 .setup-steps .is-active { color: var(--gold-bright); border-color: var(--gold); }
 .setup-form label, .setup-fields label { display: grid; gap: 7px; min-width: 0; color: var(--ink); font-size: .75rem; font-weight: 600; }
+.setup-fields label small { color: var(--quiet); font-size: .68rem; font-weight: 400; line-height: 1.35; }
+.setup-fields input[readonly] { color: var(--quiet); background: var(--surface-raised); }
 .setup-form input, .setup-form select { width: 100%; min-width: 0; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; }
 .setup-form input::placeholder { color: var(--quiet); }
 .setup-form input:focus, .setup-form select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .13); }
@@ -173,7 +175,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .input-row .submit-button { width: 100%; }
   .kiosk-actions { gap: 7px; }
   .kiosk-action { flex: 1 1 auto; min-width: 0; padding: 8px 9px; font-size: .7rem; }
-  .sound-indicator { width: 100%; justify-content: center; margin: 2px 0; }
   .setup-backdrop { padding: 12px; }
   .setup-dialog-header { padding: 18px; }
   .setup-form { padding: 20px 18px 22px; }
@@ -189,6 +190,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .dashboard-header h1 { margin: 8px 0 0; font-size: clamp(2rem, 5vw, 3.35rem); }
 .dashboard-header nav { display: flex; align-items: center; gap: 18px; }
 .dashboard-header nav a { color: var(--gold-bright); text-decoration: none; font-size: .78rem; font-weight: 700; }
+/* Compact brand lockup shared by the live attendance and admin headers. */
+.dashboard-brand { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.dashboard-brand-mark { width: 22px; height: 22px; object-fit: contain; display: block; }
+.dashboard-brand-name { color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: .62rem; font-weight: 700; letter-spacing: .08em; white-space: nowrap; }
 .dashboard-status { margin: 20px 0 12px; color: var(--muted); font-size: .75rem; }
 .dashboard-alert { color: var(--danger); margin: 16px 0; font-size: .8rem; }
 .table-wrap { overflow-x: auto; overscroll-behavior-x: contain; max-width: 100%; border: 1px solid var(--line); background: var(--surface); }
@@ -197,7 +202,7 @@ th, td { padding: 16px 18px; border-bottom: 1px solid var(--line); text-align: l
 th { color: var(--gold); text-transform: uppercase; font-size: .62rem; letter-spacing: .04em; }
 td strong, td small { display: block; } td small { color: var(--quiet); margin-top: 4px; font-size: .68rem; }
 .status-pill { display: inline-block; padding: 5px 8px; border: 1px solid var(--line-bright); font-size: .63rem; }
-.status-completed { color: var(--success); } .status-open { color: var(--gold-bright); } .status-incomplete { color: var(--danger); }
+.status-completed { color: var(--success); } .status-working { color: var(--gold-bright); } .status-missed { color: var(--danger); }
 .empty-state { margin-top: 22px; padding: 34px; border: 1px dashed var(--line-bright); color: var(--muted); text-align: center; }
 .admin-login { display: grid; place-items: center; } .admin-login form { width: min(460px, 100%); padding: 32px; border: 1px solid var(--line); background: var(--surface); }
 .admin-login label, .admin-form label, .date-filter { display: grid; gap: 7px; margin: 16px 0; color: var(--ink); font-size: .76rem; }
@@ -214,7 +219,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 
 /* Scoped kiosk readability: keep the primary scanner readable without flattening admin hierarchy. */
 .kiosk-shell .input-row input { font-size: 1rem; }
-.kiosk-shell .kiosk-action, .kiosk-shell .sound-indicator { font-size: .76rem; }
+.kiosk-shell .kiosk-action { font-size: .76rem; }
 .employee-type-toggle { grid-column: 1 / -1; }
 .employee-type-toggle button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 58px; padding: 10px 16px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--gold); border-radius: 4px; }
 .employee-type-toggle button[aria-checked="true"] { background: var(--gold); color: #11100c; }
@@ -295,7 +300,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
   .dashboard-header, .admin-tabs, .payroll-actions, .dashboard-status, .dashboard-alert,
   .file-result-card, .generated-file-actions, .admin-grid, .print-hidden,
   .setup-backdrop, .admin-login, .footer-note, .kiosk-shell, .kiosk-topbar, .kiosk-actions, .kiosk-stage, .empty-state,
-  .payroll-table, .date-filter { display: none !important; }
+  .payroll-table, .date-filter, .scanner-diag { display: none !important; }
 
   .dashboard-shell { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; color: #000 !important; }
 
@@ -308,7 +313,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 
   /* Header block. */
   .pw-header { margin: 0 0 8px; padding: 0 0 5px; border-bottom: 2px solid #000; text-align: center; }
-  .pw-company { margin: 0; font-size: 15pt; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .pw-logo { display: block; height: 17mm; width: auto; margin: 0 auto 3px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .pw-address { margin: 2px 0 0; font-size: 8pt; color: #222; }
   .pw-title { margin: 8px 0 0; font-size: 12.5pt; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
   .pw-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px 14px; margin-top: 4px; font-size: 7pt; color: #222; }
@@ -420,6 +425,14 @@ td small { font-size: .7rem; }
 .admin-tabs button { min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .75rem; }
 .admin-tabs button:hover { color: var(--ink); background: var(--surface-raised); }
 .admin-tabs button.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
+/* Scanner diagnostics strip (admin panel): read-only status, mode, detail. */
+.scanner-diag { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin: 0 0 18px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.scanner-diag-state { display: inline-flex; align-items: center; gap: 8px; font-size: .74rem; font-weight: 700; }
+.scanner-diag-state i { width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.scanner-diag-state.is-connected { color: var(--success); } .scanner-diag-state.is-connected i { background: var(--success); box-shadow: 0 0 0 3px rgba(152, 210, 168, .14); }
+.scanner-diag-state.is-scanning { color: var(--gold-bright); } .scanner-diag-state.is-scanning i { background: var(--gold-bright); }
+.scanner-diag-state.is-offline, .scanner-diag-state.is-error { color: var(--danger); } .scanner-diag-state.is-offline i, .scanner-diag-state.is-error i { background: var(--danger); }
+.scanner-diag-mode, .scanner-diag-detail { color: var(--quiet); font-size: .7rem; }
 .admin-grid { grid-template-columns: minmax(280px, 350px) minmax(0, 1fr); gap: 24px; }
 .admin-form { padding: 20px; border-radius: var(--radius-md); box-shadow: 0 10px 32px rgba(0, 0, 0, .14); }
 .admin-form h2 { margin-bottom: 15px; font-size: 1rem; }
@@ -462,7 +475,6 @@ td small { font-size: .7rem; }
   .input-row .submit-button { width: 100%; }
   .kiosk-actions { gap: 7px; }
   .kiosk-action { flex: 1 1 auto; min-width: 0; padding: 8px 9px; font-size: .7rem; }
-  .sound-indicator { width: 100%; justify-content: center; margin: 2px 0; }
   .setup-backdrop { padding: 0; align-items: end; }
   .setup-dialog { width: 100%; max-height: 92dvh; border-radius: var(--radius-md) var(--radius-md) 0 0; }
   .setup-dialog-header { padding: 17px 16px 15px; }

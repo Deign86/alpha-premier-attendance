@@ -4,7 +4,6 @@ import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, type OfficeIdentity } fr
 export type AppConfig = {
   timezone: string;
   rfidAutoSubmitDelayMs: number;
-  enableScanSounds: boolean;
   resultResetDelayMs: number;
   scanCooldownMs: number;
   rateLimitWindowMs: number;
@@ -74,7 +73,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const config: AppConfig = {
     timezone,
     rfidAutoSubmitDelayMs: numberEnv(env, 'RFID_AUTO_SUBMIT_DELAY_MS', 150),
-    enableScanSounds: boolEnv(env, 'ENABLE_SCAN_SOUNDS', true),
     resultResetDelayMs: numberEnv(env, 'RESULT_RESET_DELAY_MS', 4000),
     scanCooldownMs: numberEnv(env, 'SCAN_COOLDOWN_SECONDS', 10, 0) * 1000,
     rateLimitWindowMs: numberEnv(env, 'RATE_LIMIT_WINDOW_MS', 60_000, 1000),
@@ -116,7 +114,6 @@ export function safeConfig(config: AppConfig) {
     success: true as const,
     timezone: config.timezone,
     rfidAutoSubmitDelayMs: config.rfidAutoSubmitDelayMs,
-    enableScanSounds: config.enableScanSounds,
     resultResetDelayMs: config.resultResetDelayMs,
     enableCardSetup: config.enableCardSetup,
     enableAdmin: config.enableAdmin ?? config.enableCardSetup,

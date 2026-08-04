@@ -36,7 +36,7 @@ export type SheetAttendance = {
   department: string | null;
   timeIn: string;
   timeOut: string | null;
-  status: 'OPEN' | 'COMPLETED' | 'INCOMPLETE';
+  status: 'WORKING' | 'COMPLETED' | 'MISSED';
   source: 'RFID' | 'MANUAL_TEST';
   notes: string;
   rowNumber?: number;
@@ -139,7 +139,7 @@ export class InMemorySheetsService implements GoogleSheetsService {
 
   async completeAttendance(attendance: SheetAttendance, timeOut: string): Promise<SheetAttendance> {
     const row = this.attendance.find((item) => item.attendanceId === attendance.attendanceId);
-    if (!row || row.status !== 'OPEN' || row.timeOut) throw new Error('Attendance row is no longer open');
+    if (!row || row.status !== 'WORKING' || row.timeOut) throw new Error('Attendance row is no longer working');
     row.timeOut = timeOut;
     row.status = 'COMPLETED';
     return { ...row };
@@ -412,7 +412,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     const index = indexMap(headers);
     const rowRange = `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`;
     const existing = (await this.values(rowRange))[0];
-    if (!existing || existing[index.attendanceid] !== attendance.attendanceId || existing[index.status] !== 'OPEN' || existing[index.timeout]) throw new Error('Attendance row is no longer open');
+    if (!existing || existing[index.attendanceid] !== attendance.attendanceId || existing[index.status] !== 'WORKING' || existing[index.timeout]) throw new Error('Attendance row is no longer working');
     const updated = { ...attendance, timeOut, status: 'COMPLETED' as const };
     await this.api.spreadsheets.values.update({
       spreadsheetId: this.options.spreadsheetId,
@@ -601,7 +601,7 @@ function userFromRow(row: string[], index: Record<string, number>): SheetUser {
 }
 function normalizeAttendanceStatus(value: string | undefined): SheetAttendance['status'] {
   const status = String(value ?? '').trim().toUpperCase();
-  return status === 'COMPLETED' ? 'COMPLETED' : status === 'INCOMPLETE' ? 'INCOMPLETE' : 'OPEN';
+  return status === 'COMPLETED' ? 'COMPLETED' : status === 'MISSED' || status === 'INCOMPLETE' ? 'MISSED' : 'WORKING';
 }
 function attendanceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetAttendance {
   return {
@@ -666,7 +666,10 @@ function valuesForPayrollProfile(headers: string[], profile: SheetPayrollProfile
 function payrollCutoffFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetPayrollCutoff {
   const number = (key: string) => Number(row[index[key]] ?? 0);
   return {
-    payrollId: row[index.payrollid] ?? '', employeeId: row[index.employeeid] ?? '', employeeName: row[index.employeename] ?? '', payrollProfileId: row[index.payrollprofileid] ?? '', payrollCutoffLabel: row[index.payrollcutofflabel] ?? '', cutoffStart: row[index.cutoffstart] ?? '', cutoffEnd: row[index.cutoffend] ?? '', payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyrate'), standardWorkingDays: number('standardworkingdays'), actualWorkingDays: number('actualworkingdays'), basicPay: number('basicpay'), specialHolidayDays: number('specialholidaydays'), specialHolidayMultiplier: number('specialholidaymultiplier'), specialHolidayPay: number('specialholidaypay'), regularHolidayDays: number('regularholidaydays'), regularHolidayMultiplier: number('regularholidaymultiplier'), regularHolidayPay: number('regularholidaypay'), incentivesAllowance: number('incentivesallowance'), specialAllowance: number('specialallowance'), totalCompensation: number('totalcompensation'), totalAllowance: number('totalallowance'), lateUnits: number('lateunits'), lateDeduction: number('latededuction'), halfDayCount: number('halfdaycount'), halfDayDeduction: number('halfdaydeduction'), absentDays: number('absentdays'), absenceDeduction: number('absencededuction'), overtimeHours: number('overtimehours'), overtimeRate: number('overtimerate'), overtimePay: number('overtimepay'), manualAdjustment: number('manualadjustment'), adjustmentReason: row[index.adjustmentreason] || null, grossCompensation: number('grosscompensation'), netPay: number('netpay'), signaturePlaceholder: row[index.signatureplaceholder] ?? '', calculationBreakdown: row[index.calculationbreakdown] ?? '', approvedWorkingDayOverage: String(row[index.approvedworkingdayoverage] ?? '').toUpperCase() === 'TRUE', status: String(row[index.status] ?? '').toUpperCase() === 'FINALIZED' ? 'FINALIZED' : 'DRAFT', finalizedAt: row[index.finalizedat] || null, rowNumber,
+    payrollId: row[index.payrollid] ?? '', employeeId: row[index.employeeid] ?? '', employeeName: row[index.employeename] ?? '',
+    // The PayrollCutoffs tab does not carry an employee type column; callers
+    // (AdminService.cutoffPayroll) derive it from the live Users register.
+    employeeType: 'EMPLOYEE', payrollProfileId: row[index.payrollprofileid] ?? '', payrollCutoffLabel: row[index.payrollcutofflabel] ?? '', cutoffStart: row[index.cutoffstart] ?? '', cutoffEnd: row[index.cutoffend] ?? '', payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyrate'), standardWorkingDays: number('standardworkingdays'), actualWorkingDays: number('actualworkingdays'), basicPay: number('basicpay'), specialHolidayDays: number('specialholidaydays'), specialHolidayMultiplier: number('specialholidaymultiplier'), specialHolidayPay: number('specialholidaypay'), regularHolidayDays: number('regularholidaydays'), regularHolidayMultiplier: number('regularholidaymultiplier'), regularHolidayPay: number('regularholidaypay'), incentivesAllowance: number('incentivesallowance'), specialAllowance: number('specialallowance'), totalCompensation: number('totalcompensation'), totalAllowance: number('totalallowance'), lateUnits: number('lateunits'), lateDeduction: number('latededuction'), halfDayCount: number('halfdaycount'), halfDayDeduction: number('halfdaydeduction'), absentDays: number('absentdays'), absenceDeduction: number('absencededuction'), overtimeHours: number('overtimehours'), overtimeRate: number('overtimerate'), overtimePay: number('overtimepay'), manualAdjustment: number('manualadjustment'), adjustmentReason: row[index.adjustmentreason] || null, grossCompensation: number('grosscompensation'), netPay: number('netpay'), signaturePlaceholder: row[index.signatureplaceholder] ?? '', calculationBreakdown: row[index.calculationbreakdown] ?? '', approvedWorkingDayOverage: String(row[index.approvedworkingdayoverage] ?? '').toUpperCase() === 'TRUE', status: String(row[index.status] ?? '').toUpperCase() === 'FINALIZED' ? 'FINALIZED' : 'DRAFT', finalizedAt: row[index.finalizedat] || null, rowNumber,
   };
 }
 function valuesForPayrollCutoff(headers: string[], payroll: SheetPayrollCutoff): string[] {

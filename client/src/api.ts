@@ -44,7 +44,6 @@ export function photoSource(photoUrl: string | null | undefined): string | undef
 export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   timezone: 'Asia/Manila',
   rfidAutoSubmitDelayMs: 150,
-  enableScanSounds: false,
   resultResetDelayMs: 4_000,
   enableCardSetup: false,
   enableAdmin: false,
@@ -69,7 +68,6 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
       return {
         timezone: data.timezone || DEFAULT_CONFIG.timezone,
         rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs),
-        enableScanSounds: data.enableScanSounds ?? DEFAULT_CONFIG.enableScanSounds,
         resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
         enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
         enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
@@ -82,7 +80,6 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
     return {
       timezone: data.timezone || DEFAULT_CONFIG.timezone,
       rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs),
-      enableScanSounds: data.enableScanSounds ?? DEFAULT_CONFIG.enableScanSounds,
       resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
       enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
       enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
@@ -177,6 +174,12 @@ function lanUnavailableStatus(message: string): LanStatusResponse {
     connectedSseClients: 0,
     startedAt: null,
     lastError: null,
+    allowedSubnets: [],
+    configuredBindPresent: true,
+    localHealthOk: null,
+    localHealthError: null,
+    firewallAllowRule: 'unknown',
+    guidance: [message],
   };
 }
 

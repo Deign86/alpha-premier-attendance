@@ -8,7 +8,7 @@ export type ScanSource = (typeof scanSources)[number];
 export const attendanceActions = ['TIME_IN', 'TIME_OUT'] as const;
 export type AttendanceAction = (typeof attendanceActions)[number];
 
-export const attendanceStatuses = ['OPEN', 'COMPLETED', 'INCOMPLETE'] as const;
+export const attendanceStatuses = ['WORKING', 'COMPLETED', 'MISSED'] as const;
 export type AttendanceStatus = (typeof attendanceStatuses)[number];
 
 export type ScanRequest = {
@@ -123,9 +123,15 @@ export const lanDiagnosticIssues = [
   'port_in_use',
   'firewall_likely_blocked',
   'no_lan_ip',
+  'loopback_bind',
+  'bind_address_not_present',
   'bind_failed',
 ] as const;
 export type LanDiagnosticIssue = (typeof lanDiagnosticIssues)[number];
+
+/** Firewall allow-rule state for the LAN viewer port, for operator guidance. */
+export const lanFirewallRuleStates = ['present', 'missing', 'unknown'] as const;
+export type LanFirewallRuleState = (typeof lanFirewallRuleStates)[number];
 
 /** Safe read-only fields exposed for one attendance row on the LAN viewer. */
 export type LanAttendanceRow = {
@@ -162,6 +168,17 @@ export type LanStatusResponse = {
   connectedSseClients: number;
   startedAt: number | null;
   lastError: string | null;
+  /** Allowed client subnets from `lan.allowed_subnets` (empty = any private RFC1918 address). */
+  allowedSubnets: string[];
+  /** True when the configured bind address (if any) is on an active adapter. */
+  configuredBindPresent: boolean;
+  /** Local `/api/health` probe: true = reachable, false = unreachable, null = not checked. */
+  localHealthOk: boolean | null;
+  localHealthError: string | null;
+  /** Whether an inbound Windows Firewall allow rule covers the viewer port. */
+  firewallAllowRule: LanFirewallRuleState;
+  /** Plain-language operator guidance in priority order. */
+  guidance: string[];
 };
 
 export type LanStartResponse = LanStatusResponse;
@@ -182,6 +199,24 @@ export const payrollFrequencies = ['SEMI_MONTHLY'] as const;
 export type PayrollFrequency = (typeof payrollFrequencies)[number];
 export type PayrollProfileId = 'JEAN_TENURED' | 'BEA_STANDARD' | string;
 
+/**
+ * Intern payroll policy shared by the server, the desktop payroll commands,
+ * and the printable payroll worksheet. Interns earn a fixed PHP 80.00 per day
+ * and are charged PHP 10.00 for every full hour of lateness (after the weekly
+ * grace already applied at the daily ledger level).
+ */
+export const INTERN_DAILY_RATE_PHP = 80;
+export const INTERN_LATE_DEDUCTION_PER_HOUR_PHP = 10;
+
+/**
+ * Payroll profile id stored on intern cutoff records so every payroll record
+ * stays auditable. It intentionally does not exist in the payroll_profiles
+ * table: intern payroll uses a fixed formula, not a configurable profile.
+ */
+export const INTERN_PAYROLL_PROFILE_ID = 'INTERN_STANDARD';
+
+export type EmployeeClassification = 'INTERN' | 'EMPLOYEE';
+
 export type PayrollCalculationProfile = {
   profileId: PayrollProfileId;
   label: string;
@@ -199,6 +234,8 @@ export type PayrollCutoffRecord = {
   payrollId: string;
   employeeId: string;
   employeeName: string;
+  /** Intern vs employee payroll classification; drives intern-specific rules and sheet layout. */
+  employeeType: EmployeeClassification;
   payrollProfileId: PayrollProfileId;
   payrollCutoffLabel: string;
   cutoffStart: string;
@@ -309,7 +346,6 @@ export type SafeConfigResponse = {
   success: true;
   timezone: string;
   rfidAutoSubmitDelayMs: number;
-  enableScanSounds: boolean;
   resultResetDelayMs: number;
   enableCardSetup?: boolean;
   enableAdmin?: boolean;

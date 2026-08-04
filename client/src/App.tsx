@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, ShieldCheck, Upload, UserRound, Volume2, VolumeX, X } from 'lucide-react';
+import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, ShieldCheck, Upload, UserRound, X } from 'lucide-react';
 import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord, OfficeIdentity, LanStatusResponse } from '@rfid-attendance/shared';
-import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
+import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
 import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openViewerUrl, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
 import { listenForGlobalRfid, listenForScannerStatus, getScannerStatus, setScannerPaused, type ScannerStatus } from './tauri-api';
 import { GeneratedFileActions, type GeneratedFileResult } from './file-actions';
+import logoPhoenix from './assets/branding/logo-phoenix.png';
+import logoFull from './assets/branding/logo-full.png';
 
 type KioskState = 'ready' | 'processing' | 'success' | 'error';
 type Result = ScanSuccessResponse | ScanErrorResponse;
@@ -32,7 +34,7 @@ export default function App() {
     // Browser dev mode has no native scanner pipeline; show it as unavailable.
     '__TAURI_INTERNALS__' in window
       ? null
-      : { state: 'offline', message: 'Scanner unavailable', detail: 'Native scanner events are only available in the desktop app', mode: 'web' },
+      : { state: 'offline', message: 'Scanner unavailable', detail: 'Native scanner events are only available in the desktop app', mode: 'web', paused: true },
   );
   const manualRef = useRef<HTMLInputElement>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -100,28 +102,6 @@ export default function App() {
     }, remaining);
     return () => { if (setupSessionTimer.current) clearTimeout(setupSessionTimer.current); };
   }, [setupToken, setupExpiresAt]);
-
-  const playTone = useCallback((kind: 'success' | 'error') => {
-    if (!config.enableScanSounds || typeof window === 'undefined') return;
-    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextCtor) return;
-    try {
-      const context = new AudioContextCtor();
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.value = kind === 'success' ? 880 : 220;
-      gain.gain.setValueAtTime(0.0001, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.16);
-      oscillator.connect(gain).connect(context.destination);
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.17);
-      oscillator.addEventListener('ended', () => void context.close());
-    } catch {
-      // Audio is optional and can be blocked by kiosk browser policies.
-    }
-  }, [config.enableScanSounds]);
 
   const resetToReady = useCallback(() => {
     requestController.current?.abort();
@@ -265,10 +245,9 @@ export default function App() {
     setResult(response);
     const nextState = response.success ? 'success' : 'error';
     setState(nextState);
-    playTone(nextState);
     if (resetTimer.current) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
-  }, [config.resultResetDelayMs, playTone, resetToReady]);
+  }, [config.resultResetDelayMs, resetToReady]);
 
   // Latest scan-routing closure, re-assigned every render so the single native
   // listener always uses fresh state without re-registering (which would risk
@@ -356,7 +335,7 @@ export default function App() {
     <main className={`kiosk-shell state-${state}`}>
       <header className="kiosk-topbar">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true"><span>AP</span></div>
+          <div className="brand-mark" aria-hidden="true"><img src={logoPhoenix} alt="" /></div>
           <div className="brand-text">
             <p className="brand-name">ALPHA PREMIER</p>
             <p className="brand-subtitle">{resolveOfficeDisplay(config.office, 'short')}</p>
@@ -437,10 +416,6 @@ export default function App() {
           {manualMode ? <CreditCard size={16} /> : <Keyboard size={16} />}
           {manualMode ? 'Use card reader' : 'Manual entry'}
         </button>
-        <span className="sound-indicator" title={config.enableScanSounds ? 'Scan sounds enabled' : 'Scan sounds disabled'}>
-          {config.enableScanSounds ? <Volume2 size={16} /> : <VolumeX size={16} />}
-          {config.enableScanSounds ? 'Sounds on' : 'Sounds off'}
-        </span>
         <a className="kiosk-action" href="/attendance">Live attendance</a>
         {config.enableAdmin && <a className="kiosk-action" href="/admin">Admin</a>}
         {config.enableCardSetup && <button className="kiosk-action" type="button" onClick={() => openSetup()}><LockKeyhole size={15} /> Admin setup</button>}
@@ -615,7 +590,7 @@ function LiveAttendance() {
   }, [refreshLan]);
   const startNow = async () => { setLanBusy(true); setLan(await startLanViewer()); setLanBusy(false); };
   const stopNow = async () => { setLanBusy(true); setLan(await stopLanViewer()); setLanBusy(false); };
-  return <main className="dashboard-shell"><header className="dashboard-header"><div><p className="section-kicker">Live attendance</p><h1>Today’s timing</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')} · {localDate()} · updates every five seconds</p></div><nav><a href="/">Scanner</a><a href="/admin">Admin</a></nav></header>{error && <p className="dashboard-alert">{error}</p>}<div className="dashboard-status">{stale ? 'Showing last successful update' : `Last updated ${fetchedAt ? formatTime(fetchedAt, 'Asia/Manila') : 'just now'}`}</div><LanViewerPanel status={lan} busy={lanBusy} onStart={() => void startNow()} onStop={() => void stopNow()} onRefresh={() => void refreshLan()} /><AttendanceTable rows={rows} timezone="Asia/Manila" /></main>;
+  return <main className="dashboard-shell"><header className="dashboard-header"><div><DashboardBrand /><p className="section-kicker">Live attendance</p><h1>Today’s timing</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')} · {localDate()} · updates every five seconds</p></div><nav><a href="/">Scanner</a><a href="/admin">Admin</a></nav></header>{error && <p className="dashboard-alert">{error}</p>}<div className="dashboard-status">{stale ? 'Showing last successful update' : `Last updated ${fetchedAt ? formatTime(fetchedAt, 'Asia/Manila') : 'just now'}`}</div><LanViewerPanel status={lan} busy={lanBusy} onStart={() => void startNow()} onStop={() => void stopNow()} onRefresh={() => void refreshLan()} /><AttendanceTable rows={rows} timezone="Asia/Manila" /></main>;
 }
 
 function lanProfileLabel(profile: LanStatusResponse['networkProfile']): string {
@@ -651,6 +626,9 @@ function LanViewerPanel({ status, busy, onStart, onStop, onRefresh }: { status: 
   const copyUrl = async () => { if (!status.viewerUrl) return; setCopied(await copyText(status.viewerUrl)); window.setTimeout(() => setCopied(false), 2000); };
   const openUrl = async () => { if (status.viewerUrl) await openViewerUrl(status.viewerUrl); };
   const firewallCommand = `netsh advfirewall firewall add rule name="Alpha Premier Live Attendance" dir=in action=allow protocol=TCP localport=${status.port} profile=private`;
+  const subnetLabel = status.allowedSubnets.length ? status.allowedSubnets.join(', ') : 'Any private (same LAN)';
+  const healthLabel = status.localHealthOk === true ? 'Reachable locally' : status.localHealthOk === false ? 'Not reachable locally' : 'Not checked';
+  const firewallLabel = status.firewallAllowRule === 'present' ? 'Allow rule found' : status.firewallAllowRule === 'missing' ? 'No allow rule found' : 'Unknown';
   return (
     <section className="lan-panel" aria-label="LAN viewer">
       <div className="lan-panel-head">
@@ -671,7 +649,13 @@ function LanViewerPanel({ status, busy, onStart, onStop, onRefresh }: { status: 
           {status.networkProfile === 'public' && (
             <div className="lan-guidance">
               <p><strong>This laptop’s network profile is Public.</strong> Windows blocks most inbound traffic on Public networks. Set the Wi‑Fi/LAN profile to <em>Private</em> so other devices can reach the viewer, then try opening the link again.</p>
-              {status.issue === 'firewall_likely_blocked' && <p className="lan-code">{firewallCommand}</p>}
+              <p className="lan-code">{firewallCommand}</p>
+            </div>
+          )}
+          {status.guidance.length > 0 && (
+            <div className="lan-guidance">
+              {status.guidance.map((line) => <p key={line}>{line}</p>)}
+              {status.firewallAllowRule === 'missing' && <p className="lan-code">{firewallCommand}</p>}
             </div>
           )}
           <div className="lan-actions">
@@ -686,6 +670,8 @@ function LanViewerPanel({ status, busy, onStart, onStop, onRefresh }: { status: 
           </p>
           {status.state === 'stopped' && <p className="lan-note">Start it to let any device on the same office Wi‑Fi open a read-only live attendance screen. {status.networkScope}</p>}
           {status.issue === 'no_lan_ip' && <div className="lan-guidance"><p><strong>No reachable office LAN IP was detected.</strong> Connect this laptop to the office Wi‑Fi/LAN, or set <code>lan.bind_address</code> to the office LAN IP in config.toml (loopback/localhost is never shareable).</p></div>}
+          {status.issue === 'loopback_bind' && <div className="lan-guidance"><p><strong>Live Attendance is bound to localhost and cannot be reached by other devices.</strong> Set <code>lan.bind_address</code> to the office LAN IP in config.toml, or leave it unset so the app auto-detects the Wi‑Fi address.</p></div>}
+          {status.issue === 'bind_address_not_present' && <div className="lan-guidance"><p><strong>The configured bind address does not match an active network adapter.</strong> The laptop’s current IP changed. Set <code>lan.bind_address</code> to the current office LAN IP ({status.activeLanIp || 'unknown'}), or leave it unset to auto-detect.</p></div>}
           {status.issue === 'port_in_use' && <div className="lan-guidance"><p><strong>Port {status.port} is already in use.</strong> Close the other program or change <code>lan.port</code> in config.toml, then start the viewer again.</p></div>}
           {status.issue === 'config_invalid' && status.configError && <div className="lan-guidance"><p><strong>Invalid LAN configuration:</strong> {status.configError}</p></div>}
           {status.lastError && <p className="lan-error">{status.lastError}</p>}
@@ -700,10 +686,49 @@ function LanViewerPanel({ status, busy, onStart, onStop, onRefresh }: { status: 
       <div className="lan-facts">
         <span>Port <strong>{status.port}</strong></span>
         <span>LAN IP <strong>{status.activeLanIp || status.bindAddress || '—'}</strong></span>
-        <span>Connected viewers <strong>{status.connectedSseClients}</strong></span>
+        <span>Allowed subnets <strong>{subnetLabel}</strong></span>
+        <span>Firewall rule <strong>{firewallLabel}</strong></span>
+        <span>Local /api/health <strong>{healthLabel}</strong></span>
         <span>Network profile <strong>{lanProfileLabel(status.networkProfile)}</strong></span>
+        <span>Connected viewers <strong>{status.connectedSseClients}</strong></span>
+        {status.configuredBindPresent ? <span>Bind address <strong>On an active adapter</strong></span> : <span>Bind address <strong>Not on any adapter</strong></span>}
       </div>
     </section>
+  );
+}
+
+/** Read-only scanner diagnostics for the admin panel: state, mode, detail. */
+function ScannerDiagnostics() {
+  const [status, setStatus] = useState<ScannerStatus | null>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenForScannerStatus(setStatus).then((cleanup) => { unlisten = cleanup; }).catch(() => { /* web mode */ });
+    void getScannerStatus().then(setStatus).catch(() => { /* web mode */ });
+    return () => unlisten?.();
+  }, []);
+  if (!status) return null;
+  const stateLabel: Record<ScannerStatus['state'], string> = {
+    connected: 'Waiting for card',
+    scanning: 'Scan received',
+    offline: 'Scanner unavailable',
+    error: 'Scan error',
+  };
+  return (
+    <div className="scanner-diag" role="status">
+      <span className={`scanner-diag-state is-${status.state}`}><i aria-hidden="true" />{status.paused ? 'Paused — this screen is typing' : stateLabel[status.state]}</span>
+      <span className="scanner-diag-mode">Mode: {status.mode}</span>
+      {status.detail && <span className="scanner-diag-detail">{status.detail}</span>}
+    </div>
+  );
+}
+
+/** Compact brand lockup for the shared dashboard header (live + admin screens). */
+function DashboardBrand() {
+  return (
+    <div className="dashboard-brand">
+      <img className="dashboard-brand-mark" src={logoPhoenix} alt="" aria-hidden="true" />
+      <span className="dashboard-brand-name">ALPHA PREMIER</span>
+    </div>
   );
 }
 
@@ -732,7 +757,7 @@ function AdminPanel() {
   }, [sessionExpiresAt, unlocked]);
   useEffect(() => { if (unlocked) void load(); }, [unlocked, load]);
   if (!unlocked) return <main className="dashboard-shell admin-login"><a href="/">← Scanner</a><form onSubmit={unlock}><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><label>Administrator PIN<input autoFocus type="password" value={pin} onChange={(event) => setPin(event.target.value)} /></label>{error && <p className="dashboard-alert">{error}</p>}<button className="submit-button" disabled={busy || !pin}>Unlock admin</button></form></main>;
-  return <main className="dashboard-shell"><header className="dashboard-header"><div><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')}</p></div><nav><a href="/">Scanner</a><a href="/attendance">Live view</a>{import.meta.env.DEV && <button className="text-button" type="button" disabled={nuking} onClick={() => void nukeSheets()}>{nuking ? 'Nuking…' : 'Nuke & resync Sheets'}</button>}<button className="text-button" type="button" onClick={() => { void lockAdmin(); setUnlocked(false); setSessionExpiresAt(''); }}>Lock</button></nav></header><div className="admin-tabs"><button className={tab === 'users' ? 'is-active' : ''} onClick={() => setTab('users')}>Users and RFID</button><button className={tab === 'attendance' ? 'is-active' : ''} onClick={() => setTab('attendance')}>Attendance corrections</button><button className={tab === 'payroll' ? 'is-active' : ''} onClick={() => setTab('payroll')}>Payroll</button></div>{error && <p className="dashboard-alert">{error}</p>}{tab === 'users' ? <UserEditor users={users} profiles={profiles} editing={editing} setEditing={setEditing} onSaved={load} /> : tab === 'attendance' ? <AdminAttendance rows={rows} date={date} setDate={setDate} onSaved={load} /> : <PayrollWorkspace users={users} profiles={profiles} records={cutoffs} onSaved={load} />}</main>;
+  return <main className="dashboard-shell"><header className="dashboard-header"><div><DashboardBrand /><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')}</p></div><nav><a href="/">Scanner</a><a href="/attendance">Live view</a>{import.meta.env.DEV && <button className="text-button" type="button" disabled={nuking} onClick={() => void nukeSheets()}>{nuking ? 'Nuking…' : 'Nuke & resync Sheets'}</button>}<button className="text-button" type="button" onClick={() => { void lockAdmin(); setUnlocked(false); setSessionExpiresAt(''); }}>Lock</button></nav></header><div className="admin-tabs"><button className={tab === 'users' ? 'is-active' : ''} onClick={() => setTab('users')}>Users and RFID</button><button className={tab === 'attendance' ? 'is-active' : ''} onClick={() => setTab('attendance')}>Attendance corrections</button><button className={tab === 'payroll' ? 'is-active' : ''} onClick={() => setTab('payroll')}>Payroll</button></div><ScannerDiagnostics />{error && <p className="dashboard-alert">{error}</p>}{tab === 'users' ? <UserEditor users={users} profiles={profiles} editing={editing} setEditing={setEditing} onSaved={load} /> : tab === 'attendance' ? <AdminAttendance rows={rows} date={date} setDate={setDate} onSaved={load} /> : <PayrollWorkspace users={users} profiles={profiles} records={cutoffs} onSaved={load} />}</main>;
 }
 
 type AdminUser = { userId: string; rfidUid: string; fullName: string; department: string | null; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; dailyRate: number | null; payrollProfileId?: string | null; photoUrl?: string | null };
@@ -747,8 +772,8 @@ function UserEditor({ users, profiles, editing, setEditing, onSaved }: { users: 
   return <div className="admin-grid"><section className="admin-form"><h2>{editing ? 'Edit user' : 'Add user'}</h2><form onSubmit={save}><label>User ID<input required disabled={Boolean(editing)} value={form.userId} onChange={(e) => setForm({ ...form, userId: e.target.value })} /></label><label>RFID UID<input required value={form.rfidUid} onChange={(e) => setForm({ ...form, rfidUid: e.target.value })} /></label><label>Full name<input required value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></label><label>Department<input value={form.department ?? ''} onChange={(e) => setForm({ ...form, department: e.target.value })} /></label><label className="employee-type-toggle">Employee type <button type="button" role="switch" aria-checked={form.employeeType === 'EMPLOYEE'} onClick={() => setForm({ ...form, employeeType: form.employeeType === 'INTERN' ? 'EMPLOYEE' : 'INTERN', dailyRate: form.employeeType === 'INTERN' ? form.dailyRate : null, payrollProfileId: form.employeeType === 'INTERN' ? (form.payrollProfileId ?? 'BEA_STANDARD') : null })}><span>INTERN</span><strong>{form.employeeType}</strong></button></label>{form.employeeType === 'EMPLOYEE' && <><label>Daily rate (PHP)<input required type="number" min="0.01" step="0.01" value={form.dailyRate ?? ''} onChange={(e) => setForm({ ...form, dailyRate: Number(e.target.value) || null })} /></label><label>Payroll calculation<select value={form.payrollProfileId ?? 'BEA_STANDARD'} onChange={(e) => setForm({ ...form, payrollProfileId: e.target.value })}>{profiles.map((profile) => <option key={profile.profileId} value={profile.profileId}>{profile.label}</option>)}</select></label></>}<label>Status<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as AdminUser['status'] })}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>{message && <p className="dashboard-alert">{message}</p>}<button className="submit-button" type="submit">Save user</button></form></section><section><div className="table-wrap"><table><thead><tr><th>User</th><th>RFID</th><th>Payroll profile</th><th>Status</th><th /></tr></thead><tbody>{users.map((user) => <tr key={user.userId}><td><strong>{user.fullName}</strong><small>{user.userId}</small></td><td>{user.rfidUid}</td><td>{user.employeeType === 'EMPLOYEE' ? profiles.find((profile) => profile.profileId === user.payrollProfileId)?.label ?? user.payrollProfileId ?? 'None' : 'Not applicable'}</td><td>{user.status}</td><td><button className="text-button" onClick={() => setEditing(user)}>Edit</button><button className="text-button danger-button" disabled={deletingUserId === user.userId} onClick={() => void remove(user)}>{deletingUserId === user.userId ? 'Deleting...' : 'Delete'}</button></td></tr>)}</tbody></table></div></section></div>;
 }
 
-type PayrollForm = { employeeId: string; payrollProfileId: string; cutoffStart: string; cutoffEnd: string; payrollCutoffLabel: string; standardWorkingDays: string; actualWorkingDays: string; specialHolidayDays: string; regularHolidayDays: string; incentivesAllowance: string; specialAllowance: string; lateDeduction: string; halfDayCount: string; absentDays: string; overtimeHours: string; overtimeRate: string; manualAdjustment: string; adjustmentReason: string; approvedWorkingDayOverage: boolean; signaturePlaceholder: string };
-const emptyPayrollForm: PayrollForm = { employeeId: '', payrollProfileId: 'BEA_STANDARD', cutoffStart: '', cutoffEnd: '', payrollCutoffLabel: '', standardWorkingDays: '11', actualWorkingDays: '11', specialHolidayDays: '0', regularHolidayDays: '0', incentivesAllowance: '0', specialAllowance: '0', lateDeduction: '0', halfDayCount: '0', absentDays: '0', overtimeHours: '0', overtimeRate: '0', manualAdjustment: '0', adjustmentReason: '', approvedWorkingDayOverage: false, signaturePlaceholder: '' };
+type PayrollForm = { employeeId: string; payrollProfileId: string; cutoffStart: string; cutoffEnd: string; payrollCutoffLabel: string; standardWorkingDays: string; actualWorkingDays: string; specialHolidayDays: string; regularHolidayDays: string; incentivesAllowance: string; specialAllowance: string; lateUnits: string; lateDeduction: string; halfDayCount: string; absentDays: string; overtimeHours: string; overtimeRate: string; manualAdjustment: string; adjustmentReason: string; approvedWorkingDayOverage: boolean; signaturePlaceholder: string };
+const emptyPayrollForm: PayrollForm = { employeeId: '', payrollProfileId: 'BEA_STANDARD', cutoffStart: '', cutoffEnd: '', payrollCutoffLabel: '', standardWorkingDays: '11', actualWorkingDays: '11', specialHolidayDays: '0', regularHolidayDays: '0', incentivesAllowance: '0', specialAllowance: '0', lateUnits: '0', lateDeduction: '0', halfDayCount: '0', absentDays: '0', overtimeHours: '0', overtimeRate: '0', manualAdjustment: '0', adjustmentReason: '', approvedWorkingDayOverage: false, signaturePlaceholder: '' };
 
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -768,20 +793,42 @@ function computeSemiMonthlyCutoff(month: string, half: 'first' | 'second'): { cu
 export function PayrollWorkspace({ users, profiles, records, onSaved }: { users: AdminUser[]; profiles: PayrollCalculationProfile[]; records: PayrollCutoffRecord[]; onSaved: () => void }) {
   const office = useOfficeIdentity();
   const employees = users.filter((user) => user.employeeType === 'EMPLOYEE');
+  const interns = users.filter((user) => user.employeeType !== 'EMPLOYEE');
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm); const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
   const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(null);
   const [cutoffMonth, setCutoffMonth] = useState(() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; });
   const [exporting, setExporting] = useState(false);
+  const selectedUser = users.find((item) => item.userId === form.employeeId);
+  const isIntern = selectedUser ? selectedUser.employeeType !== 'EMPLOYEE' : false;
+  // Intern late deduction is always PHP 10.00 x total late hours, never manual.
+  const internLateDeduction = isIntern ? Math.round((Number(form.lateUnits) || 0) * INTERN_LATE_DEDUCTION_PER_HOUR_PHP) : Number(form.lateDeduction) || 0;
   const selectedProfile = profiles.find((profile) => profile.profileId === form.payrollProfileId);
+  // Keep the browser print header (if any) on-brand instead of the generic kiosk title.
+  useEffect(() => {
+    const previous = document.title;
+    document.title = 'Alpha Premier Attendance — Payroll Worksheet';
+    return () => { document.title = previous; };
+  }, []);
   const applyProfile = (profileId: string) => { const profile = profiles.find((item) => item.profileId === profileId); setForm((current) => ({ ...current, payrollProfileId: profileId, standardWorkingDays: String(profile?.standardWorkingDaysPerCutoff ?? current.standardWorkingDays), incentivesAllowance: String(profile?.incentivesAllowance ?? 0), specialAllowance: String(profile?.specialAllowance ?? 0), overtimeRate: String(profile?.overtimeRate ?? 0) })); };
-  const selectEmployee = (employeeId: string) => { const user = users.find((item) => item.userId === employeeId); const profile = profiles.find((item) => item.profileId === user?.payrollProfileId) ?? profiles.find((item) => item.profileId === 'BEA_STANDARD'); applyProfile(profile?.profileId ?? form.payrollProfileId); setForm((current) => ({ ...current, employeeId })); };
+  const selectPerson = (employeeId: string) => {
+    const user = users.find((item) => item.userId === employeeId);
+    const internSelected = user ? user.employeeType !== 'EMPLOYEE' : false;
+    const profile = profiles.find((item) => item.profileId === user?.payrollProfileId) ?? profiles.find((item) => item.profileId === 'BEA_STANDARD');
+    applyProfile(profile?.profileId ?? form.payrollProfileId);
+    setForm((current) => ({
+      ...current,
+      employeeId,
+      // Interns use a fixed formula: no profile picker, auto PHP 10/hr deduction.
+      ...(internSelected ? { payrollProfileId: '', lateDeduction: String((Number(current.lateUnits) || 0) * INTERN_LATE_DEDUCTION_PER_HOUR_PHP) } : {}),
+    }));
+  };
   const update = (field: keyof PayrollForm, value: string | boolean) => setForm((current) => ({ ...current, [field]: value }));
   const applyCutoffHalf = (half: 'first' | 'second') => { const range = computeSemiMonthlyCutoff(cutoffMonth, half); setForm((current) => ({ ...current, cutoffStart: range.cutoffStart, cutoffEnd: range.cutoffEnd, payrollCutoffLabel: range.payrollCutoffLabel })); };
-  const save = async (event: React.FormEvent) => { event.preventDefault(); setSaving(true); const numberFields: Array<keyof PayrollForm> = ['standardWorkingDays', 'actualWorkingDays', 'specialHolidayDays', 'regularHolidayDays', 'incentivesAllowance', 'specialAllowance', 'lateDeduction', 'halfDayCount', 'absentDays', 'overtimeHours', 'overtimeRate', 'manualAdjustment']; const payload: Record<string, unknown> = { ...form }; numberFields.forEach((field) => { payload[field] = Number(form[field]); }); try { const response = await savePayrollCutoff(payload); if ((response as { success?: boolean }).success) { setMessage('Cutoff payroll saved as a draft.'); onSaved(); } else setMessage((response as { error?: { message?: string } }).error?.message ?? 'Unable to save payroll.'); } catch (error) { setMessage(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unable to save payroll.'); } finally { setSaving(false); } };
+  const save = async (event: React.FormEvent) => { event.preventDefault(); setSaving(true); const numberFields: Array<keyof PayrollForm> = ['standardWorkingDays', 'actualWorkingDays', 'specialHolidayDays', 'regularHolidayDays', 'incentivesAllowance', 'specialAllowance', 'lateUnits', 'lateDeduction', 'halfDayCount', 'absentDays', 'overtimeHours', 'overtimeRate', 'manualAdjustment']; const payload: Record<string, unknown> = { ...form }; numberFields.forEach((field) => { payload[field] = Number(form[field]); }); if (isIntern) { payload.dailyRate = INTERN_DAILY_RATE_PHP; payload.lateDeduction = internLateDeduction; payload.specialHolidayDays = 0; payload.regularHolidayDays = 0; payload.incentivesAllowance = 0; payload.specialAllowance = 0; payload.halfDayCount = 0; payload.absentDays = 0; payload.overtimeHours = 0; payload.overtimeRate = 0; } try { const response = await savePayrollCutoff(payload); if ((response as { success?: boolean }).success) { setMessage('Cutoff payroll saved as a draft.'); onSaved(); } else setMessage((response as { error?: { message?: string } }).error?.message ?? 'Unable to save payroll.'); } catch (error) { setMessage(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unable to save payroll.'); } finally { setSaving(false); } };
   const exportCsv = async () => { setExporting(true); try { const result = await exportPayrollCsv(); if (result.success) { setMessage(`Generated ${result.fileName}.`); setFileResult({ filePath: result.filePath, directoryPath: result.directoryPath, fileName: result.fileName, fileKind: result.fileKind, isPortableMode: result.isPortableMode }); } else setMessage(result.error.message); } finally { setExporting(false); } };
   const exportWorkbook = async () => { setExporting(true); const result = await exportPayrollXlsx(); setExporting(false); if (result.success) { setMessage(`Generated ${result.fileName} (${result.rowCount ?? 0} rows).`); setFileResult({ filePath: result.filePath, directoryPath: result.directoryPath, fileName: result.fileName, fileKind: result.fileKind, isPortableMode: result.isPortableMode }); } else setMessage(result.error.message); };
   const registerPdf = async () => { setExporting(true); const result = await generatePayrollRegisterPdf(); setExporting(false); if (result.success) { setMessage(`Generated ${result.fileName} (${result.rowCount ?? 0} rows).`); setFileResult({ filePath: result.filePath, directoryPath: result.directoryPath, fileName: result.fileName, fileKind: result.fileKind, isPortableMode: result.isPortableMode }); } else setMessage(result.error.message); };
-  return <section className="payroll-workspace"><div className="payroll-actions"><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportCsv()}>{exporting ? 'Generating...' : 'Export CSV'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportWorkbook()}>{exporting ? 'Generating...' : 'Export Excel'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void registerPdf()}>{exporting ? 'Generating...' : 'Register PDF'}</button><button className="admin-button" type="button" onClick={() => window.print()}>Print payroll worksheet</button></div><GeneratedFileActions result={fileResult} label="Payroll export" /><div className="admin-grid"><section className="admin-form print-hidden"><h2>Create cutoff payroll</h2><form onSubmit={save}><label>Employee<select required value={form.employeeId} onChange={(event) => selectEmployee(event.target.value)}><option value="">Select employee</option>{employees.map((user) => <option key={user.userId} value={user.userId}>{user.userId} - {user.fullName}</option>)}</select></label><div className="profile-toggle" role="radiogroup" aria-label="Payroll calculation">{profiles.map((profile) => <button key={profile.profileId} type="button" role="radio" aria-checked={form.payrollProfileId === profile.profileId} className={form.payrollProfileId === profile.profileId ? 'is-active' : ''} onClick={() => applyProfile(profile.profileId)}>{profile.label}</button>)}</div><div className="setup-fields"><div className="cutoff-period"><label>Cutoff month<input type="month" value={cutoffMonth} onChange={(event) => setCutoffMonth(event.target.value)} /></label><div className="cutoff-fill-buttons"><button className="admin-button" type="button" onClick={() => applyCutoffHalf('first')}>1st&ndash;15th</button><button className="admin-button" type="button" onClick={() => applyCutoffHalf('second')}>16th&ndash;last day</button></div></div><label>Cutoff start<input required type="date" value={form.cutoffStart} onChange={(event) => update('cutoffStart', event.target.value)} /></label><label>Cutoff end<input required type="date" value={form.cutoffEnd} onChange={(event) => update('cutoffEnd', event.target.value)} /></label><label>Standard days<input type="number" min="0" value={form.standardWorkingDays} onChange={(event) => update('standardWorkingDays', event.target.value)} /></label><label>Actual days<input type="number" min="0" value={form.actualWorkingDays} onChange={(event) => update('actualWorkingDays', event.target.value)} /></label><label>Special holidays<input type="number" min="0" value={form.specialHolidayDays} onChange={(event) => update('specialHolidayDays', event.target.value)} /></label><label>Regular holidays<input type="number" min="0" value={form.regularHolidayDays} onChange={(event) => update('regularHolidayDays', event.target.value)} /></label><label>Incentives (PHP)<input type="number" min="0" step="0.01" value={form.incentivesAllowance} onChange={(event) => update('incentivesAllowance', event.target.value)} /></label><label>Special allowance (PHP)<input type="number" min="0" step="0.01" value={form.specialAllowance} onChange={(event) => update('specialAllowance', event.target.value)} /></label><label>Late deduction (PHP)<input type="number" min="0" step="0.01" value={form.lateDeduction} onChange={(event) => update('lateDeduction', event.target.value)} /></label><label>Half-days<input type="number" min="0" value={form.halfDayCount} onChange={(event) => update('halfDayCount', event.target.value)} /></label><label>Absent days<input type="number" min="0" value={form.absentDays} onChange={(event) => update('absentDays', event.target.value)} /></label><label>Overtime hours<input type="number" min="0" step="0.01" value={form.overtimeHours} onChange={(event) => update('overtimeHours', event.target.value)} /></label><label>Overtime rate (PHP/hr)<input type="number" min="0" step="0.01" value={form.overtimeRate} onChange={(event) => update('overtimeRate', event.target.value)} /></label><label>Manual adjustment (PHP)<input type="number" step="0.01" value={form.manualAdjustment} onChange={(event) => update('manualAdjustment', event.target.value)} /></label></div><label>Adjustment reason<input value={form.adjustmentReason} onChange={(event) => update('adjustmentReason', event.target.value)} placeholder="Required for a non-zero adjustment" /></label><label>Signature placeholder<input value={form.signaturePlaceholder} onChange={(event) => update('signaturePlaceholder', event.target.value)} placeholder="Employee signature" /></label><label className="checkbox-label"><input type="checkbox" checked={form.approvedWorkingDayOverage} onChange={(event) => update('approvedWorkingDayOverage', event.target.checked)} /> Approve actual days above standard</label>{selectedProfile && <p className="setup-copy">Holiday premiums: {selectedProfile.specialHolidayMultiplier * 100}% special, {selectedProfile.regularHolidayMultiplier * 100}% regular.</p>}{message && <p className="dashboard-alert">{message}</p>}<button className="submit-button" disabled={saving}>{saving ? 'Saving...' : 'Save cutoff payroll'}</button></form></section><section className="payroll-table"><PayrollTable records={records} onFinalized={onSaved} /></section></div><PayrollPrintView records={records} office={office} profiles={profiles} /></section>;
+  return <section className="payroll-workspace"><div className="payroll-actions"><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportCsv()}>{exporting ? 'Generating...' : 'Export CSV'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportWorkbook()}>{exporting ? 'Generating...' : 'Export Excel'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void registerPdf()}>{exporting ? 'Generating...' : 'Register PDF'}</button><button className="admin-button" type="button" onClick={() => window.print()}>Print payroll worksheet</button></div><GeneratedFileActions result={fileResult} label="Payroll export" /><div className="admin-grid"><section className="admin-form print-hidden"><h2>Create cutoff payroll</h2><form onSubmit={save}><label>Personnel<select required value={form.employeeId} onChange={(event) => selectPerson(event.target.value)}><option value="">Select employee or intern</option><optgroup label="Employees">{employees.map((user) => <option key={user.userId} value={user.userId}>{user.userId} - {user.fullName}</option>)}</optgroup>{interns.length > 0 && <optgroup label="Interns">{interns.map((user) => <option key={user.userId} value={user.userId}>{user.userId} - {user.fullName}</option>)}</optgroup>}</select></label>{!isIntern && <div className="profile-toggle" role="radiogroup" aria-label="Payroll calculation">{profiles.map((profile) => <button key={profile.profileId} type="button" role="radio" aria-checked={form.payrollProfileId === profile.profileId} className={form.payrollProfileId === profile.profileId ? 'is-active' : ''} onClick={() => applyProfile(profile.profileId)}>{profile.label}</button>)}</div>}{isIntern && <p className="setup-copy">Intern payroll uses a fixed {php(INTERN_DAILY_RATE_PHP)} per day and a {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour late deduction (after weekly grace). Allowances, holiday pay, half-days, absences, and overtime do not apply.</p>}<div className="setup-fields"><div className="cutoff-period"><label>Cutoff month<input type="month" value={cutoffMonth} onChange={(event) => setCutoffMonth(event.target.value)} /></label><div className="cutoff-fill-buttons"><button className="admin-button" type="button" onClick={() => applyCutoffHalf('first')}>1st&ndash;15th</button><button className="admin-button" type="button" onClick={() => applyCutoffHalf('second')}>16th&ndash;last day</button></div></div><label>Daily rate (PHP)<input readOnly value={isIntern ? String(INTERN_DAILY_RATE_PHP) : String(selectedUser?.dailyRate ?? 0)} /><small>{isIntern ? `Fixed intern rate of ${php(INTERN_DAILY_RATE_PHP)}` : 'From the user profile'}</small></label>{isIntern && <label>Total late hours<input type="number" min="0" step="0.01" value={form.lateUnits} onChange={(event) => { const hours = event.target.value; update('lateUnits', hours); update('lateDeduction', String(Math.round((Number(hours) || 0) * INTERN_LATE_DEDUCTION_PER_HOUR_PHP))); }} /></label>}<label>Cutoff start<input required type="date" value={form.cutoffStart} onChange={(event) => update('cutoffStart', event.target.value)} /></label><label>Cutoff end<input required type="date" value={form.cutoffEnd} onChange={(event) => update('cutoffEnd', event.target.value)} /></label><label>Standard days<input type="number" min="0" value={form.standardWorkingDays} onChange={(event) => update('standardWorkingDays', event.target.value)} /></label><label>Actual days<input type="number" min="0" value={form.actualWorkingDays} onChange={(event) => update('actualWorkingDays', event.target.value)} /></label>{!isIntern && <><label>Special holidays<input type="number" min="0" value={form.specialHolidayDays} onChange={(event) => update('specialHolidayDays', event.target.value)} /></label><label>Regular holidays<input type="number" min="0" value={form.regularHolidayDays} onChange={(event) => update('regularHolidayDays', event.target.value)} /></label><label>Incentives (PHP)<input type="number" min="0" step="0.01" value={form.incentivesAllowance} onChange={(event) => update('incentivesAllowance', event.target.value)} /></label><label>Special allowance (PHP)<input type="number" min="0" step="0.01" value={form.specialAllowance} onChange={(event) => update('specialAllowance', event.target.value)} /></label></>}{isIntern ? <label>Late deduction (PHP)<input readOnly value={internLateDeduction} /><small>Auto: {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} × {form.lateUnits || 0} late hour(s)</small></label> : <label>Late deduction (PHP)<input type="number" min="0" step="0.01" value={form.lateDeduction} onChange={(event) => update('lateDeduction', event.target.value)} /></label>}{!isIntern && <><label>Half-days<input type="number" min="0" value={form.halfDayCount} onChange={(event) => update('halfDayCount', event.target.value)} /></label><label>Absent days<input type="number" min="0" value={form.absentDays} onChange={(event) => update('absentDays', event.target.value)} /></label><label>Overtime hours<input type="number" min="0" step="0.01" value={form.overtimeHours} onChange={(event) => update('overtimeHours', event.target.value)} /></label><label>Overtime rate (PHP/hr)<input type="number" min="0" step="0.01" value={form.overtimeRate} onChange={(event) => update('overtimeRate', event.target.value)} /></label></>}<label>Manual adjustment (PHP)<input type="number" step="0.01" value={form.manualAdjustment} onChange={(event) => update('manualAdjustment', event.target.value)} /></label></div><label>Adjustment reason<input value={form.adjustmentReason} onChange={(event) => update('adjustmentReason', event.target.value)} placeholder="Required for a non-zero adjustment" /></label><label>Signature placeholder<input value={form.signaturePlaceholder} onChange={(event) => update('signaturePlaceholder', event.target.value)} placeholder="Employee signature" /></label><label className="checkbox-label"><input type="checkbox" checked={form.approvedWorkingDayOverage} onChange={(event) => update('approvedWorkingDayOverage', event.target.checked)} /> Approve actual days above standard</label>{selectedProfile && <p className="setup-copy">Holiday premiums: {selectedProfile.specialHolidayMultiplier * 100}% special, {selectedProfile.regularHolidayMultiplier * 100}% regular.</p>}{message && <p className="dashboard-alert">{message}</p>}<button className="submit-button" disabled={saving}>{saving ? 'Saving...' : 'Save cutoff payroll'}</button></form></section><section className="payroll-table"><PayrollTable records={records} onFinalized={onSaved} /></section></div><PayrollPrintView records={records} office={office} profiles={profiles} /></section>;
 }
 
 function PayrollTable({ records, onFinalized }: { records: PayrollCutoffRecord[]; onFinalized: () => void }) {
@@ -790,7 +837,7 @@ function PayrollTable({ records, onFinalized }: { records: PayrollCutoffRecord[]
   const finalize = async (payrollId: string) => { const response = await finalizePayrollCutoff(payrollId); if ((response as { success?: boolean }).success) { setMessage('Payroll finalized.'); onFinalized(); } else setMessage((response as { error?: { message?: string } }).error?.message ?? 'Unable to finalize payroll.'); };
   const payslip = async (payrollId: string) => { setGeneratingId(payrollId); const response = await generatePayrollPayslipPdf(payrollId); setGeneratingId(''); if (response.success) { setMessage(`Generated ${response.fileName}.`); setFileResult({ filePath: response.filePath, directoryPath: response.directoryPath, fileName: response.fileName, fileKind: response.fileKind, isPortableMode: response.isPortableMode }); } else setMessage(response.error.message); };
   if (!records.length) return <div className="empty-state">No cutoff payroll has been created.</div>;
-  return <><div className="table-wrap payroll-print"><table><thead><tr><th>Employee #</th><th>Employee Name</th><th>Cut Off Rate</th><th>Daily Rate</th><th>Standard</th><th>Actual</th><th>Basic Rate</th><th>Special Holidays (30%)</th><th>Regular Holiday (100%)</th><th>Total Compensation</th><th>Incentives Allowance</th><th>Special Allowance</th><th>Total Allowance</th><th>Late</th><th>Halfday</th><th>Absent</th><th>Overtime</th><th>Gross Compensation</th><th>Signature</th></tr></thead><tbody>{records.map((row) => <><tr key={row.payrollId}><td>{row.employeeId}</td><td>{row.employeeName}</td><td>{row.payrollCutoffLabel}</td><td>{php(row.dailyRate)}</td><td>{row.standardWorkingDays}</td><td>{row.actualWorkingDays}</td><td>{php(row.basicPay)}</td><td>{php(row.specialHolidayPay)}</td><td>{php(row.regularHolidayPay)}</td><td>{php(row.totalCompensation)}</td><td>{php(row.incentivesAllowance)}</td><td>{php(row.specialAllowance)}</td><td>{php(row.totalAllowance)}</td><td>{php(row.lateDeduction)}</td><td>{php(row.halfDayDeduction)}</td><td>{php(row.absenceDeduction)}</td><td>{php(row.overtimePay)}</td><td><strong>{php(row.grossCompensation)}</strong></td><td>{row.signaturePlaceholder || '________________'}</td></tr><tr key={`${row.payrollId}-details`} className="payroll-detail"><td colSpan={19}><details><summary>Calculation breakdown</summary><p>{php(row.basicPay)} basic + {php(row.specialHolidayPay)} special holiday + {php(row.regularHolidayPay)} regular holiday + {php(row.totalAllowance)} allowances + {php(row.overtimePay)} overtime {row.manualAdjustment !== 0 ? `+ ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})` : ''} - {php(row.lateDeduction + row.halfDayDeduction + row.absenceDeduction)} deductions = <strong>{php(row.grossCompensation)}</strong>.</p><p>Status: {row.status}. Net pay: {php(row.netPay)}.</p><button className="text-button print-hidden" disabled={generatingId === row.payrollId} onClick={() => void payslip(row.payrollId)}>{generatingId === row.payrollId ? 'Generating...' : 'Generate payslip PDF'}</button>{row.status === 'DRAFT' && <button className="text-button print-hidden" onClick={() => void finalize(row.payrollId)}>Finalize</button>}</details></td></tr></>)}</tbody></table></div><GeneratedFileActions result={fileResult} label="Payslip PDF" />{message && <p className="dashboard-alert">{message}</p>}</>;
+  return <><div className="table-wrap payroll-print"><table><thead><tr><th>Employee #</th><th>Employee Name</th><th>Cut Off Rate</th><th>Daily Rate</th><th>Standard</th><th>Actual</th><th>Basic Rate</th><th>Special Holidays (30%)</th><th>Regular Holiday (100%)</th><th>Total Compensation</th><th>Incentives Allowance</th><th>Special Allowance</th><th>Total Allowance</th><th>Late</th><th>Halfday</th><th>Absent</th><th>Overtime</th><th>Gross Compensation</th><th>Signature</th></tr></thead><tbody>{records.map((row) => <><tr key={row.payrollId}><td>{row.employeeId}</td><td>{row.employeeType === 'INTERN' ? `${row.employeeName} (Intern)` : row.employeeName}</td><td>{row.payrollCutoffLabel}</td><td>{php(row.dailyRate)}</td><td>{row.standardWorkingDays}</td><td>{row.actualWorkingDays}</td><td>{php(row.basicPay)}</td><td>{php(row.specialHolidayPay)}</td><td>{php(row.regularHolidayPay)}</td><td>{php(row.totalCompensation)}</td><td>{php(row.incentivesAllowance)}</td><td>{php(row.specialAllowance)}</td><td>{php(row.totalAllowance)}</td><td>{php(row.lateDeduction)}</td><td>{php(row.halfDayDeduction)}</td><td>{php(row.absenceDeduction)}</td><td>{php(row.overtimePay)}</td><td><strong>{php(row.grossCompensation)}</strong></td><td>{row.signaturePlaceholder || '________________'}</td></tr><tr key={`${row.payrollId}-details`} className="payroll-detail"><td colSpan={19}><details><summary>Calculation breakdown</summary>{row.employeeType === 'INTERN' ? <p>{php(row.basicPay)} basic ({row.actualWorkingDays} day(s) at {php(INTERN_DAILY_RATE_PHP)} per day){row.manualAdjustment !== 0 ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})` : ''} - {php(row.lateDeduction)} late deduction ({row.lateUnits} hour(s) at {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour) = <strong>{php(row.grossCompensation)}</strong>.</p> : <p>{php(row.basicPay)} basic + {php(row.specialHolidayPay)} special holiday + {php(row.regularHolidayPay)} regular holiday + {php(row.totalAllowance)} allowances + {php(row.overtimePay)} overtime {row.manualAdjustment !== 0 ? `+ ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})` : ''} - {php(row.lateDeduction + row.halfDayDeduction + row.absenceDeduction)} deductions = <strong>{php(row.grossCompensation)}</strong>.</p>}<p>Status: {row.status}. Net pay: {php(row.netPay)}.</p><button className="text-button print-hidden" disabled={generatingId === row.payrollId} onClick={() => void payslip(row.payrollId)}>{generatingId === row.payrollId ? 'Generating...' : 'Generate payslip PDF'}</button>{row.status === 'DRAFT' && <button className="text-button print-hidden" onClick={() => void finalize(row.payrollId)}>Finalize</button>}</details></td></tr></>)}</tbody></table></div><GeneratedFileActions result={fileResult} label="Payslip PDF" />{message && <p className="dashboard-alert">{message}</p>}</>;
 }
 
 function php(value: number): string { return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number.isFinite(value) ? value : 0).replace('₱', 'PHP '); }
@@ -808,7 +855,9 @@ function PayrollPrintView({ records, office, profiles }: { records: PayrollCutof
   if (!records.length) return <div className="print-payroll-view print-only"><p className="pw-empty-note">No cutoff payroll records are available to print. Create and save a cutoff payroll first.</p></div>;
   return (
     <div className="print-payroll-view print-only">
-      {records.map((row) => <PayrollWorksheet key={row.payrollId} row={row} office={office} profiles={profiles} />)}
+      {records.map((row) => row.employeeType === 'INTERN'
+        ? <InternPayrollWorksheet key={row.payrollId} row={row} office={office} />
+        : <PayrollWorksheet key={row.payrollId} row={row} office={office} profiles={profiles} />)}
     </div>
   );
 }
@@ -824,7 +873,7 @@ function PayrollWorksheet({ row, office, profiles }: { row: PayrollCutoffRecord;
   return (
     <article className="pw-sheet">
       <header className="pw-header">
-        <p className="pw-company">{office.companyName}</p>
+        <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
         <p className="pw-address">{office.officeDisplayFull}</p>
         <h1 className="pw-title">Payroll Worksheet</h1>
         <div className="pw-meta">
@@ -918,6 +967,107 @@ function PayrollWorksheet({ row, office, profiles }: { row: PayrollCutoffRecord;
           <div className="pw-signature"><span className="pw-sign-line">{row.signaturePlaceholder || '____________________________'}</span><span className="pw-sign-caption">Prepared by</span></div>
           <div className="pw-signature"><span className="pw-sign-line">____________________________</span><span className="pw-sign-caption">Checked by</span></div>
           <div className="pw-signature"><span className="pw-sign-line">____________________________</span><span className="pw-sign-caption">Employee signature</span></div>
+        </div>
+      </section>
+
+      <footer className="pw-footer">{office.companyName} · Confidential — for authorized payroll use only</footer>
+    </article>
+  );
+}
+
+/**
+ * Print-only worksheet for intern payroll records. Uses the same worksheet
+ * style as employee sheets but surfaces the fixed intern policy: PHP 80.00/day,
+ * PHP 10.00/hour late deduction, counted days, total late hours, and net pay.
+ */
+function InternPayrollWorksheet({ row, office }: { row: PayrollCutoffRecord; office: OfficeIdentity }) {
+  const lateHours = row.lateUnits;
+  const totalDeductions = row.lateDeduction;
+  return (
+    <article className="pw-sheet">
+      <header className="pw-header">
+        <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
+        <p className="pw-address">{office.officeDisplayFull}</p>
+        <h1 className="pw-title">Intern Payroll Worksheet</h1>
+        <div className="pw-meta">
+          <span>Pay period: <strong>{row.payrollCutoffLabel}</strong></span>
+          <span>Cutoff: <strong>{formatPrintDate(row.cutoffStart)} – {formatPrintDate(row.cutoffEnd)}</strong></span>
+          <span>Prepared: <strong>{formatPrintDate(localDate())}</strong></span>
+          <span>Status: <strong>{row.status}</strong></span>
+        </div>
+      </header>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Intern details</h2>
+        <div className="pw-grid">
+          <div className="pw-field"><span className="pw-label">Intern name</span><span className="pw-value">{row.employeeName}</span></div>
+          <div className="pw-field"><span className="pw-label">Intern number</span><span className="pw-value">{row.employeeId}</span></div>
+          <div className="pw-field"><span className="pw-label">Classification</span><span className="pw-value">Intern</span></div>
+          <div className="pw-field"><span className="pw-label">Daily rate (fixed)</span><span className="pw-value">{php(INTERN_DAILY_RATE_PHP)}</span></div>
+          <div className="pw-field"><span className="pw-label">Pay frequency</span><span className="pw-value">Semi-monthly</span></div>
+          <div className="pw-field"><span className="pw-label">Cutoff period</span><span className="pw-value">{row.payrollCutoffLabel}</span></div>
+        </div>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Attendance and pay basis</h2>
+        <table className="pw-table">
+          <thead><tr><th className="pw-col-num">#</th><th>Item</th><th className="pw-col-num">Value</th><th>Remarks</th></tr></thead>
+          <tbody>
+            <tr><td className="pw-col-num">1</td><td>Standard working days</td><td className="pw-col-num">{row.standardWorkingDays}</td><td>Days expected in this cutoff</td></tr>
+            <tr><td className="pw-col-num">2</td><td>Counted days (days worked)</td><td className="pw-col-num">{row.actualWorkingDays}</td><td>Days actually rendered at {php(INTERN_DAILY_RATE_PHP)} per day</td></tr>
+            <tr><td className="pw-col-num">3</td><td>Total late hours</td><td className="pw-col-num">{lateHours}</td><td>Deducted at {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Earnings</h2>
+        <table className="pw-table">
+          <thead><tr><th className="pw-col-num">#</th><th>Description</th><th className="pw-col-amount">Amount</th></tr></thead>
+          <tbody>
+            <tr><td className="pw-col-num">1</td><td>Basic pay — {row.actualWorkingDays} day(s) at {php(INTERN_DAILY_RATE_PHP)} per day</td><td className="pw-col-amount">{php(row.basicPay)}</td></tr>
+            <tr className="pw-subtotal"><td className="pw-col-num" colSpan={2}>Total compensation</td><td className="pw-col-amount">{php(row.totalCompensation)}</td></tr>
+            {row.manualAdjustment !== 0 && <tr><td className="pw-col-num">2</td><td>Manual adjustment{row.adjustmentReason ? ` — ${row.adjustmentReason}` : ''}</td><td className="pw-col-amount">{php(row.manualAdjustment)}</td></tr>}
+            <tr className="pw-grand"><td className="pw-col-num" colSpan={2}>Gross compensation</td><td className="pw-col-amount">{php(row.grossCompensation)}</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Deductions</h2>
+        <table className="pw-table">
+          <thead><tr><th className="pw-col-num">#</th><th>Description</th><th className="pw-col-amount">Amount</th></tr></thead>
+          <tbody>
+            <tr><td className="pw-col-num">1</td><td>Late deduction — {lateHours} hour(s) at {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour</td><td className="pw-col-amount">{php(row.lateDeduction)}</td></tr>
+            <tr className="pw-grand"><td className="pw-col-num" colSpan={2}>Total deductions</td><td className="pw-col-amount">{php(totalDeductions)}</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Pay summary</h2>
+        <div className="pw-summary">
+          <div className="pw-summary-cell"><span className="pw-label">Gross compensation</span><span className="pw-value">{php(row.grossCompensation)}</span></div>
+          <div className="pw-summary-cell"><span className="pw-label">Total deductions</span><span className="pw-value">− {php(totalDeductions)}</span></div>
+          <div className="pw-summary-cell pw-summary-net"><span className="pw-label">Net pay</span><span className="pw-value">{php(row.netPay)}</span></div>
+          <div className="pw-summary-cell"><span className="pw-label">Status</span><span className="pw-value">{row.status}</span></div>
+        </div>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Remarks</h2>
+        <p className="pw-remarks">{row.calculationBreakdown || '—'}</p>
+        <p className="pw-remarks">Intern payroll policy: {php(INTERN_DAILY_RATE_PHP)} per day; {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour of lateness (after the weekly grace). Allowances, holiday pay, half-days, absences, and overtime do not apply to interns.</p>
+        {row.adjustmentReason && <p className="pw-remarks">Adjustment reason: {row.adjustmentReason}.</p>}
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Signatures</h2>
+        <div className="pw-signatures">
+          <div className="pw-signature"><span className="pw-sign-line">{row.signaturePlaceholder || '____________________________'}</span><span className="pw-sign-caption">Prepared by</span></div>
+          <div className="pw-signature"><span className="pw-sign-line">____________________________</span><span className="pw-sign-caption">Checked by</span></div>
+          <div className="pw-signature"><span className="pw-sign-line">____________________________</span><span className="pw-sign-caption">Intern signature</span></div>
         </div>
       </section>
 

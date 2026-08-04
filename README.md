@@ -83,12 +83,12 @@ Copy the example configuration into the Tauri application config directory as `c
 Copy-Item src-tauri/config.example.toml "$env:APPDATA\com.alphapremier.attendance\config.toml"
 ```
 
-Update the values for the office. The LAN server is disabled by default:
+Update the values for the office. Leave `bind_address` unset (recommended) so the app auto-detects the laptop's active office Wi-Fi/LAN IP; set it only to a private address that is actually assigned to the laptop (verify with `ipconfig`). The LAN server is disabled by default:
 
 ```toml
 [lan]
 enabled = true
-bind_address = "192.168.1.50"
+# bind_address = "192.168.1.50"  # optional; leave unset to auto-detect
 port = 4173
 allow_wildcard_bind = false
 allowed_subnets = ["192.168.1.0/24"]
@@ -203,7 +203,7 @@ No public bind, router forwarding, UPnP mapping, public DNS record, or cloud tun
 
 Scanner state (`Connected` / `Scanning` / `Offline` / `Error`) is surfaced as `scanner-status` events and can be inspected with the `scanner_status` command; diagnostics belong in admin/setup, never on the main kiosk screen.
 
-Payroll preserves the existing intern weekly grace and PHP 10 late deduction rules, employee raw timestamps and computed hour ceiling/floor, semi-monthly cutoff profiles, allowances, incentives, manual adjustments, finalization, and CSV export. The employee payroll module intentionally retains:
+Payroll preserves the existing intern weekly grace and PHP 10 late deduction rules, employee raw timestamps and computed hour ceiling/floor, semi-monthly cutoff profiles, allowances, incentives, manual adjustments, finalization, and CSV export. Interns are fully included in the payroll system: they can be selected in the admin payroll workspace and generate a printable "Intern Payroll Worksheet" using the fixed PHP 80.00 per day rate and a PHP 10.00 per hour late deduction (after weekly grace). The employee payroll module intentionally retains:
 
 ```rust
 // TODO: Employee late rules TBD by client
@@ -268,6 +268,22 @@ docs/         Deployment, hardware, payroll, migration, and troubleshooting guid
 scripts/      Development and migration helper scripts
 plan.md       Complete migration architecture and acceptance plan
 ```
+
+## Branding
+
+Brand assets live in two places, both repo-relative and machine-independent:
+
+- `assets/` — original source PNGs (full wordmark, group wordmark, phoenix mark).
+  The Rust PDF and Excel generators embed `assets/logo_phoenix.png` at compile
+  time via `include_bytes!`, so reports never depend on runtime paths.
+- `client/src/assets/branding/` — copies imported by Vite for the kiosk, admin,
+  live attendance, and printable payroll worksheets.
+
+Usage is intentional per surface: the kiosk and dashboard headers use the compact
+phoenix mark, printable payroll worksheets use the official full wordmark, and
+generated payslip/register PDFs and the payroll workbook carry the phoenix mark
+in the header. Print output stays clean (no browser date/URL/page-count chrome).
+
 
 ## Scope And Non-Goals
 

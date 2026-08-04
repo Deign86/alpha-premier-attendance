@@ -12,9 +12,14 @@ use chrono_tz::Asia::Manila;
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqliteRow, Row};
 use state::{AdminSession, AppState};
-use std::{path::{Path, PathBuf}, time::Instant};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID};
 
 #[tauri::command]
 fn get_health(state: State<'_, AppState>) -> serde_json::Value {
@@ -23,7 +28,7 @@ fn get_health(state: State<'_, AppState>) -> serde_json::Value {
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"enableScanSounds":false,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":crate::services::scanner::mode_label(state.scanner.config.mode),"paused":state.scanner.paused()},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
+    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":crate::services::scanner::mode_label(state.scanner.config.mode),"paused":state.scanner.paused()},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
 }
 
 #[tauri::command]
@@ -252,9 +257,9 @@ async fn admin_update_attendance(
     let status = if time_in.is_some() && time_out.is_some() {
         "COMPLETED"
     } else if time_in.is_some() {
-        "OPEN"
+        "WORKING"
     } else {
-        "INCOMPLETE"
+        "MISSED"
     };
     let now = chrono::Utc::now().to_rfc3339();
     let updated = sqlx::query("UPDATE attendance SET attendance_date=?,time_in=?,time_out=?,status=?,revision=revision+1,updated_at=? WHERE attendance_id=? AND time_in IS ? AND time_out IS ? AND revision=?")
@@ -517,53 +522,67 @@ async fn payroll_list_cutoffs(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,daily_rate_centavos,standard_working_days,actual_working_days,basic_pay_centavos,special_holiday_days,special_holiday_multiplier,special_holiday_pay_centavos,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay_centavos,incentives_allowance_centavos,special_allowance_centavos,total_compensation_centavos,total_allowance_centavos,late_units,late_deduction_centavos,half_day_count,half_day_deduction_centavos,absent_days,absence_deduction_centavos,overtime_hours,overtime_rate_centavos,overtime_pay_centavos,manual_adjustment_centavos,adjustment_reason,gross_compensation_centavos,net_pay_centavos,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,finalized_at,revision FROM payroll_cutoffs ORDER BY cutoff_start DESC").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"success":true,"payroll":rows.iter().map(payroll_cutoff_json).collect::<Vec<_>>() }))
+    // Payroll cutoff rows do not store an employee type; derive intern vs
+    // employee classification from the Users register so the printable
+    // worksheet can apply the intern layout and labels.
+    let employee_types: HashMap<String, String> = sqlx::query("SELECT user_id, employee_type FROM users")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|row| (row.get::<String, _>("user_id"), row.get::<String, _>("employee_type")))
+        .collect();
+    Ok(serde_json::json!({"success":true,"payroll":rows.iter().map(|row| payroll_cutoff_json(row, employee_types.get(&row.get::<String,_>("employee_id")).map(String::as_str))).collect::<Vec<_>>() }))
 }
 
-fn payroll_cutoff_json(row: &SqliteRow) -> serde_json::Value {
-    serde_json::json!({
-        "payrollId": row.get::<String, _>("payroll_id"),
-        "employeeId": row.get::<String, _>("employee_id"),
-        "employeeName": row.get::<String, _>("employee_name"),
-        "payrollProfileId": row.get::<String, _>("payroll_profile_id"),
-        "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
-        "cutoffStart": row.get::<String, _>("cutoff_start"),
-        "cutoffEnd": row.get::<String, _>("cutoff_end"),
-        "payrollFrequency": "SEMI_MONTHLY",
-        "dailyRate": row.get::<i64, _>("daily_rate_centavos") as f64 / 100.0,
-        "standardWorkingDays": row.get::<f64, _>("standard_working_days"),
-        "actualWorkingDays": row.get::<f64, _>("actual_working_days"),
-        "basicPay": row.get::<i64, _>("basic_pay_centavos") as f64 / 100.0,
-        "specialHolidayDays": row.get::<f64, _>("special_holiday_days"),
-        "specialHolidayMultiplier": row.get::<f64, _>("special_holiday_multiplier"),
-        "specialHolidayPay": row.get::<i64, _>("special_holiday_pay_centavos") as f64 / 100.0,
-        "regularHolidayDays": row.get::<f64, _>("regular_holiday_days"),
-        "regularHolidayMultiplier": row.get::<f64, _>("regular_holiday_multiplier"),
-        "regularHolidayPay": row.get::<i64, _>("regular_holiday_pay_centavos") as f64 / 100.0,
-        "incentivesAllowance": row.get::<i64, _>("incentives_allowance_centavos") as f64 / 100.0,
-        "specialAllowance": row.get::<i64, _>("special_allowance_centavos") as f64 / 100.0,
-        "totalCompensation": row.get::<i64, _>("total_compensation_centavos") as f64 / 100.0,
-        "totalAllowance": row.get::<i64, _>("total_allowance_centavos") as f64 / 100.0,
-        "lateUnits": row.get::<f64, _>("late_units"),
-        "lateDeduction": row.get::<i64, _>("late_deduction_centavos") as f64 / 100.0,
-        "halfDayCount": row.get::<f64, _>("half_day_count"),
-        "halfDayDeduction": row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0,
-        "absentDays": row.get::<f64, _>("absent_days"),
-        "absenceDeduction": row.get::<i64, _>("absence_deduction_centavos") as f64 / 100.0,
-        "overtimeHours": row.get::<f64, _>("overtime_hours"),
-        "overtimeRate": row.get::<i64, _>("overtime_rate_centavos") as f64 / 100.0,
-        "overtimePay": row.get::<i64, _>("overtime_pay_centavos") as f64 / 100.0,
-        "manualAdjustment": row.get::<i64, _>("manual_adjustment_centavos") as f64 / 100.0,
-        "adjustmentReason": row.get::<Option<String>, _>("adjustment_reason"),
-        "grossCompensation": row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0,
-        "netPay": row.get::<i64, _>("net_pay_centavos") as f64 / 100.0,
-        "signaturePlaceholder": row.get::<String, _>("signature_placeholder"),
-        "calculationBreakdown": row.get::<String, _>("calculation_breakdown"),
-        "approvedWorkingDayOverage": row.get::<i64, _>("approved_working_day_overage") != 0,
-        "status": row.get::<String, _>("status"),
-        "finalizedAt": row.get::<Option<String>, _>("finalized_at"),
-        "revision": row.get::<i64, _>("revision")
-    })
+fn payroll_cutoff_json(row: &SqliteRow, employee_type: Option<&str>) -> serde_json::Value {
+    // Built as an explicit map so the value never depends on the json! macro
+    // recursion budget (the record is large and frequently extended).
+    let mut map = serde_json::Map::new();
+    let mut insert = |key: &str, value: serde_json::Value| { map.insert(key.into(), value); };
+    insert("payrollId", serde_json::json!(row.get::<String, _>("payroll_id")));
+    insert("employeeId", serde_json::json!(row.get::<String, _>("employee_id")));
+    insert("employeeName", serde_json::json!(row.get::<String, _>("employee_name")));
+    insert("employeeType", serde_json::json!(if employee_type == Some("EMPLOYEE") { "EMPLOYEE" } else { "INTERN" }));
+    insert("payrollProfileId", serde_json::json!(row.get::<String, _>("payroll_profile_id")));
+    insert("payrollCutoffLabel", serde_json::json!(row.get::<String, _>("payroll_cutoff_label")));
+    insert("cutoffStart", serde_json::json!(row.get::<String, _>("cutoff_start")));
+    insert("cutoffEnd", serde_json::json!(row.get::<String, _>("cutoff_end")));
+    insert("payrollFrequency", serde_json::json!("SEMI_MONTHLY"));
+    insert("dailyRate", serde_json::json!(row.get::<i64, _>("daily_rate_centavos") as f64 / 100.0));
+    insert("standardWorkingDays", serde_json::json!(row.get::<f64, _>("standard_working_days")));
+    insert("actualWorkingDays", serde_json::json!(row.get::<f64, _>("actual_working_days")));
+    insert("basicPay", serde_json::json!(row.get::<i64, _>("basic_pay_centavos") as f64 / 100.0));
+    insert("specialHolidayDays", serde_json::json!(row.get::<f64, _>("special_holiday_days")));
+    insert("specialHolidayMultiplier", serde_json::json!(row.get::<f64, _>("special_holiday_multiplier")));
+    insert("specialHolidayPay", serde_json::json!(row.get::<i64, _>("special_holiday_pay_centavos") as f64 / 100.0));
+    insert("regularHolidayDays", serde_json::json!(row.get::<f64, _>("regular_holiday_days")));
+    insert("regularHolidayMultiplier", serde_json::json!(row.get::<f64, _>("regular_holiday_multiplier")));
+    insert("regularHolidayPay", serde_json::json!(row.get::<i64, _>("regular_holiday_pay_centavos") as f64 / 100.0));
+    insert("incentivesAllowance", serde_json::json!(row.get::<i64, _>("incentives_allowance_centavos") as f64 / 100.0));
+    insert("specialAllowance", serde_json::json!(row.get::<i64, _>("special_allowance_centavos") as f64 / 100.0));
+    insert("totalCompensation", serde_json::json!(row.get::<i64, _>("total_compensation_centavos") as f64 / 100.0));
+    insert("totalAllowance", serde_json::json!(row.get::<i64, _>("total_allowance_centavos") as f64 / 100.0));
+    insert("lateUnits", serde_json::json!(row.get::<f64, _>("late_units")));
+    insert("lateDeduction", serde_json::json!(row.get::<i64, _>("late_deduction_centavos") as f64 / 100.0));
+    insert("halfDayCount", serde_json::json!(row.get::<f64, _>("half_day_count")));
+    insert("halfDayDeduction", serde_json::json!(row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0));
+    insert("absentDays", serde_json::json!(row.get::<f64, _>("absent_days")));
+    insert("absenceDeduction", serde_json::json!(row.get::<i64, _>("absence_deduction_centavos") as f64 / 100.0));
+    insert("overtimeHours", serde_json::json!(row.get::<f64, _>("overtime_hours")));
+    insert("overtimeRate", serde_json::json!(row.get::<i64, _>("overtime_rate_centavos") as f64 / 100.0));
+    insert("overtimePay", serde_json::json!(row.get::<i64, _>("overtime_pay_centavos") as f64 / 100.0));
+    insert("manualAdjustment", serde_json::json!(row.get::<i64, _>("manual_adjustment_centavos") as f64 / 100.0));
+    insert("adjustmentReason", serde_json::json!(row.get::<Option<String>, _>("adjustment_reason")));
+    insert("grossCompensation", serde_json::json!(row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0));
+    insert("netPay", serde_json::json!(row.get::<i64, _>("net_pay_centavos") as f64 / 100.0));
+    insert("signaturePlaceholder", serde_json::json!(row.get::<String, _>("signature_placeholder")));
+    insert("calculationBreakdown", serde_json::json!(row.get::<String, _>("calculation_breakdown")));
+    insert("approvedWorkingDayOverage", serde_json::json!(row.get::<i64, _>("approved_working_day_overage") != 0));
+    insert("status", serde_json::json!(row.get::<String, _>("status")));
+    insert("finalizedAt", serde_json::json!(row.get::<Option<String>, _>("finalized_at")));
+    insert("revision", serde_json::json!(row.get::<i64, _>("revision")));
+    serde_json::Value::Object(map)
 }
 
 #[tauri::command]
@@ -575,11 +594,16 @@ async fn payroll_create_cutoff(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let input = enrich_cutoff_input(&state.db, &input).await?;
+    let mut input = enrich_cutoff_input(&state.db, &input).await?;
+    apply_intern_rules(&state.db, &mut input).await?;
     let parsed = cutoff_input(&input);
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    let is_intern = input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
+    // Intern payroll floors at zero for a cutoff (mirrors the daily rule).
+    let gross = if is_intern { result.gross_compensation.max(0) } else { result.gross_compensation };
+    let net = if is_intern { result.net_pay.max(0) } else { result.net_pay };
     let profile = input
         .get("payrollProfileId")
         .and_then(|v| v.as_str())
@@ -624,8 +648,8 @@ async fn payroll_create_cutoff(
         .bind(result.overtime_pay)
         .bind((parsed.manual_adjustment * 100.0).round() as i64)
         .bind(parsed.adjustment_reason.clone())
-        .bind(result.gross_compensation)
-        .bind(result.net_pay)
+        .bind(gross)
+        .bind(net)
         .bind("")
         .bind(breakdown.to_string())
         .bind(if parsed.approved_working_day_overage {
@@ -640,7 +664,7 @@ async fn payroll_create_cutoff(
         .await
         .map_err(|e| e.to_string())?;
     enqueue_sync(&state, "PayrollCutoffs", &id, "UPSERT", &input).await;
-    Ok(serde_json::json!({"success":true,"payrollId":id,"netPay":result.net_pay as f64 / 100.0}))
+    Ok(serde_json::json!({"success":true,"payrollId":id,"netPay":net as f64 / 100.0}))
 }
 
 #[tauri::command]
@@ -656,18 +680,22 @@ async fn payroll_update_cutoff(
         .get("payrollId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
-    let input = enrich_cutoff_input(&state.db, &input).await?;
+    let mut input = enrich_cutoff_input(&state.db, &input).await?;
+    apply_intern_rules(&state.db, &mut input).await?;
     let parsed = cutoff_input(&input);
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let now = chrono::Utc::now().to_rfc3339();
+    let is_intern = input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
+    let gross = if is_intern { result.gross_compensation.max(0) } else { result.gross_compensation };
+    let net = if is_intern { result.net_pay.max(0) } else { result.net_pay };
     let updated = sqlx::query("UPDATE payroll_cutoffs SET employee_id=?,employee_name=?,payroll_profile_id=?,payroll_cutoff_label=?,cutoff_start=?,cutoff_end=?,daily_rate_centavos=?,standard_working_days=?,actual_working_days=?,basic_pay_centavos=?,incentives_allowance_centavos=?,special_allowance_centavos=?,total_compensation_centavos=?,total_allowance_centavos=?,late_deduction_centavos=?,half_day_deduction_centavos=?,absence_deduction_centavos=?,overtime_pay_centavos=?,manual_adjustment_centavos=?,adjustment_reason=?,gross_compensation_centavos=?,net_pay_centavos=?,calculation_breakdown=?,revision=revision+1,updated_at=? WHERE payroll_id=? AND status != 'FINALIZED'")
         .bind(&parsed.employee_id).bind(&parsed.employee_name).bind(input.get("payrollProfileId").and_then(|v| v.as_str()).unwrap_or("BEA_STANDARD")).bind(input.get("payrollCutoffLabel").and_then(|v| v.as_str()).unwrap_or(""))
-        .bind(&parsed.cutoff_start).bind(&parsed.cutoff_end).bind((parsed.daily_rate * 100.0).round() as i64).bind(parsed.standard_working_days).bind(parsed.actual_working_days).bind(result.basic_pay).bind(php_to_centavos(parsed.incentives_allowance)).bind(php_to_centavos(parsed.special_allowance)).bind(result.total_compensation).bind(result.total_allowance).bind(result.late_deduction).bind(result.half_day_deduction).bind(result.absence_deduction).bind(result.overtime_pay).bind((parsed.manual_adjustment * 100.0).round() as i64).bind(parsed.adjustment_reason).bind(result.gross_compensation).bind(result.net_pay).bind(serde_json::to_string(&serde_json::json!({"basicPayCentavos":result.basic_pay,"netPayCentavos":result.net_pay})).unwrap_or_default()).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
+        .bind(&parsed.cutoff_start).bind(&parsed.cutoff_end).bind((parsed.daily_rate * 100.0).round() as i64).bind(parsed.standard_working_days).bind(parsed.actual_working_days).bind(result.basic_pay).bind(php_to_centavos(parsed.incentives_allowance)).bind(php_to_centavos(parsed.special_allowance)).bind(result.total_compensation).bind(result.total_allowance).bind(result.late_deduction).bind(result.half_day_deduction).bind(result.absence_deduction).bind(result.overtime_pay).bind((parsed.manual_adjustment * 100.0).round() as i64).bind(parsed.adjustment_reason).bind(gross).bind(net).bind(serde_json::to_string(&serde_json::json!({"basicPayCentavos":result.basic_pay,"netPayCentavos":net})).unwrap_or_default()).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
     if updated.rows_affected() != 1 {
         return Err("PAYROLL_NOT_FOUND_OR_FINALIZED".into());
     }
     enqueue_sync(&state, "PayrollCutoffs", id, "UPSERT", &input).await;
-    Ok(serde_json::json!({"success":true,"payrollId":id,"netPay":result.net_pay as f64 / 100.0}))
+    Ok(serde_json::json!({"success":true,"payrollId":id,"netPay":net as f64 / 100.0}))
 }
 
 #[tauri::command]
@@ -797,6 +825,63 @@ async fn enrich_cutoff_input(
         }
     }
     Ok(enriched)
+}
+
+/// Enforces the fixed intern payroll policy on a cutoff input before the
+/// generic cutoff calculator runs: PHP 80.00/day, PHP 10.00/hour late
+/// deduction, and no holiday premium, allowances, half-days, absences, or
+/// overtime. Employees pass through untouched.
+async fn apply_intern_rules(
+    db: &sqlx::SqlitePool,
+    input: &mut serde_json::Value,
+) -> Result<(), String> {
+    let employee_id = input
+        .get("employeeId")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim();
+    if employee_id.is_empty() {
+        return Ok(());
+    }
+    let employee_type: Option<String> = sqlx::query("SELECT employee_type FROM users WHERE user_id = ?")
+        .bind(employee_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|row| row.get("employee_type"));
+    if employee_type.as_deref() != Some("INTERN") {
+        return Ok(());
+    }
+    let late_units = input
+        .get("lateUnits")
+        .and_then(|value| value.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0);
+    let Some(object) = input.as_object_mut() else {
+        return Err("ADMIN_VALIDATION_ERROR".into());
+    };
+    // Fixed intern rate; any submitted rate is ignored for interns.
+    object.insert("dailyRate".into(), serde_json::json!(INTERN_DAILY_RATE_PHP as f64));
+    object.insert("payrollProfileId".into(), serde_json::json!(INTERN_PAYROLL_PROFILE_ID));
+    object.insert("lateUnits".into(), serde_json::json!(late_units));
+    // Late deduction is PHP 10.00 per hour, computed from total late hours.
+    object.insert(
+        "lateDeduction".into(),
+        serde_json::json!(late_units * INTERN_LATE_DEDUCTION_PER_HOUR_PHP as f64),
+    );
+    for field in [
+        "incentivesAllowance",
+        "specialAllowance",
+        "specialHolidayDays",
+        "regularHolidayDays",
+        "halfDayCount",
+        "absentDays",
+        "overtimeHours",
+        "overtimeRate",
+    ] {
+        object.insert(field.into(), serde_json::json!(0.0));
+    }
+    Ok(())
 }
 
 fn cutoff_input(value: &serde_json::Value) -> crate::services::cutoff_payroll::CutoffInput {
@@ -1554,14 +1639,14 @@ async fn scan_rfid(
     let (attendance_id, action, time_in, time_out, attendance_status) = match existing {
         None => {
             let id = uuid::Uuid::new_v4().to_string();
-            let result = sqlx::query("INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'OPEN', ?, ?, ?)")
+            let result = sqlx::query("INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'WORKING', ?, ?, ?)")
                 .bind(&id).bind(&date).bind(&user_id).bind(&uid).bind(user.get::<String,_>("full_name")).bind(user.get::<Option<String>,_>("department")).bind(&timestamp).bind(source).bind(&timestamp).bind(&timestamp).execute(&state.db).await;
             if result.is_err() {
                 return Ok(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
                 );
             }
-            (id, "TIME_IN", Some(timestamp.clone()), None, "OPEN")
+            (id, "TIME_IN", Some(timestamp.clone()), None, "WORKING")
         }
         Some(row) => {
             let id: String = row.get("attendance_id");
@@ -1922,6 +2007,55 @@ mod tests {
 
         assert_eq!(enriched["employeeName"], "Ada Lovelace");
         assert_eq!(enriched["dailyRate"], 500.0);
+    }
+
+    #[tokio::test]
+    async fn applies_fixed_intern_rules_to_intern_cutoff_input() {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, full_name TEXT NOT NULL, daily_rate_centavos INTEGER, employee_type TEXT NOT NULL)")
+            .execute(&db)
+            .await
+            .expect("users table");
+        sqlx::query("INSERT INTO users (user_id, full_name, daily_rate_centavos, employee_type) VALUES (?, ?, ?, ?)")
+            .bind("INT-1")
+            .bind("Maria Santos")
+            .bind(0_i64)
+            .bind("INTERN")
+            .execute(&db)
+            .await
+            .expect("intern row");
+
+        // Submitted rate/allowances are ignored; the fixed PHP 80/day and
+        // PHP 10/hour late deduction rules are enforced for interns.
+        let mut input = serde_json::json!({
+            "employeeId": "INT-1", "dailyRate": 500.0, "lateUnits": 3.0,
+            "incentivesAllowance": 100.0, "specialHolidayDays": 1.0,
+        });
+        super::apply_intern_rules(&db, &mut input).await.expect("intern rules applied");
+
+        assert_eq!(input["dailyRate"], 80.0);
+        assert_eq!(input["lateDeduction"], 30.0);
+        assert_eq!(input["payrollProfileId"], "INTERN_STANDARD");
+        assert_eq!(input["incentivesAllowance"], 0.0);
+        assert_eq!(input["specialHolidayDays"], 0.0);
+
+        // Employees keep their own values untouched.
+        sqlx::query("INSERT INTO users (user_id, full_name, daily_rate_centavos, employee_type) VALUES (?, ?, ?, ?)")
+            .bind("EMP-1")
+            .bind("Ada Lovelace")
+            .bind(50_000_i64)
+            .bind("EMPLOYEE")
+            .execute(&db)
+            .await
+            .expect("employee row");
+        let mut employee_input = serde_json::json!({"employeeId": "EMP-1", "dailyRate": 500.0, "lateUnits": 1.0});
+        super::apply_intern_rules(&db, &mut employee_input).await.expect("employee rules pass through");
+        assert_eq!(employee_input["dailyRate"], 500.0);
+        assert_eq!(employee_input.get("lateDeduction"), None);
     }
 
     #[test]

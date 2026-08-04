@@ -59,6 +59,8 @@ pub enum LanIssue {
     ConfigInvalid,
     PortInUse,
     NoLanIp,
+    LoopbackBind,
+    BindAddressNotPresent,
     BindFailed,
 }
 
@@ -69,6 +71,8 @@ impl LanIssue {
             LanIssue::ConfigInvalid => "config_invalid",
             LanIssue::PortInUse => "port_in_use",
             LanIssue::NoLanIp => "no_lan_ip",
+            LanIssue::LoopbackBind => "loopback_bind",
+            LanIssue::BindAddressNotPresent => "bind_address_not_present",
             LanIssue::BindFailed => "bind_failed",
         }
     }
@@ -80,6 +84,8 @@ impl LanIssue {
 pub enum LanStartError {
     Config(String),
     NoLanIp,
+    LoopbackBind,
+    BindAddressNotPresent,
     PortInUse,
     Bind(String),
 }
@@ -92,6 +98,14 @@ impl std::fmt::Display for LanStartError {
                 f,
                 "no reachable office LAN IP was detected (check the Wi-Fi/LAN connection, or set lan.bind_address to the office LAN IP; loopback is not shareable)"
             ),
+            LanStartError::LoopbackBind => write!(
+                f,
+                "Live Attendance is bound to localhost and cannot be reached by other devices (set lan.bind_address to the office LAN IP, or leave it unset to auto-detect)"
+            ),
+            LanStartError::BindAddressNotPresent => write!(
+                f,
+                "the configured bind address does not match an active network adapter on this laptop (the current office IP is different; set lan.bind_address to the current office LAN IP, or leave it unset to auto-detect)"
+            ),
             LanStartError::PortInUse => write!(f, "the configured LAN viewer port is already in use"),
             LanStartError::Bind(error) => write!(f, "failed to bind the LAN viewer: {error}"),
         }
@@ -103,6 +117,8 @@ impl LanStartError {
         match self {
             LanStartError::Config(_) => LanIssue::ConfigInvalid,
             LanStartError::NoLanIp => LanIssue::NoLanIp,
+            LanStartError::LoopbackBind => LanIssue::LoopbackBind,
+            LanStartError::BindAddressNotPresent => LanIssue::BindAddressNotPresent,
             LanStartError::PortInUse => LanIssue::PortInUse,
             LanStartError::Bind(_) => LanIssue::BindFailed,
         }
@@ -123,7 +139,7 @@ pub fn router(state: AppState) -> Router {
 fn resolve_bind_address(lan: &LanConfig) -> Result<SocketAddr, LanStartError> {
     if let Some(address) = lan.bind_address {
         if address.is_loopback() {
-            return Err(LanStartError::NoLanIp);
+            return Err(LanStartError::LoopbackBind);
         }
         return Ok(SocketAddr::new(address, lan.port));
     }
@@ -142,6 +158,9 @@ pub async fn bind_and_serve(
         .await
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::AddrInUse => LanStartError::PortInUse,
+            // EADDRNOTAVAIL on Windows: the configured IP is not assigned to
+            // any adapter on this laptop, so it can never be reached.
+            std::io::ErrorKind::AddrNotAvailable => LanStartError::BindAddressNotPresent,
             _ => LanStartError::Bind(error.to_string()),
         })?;
     let actual = listener
@@ -176,6 +195,43 @@ pub struct LanStatusResponse {
     pub connected_sse_clients: u64,
     pub started_at: Option<u64>,
     pub last_error: Option<String>,
+    /// Allowed client subnets from `lan.allowed_subnets` (empty = any private
+    /// RFC1918 address on the same LAN).
+    pub allowed_subnets: Vec<String>,
+    /// True when the configured `lan.bind_address` (if any) is assigned to an
+    /// active adapter on this laptop, or when auto-detection is in use.
+    pub configured_bind_present: bool,
+    /// Local probe result against the bound viewer's `/api/health`.
+    /// `Some(true)` = reachable, `Some(false)` = unreachable, `None` = not
+    /// checked (viewer not running).
+    pub local_health_ok: Option<bool>,
+    pub local_health_error: Option<String>,
+    /// "present" | "missing" | "unknown" — whether an inbound Windows
+    /// Firewall allow rule covers the viewer port.
+    pub firewall_allow_rule: String,
+    /// Plain-language operator guidance in priority order.
+    pub guidance: Vec<String>,
+}
+
+/// Probe the running viewer's `/api/health` over the actual bound address so
+/// the operator can distinguish "server not reachable at all" from "server is
+/// up but inbound access is blocked". Returns `(ok, error)`.
+async fn probe_local_health(state: &AppState) -> (Option<bool>, Option<String>) {
+    let Some(bind) = state.lan_runtime.snapshot().await.bind_address else {
+        return (None, None);
+    };
+    let url = format!("http://{bind}/api/health");
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(1200))
+        .timeout(Duration::from_millis(2200))
+        .build()
+    else {
+        return (None, Some("health probe client unavailable".into()));
+    };
+    match client.get(&url).send().await {
+        Ok(response) => (Some(response.status().is_success()), None),
+        Err(error) => (Some(false), Some(error.to_string())),
+    }
 }
 
 pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
@@ -188,6 +244,7 @@ pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
         .collect::<Vec<_>>();
     let active_lan_ip = crate::lan_net::pick_active_lan_ip().map(|ip| ip.to_string());
     let network_profile = crate::lan_net::detect_network_profile().await;
+    let firewall_allow_rule = crate::lan_net::detect_firewall_allow_rule(state.lan.port).await;
     let running = runtime.phase == crate::state::LanPhase::Running;
 
     // The shareable URL must use the real LAN IP, not loopback. When the bind
@@ -203,6 +260,79 @@ pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
     } else {
         None
     };
+
+    let allowed_subnets = state
+        .lan
+        .allowed_subnets
+        .iter()
+        .map(|subnet| subnet.to_string())
+        .collect::<Vec<_>>();
+    // Auto-detection (None) has nothing to be stale about; loopback config is
+    // already surfaced as its own diagnostic.
+    let configured_bind_present = state
+        .lan
+        .bind_address
+        .map(|ip| ip.is_unspecified() || crate::lan_net::is_address_on_active_adapter(ip))
+        .unwrap_or(true);
+
+    let (local_health_ok, local_health_error) = if running {
+        probe_local_health(state).await
+    } else {
+        (None, None)
+    };
+
+    let firewall_rule_state = match firewall_allow_rule {
+        Some(true) => crate::lan_net::FirewallRuleState::Present,
+        Some(false) => crate::lan_net::FirewallRuleState::Missing,
+        None => crate::lan_net::FirewallRuleState::Unknown,
+    };
+
+    // Plain-language operator guidance, highest priority first.
+    let mut guidance: Vec<String> = Vec::new();
+    if running {
+        if network_profile.likely_blocks_inbound() {
+            guidance.push(
+                "Windows network profile appears to be Public. Switch to Private for office LAN access."
+                    .into(),
+            );
+        }
+        if let Some(bind) = state.lan.bind_address {
+            if !bind.is_unspecified() && !crate::lan_net::is_address_on_active_adapter(bind) {
+                guidance.push(
+                    "The configured bind address does not match an active network adapter on this laptop."
+                        .into(),
+                );
+            }
+        }
+        if firewall_rule_state == crate::lan_net::FirewallRuleState::Missing {
+            guidance.push(format!(
+                "No Windows Firewall allow rule was found for port {}. Devices may be blocked from opening the viewer.",
+                state.lan.port
+            ));
+        }
+        if local_health_ok == Some(false) {
+            guidance.push(
+                "The viewer service is running but /api/health is not reachable from this laptop. Check Windows Firewall or the network profile."
+                    .into(),
+            );
+        }
+        if allowed_subnets.is_empty() {
+            guidance.push(
+                "No allowed subnets are configured, so any private address on the same office Wi-Fi/LAN can open the viewer."
+                    .into(),
+            );
+        }
+        guidance.push(
+            "If devices still cannot open the link, confirm they are on the same office Wi-Fi/LAN and that this network does not isolate clients from each other."
+                .into(),
+        );
+    } else if matches!(state.lan.bind_address, Some(address) if address.is_loopback()) {
+        guidance.push(
+            "Live Attendance is bound to localhost and cannot be reached by other devices.".into(),
+        );
+    } else if let Some(error) = &runtime.last_error {
+        guidance.push(error.clone());
+    }
 
     let (state_name, issue) = match runtime.phase {
         crate::state::LanPhase::Starting => ("starting", "none".to_string()),
@@ -245,6 +375,12 @@ pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
             .load(std::sync::atomic::Ordering::Relaxed),
         started_at: runtime.started_at,
         last_error: runtime.last_error,
+        allowed_subnets,
+        configured_bind_present,
+        local_health_ok,
+        local_health_error,
+        firewall_allow_rule: firewall_rule_state.as_str().into(),
+        guidance,
     }
 }
 
@@ -257,9 +393,42 @@ fn html_escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Minimal branded page for browser access that is not allowed (device outside
+/// the office subnet, or viewer auth required). API routes keep returning JSON;
+/// this only improves the operator-facing browser experience.
+fn viewer_error_page(title: &str, message: &str) -> axum::response::Response {
+    let title = html_escape(title);
+    let message = html_escape(message);
+    Html(format!(
+        r#"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{title} · Alpha Premier Attendance</title>
+<style>
+  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090a09; color: #f6f2e9; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }}
+  .panel {{ width: min(520px, 100%); padding: 30px; background: #151613; border: 1px solid #3a3426; border-top: 3px solid #c6a254; border-radius: 6px; text-align: center; }}
+  .mark {{ display: grid; place-items: center; width: 44px; height: 44px; margin: 0 auto 14px; color: #e1c477; border: 1px solid #c6a254; background: #1d1c17; font-family: 'Orbitron', 'Segoe UI', sans-serif; font-size: .72rem; font-weight: 700; border-radius: 3px; }}
+  h1 {{ margin: 0 0 8px; font-size: 1.25rem; }}
+  p {{ margin: 0; color: #aaa79e; font-size: .86rem; line-height: 1.6; }}
+</style>
+</head>
+<body><div class="panel"><div class="mark">AP</div><h1>{title}</h1><p>{message}</p></div></body>
+</html>"#
+    ))
+    .into_response()
+}
+
 async fn attendance_page(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
-    if !source_allowed(&state.lan, peer.ip()) || !viewer_allowed(&state, &headers, query.token.as_deref()) {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response();
+    if !source_allowed(&state.lan, peer.ip()) {
+        return viewer_error_page(
+            "Outside the office network",
+            "This device is not within the office network allowed for Live Attendance. Open the link from a device on the same office Wi-Fi or LAN as the front-desk laptop.",
+        );
+    }
+    if !viewer_allowed(&state, &headers, query.token.as_deref()) {
+        return viewer_error_page(
+            "Viewer access required",
+            "This Live Attendance view is protected. Open the Live Attendance screen on the front-desk laptop and use the link shown there (append ?token=... when password mode is enabled).",
+        );
     }
     let company = html_escape(&state.office.company_name);
     let office_line = html_escape(&format!("{} · {}", state.office.company_name, state.office.display_short()));
@@ -269,59 +438,87 @@ async fn attendance_page(State(state): State<AppState>, ConnectInfo(peer): Conne
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>Live Attendance</title>
+<title>Live Attendance · __COMPANY__</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Poppins:wght@400;500;600;700&display=swap');
+  :root {
+    --black: #090a09; --surface: #151613; --surface-raised: #1d1c17;
+    --ink: #f6f2e9; --muted: #aaa79e; --quiet: #77746c;
+    --gold: #c6a254; --gold-bright: #e1c477; --gold-soft: #8d753e;
+    --line: #3a3426; --line-bright: #66532d;
+    --success: #98d2a8; --danger: #efaa92;
+    --radius-sm: 3px; --radius-md: 6px;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: "Segoe UI", Arial, Helvetica, sans-serif; background: #f2f4f7; color: #16202b; }
-  header { background: #10304f; color: #ffffff; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
-  .brand h1 { margin: 0; font-size: 21px; letter-spacing: .4px; }
-  .brand p { margin: 2px 0 0; opacity: .85; font-size: 13px; }
-  .clock { text-align: right; }
-  .clock .time { font-size: 27px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
-  .clock .date { font-size: 13px; opacity: .85; }
-  main { max-width: 980px; margin: 0 auto; padding: 20px 20px 48px; }
-  .status-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 10px 14px; border-radius: 8px; background: #ffffff; border: 1px solid #d8dee6; font-size: 14px; }
-  .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
-  .dot.live { background: #1e9e50; box-shadow: 0 0 0 4px rgba(30, 158, 80, .16); }
-  .dot.reconnecting { background: #d99a06; }
-  .dot.offline { background: #d64545; }
-  .status-bar .state { font-weight: 700; }
-  .status-bar .last-update { margin-left: auto; color: #5a6572; font-size: 13px; }
+  body { margin: 0; min-height: 100vh; background: var(--black); color: var(--ink); font-family: 'Poppins', 'Segoe UI', system-ui, sans-serif; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: min(980px, calc(100% - 48px)); min-height: 72px; margin: 0 auto; border-bottom: 1px solid var(--line); }
+  .brand-lockup { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand-mark { display: grid; place-items: center; width: 40px; height: 40px; color: var(--gold-bright); border: 1px solid var(--gold); background: var(--surface); font-family: 'Orbitron', 'Segoe UI', sans-serif; font-size: .7rem; font-weight: 700; border-radius: var(--radius-sm); flex: 0 0 auto; }
+  .brand-text { min-width: 0; }
+  .brand-name { margin: 0; color: var(--ink); font-family: 'Orbitron', 'Segoe UI', sans-serif; font-size: .76rem; font-weight: 700; letter-spacing: .015em; white-space: nowrap; }
+  .brand-subtitle { margin: 3px 0 0; color: var(--quiet); font-size: .64rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clock { display: grid; gap: 2px; text-align: right; }
+  .clock strong { color: var(--gold-bright); font-family: 'Orbitron', 'Segoe UI', sans-serif; font-size: 1.12rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .clock span { color: var(--quiet); font-size: .64rem; font-weight: 600; white-space: nowrap; }
+  main { width: min(980px, calc(100% - 48px)); margin: 0 auto; padding: 22px 0 40px; }
+  .status-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 11px 14px; background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-md); }
+  .chip { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: .66rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--quiet); flex: 0 0 auto; }
+  .dot.live { background: var(--success); box-shadow: 0 0 0 4px rgba(152, 210, 168, .14); }
+  .dot.polling { background: var(--gold-bright); box-shadow: 0 0 0 4px rgba(225, 196, 119, .14); }
+  .dot.reconnecting { background: var(--gold); animation: pulse 1.1s ease-in-out infinite; }
+  .dot.connecting { background: var(--gold-soft); animation: pulse 1.1s ease-in-out infinite; }
+  .dot.offline { background: var(--danger); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .last-update { margin-left: auto; color: var(--quiet); font-size: .7rem; white-space: nowrap; }
   .list { display: grid; gap: 10px; }
-  .card { display: flex; align-items: center; gap: 14px; background: #ffffff; border: 1px solid #d8dee6; border-left: 5px solid #8b97a5; border-radius: 8px; padding: 13px 16px; }
-  .card.in { border-left-color: #1e9e50; }
-  .card.out { border-left-color: #2f6fd6; }
+  .card { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--gold-soft); border-radius: var(--radius-md); }
+  .card.in { border-left-color: var(--success); }
+  .card.out { border-left-color: var(--gold-bright); }
   .card .who { min-width: 0; }
-  .card .who .name { font-size: 19px; font-weight: 700; }
-  .card .who .id { font-size: 13px; color: #5a6572; }
-  .card .badge { margin-left: auto; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; padding: 6px 13px; border-radius: 999px; white-space: nowrap; }
-  .card.in .badge { background: #e2f5e9; color: #12612f; }
-  .card.out .badge { background: #e4ecfb; color: #1d4fae; }
-  .card .when { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; }
-  .card .when small { display: block; color: #5a6572; font-size: 12px; }
-  .empty { text-align: center; color: #5a6572; padding: 56px 20px; background: #ffffff; border: 1px dashed #c2cad4; border-radius: 8px; font-size: 16px; }
-  footer { text-align: center; color: #7c8794; font-size: 12px; padding: 0 0 26px; }
+  .card .who .name { color: var(--ink); font-size: 1rem; font-weight: 600; }
+  .card .who .meta { color: var(--quiet); font-size: .7rem; margin-top: 2px; }
+  .badge { margin-left: auto; font-size: .66rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+  .card.in .badge { color: var(--success); border: 1px solid #4e825d; background: rgba(152, 210, 168, .08); }
+  .card.out .badge { color: var(--gold-bright); border: 1px solid var(--gold-soft); background: rgba(225, 196, 119, .08); }
+  .card .when { text-align: right; font-size: .86rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .card .when small { display: block; color: var(--quiet); font-size: .64rem; margin-top: 2px; }
+  .empty { text-align: center; color: var(--muted); padding: 44px 20px; background: var(--surface); border: 1px dashed var(--line-bright); border-radius: var(--radius-md); font-size: .85rem; }
+  footer { text-align: center; color: var(--quiet); font-size: .68rem; padding: 0 0 26px; }
   @media (max-width: 620px) {
-    header { flex-direction: column; align-items: flex-start; }
-    .clock { text-align: left; }
-    .card { flex-wrap: wrap; }
-    .card .badge { margin-left: 0; }
+    .topbar { width: min(100% - 32px, 980px); min-height: 64px; }
+    main { width: min(100% - 32px, 980px); }
+    .brand-name { font-size: .68rem; }
+    .brand-subtitle { font-size: .58rem; max-width: 150px; }
+    .clock strong { font-size: .95rem; }
+    .card { flex-wrap: wrap; gap: 10px; }
+    .badge { margin-left: 0; }
+    .card .when { white-space: normal; text-align: left; }
   }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand"><h1>__COMPANY__</h1><p>Live Attendance · __OFFICE_LINE__</p></div>
-  <div class="clock"><div class="time" id="clock">--:--:--</div><div class="date" id="clockDate">—</div></div>
+<header class="topbar">
+  <div class="brand-lockup">
+    <div class="brand-mark" aria-hidden="true">AP</div>
+    <div class="brand-text">
+      <p class="brand-name">ALPHA PREMIER</p>
+      <p class="brand-subtitle">Live Attendance · __OFFICE_LINE__</p>
+    </div>
+  </div>
+  <div class="clock" aria-label="Current time"><strong id="clock">--:--:--</strong><span id="clockDate">—</span></div>
 </header>
 <main>
-  <div class="status-bar"><span class="dot" id="dot"></span><span class="state" id="state">Connecting…</span><span class="last-update" id="lastUpdate">Waiting for data</span></div>
+  <div class="status-bar"><span class="chip"><i class="dot" id="dot"></i><span id="state">Connecting…</span></span><span class="last-update" id="lastUpdate">Waiting for data</span></div>
   <div id="list" class="list"></div>
   <div id="empty" class="empty" hidden>No time-ins or time-outs recorded yet today.</div>
 </main>
 <footer>Read-only live attendance · Refresh or open this page again if it ever stops updating.</footer>
 <script>
 const tz = 'Asia/Manila';
+const SNAPSHOT_TIMEOUT_MS = 8000;
+const POLL_MS = 5000;
+const OFFLINE_MS = 12000;
 const stateEl = document.getElementById('state');
 const dotEl = document.getElementById('dot');
 const lastEl = document.getElementById('lastUpdate');
@@ -334,6 +531,8 @@ let pollTimer = null;
 let es = null;
 let reconnectDelay = 1000;
 let everLoaded = false;
+let connMode = 'connecting';
+let lastEventAt = 0;
 
 function tick() {
   const now = new Date();
@@ -343,6 +542,13 @@ function tick() {
 function today() { return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date()); }
 function escapeHtml(v) { return String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function setStatus(label, cls) { stateEl.textContent = label; dotEl.className = 'dot ' + cls; }
+function updateChip() {
+  if (!everLoaded) { setStatus('Connecting…', 'connecting'); return; }
+  if (connMode === 'live') { setStatus('Live — streaming', 'live'); return; }
+  if (connMode === 'reconnecting') { setStatus('Reconnecting…', 'reconnecting'); return; }
+  if (connMode === 'polling') { setStatus('Live — polling fallback', 'polling'); return; }
+  setStatus('Offline — cannot reach the viewer service', 'offline');
+}
 function latestTime(row) { return row.timeOut || row.timeIn || ''; }
 function card(row) {
   const isOut = Boolean(row.timeOut);
@@ -350,7 +556,7 @@ function card(row) {
   const when = time ? new Date(time).toLocaleString('en-PH', { timeZone: tz, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
   const dept = row.department ? ' · ' + escapeHtml(row.department) : '';
   return '<div class="card ' + (isOut ? 'out' : 'in') + '">' +
-    '<div class="who"><div class="name">' + escapeHtml(row.fullName) + '</div><div class="id">' + escapeHtml(row.userId || '') + dept + '</div></div>' +
+    '<div class="who"><div class="name">' + escapeHtml(row.fullName) + '</div><div class="meta">' + escapeHtml(row.userId || '') + dept + '</div></div>' +
     '<div class="badge">' + (isOut ? 'Time Out' : 'Time In') + '</div>' +
     '<div class="when">' + escapeHtml(when) + '<small>' + escapeHtml(row.attendanceDate || '') + '</small></div>' +
     '</div>';
@@ -360,43 +566,58 @@ function render(rows) {
   listEl.innerHTML = sorted.map(card).join('');
   emptyEl.hidden = sorted.length > 0;
 }
+function fetchWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { cache: 'no-store', signal: controller.signal }).finally(() => clearTimeout(timer));
+}
 async function refresh() {
   try {
-    const r = await fetch('/api/attendance/today?date=' + today() + auth, { cache: 'no-store' });
+    const r = await fetchWithTimeout('/api/attendance/today?date=' + today() + auth, SNAPSHOT_TIMEOUT_MS);
     if (!r.ok) throw new Error('bad status ' + r.status);
     const data = await r.json();
     render(data.attendance || []);
     everLoaded = true;
     const now = new Date();
     lastEl.textContent = 'Updated ' + now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    if (stateEl.dataset.conn !== 'live') setStatus('Live — polling fallback', 'live');
+    // Silent SSE stall detection: if the stream claims to be live but has
+    // produced nothing for longer than the keep-alive window, reconnect it.
+    if (connMode === 'live' && Date.now() - lastEventAt > 20000) {
+      connMode = 'reconnecting';
+      if (es) { es.close(); es = null; }
+    }
+    if (connMode !== 'live') { connMode = 'polling'; }
+    updateChip();
   } catch (err) {
-    if (!everLoaded) setStatus('Offline — cannot reach the viewer service', 'offline');
+    if (connMode !== 'live') { connMode = 'offline'; }
+    updateChip();
   }
 }
-function startPolling() { if (!pollTimer) pollTimer = setInterval(refresh, 4000); }
-function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+function startPolling() { if (!pollTimer) pollTimer = setInterval(refresh, POLL_MS); }
 function connect() {
   if (es) { es.close(); es = null; }
-  let opened = false;
-  try { es = new EventSource('/api/events/attendance' + esAuth); } catch (err) { startPolling(); return; }
-  es.onopen = () => { opened = true; stateEl.dataset.conn = 'live'; setStatus('Live — streaming', 'live'); stopPolling(); refresh(); };
-  es.addEventListener('attendance-updated', () => refresh());
-  es.addEventListener('stale-data', () => refresh());
+  try { es = new EventSource('/api/events/attendance' + esAuth); } catch (err) { connMode = 'polling'; startPolling(); updateChip(); return; }
+  es.onopen = () => { connMode = 'live'; lastEventAt = Date.now(); updateChip(); refresh(); };
+  es.addEventListener('attendance-updated', () => { lastEventAt = Date.now(); refresh(); });
+  es.addEventListener('connection-status', () => { lastEventAt = Date.now(); if (connMode !== 'live') { connMode = 'live'; updateChip(); } });
+  es.addEventListener('stale-data', () => { lastEventAt = Date.now(); refresh(); });
   es.onerror = () => {
     if (es) { es.close(); es = null; }
-    stateEl.dataset.conn = 'reconnect';
-    setStatus('Reconnecting…', 'reconnecting');
-    startPolling();
+    connMode = 'reconnecting';
+    updateChip();
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
     setTimeout(connect, reconnectDelay);
   };
 }
 tick();
 setInterval(tick, 1000);
+// Snapshot first: render immediately, then stream. A broken stream never
+// blocks the page because polling keeps the snapshot fresh and the watchdog
+// below reports Offline instead of hanging forever.
 refresh();
+startPolling();
 connect();
-setTimeout(() => { if (!everLoaded) setStatus('Offline — no connection received', 'offline'); }, 8000);
+setTimeout(() => { if (!everLoaded) { connMode = 'offline'; updateChip(); } }, OFFLINE_MS);
 </script>
 </body>
 </html>"#
@@ -454,7 +675,18 @@ async fn attendance_events(State(state): State<AppState>, ConnectInfo(peer): Con
 }
 
 fn source_allowed(config: &LanConfig, address: std::net::IpAddr) -> bool {
-    if config.allowed_subnets.is_empty() { return match address { std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(), std::net::IpAddr::V6(ip) => ip.is_loopback(), }; }
+    // The laptop itself always has access (loopback), even when an allowed
+    // subnet list is configured, so local health checks and troubleshooting
+    // work without weakening the subnet restriction for other devices.
+    if address.is_loopback() {
+        return true;
+    }
+    if config.allowed_subnets.is_empty() {
+        return match address {
+            std::net::IpAddr::V4(ip) => ip.is_private(),
+            std::net::IpAddr::V6(_) => false,
+        };
+    }
     config.allowed_subnets.iter().any(|subnet| subnet.contains(&address))
 }
 
@@ -493,9 +725,28 @@ mod tests {
     }
 
     #[test]
+    fn loopback_is_always_allowed_even_with_configured_subnets() {
+        let config = LanConfig {
+            allowed_subnets: vec!["192.168.1.0/24".parse().unwrap()],
+            ..Default::default()
+        };
+        assert!(source_allowed(&config, IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(source_allowed(&config, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42))));
+        assert!(!source_allowed(&config, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9))));
+    }
+
+    #[test]
+    fn error_messages_are_plain_language_for_operator_guidance() {
+        assert!(LanStartError::LoopbackBind.to_string().contains("localhost"));
+        assert!(LanStartError::BindAddressNotPresent
+            .to_string()
+            .contains("does not match an active network adapter"));
+    }
+
+    #[test]
     fn loopback_bind_is_rejected_for_the_shareable_viewer() {
         let config = LanConfig { bind_address: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), ..Default::default() };
-        assert!(matches!(resolve_bind_address(&config), Err(LanStartError::NoLanIp)));
+        assert!(matches!(resolve_bind_address(&config), Err(LanStartError::LoopbackBind)));
     }
 
     #[test]
@@ -511,7 +762,7 @@ mod tests {
     async fn router_serves_snapshot_and_health_without_mutation_routes() {
         let data_dir = std::env::temp_dir().join(format!("alpha-lan-test-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
-        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('a1','2026-08-01','u1','ABCD1234','Ada','Ops','2026-08-01T08:00:00+08:00',NULL,'OPEN','RFID','2026-08-01T08:00:00Z','2026-08-01T08:00:00Z')").execute(&state.db).await.unwrap();
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('a1','2026-08-01','u1','ABCD1234','Ada','Ops','2026-08-01T08:00:00+08:00',NULL,'WORKING','RFID','2026-08-01T08:00:00Z','2026-08-01T08:00:00Z')").execute(&state.db).await.unwrap();
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
         let app_router = router(state.clone());

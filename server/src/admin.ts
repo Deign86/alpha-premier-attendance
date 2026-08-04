@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
+import type { AdminUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
+import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { manilaTimestamp } from './time.js';
@@ -84,7 +85,7 @@ export class AdminService {
     if (timeIn && !validTimestamp(timeIn, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-in must be a valid timestamp on the attendance date.');
     if (timeOut && !validTimestamp(timeOut, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out must be a valid timestamp on the attendance date.');
     if (timeIn && timeOut && new Date(timeOut).getTime() < new Date(timeIn).getTime()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out cannot precede time-in.');
-    const updated: SheetAttendance = { ...row, timeIn: timeIn ?? '', timeOut, status: timeIn && timeOut ? 'COMPLETED' : timeIn ? 'OPEN' : 'INCOMPLETE' };
+    const updated: SheetAttendance = { ...row, timeIn: timeIn ?? '', timeOut, status: timeIn && timeOut ? 'COMPLETED' : timeIn ? 'WORKING' : 'MISSED' };
     try {
       const saved = await this.sheets.updateAttendance(updated, { timeIn: value.expectedTimeIn ?? null, timeOut: value.expectedTimeOut ?? null });
       const user = await this.sheets.findUserById(row.userId);
@@ -120,7 +121,16 @@ export class AdminService {
     return this.sheets.upsertPayrollProfile({ ...profile, profileId: profile.profileId.trim(), label: profile.label.trim() });
   }
 
-  async cutoffPayroll(): Promise<SheetPayrollCutoff[]> { return (await this.sheets.listPayrollCutoffs()).sort((a, b) => b.cutoffStart.localeCompare(a.cutoffStart)); }
+  async cutoffPayroll(): Promise<SheetPayrollCutoff[]> {
+    const [records, users] = await Promise.all([this.sheets.listPayrollCutoffs(), this.sheets.listUsers()]);
+    // The PayrollCutoffs register does not store an employee type column; derive
+    // intern vs employee classification from the live Users register so the
+    // printable worksheet can apply intern-specific layout and labels.
+    const byId = new Map(users.map((user) => [user.userId, (user.employeeType ?? 'INTERN') === 'EMPLOYEE' ? ('EMPLOYEE' as const) : ('INTERN' as const)]));
+    return records
+      .map((record) => ({ ...record, employeeType: byId.get(record.employeeId) ?? 'EMPLOYEE' }))
+      .sort((a, b) => b.cutoffStart.localeCompare(a.cutoffStart));
+  }
 
   async saveCutoffPayroll(input: unknown, existingPayrollId?: string): Promise<SheetPayrollCutoff> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll values are required.');
@@ -128,20 +138,25 @@ export class AdminService {
     const employeeId = String(value.employeeId ?? '').trim();
     const employee = await this.sheets.findUserById(employeeId);
     if (!employee) throw new AdminError('ADMIN_VALIDATION_ERROR', 'The employee was not found.');
-    if (employee.employeeType !== 'EMPLOYEE' || !employee.dailyRate) throw new AdminError('ADMIN_VALIDATION_ERROR', 'An employee daily rate is required before cutoff payroll can be saved.');
+    const isIntern = (employee.employeeType ?? 'INTERN') !== 'EMPLOYEE';
+    if (!isIntern && !employee.dailyRate) throw new AdminError('ADMIN_VALIDATION_ERROR', 'An employee daily rate is required before cutoff payroll can be saved.');
     const profiles = await this.payrollProfiles();
-    const profileId = String(value.payrollProfileId ?? employee.payrollProfileId ?? 'BEA_STANDARD');
-    const profile = profiles.find((item) => item.profileId === profileId) ?? defaultPayrollProfiles.find((item) => item.profileId === profileId);
-    if (!profile) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Select a valid payroll calculation profile.');
+    const profileId = isIntern ? INTERN_PAYROLL_PROFILE_ID : String(value.payrollProfileId ?? employee.payrollProfileId ?? 'BEA_STANDARD');
+    let profile: PayrollCalculationProfile | undefined;
+    if (!isIntern) {
+      profile = profiles.find((item) => item.profileId === profileId) ?? defaultPayrollProfiles.find((item) => item.profileId === profileId);
+      if (!profile) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Select a valid payroll calculation profile.');
+    }
     const number = (field: keyof CutoffInput, fallback: number) => value[field] === undefined || value[field] === null || value[field] === '' ? fallback : Number(value[field]);
     const existing = existingPayrollId ? await this.sheets.findPayrollCutoff(existingPayrollId) : null;
     if (existingPayrollId && !existing) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
     if (existing?.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be edited.');
     try {
-      const calculated = calculateCutoffPayroll({
-        employeeId, employeeName: employee.fullName, payrollProfileId: profile.profileId, payrollCutoffLabel: String(value.payrollCutoffLabel ?? '').trim() || `${value.cutoffStart ?? ''} to ${value.cutoffEnd ?? ''}`,
-        cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate), standardWorkingDays: number('standardWorkingDays', profile.standardWorkingDaysPerCutoff), actualWorkingDays: number('actualWorkingDays', profile.standardWorkingDaysPerCutoff), specialHolidayDays: number('specialHolidayDays', 0), specialHolidayMultiplier: number('specialHolidayMultiplier', profile.specialHolidayMultiplier), regularHolidayDays: number('regularHolidayDays', 0), regularHolidayMultiplier: number('regularHolidayMultiplier', profile.regularHolidayMultiplier), incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance), lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0), halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0), overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate), manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''), approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
-      });
+      const cutoffLabel = String(value.payrollCutoffLabel ?? '').trim() || `${value.cutoffStart ?? ''} to ${value.cutoffEnd ?? ''}`;
+      const cutoff = isIntern
+        ? internCutoffInput({ value, employee, profileId: INTERN_PAYROLL_PROFILE_ID, cutoffLabel, number })
+        : employeeCutoffInput({ value, employee, profile: profile!, profileId, cutoffLabel, number });
+      const calculated = calculateCutoffPayroll(cutoff);
       return this.sheets.upsertPayrollCutoff({ ...calculated, payrollId: existingPayrollId ?? crypto.randomUUID(), finalizedAt: null });
     } catch (error) { throw new AdminError('ADMIN_VALIDATION_ERROR', error instanceof Error ? error.message : 'Payroll values are invalid.'); }
   }
@@ -159,3 +174,53 @@ export class AdminService {
 function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null }; }
 function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department }; }
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }
+
+/** Builds the shared cutoff input for a standard employee record (existing rules unchanged). */
+function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number }: CutoffInputBuilder & { profile: PayrollCalculationProfile }): CutoffInput {
+  return {
+    employeeId: employee.userId, employeeName: employee.fullName, employeeType: 'EMPLOYEE', payrollProfileId: profileId, payrollCutoffLabel: cutoffLabel,
+    cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate ?? 0),
+    standardWorkingDays: number('standardWorkingDays', profile.standardWorkingDaysPerCutoff), actualWorkingDays: number('actualWorkingDays', profile.standardWorkingDaysPerCutoff),
+    specialHolidayDays: number('specialHolidayDays', 0), specialHolidayMultiplier: number('specialHolidayMultiplier', profile.specialHolidayMultiplier),
+    regularHolidayDays: number('regularHolidayDays', 0), regularHolidayMultiplier: number('regularHolidayMultiplier', profile.regularHolidayMultiplier),
+    incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance),
+    lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
+    halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0),
+    overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
+    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''),
+    approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
+  };
+}
+
+/**
+ * Builds the shared cutoff input for an intern record using the fixed intern
+ * policy: PHP 80.00 per day and PHP 10.00 per hour of lateness. No holiday
+ * premium, allowances, half-days, absences, or overtime apply to interns.
+ */
+function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: CutoffInputBuilder): CutoffInput {
+  const lateUnits = Math.max(0, number('lateUnits', 0));
+  return {
+    employeeId: employee.userId, employeeName: employee.fullName, employeeType: 'INTERN', payrollProfileId: profileId, payrollCutoffLabel: cutoffLabel,
+    cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY',
+    // Fixed intern rate — any submitted rate is ignored for interns.
+    dailyRate: INTERN_DAILY_RATE_PHP,
+    standardWorkingDays: number('standardWorkingDays', 11), actualWorkingDays: number('actualWorkingDays', 11),
+    specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
+    incentivesAllowance: 0, specialAllowance: 0,
+    lateUnits,
+    // Late deduction is PHP 10.00 per hour, computed from the total late hours.
+    lateDeduction: Math.round(lateUnits * INTERN_LATE_DEDUCTION_PER_HOUR_PHP),
+    halfDayCount: 0, halfDayFraction: 0, absentDays: 0,
+    overtimeHours: 0, overtimeRate: 0,
+    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''),
+    approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
+  };
+}
+
+type CutoffInputBuilder = {
+  value: Partial<CutoffInput>;
+  employee: SheetUser;
+  profileId: string;
+  cutoffLabel: string;
+  number: (field: keyof CutoffInput, fallback: number) => number;
+};

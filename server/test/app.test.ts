@@ -10,7 +10,7 @@ describe('HTTP API', () => {
       config: {
         timezone: 'Asia/Manila',
         rfidAutoSubmitDelayMs: 500,
-        enableScanSounds: true,
+       
         resultResetDelayMs: 3000,
         scanCooldownMs: 10,
         rateLimitWindowMs: 60000,
@@ -36,7 +36,7 @@ describe('HTTP API', () => {
   });
 
   it('returns typed validation errors', async () => {
-    const app = createApp({ sheets: new InMemorySheetsService(), config: { timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 500, enableScanSounds: true, resultResetDelayMs: 3000, scanCooldownMs: 10, rateLimitWindowMs: 60000, rateLimitMax: 100, port: 3001, corsOrigin: '*' } });
+    const app = createApp({ sheets: new InMemorySheetsService(), config: { timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 500, resultResetDelayMs: 3000, scanCooldownMs: 10, rateLimitWindowMs: 60000, rateLimitMax: 100, port: 3001, corsOrigin: '*' } });
     const response = await request(app).post('/api/scan').send({ rfidUid: '', source: 'RFID' }).expect(400);
     expect(response.body.success).toBe(false);
     expect(response.body.error.code).toBe('INVALID_SCAN_INPUT');

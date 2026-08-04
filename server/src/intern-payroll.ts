@@ -1,4 +1,5 @@
 import { DateTime } from 'luxon';
+import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -34,9 +35,9 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const lateMilliseconds = actualTimeIn.toMillis() - start.toMillis();
   const lateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
   const graceUsed = lateHours > 0 && input.graceAvailable;
-  const lateDeduction = lateHours > 0 && !graceUsed ? lateHours * 10 : 0;
+  const lateDeduction = lateHours > 0 && !graceUsed ? lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP : 0;
   const computedTimeIn = lateHours > 0 && !graceUsed ? ceilHour(actualTimeIn) : actualTimeIn;
-  const basePay = 80;
+  const basePay = INTERN_DAILY_RATE_PHP;
 
   return {
     computedTimeIn: computedTimeIn.toISO({ suppressMilliseconds: true })!,

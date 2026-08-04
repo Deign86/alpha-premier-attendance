@@ -7,7 +7,7 @@ Use this runbook before enabling real cards and after replacing a reader, kiosk 
 - The reader appears in Windows as a keyboard/HID device without an unknown-device warning.
 - Every test card produces the expected UID exactly once, with the expected suffix behavior.
 - The native scanner completes a scan on Enter or the idle-timeout fallback, never twice.
-- A successful first scan creates one `OPEN` row; the next scan closes it as `COMPLETED`.
+- A successful first scan creates one `WORKING` row; the next scan closes it as `COMPLETED`.
 - Unknown and inactive cards are rejected without an Attendance row.
 - The kiosk shows a large, clear result and resets after every outcome; card taps are captured natively without any focused field.
 - The 10-second cooldown prevents an accidental repeated read from mutating attendance.
@@ -24,7 +24,7 @@ Prepare one active test user, one inactive test user, one unknown card, and a di
 2. **Confirm keyboard mode.** Open Notepad outside the kiosk and scan the active test card. The UID should appear as printable characters. Verify whether the reader sends Enter. Delete the test text afterward.
 3. **Check UID formatting.** Compare the captured string with the `Users.rfid_uid` value. Confirm case, separators, leading zeros, and length. Normalize the roster or scanner configuration once; do not maintain multiple spellings.
 4. **Open the kiosk.** Load the kiosk window. No field needs to be focused: card taps are captured by the native Rust scanner listener even when the webview has no focus. Tap a card without clicking anything and confirm a result appears.
-5. **Test Enter-suffixed scans.** Scan the active card. Confirm one request, a `TIME_IN` result, and one `OPEN` Attendance row. Note the `requestId`.
+5. **Test Enter-suffixed scans.** Scan the active card. Confirm one request, a `TIME_IN` result, and one `WORKING` Attendance row. Note the `requestId`.
 6. **Test cooldown.** Present the same card again immediately. Confirm the UI reports cooldown/duplicate behavior and no second row is created.
 7. **Complete attendance.** After the cooldown, scan the same card once. Confirm one `TIME_OUT` result and that the original row has `time_out` populated and `status=COMPLETED`.
 8. **Test no-Enter scanners.** Temporarily disable the reader's Enter suffix (or use a test profile), scan an active card, and verify the 150 ms idle fallback submits once. Restore the production suffix setting afterward.
@@ -35,7 +35,7 @@ Prepare one active test user, one inactive test user, one unknown card, and a di
 13. **Test LAN path (if enabled).** From the kiosk and one approved LAN client, check `/api/health`; verify the kiosk can scan while unapproved network sources are blocked by the Windows firewall.
 14. **Test disabled setup.** With `ENABLE_CARD_SETUP=false`, attempt to open setup and confirm `SETUP_DISABLED`; scan the unknown card normally and confirm `UNKNOWN_RFID_CARD` with no `Users` or `Attendance` mutation.
 15. **Test PIN unlock and enrollment.** Temporarily set `ENABLE_CARD_SETUP=true` with the supervised `SETUP_ADMIN_PIN`. Unlock with a wrong PIN (rejected and rate-limited), then the correct PIN. Scan the unknown card, submit approved profile fields, and confirm one `Users` row plus no `Attendance` row.
-16. **Test known-card reconfiguration.** In the same setup session, scan the known test card, change a safe profile field or status, and confirm only the matching `Users` row changes. Verify its existing/open or completed Attendance history is byte-for-byte unchanged.
+16. **Test known-card reconfiguration.** In the same setup session, scan the known test card, change a safe profile field or status, and confirm only the matching `Users` row changes. Verify its existing/working or completed Attendance history is byte-for-byte unchanged.
 17. **Test conflict and expiry.** Attempt to assign an existing UID/user combination to a different user and confirm `USER_CONFLICT` without overwrite. Call setup lock, then retry lookup; wait past `SETUP_SESSION_MINUTES` in a short test configuration and confirm `SETUP_SESSION_EXPIRED`.
 18. **Close the setup window.** Call `POST /api/setup/lock`, clear the browser token, set `ENABLE_CARD_SETUP=false`, and restart if configuration is startup-loaded. Repeat a normal Time In/Time Out to verify attendance behavior is unchanged.
 

@@ -34,7 +34,10 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   const overtimePay = multiply(cents(input.overtimeRate) * input.overtimeHours, 1);
   const manualAdjustment = cents(input.manualAdjustment);
   const deductions = lateDeduction + halfDayDeduction + absenceDeduction;
-  const grossCompensation = totalCompensation + totalAllowance + overtimePay + manualAdjustment - deductions;
+  // Intern payroll floors at zero for the cutoff: an intern can never owe
+  // money for a period (mirrors the floor-at-zero daily intern rule).
+  const grossBeforeFloor = totalCompensation + totalAllowance + overtimePay + manualAdjustment - deductions;
+  const grossCompensation = input.employeeType === 'INTERN' ? Math.max(0, grossBeforeFloor) : grossBeforeFloor;
   const record = {
     ...recordInput,
     dailyRate: pesos(dailyRate),

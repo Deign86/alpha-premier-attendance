@@ -12,9 +12,12 @@ enabled = true
 # Allow the Live Attendance screen to start the viewer when `enabled = false`.
 # Set to false to disable the viewer entirely (state shows as Disabled).
 allow_runtime_start = true
-# Leave unset to auto-detect the front-desk laptop's office Wi-Fi/LAN IP, or set
-# a specific private IPv4 (never localhost). Example: "192.168.1.25".
-bind_address = "192.168.1.25"
+# Leave unset (recommended) to auto-detect the front-desk laptop's active
+# office Wi-Fi/LAN IP, or set a specific private IPv4 (never localhost) that is
+# actually assigned to this laptop (use `ipconfig` to confirm). A stale or
+# missing bind address is the most common reason the viewer works on the laptop
+# but phones on the same Wi-Fi cannot open it.
+# bind_address = "192.168.1.25"
 port = 4173
 allow_wildcard_bind = false
 allowed_subnets = ["192.168.1.0/24"]

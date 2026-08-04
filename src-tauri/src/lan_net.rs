@@ -85,6 +85,58 @@ pub fn pick_active_lan_ip() -> Option<IpAddr> {
     detect_lan_interfaces().into_iter().map(|item| item.ip).next()
 }
 
+/// True when `ip` belongs to an active network adapter on this machine
+/// (loopback always counts). Used to warn when a configured `lan.bind_address`
+/// is stale, which is one of the most common reasons the viewer runs locally
+/// but other devices cannot connect.
+pub fn is_address_on_active_adapter(ip: IpAddr) -> bool {
+    if ip.is_loopback() {
+        return true;
+    }
+    detect_lan_interfaces().iter().any(|item| item.ip == ip)
+}
+
+/// Best-effort check for an inbound Windows Firewall allow rule covering the
+/// LAN viewer port. Returns `Some(true)` when at least one matching rule
+/// exists, `Some(false)` when none does, and `None` when the check could not
+/// run (non-Windows, missing PowerShell, or the query timed out).
+pub async fn detect_firewall_allow_rule(port: u16) -> Option<bool> {
+    let script = r#"
+try {
+  $f = Get-NetFirewallPortFilter -Protocol TCP | Where-Object { $_.LocalPort -contains '__PORT__' };
+  if (-not $f) { '0' }
+  else {
+    $count = 0;
+    foreach ($item in $f) {
+      $rules = $item | Get-NetFirewallRule -ErrorAction SilentlyContinue;
+      if ($rules) { $count += ($rules | Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' } | Measure-Object).Count }
+    }
+    if ($count -gt 0) { '1' } else { '0' }
+  }
+} catch { 'x' }
+"#
+    .replace("__PORT__", &port.to_string());
+    let Ok(child) = tokio::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+    else {
+        return None;
+    };
+    let output = tokio::time::timeout(std::time::Duration::from_secs(6), child.wait_with_output())
+        .await
+        .ok()
+        .and_then(|result| result.ok());
+    let Some(output) = output else { return None; };
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
 /// Windows network profile category. `Public` blocks most inbound LAN traffic
 /// by default, so the app can surface plain-language firewall guidance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -94,6 +146,28 @@ pub enum NetworkProfile {
     Private,
     Domain,
     Unknown,
+}
+
+/// Firewall allow-rule state for the LAN viewer port, for operator guidance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FirewallRuleState {
+    /// At least one inbound allow rule covers the viewer port.
+    Present,
+    /// No inbound allow rule was found for the viewer port.
+    Missing,
+    /// The check could not run (non-Windows, or PowerShell unavailable).
+    Unknown,
+}
+
+impl FirewallRuleState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FirewallRuleState::Present => "present",
+            FirewallRuleState::Missing => "missing",
+            FirewallRuleState::Unknown => "unknown",
+        }
+    }
 }
 
 impl NetworkProfile {
@@ -161,6 +235,11 @@ mod tests {
         assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(169, 254, 10, 10))));
         assert!(!is_office_lan_candidate(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)));
         assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn loopback_counts_as_an_active_adapter() {
+        assert!(is_address_on_active_adapter(IpAddr::V4(Ipv4Addr::LOCALHOST)));
     }
 
     #[test]

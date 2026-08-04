@@ -65,7 +65,7 @@ payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cut
 
 `PayrollCutoffs` is the editable semi-monthly payroll report. The existing `Payroll` tab remains the attendance-linked daily payroll ledger and is not replaced. Currency is stored as two-decimal peso values; the service calculates in centavos before writing values. A non-zero `manual_adjustment` requires `adjustment_reason`.
 
-`employee_type` is `INTERN` or `EMPLOYEE`; enrollment defaults to `INTERN`. `daily_rate` is a positive peso amount for employees and may be blank for interns. `photo_url` is the public Vercel Blob URL returned by the protected setup photo upload. Payroll is appended only after a `COMPLETED` attendance row has a time-out; open attendance never creates payroll.
+`employee_type` is `INTERN` or `EMPLOYEE`; enrollment defaults to `INTERN`. `daily_rate` is a positive peso amount for employees and may be blank for interns. `photo_url` is the public Vercel Blob URL returned by the protected setup photo upload. Payroll is appended only after a `COMPLETED` attendance row has a time-out; working attendance never creates payroll.
 
 Freeze row 1. Keep data values as plain text/ISO timestamps; do not insert formulas into columns written by the service. Avoid sorting a live sheet while a kiosk is processing a scan.
 
@@ -144,7 +144,7 @@ Setup mode is separate from attendance. An unknown card must continue to return 
 2. Submit `POST /api/setup/unlock` with `{ "pin": "..." }`. On success, retain the opaque `setupToken` in memory until `expiresAt`; send it as `X-Setup-Token`. Do not write it to local storage or logs.
 3. Scan the card and call `GET /api/setup/card?rfidUid=<normalized-uid>`. A `user: null` response means the card is unknown and eligible for supervised enrollment; a populated user means it is already registered.
 4. For an unknown card, collect the operator-approved `userId`, `fullName`, optional `department`, and `status`, then call `POST /api/setup/users` with the setup token. Confirm one new `Users` row and no `Attendance` row.
-5. For a known card, review and edit the returned user profile, then call the same upsert endpoint. This updates only the matching `Users` row; it must not alter historical or open attendance rows.
+5. For a known card, review and edit the returned user profile, then call the same upsert endpoint. This updates only the matching `Users` row; it must not alter historical or working attendance rows.
 6. If the UID is assigned to another user, stop and resolve the roster conflict. The API must return `USER_CONFLICT` without overwriting either user. For a replacement card, deactivate the old UID first, then enroll the new UID as a separate supervised action.
 7. Call `POST /api/setup/lock` when finished. Clear the token in the browser even if the request fails. Set `ENABLE_CARD_SETUP=false` after the enrollment window and restart the service if configuration is loaded at startup.
 

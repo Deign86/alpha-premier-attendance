@@ -55,6 +55,9 @@ pub struct ScannerStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub mode: String,
+    /// True while the operator types in admin/setup/manual-entry screens, so
+    /// keystrokes are never misread as card taps.
+    pub paused: bool,
 }
 
 /// Shared scanner control surface stored in `AppState` so Tauri commands can
@@ -76,6 +79,7 @@ impl ScannerHandle {
                 message: "Waiting for card".into(),
                 detail: None,
                 mode,
+                paused: false,
             }),
             paused: AtomicBool::new(false),
         }
@@ -90,7 +94,9 @@ impl ScannerHandle {
     }
 
     pub fn status(&self) -> ScannerStatus {
-        self.status.lock().expect("scanner status lock").clone()
+        let mut status = self.status.lock().expect("scanner status lock").clone();
+        status.paused = self.paused.load(Ordering::SeqCst);
+        status
     }
 }
 
@@ -193,13 +199,13 @@ fn spawn_keyboard(runtime: &Arc<Runtime>, config: ScannerConfig) {
                 flush_buffer(&hook_runtime);
                 return;
             }
-            // `Event.name` carries the character the layout actually emitted
-            // (shift-aware), which is what keyboard-wedge readers type.
-            if let Some(name) = event.name {
-                for ch in name.chars() {
-                    push_char(&hook_runtime, ch);
-                }
-            } else if let Some(ch) = key_text(key) {
+            // Deterministic VK-to-character mapping only. Card UIDs are hex, so
+            // relying on the active keyboard layout (`Event.name` on Windows
+            // runs AttachThreadInput + ToUnicodeEx for every keystroke) risks
+            // wrong characters on non-US layouts and is slow enough to exceed
+            // the low-level-hook timeout, after which Windows silently removes
+            // the hook and the kiosk stops responding to card taps.
+            if let Some(ch) = key_text(key) {
                 push_char(&hook_runtime, ch);
             }
         });
@@ -284,6 +290,10 @@ fn is_enter(key: rdev::Key) -> bool {
 
 /// Layout-independent fallback for drivers that do not populate `Event.name`.
 /// Accepts only the characters keyboard-wedge readers actually send.
+///
+/// This is now the primary capture path: card UIDs are uppercase hex, so a
+/// deterministic virtual-key mapping is always correct and never touches the
+/// active keyboard layout or the slow Win32 name lookup.
 fn key_text(key: rdev::Key) -> Option<char> {
     use rdev::Key::*;
     match key {
@@ -372,7 +382,7 @@ fn push_char(runtime: &Arc<Runtime>, ch: char) {
         was_empty
     };
     if was_empty {
-        set_status(runtime, ScannerState::Scanning, "Input received", None);
+        set_status(runtime, ScannerState::Scanning, "Scan received", None);
     }
 }
 
@@ -499,6 +509,7 @@ fn set_status(
         message: message.to_string(),
         detail,
         mode: mode_label(runtime.handle.config.mode),
+        paused: runtime.handle.paused(),
     };
     {
         let mut current = runtime.handle.status.lock().expect("scanner status lock");
@@ -515,13 +526,29 @@ fn set_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, ScanParse};
+    use super::{key_text, normalize, ScanParse};
+    use rdev::Key;
 
     fn valid(raw: &str) -> String {
         match normalize(raw) {
             ScanParse::Valid(uid) => uid,
             other => panic!("expected valid scan for {raw:?}, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn key_text_covers_hex_digits_and_letters_layout_independently() {
+        assert_eq!(key_text(Key::Num0), Some('0'));
+        assert_eq!(key_text(Key::Num9), Some('9'));
+        assert_eq!(key_text(Key::Kp5), Some('5'));
+        assert_eq!(key_text(Key::KeyA), Some('A'));
+        assert_eq!(key_text(Key::KeyF), Some('F'));
+        assert_eq!(key_text(Key::KeyZ), Some('Z'));
+        // Non-UID keys never enter the scan buffer.
+        assert_eq!(key_text(Key::SemiColon), None);
+        assert_eq!(key_text(Key::Space), None);
+        assert_eq!(key_text(Key::Return), None);
+        assert_eq!(key_text(Key::Tab), None);
     }
 
     #[test]

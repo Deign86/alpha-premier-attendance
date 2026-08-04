@@ -17,7 +17,7 @@ const printProfiles: PayrollCalculationProfile[] = [
 
 function samplePayrollRecord(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {
   return {
-    payrollId: 'P-001', employeeId: 'EMP-001', employeeName: 'Ada Lovelace', payrollProfileId: 'BEA_STANDARD',
+    payrollId: 'P-001', employeeId: 'EMP-001', employeeName: 'Ada Lovelace', employeeType: 'EMPLOYEE', payrollProfileId: 'BEA_STANDARD',
     payrollCutoffLabel: 'August 1-15, 2026', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15', payrollFrequency: 'SEMI_MONTHLY',
     dailyRate: 500, standardWorkingDays: 11, actualWorkingDays: 11, basicPay: 5500,
     specialHolidayDays: 0, specialHolidayMultiplier: 0.3, specialHolidayPay: 0,
@@ -45,7 +45,7 @@ describe('PayrollWorkspace', () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText('Employee'), 'EMP-1');
+    await user.selectOptions(screen.getByLabelText('Personnel'), 'EMP-1');
     await user.click(screen.getByRole('button', { name: /1st.*15th/i }));
     await user.click(screen.getByRole('button', { name: 'Save cutoff payroll' }));
 
@@ -63,7 +63,7 @@ describe('PayrollWorkspace', () => {
       />,
     );
     expect(screen.getAllByText('Payroll Worksheet')).toHaveLength(2);
-    expect(screen.getAllByText('Alpha Premier')).toHaveLength(2);
+    expect(screen.getAllByAltText('Alpha Premier logo')).toHaveLength(2);
     expect(screen.getAllByText('Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila')).toHaveLength(2);
     expect(screen.getAllByText('Employee details')).toHaveLength(2);
     expect(screen.getAllByText('Earnings')).toHaveLength(2);
@@ -75,5 +75,34 @@ describe('PayrollWorkspace', () => {
     expect(screen.getAllByText('Ada Lovelace').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Grace Hopper').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('PHP 5,375.00').length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('renders a worksheet-style printable intern payroll sheet with the fixed PHP 80/day rule', () => {
+    render(
+      <PayrollWorkspace
+        users={[{ userId: 'INT-001', rfidUid: 'ABCD5678', fullName: 'Maria Santos', department: null, status: 'ACTIVE', employeeType: 'INTERN', dailyRate: null, payrollProfileId: null, photoUrl: null }]}
+        profiles={printProfiles}
+        records={[samplePayrollRecord({
+          payrollId: 'P-INT-001', employeeId: 'INT-001', employeeName: 'Maria Santos', employeeType: 'INTERN',
+          payrollProfileId: 'INTERN_STANDARD', dailyRate: 80, basicPay: 800, totalCompensation: 800,
+          incentivesAllowance: 0, specialAllowance: 0, totalAllowance: 0, specialHolidayDays: 0, regularHolidayDays: 0,
+          lateUnits: 3, lateDeduction: 30, halfDayCount: 0, halfDayDeduction: 0, absentDays: 0, absenceDeduction: 0,
+          overtimeHours: 0, overtimeRate: 0, overtimePay: 0, grossCompensation: 770, netPay: 770, status: 'DRAFT',
+          calculationBreakdown: 'PHP 800.00 basic - PHP 30.00 late deduction = PHP 770.00',
+        })]}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    // Intern worksheet-specific labels and fixed intern values.
+    expect(screen.getAllByText('Intern Payroll Worksheet')).toHaveLength(1);
+    expect(screen.getAllByAltText('Alpha Premier logo')).toHaveLength(1);
+    expect(screen.getAllByText('Intern details')).toHaveLength(1);
+    expect(screen.getAllByText('Counted days (days worked)')).toHaveLength(1);
+    expect(screen.getAllByText('Total late hours')).toHaveLength(1);
+    expect(screen.getAllByText('Maria Santos (Intern)')).toHaveLength(1);
+    expect(screen.getAllByText('PHP 80.00').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('PHP 770.00').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('PHP 30.00').length).toBeGreaterThanOrEqual(2);
   });
 });

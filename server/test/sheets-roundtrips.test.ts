@@ -53,11 +53,11 @@ const SHEET_DATA: Record<string, string[][]> = {
   Attendance: [
     ATTENDANCE_HEADERS,
     // attendanceId, attendanceDate, userId, rfidUid, fullName, department, timeIn, timeOut, status, source, notes
-    ['att1', '2026-07-28', 'u1', 'AABBCC11', 'Test User', 'Eng', '2026-07-28T07:50:00+08:00', '', 'OPEN', 'RFID', ''],
+    ['att1', '2026-07-28', 'u1', 'AABBCC11', 'Test User', 'Eng', '2026-07-28T07:50:00+08:00', '', 'WORKING', 'RFID', ''],
   ],
   // Row-targeted optimistic check: single data row at row 2, columns A..K (11 headers).
   'Attendance!A2:K2': [
-    ['att1', '2026-07-28', 'u1', 'AABBCC11', 'Test User', 'Eng', '2026-07-28T07:50:00+08:00', '', 'OPEN', 'RFID', ''],
+    ['att1', '2026-07-28', 'u1', 'AABBCC11', 'Test User', 'Eng', '2026-07-28T07:50:00+08:00', '', 'WORKING', 'RFID', ''],
   ],
   Payroll: [PAYROLL_HEADERS],
   InternGrace: [GRACE_HEADERS],

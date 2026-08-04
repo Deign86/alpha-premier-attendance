@@ -6,7 +6,7 @@ import { InMemorySheetsService } from '../src/sheets.js';
 
 const setupConfig = { enableCardSetup: true, setupAdminPin: '2468', setupSessionMinutes: 1 };
 const appConfig = {
-  timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 150, enableScanSounds: true, resultResetDelayMs: 4000,
+  timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 150, resultResetDelayMs: 4000,
   scanCooldownMs: 10000, rateLimitWindowMs: 60000, rateLimitMax: 100, port: 3001, corsOrigin: '*',
   sheetsMode: 'memory' as const, ...setupConfig,
 };

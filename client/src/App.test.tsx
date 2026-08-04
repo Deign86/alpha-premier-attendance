@@ -53,7 +53,7 @@ const successResponse = {
     attendanceDate: '2026-07-28',
     timeIn: '2026-07-28T09:00:00+08:00',
     timeOut: null,
-    status: 'OPEN',
+    status: 'WORKING',
   },
   user: { userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', photoUrl: 'asset://localhost/C:/photos/ada.webp' },
 };
@@ -63,7 +63,7 @@ function mockFetch(response: unknown = successResponse) {
     if (String(input) === '/api/config') {
       return {
         ok: true,
-        json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, enableScanSounds: false, resultResetDelayMs: 500 }),
+        json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }),
       } as Response;
     }
     return { ok: true, json: async () => response } as Response;
@@ -111,7 +111,7 @@ describe('RFID kiosk', () => {
     const scanCalls = vi.fn();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       if (String(input) === '/api/config') {
-        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, enableScanSounds: false, resultResetDelayMs: 500 }) } as Response;
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
       }
       scanCalls(String(input));
       return new Promise<Response>((resolve) => { resolveScan = resolve; });
@@ -174,7 +174,7 @@ describe('RFID kiosk', () => {
             success: true,
             timezone: 'Asia/Manila',
             rfidAutoSubmitDelayMs: 30,
-            enableScanSounds: false,
+           
             resultResetDelayMs: 500,
             office: {
               companyName: 'Alpha Premier',
@@ -202,7 +202,7 @@ describe('RFID kiosk', () => {
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes('/api/config')) return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, enableScanSounds: false, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      if (url.includes('/api/config')) return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
       if (url.includes('/api/setup/unlock')) return { ok: true, json: async () => ({ success: true, setupToken: 'setup-token', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
       return { ok: true, json: async () => successResponse } as Response;
     });
@@ -228,7 +228,7 @@ describe('RFID kiosk', () => {
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes('/api/config')) return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, enableScanSounds: false, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      if (url.includes('/api/config')) return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
       if (url.includes('/api/setup/unlock')) return { ok: true, json: async () => ({ success: true, setupToken: 'setup-token', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
       if (url.includes('/api/setup/card')) return { ok: true, json: async () => ({ success: true, rfidUid: 'ABCD1234', user: null }) } as Response;
       if (url.includes('/api/setup/users')) return { ok: true, json: async () => ({ success: true, created: true, user: { userId: 'EMP-002', fullName: 'Grace Hopper', department: 'Engineering', status: 'ACTIVE', rfidUid: 'ABCD1234' } }) } as Response;
