@@ -6,7 +6,14 @@
 # `config.toml` next to the executable is used when present.
 
 [lan]
+# Auto-start the LAN attendance viewer when the app boots. The viewer can also
+# be started on demand from the Live Attendance screen even when this is false.
 enabled = true
+# Allow the Live Attendance screen to start the viewer when `enabled = false`.
+# Set to false to disable the viewer entirely (state shows as Disabled).
+allow_runtime_start = true
+# Leave unset to auto-detect the front-desk laptop's office Wi-Fi/LAN IP, or set
+# a specific private IPv4 (never localhost). Example: "192.168.1.25".
 bind_address = "192.168.1.25"
 port = 4173
 allow_wildcard_bind = false

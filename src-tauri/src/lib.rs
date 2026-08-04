@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod lan_net;
 mod lan_server;
 mod paths;
 pub mod reporting;
@@ -966,6 +967,47 @@ async fn open_generated_directory(
 }
 
 #[tauri::command]
+/// Read-only status of the LAN attendance viewer for the Live Attendance panel.
+async fn lan_status(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
+    Ok(crate::lan_server::build_lan_status(state.inner()).await)
+}
+
+#[tauri::command]
+/// Start (or verify) the LAN attendance viewer from the Live Attendance panel.
+/// The viewer binds to the office LAN IP so devices on the same Wi-Fi/LAN can
+/// open it; it stays strictly read-only and never exposes admin or payroll.
+async fn lan_start(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
+    let lan = state.lan.clone();
+    if !lan.enabled && !lan.allow_runtime_start {
+        return Ok(crate::lan_server::build_lan_status(state.inner()).await);
+    }
+    if state.lan_runtime.phase().await != crate::state::LanPhase::Running {
+        let _ = state.lan_runtime.start(state.inner()).await;
+    }
+    Ok(crate::lan_server::build_lan_status(state.inner()).await)
+}
+
+#[tauri::command]
+/// Stop the LAN attendance viewer. Attendance recording on the front-desk
+/// laptop is unaffected; only the LAN viewer goes offline.
+async fn lan_stop(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
+    state.lan_runtime.stop().await;
+    Ok(crate::lan_server::build_lan_status(state.inner()).await)
+}
+
+#[tauri::command]
+/// Open the viewer URL in the system default browser (Windows-first office use).
+async fn open_viewer_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
+        return Err("Invalid viewer URL".into());
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|error| {
+        log::error!("open viewer URL failed: {error}");
+        "OPEN_FAILED".to_string()
+    })
+}
+
+#[tauri::command]
 async fn setup_unlock(
     state: State<'_, AppState>,
     pin: String,
@@ -1758,9 +1800,10 @@ pub fn run() {
             ))
             .expect("SQLite initialization");
             if state.lan.enabled {
+                let runtime = state.lan_runtime.clone();
                 let server_state = state.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = lan_server::start(server_state).await;
+                    let _ = runtime.start(&server_state).await;
                 });
             }
             let sync_state = state.clone();
@@ -1817,7 +1860,11 @@ pub fn run() {
             admin_get_sync_status,
             admin_retry_sync_item,
             admin_sync_now,
-            admin_sheets_nuke_resync
+            admin_sheets_nuke_resync,
+            lan_status,
+            lan_start,
+            lan_stop,
+            open_viewer_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alpha Premier Attendance");

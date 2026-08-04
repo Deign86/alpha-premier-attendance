@@ -1,4 +1,4 @@
-use crate::{config::{LanConfig, OfficeConfig}, error::AppError};
+use crate::{config::{LanConfig, OfficeConfig}, error::AppError, lan_server::{self, LanIssue}};
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{
     collections::HashMap,
@@ -30,6 +30,109 @@ impl AttendanceEventBus {
     }
 }
 
+/// Lifecycle phase of the LAN attendance viewer server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LanPhase {
+    #[default]
+    Stopped,
+    Starting,
+    Running,
+    Error,
+}
+
+/// Snapshot of the LAN viewer runtime (phase, bound socket, diagnostics).
+#[derive(Debug, Clone, Default)]
+pub struct LanRuntimeStatus {
+    pub phase: LanPhase,
+    pub bind_address: Option<std::net::SocketAddr>,
+    pub started_at: Option<u64>,
+    pub last_error: Option<String>,
+    pub issue: LanIssue,
+}
+
+struct LanRuntimeInner {
+    status: LanRuntimeStatus,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+/// Owns the running LAN viewer task so the Live Attendance panel can start,
+/// verify, and stop the server at runtime (in addition to config-driven
+/// auto-start at boot).
+#[derive(Clone)]
+pub struct LanRuntime {
+    inner: std::sync::Arc<tokio::sync::Mutex<LanRuntimeInner>>,
+}
+
+impl LanRuntime {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(tokio::sync::Mutex::new(LanRuntimeInner {
+                status: LanRuntimeStatus::default(),
+                task: None,
+            })),
+        }
+    }
+
+    pub async fn phase(&self) -> LanPhase {
+        self.inner.lock().await.status.phase
+    }
+
+    pub async fn snapshot(&self) -> LanRuntimeStatus {
+        self.inner.lock().await.status.clone()
+    }
+
+    /// Bind the viewer to the configured/detected LAN address and serve until
+    /// stopped. Idempotent: returns immediately when already running.
+    pub async fn start(&self, state: &AppState) -> Result<(), String> {
+        {
+            let guard = self.inner.lock().await;
+            if guard.status.phase == LanPhase::Running {
+                return Ok(());
+            }
+        }
+        let mut guard = self.inner.lock().await;
+        guard.status.phase = LanPhase::Starting;
+        guard.status.last_error = None;
+        guard.status.issue = LanIssue::None;
+        drop(guard);
+
+        match lan_server::bind_and_serve(state.clone()).await {
+            Ok((address, task)) => {
+                let mut guard = self.inner.lock().await;
+                guard.status.phase = LanPhase::Running;
+                guard.status.bind_address = Some(address);
+                guard.status.started_at = Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                );
+                guard.task = Some(task);
+                Ok(())
+            }
+            Err(error) => {
+                let mut guard = self.inner.lock().await;
+                guard.status.phase = LanPhase::Error;
+                guard.status.bind_address = None;
+                guard.status.started_at = None;
+                guard.status.last_error = Some(error.to_string());
+                guard.status.issue = error.issue();
+                guard.task = None;
+                Err(error.to_string())
+            }
+        }
+    }
+
+    /// Abort the serving task and reset to the stopped state.
+    pub async fn stop(&self) {
+        let mut guard = self.inner.lock().await;
+        if let Some(task) = guard.task.take() {
+            task.abort();
+        }
+        guard.status = LanRuntimeStatus::default();
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
@@ -45,6 +148,7 @@ pub struct AppState {
     pub connected_sse_clients: Arc<AtomicU64>,
     pub started_at: u64,
     pub admin_session: Arc<tokio::sync::Mutex<Option<AdminSession>>>,
+    pub lan_runtime: std::sync::Arc<LanRuntime>,
 }
 
 #[derive(Clone)]
@@ -91,6 +195,7 @@ impl AppState {
                 .unwrap_or_default()
                 .as_secs(),
             admin_session: Arc::new(tokio::sync::Mutex::new(None)),
+            lan_runtime: Arc::new(LanRuntime::new()),
         })
     }
 

@@ -1,12 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, PayrollCsvExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, LanStatusResponse, PayrollCsvExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
   getHealth: () => invoke<Record<string, unknown>>('get_health'),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),
+  lanStatus: () => invoke<LanStatusResponse>('lan_status'),
+  lanStart: () => invoke<LanStatusResponse>('lan_start'),
+  lanStop: () => invoke<LanStatusResponse>('lan_stop'),
+  openViewerUrl: (url: string) => invoke<void>('open_viewer_url', { url }),
   scanRfid: (request: ScanRequest) => invoke<ScanResponse>('scan_rfid', { request }),
   setupUnlock: (pin: string) => invoke<{ success: true; token: string; expiresAt: string }>('setup_unlock', { pin }),
   setupLock: () => invoke<{ success: true }>('setup_lock'),

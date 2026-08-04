@@ -1,6 +1,7 @@
 import type {
   ArtifactExportResponse,
   AttendanceXlsxExportResponse,
+  LanStatusResponse,
   OfficeIdentity,
   PayrollCsvExportResponse,
   SafeConfigResponse,
@@ -154,6 +155,53 @@ export async function loadAttendance(date?: string, signal?: AbortSignal): Promi
   if (runningInTauri()) return await tauriApi.getAttendance(date) as AttendanceListResponse;
   const response = await fetch(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`, { signal });
   return (await response.json()) as AttendanceListResponse;
+}
+
+/** LAN viewer status used when the desktop bridge is unavailable (web mode). */
+function lanUnavailableStatus(message: string): LanStatusResponse {
+  return {
+    success: false,
+    state: 'disabled',
+    enabled: false,
+    allowRuntimeStart: false,
+    port: 4173,
+    bindAddress: null,
+    viewerUrl: null,
+    lanIps: [],
+    activeLanIp: null,
+    networkScope: 'The LAN viewer is available in the desktop application.',
+    networkProfile: 'unknown',
+    configValid: false,
+    configError: message,
+    issue: 'not_tauri',
+    connectedSseClients: 0,
+    startedAt: null,
+    lastError: null,
+  };
+}
+
+/** Desktop-only: start (or verify) the LAN live attendance viewer. */
+export async function startLanViewer(): Promise<LanStatusResponse> {
+  if (runningInTauri()) { try { return await tauriApi.lanStart(); } catch { return lanUnavailableStatus('Unable to reach the LAN viewer service.'); } }
+  return lanUnavailableStatus('The LAN viewer is available in the desktop application.');
+}
+
+/** Desktop-only: read the current LAN viewer status for the Live Attendance panel. */
+export async function getLanStatus(): Promise<LanStatusResponse> {
+  if (runningInTauri()) { try { return await tauriApi.lanStatus(); } catch { return lanUnavailableStatus('Unable to reach the LAN viewer service.'); } }
+  return lanUnavailableStatus('The LAN viewer is available in the desktop application.');
+}
+
+/** Desktop-only: stop the LAN viewer (attendance recording on this laptop is unaffected). */
+export async function stopLanViewer(): Promise<LanStatusResponse> {
+  if (runningInTauri()) { try { return await tauriApi.lanStop(); } catch { return lanUnavailableStatus('Unable to reach the LAN viewer service.'); } }
+  return lanUnavailableStatus('The LAN viewer is available in the desktop application.');
+}
+
+/** Open the viewer URL in the system default browser (web fallback: new tab). */
+export async function openViewerUrl(url: string): Promise<boolean> {
+  if (runningInTauri()) { try { await tauriApi.openViewerUrl(url); return true; } catch { return false; } }
+  try { window.open(url, '_blank'); return true; } catch { return false; }
 }
 
 export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | { success: false; error: { message: string } }> {

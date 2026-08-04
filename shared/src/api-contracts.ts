@@ -103,6 +103,70 @@ export type LanErrorResponse = {
   error: { code: 'INVALID_DATE' | 'VIEWER_AUTH_REQUIRED' | 'VIEWER_AUTH_INVALID' | 'SOURCE_NOT_ALLOWED' | 'DATABASE_UNAVAILABLE' | 'INTERNAL_SERVER_ERROR'; message: string };
 };
 
+/**
+ * LAN live-attendance viewer contracts (desktop app <-> browser viewer).
+ *
+ * The LAN viewer is strictly read-only: it exposes today's attendance snapshot
+ * and an SSE event stream. It never exposes admin, setup, payroll, mutation,
+ * credential, or photo-management surfaces.
+ */
+export const lanServerStates = ['starting', 'running', 'stopped', 'disabled', 'error'] as const;
+export type LanServerState = (typeof lanServerStates)[number];
+
+export const lanNetworkProfiles = ['public', 'private', 'domain', 'unknown'] as const;
+export type LanNetworkProfile = (typeof lanNetworkProfiles)[number];
+
+export const lanDiagnosticIssues = [
+  'none',
+  'not_tauri',
+  'config_invalid',
+  'port_in_use',
+  'firewall_likely_blocked',
+  'no_lan_ip',
+  'bind_failed',
+] as const;
+export type LanDiagnosticIssue = (typeof lanDiagnosticIssues)[number];
+
+/** Safe read-only fields exposed for one attendance row on the LAN viewer. */
+export type LanAttendanceRow = {
+  attendanceId: string;
+  attendanceDate: string;
+  userId: string;
+  fullName: string;
+  department: string | null;
+  timeIn: string | null;
+  timeOut: string | null;
+  status: string;
+};
+
+/** Status of the in-app LAN attendance viewer server, reported by the desktop app. */
+export type LanStatusResponse = {
+  success: boolean;
+  state: LanServerState;
+  /** Auto-start at boot is driven by `lan.enabled` in config.toml. */
+  enabled: boolean;
+  /** When false, config.toml forbids starting the viewer from the Live Attendance panel. */
+  allowRuntimeStart: boolean;
+  port: number;
+  bindAddress: string | null;
+  /** Shareable browser URL, e.g. http://192.168.1.50:4173/attendance (never localhost). */
+  viewerUrl: string | null;
+  /** Candidate LAN IPs found on this laptop, in preference order. */
+  lanIps: string[];
+  activeLanIp: string | null;
+  networkScope: string;
+  networkProfile: LanNetworkProfile;
+  configValid: boolean;
+  configError: string | null;
+  issue: LanDiagnosticIssue;
+  connectedSseClients: number;
+  startedAt: number | null;
+  lastError: string | null;
+};
+
+export type LanStartResponse = LanStatusResponse;
+export type LanStopResponse = LanStatusResponse;
+
 export type AdminUser = SetupUser;
 export type AdminUsersResponse = { success: true; users: AdminUser[] };
 export type AdminAttendanceResponse = { success: true; date: string; attendance: AttendanceListItem[]; fetchedAt: string };

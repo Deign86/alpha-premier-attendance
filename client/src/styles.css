@@ -230,6 +230,36 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .photo-overlay { position: absolute; inset: auto 0 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; color: #11100c; background: rgba(225, 196, 119, .94); font-size: .72rem; font-weight: 700; }
 
 .payroll-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 18px; }
+
+/* Live Attendance LAN viewer panel (in-app). */
+.lan-panel { margin: 0 0 22px; padding: 18px 20px; border: 1px solid var(--line); border-top: 3px solid var(--gold); border-radius: var(--radius-md); background: var(--surface); }
+.lan-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.lan-panel-head .section-kicker { margin: 0 0 6px; }
+.lan-panel-head h2 { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: 1.05rem; font-weight: 600; }
+.lan-state { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid var(--line-bright); border-radius: 999px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.lan-state i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.lan-state-running { color: var(--success); border-color: #4e825d; }
+.lan-state-running i { background: var(--success); box-shadow: 0 0 0 3px rgba(152, 210, 168, .14); }
+.lan-state-starting { color: var(--gold-bright); border-color: var(--gold-soft); }
+.lan-state-starting i { background: var(--gold-bright); animation: spin 900ms linear infinite; }
+.lan-state-stopped { color: var(--muted); }
+.lan-state-disabled { color: var(--quiet); }
+.lan-state-error { color: var(--danger); border-color: #955e4f; }
+.lan-state-error i { background: var(--danger); }
+.lan-url-row { display: flex; align-items: center; gap: 9px; margin-top: 14px; flex-wrap: wrap; }
+.lan-url { padding: 10px 13px; color: var(--gold-bright); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: var(--radius-sm); font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: .88rem; overflow-wrap: anywhere; }
+.lan-note { margin: 12px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.55; }
+.lan-guidance { margin: 12px 0 0; padding: 11px 13px; border: 1px solid var(--line-bright); border-left: 3px solid var(--gold); background: var(--surface-raised); }
+.lan-guidance p { margin: 0 0 6px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
+.lan-guidance p:last-child { margin-bottom: 0; }
+.lan-guidance code, .lan-code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: .76rem; color: var(--gold-bright); overflow-wrap: anywhere; }
+.lan-error { margin: 12px 0 0; color: var(--danger); font-size: .78rem; line-height: 1.5; }
+.lan-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.lan-actions .admin-button { min-width: 0; }
+.lan-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
+.lan-facts span { display: grid; gap: 3px; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.lan-facts strong { color: var(--ink); font-size: .78rem; font-weight: 600; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .lan-facts { grid-template-columns: 1fr 1fr; } .lan-panel-head { flex-direction: column; } }
 .file-result-card { display: grid; gap: 8px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line-bright); border-radius: var(--radius-sm); background: var(--surface); }
 .file-result-label { margin: 0; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 .file-result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .92rem; font-weight: 600; }

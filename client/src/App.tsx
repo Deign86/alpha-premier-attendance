@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, ShieldCheck, Upload, UserRound, Volume2, VolumeX, X } from 'lucide-react';
-import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord, OfficeIdentity } from '@rfid-attendance/shared';
+import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord, OfficeIdentity, LanStatusResponse } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
-import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, loadConfig, loadAttendance, loadAdminAttendance, loadAdminUsers, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
+import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openViewerUrl, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
 import { listenForGlobalRfid } from './tauri-api';
 import { GeneratedFileActions, type GeneratedFileResult } from './file-actions';
@@ -596,11 +596,111 @@ function LiveAttendance() {
   const [stale, setStale] = useState(false);
   const [fetchedAt, setFetchedAt] = useState('');
   const [error, setError] = useState('');
+  const [lan, setLan] = useState<LanStatusResponse | null>(null);
+  const [lanBusy, setLanBusy] = useState(false);
   const refresh = useCallback(async () => {
     try { const response = await loadAttendance(); if (response.success) { setRows(response.attendance); setFetchedAt(response.fetchedAt); setStale(false); setError(''); } else throw new Error('Unable to load attendance'); } catch { setStale(true); setError('Live attendance is temporarily unavailable.'); }
   }, []);
   useEffect(() => { void refresh(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 5_000); const onFocus = () => void refresh(); window.addEventListener('focus', onFocus); return () => { window.clearInterval(timer); window.removeEventListener('focus', onFocus); }; }, [refresh]);
-  return <main className="dashboard-shell"><header className="dashboard-header"><div><p className="section-kicker">Live attendance</p><h1>Today’s timing</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')} · {localDate()} · updates every five seconds</p></div><nav><a href="/">Scanner</a><a href="/admin">Admin</a></nav></header>{error && <p className="dashboard-alert">{error}</p>}<div className="dashboard-status">{stale ? 'Showing last successful update' : `Last updated ${fetchedAt ? formatTime(fetchedAt, 'Asia/Manila') : 'just now'}`}</div><AttendanceTable rows={rows} timezone="Asia/Manila" /></main>;
+  const refreshLan = useCallback(async () => { setLan(await getLanStatus()); }, []);
+  useEffect(() => {
+    // Opening Live Attendance starts (or verifies) the LAN viewer server.
+    void startLanViewer().then(setLan);
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refreshLan(); }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [refreshLan]);
+  const startNow = async () => { setLanBusy(true); setLan(await startLanViewer()); setLanBusy(false); };
+  const stopNow = async () => { setLanBusy(true); setLan(await stopLanViewer()); setLanBusy(false); };
+  return <main className="dashboard-shell"><header className="dashboard-header"><div><p className="section-kicker">Live attendance</p><h1>Today’s timing</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')} · {localDate()} · updates every five seconds</p></div><nav><a href="/">Scanner</a><a href="/admin">Admin</a></nav></header>{error && <p className="dashboard-alert">{error}</p>}<div className="dashboard-status">{stale ? 'Showing last successful update' : `Last updated ${fetchedAt ? formatTime(fetchedAt, 'Asia/Manila') : 'just now'}`}</div><LanViewerPanel status={lan} busy={lanBusy} onStart={() => void startNow()} onStop={() => void stopNow()} onRefresh={() => void refreshLan()} /><AttendanceTable rows={rows} timezone="Asia/Manila" /></main>;
+}
+
+function lanProfileLabel(profile: LanStatusResponse['networkProfile']): string {
+  switch (profile) {
+    case 'public': return 'Public — inbound blocked by default';
+    case 'private': return 'Private — office-ready';
+    case 'domain': return 'Domain';
+    default: return 'Unknown';
+  }
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  try {
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand('copy');
+    el.remove();
+    return ok;
+  } catch { return false; }
+}
+
+/** In-app Live Attendance panel: LAN viewer status, URL, and operator guidance. */
+function LanViewerPanel({ status, busy, onStart, onStop, onRefresh }: { status: LanStatusResponse | null; busy: boolean; onStart: () => void; onStop: () => void; onRefresh: () => void }) {
+  const [copied, setCopied] = useState(false);
+  if (!status) return <section className="lan-panel" aria-label="LAN viewer"><p className="lan-note">Checking the LAN viewer…</p></section>;
+  const running = status.state === 'running';
+  const stateLabel: Record<LanStatusResponse['state'], string> = { starting: 'Starting', running: 'Running', stopped: 'Stopped', disabled: 'Disabled', error: 'Needs attention' };
+  const copyUrl = async () => { if (!status.viewerUrl) return; setCopied(await copyText(status.viewerUrl)); window.setTimeout(() => setCopied(false), 2000); };
+  const openUrl = async () => { if (status.viewerUrl) await openViewerUrl(status.viewerUrl); };
+  const firewallCommand = `netsh advfirewall firewall add rule name="Alpha Premier Live Attendance" dir=in action=allow protocol=TCP localport=${status.port} profile=private`;
+  return (
+    <section className="lan-panel" aria-label="LAN viewer">
+      <div className="lan-panel-head">
+        <div>
+          <p className="section-kicker">Live Attendance LAN viewer</p>
+          <h2>Share today’s timing with the office</h2>
+        </div>
+        <span className={`lan-state lan-state-${status.state}`}><i />{stateLabel[status.state]}</span>
+      </div>
+      {running && status.viewerUrl ? (
+        <>
+          <div className="lan-url-row">
+            <code className="lan-url">{status.viewerUrl}</code>
+            <button className="admin-button" type="button" onClick={() => void copyUrl()}>{copied ? 'Copied' : 'Copy URL'}</button>
+            <button className="admin-button file-action-primary" type="button" onClick={() => void openUrl()}>Open Local Viewer</button>
+          </div>
+          <p className="lan-note">Open this link on any device connected to the same office Wi‑Fi. {status.networkScope}</p>
+          {status.networkProfile === 'public' && (
+            <div className="lan-guidance">
+              <p><strong>This laptop’s network profile is Public.</strong> Windows blocks most inbound traffic on Public networks. Set the Wi‑Fi/LAN profile to <em>Private</em> so other devices can reach the viewer, then try opening the link again.</p>
+              {status.issue === 'firewall_likely_blocked' && <p className="lan-code">{firewallCommand}</p>}
+            </div>
+          )}
+          <div className="lan-actions">
+            <button className="text-button" type="button" disabled={busy} onClick={onStop}>Stop viewer</button>
+            <button className="text-button" type="button" onClick={onRefresh}>Refresh status</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="lan-note">
+            {status.state === 'disabled' ? 'The LAN viewer is disabled by configuration.' : status.state === 'starting' ? 'The LAN viewer is starting…' : status.state === 'error' ? 'The LAN viewer could not start.' : 'The LAN viewer is not running yet.'}
+          </p>
+          {status.state === 'stopped' && <p className="lan-note">Start it to let any device on the same office Wi‑Fi open a read-only live attendance screen. {status.networkScope}</p>}
+          {status.issue === 'no_lan_ip' && <div className="lan-guidance"><p><strong>No reachable office LAN IP was detected.</strong> Connect this laptop to the office Wi‑Fi/LAN, or set <code>lan.bind_address</code> to the office LAN IP in config.toml (loopback/localhost is never shareable).</p></div>}
+          {status.issue === 'port_in_use' && <div className="lan-guidance"><p><strong>Port {status.port} is already in use.</strong> Close the other program or change <code>lan.port</code> in config.toml, then start the viewer again.</p></div>}
+          {status.issue === 'config_invalid' && status.configError && <div className="lan-guidance"><p><strong>Invalid LAN configuration:</strong> {status.configError}</p></div>}
+          {status.lastError && <p className="lan-error">{status.lastError}</p>}
+          {status.state !== 'disabled' && status.state !== 'starting' && (
+            <div className="lan-actions">
+              <button className="admin-button file-action-primary" type="button" disabled={busy} onClick={onStart}>{busy ? 'Starting…' : 'Start LAN viewer'}</button>
+              <button className="text-button" type="button" onClick={onRefresh}>Refresh status</button>
+            </div>
+          )}
+        </>
+      )}
+      <div className="lan-facts">
+        <span>Port <strong>{status.port}</strong></span>
+        <span>LAN IP <strong>{status.activeLanIp || status.bindAddress || '—'}</strong></span>
+        <span>Connected viewers <strong>{status.connectedSseClients}</strong></span>
+        <span>Network profile <strong>{lanProfileLabel(status.networkProfile)}</strong></span>
+      </div>
+    </section>
+  );
 }
 
 function AttendanceTable({ rows, timezone }: { rows: AttendanceListItem[]; timezone: string }) {

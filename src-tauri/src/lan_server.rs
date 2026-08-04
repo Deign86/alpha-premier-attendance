@@ -1,5 +1,11 @@
-use crate::{error::AppError, state::AppState};
-use axum::{extract::{ConnectInfo, Query, State}, http::{header, HeaderMap, StatusCode}, response::{sse::{Event, KeepAlive, Sse}, Html, IntoResponse}, routing::get, Json, Router};
+use crate::{config::LanConfig, error::AppError, state::AppState};
+use axum::{
+    extract::{ConnectInfo, Query, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{sse::{Event, KeepAlive, Sse}, Html, IntoResponse},
+    routing::get,
+    Json, Router,
+};
 use chrono::{DateTime, Utc};
 use chrono_tz::Asia::Manila;
 use serde::{Deserialize, Serialize};
@@ -45,6 +51,64 @@ pub enum LanAttendanceEvent {
 #[derive(Debug, Deserialize)]
 pub struct DateQuery { pub date: Option<String>, pub token: Option<String> }
 
+/// Why the LAN viewer cannot serve, mapped to the shared client contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LanIssue {
+    #[default]
+    None,
+    ConfigInvalid,
+    PortInUse,
+    NoLanIp,
+    BindFailed,
+}
+
+impl LanIssue {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LanIssue::None => "none",
+            LanIssue::ConfigInvalid => "config_invalid",
+            LanIssue::PortInUse => "port_in_use",
+            LanIssue::NoLanIp => "no_lan_ip",
+            LanIssue::BindFailed => "bind_failed",
+        }
+    }
+}
+
+/// Structured failure from starting the LAN viewer, used to set the runtime
+/// phase and the diagnostic issue shown by the Live Attendance panel.
+#[derive(Debug, Clone)]
+pub enum LanStartError {
+    Config(String),
+    NoLanIp,
+    PortInUse,
+    Bind(String),
+}
+
+impl std::fmt::Display for LanStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LanStartError::Config(message) => write!(f, "{message}"),
+            LanStartError::NoLanIp => write!(
+                f,
+                "no reachable office LAN IP was detected (check the Wi-Fi/LAN connection, or set lan.bind_address to the office LAN IP; loopback is not shareable)"
+            ),
+            LanStartError::PortInUse => write!(f, "the configured LAN viewer port is already in use"),
+            LanStartError::Bind(error) => write!(f, "failed to bind the LAN viewer: {error}"),
+        }
+    }
+}
+
+impl LanStartError {
+    pub fn issue(&self) -> LanIssue {
+        match self {
+            LanStartError::Config(_) => LanIssue::ConfigInvalid,
+            LanStartError::NoLanIp => LanIssue::NoLanIp,
+            LanStartError::PortInUse => LanIssue::PortInUse,
+            LanStartError::Bind(_) => LanIssue::BindFailed,
+        }
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/attendance", get(attendance_page))
@@ -54,18 +118,289 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub async fn start(state: AppState) -> Result<(), AppError> {
-    if !state.lan.enabled { return Ok(()); }
-    state.lan.validate().map_err(AppError::Configuration)?;
-    let address = state.lan.bind_address.unwrap();
-    let listener = tokio::net::TcpListener::bind(SocketAddr::new(address, state.lan.port)).await.map_err(|e| AppError::Lan(e.to_string()))?;
-    axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>()).await.map_err(|e| AppError::Lan(e.to_string()))
+/// The socket the viewer binds to: the configured `lan.bind_address` (never
+/// loopback for the shareable viewer) or the detected office LAN IP.
+fn resolve_bind_address(lan: &LanConfig) -> Result<SocketAddr, LanStartError> {
+    if let Some(address) = lan.bind_address {
+        if address.is_loopback() {
+            return Err(LanStartError::NoLanIp);
+        }
+        return Ok(SocketAddr::new(address, lan.port));
+    }
+    let ip = crate::lan_net::pick_active_lan_ip().ok_or(LanStartError::NoLanIp)?;
+    Ok(SocketAddr::new(ip, lan.port))
+}
+
+/// Bind the viewer to the resolved LAN address and serve until aborted.
+/// Returns the actual bound socket plus a task handle the runtime aborts on
+/// stop. The caller (LanRuntime) owns the handle.
+pub async fn bind_and_serve(
+    state: AppState,
+) -> Result<(SocketAddr, tauri::async_runtime::JoinHandle<()>), LanStartError> {
+    let address = resolve_bind_address(&state.lan)?;
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AddrInUse => LanStartError::PortInUse,
+            _ => LanStartError::Bind(error.to_string()),
+        })?;
+    let actual = listener
+        .local_addr()
+        .map_err(|error| LanStartError::Bind(error.to_string()))?;
+    let task = tauri::async_runtime::spawn(async move {
+        let _ = axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>())
+            .await;
+    });
+    Ok((actual, task))
+}
+
+/// Read-only status of the LAN attendance viewer, consumed by the in-app
+/// Live Attendance panel. Never exposes secrets, admin state, or mutations.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanStatusResponse {
+    pub success: bool,
+    pub state: String,
+    pub enabled: bool,
+    pub allow_runtime_start: bool,
+    pub port: u16,
+    pub bind_address: Option<String>,
+    pub viewer_url: Option<String>,
+    pub lan_ips: Vec<String>,
+    pub active_lan_ip: Option<String>,
+    pub network_scope: String,
+    pub network_profile: String,
+    pub config_valid: bool,
+    pub config_error: Option<String>,
+    pub issue: String,
+    pub connected_sse_clients: u64,
+    pub started_at: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
+    let runtime = state.lan_runtime.snapshot().await;
+    let config_error = state.lan.validate_runtime().err();
+    let config_valid = config_error.is_none();
+    let lan_ips = crate::lan_net::detect_lan_interfaces()
+        .into_iter()
+        .map(|item| item.ip.to_string())
+        .collect::<Vec<_>>();
+    let active_lan_ip = crate::lan_net::pick_active_lan_ip().map(|ip| ip.to_string());
+    let network_profile = crate::lan_net::detect_network_profile().await;
+    let running = runtime.phase == crate::state::LanPhase::Running;
+
+    // The shareable URL must use the real LAN IP, not loopback. When the bind
+    // is 0.0.0.0 (wildcard) we advertise the detected active office IP.
+    let display_ip = runtime
+        .bind_address
+        .map(|addr| addr.ip())
+        .filter(|ip| !ip.is_unspecified())
+        .map(|ip| ip.to_string())
+        .or_else(|| active_lan_ip.clone());
+    let viewer_url = if running {
+        display_ip.as_ref().map(|ip| format!("http://{ip}:{}/attendance", state.lan.port))
+    } else {
+        None
+    };
+
+    let (state_name, issue) = match runtime.phase {
+        crate::state::LanPhase::Starting => ("starting", "none".to_string()),
+        crate::state::LanPhase::Running => (
+            "running",
+            if network_profile.likely_blocks_inbound() {
+                "firewall_likely_blocked".to_string()
+            } else {
+                "none".to_string()
+            },
+        ),
+        crate::state::LanPhase::Stopped => {
+            if !state.lan.enabled && !state.lan.allow_runtime_start {
+                ("disabled", "none".to_string())
+            } else {
+                ("stopped", "none".to_string())
+            }
+        }
+        crate::state::LanPhase::Error => ("error", runtime.issue.as_str().to_string()),
+    };
+
+    LanStatusResponse {
+        success: true,
+        state: state_name.into(),
+        enabled: state.lan.enabled,
+        allow_runtime_start: state.lan.allow_runtime_start,
+        port: state.lan.port,
+        bind_address: runtime.bind_address.map(|addr| addr.to_string()),
+        viewer_url,
+        lan_ips,
+        active_lan_ip,
+        network_scope: "Accessible to devices on the same office Wi-Fi / LAN (private network only)."
+            .into(),
+        network_profile: network_profile.as_str().into(),
+        config_valid,
+        config_error,
+        issue,
+        connected_sse_clients: state
+            .connected_sse_clients
+            .load(std::sync::atomic::Ordering::Relaxed),
+        started_at: runtime.started_at,
+        last_error: runtime.last_error,
+    }
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 async fn attendance_page(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
-    if !source_allowed(&state.lan, peer.ip()) || !viewer_allowed(&state, &headers, query.token.as_deref()) { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response(); }
-    let office_line = format!("{} · {}", state.office.company_name, state.office.display_short());
-    Html(r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Live Attendance</title><style>body{font-family:system-ui;margin:2rem;color:#1b1b1b}table{border-collapse:collapse;width:100%}th,td{padding:.6rem;border-bottom:1px solid #ddd;text-align:left}.status{font-weight:600}.state{margin-bottom:1rem}.office{color:#555;font-size:1rem;margin:0 0 1.5rem}</style></head><body><h1>Live Attendance</h1><p class="office">__OFFICE_LINE__</p><div id="state" class="state">Connecting...</div><table><thead><tr><th>Employee</th><th>Department</th><th>Time in</th><th>Time out</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table><script>const state=document.querySelector('#state'),rows=document.querySelector('#rows');const token=new URLSearchParams(location.search).get('token');const auth=token?'&token='+encodeURIComponent(token):'';let date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila'}).format(new Date()),pollTimer=null;function render(data){rows.innerHTML=data.attendance.map(r=>`<tr><td>${escapeHtml(r.fullName)}</td><td>${escapeHtml(r.department||'')}</td><td>${r.timeIn||''}</td><td>${r.timeOut||''}</td><td class="status">${r.status}</td></tr>`).join('')}function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}async function refresh(){try{const r=await fetch('/api/attendance/today?date='+date+auth,{cache:'no-store'});if(!r.ok)throw Error();render(await r.json());state.textContent='Live dashboard available';}catch{state.textContent='Dashboard offline; retrying...'}}function startPolling(){if(!pollTimer)pollTimer=setInterval(refresh,5000)}function connect(){const es=new EventSource('/api/events/attendance?token='+encodeURIComponent(token||''));es.onopen=()=>{state.textContent='Live';if(pollTimer){clearInterval(pollTimer);pollTimer=null}refresh()};es.addEventListener('attendance-updated',refresh);es.addEventListener('stale-data',refresh);es.onerror=()=>{state.textContent='Reconnecting; polling fallback active';startPolling();setTimeout(connect,2000);es.close()}}refresh();connect();</script></body></html>"#
+    if !source_allowed(&state.lan, peer.ip()) || !viewer_allowed(&state, &headers, query.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response();
+    }
+    let company = html_escape(&state.office.company_name);
+    let office_line = html_escape(&format!("{} · {}", state.office.company_name, state.office.display_short()));
+    Html(r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Live Attendance</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", Arial, Helvetica, sans-serif; background: #f2f4f7; color: #16202b; }
+  header { background: #10304f; color: #ffffff; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  .brand h1 { margin: 0; font-size: 21px; letter-spacing: .4px; }
+  .brand p { margin: 2px 0 0; opacity: .85; font-size: 13px; }
+  .clock { text-align: right; }
+  .clock .time { font-size: 27px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .clock .date { font-size: 13px; opacity: .85; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 20px 48px; }
+  .status-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 10px 14px; border-radius: 8px; background: #ffffff; border: 1px solid #d8dee6; font-size: 14px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+  .dot.live { background: #1e9e50; box-shadow: 0 0 0 4px rgba(30, 158, 80, .16); }
+  .dot.reconnecting { background: #d99a06; }
+  .dot.offline { background: #d64545; }
+  .status-bar .state { font-weight: 700; }
+  .status-bar .last-update { margin-left: auto; color: #5a6572; font-size: 13px; }
+  .list { display: grid; gap: 10px; }
+  .card { display: flex; align-items: center; gap: 14px; background: #ffffff; border: 1px solid #d8dee6; border-left: 5px solid #8b97a5; border-radius: 8px; padding: 13px 16px; }
+  .card.in { border-left-color: #1e9e50; }
+  .card.out { border-left-color: #2f6fd6; }
+  .card .who { min-width: 0; }
+  .card .who .name { font-size: 19px; font-weight: 700; }
+  .card .who .id { font-size: 13px; color: #5a6572; }
+  .card .badge { margin-left: auto; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; padding: 6px 13px; border-radius: 999px; white-space: nowrap; }
+  .card.in .badge { background: #e2f5e9; color: #12612f; }
+  .card.out .badge { background: #e4ecfb; color: #1d4fae; }
+  .card .when { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .card .when small { display: block; color: #5a6572; font-size: 12px; }
+  .empty { text-align: center; color: #5a6572; padding: 56px 20px; background: #ffffff; border: 1px dashed #c2cad4; border-radius: 8px; font-size: 16px; }
+  footer { text-align: center; color: #7c8794; font-size: 12px; padding: 0 0 26px; }
+  @media (max-width: 620px) {
+    header { flex-direction: column; align-items: flex-start; }
+    .clock { text-align: left; }
+    .card { flex-wrap: wrap; }
+    .card .badge { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><h1>__COMPANY__</h1><p>Live Attendance · __OFFICE_LINE__</p></div>
+  <div class="clock"><div class="time" id="clock">--:--:--</div><div class="date" id="clockDate">—</div></div>
+</header>
+<main>
+  <div class="status-bar"><span class="dot" id="dot"></span><span class="state" id="state">Connecting…</span><span class="last-update" id="lastUpdate">Waiting for data</span></div>
+  <div id="list" class="list"></div>
+  <div id="empty" class="empty" hidden>No time-ins or time-outs recorded yet today.</div>
+</main>
+<footer>Read-only live attendance · Refresh or open this page again if it ever stops updating.</footer>
+<script>
+const tz = 'Asia/Manila';
+const stateEl = document.getElementById('state');
+const dotEl = document.getElementById('dot');
+const lastEl = document.getElementById('lastUpdate');
+const listEl = document.getElementById('list');
+const emptyEl = document.getElementById('empty');
+const token = new URLSearchParams(location.search).get('token');
+const auth = token ? '&token=' + encodeURIComponent(token) : '';
+const esAuth = token ? '?token=' + encodeURIComponent(token) : '';
+let pollTimer = null;
+let es = null;
+let reconnectDelay = 1000;
+let everLoaded = false;
+
+function tick() {
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  document.getElementById('clockDate').textContent = now.toLocaleDateString('en-PH', { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+}
+function today() { return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date()); }
+function escapeHtml(v) { return String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function setStatus(label, cls) { stateEl.textContent = label; dotEl.className = 'dot ' + cls; }
+function latestTime(row) { return row.timeOut || row.timeIn || ''; }
+function card(row) {
+  const isOut = Boolean(row.timeOut);
+  const time = isOut ? row.timeOut : row.timeIn;
+  const when = time ? new Date(time).toLocaleString('en-PH', { timeZone: tz, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+  const dept = row.department ? ' · ' + escapeHtml(row.department) : '';
+  return '<div class="card ' + (isOut ? 'out' : 'in') + '">' +
+    '<div class="who"><div class="name">' + escapeHtml(row.fullName) + '</div><div class="id">' + escapeHtml(row.userId || '') + dept + '</div></div>' +
+    '<div class="badge">' + (isOut ? 'Time Out' : 'Time In') + '</div>' +
+    '<div class="when">' + escapeHtml(when) + '<small>' + escapeHtml(row.attendanceDate || '') + '</small></div>' +
+    '</div>';
+}
+function render(rows) {
+  const sorted = rows.slice().sort((a, b) => latestTime(b).localeCompare(latestTime(a)));
+  listEl.innerHTML = sorted.map(card).join('');
+  emptyEl.hidden = sorted.length > 0;
+}
+async function refresh() {
+  try {
+    const r = await fetch('/api/attendance/today?date=' + today() + auth, { cache: 'no-store' });
+    if (!r.ok) throw new Error('bad status ' + r.status);
+    const data = await r.json();
+    render(data.attendance || []);
+    everLoaded = true;
+    const now = new Date();
+    lastEl.textContent = 'Updated ' + now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    if (stateEl.dataset.conn !== 'live') setStatus('Live — polling fallback', 'live');
+  } catch (err) {
+    if (!everLoaded) setStatus('Offline — cannot reach the viewer service', 'offline');
+  }
+}
+function startPolling() { if (!pollTimer) pollTimer = setInterval(refresh, 4000); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+function connect() {
+  if (es) { es.close(); es = null; }
+  let opened = false;
+  try { es = new EventSource('/api/events/attendance' + esAuth); } catch (err) { startPolling(); return; }
+  es.onopen = () => { opened = true; stateEl.dataset.conn = 'live'; setStatus('Live — streaming', 'live'); stopPolling(); refresh(); };
+  es.addEventListener('attendance-updated', () => refresh());
+  es.addEventListener('stale-data', () => refresh());
+  es.onerror = () => {
+    if (es) { es.close(); es = null; }
+    stateEl.dataset.conn = 'reconnect';
+    setStatus('Reconnecting…', 'reconnecting');
+    startPolling();
+    reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    setTimeout(connect, reconnectDelay);
+  };
+}
+tick();
+setInterval(tick, 1000);
+refresh();
+connect();
+setTimeout(() => { if (!everLoaded) setStatus('Offline — no connection received', 'offline'); }, 8000);
+</script>
+</body>
+</html>"#
+        .replace("__COMPANY__", &company)
         .replace("__OFFICE_LINE__", &office_line))
         .into_response()
 }
@@ -75,7 +410,7 @@ async fn attendance_today(State(state): State<AppState>, ConnectInfo(peer): Conn
     if !source_allowed(&state.lan, peer.ip()) { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response(); }
     let date = query.date.unwrap_or_else(|| Utc::now().with_timezone(&Manila).date_naive().to_string());
     if date.len() != 10 { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success":false,"error":{"code":"INVALID_DATE","message":"date must be YYYY-MM-DD"}}))).into_response(); }
-    let rows = sqlx::query("SELECT attendance_id, attendance_date, user_id, full_name, department, time_in, time_out, status FROM attendance WHERE attendance_date = ? ORDER BY time_in, full_name")
+    let rows = sqlx::query("SELECT attendance_id, attendance_date, user_id, full_name, department, time_in, time_out, status FROM attendance WHERE attendance_date = ? ORDER BY COALESCE(time_out, time_in) DESC, full_name")
         .bind(&date).fetch_all(&state.db).await;
     match rows {
         Ok(rows) => {
@@ -118,7 +453,7 @@ async fn attendance_events(State(state): State<AppState>, ConnectInfo(peer): Con
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(state.lan.sse_keep_alive_seconds.max(1))).text("keep-alive")).into_response()
 }
 
-fn source_allowed(config: &crate::config::LanConfig, address: std::net::IpAddr) -> bool {
+fn source_allowed(config: &LanConfig, address: std::net::IpAddr) -> bool {
     if config.allowed_subnets.is_empty() { return match address { std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(), std::net::IpAddr::V6(ip) => ip.is_loopback(), }; }
     config.allowed_subnets.iter().any(|subnet| subnet.contains(&address))
 }
@@ -132,6 +467,18 @@ fn viewer_allowed(state: &AppState, headers: &HeaderMap, query_token: Option<&st
     format!("{:x}", Sha256::digest(token.as_bytes())) == expected
 }
 
+async fn health(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
+    if !viewer_allowed(&state, &headers, query.token.as_deref()) { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response(); }
+    if !source_allowed(&state.lan, peer.ip()) { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response(); }
+    let active_lan_ip = crate::lan_net::pick_active_lan_ip().map(|ip| ip.to_string());
+    let viewer_url = active_lan_ip.as_ref().map(|ip| format!("http://{ip}:{}/attendance", state.lan.port));
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({"success":true,"service":"alpha-premier-attendance-lan","status":"healthy","serverInstanceId":state.server_instance_id,"timestamp":Utc::now(),"timezone":"Asia/Manila","sqlite":"connected","lan":{"bindAddress":state.lan.bind_address.map(|v|v.to_string()).unwrap_or_default(),"port":state.lan.port,"viewerMode":"read-only","viewerSessionMinutes":state.lan.viewer_session_minutes,"connectedSseClients":state.connected_sse_clients.load(std::sync::atomic::Ordering::Relaxed),"uptimeSeconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().saturating_sub(state.started_at),"viewerUrl":viewer_url,"lanIps":active_lan_ip},"googleSheetsExport":if state.lan.sheets_sync_endpoint.is_some() || state.lan.google_spreadsheet_id.is_some() { "offline" } else { "disabled" }})),
+    ).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +490,21 @@ mod tests {
         let config = LanConfig::default();
         assert!(source_allowed(&config, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))));
         assert!(!source_allowed(&config, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn loopback_bind_is_rejected_for_the_shareable_viewer() {
+        let config = LanConfig { bind_address: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), ..Default::default() };
+        assert!(matches!(resolve_bind_address(&config), Err(LanStartError::NoLanIp)));
+    }
+
+    #[test]
+    fn configured_private_bind_is_used_verbatim() {
+        let config = LanConfig { bind_address: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 25))), ..Default::default() };
+        match resolve_bind_address(&config) {
+            Ok(addr) => assert_eq!(addr.to_string(), "192.168.1.25:4173"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -159,18 +521,40 @@ mod tests {
         assert!(snapshot.text().await.unwrap().contains("Ada"));
         let mutation = reqwest::Client::new().post(format!("http://{address}/api/attendance/today")).send().await.unwrap();
         assert_eq!(mutation.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let page = reqwest::get(format!("http://{address}/attendance")).await.unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        let page_text = page.text().await.unwrap();
+        assert!(page_text.contains("Live Attendance"));
+        assert!(page_text.contains("Read-only live attendance"));
+        assert!(page_text.contains("EventSource"));
+        assert!(!page_text.contains("admin"), "viewer page must not expose admin UI");
         task.abort();
         state.db.close().await;
         let _ = std::fs::remove_dir_all(data_dir);
     }
-}
 
-async fn health(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
-    if !viewer_allowed(&state, &headers, query.token.as_deref()) { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response(); }
-    if !source_allowed(&state.lan, peer.ip()) { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response(); }
-    (
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({"success":true,"service":"alpha-premier-attendance-lan","status":"healthy","serverInstanceId":state.server_instance_id,"timestamp":Utc::now(),"timezone":"Asia/Manila","sqlite":"connected","lan":{"bindAddress":state.lan.bind_address.map(|v|v.to_string()).unwrap_or_default(),"port":state.lan.port,"viewerMode":"read-only","viewerSessionMinutes":state.lan.viewer_session_minutes,"connectedSseClients":state.connected_sse_clients.load(std::sync::atomic::Ordering::Relaxed),"uptimeSeconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().saturating_sub(state.started_at)},"googleSheetsExport":if state.lan.sheets_sync_endpoint.is_some() || state.lan.google_spreadsheet_id.is_some() { "offline" } else { "disabled" }})),
-    ).into_response()
+    #[tokio::test]
+    async fn lan_status_reports_stopped_when_never_started() {
+        let data_dir = std::env::temp_dir().join(format!("alpha-lan-status-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default()).await.unwrap();
+        let status = build_lan_status(&state).await;
+        assert_eq!(status.state, "stopped");
+        assert_eq!(status.viewer_url, None);
+        assert_eq!(status.port, 4173);
+        assert!(status.success);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn lan_status_is_disabled_when_runtime_start_is_forbidden() {
+        let data_dir = std::env::temp_dir().join(format!("alpha-lan-disabled-{}", uuid::Uuid::new_v4()));
+        let lan = LanConfig { enabled: false, allow_runtime_start: false, ..Default::default() };
+        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, lan, crate::config::OfficeConfig::default()).await.unwrap();
+        let status = build_lan_status(&state).await;
+        assert_eq!(status.state, "disabled");
+        assert_eq!(status.allow_runtime_start, false);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
 }

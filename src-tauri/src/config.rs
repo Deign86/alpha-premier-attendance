@@ -16,6 +16,10 @@ pub struct LanConfig {
     pub admin_session_minutes: u64,
     #[serde(default)]
     pub enabled: bool,
+    /// When false, config.toml forbids starting the LAN viewer from the Live
+    /// Attendance panel; `enabled` alone only controls auto-start at boot.
+    #[serde(default = "default_allow_runtime_start")]
+    pub allow_runtime_start: bool,
     pub bind_address: Option<IpAddr>,
     #[serde(default = "default_port")]
     pub port: u16,
@@ -34,7 +38,7 @@ pub struct LanConfig {
 
 impl Default for LanConfig {
     fn default() -> Self {
-        Self { sheets_sync_endpoint: None, google_service_account_json_path: None, google_spreadsheet_id: None, admin_pin: Some("293906".into()), admin_session_minutes: 15, enabled: false, bind_address: None, port: default_port(), allow_wildcard_bind: false, allowed_subnets: Vec::new(), auth_mode: ViewerAuthMode::None, viewer_password_hash: None, viewer_session_minutes: default_session_minutes(), sse_keep_alive_seconds: default_keep_alive_seconds() }
+        Self { sheets_sync_endpoint: None, google_service_account_json_path: None, google_spreadsheet_id: None, admin_pin: Some("293906".into()), admin_session_minutes: 15, enabled: false, allow_runtime_start: true, bind_address: None, port: default_port(), allow_wildcard_bind: false, allowed_subnets: Vec::new(), auth_mode: ViewerAuthMode::None, viewer_password_hash: None, viewer_session_minutes: default_session_minutes(), sse_keep_alive_seconds: default_keep_alive_seconds() }
     }
 }
 
@@ -50,6 +54,7 @@ fn default_port() -> u16 { 4173 }
 fn default_session_minutes() -> u64 { 480 }
 fn default_keep_alive_seconds() -> u64 { 15 }
 fn default_admin_session_minutes() -> u64 { 15 }
+fn default_allow_runtime_start() -> bool { true }
 
 impl LanConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
@@ -58,18 +63,27 @@ impl LanConfig {
 
     pub fn validate(&self) -> Result<(), String> {
         if !self.enabled { return Ok(()); }
-        let address = self.bind_address.ok_or("lan.bind_address is required when LAN mode is enabled")?;
-        if address.is_unspecified() && !self.allow_wildcard_bind {
-            return Err("wildcard LAN bind requires lan.allow_wildcard_bind=true".into());
-        }
-        if !address.is_loopback() && !is_private(address) && !address.is_unspecified() {
-            return Err("LAN bind address must be loopback or RFC1918 private IPv4".into());
+        self.validate_runtime()
+    }
+
+    /// Validation for runtime start from the Live Attendance panel: the bind
+    /// address may be omitted (the app then auto-detects the office LAN IP),
+    /// but every other safety constraint still applies even when `enabled` is
+    /// false and the server is started on demand.
+    pub fn validate_runtime(&self) -> Result<(), String> {
+        if let Some(address) = self.bind_address {
+            if address.is_unspecified() && !self.allow_wildcard_bind {
+                return Err("wildcard LAN bind requires lan.allow_wildcard_bind=true".into());
+            }
+            if !address.is_loopback() && !is_private(address) && !address.is_unspecified() {
+                return Err("LAN bind address must be loopback or RFC1918 private IPv4".into());
+            }
+            if address.is_unspecified() && self.allowed_subnets.is_empty() {
+                return Err("wildcard LAN bind requires at least one allowed subnet".into());
+            }
         }
         if matches!(self.auth_mode, ViewerAuthMode::Password) && self.viewer_password_hash.is_none() {
             return Err("password viewer mode requires lan.viewer_password_hash".into());
-        }
-        if address.is_unspecified() && self.allowed_subnets.is_empty() {
-            return Err("wildcard LAN bind requires at least one allowed subnet".into());
         }
         Ok(())
     }
