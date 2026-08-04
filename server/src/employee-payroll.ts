@@ -1,15 +1,15 @@
 import { DateTime } from 'luxon';
+import { manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type EmployeePayrollInput = { actualTimeIn: string; actualTimeOut: string; dailyRate: number };
-export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; basePay: number; dailyPay: number };
+export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; basePay: number; dailyPay: number; workedHours: number };
 
 const timezone = 'Asia/Manila';
 
 export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeePayrollResult {
   if (!Number.isFinite(input.dailyRate) || input.dailyRate <= 0) throw new Error('Employee daily rate must be greater than zero');
-  const actualTimeIn = DateTime.fromISO(input.actualTimeIn, { setZone: true }).setZone(timezone);
-  const actualTimeOut = DateTime.fromISO(input.actualTimeOut, { setZone: true }).setZone(timezone);
-  if (!actualTimeIn.isValid || !actualTimeOut.isValid) throw new Error('Payroll timestamps must be valid ISO values');
+  const actualTimeIn = manilaTimestamp(input.actualTimeIn);
+  const actualTimeOut = manilaTimestamp(input.actualTimeOut);
 
   // TODO: Employee late rules TBD by client
   return {
@@ -19,6 +19,8 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
     lateDeduction: 0,
     basePay: input.dailyRate,
     dailyPay: input.dailyRate,
+    // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
+    workedHours: paidWorkHoursCeiled(actualTimeIn, actualTimeOut),
   };
 }
 

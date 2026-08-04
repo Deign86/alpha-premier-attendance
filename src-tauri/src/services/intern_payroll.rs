@@ -1,3 +1,4 @@
+use super::lunch_break::paid_work_hours_ceiled;
 use super::payroll::floor_zero;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike};
 use chrono_tz::Asia::Manila;
@@ -15,7 +16,7 @@ pub fn late_deduction_centavos(daily_rate_centavos: i64, late_hours: i64, grace_
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct InternPayrollResult { pub computed_time_in: String, pub computed_time_out: String, pub late_hours: i64, pub late_deduction_centavos: i64, pub grace_used: bool, pub base_pay_centavos: i64, pub daily_pay_centavos: i64 }
+pub struct InternPayrollResult { pub computed_time_in: String, pub computed_time_out: String, pub late_hours: i64, pub late_deduction_centavos: i64, pub grace_used: bool, pub base_pay_centavos: i64, pub daily_pay_centavos: i64, pub worked_hours: i64 }
 
 pub fn calculate(attendance_date: &str, actual_time_in: &str, actual_time_out: &str, grace_available: bool) -> Result<InternPayrollResult, String> {
     let date = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d").map_err(|_| "attendanceDate must be a valid Manila date")?;
@@ -28,7 +29,7 @@ pub fn calculate(attendance_date: &str, actual_time_in: &str, actual_time_out: &
     let deduction = if late_hours > 0 && !grace_used { late_hours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP * 100 } else { 0 };
     let computed_in = if late_hours > 0 && !grace_used { ceil_hour(time_in) } else { time_in };
     let base = INTERN_DAILY_RATE_PHP * 100;
-    Ok(InternPayrollResult { computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true), computed_time_out: time_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true), late_hours, late_deduction_centavos: deduction, grace_used, base_pay_centavos: base, daily_pay_centavos: floor_zero(base - deduction) })
+    Ok(InternPayrollResult { computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true), computed_time_out: time_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true), late_hours, late_deduction_centavos: deduction, grace_used, base_pay_centavos: base, daily_pay_centavos: floor_zero(base - deduction), worked_hours: paid_work_hours_ceiled(time_in, time_out) })
 }
 
 fn ceil_hour(value: DateTime<chrono_tz::Tz>) -> DateTime<chrono_tz::Tz> {
@@ -39,4 +40,19 @@ fn ceil_hour(value: DateTime<chrono_tz::Tz>) -> DateTime<chrono_tz::Tz> {
 mod tests {
     use super::*;
     #[test] fn grace_and_floor_are_applied() { assert_eq!(late_deduction_centavos(80000, 3, 1), 20000); assert_eq!(late_deduction_centavos(100, 0, 1), 0); }
+    #[test] fn worked_hours_exclude_lunch_but_keep_fixed_daily_pay() {
+        // 08:00–17:00 → 8 paid hours after the 12:00–13:00 lunch cut.
+        let result = calculate("2026-08-01", "2026-08-01T08:00:00+08:00", "2026-08-01T17:00:00+08:00", true).unwrap();
+        assert_eq!(result.worked_hours, 8);
+        // The fixed PHP 80.00/day intern rule is untouched by the lunch cut.
+        assert_eq!(result.base_pay_centavos, 8000);
+        assert_eq!(result.daily_pay_centavos, 8000);
+    }
+    #[test] fn late_hours_are_not_affected_by_lunch() {
+        // Lateness is measured against the 08:00 start, before any lunch window.
+        let result = calculate("2026-08-01", "2026-08-01T09:30:00+08:00", "2026-08-01T17:00:00+08:00", false).unwrap();
+        assert_eq!(result.late_hours, 2);
+        assert_eq!(result.late_deduction_centavos, 2000);
+        assert_eq!(result.worked_hours, 7);
+    }
 }

@@ -75,4 +75,22 @@ describe('admin and live attendance API', () => {
     await agent.post('/api/admin/unlock').send({ pin: '2468' });
     await agent.patch('/api/admin/users/u1').send({ userId: 'u1', rfidUid: 'CCDD', fullName: 'Ada', status: 'ACTIVE' }).expect(409);
   });
+
+  it('keeps an after-hours admin time-out flagged LATE_TIMEOUT until the official time is re-entered', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 500 },
+    ], [{ attendanceId: 'att-1', attendanceDate: '2026-07-29', userId: 'u1', rfidUid: 'AABB', fullName: 'Ada', department: null, timeIn: '2026-07-29T08:00:00+08:00', timeOut: null, status: 'WORKING', source: 'RFID', notes: '' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    // Saving an 18:55 time-out stays flagged, never COMPLETED, and never gets payroll.
+    await agent.patch('/api/admin/attendance/att-1').send({ attendanceDate: '2026-07-29', timeIn: '2026-07-29T08:00:00+08:00', timeOut: '2026-07-29T18:55:00+08:00', expectedTimeIn: '2026-07-29T08:00:00+08:00', expectedTimeOut: null }).expect(200);
+    expect((await request(app).get('/api/attendance?date=2026-07-29')).body.attendance[0].status).toBe('LATE_TIMEOUT');
+    expect(await sheets.findPayrollByAttendanceId('att-1')).toBeNull();
+
+    // Re-entering the official 17:00 time-out completes the shift normally.
+    await agent.patch('/api/admin/attendance/att-1').send({ attendanceDate: '2026-07-29', timeIn: '2026-07-29T08:00:00+08:00', timeOut: '2026-07-29T17:00:00+08:00', expectedTimeIn: '2026-07-29T08:00:00+08:00', expectedTimeOut: '2026-07-29T18:55:00+08:00' }).expect(200);
+    expect((await request(app).get('/api/attendance?date=2026-07-29')).body.attendance[0].status).toBe('COMPLETED');
+    expect(await sheets.findPayrollByAttendanceId('att-1')).not.toBeNull();
+  });
 });

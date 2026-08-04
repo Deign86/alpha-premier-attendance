@@ -3,6 +3,7 @@ import { google, type sheets_v4 } from 'googleapis';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaTimestamp } from './time.js';
 import type { PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
+import { isLateTimeout } from '@rfid-attendance/shared';
 import { defaultPayrollProfiles } from './cutoff-payroll.js';
 
 export type SheetUser = {
@@ -36,7 +37,7 @@ export type SheetAttendance = {
   department: string | null;
   timeIn: string;
   timeOut: string | null;
-  status: 'WORKING' | 'COMPLETED' | 'MISSED';
+  status: 'WORKING' | 'COMPLETED' | 'MISSED' | 'LATE_TIMEOUT';
   source: 'RFID' | 'MANUAL_TEST';
   notes: string;
   rowNumber?: number;
@@ -141,7 +142,7 @@ export class InMemorySheetsService implements GoogleSheetsService {
     const row = this.attendance.find((item) => item.attendanceId === attendance.attendanceId);
     if (!row || row.status !== 'WORKING' || row.timeOut) throw new Error('Attendance row is no longer working');
     row.timeOut = timeOut;
-    row.status = 'COMPLETED';
+    row.status = isLateTimeout(timeOut) ? 'LATE_TIMEOUT' : 'COMPLETED';
     return { ...row };
   }
 
@@ -413,7 +414,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     const rowRange = `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`;
     const existing = (await this.values(rowRange))[0];
     if (!existing || existing[index.attendanceid] !== attendance.attendanceId || existing[index.status] !== 'WORKING' || existing[index.timeout]) throw new Error('Attendance row is no longer working');
-    const updated = { ...attendance, timeOut, status: 'COMPLETED' as const };
+    const updated = { ...attendance, timeOut, status: isLateTimeout(timeOut) ? 'LATE_TIMEOUT' as const : 'COMPLETED' as const };
     await this.api.spreadsheets.values.update({
       spreadsheetId: this.options.spreadsheetId,
       range: rowRange,
@@ -601,7 +602,9 @@ function userFromRow(row: string[], index: Record<string, number>): SheetUser {
 }
 function normalizeAttendanceStatus(value: string | undefined): SheetAttendance['status'] {
   const status = String(value ?? '').trim().toUpperCase();
-  return status === 'COMPLETED' ? 'COMPLETED' : status === 'MISSED' || status === 'INCOMPLETE' ? 'MISSED' : 'WORKING';
+  if (status === 'COMPLETED') return 'COMPLETED';
+  if (status === 'LATE_TIMEOUT') return 'LATE_TIMEOUT';
+  return status === 'MISSED' || status === 'INCOMPLETE' ? 'MISSED' : 'WORKING';
 }
 function attendanceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetAttendance {
   return {

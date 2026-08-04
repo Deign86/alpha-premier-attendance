@@ -198,6 +198,7 @@ No public bind, router forwarding, UPnP mapping, public DNS record, or cloud tun
 - The kiosk receives clean `rfid-scan` events and drives fast feedback: processing, success with the employee photo, unknown card, duplicate cooldown, and error states.
 - The scanner listener pauses while the operator types in admin, setup, or manual-entry screens so keystrokes are never misread as card taps.
 - Each user has one Time In and one Time Out per Manila calendar day (`Asia/Manila`).
+- **Late time-outs.** The office does not allow overtime. A time-out recorded strictly after 17:00 Manila is saved as `LATE_TIMEOUT` instead of `COMPLETED`: the record is kept and shown with a distinct state on the live attendance screens (in-app dashboard and LAN viewer), no payroll row is generated, and the attendance editor flags it for manual re-input of the official time-out. Re-entering a time-out at or before 17:00 completes the shift normally. The rule lives in `shared/src/api-contracts.ts` (`isLateTimeout`, `OFFICE_HOURS_END`) and is mirrored in `src-tauri/src/services/office_hours.rs` for the desktop app.
 - Local writes are committed to SQLite before local events or Sheets export are published.
 - Accepted and rejected scan requests are correlated with a request ID in the audit log.
 
@@ -208,6 +209,8 @@ Payroll preserves the existing intern weekly grace and PHP 10 late deduction rul
 ```rust
 // TODO: Employee late rules TBD by client
 ```
+
+**Lunch break rule.** Paid hours never include the fixed 12:00–13:00 lunch window (`Asia/Manila`). The rule is centralized in `src-tauri/src/services/lunch_break.rs` (desktop app) and `server/src/lunch-break.ts` (legacy server), and it applies to employees and interns alike: daily worked hours, the attendance workbook `TOTAL_HOURS` column, and any derived payroll hour values subtract only the portion of the lunch window that overlaps the worked interval (partial clock-in/out inside the window and multi-day spans are handled). Overtime hours entered on cutoff payroll are recorded net of lunch; intern lateness continues to be measured against the 08:00 start and is unaffected.
 
 ## Photos And Security
 

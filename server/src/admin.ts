@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { AdminUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
-import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID } from '@rfid-attendance/shared';
+import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { manilaTimestamp } from './time.js';
@@ -85,7 +85,7 @@ export class AdminService {
     if (timeIn && !validTimestamp(timeIn, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-in must be a valid timestamp on the attendance date.');
     if (timeOut && !validTimestamp(timeOut, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out must be a valid timestamp on the attendance date.');
     if (timeIn && timeOut && new Date(timeOut).getTime() < new Date(timeIn).getTime()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out cannot precede time-in.');
-    const updated: SheetAttendance = { ...row, timeIn: timeIn ?? '', timeOut, status: timeIn && timeOut ? 'COMPLETED' : timeIn ? 'WORKING' : 'MISSED' };
+    const updated: SheetAttendance = { ...row, timeIn: timeIn ?? '', timeOut, status: timeIn && timeOut ? (isLateTimeout(timeOut) ? 'LATE_TIMEOUT' : 'COMPLETED') : timeIn ? 'WORKING' : 'MISSED' };
     try {
       const saved = await this.sheets.updateAttendance(updated, { timeIn: value.expectedTimeIn ?? null, timeOut: value.expectedTimeOut ?? null });
       const user = await this.sheets.findUserById(row.userId);

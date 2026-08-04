@@ -8,8 +8,40 @@ export type ScanSource = (typeof scanSources)[number];
 export const attendanceActions = ['TIME_IN', 'TIME_OUT'] as const;
 export type AttendanceAction = (typeof attendanceActions)[number];
 
-export const attendanceStatuses = ['WORKING', 'COMPLETED', 'MISSED'] as const;
+export const attendanceStatuses = ['WORKING', 'COMPLETED', 'MISSED', 'LATE_TIMEOUT'] as const;
 export type AttendanceStatus = (typeof attendanceStatuses)[number];
+
+/**
+ * Attendance policy constants. The office does not allow overtime: a time-out
+ * recorded strictly after the end of office hours is saved as `LATE_TIMEOUT`
+ * (flagged for manual correction) instead of a normal `COMPLETED` shift.
+ */
+export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
+/** Official start of the workday, used by intern lateness rules. */
+export const OFFICE_HOURS_START = '08:00';
+/** Official end of office hours. Time-outs strictly after this are flagged `LATE_TIMEOUT`. */
+export const OFFICE_HOURS_END = '17:00';
+
+/**
+ * True when the Manila-local clock time of a time-out timestamp is strictly
+ * after the end of office hours (17:00). A time-out at exactly 17:00 is a
+ * normal end-of-day COMPLETED shift; anything later must be corrected because
+ * the office does not allow overtime.
+ */
+export function isLateTimeout(timeOutIso: string): boolean {
+  const date = new Date(timeOutIso);
+  if (!Number.isFinite(date.getTime())) return false;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: ATTENDANCE_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  const minutesSinceMidnight = read('hour') * 60 + read('minute');
+  const [endHour, endMinute] = OFFICE_HOURS_END.split(':').map(Number);
+  return minutesSinceMidnight > endHour * 60 + endMinute;
+}
 
 export type ScanRequest = {
   rfidUid: string;

@@ -475,12 +475,15 @@ async fn attendance_page(State(state): State<AppState>, ConnectInfo(peer): Conne
   .card { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--gold-soft); border-radius: var(--radius-md); }
   .card.in { border-left-color: var(--success); }
   .card.out { border-left-color: var(--gold-bright); }
+  .card.late { border-left-color: var(--danger); }
   .card .who { min-width: 0; }
   .card .who .name { color: var(--ink); font-size: 1rem; font-weight: 600; }
   .card .who .meta { color: var(--quiet); font-size: .7rem; margin-top: 2px; }
   .badge { margin-left: auto; font-size: .66rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
   .card.in .badge { color: var(--success); border: 1px solid #4e825d; background: rgba(152, 210, 168, .08); }
   .card.out .badge { color: var(--gold-bright); border: 1px solid var(--gold-soft); background: rgba(225, 196, 119, .08); }
+  .card.late .badge { color: var(--danger); border: 1px solid #a8553d; background: rgba(239, 170, 146, .08); }
+  .card.late .when { color: var(--danger); }
   .card .when { text-align: right; font-size: .86rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .card .when small { display: block; color: var(--quiet); font-size: .64rem; margin-top: 2px; }
   .empty { text-align: center; color: var(--muted); padding: 44px 20px; background: var(--surface); border: 1px dashed var(--line-bright); border-radius: var(--radius-md); font-size: .85rem; }
@@ -551,13 +554,14 @@ function updateChip() {
 }
 function latestTime(row) { return row.timeOut || row.timeIn || ''; }
 function card(row) {
+  const isLate = row.status === 'LATE_TIMEOUT';
   const isOut = Boolean(row.timeOut);
   const time = isOut ? row.timeOut : row.timeIn;
   const when = time ? new Date(time).toLocaleString('en-PH', { timeZone: tz, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
   const dept = row.department ? ' · ' + escapeHtml(row.department) : '';
-  return '<div class="card ' + (isOut ? 'out' : 'in') + '">' +
+  return '<div class="card ' + (isLate ? 'late' : (isOut ? 'out' : 'in')) + '">' +
     '<div class="who"><div class="name">' + escapeHtml(row.fullName) + '</div><div class="meta">' + escapeHtml(row.userId || '') + dept + '</div></div>' +
-    '<div class="badge">' + (isOut ? 'Time Out' : 'Time In') + '</div>' +
+    '<div class="badge">' + (isLate ? 'Late Timeout — Fix Needed' : (isOut ? 'Time Out' : 'Time In')) + '</div>' +
     '<div class="when">' + escapeHtml(when) + '<small>' + escapeHtml(row.attendanceDate || '') + '</small></div>' +
     '</div>';
 }

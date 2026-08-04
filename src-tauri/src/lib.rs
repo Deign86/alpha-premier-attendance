@@ -254,8 +254,16 @@ async fn admin_update_attendance(
         .get("expectedTimeOut")
         .and_then(|v| v.as_str())
         .or(current_out.as_deref());
+    // The office does not allow overtime: an admin-saved time-out after
+    // office hours stays flagged LATE_TIMEOUT instead of COMPLETED until the
+    // official time is re-entered.
+    let late = time_out.is_some_and(|value| crate::services::office_hours::is_late_timeout(value));
     let status = if time_in.is_some() && time_out.is_some() {
-        "COMPLETED"
+        if late {
+            "LATE_TIMEOUT"
+        } else {
+            "COMPLETED"
+        }
     } else if time_in.is_some() {
         "WORKING"
     } else {
@@ -312,9 +320,11 @@ async fn admin_update_attendance(
         )
         .await;
     }
-    if let (Some(actual_in), Some(actual_out)) = (time_in, time_out) {
-        if let Some(user_row) = sqlx::query("SELECT user_id,full_name,employee_type,daily_rate_centavos FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
-            ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), user_row.get("employee_type"), user_row.get("daily_rate_centavos"), date, actual_in, actual_out).await?;
+    if status == "COMPLETED" {
+        if let (Some(actual_in), Some(actual_out)) = (time_in, time_out) {
+            if let Some(user_row) = sqlx::query("SELECT user_id,full_name,employee_type,daily_rate_centavos FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
+                ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), user_row.get("employee_type"), user_row.get("daily_rate_centavos"), date, actual_in, actual_out).await?;
+            }
         }
     }
     enqueue_sync(&state, "Attendance", &attendance_id, "UPSERT", &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status})).await;
@@ -1653,8 +1663,14 @@ async fn scan_rfid(
             let tin: Option<String> = row.get("time_in");
             let tout: Option<String> = row.get("time_out");
             if tout.is_some() {
+                let existing_status: String = row.get("status");
+                let message = if existing_status == "LATE_TIMEOUT" {
+                    "Attendance timed out after office hours and is pending manual correction."
+                } else {
+                    "Attendance is already complete for today."
+                };
                 return Ok(
-                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_ALREADY_COMPLETED","message":"Attendance is already complete for today."}}),
+                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_ALREADY_COMPLETED","message":message}}),
                 );
             }
             if tin.is_none() {
@@ -1662,14 +1678,19 @@ async fn scan_rfid(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_DATA_CONFLICT","message":"Attendance data is inconsistent."}}),
                 );
             }
-            let result = sqlx::query("UPDATE attendance SET time_out = ?, status = 'COMPLETED', revision = revision + 1, updated_at = ? WHERE attendance_id = ? AND revision = ? AND time_out IS NULL")
-                .bind(&timestamp).bind(&timestamp).bind(&id).bind(row.get::<i64,_>("revision")).execute(&state.db).await;
+            // The office does not allow overtime: a time-out after office
+            // hours is saved as LATE_TIMEOUT (pending manual correction),
+            // never as a normal COMPLETED shift.
+            let late = crate::services::office_hours::is_late_timeout(&timestamp);
+            let new_status = if late { "LATE_TIMEOUT" } else { "COMPLETED" };
+            let result = sqlx::query("UPDATE attendance SET time_out = ?, status = ?, revision = revision + 1, updated_at = ? WHERE attendance_id = ? AND revision = ? AND time_out IS NULL")
+                .bind(&timestamp).bind(new_status).bind(&timestamp).bind(&id).bind(row.get::<i64,_>("revision")).execute(&state.db).await;
             if result.map(|r| r.rows_affected()).unwrap_or(0) != 1 {
                 return Ok(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_DATA_CONFLICT","message":"Attendance changed before the scan was saved."}}),
                 );
             }
-            (id, "TIME_OUT", tin, Some(timestamp.clone()), "COMPLETED")
+            (id, "TIME_OUT", tin, Some(timestamp.clone()), new_status)
         }
     };
     let seq = state.next_sequence();
@@ -1678,7 +1699,7 @@ async fn scan_rfid(
         .lock()
         .await
         .insert(uid.clone(), Instant::now());
-    if action == "TIME_OUT" {
+    if action == "TIME_OUT" && attendance_status == "COMPLETED" {
         if let (Some(actual_in), Some(actual_out)) = (time_in.as_deref(), time_out.as_deref()) {
             let employee_type: String = user.get("employee_type");
             let daily_rate: Option<i64> = user.get("daily_rate_centavos");

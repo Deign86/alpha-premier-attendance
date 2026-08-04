@@ -1,5 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
+import { manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -16,6 +17,7 @@ export type InternPayrollResult = {
   graceUsed: boolean;
   basePay: number;
   dailyPay: number;
+  workedHours: number;
 };
 
 const timezone = 'Asia/Manila';
@@ -27,10 +29,10 @@ export function manilaWeekStart(attendanceDate: string): string {
 }
 
 export function calculateInternPayroll(input: InternPayrollInput): InternPayrollResult {
-  const actualTimeIn = manilaDate(input.actualTimeIn);
-  const actualTimeOut = manilaDate(input.actualTimeOut);
+  const actualTimeIn = manilaTimestamp(input.actualTimeIn);
+  const actualTimeOut = manilaTimestamp(input.actualTimeOut);
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
-  if (!start.isValid || !actualTimeIn.isValid || !actualTimeOut.isValid) throw new Error('Payroll timestamps must be valid ISO values');
+  if (!start.isValid) throw new Error('Payroll timestamps must be valid ISO values');
 
   const lateMilliseconds = actualTimeIn.toMillis() - start.toMillis();
   const lateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
@@ -47,11 +49,9 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
     graceUsed,
     basePay,
     dailyPay: Math.max(0, basePay - lateDeduction),
+    // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
+    workedHours: paidWorkHoursCeiled(actualTimeIn, actualTimeOut),
   };
-}
-
-function manilaDate(value: string): DateTime {
-  return DateTime.fromISO(value, { setZone: true }).setZone(timezone);
 }
 
 function ceilHour(value: DateTime): DateTime {

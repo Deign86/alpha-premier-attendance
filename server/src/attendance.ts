@@ -93,10 +93,13 @@ export class AttendanceService {
             return this.successResponse(requestId, action, saved, user);
           }
           if (!attendance.timeIn && attendance.timeOut) throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance has a time-out but no time-in.', 409);
-          if (!attendance.timeIn || attendance.attendanceDate !== attendanceDate || (attendance.status === 'COMPLETED' && !attendance.timeOut) || (attendance.status === 'WORKING' && attendance.timeOut)) {
+          if (!attendance.timeIn || attendance.attendanceDate !== attendanceDate || (attendance.status === 'COMPLETED' && !attendance.timeOut) || (attendance.status === 'LATE_TIMEOUT' && !attendance.timeOut) || (attendance.status === 'WORKING' && attendance.timeOut)) {
             throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
           }
-          if (attendance.status === 'COMPLETED') {
+          if (attendance.status === 'COMPLETED' || attendance.status === 'LATE_TIMEOUT') {
+            if (attendance.status === 'LATE_TIMEOUT') {
+              throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance timed out after office hours and is pending manual correction.', 409);
+            }
             if (!await this.sheets.findPayrollByAttendanceId(attendance.attendanceId)) {
               try { await this.payroll.ensureForCompletedAttendance(attendance, user); }
               catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance is complete but payroll could not be generated.', 503); }
@@ -107,12 +110,14 @@ export class AttendanceService {
             saved = await this.sheets.completeAttendance(attendance, timestamp);
           } catch {
             const reconciled = await this.sheets.findAttendance(user.userId, attendanceDate).catch(() => null);
-            if (reconciled?.attendanceId === attendance.attendanceId && reconciled.status === 'COMPLETED' && reconciled.timeOut) saved = reconciled;
+            if (reconciled?.attendanceId === attendance.attendanceId && (reconciled.status === 'COMPLETED' || reconciled.status === 'LATE_TIMEOUT') && reconciled.timeOut) saved = reconciled;
             else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
           }
           action = 'TIME_OUT';
-          try { await this.payroll.ensureForCompletedAttendance(saved, user); }
-          catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance was completed but payroll could not be generated.', 503); }
+          if (saved.status === 'COMPLETED') {
+            try { await this.payroll.ensureForCompletedAttendance(saved, user); }
+            catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance was completed but payroll could not be generated.', 503); }
+          }
         }
 
         this.lastScans.set(uid, currentMs);
@@ -135,11 +140,16 @@ export class AttendanceService {
 
   private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null; employeeType?: 'INTERN' | 'EMPLOYEE'; photoUrl?: string | null }): ScanSuccessResponse {
     const userSummary: UserSummary = { userId: user.userId, fullName: user.fullName, department: user.department, employeeType: user.employeeType ?? 'INTERN', photoUrl: user.photoUrl ?? null };
+    const message = action === 'TIME_IN'
+      ? 'Time In recorded successfully.'
+      : attendance.status === 'LATE_TIMEOUT'
+        ? 'Time Out recorded after office hours. Manual correction is required.'
+        : 'Time Out recorded successfully.';
     return {
       success: true,
       requestId,
       action,
-      message: action === 'TIME_IN' ? 'Time In recorded successfully.' : 'Time Out recorded successfully.',
+      message,
       attendance: {
         attendanceId: attendance.attendanceId,
         attendanceDate: attendance.attendanceDate,

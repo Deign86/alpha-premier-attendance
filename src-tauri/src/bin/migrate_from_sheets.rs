@@ -71,8 +71,10 @@ async fn import_attendance(db: &SqlitePool, path: &PathBuf) -> Result<(), Box<dy
         if row.len() < 8 { continue; }
         let now = chrono::Utc::now().to_rfc3339();
         // Legacy sheets use OPEN/INCOMPLETE; normalize to the current attendance statuses.
+        // LATE_TIMEOUT (after-hours time-out pending correction) is preserved.
         let status: &str = match row.get(8).filter(|v| !v.is_empty()).unwrap_or("OPEN").to_ascii_uppercase().as_str() {
             "COMPLETED" => "COMPLETED",
+            "LATE_TIMEOUT" => "LATE_TIMEOUT",
             "MISSED" | "INCOMPLETE" => "MISSED",
             _ => "WORKING",
         };

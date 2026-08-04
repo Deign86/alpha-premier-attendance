@@ -253,6 +253,41 @@ describe('RFID kiosk', () => {
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('scanner_pause', { paused: false }));
   });
 
+  it('shows a distinct LATE TIMEOUT pill in the live attendance view', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === '/api/config') {
+          return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+        }
+        if (url === '/api/attendance') {
+          return {
+            ok: true,
+            json: async () => ({
+              success: true,
+              date: '2026-07-28',
+              fetchedAt: '2026-07-28T10:00:00+08:00',
+              attendance: [
+                { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T18:55:00+08:00', status: 'LATE_TIMEOUT' },
+                { attendanceId: 'a2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      });
+      render(<App />);
+      expect(await screen.findByText('LATE TIMEOUT')).toBeInTheDocument();
+      expect(screen.getByText('Correction needed')).toBeInTheDocument();
+      // Normal shifts keep rendering their existing status unchanged.
+      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('enrolls an unknown card through the protected setup flow', async () => {
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

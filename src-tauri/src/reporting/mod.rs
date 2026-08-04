@@ -361,7 +361,14 @@ fn elapsed_hours(start: &str, end: &str) -> f64 {
         chrono::DateTime::parse_from_rfc3339(start),
         chrono::DateTime::parse_from_rfc3339(end),
     ) {
-        (Ok(start), Ok(end)) => (end - start).num_minutes().max(0) as f64 / 60.0,
+        (Ok(start), Ok(end)) => {
+            // Rendered hours are net of the fixed 12:00–13:00 lunch break so
+            // reports stay consistent with payroll (shared lunch rule).
+            crate::services::lunch_break::paid_work_hours(
+                start.with_timezone(&chrono_tz::Asia::Manila),
+                end.with_timezone(&chrono_tz::Asia::Manila),
+            )
+        }
         _ => 0.0,
     }
 }
@@ -415,7 +422,7 @@ pub fn generate_attendance_workbook(
     worksheet.write_string_with_format(
         3,
         0,
-        "Timezone: Asia/Manila | Status: FINAL DATA FROM SQLITE",
+        "Timezone: Asia/Manila | Hours exclude the 12:00-13:00 lunch break | Status: FINAL DATA FROM SQLITE",
         &metadata_format,
     )?;
     let headers = [
