@@ -18,12 +18,26 @@
   --line-bright: #66532d;
   --success: #98d2a8;
   --danger: #efaa92;
+  --scrollbar-size: 10px;
+  --scrollbar-thumb: #3a3426;
+  --scrollbar-thumb-hover: #8d753e;
+  --scrollbar-track: #0d0e0c;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
+/* Scrollbar system: slim, theme-matched, desktop-like instead of the default
+   bright browser bars. Applies to every scroll container (page, panels,
+   tables, dialogs) while keeping scrolling fully functional. */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+*::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+*::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; border: 2px solid var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
+
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--black); }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--black); overflow-x: clip; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
@@ -116,8 +130,8 @@ h1 { color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: 3.35rem;
 .setup-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 4px; }
 .setup-steps span { padding: 10px 8px; color: var(--quiet); border-bottom: 1px solid var(--line); font-size: .62rem; font-weight: 700; text-align: center; }
 .setup-steps .is-active { color: var(--gold-bright); border-color: var(--gold); }
-.setup-form label, .setup-fields label { display: grid; gap: 7px; color: var(--ink); font-size: .75rem; font-weight: 600; }
-.setup-form input, .setup-form select { width: 100%; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; }
+.setup-form label, .setup-fields label { display: grid; gap: 7px; min-width: 0; color: var(--ink); font-size: .75rem; font-weight: 600; }
+.setup-form input, .setup-form select { width: 100%; min-width: 0; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; }
 .setup-form input::placeholder { color: var(--quiet); }
 .setup-form input:focus, .setup-form select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .13); }
 .setup-progress, .setup-success, .setup-error { display: flex; align-items: center; gap: 7px; margin: 1px 0 0; font-size: .76rem; line-height: 1.4; }
@@ -131,8 +145,8 @@ h1 { color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: 3.35rem;
 .text-button:hover { color: var(--gold-bright); }
 .card-badge { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 11px 12px; color: var(--gold-bright); background: #211d13; border: 1px solid var(--gold-soft); border-radius: 3px; font-size: .76rem; font-weight: 700; overflow-wrap: anywhere; }
 .card-badge span { margin-left: auto; color: var(--muted); font-size: .66rem; font-weight: 500; white-space: nowrap; }
-.setup-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
-.cutoff-period { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+.setup-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 12px; }
+.cutoff-period { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
 .cutoff-period label { margin: 0 !important; }
 .cutoff-fill-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .cutoff-fill-buttons .admin-button { min-height: 42px; padding: 0 12px; white-space: nowrap; }
@@ -179,7 +193,7 @@ h1 { color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: 3.35rem;
 .dashboard-header nav a { color: var(--gold-bright); text-decoration: none; font-size: .78rem; font-weight: 700; }
 .dashboard-status { margin: 20px 0 12px; color: var(--muted); font-size: .75rem; }
 .dashboard-alert { color: var(--danger); margin: 16px 0; font-size: .8rem; }
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); background: var(--surface); }
+.table-wrap { overflow-x: auto; overscroll-behavior-x: contain; max-width: 100%; border: 1px solid var(--line); background: var(--surface); }
 table { width: 100%; border-collapse: collapse; min-width: 640px; }
 th, td { padding: 16px 18px; border-bottom: 1px solid var(--line); text-align: left; font-size: .78rem; }
 th { color: var(--gold); text-transform: uppercase; font-size: .62rem; letter-spacing: .04em; }
@@ -445,7 +459,7 @@ td small { font-size: .7rem; }
 .payroll-actions { gap: 8px; margin-bottom: 14px; }
 .payroll-actions .admin-button { font-size: .74rem; }
 .payroll-workspace .admin-grid { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr); }
-.payroll-workspace .admin-form { max-height: calc(100dvh - 180px); overflow: auto; }
+.payroll-workspace .admin-form { max-height: calc(100dvh - 180px); overflow-y: auto; overflow-x: hidden; }
 .payroll-workspace .setup-fields { gap: 10px; }
 .payroll-workspace .setup-fields label { margin: 8px 0; }
 .payroll-table .table-wrap { overflow: auto; }
