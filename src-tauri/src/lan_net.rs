@@ -126,7 +126,7 @@ fn parse_network_category(text: &str) -> NetworkProfile {
 /// 2=DomainAuthenticated) via `Get-NetConnectionProfile`. Non-Windows or
 /// missing PowerShell degrades to `Unknown` without error.
 pub async fn detect_network_profile() -> NetworkProfile {
-    let Ok(mut child) = tokio::process::Command::new("powershell")
+    let Ok(child) = tokio::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",

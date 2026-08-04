@@ -23,7 +23,21 @@ fn get_health(state: State<'_, AppState>) -> serde_json::Value {
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"enableScanSounds":false,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
+    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"enableScanSounds":false,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":crate::services::scanner::mode_label(state.scanner.config.mode),"paused":state.scanner.paused()},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
+}
+
+#[tauri::command]
+/// Live scanner lifecycle status (state, message, mode) for the kiosk status
+/// pill and admin diagnostics.
+fn scanner_status(state: State<'_, AppState>) -> crate::services::scanner::ScannerStatus {
+    state.scanner.status()
+}
+
+#[tauri::command]
+/// Pause/resume the native scanner listener while the operator types (admin,
+/// setup, manual entry) so keystrokes are never misread as card scans.
+fn scanner_pause(state: State<'_, AppState>, paused: bool) {
+    state.scanner.set_paused(paused);
 }
 
 #[tauri::command]
@@ -1790,13 +1804,14 @@ pub fn run() {
             let paths = crate::paths::resolve(app.handle())
                 .expect("resolve application paths");
             std::fs::create_dir_all(&paths.config_dir).expect("create application config directory");
-            let (lan, office) = config::load_config(&paths.config_dir).expect("valid config.toml");
+            let (lan, office, scanner_config) = config::load_config(&paths.config_dir).expect("valid config.toml");
             let state = tauri::async_runtime::block_on(AppState::new(
                 paths.data_dir.clone(),
                 paths.exports_dir.clone(),
                 paths.is_portable,
                 lan,
                 office,
+                scanner_config,
             ))
             .expect("SQLite initialization");
             if state.lan.enabled {
@@ -1814,8 +1829,12 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
+            // Native scanner pipeline: global keyboard-wedge hook (default) or
+            // raw HID reader, normalized into `rfid-scan` events. The webview
+            // never needs a focused input for card taps.
+            let scanner_handle = state.scanner.clone();
             app.manage(state);
-            crate::services::rfid_global::start(app.handle().clone());
+            crate::services::scanner::start(app.handle().clone(), scanner_handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1823,6 +1842,8 @@ pub fn run() {
             get_config,
             get_attendance,
             scan_rfid,
+            scanner_status,
+            scanner_pause,
             upload_photo,
             admin_users,
             admin_list_users,
@@ -1939,6 +1960,7 @@ mod tests {
             true,
             LanConfig::default(),
             OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
         ))
         .unwrap();
         let file_path = exports_dir.join("payroll-2026-08-04.csv");
@@ -1972,6 +1994,7 @@ mod tests {
             false,
             LanConfig::default(),
             OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
         )
         .await
         .unwrap();

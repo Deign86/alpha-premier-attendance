@@ -56,9 +56,78 @@ fn default_keep_alive_seconds() -> u64 { 15 }
 fn default_admin_session_minutes() -> u64 { 15 }
 fn default_allow_runtime_start() -> bool { true }
 
+/// How the RFID reader is attached to the front-desk laptop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ScannerMode {
+    /// The reader behaves as a keyboard wedge: it types the card UID followed
+    /// by Enter. A global low-level keyboard hook captures the stream even when
+    /// the webview is not focused. This is the default and recommended mode for
+    /// the common USB RFID readers.
+    #[default]
+    Keyboard,
+    /// The reader exposes raw HID reports. Requires `scanner.hid_vid` and
+    /// `scanner.hid_pid` so the app never guesses which HID device is the
+    /// reader.
+    Hid,
+    /// Use HID when `scanner.hid_vid`/`scanner.hid_pid` are configured,
+    /// otherwise fall back to the keyboard wedge.
+    Auto,
+}
+
+/// Native RFID scanner configuration (`[scanner]` in config.toml).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScannerConfig {
+    #[serde(default)]
+    pub mode: ScannerMode,
+    /// Most keyboard-wedge readers append Enter after the card UID. When true
+    /// (default), an Enter key press finalizes the current input immediately.
+    #[serde(default = "default_enter_suffix")]
+    pub enter_suffix: bool,
+    /// Fallback completion window (ms) when the reader does not send Enter:
+    /// input is finalized after this much silence. Also the inter-character
+    /// gap that separates two card taps.
+    #[serde(default = "default_idle_timeout_ms")]
+    pub idle_timeout_ms: u64,
+    /// Native duplicate window (ms): identical UIDs read within this window are
+    /// swallowed so one physical tap never produces two scan requests. The
+    /// backend keeps its own 500 ms guard and 10 s physical cooldown.
+    #[serde(default = "default_dedup_ms")]
+    pub dedup_ms: u64,
+    /// HID mode only: vendor id of the RFID reader (e.g. 0x1234).
+    #[serde(default)]
+    pub hid_vid: Option<u16>,
+    /// HID mode only: product id of the RFID reader (e.g. 0x5678).
+    #[serde(default)]
+    pub hid_pid: Option<u16>,
+}
+
+fn default_enter_suffix() -> bool { true }
+fn default_idle_timeout_ms() -> u64 { 150 }
+fn default_dedup_ms() -> u64 { 300 }
+
+impl Default for ScannerConfig {
+    fn default() -> Self {
+        Self {
+            mode: ScannerMode::default(),
+            enter_suffix: default_enter_suffix(),
+            idle_timeout_ms: default_idle_timeout_ms(),
+            dedup_ms: default_dedup_ms(),
+            hid_vid: None,
+            hid_pid: None,
+        }
+    }
+}
+
+impl ScannerConfig {
+    pub fn load(config_dir: &Path) -> Result<Self, String> {
+        load_config(config_dir).map(|(_, _, scanner)| scanner)
+    }
+}
+
 impl LanConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(lan, _)| lan)
+        load_config(config_dir).map(|(lan, _, _)| lan)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -167,7 +236,7 @@ fn join_address_parts(parts: Vec<String>) -> String {
 
 impl OfficeConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, office)| office)
+        load_config(config_dir).map(|(_, office, _)| office)
     }
 
     fn compose_short(&self) -> String {
@@ -224,12 +293,12 @@ impl OfficeConfig {
     }
 }
 
-/// Load both LAN and office sections from `config.toml` (defaults when absent).
-pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig), String> {
+/// Load the LAN, office, and scanner sections from `config.toml` (defaults when absent).
+pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig, ScannerConfig), String> {
     let path = config_dir.join("config.toml");
-    if !path.exists() { return Ok((LanConfig::default(), OfficeConfig::default())); }
+    if !path.exists() { return Ok((LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())); }
     let contents = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig, #[serde(default)] office: OfficeConfig }
+    #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig, #[serde(default)] office: OfficeConfig, #[serde(default)] scanner: ScannerConfig }
     let root: Root = toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
     let mut lan = root.lan;
     if lan.sheets_sync_endpoint.as_deref().is_some_and(str::is_empty) { lan.sheets_sync_endpoint = None; }
@@ -243,7 +312,7 @@ pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig), Strin
         if path_value.is_absolute() && !path_value.starts_with(config_dir) { return Err("google service-account path must remain under the application config directory".into()); }
         if path_value.is_relative() { lan.google_service_account_json_path = Some(config_dir.join(path_value).to_string_lossy().into_owned()); }
     }
-    Ok((lan, root.office))
+    Ok((lan, root.office, root.scanner))
 }
 
 fn is_private(address: IpAddr) -> bool {
@@ -334,5 +403,34 @@ mod tests {
                 "Office: Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn scanner_defaults_to_keyboard_wedge() {
+        let scanner = ScannerConfig::default();
+        assert_eq!(scanner.mode, ScannerMode::Keyboard);
+        assert!(scanner.enter_suffix);
+        assert_eq!(scanner.idle_timeout_ms, 150);
+        assert_eq!(scanner.dedup_ms, 300);
+        assert_eq!(scanner.hid_vid, None);
+        assert_eq!(scanner.hid_pid, None);
+    }
+
+    #[test]
+    fn scanner_parses_explicit_hid_mode_from_toml() {
+        #[derive(Deserialize)]
+        struct Root {
+            #[serde(default)]
+            scanner: ScannerConfig,
+        }
+        let root: Root = toml::from_str(
+            "[scanner]\nmode = \"hid\"\nenter_suffix = false\nidle_timeout_ms = 200\nhid_vid = 0x1234\nhid_pid = 0x5678\n",
+        )
+        .expect("scanner toml");
+        assert_eq!(root.scanner.mode, ScannerMode::Hid);
+        assert!(!root.scanner.enter_suffix);
+        assert_eq!(root.scanner.idle_timeout_ms, 200);
+        assert_eq!(root.scanner.hid_vid, Some(0x1234));
+        assert_eq!(root.scanner.hid_pid, Some(0x5678));
     }
 }

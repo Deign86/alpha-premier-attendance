@@ -1,4 +1,4 @@
-use crate::{config::LanConfig, error::AppError, state::AppState};
+use crate::{config::LanConfig, state::AppState};
 use axum::{
     extract::{ConnectInfo, Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -510,7 +510,7 @@ mod tests {
     #[tokio::test]
     async fn router_serves_snapshot_and_health_without_mutation_routes() {
         let data_dir = std::env::temp_dir().join(format!("alpha-lan-test-{}", uuid::Uuid::new_v4()));
-        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default()).await.unwrap();
+        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
         sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('a1','2026-08-01','u1','ABCD1234','Ada','Ops','2026-08-01T08:00:00+08:00',NULL,'OPEN','RFID','2026-08-01T08:00:00Z','2026-08-01T08:00:00Z')").execute(&state.db).await.unwrap();
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn lan_status_reports_stopped_when_never_started() {
         let data_dir = std::env::temp_dir().join(format!("alpha-lan-status-{}", uuid::Uuid::new_v4()));
-        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default()).await.unwrap();
+        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
         let status = build_lan_status(&state).await;
         assert_eq!(status.state, "stopped");
         assert_eq!(status.viewer_url, None);
@@ -550,7 +550,7 @@ mod tests {
     async fn lan_status_is_disabled_when_runtime_start_is_forbidden() {
         let data_dir = std::env::temp_dir().join(format!("alpha-lan-disabled-{}", uuid::Uuid::new_v4()));
         let lan = LanConfig { enabled: false, allow_runtime_start: false, ..Default::default() };
-        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, lan, crate::config::OfficeConfig::default()).await.unwrap();
+        let state = AppState::new(data_dir.clone(), data_dir.join("exports"), false, lan, crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
         let status = build_lan_status(&state).await;
         assert_eq!(status.state, "disabled");
         assert_eq!(status.allow_runtime_start, false);

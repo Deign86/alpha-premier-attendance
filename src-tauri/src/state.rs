@@ -1,4 +1,4 @@
-use crate::{config::{LanConfig, OfficeConfig}, error::AppError, lan_server::{self, LanIssue}};
+use crate::{config::{LanConfig, OfficeConfig, ScannerConfig}, error::AppError, lan_server::{self, LanIssue}};
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{
     collections::HashMap,
@@ -149,6 +149,9 @@ pub struct AppState {
     pub started_at: u64,
     pub admin_session: Arc<tokio::sync::Mutex<Option<AdminSession>>>,
     pub lan_runtime: std::sync::Arc<LanRuntime>,
+    /// Native RFID scanner control surface (status + pause) shared with the
+    /// scanner worker threads.
+    pub scanner: Arc<crate::services::scanner::ScannerHandle>,
 }
 
 #[derive(Clone)]
@@ -164,6 +167,7 @@ impl AppState {
         is_portable: bool,
         lan: LanConfig,
         office: OfficeConfig,
+        scanner: ScannerConfig,
     ) -> Result<Self, AppError> {
         std::fs::create_dir_all(&data_dir).map_err(|e| AppError::Configuration(e.to_string()))?;
         std::fs::create_dir_all(&exports_dir)
@@ -196,6 +200,7 @@ impl AppState {
                 .as_secs(),
             admin_session: Arc::new(tokio::sync::Mutex::new(None)),
             lan_runtime: Arc::new(LanRuntime::new()),
+            scanner: Arc::new(crate::services::scanner::ScannerHandle::new(scanner)),
         })
     }
 
@@ -207,13 +212,13 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LanConfig;
+    use crate::config::{LanConfig, ScannerConfig};
 
     #[tokio::test]
     async fn migrations_create_required_indexes_and_queue() {
         let data_dir = std::env::temp_dir().join(format!("alpha-data-{}", Uuid::new_v4()));
         let exports_dir = data_dir.join("exports");
-        let state = AppState::new(data_dir.clone(), exports_dir, false, LanConfig::default(), OfficeConfig::default())
+        let state = AppState::new(data_dir.clone(), exports_dir, false, LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())
             .await
             .unwrap();
         let names: Vec<String> =

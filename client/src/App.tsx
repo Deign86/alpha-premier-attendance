@@ -4,7 +4,7 @@ import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListI
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openViewerUrl, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
-import { listenForGlobalRfid } from './tauri-api';
+import { listenForGlobalRfid, listenForScannerStatus, getScannerStatus, setScannerPaused, type ScannerStatus } from './tauri-api';
 import { GeneratedFileActions, type GeneratedFileResult } from './file-actions';
 
 type KioskState = 'ready' | 'processing' | 'success' | 'error';
@@ -17,13 +17,6 @@ export function shouldRouteGlobalRfidToSetup(dialogOpen: boolean, token: string,
   return dialogOpen && Boolean(token) && step === 'scan';
 }
 
-const stateCopy: Record<KioskState, { eyebrow: string; title: string }> = {
-  ready: { eyebrow: 'Scanner ready', title: 'Tap your card to begin' },
-  processing: { eyebrow: 'Reading card', title: 'Checking your attendance' },
-  success: { eyebrow: 'Attendance recorded', title: 'You are all set' },
-  error: { eyebrow: 'Could not record scan', title: 'Please try again' },
-};
-
 export default function App() {
   const path = window.location.pathname;
   if (path === '/attendance') return <LiveAttendance />;
@@ -35,16 +28,18 @@ export default function App() {
   const [result, setResult] = useState<Result | null>(null);
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [now, setNow] = useState(() => new Date());
-  const scannerRef = useRef<HTMLInputElement>(null);
+  const [scannerStatus, setScannerStatus] = useState<ScannerStatus | null>(() =>
+    // Browser dev mode has no native scanner pipeline; show it as unavailable.
+    '__TAURI_INTERNALS__' in window
+      ? null
+      : { state: 'offline', message: 'Scanner unavailable', detail: 'Native scanner events are only available in the desktop app', mode: 'web' },
+  );
   const manualRef = useRef<HTMLInputElement>(null);
-  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestController = useRef<AbortController | null>(null);
-  const lastInputAt = useRef(0);
-  const lastInputLength = useRef(0);
-  const rapidCharacterCount = useRef(0);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  // Synchronous in-flight guard: set before the first await so two rapid native
+  // scan events can never start two attendance writes for the same tap.
+  const processingRef = useRef(false);
 
   const [setupToken, setSetupToken] = useState('');
   const [setupExpiresAt, setSetupExpiresAt] = useState('');
@@ -71,28 +66,15 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const focusActiveInput = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      (manualMode ? manualRef.current : scannerRef.current)?.focus();
-    });
-  }, [manualMode]);
-
   const focusSetupInput = useCallback(() => {
     window.requestAnimationFrame(() => setupInputRef.current?.focus());
   }, []);
 
-  useEffect(() => {
-    focusActiveInput();
-  }, [focusActiveInput]);
-
-  useEffect(() => {
-    const reclaim = () => { if (!manualMode && document.visibilityState === 'visible' && stateRef.current === 'ready' && !setupDialogOpen) focusActiveInput(); };
-    window.addEventListener('focus', reclaim); document.addEventListener('visibilitychange', reclaim);
-    return () => { window.removeEventListener('focus', reclaim); document.removeEventListener('visibilitychange', reclaim); };
-  }, [focusActiveInput, manualMode, setupDialogOpen]);
+  const focusManualInput = useCallback(() => {
+    window.requestAnimationFrame(() => manualRef.current?.focus());
+  }, []);
 
   useEffect(() => () => {
-    if (idleTimer.current) clearTimeout(idleTimer.current);
     if (resetTimer.current) clearTimeout(resetTimer.current);
     requestController.current?.abort();
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
@@ -143,15 +125,12 @@ export default function App() {
 
   const resetToReady = useCallback(() => {
     requestController.current?.abort();
+    processingRef.current = false;
     setState('ready');
     setResult(null);
     setUid('');
     setManualUid('');
-    lastInputAt.current = 0;
-    lastInputLength.current = 0;
-    rapidCharacterCount.current = 0;
-    focusActiveInput();
-  }, [focusActiveInput]);
+  }, []);
 
   const openSetup = useCallback((initialUid = '') => {
     setSetupDialogOpen(true);
@@ -195,7 +174,6 @@ export default function App() {
     setSetupError('');
     setAdminPin('');
     setSetupForm(emptySetupForm);
-    focusActiveInput();
   };
 
   const lookupCardForSetup = useCallback(async (rawUid: string) => {
@@ -272,8 +250,9 @@ export default function App() {
 
   const submit = useCallback(async (rawUid: string, source: 'RFID' | 'MANUAL_TEST') => {
     const normalizedUid = rawUid.trim();
-    if (!normalizedUid || stateRef.current === 'processing') return;
-    if (idleTimer.current) clearTimeout(idleTimer.current);
+    if (!normalizedUid || processingRef.current) return;
+    processingRef.current = true;
+    setUid(normalizedUid);
     setState('processing');
     setResult(null);
     requestController.current?.abort();
@@ -282,6 +261,7 @@ export default function App() {
     const response = await submitScan({ rfidUid: normalizedUid, source }, controller.signal);
     if (controller.signal.aborted) return;
     requestController.current = null;
+    processingRef.current = false;
     setResult(response);
     const nextState = response.success ? 'success' : 'error';
     setState(nextState);
@@ -290,42 +270,47 @@ export default function App() {
     resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
   }, [config.resultResetDelayMs, playTone, resetToReady]);
 
-  const handleScannerChange = (value: string) => {
-    setUid(value);
-    if (idleTimer.current) clearTimeout(idleTimer.current);
-    const now = performance.now();
-    const gap = lastInputAt.current === 0 ? Number.POSITIVE_INFINITY : now - lastInputAt.current;
-    const isAppend = value.length > lastInputLength.current;
-    rapidCharacterCount.current = isAppend && gap <= 75 ? rapidCharacterCount.current + 1 : isAppend ? 1 : 0;
-    lastInputAt.current = now;
-    lastInputLength.current = value.length;
-    if (value.trim() && rapidCharacterCount.current >= 4) idleTimer.current = setTimeout(() => void submit(value, 'RFID'), config.rfidAutoSubmitDelayMs);
+  // Latest scan-routing closure, re-assigned every render so the single native
+  // listener always uses fresh state without re-registering (which would risk
+  // duplicate listeners while config/setup state settles).
+  const scanHandlerRef = useRef<(value: string) => void>(() => {});
+  scanHandlerRef.current = (value) => {
+    if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
+      handleSetupInput(value);
+    } else if (!setupDialogOpen || !setupToken) {
+      void submit(value, 'RFID');
+    }
   };
 
-  const handleScannerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    void submit(uid, 'RFID');
-  };
-
+  // Native scanner events: card taps arrive here from the Rust layer without
+  // any focused webview input. The listener also feeds the card-setup dialog
+  // while it is open and awaiting a scan.
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
-    let unlisten: (() => void) | undefined;
-    void listenForGlobalRfid((value) => {
-      if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
-        handleSetupInput(value);
-      } else if (!setupDialogOpen || !setupToken) {
-        void submit(value, 'RFID');
-      }
-    }).then((cleanup) => { unlisten = cleanup; });
-    return () => { unlisten?.(); };
-  }, [handleSetupInput, setupDialogOpen, setupStep, setupToken, submit]);
+    let unlistenScan: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
+    void listenForGlobalRfid((value) => scanHandlerRef.current(value))
+      .then((cleanup) => { unlistenScan = cleanup; })
+      .catch(() => { /* web mode */ });
+    void listenForScannerStatus(setScannerStatus).then((cleanup) => { unlistenStatus = cleanup; }).catch(() => { /* web mode */ });
+    void getScannerStatus().then(setScannerStatus).catch(() => { /* web mode */ });
+    return () => { unlistenScan?.(); unlistenStatus?.(); };
+  }, []);
+
+  // While the operator types (admin, setup PIN/form steps, manual entry) the
+  // native scanner listener is paused so keystrokes are never misread as card
+  // scans. Only the setup dialog's scan step stays live: that is how a new
+  // card is enrolled.
+  useEffect(() => {
+    const paused = manualMode || (setupDialogOpen && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep));
+    void setScannerPaused(paused).catch(() => { /* web mode */ });
+  }, [manualMode, setupDialogOpen, setupStep, setupToken]);
 
   const toggleManualMode = () => {
     if (state !== 'ready') return;
     setManualMode((current) => !current);
     setUid('');
     setManualUid('');
+    if (!manualMode) focusManualInput();
   };
 
   const displayDate = new Intl.DateTimeFormat('en-PH', {
@@ -345,116 +330,122 @@ export default function App() {
 
   const success = result?.success ? result : null;
   const error = result && !result.success ? result : null;
-  const copy = stateCopy[state];
+
+  // Scanner readiness for the compact status pill. Falls back to a neutral
+  // state when the native layer is unavailable (browser dev mode).
+  const scannerPill = (() => {
+    if (!scannerStatus) return { label: 'Connecting…', state: 'scanning' as const, detail: '' };
+    switch (scannerStatus.state) {
+      case 'connected': return { label: 'Ready', state: 'connected' as const, detail: scannerStatus.detail ?? scannerStatus.message };
+      case 'scanning': return { label: 'Scanning…', state: 'scanning' as const, detail: scannerStatus.message };
+      case 'offline': return { label: 'Scanner unavailable', state: 'offline' as const, detail: scannerStatus.detail ?? scannerStatus.message };
+      case 'error': return { label: 'Invalid scan format', state: 'error' as const, detail: scannerStatus.detail ?? scannerStatus.message };
+    }
+  })();
+
+  const heroTitle = state === 'processing' ? 'Reading card…' : 'Tap card';
+  const heroSub = state === 'processing'
+    ? 'Checking your attendance'
+    : scannerStatus?.state === 'offline'
+      ? 'Connect the RFID reader, or use manual entry below'
+      : scannerStatus?.state === 'error'
+        ? 'Invalid scan format — tap the card again'
+        : 'Waiting for card';
 
   return (
     <main className={`kiosk-shell state-${state}`}>
-      <header className="topbar">
+      <header className="kiosk-topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true"><span>AP</span></div>
-          <div>
+          <div className="brand-text">
             <p className="brand-name">ALPHA PREMIER</p>
-            <p className="brand-subtitle">GROUP OF COMPANIES</p>
+            <p className="brand-subtitle">{resolveOfficeDisplay(config.office, 'short')}</p>
           </div>
         </div>
-        <div className="clock" aria-label={`Current time in ${config.timezone}`}>
-          <span>MANILA TIME</span>
-          <strong>{displayTime}</strong>
+        <div className="topbar-cluster">
+          <span className={`scanner-pill is-${scannerPill.state}`} role="status" title={scannerPill.detail}>
+            <i aria-hidden="true" />{scannerPill.label}
+          </span>
+          <div className="clock" aria-label={`Current time in ${config.timezone}`}>
+            <span>{displayDate}</span>
+            <strong>{displayTime}</strong>
+          </div>
         </div>
       </header>
 
-      <section className="kiosk-content" aria-labelledby="kiosk-heading">
-        <div className="intro-copy">
-          <p className="section-kicker">Workforce access</p>
-          <h1 id="kiosk-heading">{copy.title}</h1>
-          <p className="section-description">Secure attendance for the Alpha Premier Group of Companies.</p>
-        </div>
-
-        <div className="kiosk-grid">
-        <div className="scanner-column">
-        <div className="scanner-panel">
-          <div className={`status-icon icon-${state}`} aria-hidden="true">
-            {state === 'processing' && <LoaderCircle className="spin" size={34} />}
-            {state === 'success' && <Check size={38} />}
-            {state === 'error' && <CircleAlert size={38} />}
-            {state === 'ready' && <CreditCard size={38} />}
-          </div>
-          <p className="status-eyebrow">{copy.eyebrow}</p>
-
-          {state === 'success' && success ? (
-            <div className="result-details" role="status" aria-live="polite">
-              {success.user.photoUrl ? <img className="result-photo result-photo-full" src={photoSource(success.user.photoUrl)} alt={`${success.user.fullName} ID`} /> : <div className="result-photo result-photo-fallback" aria-label="ID photo unavailable"><UserRound size={72} /></div>}
-              <h2>{success.user.fullName}</h2>
-              <p>{success.message}</p>
-              <p className="result-user-id">{success.user.userId}{success.user.department ? ` · ${success.user.department}` : ''}</p>
-              <div className="result-meta"><span className="employee-badge">{success.user.employeeType}</span><span>{formatAction(success.action)}</span><span>{formatTime(success.attendance.timeOut ?? success.attendance.timeIn, config.timezone)}</span></div>
+      <section className="kiosk-stage" aria-labelledby="kiosk-heading">
+        {state === 'success' && success ? (
+          <div className="kiosk-result is-success" role="status" aria-live="polite">
+            {success.user.photoUrl
+              ? <img className="result-photo result-photo-full" src={photoSource(success.user.photoUrl)} alt={`${success.user.fullName} ID`} />
+              : <div className="result-photo result-photo-fallback" aria-label="ID photo unavailable"><UserRound size={72} /></div>}
+            <h2 className="result-name">{success.user.fullName}</h2>
+            <p className="result-message">{success.message}</p>
+            <p className="result-user-id">{success.user.userId}{success.user.department ? ` · ${success.user.department}` : ''}</p>
+            <div className="result-meta">
+              <span className="employee-badge">{success.user.employeeType}</span>
+              <span>{formatAction(success.action)}</span>
+              <span>{formatTime(success.attendance.timeOut ?? success.attendance.timeIn, config.timezone)}</span>
             </div>
-          ) : state === 'error' && error ? (
-            <div className="result-details" role="alert" aria-live="assertive">
-              <h2>{error.error.message}</h2>
-              <p className="error-code">{error.error.code.replaceAll('_', ' ')}</p>
-              {error.error.code === 'UNKNOWN_RFID_CARD' && config.enableCardSetup && <button className="setup-card-button" type="button" onClick={() => openSetup(uid)}><ShieldCheck size={17} /> Setup this card</button>}
-            </div>
-          ) : (
-            <div className="input-area">
-              <label htmlFor={manualMode ? 'manual-uid' : 'scanner-uid'}>{manualMode ? 'Manual card ID' : 'Scanner card ID'}</label>
-              <div className="input-row">
-                <input
-                  ref={manualMode ? manualRef : scannerRef}
-                  id={manualMode ? 'manual-uid' : 'scanner-uid'}
-                  className={manualMode ? undefined : 'rfid-capture-input'}
-                  aria-label={manualMode ? 'Manual card ID' : 'Scanner card ID'}
-                  value={manualMode ? manualUid : uid}
-                  onChange={(event) => manualMode ? setManualUid(event.target.value) : handleScannerChange(event.target.value)}
-                  onKeyDown={manualMode ? (event) => event.key === 'Enter' && (event.preventDefault(), void submit(manualUid, 'MANUAL_TEST')) : handleScannerKeyDown}
-                  placeholder={manualMode ? 'Enter a UID to test' : 'Waiting for card reader…'}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={state !== 'ready'}
-                  autoFocus={!manualMode}
-                />
-                {manualMode && <button className="submit-button" type="button" onClick={() => void submit(manualUid, 'MANUAL_TEST')} disabled={!manualUid.trim()}><ArrowRight size={18} /> Record attendance</button>}
-              </div>
-              {manualMode && <p className="input-hint"><Keyboard size={14} /> Press Enter or use the button to submit</p>}
-            </div>
-          )}
-
-          {(state === 'success' || state === 'error') && <p className="reset-hint">Returning to ready mode in a few seconds…</p>}
-        </div>
-
-        <div className="panel-actions">
-          <button className="mode-button" type="button" onClick={toggleManualMode} disabled={state !== 'ready'} aria-pressed={manualMode}>
-            {manualMode ? <CreditCard size={17} /> : <Keyboard size={17} />}
-            {manualMode ? 'Use card reader' : 'Manual UID'}
-          </button>
-          <span className="sound-indicator" title={config.enableScanSounds ? 'Scan sounds enabled' : 'Scan sounds disabled'}>
-            {config.enableScanSounds ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            {config.enableScanSounds ? 'Sounds on' : 'Sounds off'}
-          </span>
-          <a className="admin-button" href="/attendance">Live attendance</a>
-          {config.enableAdmin && <a className="admin-button" href="/admin">Admin panel</a>}
-          {config.enableCardSetup && <button className="admin-button" type="button" onClick={() => openSetup()}><LockKeyhole size={15} /> Admin setup</button>}
-        </div>
-        </div>
-
-        <aside className="terminal-aside" aria-label="Terminal controls">
-          <p className="aside-kicker">Terminal control</p>
-          <h2>People first.<br />Precision always.</h2>
-          <p className="aside-copy">Each card is paired with one employee record before attendance can be recorded.</p>
-          <div className="aside-facts">
-            <div><span>OFFICE</span><strong className="office-location">{resolveOfficeDisplay(config.office, 'short')}</strong></div>
-            <div><span>STATUS</span><strong className="status-live"><i /> ONLINE</strong></div>
           </div>
-          <div className="aside-admin">
-            <p className="aside-kicker">Employee mapping</p>
-            <p className="aside-copy">Associate a new RFID card with its employee profile.</p>
-            {config.enableCardSetup ? <span className="setup-ready"><ShieldCheck size={14} /> Setup available above</span> : <span className="setup-locked"><LockKeyhole size={14} /> Setup locked</span>}
+        ) : state === 'error' && error ? (
+          <div className="kiosk-result is-error" role="alert" aria-live="assertive">
+            <CircleAlert className="result-error-icon" size={42} aria-hidden="true" />
+            <h2 className="result-name">{error.error.message}</h2>
+            <p className="error-code">{error.error.code.replaceAll('_', ' ')}</p>
+            {error.error.code === 'UNKNOWN_RFID_CARD' && config.enableCardSetup && (
+              <button className="setup-card-button" type="button" onClick={() => openSetup(uid)}><ShieldCheck size={17} /> Setup this card</button>
+            )}
           </div>
-        </aside>
-        </div>
+        ) : (
+          <div className="kiosk-hero">
+            <div className={`hero-icon icon-${state}`} aria-hidden="true">
+              {state === 'processing' ? <LoaderCircle className="spin" size={46} /> : <CreditCard size={48} />}
+            </div>
+            <h1 id="kiosk-heading">{heroTitle}</h1>
+            <p className="hero-sub">{heroSub}</p>
+          </div>
+        )}
+
+        {manualMode && (
+          <div className="manual-entry" aria-label="Manual card entry">
+            <label htmlFor="manual-uid">Manual card ID</label>
+            <div className="input-row">
+              <input
+                ref={manualRef}
+                id="manual-uid"
+                aria-label="Manual card ID"
+                value={manualUid}
+                onChange={(event) => setManualUid(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submit(manualUid, 'MANUAL_TEST'); } }}
+                placeholder="Enter a card ID"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={state !== 'ready'}
+              />
+              <button className="submit-button" type="button" onClick={() => void submit(manualUid, 'MANUAL_TEST')} disabled={!manualUid.trim()}><ArrowRight size={18} /> Record</button>
+            </div>
+            <p className="input-hint"><Keyboard size={14} /> Press Enter or use the button — a fallback when the reader is unavailable</p>
+          </div>
+        )}
+
+        {(state === 'success' || state === 'error') && <p className="reset-hint">Returning to ready mode in a few seconds…</p>}
       </section>
 
-      <footer className="footer-note"><span className="online-dot" aria-hidden="true" /> Securely connected · {config.timezone}</footer>
+      <footer className="kiosk-actions">
+        <button className="kiosk-action" type="button" onClick={toggleManualMode} disabled={state !== 'ready'} aria-pressed={manualMode}>
+          {manualMode ? <CreditCard size={16} /> : <Keyboard size={16} />}
+          {manualMode ? 'Use card reader' : 'Manual entry'}
+        </button>
+        <span className="sound-indicator" title={config.enableScanSounds ? 'Scan sounds enabled' : 'Scan sounds disabled'}>
+          {config.enableScanSounds ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          {config.enableScanSounds ? 'Sounds on' : 'Sounds off'}
+        </span>
+        <a className="kiosk-action" href="/attendance">Live attendance</a>
+        {config.enableAdmin && <a className="kiosk-action" href="/admin">Admin</a>}
+        {config.enableCardSetup && <button className="kiosk-action" type="button" onClick={() => openSetup()}><LockKeyhole size={15} /> Admin setup</button>}
+      </footer>
+
       {setupDialogOpen && <SetupDialog
         token={setupToken}
         step={setupStep}
@@ -579,6 +570,18 @@ function formatTime(value: string, timezone: string) {
 
 function localDate(timezone = 'Asia/Manila') { return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date()); }
 
+/**
+ * Pauses the native scanner listener while a screen with text input is open
+ * (admin, live attendance) and resumes it when the kiosk comes back, so
+ * operator keystrokes are never misread as card scans.
+ */
+function useScannerPause(paused: boolean) {
+  useEffect(() => {
+    void setScannerPaused(paused).catch(() => { /* web mode */ });
+    return () => { void setScannerPaused(false).catch(() => { /* web mode */ }); };
+  }, [paused]);
+}
+
 /** Loads the canonical office identity with a safe fallback to defaults. */
 function useOfficeIdentity(): OfficeIdentity {
   const [office, setOffice] = useState<OfficeIdentity>(DEFAULT_OFFICE_IDENTITY);
@@ -591,6 +594,7 @@ function useOfficeIdentity(): OfficeIdentity {
 }
 
 function LiveAttendance() {
+  useScannerPause(true);
   const office = useOfficeIdentity();
   const [rows, setRows] = useState<AttendanceListItem[]>([]);
   const [stale, setStale] = useState(false);
@@ -709,6 +713,7 @@ function AttendanceTable({ rows, timezone }: { rows: AttendanceListItem[]; timez
 }
 
 function AdminPanel() {
+  useScannerPause(true);
   const office = useOfficeIdentity();
   const [unlocked, setUnlocked] = useState(false); const [sessionExpiresAt, setSessionExpiresAt] = useState(''); const [pin, setPin] = useState(''); const [error, setError] = useState(''); const [tab, setTab] = useState<'users' | 'attendance' | 'payroll'>('users');
   const [users, setUsers] = useState<AdminUser[]>([]); const [rows, setRows] = useState<AttendanceListItem[]>([]); const [profiles, setProfiles] = useState<PayrollCalculationProfile[]>([]); const [cutoffs, setCutoffs] = useState<PayrollCutoffRecord[]>([]); const [date, setDate] = useState(localDate());

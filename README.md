@@ -30,7 +30,7 @@ SQLite is the source of truth. Google Sheets is an optional write-only export ta
 - Node.js 20 or newer and npm for development
 - Rust stable with the Windows desktop toolchain for Tauri development
 - Microsoft WebView2 Runtime on the target Windows machine when using the portable executable
-- A USB RFID reader that behaves as a keyboard wedge
+- A USB RFID reader. Keyboard-wedge readers (they type the card UID followed by Enter) work out of the box; raw HID readers can be enabled per-device through `scanner.hid_vid` / `scanner.hid_pid` in `config.toml`
 
 ## Install And Run
 
@@ -193,12 +193,15 @@ No public bind, router forwarding, UPnP mapping, public DNS record, or cloud tun
 
 ## RFID And Attendance Rules
 
-- The focused client scanner detects Enter and uses a 150 ms idle fallback.
-- The Rust `rdev` listener captures the keyboard-wedge stream even when the webview loses focus.
-- Focused and global paths share normalization and deduplication, so a card is not processed twice.
+- Card taps are captured at the native layer: a global keyboard-wedge hook (default) or raw HID reads (configured per device) feed one normalized scan pipeline in Rust.
+- The webview never needs a focused text box. The Rust layer completes a scan on the reader's Enter suffix or an idle-timeout fallback, sanitizes the UID to uppercase hex, strips separators, validates length, and dedupes repeats within a short window.
+- The kiosk receives clean `rfid-scan` events and drives fast feedback: processing, success with the employee photo, unknown card, duplicate cooldown, and error states.
+- The scanner listener pauses while the operator types in admin, setup, or manual-entry screens so keystrokes are never misread as card taps.
 - Each user has one Time In and one Time Out per Manila calendar day (`Asia/Manila`).
 - Local writes are committed to SQLite before local events or Sheets export are published.
 - Accepted and rejected scan requests are correlated with a request ID in the audit log.
+
+Scanner state (`Connected` / `Scanning` / `Offline` / `Error`) is surfaced as `scanner-status` events and can be inspected with the `scanner_status` command; diagnostics belong in admin/setup, never on the main kiosk screen.
 
 Payroll preserves the existing intern weekly grace and PHP 10 late deduction rules, employee raw timestamps and computed hour ceiling/floor, semi-monthly cutoff profiles, allowances, incentives, manual adjustments, finalization, and CSV export. The employee payroll module intentionally retains:
 

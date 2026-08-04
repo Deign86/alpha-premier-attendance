@@ -47,3 +47,25 @@ export const tauriApi = {
 };
 
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));
+
+/** Scanner lifecycle state reported by the native pipeline. */
+export type ScannerState = 'connected' | 'scanning' | 'offline' | 'error';
+export type ScannerStatus = {
+  state: ScannerState;
+  message: string;
+  detail?: string | null;
+  mode: string;
+};
+
+/** Native scanner status changes (`scanner-status` events). */
+export const listenForScannerStatus = (handler: (status: ScannerStatus) => void) =>
+  listen<ScannerStatus>('scanner-status', (event) => handler(event.payload));
+
+/** Snapshot the current native scanner status (fallback for the initial render). */
+export const getScannerStatus = () => invoke<ScannerStatus>('scanner_status');
+
+/**
+ * Pause/resume the native scanner listener while the operator types (admin,
+ * setup, manual entry) so keystrokes are never misread as card scans.
+ */
+export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause', { paused });

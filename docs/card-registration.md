@@ -27,7 +27,7 @@ The server also needs the normal Google Sheets variables: `GOOGLE_SHEET_ID`, `GO
 6. Set `Status` to `Active`, then select `Save user`.
 7. Lock the admin session and scan the same card on the normal attendance screen.
 
-The kiosk RFID input is focused automatically when `/` opens and regains focus after each scan result, so operators can tap cards without clicking the field.
+Card taps are captured at the native Rust layer through a global keyboard-wedge hook (or configured raw HID reads) and surface to the kiosk as `rfid-scan` events. No webview field needs to be focused; operators can tap cards at any time, and the scanner pauses only while the operator types in admin, setup, or manual-entry screens.
 
 For Deign Lazaro, the profile should look like:
 
