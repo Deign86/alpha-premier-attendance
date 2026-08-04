@@ -1090,7 +1090,7 @@ async fn scan_rfid(
             );
         }
     }
-    let user = match sqlx::query("SELECT user_id, full_name, department, employee_type, photo_url, status FROM users WHERE rfid_uid = ?")
+    let user = match sqlx::query("SELECT user_id, full_name, department, employee_type, daily_rate_centavos, photo_url, status FROM users WHERE rfid_uid = ?")
         .bind(&uid).fetch_optional(&state.db).await {
         Ok(Some(row)) => row,
         Ok(None) => return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"UNKNOWN_RFID_CARD","message":"This RFID card is not registered."}})),
