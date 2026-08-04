@@ -8,10 +8,10 @@ export class PayrollService {
 
   async ensureForCompletedAttendance(attendance: SheetAttendance, user: SheetUser): Promise<SheetPayroll> {
     if (!attendance.timeIn || !attendance.timeOut || attendance.status !== 'COMPLETED') throw new Error('Payroll requires completed attendance');
-    const existing = await this.sheets.findPayrollByAttendanceId(attendance.attendanceId);
-    if (existing) return existing;
 
     if ((user.employeeType ?? 'INTERN') === 'EMPLOYEE') {
+      const existing = await this.sheets.findPayrollByAttendanceId(attendance.attendanceId);
+      if (existing) return existing;
       const dailyRate = user.dailyRate;
       if (dailyRate === null || dailyRate === undefined) throw new Error('Employee daily rate is required for payroll');
       const calculation = calculateEmployeePayroll({ actualTimeIn: attendance.timeIn, actualTimeOut: attendance.timeOut, dailyRate });
@@ -23,7 +23,12 @@ export class PayrollService {
     }
 
     const weekStart = manilaWeekStart(attendance.attendanceDate);
-    const grace = await this.sheets.findInternGrace(user.userId, weekStart);
+    const [existing, grace] = await Promise.all([
+      this.sheets.findPayrollByAttendanceId(attendance.attendanceId),
+      this.sheets.findInternGrace(user.userId, weekStart),
+    ]);
+    if (existing) return existing;
+
     const graceAvailable = !grace || grace.attendanceId === attendance.attendanceId;
     const calculation = calculateInternPayroll({ attendanceDate: attendance.attendanceDate, actualTimeIn: attendance.timeIn, actualTimeOut: attendance.timeOut, graceAvailable });
     if (calculation.graceUsed && !grace) {

@@ -89,7 +89,7 @@ export class AttendanceService {
             catch { throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data changed before the scan was saved.', 409); }
             action = 'TIME_IN';
             this.lastScans.set(uid, currentMs);
-            await this.writeAudit({ eventType: 'SCAN_SUCCESS', rfidUid: uid, userId: user.userId, message: 'TIME_IN recorded in a cleared row', requestId });
+            void this.writeAudit({ eventType: 'SCAN_SUCCESS', rfidUid: uid, userId: user.userId, message: 'TIME_IN recorded in a cleared row', requestId });
             return this.successResponse(requestId, action, saved, user);
           }
           if (!attendance.timeIn && attendance.timeOut) throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance has a time-out but no time-in.', 409);
@@ -116,15 +116,11 @@ export class AttendanceService {
         }
 
         this.lastScans.set(uid, currentMs);
-        await this.writeAudit({ eventType: 'SCAN_SUCCESS', rfidUid: uid, userId: user.userId, message: `${action} recorded`, requestId });
+        void this.writeAudit({ eventType: 'SCAN_SUCCESS', rfidUid: uid, userId: user.userId, message: `${action} recorded`, requestId });
         return this.successResponse(requestId, action, saved, user);
       });
     } catch (error) {
-      try {
-        await this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
-      } catch {
-        // Audit logging must not replace the scan result when the audit sheet is unavailable.
-      }
+      void this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
       return asScanError(error).toResponse(requestId);
     }
   }

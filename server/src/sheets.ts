@@ -247,15 +247,47 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     }
   }
 
+  private readonly headersCache = new Map<keyof typeof requiredHeaders, { headers: string[]; fetchedAt: number }>();
+  private readonly HEADER_CACHE_TTL_MS = 60_000;
+
   private async values(range: string): Promise<string[][]> {
     const result = await this.api.spreadsheets.values.get({ spreadsheetId: this.options.spreadsheetId, range });
     return (result.data.values ?? []) as string[][];
+  }
+
+  private rangeFor(sheet: keyof typeof requiredHeaders): string {
+    switch (sheet) {
+      case 'Users': return this.options.usersRange;
+      case 'Attendance': return this.options.attendanceRange;
+      case 'AuditLogs': return this.options.auditRange;
+      case 'Payroll': return this.options.payrollRange;
+      case 'InternGrace': return this.options.internGraceRange;
+      case 'PayrollProfiles': return this.options.payrollProfilesRange;
+      case 'PayrollCutoffs': return this.options.payrollCutoffsRange;
+    }
+  }
+
+  /**
+   * Canonicalized + validated headers for a sheet, served from a short TTL
+   * cache. On the scan path every target sheet was already read by `table()`,
+   * so this adds no round trip; a cold-cache sheet (e.g. AuditLogs, which is
+   * only ever written) costs one read.
+   */
+  private async headersFor(sheet: keyof typeof requiredHeaders): Promise<string[]> {
+    const cached = this.headersCache.get(sheet);
+    if (cached && Date.now() - cached.fetchedAt < this.HEADER_CACHE_TTL_MS) return cached.headers;
+    const rows = await this.values(this.rangeFor(sheet));
+    const headers = (rows[0] ?? []).map(canonicalHeader);
+    validateHeaders(sheet, headers);
+    this.headersCache.set(sheet, { headers, fetchedAt: Date.now() });
+    return headers;
   }
 
   private async table(range: string, sheet: keyof typeof requiredHeaders): Promise<Table> {
     const rows = await this.values(range);
     const headers = (rows[0] ?? []).map(canonicalHeader);
     validateHeaders(sheet, headers);
+    this.headersCache.set(sheet, { headers, fetchedAt: Date.now() });
     return { headers, rows: rows.slice(1) };
   }
 
@@ -363,7 +395,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   async createAttendance(attendance: SheetAttendance): Promise<SheetAttendance> {
-    const { headers } = await this.table(this.options.attendanceRange, 'Attendance');
+    const headers = await this.headersFor('Attendance');
     await this.api.spreadsheets.values.append({
       spreadsheetId: this.options.spreadsheetId,
       range: this.options.attendanceRange,
@@ -376,14 +408,15 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
 
   async completeAttendance(attendance: SheetAttendance, timeOut: string): Promise<SheetAttendance> {
     if (!attendance.rowNumber) throw new Error('Attendance row number unavailable');
-    const { headers, rows } = await this.table(this.options.attendanceRange, 'Attendance');
+    const headers = await this.headersFor('Attendance');
     const index = indexMap(headers);
-    const existing = rows[attendance.rowNumber - 2];
+    const rowRange = `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`;
+    const existing = (await this.values(rowRange))[0];
     if (!existing || existing[index.attendanceid] !== attendance.attendanceId || existing[index.status] !== 'OPEN' || existing[index.timeout]) throw new Error('Attendance row is no longer open');
     const updated = { ...attendance, timeOut, status: 'COMPLETED' as const };
     await this.api.spreadsheets.values.update({
       spreadsheetId: this.options.spreadsheetId,
-      range: `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`,
+      range: rowRange,
       valueInputOption: 'RAW',
       requestBody: { values: [valuesForAttendance(headers, updated, existing)] },
     });
@@ -392,13 +425,14 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
 
   async updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance> {
     if (!attendance.rowNumber) throw new Error('Attendance row number unavailable');
-    const { headers, rows } = await this.table(this.options.attendanceRange, 'Attendance');
+    const headers = await this.headersFor('Attendance');
     const index = indexMap(headers);
-    const existing = rows[attendance.rowNumber - 2];
+    const rowRange = `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`;
+    const existing = (await this.values(rowRange))[0];
     if (!existing || existing[index.attendanceid] !== attendance.attendanceId || (existing[index.timein] || null) !== expected.timeIn || (existing[index.timeout] || null) !== expected.timeOut) throw new Error('Attendance row has changed');
     await this.api.spreadsheets.values.update({
       spreadsheetId: this.options.spreadsheetId,
-      range: `${sheetName(this.options.attendanceRange)}!A${attendance.rowNumber}:${columnName(headers.length - 1)}${attendance.rowNumber}`,
+      range: rowRange,
       valueInputOption: 'RAW',
       requestBody: { values: [valuesForAttendance(headers, attendance, existing)] },
     });
@@ -422,7 +456,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   async createPayroll(payroll: SheetPayroll): Promise<SheetPayroll> {
-    const { headers } = await this.table(this.options.payrollRange, 'Payroll');
+    const headers = await this.headersFor('Payroll');
     await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [valuesForPayroll(headers, payroll)] } });
     return payroll;
   }
@@ -485,7 +519,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   async claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace> {
-    const { headers } = await this.table(this.options.internGraceRange, 'InternGrace');
+    const headers = await this.headersFor('InternGrace');
     await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.internGraceRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [valuesForGrace(headers, grace)] } });
     return grace;
   }
@@ -503,7 +537,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   async writeAudit(event: AuditEvent): Promise<void> {
-    const { headers } = await this.table(this.options.auditRange, 'AuditLogs');
+    const headers = await this.headersFor('AuditLogs');
     const index = indexMap(headers);
     const row = Array.from({ length: headers.length }, () => '');
     row[index.logid] = crypto.randomUUID();
