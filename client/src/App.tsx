@@ -676,7 +676,7 @@ export function PayrollWorkspace({ users, profiles, records, onSaved }: { users:
   const exportCsv = async () => { setExporting(true); try { const result = await exportPayrollCsv(); if (result.success) { setMessage(`Generated ${result.fileName}.`); setFileResult({ filePath: result.filePath, directoryPath: result.directoryPath, fileName: result.fileName, fileKind: result.fileKind, isPortableMode: result.isPortableMode }); } else setMessage(result.error.message); } finally { setExporting(false); } };
   const exportWorkbook = async () => { setExporting(true); const result = await exportPayrollXlsx(); setExporting(false); if (result.success) { setMessage(`Generated ${result.fileName} (${result.rowCount ?? 0} rows).`); setFileResult({ filePath: result.filePath, directoryPath: result.directoryPath, fileName: result.fileName, fileKind: result.fileKind, isPortableMode: result.isPortableMode }); } else setMessage(result.error.message); };
   const registerPdf = async () => { setExporting(true); const result = await generatePayrollRegisterPdf(); setExporting(false); if (result.success) { setMessage(`Generated ${result.fileName} (${result.rowCount ?? 0} rows).`); setFileResult({ filePath: result.filePath, directoryPath: result.directoryPath, fileName: result.fileName, fileKind: result.fileKind, isPortableMode: result.isPortableMode }); } else setMessage(result.error.message); };
-  return <section className="payroll-workspace"><header className="report-header print-only"><p className="report-company">{office.companyName}</p><p className="report-office">{office.officeDisplayFull}</p><p className="report-meta">Payroll Register · {localDate()}</p></header><div className="payroll-actions"><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportCsv()}>{exporting ? 'Generating...' : 'Export CSV'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportWorkbook()}>{exporting ? 'Generating...' : 'Export Excel'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void registerPdf()}>{exporting ? 'Generating...' : 'Register PDF'}</button><button className="admin-button" type="button" onClick={() => window.print()}>Print payroll report</button></div><GeneratedFileActions result={fileResult} label="Payroll export" /><div className="admin-grid"><section className="admin-form print-hidden"><h2>Create cutoff payroll</h2><form onSubmit={save}><label>Employee<select required value={form.employeeId} onChange={(event) => selectEmployee(event.target.value)}><option value="">Select employee</option>{employees.map((user) => <option key={user.userId} value={user.userId}>{user.userId} - {user.fullName}</option>)}</select></label><div className="profile-toggle" role="radiogroup" aria-label="Payroll calculation">{profiles.map((profile) => <button key={profile.profileId} type="button" role="radio" aria-checked={form.payrollProfileId === profile.profileId} className={form.payrollProfileId === profile.profileId ? 'is-active' : ''} onClick={() => applyProfile(profile.profileId)}>{profile.label}</button>)}</div><div className="setup-fields"><div className="cutoff-period"><label>Cutoff month<input type="month" value={cutoffMonth} onChange={(event) => setCutoffMonth(event.target.value)} /></label><div className="cutoff-fill-buttons"><button className="admin-button" type="button" onClick={() => applyCutoffHalf('first')}>1st&ndash;15th</button><button className="admin-button" type="button" onClick={() => applyCutoffHalf('second')}>16th&ndash;last day</button></div></div><label>Cutoff start<input required type="date" value={form.cutoffStart} onChange={(event) => update('cutoffStart', event.target.value)} /></label><label>Cutoff end<input required type="date" value={form.cutoffEnd} onChange={(event) => update('cutoffEnd', event.target.value)} /></label><label>Standard days<input type="number" min="0" value={form.standardWorkingDays} onChange={(event) => update('standardWorkingDays', event.target.value)} /></label><label>Actual days<input type="number" min="0" value={form.actualWorkingDays} onChange={(event) => update('actualWorkingDays', event.target.value)} /></label><label>Special holidays<input type="number" min="0" value={form.specialHolidayDays} onChange={(event) => update('specialHolidayDays', event.target.value)} /></label><label>Regular holidays<input type="number" min="0" value={form.regularHolidayDays} onChange={(event) => update('regularHolidayDays', event.target.value)} /></label><label>Incentives (PHP)<input type="number" min="0" step="0.01" value={form.incentivesAllowance} onChange={(event) => update('incentivesAllowance', event.target.value)} /></label><label>Special allowance (PHP)<input type="number" min="0" step="0.01" value={form.specialAllowance} onChange={(event) => update('specialAllowance', event.target.value)} /></label><label>Late deduction (PHP)<input type="number" min="0" step="0.01" value={form.lateDeduction} onChange={(event) => update('lateDeduction', event.target.value)} /></label><label>Half-days<input type="number" min="0" value={form.halfDayCount} onChange={(event) => update('halfDayCount', event.target.value)} /></label><label>Absent days<input type="number" min="0" value={form.absentDays} onChange={(event) => update('absentDays', event.target.value)} /></label><label>Overtime hours<input type="number" min="0" step="0.01" value={form.overtimeHours} onChange={(event) => update('overtimeHours', event.target.value)} /></label><label>Overtime rate (PHP/hr)<input type="number" min="0" step="0.01" value={form.overtimeRate} onChange={(event) => update('overtimeRate', event.target.value)} /></label><label>Manual adjustment (PHP)<input type="number" step="0.01" value={form.manualAdjustment} onChange={(event) => update('manualAdjustment', event.target.value)} /></label></div><label>Adjustment reason<input value={form.adjustmentReason} onChange={(event) => update('adjustmentReason', event.target.value)} placeholder="Required for a non-zero adjustment" /></label><label>Signature placeholder<input value={form.signaturePlaceholder} onChange={(event) => update('signaturePlaceholder', event.target.value)} placeholder="Employee signature" /></label><label className="checkbox-label"><input type="checkbox" checked={form.approvedWorkingDayOverage} onChange={(event) => update('approvedWorkingDayOverage', event.target.checked)} /> Approve actual days above standard</label>{selectedProfile && <p className="setup-copy">Holiday premiums: {selectedProfile.specialHolidayMultiplier * 100}% special, {selectedProfile.regularHolidayMultiplier * 100}% regular.</p>}{message && <p className="dashboard-alert">{message}</p>}<button className="submit-button" disabled={saving}>{saving ? 'Saving...' : 'Save cutoff payroll'}</button></form></section><section className="payroll-table"><PayrollTable records={records} onFinalized={onSaved} /></section></div></section>;
+  return <section className="payroll-workspace"><div className="payroll-actions"><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportCsv()}>{exporting ? 'Generating...' : 'Export CSV'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void exportWorkbook()}>{exporting ? 'Generating...' : 'Export Excel'}</button><button className="admin-button" type="button" disabled={exporting} onClick={() => void registerPdf()}>{exporting ? 'Generating...' : 'Register PDF'}</button><button className="admin-button" type="button" onClick={() => window.print()}>Print payroll worksheet</button></div><GeneratedFileActions result={fileResult} label="Payroll export" /><div className="admin-grid"><section className="admin-form print-hidden"><h2>Create cutoff payroll</h2><form onSubmit={save}><label>Employee<select required value={form.employeeId} onChange={(event) => selectEmployee(event.target.value)}><option value="">Select employee</option>{employees.map((user) => <option key={user.userId} value={user.userId}>{user.userId} - {user.fullName}</option>)}</select></label><div className="profile-toggle" role="radiogroup" aria-label="Payroll calculation">{profiles.map((profile) => <button key={profile.profileId} type="button" role="radio" aria-checked={form.payrollProfileId === profile.profileId} className={form.payrollProfileId === profile.profileId ? 'is-active' : ''} onClick={() => applyProfile(profile.profileId)}>{profile.label}</button>)}</div><div className="setup-fields"><div className="cutoff-period"><label>Cutoff month<input type="month" value={cutoffMonth} onChange={(event) => setCutoffMonth(event.target.value)} /></label><div className="cutoff-fill-buttons"><button className="admin-button" type="button" onClick={() => applyCutoffHalf('first')}>1st&ndash;15th</button><button className="admin-button" type="button" onClick={() => applyCutoffHalf('second')}>16th&ndash;last day</button></div></div><label>Cutoff start<input required type="date" value={form.cutoffStart} onChange={(event) => update('cutoffStart', event.target.value)} /></label><label>Cutoff end<input required type="date" value={form.cutoffEnd} onChange={(event) => update('cutoffEnd', event.target.value)} /></label><label>Standard days<input type="number" min="0" value={form.standardWorkingDays} onChange={(event) => update('standardWorkingDays', event.target.value)} /></label><label>Actual days<input type="number" min="0" value={form.actualWorkingDays} onChange={(event) => update('actualWorkingDays', event.target.value)} /></label><label>Special holidays<input type="number" min="0" value={form.specialHolidayDays} onChange={(event) => update('specialHolidayDays', event.target.value)} /></label><label>Regular holidays<input type="number" min="0" value={form.regularHolidayDays} onChange={(event) => update('regularHolidayDays', event.target.value)} /></label><label>Incentives (PHP)<input type="number" min="0" step="0.01" value={form.incentivesAllowance} onChange={(event) => update('incentivesAllowance', event.target.value)} /></label><label>Special allowance (PHP)<input type="number" min="0" step="0.01" value={form.specialAllowance} onChange={(event) => update('specialAllowance', event.target.value)} /></label><label>Late deduction (PHP)<input type="number" min="0" step="0.01" value={form.lateDeduction} onChange={(event) => update('lateDeduction', event.target.value)} /></label><label>Half-days<input type="number" min="0" value={form.halfDayCount} onChange={(event) => update('halfDayCount', event.target.value)} /></label><label>Absent days<input type="number" min="0" value={form.absentDays} onChange={(event) => update('absentDays', event.target.value)} /></label><label>Overtime hours<input type="number" min="0" step="0.01" value={form.overtimeHours} onChange={(event) => update('overtimeHours', event.target.value)} /></label><label>Overtime rate (PHP/hr)<input type="number" min="0" step="0.01" value={form.overtimeRate} onChange={(event) => update('overtimeRate', event.target.value)} /></label><label>Manual adjustment (PHP)<input type="number" step="0.01" value={form.manualAdjustment} onChange={(event) => update('manualAdjustment', event.target.value)} /></label></div><label>Adjustment reason<input value={form.adjustmentReason} onChange={(event) => update('adjustmentReason', event.target.value)} placeholder="Required for a non-zero adjustment" /></label><label>Signature placeholder<input value={form.signaturePlaceholder} onChange={(event) => update('signaturePlaceholder', event.target.value)} placeholder="Employee signature" /></label><label className="checkbox-label"><input type="checkbox" checked={form.approvedWorkingDayOverage} onChange={(event) => update('approvedWorkingDayOverage', event.target.checked)} /> Approve actual days above standard</label>{selectedProfile && <p className="setup-copy">Holiday premiums: {selectedProfile.specialHolidayMultiplier * 100}% special, {selectedProfile.regularHolidayMultiplier * 100}% regular.</p>}{message && <p className="dashboard-alert">{message}</p>}<button className="submit-button" disabled={saving}>{saving ? 'Saving...' : 'Save cutoff payroll'}</button></form></section><section className="payroll-table"><PayrollTable records={records} onFinalized={onSaved} /></section></div><PayrollPrintView records={records} office={office} profiles={profiles} /></section>;
 }
 
 function PayrollTable({ records, onFinalized }: { records: PayrollCutoffRecord[]; onFinalized: () => void }) {
@@ -689,6 +689,137 @@ function PayrollTable({ records, onFinalized }: { records: PayrollCutoffRecord[]
 }
 
 function php(value: number): string { return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number.isFinite(value) ? value : 0).replace('₱', 'PHP '); }
+
+/** Formats a YYYY-MM-DD date for printed worksheet labels (e.g. "Aug 4, 2026"). */
+function formatPrintDate(value: string): string {
+  if (!value) return '—';
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat('en-PH', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' }).format(parsed);
+}
+
+/** Print-only payroll worksheet template. Hidden on screen; rendered on paper via @media print. */
+function PayrollPrintView({ records, office, profiles }: { records: PayrollCutoffRecord[]; office: OfficeIdentity; profiles: PayrollCalculationProfile[] }) {
+  if (!records.length) return <div className="print-payroll-view print-only"><p className="pw-empty-note">No cutoff payroll records are available to print. Create and save a cutoff payroll first.</p></div>;
+  return (
+    <div className="print-payroll-view print-only">
+      {records.map((row) => <PayrollWorksheet key={row.payrollId} row={row} office={office} profiles={profiles} />)}
+    </div>
+  );
+}
+
+function PayrollWorksheet({ row, office, profiles }: { row: PayrollCutoffRecord; office: OfficeIdentity; profiles: PayrollCalculationProfile[] }) {
+  const profile = profiles.find((item) => item.profileId === row.payrollProfileId);
+  const profileLabel = profile?.label ?? row.payrollProfileId;
+  const frequencyLabel = row.payrollFrequency === 'SEMI_MONTHLY' ? 'Semi-monthly' : row.payrollFrequency;
+  const specialPercent = Math.round(row.specialHolidayMultiplier * 100);
+  const regularPercent = Math.round(row.regularHolidayMultiplier * 100);
+  const halfDayPercent = Math.round((profile?.halfDayFraction ?? 0.5) * 100);
+  const totalDeductions = row.lateDeduction + row.halfDayDeduction + row.absenceDeduction;
+  return (
+    <article className="pw-sheet">
+      <header className="pw-header">
+        <p className="pw-company">{office.companyName}</p>
+        <p className="pw-address">{office.officeDisplayFull}</p>
+        <h1 className="pw-title">Payroll Worksheet</h1>
+        <div className="pw-meta">
+          <span>Pay period: <strong>{row.payrollCutoffLabel}</strong></span>
+          <span>Cutoff: <strong>{formatPrintDate(row.cutoffStart)} – {formatPrintDate(row.cutoffEnd)}</strong></span>
+          <span>Prepared: <strong>{formatPrintDate(localDate())}</strong></span>
+          <span>Status: <strong>{row.status}</strong></span>
+        </div>
+      </header>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Employee details</h2>
+        <div className="pw-grid">
+          <div className="pw-field"><span className="pw-label">Employee name</span><span className="pw-value">{row.employeeName}</span></div>
+          <div className="pw-field"><span className="pw-label">Employee number</span><span className="pw-value">{row.employeeId}</span></div>
+          <div className="pw-field"><span className="pw-label">Daily rate</span><span className="pw-value">{php(row.dailyRate)}</span></div>
+          <div className="pw-field"><span className="pw-label">Payroll calculation</span><span className="pw-value">{profileLabel}</span></div>
+          <div className="pw-field"><span className="pw-label">Pay frequency</span><span className="pw-value">{frequencyLabel}</span></div>
+          <div className="pw-field"><span className="pw-label">Cutoff period</span><span className="pw-value">{row.payrollCutoffLabel}</span></div>
+        </div>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Attendance and pay basis</h2>
+        <table className="pw-table">
+          <thead><tr><th className="pw-col-num">#</th><th>Item</th><th className="pw-col-num">Value</th><th>Remarks</th></tr></thead>
+          <tbody>
+            <tr><td className="pw-col-num">1</td><td>Standard working days</td><td className="pw-col-num">{row.standardWorkingDays}</td><td>Days expected in this cutoff</td></tr>
+            <tr><td className="pw-col-num">2</td><td>Actual working days</td><td className="pw-col-num">{row.actualWorkingDays}</td><td>{row.approvedWorkingDayOverage ? 'Actual days approved above standard' : 'Days actually rendered'}</td></tr>
+            <tr><td className="pw-col-num">3</td><td>Special holiday days</td><td className="pw-col-num">{row.specialHolidayDays}</td><td>Paid at {specialPercent}% premium</td></tr>
+            <tr><td className="pw-col-num">4</td><td>Regular holiday days</td><td className="pw-col-num">{row.regularHolidayDays}</td><td>Paid at {regularPercent}% premium</td></tr>
+            <tr><td className="pw-col-num">5</td><td>Half-days</td><td className="pw-col-num">{row.halfDayCount}</td><td>Each half-day counted at {halfDayPercent}% of a day</td></tr>
+            <tr><td className="pw-col-num">6</td><td>Absent days</td><td className="pw-col-num">{row.absentDays}</td><td>Deducted from gross pay</td></tr>
+            <tr><td className="pw-col-num">7</td><td>Overtime hours</td><td className="pw-col-num">{row.overtimeHours}</td><td>At {php(row.overtimeRate)} per hour</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Earnings</h2>
+        <table className="pw-table">
+          <thead><tr><th className="pw-col-num">#</th><th>Description</th><th className="pw-col-amount">Amount</th></tr></thead>
+          <tbody>
+            <tr><td className="pw-col-num">1</td><td>Basic pay — {row.actualWorkingDays} day(s) at {php(row.dailyRate)} per day</td><td className="pw-col-amount">{php(row.basicPay)}</td></tr>
+            <tr><td className="pw-col-num">2</td><td>Special holiday pay — {row.specialHolidayDays} day(s) at {specialPercent}%</td><td className="pw-col-amount">{php(row.specialHolidayPay)}</td></tr>
+            <tr><td className="pw-col-num">3</td><td>Regular holiday pay — {row.regularHolidayDays} day(s) at {regularPercent}%</td><td className="pw-col-amount">{php(row.regularHolidayPay)}</td></tr>
+            <tr className="pw-subtotal"><td className="pw-col-num" colSpan={2}>Total compensation</td><td className="pw-col-amount">{php(row.totalCompensation)}</td></tr>
+            <tr><td className="pw-col-num">4</td><td>Incentives allowance</td><td className="pw-col-amount">{php(row.incentivesAllowance)}</td></tr>
+            <tr><td className="pw-col-num">5</td><td>Special allowance</td><td className="pw-col-amount">{php(row.specialAllowance)}</td></tr>
+            <tr className="pw-subtotal"><td className="pw-col-num" colSpan={2}>Total allowances</td><td className="pw-col-amount">{php(row.totalAllowance)}</td></tr>
+            <tr><td className="pw-col-num">6</td><td>Overtime pay — {row.overtimeHours} hour(s) at {php(row.overtimeRate)} per hour</td><td className="pw-col-amount">{php(row.overtimePay)}</td></tr>
+            {row.manualAdjustment !== 0 && <tr><td className="pw-col-num">7</td><td>Manual adjustment{row.adjustmentReason ? ` — ${row.adjustmentReason}` : ''}</td><td className="pw-col-amount">{php(row.manualAdjustment)}</td></tr>}
+            <tr className="pw-grand"><td className="pw-col-num" colSpan={2}>Gross compensation</td><td className="pw-col-amount">{php(row.grossCompensation)}</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Deductions</h2>
+        <table className="pw-table">
+          <thead><tr><th className="pw-col-num">#</th><th>Description</th><th className="pw-col-amount">Amount</th></tr></thead>
+          <tbody>
+            <tr><td className="pw-col-num">1</td><td>Late deduction{row.lateUnits ? ` — ${row.lateUnits} unit(s)` : ''}</td><td className="pw-col-amount">{php(row.lateDeduction)}</td></tr>
+            <tr><td className="pw-col-num">2</td><td>Half-day deduction — {row.halfDayCount} half-day(s)</td><td className="pw-col-amount">{php(row.halfDayDeduction)}</td></tr>
+            <tr><td className="pw-col-num">3</td><td>Absence deduction — {row.absentDays} absent day(s)</td><td className="pw-col-amount">{php(row.absenceDeduction)}</td></tr>
+            <tr className="pw-grand"><td className="pw-col-num" colSpan={2}>Total deductions</td><td className="pw-col-amount">{php(totalDeductions)}</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Pay summary</h2>
+        <div className="pw-summary">
+          <div className="pw-summary-cell"><span className="pw-label">Gross compensation</span><span className="pw-value">{php(row.grossCompensation)}</span></div>
+          <div className="pw-summary-cell"><span className="pw-label">Total deductions</span><span className="pw-value">− {php(totalDeductions)}</span></div>
+          <div className="pw-summary-cell pw-summary-net"><span className="pw-label">Net pay</span><span className="pw-value">{php(row.netPay)}</span></div>
+          <div className="pw-summary-cell"><span className="pw-label">Status</span><span className="pw-value">{row.status}</span></div>
+        </div>
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Remarks</h2>
+        <p className="pw-remarks">{row.calculationBreakdown || '—'}</p>
+        {row.adjustmentReason && <p className="pw-remarks">Adjustment reason: {row.adjustmentReason}.</p>}
+        {row.approvedWorkingDayOverage && <p className="pw-remarks">Actual working days above the standard were approved for this cutoff.</p>}
+      </section>
+
+      <section className="pw-section">
+        <h2 className="pw-section-title">Signatures</h2>
+        <div className="pw-signatures">
+          <div className="pw-signature"><span className="pw-sign-line">{row.signaturePlaceholder || '____________________________'}</span><span className="pw-sign-caption">Prepared by</span></div>
+          <div className="pw-signature"><span className="pw-sign-line">____________________________</span><span className="pw-sign-caption">Checked by</span></div>
+          <div className="pw-signature"><span className="pw-sign-line">____________________________</span><span className="pw-sign-caption">Employee signature</span></div>
+        </div>
+      </section>
+
+      <footer className="pw-footer">{office.companyName} · Confidential — for authorized payroll use only</footer>
+    </article>
+  );
+}
 
 function AdminAttendance({ rows, date, setDate, onSaved }: { rows: AttendanceListItem[]; date: string; setDate: (value: string) => void; onSaved: () => void }) {
   const [message, setMessage] = useState('');
