@@ -125,6 +125,19 @@ impl Default for ScanBuffer {
     }
 }
 
+impl ScanBuffer {
+    fn take_if_idle(&mut self, now: Instant, idle_timeout: Duration) -> Option<String> {
+        if self.data.is_empty()
+            || now.saturating_duration_since(self.last_at) < idle_timeout
+        {
+            return None;
+        }
+        let value = std::mem::take(&mut self.data);
+        self.last_at = now;
+        Some(value)
+    }
+}
+
 struct Runtime {
     app: AppHandle,
     handle: Arc<ScannerHandle>,
@@ -153,13 +166,7 @@ pub fn start(app: AppHandle, handle: Arc<ScannerHandle>) {
             std::thread::sleep(Duration::from_millis(20));
             let value = {
                 let mut buffer = runtime.buffer.lock().expect("scanner buffer lock");
-                if buffer.data.is_empty() || buffer.last_at.elapsed() < idle_timeout {
-                    None
-                } else {
-                    let value = std::mem::take(&mut buffer.data);
-                    buffer.last_at = Instant::now();
-                    Some(value)
-                }
+                buffer.take_if_idle(Instant::now(), idle_timeout)
             };
             if let Some(value) = value {
                 emit_scan(&runtime, value);
@@ -526,8 +533,9 @@ fn set_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{key_text, normalize, ScanParse};
+    use super::{key_text, normalize, ScanBuffer, ScanParse};
     use rdev::Key;
+    use std::time::{Duration, Instant};
 
     fn valid(raw: &str) -> String {
         match normalize(raw) {
@@ -549,6 +557,26 @@ mod tests {
         assert_eq!(key_text(Key::Space), None);
         assert_eq!(key_text(Key::Return), None);
         assert_eq!(key_text(Key::Tab), None);
+    }
+
+    #[test]
+    fn idle_timeout_completes_a_scan_without_sleeping() {
+        let started_at = Instant::now();
+        let mut buffer = ScanBuffer {
+            data: "04A1B2C3".into(),
+            last_at: started_at,
+        };
+        let timeout = Duration::from_millis(150);
+
+        assert_eq!(
+            buffer.take_if_idle(started_at + Duration::from_millis(149), timeout),
+            None
+        );
+        assert_eq!(
+            buffer.take_if_idle(started_at + Duration::from_millis(150), timeout),
+            Some("04A1B2C3".into())
+        );
+        assert!(buffer.data.is_empty());
     }
 
     #[test]

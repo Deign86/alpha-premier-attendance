@@ -15,6 +15,18 @@ type SetupStep = 'scan' | 'edit';
 type SetupForm = { userId: string; fullName: string; department: string; status: SetupUser['status']; employeeType: SetupUser['employeeType']; dailyRate: string; photoUrl: string };
 const emptySetupForm: SetupForm = { userId: '', fullName: '', department: '', status: 'ACTIVE', employeeType: 'INTERN', dailyRate: '', photoUrl: '' };
 
+export function greetingForDate(date: Date, timeZone: string): string {
+  const hourPart = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date).find((part) => part.type === 'hour');
+  const hour = Number(hourPart?.value ?? 0);
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
 export function shouldRouteGlobalRfidToSetup(dialogOpen: boolean, token: string, step: SetupStep): boolean {
   return dialogOpen && Boolean(token) && step === 'scan';
 }
@@ -316,20 +328,14 @@ export default function App() {
     if (!scannerStatus) return { label: 'Connecting…', state: 'scanning' as const, detail: '' };
     switch (scannerStatus.state) {
       case 'connected': return { label: 'Ready', state: 'connected' as const, detail: scannerStatus.detail ?? scannerStatus.message };
-      case 'scanning': return { label: 'Scanning…', state: 'scanning' as const, detail: scannerStatus.message };
-      case 'offline': return { label: 'Scanner unavailable', state: 'offline' as const, detail: scannerStatus.detail ?? scannerStatus.message };
-      case 'error': return { label: 'Invalid scan format', state: 'error' as const, detail: scannerStatus.detail ?? scannerStatus.message };
+      case 'scanning': return { label: 'Scanning', state: 'scanning' as const, detail: scannerStatus.message };
+      case 'offline': return { label: 'Offline', state: 'offline' as const, detail: scannerStatus.detail ?? scannerStatus.message };
+      case 'error': return { label: 'Error', state: 'error' as const, detail: scannerStatus.detail ?? scannerStatus.message };
     }
   })();
 
-  const heroTitle = state === 'processing' ? 'Reading card…' : 'Tap card';
-  const heroSub = state === 'processing'
-    ? 'Checking your attendance'
-    : scannerStatus?.state === 'offline'
-      ? 'Connect the RFID reader, or use manual entry below'
-      : scannerStatus?.state === 'error'
-        ? 'Invalid scan format — tap the card again'
-        : 'Waiting for card';
+  const heroTitle = state === 'processing' ? 'Reading card…' : greetingForDate(now, config.timezone);
+  const heroSub = state === 'processing' ? 'Checking your attendance' : 'Scan card';
 
   return (
     <main className={`kiosk-shell state-${state}`}>

@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as eventApi from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import App, { shouldRouteGlobalRfidToSetup } from './App';
+import App, { greetingForDate, shouldRouteGlobalRfidToSetup } from './App';
 
 /**
  * Mock the Tauri command bridge so tests can assert native scanner pause calls.
@@ -79,15 +79,23 @@ beforeEach(() => {
 });
 
 describe('RFID kiosk', () => {
+  it('uses Manila local time for the welcoming greeting', () => {
+    expect(greetingForDate(new Date('2026-08-04T01:00:00Z'), 'Asia/Manila')).toBe('Good morning');
+    expect(greetingForDate(new Date('2026-08-04T05:00:00Z'), 'Asia/Manila')).toBe('Good afternoon');
+    expect(greetingForDate(new Date('2026-08-04T11:00:00Z'), 'Asia/Manila')).toBe('Good evening');
+  });
+
   it('routes global RFID scans to the registration dialog while setup is active', () => {
     expect(shouldRouteGlobalRfidToSetup(true, 'setup-token', 'scan')).toBe(true);
     expect(shouldRouteGlobalRfidToSetup(true, 'setup-token', 'edit')).toBe(false);
     expect(shouldRouteGlobalRfidToSetup(false, 'setup-token', 'scan')).toBe(false);
   });
 
-  it('shows the scanner-first tap prompt with no visible RFID text input', () => {
+  it('shows a welcoming greeting and smaller scan instruction with no visible RFID text input', async () => {
     render(<App />);
-    expect(screen.getByRole('heading', { name: /tap card/i })).toBeInTheDocument();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument();
+    expect(screen.getByText(/^scan card$/i)).toHaveClass('hero-sub');
     expect(screen.queryByLabelText(/scanner card id/i)).not.toBeInTheDocument();
   });
 
@@ -104,6 +112,27 @@ describe('RFID kiosk', () => {
     ));
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
+  });
+
+  it('shows the four native scanner states truthfully', async () => {
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const status = (state: 'connected' | 'scanning' | 'offline' | 'error', message: string) => ({
+      state,
+      message,
+      detail: null,
+      mode: 'keyboard',
+      paused: false,
+    });
+
+    act(() => mockEventBridge.__emit('scanner-status', status('connected', 'Waiting for card')));
+    expect(screen.getByText(/^Ready$/)).toBeInTheDocument();
+    act(() => mockEventBridge.__emit('scanner-status', status('scanning', 'Scan received')));
+    expect(screen.getByText(/^Scanning$/)).toBeInTheDocument();
+    act(() => mockEventBridge.__emit('scanner-status', status('offline', 'Scanner unavailable')));
+    expect(screen.getByText(/^Offline$/)).toBeInTheDocument();
+    act(() => mockEventBridge.__emit('scanner-status', status('error', 'Invalid scan format')));
+    expect(screen.getByText(/^Error$/)).toBeInTheDocument();
   });
 
   it('keeps processing guard active during an in-flight scan', async () => {
@@ -156,7 +185,7 @@ describe('RFID kiosk', () => {
     act(() => mockEventBridge.__emit('rfid-scan', 'DEADBEEF'));
     expect(await screen.findByText('Card is not registered.')).toBeInTheDocument();
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: /tap card/i })).toBeInTheDocument(), { timeout: 1_000 });
+    await waitFor(() => expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument(), { timeout: 1_000 });
   });
 
   it('shows the canonical office short address on the kiosk', async () => {
@@ -174,7 +203,7 @@ describe('RFID kiosk', () => {
             success: true,
             timezone: 'Asia/Manila',
             rfidAutoSubmitDelayMs: 30,
-           
+
             resultResetDelayMs: 500,
             office: {
               companyName: 'Alpha Premier',

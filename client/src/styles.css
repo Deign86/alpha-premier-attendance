@@ -68,8 +68,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .hero-icon { display: grid; place-items: center; width: 104px; height: 104px; border-radius: 50%; }
 .icon-ready { color: var(--gold-bright); background: #242015; border: 1px solid var(--gold); }
 .icon-processing { color: #d5c48e; background: #1e211c; border: 1px solid #78835d; }
-.kiosk-hero h1 { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(3.6rem, 10vw, 7rem); font-weight: 600; line-height: 1.02; letter-spacing: .03em; text-transform: uppercase; }
-.hero-sub { color: var(--muted); font-size: 1rem; }
+.kiosk-hero h1 { max-width: 14ch; margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(3.2rem, 8vw, 6.2rem); font-weight: 600; line-height: 1.08; letter-spacing: 0; }
+.hero-sub { color: var(--muted); font-size: 1.05rem; font-weight: 600; }
 .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -460,11 +460,12 @@ td small { font-size: .7rem; }
 }
 
 @media (max-width: 600px) {
-  .kiosk-topbar, .kiosk-actions, .dashboard-shell { width: min(100% - 32px, var(--page-width)); }
-  .kiosk-topbar { min-height: 62px; }
+  .kiosk-topbar, .dashboard-shell { width: calc(100% - 32px); }
+  .kiosk-topbar { min-height: 62px; gap: 8px; }
+  .brand-lockup, .topbar-cluster { gap: 8px; }
   .brand-mark { width: 36px; height: 36px; }
   .brand-name { font-size: .68rem; }
-  .brand-subtitle { font-size: .56rem; max-width: 130px; }
+  .brand-subtitle { display: none; }
   .clock span { display: none; }
   .clock strong { font-size: .9rem; }
   .kiosk-stage { padding: 22px 16px; gap: 20px; }
@@ -473,8 +474,8 @@ td small { font-size: .7rem; }
   .result-photo { width: min(200px, 60vw); }
   .input-row { flex-direction: column; }
   .input-row .submit-button { width: 100%; }
-  .kiosk-actions { gap: 7px; }
-  .kiosk-action { flex: 1 1 auto; min-width: 0; padding: 8px 9px; font-size: .7rem; }
+  .kiosk-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; width: calc(100% - 32px); }
+  .kiosk-action { width: 100%; min-width: 0; padding: 8px 9px; font-size: .7rem; }
   .setup-backdrop { padding: 0; align-items: end; }
   .setup-dialog { width: 100%; max-height: 92dvh; border-radius: var(--radius-md) var(--radius-md) 0 0; }
   .setup-dialog-header { padding: 17px 16px 15px; }
