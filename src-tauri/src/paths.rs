@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use tauri::Manager;
+use crate::config::DatabaseConfig;
 
 /// Resolved application paths.
 ///
@@ -72,6 +73,48 @@ fn detect_portable_with_exe(exe: Option<&Path>) -> bool {
         .is_some_and(|marker| marker.is_file())
 }
 
+/// Environment variable override for the SQLite database file location.
+pub const ENV_DB_PATH: &str = "ALPHA_PREMIER_DB_PATH";
+
+/// Resolve the live SQLite database file location.
+///
+/// Priority:
+/// 1. `[database] path` in `config.toml` (relative paths resolve against the
+///    config directory, so a portable deployment can carry the database next
+///    to the executable and the path survives a move).
+/// 2. `ALPHA_PREMIER_DB_PATH` environment variable (relative paths resolve
+///    against the current working directory; for installers/scripting).
+/// 3. Default: `attendance.db` inside the resolved data directory.
+///
+/// A value that points at an existing file, or that has a file extension, is
+/// treated as the database file itself; anything else is treated as a
+/// directory and `attendance.db` is appended.
+pub fn resolve_db_path(config_dir: &Path, data_dir: &Path, database: &DatabaseConfig) -> PathBuf {
+    let configured = database
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let env_value = std::env::var_os(ENV_DB_PATH)
+        .map(|value| value.to_string_lossy().into_owned())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let (value, base) = match configured {
+        Some(value) => (value, config_dir),
+        None => match env_value.as_deref() {
+            Some(value) => (value, Path::new(".")),
+            None => return data_dir.join("attendance.db"),
+        },
+    };
+    let path = PathBuf::from(value);
+    let path = if path.is_absolute() { path } else { base.join(path) };
+    if path.extension().is_some() || path.is_file() {
+        path
+    } else {
+        path.join("attendance.db")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +139,33 @@ mod tests {
         let other = temp.join("elsewhere").join("app.exe");
         assert!(!detect_portable_with_exe(Some(&other)));
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn db_path_defaults_to_the_data_directory() {
+        let database = DatabaseConfig::default();
+        let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
+        assert_eq!(resolved, PathBuf::from("C:/data/attendance.db"));
+    }
+
+    #[test]
+    fn db_path_override_treats_a_dot_extension_as_a_file() {
+        let database = DatabaseConfig { path: Some("D:/Attendance/attendance.db".into()) };
+        let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
+        assert_eq!(resolved, PathBuf::from("D:/Attendance/attendance.db"));
+    }
+
+    #[test]
+    fn db_path_override_treats_a_directory_by_appending_attendance_db() {
+        let database = DatabaseConfig { path: Some("D:/Attendance".into()) };
+        let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
+        assert_eq!(resolved, PathBuf::from("D:/Attendance/attendance.db"));
+    }
+
+    #[test]
+    fn db_path_override_resolves_relative_paths_against_the_config_dir() {
+        let database = DatabaseConfig { path: Some("data/attendance.db".into()) };
+        let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
+        assert_eq!(resolved, PathBuf::from("C:/cfg/data/attendance.db"));
     }
 }

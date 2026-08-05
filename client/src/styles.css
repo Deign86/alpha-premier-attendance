@@ -267,6 +267,17 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .lan-facts span { display: grid; gap: 3px; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 .lan-facts strong { color: var(--ink); font-size: .78rem; font-weight: 600; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .lan-facts { grid-template-columns: 1fr 1fr; } .lan-panel-head { flex-direction: column; } }
+.db-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.db-notice { color: var(--success, #7fb069); }
+.db-steps { margin: 4px 0 8px; padding-left: 18px; display: grid; gap: 6px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
+.db-steps li::marker { color: var(--gold-bright); font-weight: 700; }
+.db-steps strong { color: var(--ink); }
+.db-backup-list { margin-top: 14px; }
+.db-backup-list h3 { margin: 0 0 8px; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; }
+.db-backup-list ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.db-backup-list li { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); font-size: .76rem; }
+.db-backup-list code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--gold-bright); overflow-wrap: anywhere; }
+.db-backup-list li span { margin-left: auto; color: var(--quiet); white-space: nowrap; }
 .file-result-card { display: grid; gap: 8px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line-bright); border-radius: var(--radius-sm); background: var(--surface); }
 .file-result-label { margin: 0; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 .file-result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .92rem; font-weight: 600; }

@@ -106,6 +106,27 @@ fn default_enter_suffix() -> bool { true }
 fn default_idle_timeout_ms() -> u64 { 150 }
 fn default_dedup_ms() -> u64 { 300 }
 
+/// Local SQLite database location override (`[database]` in config.toml).
+///
+/// Default: `attendance.db` inside the resolved application data directory.
+/// Set `path` to a database file (a value with a file extension, or an
+/// existing file) or to a directory (the app then uses `<dir>/attendance.db`).
+/// Relative paths resolve against the config directory, so a portable
+/// deployment can carry the database next to the executable. The
+/// `ALPHA_PREMIER_DB_PATH` environment variable is a lower-priority override
+/// for installers and scripting.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DatabaseConfig {
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+impl DatabaseConfig {
+    pub fn load(config_dir: &Path) -> Result<Self, String> {
+        load_config(config_dir).map(|(_, _, _, database)| database)
+    }
+}
+
 impl Default for ScannerConfig {
     fn default() -> Self {
         Self {
@@ -121,13 +142,13 @@ impl Default for ScannerConfig {
 
 impl ScannerConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, _, scanner)| scanner)
+        load_config(config_dir).map(|(_, _, scanner, _)| scanner)
     }
 }
 
 impl LanConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(lan, _, _)| lan)
+        load_config(config_dir).map(|(lan, _, _, _)| lan)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -236,7 +257,7 @@ fn join_address_parts(parts: Vec<String>) -> String {
 
 impl OfficeConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, office, _)| office)
+        load_config(config_dir).map(|(_, office, _, _)| office)
     }
 
     fn compose_short(&self) -> String {
@@ -293,12 +314,13 @@ impl OfficeConfig {
     }
 }
 
-/// Load the LAN, office, and scanner sections from `config.toml` (defaults when absent).
-pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig, ScannerConfig), String> {
+/// Load the LAN, office, scanner, and database sections from `config.toml`
+/// (defaults when absent).
+pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig, ScannerConfig, DatabaseConfig), String> {
     let path = config_dir.join("config.toml");
-    if !path.exists() { return Ok((LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())); }
+    if !path.exists() { return Ok((LanConfig::default(), OfficeConfig::default(), ScannerConfig::default(), DatabaseConfig::default())); }
     let contents = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig, #[serde(default)] office: OfficeConfig, #[serde(default)] scanner: ScannerConfig }
+    #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig, #[serde(default)] office: OfficeConfig, #[serde(default)] scanner: ScannerConfig, #[serde(default)] database: DatabaseConfig }
     let root: Root = toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
     let mut lan = root.lan;
     if lan.sheets_sync_endpoint.as_deref().is_some_and(str::is_empty) { lan.sheets_sync_endpoint = None; }
@@ -312,7 +334,9 @@ pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig, Scanne
         if path_value.is_absolute() && !path_value.starts_with(config_dir) { return Err("google service-account path must remain under the application config directory".into()); }
         if path_value.is_relative() { lan.google_service_account_json_path = Some(config_dir.join(path_value).to_string_lossy().into_owned()); }
     }
-    Ok((lan, root.office, root.scanner))
+    let mut database = root.database;
+    if database.path.as_deref().is_some_and(str::is_empty) { database.path = None; }
+    Ok((lan, root.office, root.scanner, database))
 }
 
 fn is_private(address: IpAddr) -> bool {
@@ -326,6 +350,7 @@ fn is_private(address: IpAddr) -> bool {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    use uuid::Uuid;
 
     #[test]
     fn defaults_disable_lan() {
@@ -432,5 +457,32 @@ mod tests {
         assert_eq!(root.scanner.idle_timeout_ms, 200);
         assert_eq!(root.scanner.hid_vid, Some(0x1234));
         assert_eq!(root.scanner.hid_pid, Some(0x5678));
+    }
+
+    #[test]
+    fn database_config_parses_path_and_defaults_when_absent() {
+        #[derive(Deserialize)]
+        struct Root {
+            #[serde(default)]
+            database: DatabaseConfig,
+        }
+        let root: Root = toml::from_str("[database]\npath = \"D:/Attendance/attendance.db\"\n").expect("database toml");
+        assert_eq!(root.database.path.as_deref(), Some("D:/Attendance/attendance.db"));
+        let empty: Root = toml::from_str("").expect("empty toml");
+        assert_eq!(empty.database.path, None);
+    }
+
+    #[test]
+    fn load_config_round_trips_database_section() {
+        let temp = std::env::temp_dir().join(format!("alpha-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(
+            temp.join("config.toml"),
+            "[database]\npath = \"data/attendance.db\"\n",
+        )
+        .unwrap();
+        let (_, _, _, database) = load_config(&temp).expect("load config");
+        assert_eq!(database.path.as_deref(), Some("data/attendance.db"));
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

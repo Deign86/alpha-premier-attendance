@@ -75,3 +75,21 @@ office_display_full = "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Me
 sheets_sync_endpoint = ""
 google_service_account_json_path = ""
 google_spreadsheet_id = ""
+
+# Local SQLite database location. Optional — leave unset to use the default
+# `attendance.db` inside the app data directory
+# (%LOCALAPPDATA%\com.alphapremier.attendance, or `Data/` next to the .exe in
+# portable mode). Set this when the database must live somewhere stable and
+# shared (e.g. a D: drive) so a PC replacement never touches the data.
+#
+# A value with a file extension (or an existing file) is treated as the
+# database file itself; a value without one is treated as a directory and
+# `attendance.db` is appended. Relative paths resolve against this config
+# directory (next to the executable in portable mode).
+#
+# The ALPHA_PREMIER_DB_PATH environment variable is a lower-priority override.
+# Moving a database between PCs: use Admin -> Data and backup (Create backup /
+# Restore from backup file) — see docs/database-migration.md. Never copy a
+# live attendance.db while the app is open.
+[database]
+path = ""

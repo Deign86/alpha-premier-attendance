@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, LanStatusResponse, PayrollCsvExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
@@ -45,6 +45,10 @@ export const tauriApi = {
   syncNow: (token: string) => invoke('admin_sync_now', { token }),
   sheetsNukeResync: (token: string, confirm: boolean) => invoke('admin_sheets_nuke_resync', { token, confirm }),
   uploadPhoto: (token: string, userId: string, base64Data: string) => invoke<{ success: true; photoUrl: string }>('upload_photo', { token, userId, base64Data }),
+  dbInfo: () => invoke<DatabaseInfoResponse>('db_info'),
+  dbBackup: (token: string) => invoke<DatabaseBackupResponse>('db_backup', { token }),
+  dbRestoreRequest: (token: string, sourcePath: string) => invoke<{ success: true; message: string }>('db_restore_request', { token, sourcePath }),
+  dbOpenBackupsDir: (token: string) => invoke<{ success: true; message: string }>('db_open_backups_dir', { token }),
 };
 
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));

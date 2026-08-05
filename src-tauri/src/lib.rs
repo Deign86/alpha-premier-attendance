@@ -1,4 +1,5 @@
 mod config;
+mod database;
 mod error;
 mod lan_net;
 mod lan_server;
@@ -1093,6 +1094,146 @@ async fn open_generated_directory(
 }
 
 #[tauri::command]
+/// Status of the local SQLite database for the Data & backup admin panel:
+/// live file path, mode, pending restore, and existing backups.
+async fn db_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let backups = crate::database::list_backups(&state.data_dir).await?;
+    let marker = crate::database::restore_request_path(&state.data_dir);
+    let restore_pending = marker.is_file();
+    let restore_source = if restore_pending {
+        std::fs::read_to_string(&marker).ok().map(|text| text.trim().to_string())
+    } else {
+        None
+    };
+    let last_backup_at = backups
+        .first()
+        .and_then(|(path, _)| std::fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+        .map(|time| {
+            let dt: chrono::DateTime<chrono::Utc> = time.into();
+            dt.to_rfc3339()
+        });
+    let backup_items: Vec<serde_json::Value> = backups
+        .iter()
+        .map(|(path, size)| {
+            let modified = std::fs::metadata(path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .map(|time| {
+                    let dt: chrono::DateTime<chrono::Utc> = time.into();
+                    dt.to_rfc3339()
+                });
+            serde_json::json!({
+                "fileName": path.file_name().and_then(|name| name.to_str()).unwrap_or(""),
+                "filePath": path.to_string_lossy(),
+                "sizeBytes": size,
+                "modifiedAt": modified,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "success": true,
+        "dbPath": state.db_path.to_string_lossy(),
+        "dataDir": state.data_dir.to_string_lossy(),
+        "backupDir": state.backups_dir.to_string_lossy(),
+        "isPortableMode": state.is_portable,
+        "restorePending": restore_pending,
+        "restoreSourcePath": restore_source,
+        "backups": backup_items,
+        "lastBackupAt": last_backup_at,
+    }))
+}
+
+#[tauri::command]
+/// Create a consistent timestamped backup of the SQLite database into
+/// `data_dir/backups` (keeps the newest 10). Safe while the app is running.
+async fn db_backup(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let file_path = crate::database::create_backup(&state.db, &state.data_dir).await?;
+    let file_name = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attendance.db")
+        .to_string();
+    Ok(serde_json::json!({
+        "success": true,
+        "filePath": file_path.to_string_lossy(),
+        "directoryPath": state.backups_dir.to_string_lossy(),
+        "fileName": file_name,
+        "fileKind": "backup",
+        "isPortableMode": state.is_portable,
+        "message": "Backup created.",
+    }))
+}
+
+#[tauri::command]
+/// Schedule a database restore: validate the source file, write the
+/// `restore.request` marker, then exit the app. The next launch restores the
+/// database from the marker before opening it (see
+/// `database::process_restore_request`).
+async fn db_restore_request(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    source_path: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let source = std::path::PathBuf::from(source_path.trim());
+    if source.as_os_str().is_empty() {
+        return Err("RESTORE_SOURCE_REQUIRED".into());
+    }
+    if !source.is_file() {
+        return Err("RESTORE_SOURCE_NOT_FOUND".into());
+    }
+    crate::database::validate_database_file(&source)
+        .await
+        .map_err(|error| format!("RESTORE_SOURCE_INVALID: {error}"))?;
+    let marker = crate::database::restore_request_path(&state.data_dir);
+    std::fs::write(&marker, source.to_string_lossy().into_owned())
+        .map_err(|error| format!("cannot write restore request: {error}"))?;
+    // Drop any stale failure marker from a previous attempt.
+    let _ = std::fs::remove_file(crate::database::restore_failed_path(&state.data_dir));
+    // Exit cleanly; the response is delivered before the delayed exit. The
+    // next launch restores before opening the database.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        app.exit(0);
+    });
+    Ok(serde_json::json!({
+        "success": true,
+        "message": "Restore scheduled. The app will close and restore on the next launch."
+    }))
+}
+
+#[tauri::command]
+/// Open the backups folder in the OS file explorer.
+async fn db_open_backups_dir(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let dir = state.backups_dir.clone();
+    std::fs::create_dir_all(&dir).map_err(|error| format!("cannot create backup folder: {error}"))?;
+    app.opener()
+        .open_path(dir.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| {
+            log::error!("open backups dir failed: {error}");
+            "OPEN_FAILED".to_string()
+        })?;
+    Ok(serde_json::json!({"success": true, "message": "Backup folder opened."}))
+}
+
+#[tauri::command]
 /// Read-only status of the LAN attendance viewer for the Live Attendance panel.
 async fn lan_status(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
     Ok(crate::lan_server::build_lan_status(state.inner()).await)
@@ -1927,9 +2068,38 @@ pub fn run() {
             let paths = crate::paths::resolve(app.handle())
                 .expect("resolve application paths");
             std::fs::create_dir_all(&paths.config_dir).expect("create application config directory");
-            let (lan, office, scanner_config) = config::load_config(&paths.config_dir).expect("valid config.toml");
+            let (lan, office, scanner_config, database_config) = config::load_config(&paths.config_dir).expect("valid config.toml");
+            let db_path = crate::paths::resolve_db_path(&paths.config_dir, &paths.data_dir, &database_config);
+            // Apply any pending database restore (admin flow marker or
+            // ALPHA_PREMIER_RESTORE_FROM) before the database is opened, so
+            // the live file is never touched by two processes. A failed
+            // restore never blocks startup: the app keeps its current DB and
+            // records the problem in `restore.failed`.
+            match tauri::async_runtime::block_on(crate::database::process_restore_request(
+                &paths.data_dir,
+                &db_path,
+            )) {
+                crate::database::RestoreOutcome::None => {}
+                crate::database::RestoreOutcome::Restored { source } => {
+                    log::info!("startup restore applied from {}", source.display());
+                }
+                crate::database::RestoreOutcome::SkippedMissingSource { source } => {
+                    log::warn!(
+                        "startup restore skipped: source {} was missing",
+                        source.display()
+                    );
+                }
+                crate::database::RestoreOutcome::Failed { source, error } => {
+                    log::error!(
+                        "startup restore failed (source {}): {}; keeping current database",
+                        source.display(),
+                        error
+                    );
+                }
+            }
             let state = tauri::async_runtime::block_on(AppState::new(
                 paths.data_dir.clone(),
+                db_path,
                 paths.exports_dir.clone(),
                 paths.is_portable,
                 lan,
@@ -1957,6 +2127,33 @@ pub fn run() {
             // never needs a focused input for card taps.
             let scanner_handle = state.scanner.clone();
             app.manage(state);
+            // Best-effort automatic database backup on clean exit. The backup
+            // uses SQLite's online engine, so it is consistent even while the
+            // app has been recording scans, and a failed backup never blocks
+            // closing the app.
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        let handle = handle.clone();
+                        if let Some(state) = handle.try_state::<AppState>() {
+                            let data_dir = state.data_dir.clone();
+                            let db = state.db.clone();
+                            let _ = tauri::async_runtime::block_on(async move {
+                                match crate::database::create_backup(&db, &data_dir).await {
+                                    Ok(path) => log::info!(
+                                        "automatic backup on exit saved to {}",
+                                        path.display()
+                                    ),
+                                    Err(error) => log::warn!(
+                                        "automatic backup on exit skipped: {error}"
+                                    ),
+                                }
+                            });
+                        }
+                    }
+                });
+            }
             crate::services::scanner::start(app.handle().clone(), scanner_handle);
             Ok(())
         })
@@ -1995,6 +2192,10 @@ pub fn run() {
             reveal_generated_file,
             open_generated_directory,
             open_generated_artifact,
+            db_info,
+            db_backup,
+            db_restore_request,
+            db_open_backups_dir,
             setup_unlock,
             setup_lock,
             setup_lookup_card,
@@ -2129,6 +2330,7 @@ mod tests {
         let exports_dir = temp.join("exports");
         let state = tauri::async_runtime::block_on(AppState::new(
             data_dir.clone(),
+            data_dir.join("attendance.db"),
             exports_dir.clone(),
             true,
             LanConfig::default(),
@@ -2163,6 +2365,7 @@ mod tests {
         let exports_dir = temp.join("exports");
         let state = AppState::new(
             data_dir.clone(),
+            data_dir.join("attendance.db"),
             exports_dir.clone(),
             false,
             LanConfig::default(),

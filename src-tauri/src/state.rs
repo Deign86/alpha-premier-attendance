@@ -136,6 +136,10 @@ impl LanRuntime {
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
+    /// Absolute path of the live `attendance.db` file (configurable).
+    pub db_path: PathBuf,
+    /// Directory holding timestamped SQLite backups (`data_dir/backups`).
+    pub backups_dir: PathBuf,
     pub lan: LanConfig,
     pub office: OfficeConfig,
     pub bus: AttendanceEventBus,
@@ -163,6 +167,7 @@ pub struct AdminSession {
 impl AppState {
     pub async fn new(
         data_dir: PathBuf,
+        db_path: PathBuf,
         exports_dir: PathBuf,
         is_portable: bool,
         lan: LanConfig,
@@ -172,9 +177,15 @@ impl AppState {
         std::fs::create_dir_all(&data_dir).map_err(|e| AppError::Configuration(e.to_string()))?;
         std::fs::create_dir_all(&exports_dir)
             .map_err(|e| AppError::Configuration(e.to_string()))?;
-        let db_path = data_dir.join("attendance.db");
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::Configuration(format!("create database folder {}: {e}", parent.display())))?;
+        }
+        let backups_dir = data_dir.join("backups");
+        std::fs::create_dir_all(&backups_dir)
+            .map_err(|e| AppError::Configuration(e.to_string()))?;
         let options = SqliteConnectOptions::new()
-            .filename(db_path)
+            .filename(&db_path)
             .create_if_missing(true);
         let db = SqlitePool::connect_with(options).await?;
         sqlx::query("PRAGMA journal_mode = WAL")
@@ -184,6 +195,8 @@ impl AppState {
         MIGRATOR.run(&db).await?;
         Ok(Self {
             db,
+            db_path,
+            backups_dir,
             lan,
             office,
             bus: AttendanceEventBus::new(),
@@ -218,7 +231,7 @@ mod tests {
     async fn migrations_create_required_indexes_and_queue() {
         let data_dir = std::env::temp_dir().join(format!("alpha-data-{}", Uuid::new_v4()));
         let exports_dir = data_dir.join("exports");
-        let state = AppState::new(data_dir.clone(), exports_dir, false, LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())
+        let state = AppState::new(data_dir.clone(), data_dir.join("attendance.db"), exports_dir, false, LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())
             .await
             .unwrap();
         let names: Vec<String> =
@@ -248,5 +261,26 @@ mod tests {
         assert!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ux_sync_queue_idempotency'").fetch_one(&state.db).await.unwrap() == 1);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn creates_a_configurable_database_path_in_a_new_directory() {
+        let temp = std::env::temp_dir().join(format!("alpha-dbpath-{}", Uuid::new_v4()));
+        let data_dir = temp.join("data");
+        // The configured database path points into a directory that does not
+        // exist yet; AppState::new must create it.
+        let db_path = temp.join("shared").join("attendance.db");
+        let state = AppState::new(data_dir.clone(), db_path.clone(), data_dir.join("exports"), false, LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())
+            .await
+            .unwrap();
+        assert!(db_path.is_file(), "database file must be created at the configured path");
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
+                .fetch_all(&state.db)
+                .await
+                .unwrap();
+        assert!(names.iter().any(|name| name == "users"));
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

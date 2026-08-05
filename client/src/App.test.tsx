@@ -4,6 +4,13 @@ import userEvent from '@testing-library/user-event';
 import * as eventApi from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup } from './App';
+import { announceTimeIn, announceTimeOut } from './speech';
+
+/** Speech announcements are asserted via the mocked module, never spoken in tests. */
+vi.mock('./speech', () => ({
+  announceTimeIn: vi.fn(),
+  announceTimeOut: vi.fn(),
+}));
 
 /**
  * Mock the Tauri command bridge so tests can assert native scanner pause calls.
@@ -75,6 +82,8 @@ beforeEach(() => {
   vi.restoreAllMocks();
   mockEventBridge.__reset();
   invokeMock.mockClear();
+  vi.mocked(announceTimeIn).mockClear();
+  vi.mocked(announceTimeOut).mockClear();
   mockFetch();
 });
 
@@ -145,6 +154,28 @@ describe('RFID kiosk', () => {
     ));
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
+  });
+
+  it('announces a time-in with the time-appropriate greeting in speech', async () => {
+    render(<App />);
+    act(() => mockEventBridge.__emit('rfid-scan', '04A1B2C3'));
+    await screen.findByText('Ada Lovelace');
+    expect(vi.mocked(announceTimeIn)).toHaveBeenCalledWith(expect.stringMatching(/^Good (morning|afternoon|evening)$/));
+    expect(vi.mocked(announceTimeOut)).not.toHaveBeenCalled();
+  });
+
+  it('announces a time-out with a goodbye in speech', async () => {
+    mockFetch({
+      ...successResponse,
+      action: 'TIME_OUT',
+      message: 'Time out recorded',
+      attendance: { ...successResponse.attendance, timeOut: '2026-07-28T18:00:00+08:00', status: 'COMPLETED' },
+    });
+    render(<App />);
+    act(() => mockEventBridge.__emit('rfid-scan', '04A1B2C3'));
+    await screen.findByText('Ada Lovelace');
+    expect(vi.mocked(announceTimeOut)).toHaveBeenCalled();
+    expect(vi.mocked(announceTimeIn)).not.toHaveBeenCalled();
   });
 
   it('shows the four native scanner states truthfully', async () => {

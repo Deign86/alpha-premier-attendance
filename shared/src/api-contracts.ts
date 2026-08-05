@@ -324,6 +324,32 @@ export type GeneratedFileMetadata = {
   message?: string;
 };
 
+/** One SQLite backup file stored in the app backups directory. */
+export type DatabaseBackupInfo = {
+  fileName: string;
+  filePath: string;
+  sizeBytes: number;
+  modifiedAt: string | null;
+};
+
+/** Status of the local SQLite database for the Data & backup admin panel. */
+export type DatabaseInfoResponse = {
+  success: true;
+  /** Absolute path to the live `attendance.db` file. */
+  dbPath: string;
+  dataDir: string;
+  backupDir: string;
+  isPortableMode: boolean;
+  /** True when a restore is waiting to be applied on the next launch. */
+  restorePending: boolean;
+  restoreSourcePath: string | null;
+  backups: DatabaseBackupInfo[];
+  lastBackupAt: string | null;
+};
+
+/** Result of creating a database backup; carries the same file actions as other generated files. */
+export type DatabaseBackupResponse = { success: true } & GeneratedFileMetadata;
+
 export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculationProfile[] };
 export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
 export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number } & GeneratedFileMetadata;

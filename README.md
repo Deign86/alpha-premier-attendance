@@ -277,6 +277,16 @@ npm run migrate:from-sheets -- --execute --input .\sheets-export --db .\attendan
 
 The importer applies numbered SQLite migrations, imports the available tabs, and verifies imported row counts. Keep the old web deployment read-only for one pay period while comparing attendance and payroll results. See [docs/migration-cutover.md](docs/migration-cutover.md).
 
+### Moving the app to a new front-desk PC
+
+SQLite is the source of truth, and the whole database lives in one file (`attendance.db`). To move the app to the actual front-desk PC — or any replacement machine — use **Admin → Data and backup**:
+
+1. On the old PC: **Create backup now** (the app writes a consistent snapshot via SQLite's online backup engine — safe even while the app is running — into `backups/`; one is also written automatically on every clean exit).
+2. Copy `attendance-backup-*.db` to a USB drive.
+3. On the new PC: **Restore from backup file…** and confirm. The app closes, validates the file, restores on the next launch (the previous database is saved first as `backups/pre-restore-*.db`), and runs migrations automatically.
+
+The database location is configurable — `[database] path` in `config.toml` (relative to the config directory, so portable deployments travel with their data) or the `ALPHA_PREMIER_DB_PATH` environment variable — and defaults to the data directory. A technician/installer flow exists at [scripts/migrate-database.ps1](scripts/migrate-database.ps1) and `ALPHA_PREMIER_RESTORE_FROM` for automated provisioning. Full runbook and troubleshooting: [docs/database-migration.md](docs/database-migration.md). Never copy `attendance.db` while the app is open — WAL writes can be lost.
+
 ## Development Commands
 
 ```powershell

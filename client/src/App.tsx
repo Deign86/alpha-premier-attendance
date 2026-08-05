@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, Nfc, ShieldCheck, Upload, UserRound, X } from 'lucide-react';
-import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord, OfficeIdentity, LanStatusResponse } from '@rfid-attendance/shared';
+import { ArrowRight, Check, CircleAlert, CreditCard, Database, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, Nfc, ShieldCheck, Upload, UserRound, X } from 'lucide-react';
+import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord, OfficeIdentity, LanStatusResponse, DatabaseInfoResponse } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, OFFICE_HOURS_END, isLateTimeout } from '@rfid-attendance/shared';
-import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openViewerUrl, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
+import { DEFAULT_CONFIG, checkAdminSession, createDatabaseBackup, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadDatabaseInfo, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openDatabaseBackupsFolder, openViewerUrl, photoSource, requestDatabaseRestore, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
 import { listenForGlobalRfid, listenForScannerStatus, getScannerStatus, setScannerPaused, tauriApi, type ScannerStatus } from './tauri-api';
 import { GeneratedFileActions, type GeneratedFileResult } from './file-actions';
+import { announceTimeIn, announceTimeOut } from './speech';
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import logoPhoenix from './assets/branding/logo-phoenix.png';
 import logoFull from './assets/branding/logo-full.png';
 
@@ -294,9 +296,14 @@ export default function App() {
     setResult(response);
     const nextState = response.success ? 'success' : 'error';
     setState(nextState);
+    // Voice announcement: greet on time-in, say goodbye on time-out.
+    if (response.success) {
+      if (response.action === 'TIME_IN') announceTimeIn(greetingForDate(new Date(), config.timezone));
+      else announceTimeOut();
+    }
     if (resetTimer.current) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
-  }, [config.resultResetDelayMs, resetToReady]);
+  }, [config.resultResetDelayMs, config.timezone, resetToReady]);
 
   /** Flush the scanner burst as an attendance scan (keyboard-wedge path). */
   const commitScanBuffer = useCallback(() => {
@@ -876,7 +883,7 @@ function AttendanceTable({ rows, timezone }: { rows: AttendanceListItem[]; timez
 function AdminPanel() {
   useScannerPause(true);
   const office = useOfficeIdentity();
-  const [unlocked, setUnlocked] = useState(false); const [sessionExpiresAt, setSessionExpiresAt] = useState(''); const [pin, setPin] = useState(''); const [error, setError] = useState(''); const [tab, setTab] = useState<'users' | 'attendance' | 'payroll'>('users');
+  const [unlocked, setUnlocked] = useState(false); const [sessionExpiresAt, setSessionExpiresAt] = useState(''); const [pin, setPin] = useState(''); const [error, setError] = useState(''); const [tab, setTab] = useState<'users' | 'attendance' | 'payroll' | 'data'>('users');
   const [users, setUsers] = useState<AdminUser[]>([]); const [rows, setRows] = useState<AttendanceListItem[]>([]); const [profiles, setProfiles] = useState<PayrollCalculationProfile[]>([]); const [cutoffs, setCutoffs] = useState<PayrollCutoffRecord[]>([]); const [date, setDate] = useState(localDate());
   const [editing, setEditing] = useState<AdminUser | null>(null); const [busy, setBusy] = useState(false);
   const [nuking, setNuking] = useState(false);
@@ -893,10 +900,103 @@ function AdminPanel() {
   }, [sessionExpiresAt, unlocked]);
   useEffect(() => { if (unlocked) void load(); }, [unlocked, load]);
   if (!unlocked) return <main className="dashboard-shell admin-login"><a href="/">← Scanner</a><form onSubmit={unlock}><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><label>Administrator PIN<input autoFocus type="password" value={pin} onChange={(event) => setPin(event.target.value)} /></label>{error && <p className="dashboard-alert">{error}</p>}<button className="submit-button" disabled={busy || !pin}>Unlock admin</button></form></main>;
-  return <main className="dashboard-shell"><header className="dashboard-header"><div><DashboardBrand /><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')}</p></div><nav><a href="/">Scanner</a><a href="/attendance">Live view</a>{import.meta.env.DEV && <button className="text-button" type="button" disabled={nuking} onClick={() => void nukeSheets()}>{nuking ? 'Nuking…' : 'Nuke & resync Sheets'}</button>}<button className="text-button" type="button" onClick={() => { void lockAdmin(); setUnlocked(false); setSessionExpiresAt(''); }}>Lock</button></nav></header><div className="admin-tabs"><button className={tab === 'users' ? 'is-active' : ''} onClick={() => setTab('users')}>Users and RFID</button><button className={tab === 'attendance' ? 'is-active' : ''} onClick={() => setTab('attendance')}>Attendance corrections</button><button className={tab === 'payroll' ? 'is-active' : ''} onClick={() => setTab('payroll')}>Payroll</button></div><ScannerDiagnostics />{error && <p className="dashboard-alert">{error}</p>}{tab === 'users' ? <UserEditor users={users} profiles={profiles} editing={editing} setEditing={setEditing} onSaved={load} /> : tab === 'attendance' ? <AdminAttendance rows={rows} date={date} setDate={setDate} onSaved={load} /> : <PayrollWorkspace users={users} profiles={profiles} records={cutoffs} onSaved={load} />}</main>;
+  return <main className="dashboard-shell"><header className="dashboard-header"><div><DashboardBrand /><p className="section-kicker">Administrator access</p><h1>Manage attendance</h1><p className="section-description">{resolveOfficeDisplay(office, 'short')}</p></div><nav><a href="/">Scanner</a><a href="/attendance">Live view</a>{import.meta.env.DEV && <button className="text-button" type="button" disabled={nuking} onClick={() => void nukeSheets()}>{nuking ? 'Nuking…' : 'Nuke & resync Sheets'}</button>}<button className="text-button" type="button" onClick={() => { void lockAdmin(); setUnlocked(false); setSessionExpiresAt(''); }}>Lock</button></nav></header><div className="admin-tabs"><button className={tab === 'users' ? 'is-active' : ''} onClick={() => setTab('users')}>Users and RFID</button><button className={tab === 'attendance' ? 'is-active' : ''} onClick={() => setTab('attendance')}>Attendance corrections</button><button className={tab === 'payroll' ? 'is-active' : ''} onClick={() => setTab('payroll')}>Payroll</button><button className={tab === 'data' ? 'is-active' : ''} onClick={() => setTab('data')}>Data and backup</button></div><ScannerDiagnostics />{error && <p className="dashboard-alert">{error}</p>}{tab === 'users' ? <UserEditor users={users} profiles={profiles} editing={editing} setEditing={setEditing} onSaved={load} /> : tab === 'attendance' ? <AdminAttendance rows={rows} date={date} setDate={setDate} onSaved={load} /> : tab === 'payroll' ? <PayrollWorkspace users={users} profiles={profiles} records={cutoffs} onSaved={load} /> : <DatabasePanel />}</main>;
 }
 
 type AdminUser = { userId: string; rfidUid: string; fullName: string; department: string | null; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; dailyRate: number | null; payrollProfileId?: string | null; photoUrl?: string | null };
+
+/** Data & backup panel: configurable DB location, safe backups, and the PC-switch restore flow. */
+function DatabasePanel() {
+  const [info, setInfo] = useState<DatabaseInfoResponse | null>(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [backupResult, setBackupResult] = useState<GeneratedFileResult | null>(null);
+
+  const refresh = useCallback(async () => {
+    const response = await loadDatabaseInfo();
+    if (response.success) { setInfo(response); setError(''); }
+    else setError(response.error.message);
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const createBackup = async () => {
+    setBusy(true); setError(''); setNotice('');
+    const response = await createDatabaseBackup();
+    setBusy(false);
+    if (response.success) {
+      setNotice(`Backup created: ${response.fileName}. Copy this file to the new computer.`);
+      setBackupResult({ filePath: null, directoryPath: response.directoryPath, fileName: response.fileName, fileKind: response.fileKind, isPortableMode: response.isPortableMode });
+      void refresh();
+    } else setError(response.error.message);
+  };
+
+  const restore = async () => {
+    if (!('__TAURI_INTERNALS__' in window)) { setError('Restore is available in the desktop application.'); return; }
+    try {
+      const selected = await openFileDialog({ multiple: false, directory: false, filters: [{ name: 'SQLite database backup', extensions: ['db'] }] });
+      if (!selected || typeof selected !== 'string') return;
+      if (!window.confirm('The app will close and restore the database from this file on the next launch. Continue?')) return;
+      setBusy(true); setError(''); setNotice('');
+      const response = await requestDatabaseRestore(selected);
+      setBusy(false);
+      if (response.success) setNotice(response.message);
+      else setError(response.error.message);
+    } catch {
+      setError('Unable to open the file picker.');
+    }
+  };
+
+  const openBackups = async () => {
+    const outcome = await openDatabaseBackupsFolder();
+    if (!outcome.ok) setError(outcome.message);
+  };
+
+  const formatSize = (bytes: number) => (bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+  const formatWhen = (value: string | null) => (value ? new Date(value).toLocaleString() : '—');
+
+  return (
+    <section className="lan-panel" aria-label="Database and backup">
+      <div className="lan-panel-head">
+        <div>
+          <p className="section-kicker">Data and backup</p>
+          <h2>Move the attendance database to a new computer</h2>
+        </div>
+      </div>
+      <div className="lan-facts db-facts">
+        <span>Database file <strong title={info?.dbPath}>{info?.dbPath ?? '—'}</strong></span>
+        <span>Storage mode <strong>{info?.isPortableMode ? 'Portable — next to the .exe' : 'Installed — app data folder'}</strong></span>
+        <span>Saved backups <strong>{info?.backups.length ?? 0}</strong></span>
+        <span>Pending restore <strong>{info?.restorePending ? 'Yes — restart to apply' : 'None'}</strong></span>
+      </div>
+      <div className="lan-actions">
+        <button className="admin-button file-action-primary" type="button" disabled={busy} onClick={() => void createBackup()}>{busy ? 'Working…' : 'Create backup now'}</button>
+        <button className="admin-button" type="button" disabled={busy} onClick={() => void restore()}>Restore from backup file…</button>
+        <button className="admin-button" type="button" onClick={() => void openBackups()}>Open backups folder</button>
+      </div>
+      {notice && <p className="dashboard-alert db-notice" role="status">{notice}</p>}
+      {error && <p className="dashboard-alert" role="alert">{error}</p>}
+      <GeneratedFileActions result={backupResult} label="Latest backup" />
+      <div className="lan-guidance">
+        <p><strong>Moving to the new front-desk PC</strong> (no data loss, no manual SQL):</p>
+        <ol className="db-steps">
+          <li>On the <strong>old PC</strong>: open Admin → Data and backup and press <strong>Create backup now</strong>. The app writes a consistent copy of the entire database (SQLite online backup — safe even while the app is running) and keeps the newest 10.</li>
+          <li>Copy the <code>attendance-backup-*.db</code> file to a USB drive (or the office network) and plug it into the <strong>new PC</strong>.</li>
+          <li>On the <strong>new PC</strong>: open Admin → Data and backup, press <strong>Restore from backup file…</strong>, select the copied file, and confirm. The app closes, restores the database on the next launch, and starts with all users, attendance, payroll, and settings intact.</li>
+        </ol>
+        <p>A backup is also written automatically every time the app closes cleanly. If the new PC already has data, restoring replaces it — the previous database is saved first under <code>backups/pre-restore-*.db</code> so the restore can always be rolled back. The database file location is configurable in <code>config.toml</code> (<code>[database] path</code>) — see docs/database-migration.md.</p>
+      </div>
+      {info && info.backups.length > 0 && (
+        <div className="db-backup-list">
+          <h3>Existing backups</h3>
+          <ul>{info.backups.map((backup) => (
+            <li key={backup.filePath}><code>{backup.fileName}</code><span>{formatSize(backup.sizeBytes)}</span><span>{formatWhen(backup.modifiedAt)}</span></li>
+          ))}</ul>
+        </div>
+      )}
+    </section>
+  );
+}
 function UserEditor({ users, profiles, editing, setEditing, onSaved }: { users: AdminUser[]; profiles: PayrollCalculationProfile[]; editing: AdminUser | null; setEditing: (user: AdminUser | null) => void; onSaved: () => void }) {
   const blankUser: AdminUser = { userId: '', rfidUid: '', fullName: '', department: '', status: 'ACTIVE', employeeType: 'INTERN', dailyRate: null, payrollProfileId: null };
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);

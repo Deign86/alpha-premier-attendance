@@ -1,6 +1,8 @@
 import type {
   ArtifactExportResponse,
   AttendanceXlsxExportResponse,
+  DatabaseBackupResponse,
+  DatabaseInfoResponse,
   LanStatusResponse,
   OfficeIdentity,
   PayrollCsvExportResponse,
@@ -294,6 +296,36 @@ export async function generatePayrollRegisterPdf(cutoff?: string): Promise<Artif
 export async function nukeSheetsResync(confirm: boolean): Promise<unknown> {
   if (runningInTauri()) return tauriApi.sheetsNukeResync(nativeAdminToken ?? '', confirm);
   return { success: false, error: { message: 'Sheet resync is only available in the desktop application.' } };
+}
+
+/** Desktop-only: read the live SQLite database status for the Data & backup panel. */
+export async function loadDatabaseInfo(): Promise<DatabaseInfoResponse | { success: false; error: { message: string } }> {
+  if (runningInTauri()) { try { return await tauriApi.dbInfo(); } catch { return { success: false, error: { message: 'Unable to read the database status.' } }; } }
+  return { success: false, error: { message: 'Database tools are available in the desktop application.' } };
+}
+
+/** Desktop-only: create a consistent timestamped backup of the SQLite database. */
+export async function createDatabaseBackup(): Promise<DatabaseBackupResponse | { success: false; error: { message: string } }> {
+  if (runningInTauri()) { try { return await tauriApi.dbBackup(nativeAdminToken ?? ''); } catch { return { success: false, error: { message: 'Unable to create a database backup.' } }; } }
+  return { success: false, error: { message: 'Database backup is available in the desktop application.' } };
+}
+
+/** Desktop-only: schedule a restore from `sourcePath`; the app exits and restores on next launch. */
+export async function requestDatabaseRestore(sourcePath: string): Promise<{ success: true; message: string } | { success: false; error: { message: string } }> {
+  if (runningInTauri()) {
+    try { return await tauriApi.dbRestoreRequest(nativeAdminToken ?? '', sourcePath); }
+    catch (error) {
+      const code = typeof error === 'string' ? error : '';
+      const message = code.startsWith('RESTORE_SOURCE_INVALID') ? 'The selected file is not a valid Alpha Premier attendance database.' : code === 'RESTORE_SOURCE_NOT_FOUND' ? 'The selected file could not be found.' : 'Unable to schedule the restore.';
+      return { success: false, error: { message } };
+    }
+  }
+  return { success: false, error: { message: 'Restore is available in the desktop application.' } };
+}
+
+/** Desktop-only: open the backups folder in the OS file explorer. */
+export function openDatabaseBackupsFolder(): Promise<FileActionResult> {
+  return runFileAction((token) => tauriApi.dbOpenBackupsDir(token));
 }
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {

@@ -5,14 +5,14 @@
   "version": "0.1.0",
   "workspaces": ["client", "server", "shared"],
   "scripts": {
-    "dev": "node scripts/start-dev.mjs",
+    "dev": "npm run build -w shared && node scripts/start-dev.mjs",
     "build": "npm run build -w shared && npm run build -w client && npm run build -w server",
     "lint": "npm run lint -w shared && npm run lint -w client && npm run lint -w server",
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
     "test": "npm run test -w shared && npm run test -w client && npm run test -w server",
     "validate:sheets": "npm run validate:sheets -w server"
-    ,"tauri:dev": "npm run build -w client && tauri dev"
-    ,"tauri:build": "npm run build -w client && tauri build"
+    ,"tauri:dev": "npm run build -w shared && npm run build -w client && tauri dev"
+    ,"tauri:build": "npm run build -w shared && npm run build -w client && tauri build"
     ,"rust:check": "cargo check --manifest-path src-tauri/Cargo.toml"
     ,"rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"
     ,"migrate:from-sheets": "cargo run --manifest-path src-tauri/Cargo.toml --bin migrate_from_sheets --"
