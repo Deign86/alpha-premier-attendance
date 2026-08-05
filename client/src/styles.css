@@ -84,6 +84,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .result-meta { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; color: var(--ink); font-size: .76rem; }
 .result-meta span { padding: 7px 12px; border: 1px solid var(--line-bright); background: #211d13; border-radius: 999px; }
 .employee-badge { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright) !important; font-weight: 700; }
+.intern-badge { color: var(--gold-bright); background: #211d13; border-color: var(--gold-soft) !important; }
 .result-error-icon { color: var(--danger); }
 .error-code { margin: 2px 0 0; color: var(--danger); text-transform: uppercase; font-size: .68rem; font-weight: 700; letter-spacing: .06em; }
 .setup-card-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; margin-top: 14px; padding: 10px 16px; color: #11100c; background: var(--gold); border: 1px solid var(--gold-bright); border-radius: 3px; font-size: .76rem; font-weight: 700; }
@@ -126,6 +127,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-steps span { padding: 10px 8px; color: var(--quiet); border-bottom: 1px solid var(--line); font-size: .62rem; font-weight: 700; text-align: center; }
 .setup-steps .is-active { color: var(--gold-bright); border-color: var(--gold); }
 .setup-form label, .setup-fields label { display: grid; gap: 7px; min-width: 0; color: var(--ink); font-size: .75rem; font-weight: 600; }
+.setup-fields label { grid-template-rows: minmax(1.1em, auto) 46px; align-content: start; }
 .setup-fields label small { color: var(--quiet); font-size: .68rem; font-weight: 400; line-height: 1.35; }
 .setup-fields input[readonly] { color: var(--quiet); background: var(--surface-raised); }
 .setup-form input, .setup-form select { width: 100%; min-width: 0; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; }
@@ -222,9 +224,6 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 /* Scoped kiosk readability: keep the primary scanner readable without flattening admin hierarchy. */
 .kiosk-shell .input-row input { font-size: 1rem; }
 .kiosk-shell .kiosk-action { font-size: .76rem; }
-.employee-type-toggle { grid-column: 1 / -1; }
-.employee-type-toggle button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 58px; padding: 10px 16px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--gold); border-radius: 4px; }
-.employee-type-toggle button[aria-checked="true"] { background: var(--gold); color: #11100c; }
 .photo-field { display: grid; gap: 7px; grid-column: 1 / -1; }
 .field-label { color: var(--ink); font-size: .75rem; font-weight: 600; }
 .photo-input { position: absolute; width: 1px !important; height: 1px !important; opacity: 0; pointer-events: none; }
