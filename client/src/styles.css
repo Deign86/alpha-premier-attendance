@@ -499,3 +499,188 @@ td small { font-size: .7rem; }
 @media (prefers-reduced-motion: reduce) {
   button, a, input, select { transition: none; }
 }
+
+/* Kiosk finish: a calm three-zone composition with a single scanner control. */
+.kiosk-shell {
+  --kiosk-gutter: clamp(24px, 4vw, 56px);
+  background: #0b0c0b;
+}
+
+.kiosk-topbar {
+  width: min(var(--page-width), calc(100% - (var(--kiosk-gutter) * 2)));
+  min-height: 88px;
+  padding: 0 4px;
+}
+
+.kiosk-stage {
+  justify-content: center;
+  gap: clamp(28px, 4vh, 48px);
+  padding: clamp(44px, 8vh, 96px) var(--kiosk-gutter) clamp(56px, 9vh, 108px);
+}
+
+.kiosk-hero {
+  gap: 18px;
+}
+
+.hero-icon {
+  width: 96px;
+  height: 96px;
+  margin-bottom: 8px;
+  background: #211d14;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18), inset 0 0 0 1px rgba(225, 196, 119, .06);
+}
+
+.kiosk-hero h1 {
+  font-size: clamp(3.2rem, 6.4vw, 5.5rem);
+  line-height: 1.02;
+  letter-spacing: .025em;
+}
+
+.hero-sub {
+  margin-top: 2px;
+  color: var(--gold-soft);
+  font-size: .93rem;
+  font-weight: 600;
+  letter-spacing: .015em;
+}
+
+.scan-console {
+  width: min(560px, 100%);
+  padding: 20px 22px 17px;
+  border: 1px solid var(--line);
+  border-top-color: var(--gold-soft);
+  border-radius: 8px;
+  background: rgba(21, 22, 19, .82);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .16);
+}
+
+.scan-console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.scan-console-title {
+  color: var(--ink);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.input-row {
+  display: flex;
+  gap: 0;
+  min-height: 54px;
+  overflow: hidden;
+  border: 1px solid var(--line-bright);
+  border-radius: 5px;
+  background: var(--surface-input);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.input-row:focus-within {
+  border-color: var(--gold-bright);
+  box-shadow: 0 0 0 3px rgba(198, 162, 84, .12);
+}
+
+.scan-input-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  flex: 0 0 54px;
+  color: var(--gold-bright);
+  border-right: 1px solid var(--line);
+  background: #17160f;
+}
+
+.scan-input-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.input-row input {
+  height: 52px;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 16px;
+  font-size: .92rem;
+}
+
+.input-row input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.input-hint {
+  min-height: 20px;
+  margin-top: 10px;
+  color: var(--quiet);
+  font-size: .68rem;
+  line-height: 1.45;
+}
+
+.kiosk-actions {
+  width: min(860px, calc(100% - (var(--kiosk-gutter) * 2)));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 20px 0 30px;
+}
+
+.kiosk-action {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  border-color: var(--line-bright);
+  font-size: .72rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .kiosk-topbar {
+    width: calc(100% - 32px);
+    min-height: 72px;
+    padding: 0;
+  }
+
+  .kiosk-stage {
+    gap: 28px;
+    padding: 44px 16px 56px;
+  }
+
+  .kiosk-hero {
+    gap: 15px;
+  }
+
+  .hero-icon {
+    width: 82px;
+    height: 82px;
+    margin-bottom: 5px;
+  }
+
+  .kiosk-hero h1 {
+    max-width: 12ch;
+    font-size: clamp(2.7rem, 14vw, 4.1rem);
+  }
+
+  .scan-console {
+    padding: 17px 16px 14px;
+    border-radius: 7px;
+  }
+
+  .kiosk-actions {
+    width: calc(100% - 32px);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 16px 0 22px;
+  }
+
+  .kiosk-action {
+    min-height: 44px;
+    padding: 8px 6px;
+    font-size: .68rem;
+  }
+}
