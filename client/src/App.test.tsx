@@ -156,11 +156,11 @@ describe('RFID kiosk', () => {
     expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
   });
 
-  it('announces a time-in with the time-appropriate greeting in speech', async () => {
+  it('announces a time-in with the time-appropriate greeting and employee name in speech', async () => {
     render(<App />);
     act(() => mockEventBridge.__emit('rfid-scan', '04A1B2C3'));
     await screen.findByText('Ada Lovelace');
-    expect(vi.mocked(announceTimeIn)).toHaveBeenCalledWith(expect.stringMatching(/^Good (morning|afternoon|evening)$/));
+    expect(vi.mocked(announceTimeIn)).toHaveBeenCalledWith(expect.stringMatching(/^Good (morning|afternoon|evening)$/), 'Ada Lovelace');
     expect(vi.mocked(announceTimeOut)).not.toHaveBeenCalled();
   });
 

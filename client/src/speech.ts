@@ -88,9 +88,12 @@ export function speak(phrase: string, { rate = 1, pitch = 1 }: SpeakOptions = {}
   synthesis.speak(utterance);
 }
 
-/** Time-in announcement: the time-appropriate greeting ("Good morning"). */
-export function announceTimeIn(greeting: string) {
-  speak(greeting);
+/**
+ * Time-in announcement: the time-appropriate greeting ("Good morning") plus
+ * the employee's name, e.g. "Good morning Sir Ada Lovelace".
+ */
+export function announceTimeIn(greeting: string, employeeName: string) {
+  speak(`${greeting} Sir ${employeeName}`);
 }
 
 /** Time-out announcement: a farewell. */

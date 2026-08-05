@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pickFemaleVoice, speak } from './speech';
+import { announceTimeIn, pickFemaleVoice, speak } from './speech';
 
 const voice = (name: string): SpeechSynthesisVoice => ({
   name,
@@ -54,6 +54,15 @@ describe('pickFemaleVoice', () => {
 
   it('returns null when no female voice is installed', () => {
     expect(pickFemaleVoice([voice('Microsoft David'), voice('Microsoft Mark')])).toBeNull();
+  });
+});
+
+describe('announceTimeIn', () => {
+  it('composes the greeting with the employee name', () => {
+    const { synthesis } = stubSpeechSynthesis([voice('Microsoft Zira - English (United States)')]);
+    announceTimeIn('Good afternoon', 'Deign Lazaro');
+    const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+    expect(utterance.text).toBe('Good afternoon Sir Deign Lazaro');
   });
 });
 

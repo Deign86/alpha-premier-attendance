@@ -296,9 +296,9 @@ export default function App() {
     setResult(response);
     const nextState = response.success ? 'success' : 'error';
     setState(nextState);
-    // Voice announcement: greet on time-in, say goodbye on time-out.
+    // Voice announcement: greet the employee by name on time-in, say goodbye on time-out.
     if (response.success) {
-      if (response.action === 'TIME_IN') announceTimeIn(greetingForDate(new Date(), config.timezone));
+      if (response.action === 'TIME_IN') announceTimeIn(greetingForDate(new Date(), config.timezone), response.user.fullName);
       else announceTimeOut();
     }
     if (resetTimer.current) clearTimeout(resetTimer.current);
