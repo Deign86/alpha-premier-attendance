@@ -147,8 +147,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 12px; }
 .cutoff-period { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
 .cutoff-period label { margin: 0 !important; }
-.cutoff-fill-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.cutoff-fill-buttons .admin-button { min-height: 42px; padding: 0 12px; white-space: nowrap; }
+.cutoff-fill-buttons { display: grid; grid-template-columns: 1fr 1fr; align-self: end; gap: 8px; height: 42px; }
+.cutoff-fill-buttons .admin-button { min-height: 0; height: 42px; padding: 0 12px; white-space: nowrap; }
 @media (max-width: 560px) { .cutoff-period { grid-template-columns: 1fr; } }
 .optional { color: var(--quiet); font-size: .67rem; font-weight: 400; }
 
@@ -325,7 +325,8 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 
   /* Header block. */
   .pw-header { margin: 0 0 8px; padding: 0 0 5px; border-bottom: 2px solid #000; text-align: center; }
-  .pw-logo { display: block; height: 17mm; width: auto; margin: 0 auto 3px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .pw-brand-plate { display: grid; place-items: center; width: max-content; margin: 0 auto 3px; padding: 2.5mm 8mm 2mm; background: #111; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .pw-logo { display: block; height: 17mm; width: auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .pw-address { margin: 2px 0 0; font-size: 8pt; color: #222; }
   .pw-title { margin: 8px 0 0; font-size: 12.5pt; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
   .pw-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px 14px; margin-top: 4px; font-size: 7pt; color: #222; }

@@ -371,6 +371,7 @@ describe('RFID kiosk', () => {
     await user.type(setupInput, 'ABCD1234');
     await user.keyboard('{Enter}');
     await screen.findByText('ABCD1234');
+    expect(screen.getByLabelText(/^user id/i)).toHaveFocus();
     await user.type(screen.getByLabelText(/^user id/i), 'EMP-002');
     await user.type(screen.getByLabelText(/full name/i), 'Grace Hopper');
     await user.click(screen.getByRole('button', { name: /save user/i }));
