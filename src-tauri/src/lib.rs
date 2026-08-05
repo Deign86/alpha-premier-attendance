@@ -614,6 +614,13 @@ async fn payroll_create_cutoff(
     // Intern payroll floors at zero for a cutoff (mirrors the daily rule).
     let gross = if is_intern { result.gross_compensation.max(0) } else { result.gross_compensation };
     let net = if is_intern { result.net_pay.max(0) } else { result.net_pay };
+    // Total late hours are fillable for employees (rate-based deduction) and
+    // computed from late units for interns; persist the units on the record.
+    let late_units = input
+        .get("lateUnits")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0);
     let profile = input
         .get("payrollProfileId")
         .and_then(|v| v.as_str())
@@ -647,7 +654,7 @@ async fn payroll_create_cutoff(
         .bind(php_to_centavos(parsed.special_allowance))
         .bind(result.total_compensation)
         .bind(result.total_allowance)
-        .bind(0.0_f64)
+        .bind(late_units)
         .bind(result.late_deduction)
         .bind(parsed.half_day_count)
         .bind(result.half_day_deduction)
@@ -698,9 +705,14 @@ async fn payroll_update_cutoff(
     let is_intern = input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
     let gross = if is_intern { result.gross_compensation.max(0) } else { result.gross_compensation };
     let net = if is_intern { result.net_pay.max(0) } else { result.net_pay };
-    let updated = sqlx::query("UPDATE payroll_cutoffs SET employee_id=?,employee_name=?,payroll_profile_id=?,payroll_cutoff_label=?,cutoff_start=?,cutoff_end=?,daily_rate_centavos=?,standard_working_days=?,actual_working_days=?,basic_pay_centavos=?,incentives_allowance_centavos=?,special_allowance_centavos=?,total_compensation_centavos=?,total_allowance_centavos=?,late_deduction_centavos=?,half_day_deduction_centavos=?,absence_deduction_centavos=?,overtime_pay_centavos=?,manual_adjustment_centavos=?,adjustment_reason=?,gross_compensation_centavos=?,net_pay_centavos=?,calculation_breakdown=?,revision=revision+1,updated_at=? WHERE payroll_id=? AND status != 'FINALIZED'")
+    let late_units = input
+        .get("lateUnits")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0);
+    let updated = sqlx::query("UPDATE payroll_cutoffs SET employee_id=?,employee_name=?,payroll_profile_id=?,payroll_cutoff_label=?,cutoff_start=?,cutoff_end=?,daily_rate_centavos=?,standard_working_days=?,actual_working_days=?,basic_pay_centavos=?,incentives_allowance_centavos=?,special_allowance_centavos=?,total_compensation_centavos=?,total_allowance_centavos=?,late_units=?,late_deduction_centavos=?,half_day_deduction_centavos=?,absence_deduction_centavos=?,overtime_pay_centavos=?,manual_adjustment_centavos=?,adjustment_reason=?,gross_compensation_centavos=?,net_pay_centavos=?,calculation_breakdown=?,revision=revision+1,updated_at=? WHERE payroll_id=? AND status != 'FINALIZED'")
         .bind(&parsed.employee_id).bind(&parsed.employee_name).bind(input.get("payrollProfileId").and_then(|v| v.as_str()).unwrap_or("BEA_STANDARD")).bind(input.get("payrollCutoffLabel").and_then(|v| v.as_str()).unwrap_or(""))
-        .bind(&parsed.cutoff_start).bind(&parsed.cutoff_end).bind((parsed.daily_rate * 100.0).round() as i64).bind(parsed.standard_working_days).bind(parsed.actual_working_days).bind(result.basic_pay).bind(php_to_centavos(parsed.incentives_allowance)).bind(php_to_centavos(parsed.special_allowance)).bind(result.total_compensation).bind(result.total_allowance).bind(result.late_deduction).bind(result.half_day_deduction).bind(result.absence_deduction).bind(result.overtime_pay).bind((parsed.manual_adjustment * 100.0).round() as i64).bind(parsed.adjustment_reason).bind(gross).bind(net).bind(serde_json::to_string(&serde_json::json!({"basicPayCentavos":result.basic_pay,"netPayCentavos":net})).unwrap_or_default()).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
+        .bind(&parsed.cutoff_start).bind(&parsed.cutoff_end).bind((parsed.daily_rate * 100.0).round() as i64).bind(parsed.standard_working_days).bind(parsed.actual_working_days).bind(result.basic_pay).bind(php_to_centavos(parsed.incentives_allowance)).bind(php_to_centavos(parsed.special_allowance)).bind(result.total_compensation).bind(result.total_allowance).bind(late_units).bind(result.late_deduction).bind(result.half_day_deduction).bind(result.absence_deduction).bind(result.overtime_pay).bind((parsed.manual_adjustment * 100.0).round() as i64).bind(parsed.adjustment_reason).bind(gross).bind(net).bind(serde_json::to_string(&serde_json::json!({"basicPayCentavos":result.basic_pay,"netPayCentavos":net})).unwrap_or_default()).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
     if updated.rows_affected() != 1 {
         return Err("PAYROLL_NOT_FOUND_OR_FINALIZED".into());
     }

@@ -31,6 +31,12 @@ describe('cutoff payroll calculator', () => {
     expect(() => calculateCutoffPayroll({ ...jeanInput, actualWorkingDays: 12 })).toThrow('require approval');
   });
 
+  it('subtracts a fillable employee late deduction from gross and net pay', () => {
+    const result = calculateCutoffPayroll({ ...jeanInput, lateUnits: 5, lateDeduction: 250 });
+    // Total compensation 7966.5 + allowances 6750 = 14716.5, minus 250 late deduction.
+    expect(result).toMatchObject({ lateUnits: 5, lateDeduction: 250, grossCompensation: 14466.5, netPay: 14466.5 });
+  });
+
   it('computes intern cutoffs at PHP 80/day with PHP 10/hour late deduction and floors at zero', () => {
     const internInput = {
       ...jeanInput,

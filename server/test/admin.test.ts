@@ -66,6 +66,21 @@ describe('admin and live attendance API', () => {
     expect(payroll.body.payroll[0]).toMatchObject({ employeeId: 'INT-001', employeeType: 'INTERN', dailyRate: 80 });
   });
 
+  it('applies a fillable employee late deduction to gross and net pay', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'APGCO-0013', fullName: 'CHICO, JEAN ASHLEY', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705, payrollProfileId: 'JEAN_TENURED' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+    // 11 days at 705 = 7755 basic + 211.5 special holiday + 6750 allowances = 14716.5,
+    // then the fillable late form (5 hours at PHP 50/hr) deducts 250.
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({
+      employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15',
+      actualWorkingDays: 11, specialHolidayDays: 1, lateUnits: 5, lateDeductionRate: 50, lateDeduction: 250,
+    }).expect(200);
+    expect(created.body.payroll).toMatchObject({
+      lateUnits: 5, lateDeduction: 250, grossCompensation: 14466.5, netPay: 14466.5, status: 'DRAFT',
+    });
+  });
+
   it('rejects stale attendance edits and conflicting RFID assignments', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: null, active: true },
