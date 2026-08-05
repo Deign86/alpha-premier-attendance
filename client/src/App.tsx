@@ -83,7 +83,7 @@ export default function App() {
   const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
   const setupInputRef = useRef<HTMLInputElement>(null);
   const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const setupSessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setupSessionTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -114,27 +114,26 @@ export default function App() {
     requestController.current?.abort();
     if (scannerIdleTimer.current) clearTimeout(scannerIdleTimer.current);
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
-    if (setupSessionTimer.current) clearTimeout(setupSessionTimer.current);
+    if (setupSessionTimer.current) { clearInterval(setupSessionTimer.current); setupSessionTimer.current = null; }
   }, []);
 
   useEffect(() => {
     if (!setupToken || !setupExpiresAt) return;
-    const remaining = new Date(setupExpiresAt).getTime() - Date.now();
-    if (remaining <= 0) {
+    const deadline = new Date(setupExpiresAt).getTime();
+    // Poll every second instead of a single long setTimeout: Chromium throttles
+    // timers while the window is minimized/suspended (e.g. laptop sleep), so a
+    // one-shot timer may not fire until long after the backend session expires.
+    const checkSession = () => {
+      if (Date.now() < deadline) return;
+      if (setupSessionTimer.current) { clearInterval(setupSessionTimer.current); setupSessionTimer.current = null; }
       setSetupToken('');
       setSetupExpiresAt('');
-      setSetupDialogOpen(false);
+      setSetupStep('scan');
       setSetupError('Setup session expired. Unlock again to continue.');
-      return;
-    }
-    if (setupSessionTimer.current) clearTimeout(setupSessionTimer.current);
-    setupSessionTimer.current = setTimeout(() => {
-      setSetupToken('');
-      setSetupExpiresAt('');
-      setSetupDialogOpen(false);
-      setSetupError('Setup session expired. Unlock again to continue.');
-    }, remaining);
-    return () => { if (setupSessionTimer.current) clearTimeout(setupSessionTimer.current); };
+    };
+    checkSession();
+    setupSessionTimer.current = window.setInterval(checkSession, 1_000);
+    return () => { if (setupSessionTimer.current) { clearInterval(setupSessionTimer.current); setupSessionTimer.current = null; } };
   }, [setupToken, setupExpiresAt]);
 
   const resetToReady = useCallback(() => {
@@ -195,9 +194,26 @@ export default function App() {
     setSetupForm(emptySetupForm);
   };
 
+  /**
+   * Returns true (and returns the dialog to the unlock step with a clear
+   * message) when the setup session has already expired. Guards every setup
+   * API call so a stale token is never sent after the 15-minute window.
+   */
+  const setupSessionExpired = useCallback(() => {
+    if (!setupToken || !setupExpiresAt) return false;
+    if (Date.now() < new Date(setupExpiresAt).getTime()) return false;
+    if (setupSessionTimer.current) { clearInterval(setupSessionTimer.current); setupSessionTimer.current = null; }
+    setSetupToken('');
+    setSetupExpiresAt('');
+    setSetupStep('scan');
+    setSetupError('Setup session expired. Unlock again to continue.');
+    return true;
+  }, [setupToken, setupExpiresAt]);
+
   const lookupCardForSetup = useCallback(async (rawUid: string) => {
     const normalizedUid = rawUid.trim();
     if (!normalizedUid || !setupToken || setupBusy) return;
+    if (setupSessionExpired()) return;
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
     setSetupBusy(true);
     setSetupError('');
@@ -220,7 +236,7 @@ export default function App() {
       photoUrl: response.user.photoUrl ?? '',
     } : emptySetupForm);
     setSetupStep('edit');
-  }, [setupBusy, setupToken]);
+  }, [setupBusy, setupToken, setupSessionExpired]);
 
   const handleSetupInput = useCallback((value: string) => {
     setSetupUid(value);
@@ -231,6 +247,7 @@ export default function App() {
   const submitSetupUser = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!setupToken || !setupUid.trim() || !setupForm.userId.trim() || !setupForm.fullName.trim() || setupBusy) return;
+    if (setupSessionExpired()) return;
     setSetupBusy(true);
     setSetupError('');
     const response = await upsertSetupUser({
@@ -259,6 +276,7 @@ export default function App() {
 
   const uploadSetupPhotoFile = async (file: File) => {
     if (!setupToken || !setupForm.userId.trim()) { setSetupError('Enter the User ID before uploading a photo.'); return; }
+    if (setupSessionExpired()) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > PHOTO_UPLOAD_MAX_BYTES) { setSetupError('Choose a JPEG, PNG, or WebP photo up to 500 KB.'); return; }
     let dataUrl: string;
     try { dataUrl = await preparePhotoDataUrl(file); } catch (error) { setSetupBusy(false); setSetupError(error instanceof Error ? error.message : 'Unable to prepare this photo.'); return; }

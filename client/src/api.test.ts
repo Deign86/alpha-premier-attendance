@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 import { invoke } from '@tauri-apps/api/core';
-import { exportPayrollCsv, openGeneratedFile, revealGeneratedFile, submitScan } from './api';
+import { exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -96,3 +96,38 @@ describe('generated file actions', () => {
     expect(result.message).toBe('File actions are available in the desktop application.');
   });
 });
+
+describe('setupErrorFrom', () => {
+  it('turns a genuine session failure into a clear expired/replaced message', () => {
+    expect(setupErrorFrom('SETUP_AUTH_REQUIRED', 'SETUP_AUTH_REQUIRED')).toMatchObject({
+      success: false,
+      error: { code: 'SETUP_AUTH_REQUIRED', message: expect.stringContaining('expired or was replaced') },
+    });
+  });
+
+  it('passes through real backend errors instead of masking them as auth failures', () => {
+    expect(setupErrorFrom('USER_CONFLICT', 'SETUP_AUTH_REQUIRED')).toMatchObject({
+      success: false,
+      error: { code: 'USER_CONFLICT', message: expect.stringContaining('already in use') },
+    });
+    expect(setupErrorFrom('SETUP_VALIDATION_ERROR', 'SETUP_AUTH_REQUIRED')).toMatchObject({
+      success: false,
+      error: { code: 'SETUP_VALIDATION_ERROR' },
+    });
+  });
+
+  it('surfaces unknown backend errors verbatim so the real cause is visible', () => {
+    expect(setupErrorFrom('no such column: gender', 'SETUP_AUTH_REQUIRED')).toMatchObject({
+      success: false,
+      error: { code: 'SETUP_AUTH_REQUIRED', message: 'no such column: gender' },
+    });
+  });
+
+  it('uses the fallback message when no backend detail is available', () => {
+    expect(setupErrorFrom(undefined, 'SETUP_AUTH_REQUIRED')).toMatchObject({
+      success: false,
+      error: { code: 'SETUP_AUTH_REQUIRED', message: 'The setup request could not be completed.' },
+    });
+  });
+});
+

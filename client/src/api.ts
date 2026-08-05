@@ -11,6 +11,7 @@ import type {
   ScanRequest,
   ScanResponse,
   ScanSuccessResponse,
+  SetupErrorCode,
   SetupErrorResponse,
   SetupLookupResponse,
   SetupUnlockResponse,
@@ -52,6 +53,36 @@ export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   enableAdmin: false,
   office: DEFAULT_OFFICE_IDENTITY,
 };
+
+/**
+ * Tauri command errors arrive as the `Err(String)` value (e.g. "SETUP_AUTH_REQUIRED").
+ * Map them to a readable setup error instead of masking every failure as an
+ * authentication problem — otherwise a user whose session simply expired sees
+ * the misleading "Setup authentication is required" with all fields filled.
+ */
+export function setupErrorFrom(error: unknown, fallback: SetupErrorCode): SetupErrorResponse {
+  const raw = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+  switch (raw) {
+    case 'SETUP_AUTH_REQUIRED':
+      return { success: false, error: { code: 'SETUP_AUTH_REQUIRED', message: 'Your setup session expired or was replaced (e.g. by unlocking the Admin panel). Unlock setup again to continue.' } };
+    case 'SETUP_SESSION_EXPIRED':
+      return { success: false, error: { code: 'SETUP_SESSION_EXPIRED', message: 'Your setup session expired. Unlock setup again to continue.' } };
+    case 'INVALID_SETUP_PIN':
+      return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'The setup PIN is invalid.' } };
+    case 'ADMIN_DISABLED':
+    case 'SETUP_DISABLED':
+      return { success: false, error: { code: 'SETUP_DISABLED', message: 'Admin setup is disabled in the configuration.' } };
+    case 'SETUP_VALIDATION_ERROR':
+      return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'Some form fields are missing or invalid.' } };
+    case 'USER_CONFLICT':
+      return { success: false, error: { code: 'USER_CONFLICT', message: 'That User ID or RFID card is already in use by another user.' } };
+    case 'INVALID_USER_ID':
+      return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'The User ID may only contain letters, numbers, dashes, underscores, and dots.' } };
+    default:
+      // Unknown backend error: surface the real message so the true cause is visible.
+      return { success: false, error: { code: fallback, message: raw || 'The setup request could not be completed.' } };
+  }
+}
 
 /** Merge a partial office payload from the backend with canonical defaults. */
 export function normalizeOffice(office: Partial<OfficeIdentity> | undefined): OfficeIdentity {
@@ -114,7 +145,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
 }
 
 export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<SetupUnlockResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; return { success: true, setupToken: response.token, expiresAt: response.expiresAt }; } catch { return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'The setup PIN is invalid.' } } as SetupErrorResponse; } }
+  if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; return { success: true, setupToken: response.token, expiresAt: response.expiresAt }; } catch (error) { return setupErrorFrom(error, 'INVALID_SETUP_PIN'); } }
   return setupRequest<SetupUnlockResponse | SetupErrorResponse>(apiUrl('/api/setup/unlock'), {
     method: 'POST',
     body: JSON.stringify({ pin }),
@@ -123,7 +154,7 @@ export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<Se
 }
 
 export async function lookupSetupCard(rfidUid: string, setupToken: string, signal?: AbortSignal): Promise<SetupLookupResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { return await tauriApi.setupLookupCard(setupToken, rfidUid) as SetupLookupResponse; } catch { return { success: false, error: { code: 'SETUP_AUTH_REQUIRED', message: 'Setup authentication is required.' } } as SetupErrorResponse; } }
+  if (runningInTauri()) { try { return await tauriApi.setupLookupCard(setupToken, rfidUid) as SetupLookupResponse; } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
   return setupRequest<SetupLookupResponse | SetupErrorResponse>(apiUrl(`/api/setup/card?rfidUid=${encodeURIComponent(rfidUid)}`), {
     method: 'GET',
     setupToken,
@@ -132,7 +163,7 @@ export async function lookupSetupCard(rfidUid: string, setupToken: string, signa
 }
 
 export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: string, signal?: AbortSignal): Promise<SetupUpsertResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { return await tauriApi.setupUpsertUser(setupToken, request) as SetupUpsertResponse; } catch { return { success: false, error: { code: 'SETUP_AUTH_REQUIRED', message: 'Setup authentication is required.' } } as SetupErrorResponse; } }
+  if (runningInTauri()) { try { return await tauriApi.setupUpsertUser(setupToken, request) as SetupUpsertResponse; } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
   return setupRequest<SetupUpsertResponse | SetupErrorResponse>(apiUrl('/api/setup/users'), {
     method: 'POST',
     setupToken,
@@ -147,7 +178,7 @@ export async function lockSetup(setupToken: string, signal?: AbortSignal): Promi
 }
 
 export async function uploadSetupPhoto(userId: string, dataUrl: string, setupToken: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
-  if (runningInTauri()) { try { return await tauriApi.uploadPhoto(setupToken, userId, dataUrl); } catch { return { success: false, error: { code: 'SETUP_AUTH_REQUIRED', message: 'Setup authentication is required.' } } as SetupErrorResponse; } }
+  if (runningInTauri()) { try { return await tauriApi.uploadPhoto(setupToken, userId, dataUrl); } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
   return setupRequest<{ success: true; photoUrl: string }>(apiUrl('/api/setup/photo'), { method: 'POST', setupToken, body: JSON.stringify({ userId, dataUrl }) });
 }
 
