@@ -157,7 +157,29 @@ D:\Alpha Premier Attendance\Data\attendance.db
 - File-action commands require an active administrator session and only accept paths inside the application data root.
 - The legacy `open_generated_artifact` reveal command remains available and resolves the same relative export paths in both modes.
 
-## Boss LAN Dashboard
+## Live Viewer On Same Wi-Fi
+
+The front-desk laptop starts the read-only viewer. Other phones and laptops open the LAN IPv4 URL printed by the server or shown in the desktop Live Attendance panel. All devices must be on the same private Wi-Fi/LAN; guest Wi-Fi and AP/client isolation prevent device-to-device traffic.
+
+Start the host:
+
+```powershell
+npm run dev                 # web development server, Vite is LAN-accessible
+npm run tauri:dev           # packaged/local desktop flow
+```
+
+Find the host IPv4 address:
+
+```powershell
+ipconfig                    # Windows
+```
+
+```bash
+ipconfig getifaddr en0     # macOS Wi-Fi
+hostname -I                # Linux
+```
+
+Open `http://<host-lan-ip>:4173/attendance` for the Tauri viewer, or the Vite URL printed by Vite during web development. Do not replace `<host-lan-ip>` with `localhost` or `127.0.0.1` on another device.
 
 Give the front-desk laptop a stable private address using a DHCP reservation or a static address. Set the Windows network profile to **Private**, then allow only the office subnet through Windows Defender Firewall:
 
@@ -179,6 +201,15 @@ http://192.168.1.50:4173/attendance
 ```
 
 The dashboard loads a Manila-date snapshot, subscribes to `GET /api/events/attendance` using Server-Sent Events, and falls back to five-second polling when the stream is unavailable. A committed scan remains successful even when the boss browser or network is offline.
+
+The web client resolves API requests from the current browser origin by default. Set `client/.env` `VITE_API_BASE_URL` only when the API is hosted separately; use `VITE_API_PROXY_TARGET` for the development proxy. The Node API uses `HOST=0.0.0.0` by default, with `PORT` configurable, and accepts comma-separated trusted `CLIENT_ORIGIN` values for cross-origin deployments.
+
+Troubleshooting:
+
+- Viewer cannot connect: run `Test-NetConnection <host-lan-ip> -Port 4173`, check the Windows Firewall rule and Private network profile, then confirm guest Wi-Fi/AP isolation is disabled.
+- Viewer opens but has no updates: check `/api/health`, keep the page open while reconnecting, and confirm the SSE status changes from Connecting/Reconnecting to Live; polling remains the fallback.
+- Viewer connects to localhost: use the LAN URL printed by the host, clear any `VITE_API_BASE_URL` pointing to localhost, and rebuild/restart the client.
+- WebSocket/SSE errors: verify the correct `http`/`https` origin, firewall access, trusted CORS origin when using a separate API host, and that the port is not already in use.
 
 The LAN routes are:
 

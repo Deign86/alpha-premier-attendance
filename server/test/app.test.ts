@@ -42,4 +42,15 @@ describe('HTTP API', () => {
     expect(response.body.error.code).toBe('INVALID_SCAN_INPUT');
     expect(response.body.requestId).toBeTypeOf('string');
   });
+
+  it('allows configured LAN origins and omits CORS access for untrusted origins', async () => {
+    const app = createApp({
+      sheets: new InMemorySheetsService(),
+      config: { timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 500, resultResetDelayMs: 3000, scanCooldownMs: 10, rateLimitWindowMs: 60000, rateLimitMax: 100, port: 3001, corsOrigin: 'http://192.168.1.25:5173' },
+    });
+    const trusted = await request(app).get('/api/config').set('Origin', 'http://192.168.1.25:5173').expect(200);
+    expect(trusted.headers['access-control-allow-origin']).toBe('http://192.168.1.25:5173');
+    const untrusted = await request(app).get('/api/config').set('Origin', 'http://192.168.1.99:5173');
+    expect(untrusted.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });

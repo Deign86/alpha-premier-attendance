@@ -31,7 +31,16 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   app.disable('x-powered-by');
   app.use(helmet());
-  app.use(cors({ origin: options.config.corsOrigin }));
+  const trustedOrigins = options.config.corsOrigin.split(',').map((origin) => origin.trim()).filter(Boolean);
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin || trustedOrigins.includes('*') || trustedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error('Origin is not trusted by the attendance API.'));
+    },
+  }));
   app.use((req, _res, next) => {
     req.requestId = requestId(req);
     next();

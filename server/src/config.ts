@@ -8,6 +8,7 @@ export type AppConfig = {
   scanCooldownMs: number;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  host?: string;
   port: number;
   corsOrigin: string;
   sheetsMode: 'memory' | 'google';
@@ -77,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     scanCooldownMs: numberEnv(env, 'SCAN_COOLDOWN_SECONDS', 10, 0) * 1000,
     rateLimitWindowMs: numberEnv(env, 'RATE_LIMIT_WINDOW_MS', 60_000, 1000),
     rateLimitMax: numberEnv(env, 'RATE_LIMIT_MAX', 60, 1),
+    host: env.HOST || env.BIND_HOST || '0.0.0.0',
     port: numberEnv(env, 'PORT', 3001, 1),
     corsOrigin: env.CLIENT_ORIGIN || env.CORS_ORIGIN || 'http://localhost:5173',
     sheetsMode,

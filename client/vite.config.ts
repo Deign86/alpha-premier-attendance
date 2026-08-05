@@ -5,6 +5,7 @@ import { attendanceApiProxy } from './src/dev-server-config';
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: true,
     proxy: {
       '/api': attendanceApiProxy,
     },
