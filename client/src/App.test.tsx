@@ -174,7 +174,7 @@ describe('RFID kiosk', () => {
     render(<App />);
     act(() => mockEventBridge.__emit('rfid-scan', '04A1B2C3'));
     await screen.findByText('Ada Lovelace');
-    expect(vi.mocked(announceTimeOut)).toHaveBeenCalled();
+    expect(vi.mocked(announceTimeOut)).toHaveBeenCalledWith('Ada Lovelace');
     expect(vi.mocked(announceTimeIn)).not.toHaveBeenCalled();
   });
 

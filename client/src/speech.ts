@@ -4,7 +4,7 @@ import type { UserGender } from '@rfid-attendance/shared';
  * Kiosk voice announcements via the Web Speech API.
  *
  * The kiosk greets an employee when a card times in ("Good morning") and says
- * goodbye when it times out ("Good bye"). Phrases are spoken through a female
+ * goodbye when it times out ("Good bye [name]"). Phrases are spoken through a female
  * voice when the operating system provides one (Microsoft Aria/Jenny/Zira on
  * Windows, Google US English, Apple Samantha, etc.) and fall back to the
  * default voice otherwise.
@@ -101,9 +101,9 @@ export function announceTimeIn(greeting: string, employeeName: string, gender: U
   speak(`${greeting} ${title} ${employeeName}`);
 }
 
-/** Time-out announcement: a farewell. */
-export function announceTimeOut() {
-  speak('Good bye');
+/** Time-out announcement: a named farewell. */
+export function announceTimeOut(employeeName: string) {
+  speak(`Good bye ${employeeName}`);
 }
 
 /**

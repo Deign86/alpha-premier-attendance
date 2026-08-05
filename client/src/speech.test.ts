@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { announceTimeIn, pickFemaleVoice, speak } from './speech';
+import { announceTimeIn, announceTimeOut, pickFemaleVoice, speak } from './speech';
 
 const voice = (name: string): SpeechSynthesisVoice => ({
   name,
@@ -81,6 +81,13 @@ describe('announceTimeIn', () => {
 });
 
 describe('speak', () => {
+  it('says goodbye with the employee name', () => {
+    const { synthesis } = stubSpeechSynthesis([]);
+    announceTimeOut('Deign Lazaro');
+    const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+    expect(utterance.text).toBe('Good bye Deign Lazaro');
+  });
+
   it('speaks the phrase through the chosen female voice', () => {
     const { synthesis } = stubSpeechSynthesis([voice('Microsoft Zira - English (United States)')]);
     speak('Good morning');

@@ -87,7 +87,6 @@ import { GeneratedFileActions, type GeneratedFileResult } from "./file-actions";
 import { announceTimeIn, announceTimeOut } from "./speech";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
-import logoFull from "./assets/branding/logo-full.png";
 
 type KioskState = "ready" | "processing" | "success" | "error";
 type Result = ScanSuccessResponse | ScanErrorResponse;
@@ -517,7 +516,7 @@ export default function App() {
             response.user.fullName,
             response.user.gender,
           );
-        else announceTimeOut();
+        else announceTimeOut(response.user.fullName);
       }
       if (resetTimer.current) clearTimeout(resetTimer.current);
       resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
@@ -2889,11 +2888,8 @@ export function PayrollWorkspace({
       });
     } else setMessage(result.error.message);
   };
-  // Separate print actions: the payroll format is chosen per employee type, never one shared layout.
-  // The print target is detected first, then only the matching payroll template is loaded.
-  const [printTarget, setPrintTarget] = useState<PayrollPrintTarget | null>(
-    null,
-  );
+  // One print action produces the shared landscape payroll register.
+  const [printTarget, setPrintTarget] = useState(false);
   const [printMessage, setPrintMessage] = useState("");
   useEffect(() => {
     if (!printTarget) return;
@@ -2909,23 +2905,15 @@ export function PayrollWorkspace({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [printTarget]);
-  const printPayroll = (target: PayrollPrintTarget) => {
-    const available = records.some((row) =>
-      target === "INTERN"
-        ? row.employeeType === "INTERN"
-        : row.employeeType === "EMPLOYEE",
-    );
+  const printPayroll = () => {
+    const available = records.length > 0;
     if (!available) {
-      setPrintTarget(null);
-      setPrintMessage(
-        target === "INTERN"
-          ? "No intern payroll records to print. Create and save an intern cutoff payroll first."
-          : "No employee payroll records to print. Create and save an employee cutoff payroll first.",
-      );
+      setPrintTarget(false);
+      setPrintMessage("No payroll records to print. Create and save a payroll first.");
       return;
     }
     setPrintMessage("");
-    setPrintTarget(target);
+    setPrintTarget(true);
   };
   return (
     <section className="payroll-workspace">
@@ -2954,19 +2942,8 @@ export function PayrollWorkspace({
         >
           {exporting ? "Generating..." : "Register PDF"}
         </button>
-        <button
-          className="admin-button"
-          type="button"
-          onClick={() => printPayroll("INTERN")}
-        >
-          Print Intern Payroll
-        </button>
-        <button
-          className="admin-button"
-          type="button"
-          onClick={() => printPayroll("EMPLOYEE")}
-        >
-          Print Employee Payroll
+        <button className="admin-button" type="button" onClick={printPayroll}>
+          Print Payroll
         </button>
       </div>
       {printMessage && <p className="dashboard-alert">{printMessage}</p>}
@@ -3377,8 +3354,6 @@ export function PayrollWorkspace({
         <PayrollPrintView
           records={records}
           office={office}
-          profiles={profiles}
-          target={printTarget}
         />
       )}
     </section>
@@ -3624,58 +3599,86 @@ function formatPrintDate(value: string): string {
   }).format(parsed);
 }
 
-/** Which payroll format is being printed. Interns and employees never share a print layout. */
-type PayrollPrintTarget = "INTERN" | "EMPLOYEE";
-
 /**
- * Print-only payroll worksheet template. Hidden on screen; rendered on paper via @media print.
- * The employee type is detected first, then the correct payroll template is loaded:
- * intern records only render on the intern worksheet and employee records only on the
- * employee worksheet, so the two formats are never mixed or cross-printed.
+ * Print-only payroll register. Interns and employees intentionally share one
+ * landscape format so payroll can be reviewed and signed as one document.
  */
 function PayrollPrintView({
   records,
   office,
-  profiles,
-  target,
 }: {
   records: PayrollCutoffRecord[];
   office: OfficeIdentity;
-  profiles: PayrollCalculationProfile[];
-  target: PayrollPrintTarget;
 }) {
-  const intern = target === "INTERN";
-  const matching = records.filter((row) =>
-    intern ? row.employeeType === "INTERN" : row.employeeType === "EMPLOYEE",
-  );
-  if (!matching.length)
+  if (!records.length)
     return (
       <div className="print-payroll-view print-only">
-        <p className="pw-empty-note">
-          No {intern ? "intern" : "employee"} payroll records are available to
-          print. Create and save a {intern ? "intern" : "employee"} cutoff
-          payroll first.
-        </p>
+        <p className="pw-empty-note">No payroll records are available to print.</p>
       </div>
     );
+  const first = records[0];
+  const cutoffLabel = records.every(
+    (row) => row.payrollCutoffLabel === first.payrollCutoffLabel,
+  )
+    ? first.payrollCutoffLabel
+    : "Multiple cutoff periods";
+  const totalGross = records.reduce((sum, row) => sum + row.grossCompensation, 0);
   return (
-    <div className="print-payroll-view print-only">
-      {matching.map((row) =>
-        row.employeeType === "INTERN" ? (
-          <InternPayrollWorksheet
-            key={row.payrollId}
-            row={row}
-            office={office}
-          />
-        ) : (
-          <PayrollWorksheet
-            key={row.payrollId}
-            row={row}
-            office={office}
-            profiles={profiles}
-          />
-        ),
-      )}
+    <div className="print-payroll-view print-only payroll-register-print">
+      <header className="payroll-register-header">
+        <div>
+          <strong>{office.companyName}</strong>
+          <span>{office.officeDisplayFull}</span>
+          <span>{first.cutoffStart} - {first.cutoffEnd}</span>
+        </div>
+        <div className="payroll-register-cutoff">
+          <span>Payroll cut off:</span>
+          <strong>{cutoffLabel}</strong>
+        </div>
+      </header>
+      <table className="payroll-register-table">
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Employee Name</th>
+            <th>Cut Off Rate</th>
+            <th>Daily Rate</th>
+            <th>Actual Working Days</th>
+            <th>Standard Working Days</th>
+            <th>Basic Rate</th>
+            <th>Total Compensation</th>
+            <th>Late 10 /Hr</th>
+            <th>Halfday</th>
+            <th>Absent</th>
+            <th>Gross Compensation</th>
+            <th>Signature</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((row) => (
+            <tr key={row.payrollId}>
+              <td>{row.employeeId}</td>
+              <td>{row.employeeName}</td>
+              <td>{row.payrollCutoffLabel}</td>
+              <td>{php(row.dailyRate)}</td>
+              <td>{row.actualWorkingDays}</td>
+              <td>{row.standardWorkingDays}</td>
+              <td>{php(row.basicPay)}</td>
+              <td>{php(row.totalCompensation)}</td>
+              <td>{php(row.lateDeduction)}</td>
+              <td>{php(row.halfDayDeduction)}</td>
+              <td>{php(row.absenceDeduction)}</td>
+              <td>{php(row.grossCompensation)}</td>
+              <td>{row.signaturePlaceholder || ""}</td>
+            </tr>
+          ))}
+          <tr className="payroll-register-total">
+            <td colSpan={11}></td>
+            <td>{php(totalGross)}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -3705,7 +3708,7 @@ function PayrollWorksheet({
   return (
     <article className="pw-sheet">
       <header className="pw-header">
-        <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
+        <img className="pw-logo" src={logoPhoenix} alt="Phoenix logo" />
         <p className="pw-address">{office.officeDisplayFull}</p>
         <h1 className="pw-title">Payroll Worksheet</h1>
         <div className="pw-meta">
@@ -4033,7 +4036,7 @@ function InternPayrollWorksheet({
   return (
     <article className="pw-sheet">
       <header className="pw-header">
-        <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
+        <img className="pw-logo" src={logoPhoenix} alt="Phoenix logo" />
         <p className="pw-address">{office.officeDisplayFull}</p>
         <h1 className="pw-title">Intern Payroll Worksheet</h1>
         <div className="pw-meta">

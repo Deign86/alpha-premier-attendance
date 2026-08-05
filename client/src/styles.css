@@ -303,7 +303,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 /* Printable payroll worksheet — A4, black on white, form-style layout.
    The on-screen payroll table stays untouched; printing swaps to this template. */
 @media print {
-  @page { size: A4; margin: 9mm 9mm; }
+  @page { size: A4 landscape; margin: 8mm 7mm; }
 
   html, body { background: #fff !important; }
   body { color: #000 !important; font-family: 'Segoe UI', Arial, 'Helvetica Neue', sans-serif !important; }
@@ -368,6 +368,28 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
   .pw-sign-caption { font-size: 7pt; color: #222; }
 
   .pw-footer { margin-top: 8px; padding-top: 3px; border-top: 1px solid #000; text-align: center; font-size: 6.5pt; color: #333; }
+
+  .payroll-register-print { width: 100%; color: #000; font-family: 'Segoe UI', Arial, sans-serif; }
+  .payroll-register-header { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 0 6mm; padding: 0 3mm 3mm; border-bottom: 1px solid #000; font-size: 8pt; }
+  .payroll-register-header > div { display: grid; gap: 1mm; }
+  .payroll-register-header strong { font-size: 10pt; }
+  .payroll-register-cutoff { min-width: 42mm; }
+  .payroll-register-cutoff strong { font-size: 9pt; }
+  .payroll-register-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 7pt; line-height: 1.15; }
+  .payroll-register-table th, .payroll-register-table td { padding: 1.7mm 1.2mm; border: 1px solid #000; text-align: center; vertical-align: middle; overflow-wrap: anywhere; }
+  .payroll-register-table th { font-size: 6.2pt; font-weight: 700; text-transform: uppercase; }
+  .payroll-register-table th:nth-child(1) { width: 10%; }
+  .payroll-register-table th:nth-child(2) { width: 15%; }
+  .payroll-register-table th:nth-child(3) { width: 8%; }
+  .payroll-register-table th:nth-child(4) { width: 7%; }
+  .payroll-register-table th:nth-child(5), .payroll-register-table th:nth-child(6) { width: 6.5%; }
+  .payroll-register-table th:nth-child(7), .payroll-register-table th:nth-child(8) { width: 8%; }
+  .payroll-register-table th:nth-child(9), .payroll-register-table th:nth-child(10), .payroll-register-table th:nth-child(11) { width: 6%; }
+  .payroll-register-table th:nth-child(12) { width: 9%; }
+  .payroll-register-table th:nth-child(13) { width: 8%; }
+  .payroll-register-table td:nth-child(1), .payroll-register-table td:nth-child(2) { text-align: left; }
+  .payroll-register-total td { height: 7mm; font-weight: 700; }
+  .payroll-register-total td:nth-child(12) { background: #f3df3f; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 
 /* Product UI refinement: dense, calm, and consistent across kiosk, attendance, and admin. */
