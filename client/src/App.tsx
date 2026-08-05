@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, ShieldCheck, Upload, UserRound, X } from 'lucide-react';
+import { ArrowRight, Check, CircleAlert, CreditCard, ImagePlus, Keyboard, LoaderCircle, LockKeyhole, Nfc, ShieldCheck, Upload, UserRound, X } from 'lucide-react';
 import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord, OfficeIdentity, LanStatusResponse } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, OFFICE_HOURS_END, isLateTimeout } from '@rfid-attendance/shared';
 import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openViewerUrl, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
@@ -14,6 +14,12 @@ type Result = ScanSuccessResponse | ScanErrorResponse;
 type SetupStep = 'scan' | 'edit';
 type SetupForm = { userId: string; fullName: string; department: string; status: SetupUser['status']; employeeType: SetupUser['employeeType']; dailyRate: string; photoUrl: string };
 const emptySetupForm: SetupForm = { userId: '', fullName: '', department: '', status: 'ACTIVE', employeeType: 'INTERN', dailyRate: '', photoUrl: '' };
+
+/** Keyboard-wedge readers type a burst of characters; humans do not. */
+const SCANNER_BURST_GAP_MS = 100;
+const SCANNER_MIN_BURST = 3;
+/** The scanner box and the native pipeline both capture the same tap; swallow the second copy. */
+const SCAN_DEDUP_WINDOW_MS = 2000;
 
 export function greetingForDate(date: Date, timeZone: string): string {
   const hourPart = new Intl.DateTimeFormat('en-US', {
@@ -48,9 +54,17 @@ export default function App() {
       ? null
       : { state: 'offline', message: 'Scanner unavailable', detail: 'Native scanner events are only available in the desktop app', mode: 'web', paused: true },
   );
-  const manualRef = useRef<HTMLInputElement>(null);
+  const scannerInputRef = useRef<HTMLInputElement>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestController = useRef<AbortController | null>(null);
+  // Keyboard-wedge capture state for the read-only scanner box: the burst is
+  // the only evidence that keystrokes came from a reader, not a person.
+  const scannerIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scanBufferRef = useRef('');
+  const burstArmed = useRef(false);
+  const lastScanKeyAt = useRef(0);
+  const rapidKeyCount = useRef(0);
+  const recentScans = useRef(new Map<string, number>());
   // Synchronous in-flight guard: set before the first await so two rapid native
   // scan events can never start two attendance writes for the same tap.
   const processingRef = useRef(false);
@@ -84,13 +98,19 @@ export default function App() {
     window.requestAnimationFrame(() => setupInputRef.current?.focus());
   }, []);
 
-  const focusManualInput = useCallback(() => {
-    window.requestAnimationFrame(() => manualRef.current?.focus());
+  const focusScannerInput = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const el = scannerInputRef.current;
+      if (!el || el.disabled) return;
+      if (document.hasFocus && !document.hasFocus()) return;
+      el.focus({ preventScroll: true });
+    });
   }, []);
 
   useEffect(() => () => {
     if (resetTimer.current) clearTimeout(resetTimer.current);
     requestController.current?.abort();
+    if (scannerIdleTimer.current) clearTimeout(scannerIdleTimer.current);
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
     if (setupSessionTimer.current) clearTimeout(setupSessionTimer.current);
   }, []);
@@ -122,6 +142,11 @@ export default function App() {
     setResult(null);
     setUid('');
     setManualUid('');
+    scanBufferRef.current = '';
+    burstArmed.current = false;
+    rapidKeyCount.current = 0;
+    lastScanKeyAt.current = 0;
+    if (scannerIdleTimer.current) { clearTimeout(scannerIdleTimer.current); scannerIdleTimer.current = null; }
   }, []);
 
   const openSetup = useCallback((initialUid = '') => {
@@ -243,6 +268,18 @@ export default function App() {
   const submit = useCallback(async (rawUid: string, source: 'RFID' | 'MANUAL_TEST') => {
     const normalizedUid = rawUid.trim();
     if (!normalizedUid || processingRef.current) return;
+    // The read-only scanner box and the native pipeline both capture the same
+    // card tap in the desktop app; drop the second copy so one tap never posts
+    // twice (which the backend would reject as a duplicate scan).
+    const now = Date.now();
+    const previousScanAt = recentScans.current.get(normalizedUid);
+    if (previousScanAt !== undefined && now - previousScanAt < SCAN_DEDUP_WINDOW_MS) return;
+    recentScans.current.set(normalizedUid, now);
+    if (recentScans.current.size > 128) {
+      for (const [key, at] of recentScans.current) {
+        if (now - at >= SCAN_DEDUP_WINDOW_MS) recentScans.current.delete(key);
+      }
+    }
     processingRef.current = true;
     setUid(normalizedUid);
     setState('processing');
@@ -260,6 +297,59 @@ export default function App() {
     if (resetTimer.current) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
   }, [config.resultResetDelayMs, resetToReady]);
+
+  /** Flush the scanner burst as an attendance scan (keyboard-wedge path). */
+  const commitScanBuffer = useCallback(() => {
+    if (scannerIdleTimer.current) { clearTimeout(scannerIdleTimer.current); scannerIdleTimer.current = null; }
+    burstArmed.current = false;
+    rapidKeyCount.current = 0;
+    lastScanKeyAt.current = 0;
+    const value = scanBufferRef.current;
+    scanBufferRef.current = '';
+    if (!value) return;
+    void submit(value, 'RFID');
+  }, [submit]);
+
+  /**
+   * Scanner-mode key capture. The box is read-only, so keystrokes only come
+   * from a keyboard-wedge reader (or a deliberate fast burst). A run of rapid
+   * characters arms the submit — the reader signature — while slow human
+   * typing never arms, so the kiosk box cannot be used to type a fake card ID.
+   * Manual entry is the opt-in path for typing.
+   */
+  const handleScannerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (state !== 'ready' || manualMode) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (burstArmed.current) {
+        commitScanBuffer();
+      } else {
+        // A lone Enter from a person is not a scan: discard the partial buffer.
+        scanBufferRef.current = '';
+        setUid('');
+      }
+      return;
+    }
+    if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
+    const ch = event.key.toUpperCase();
+    if (!/[0-9A-F]/.test(ch)) return;
+    event.preventDefault();
+    const now = performance.now();
+    const gap = lastScanKeyAt.current === 0 ? Number.POSITIVE_INFINITY : now - lastScanKeyAt.current;
+    lastScanKeyAt.current = now;
+    rapidKeyCount.current = gap <= SCANNER_BURST_GAP_MS ? rapidKeyCount.current + 1 : 1;
+    if (rapidKeyCount.current >= SCANNER_MIN_BURST) burstArmed.current = true;
+    scanBufferRef.current = (scanBufferRef.current + ch).slice(0, 64);
+    setUid(scanBufferRef.current);
+    if (scannerIdleTimer.current) clearTimeout(scannerIdleTimer.current);
+    if (burstArmed.current) scannerIdleTimer.current = setTimeout(() => commitScanBuffer(), config.rfidAutoSubmitDelayMs);
+  };
+
+  const handleManualKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void submit(manualUid, 'MANUAL_TEST');
+  };
 
   // Latest scan-routing closure, re-assigned every render so the single native
   // listener always uses fresh state without re-registering (which would risk
@@ -296,12 +386,41 @@ export default function App() {
     void setScannerPaused(paused).catch(() => { /* web mode */ });
   }, [manualMode, setupDialogOpen, setupStep, setupToken]);
 
+  // The scanner box must be focused before a keyboard-wedge reader can type
+  // into it: focus on mount, whenever the kiosk returns to ready, when the
+  // window regains focus, and on a light interval so dialogs or focus loss
+  // never leave the kiosk unable to scan.
+  useEffect(() => {
+    if (manualMode || setupDialogOpen) return;
+    focusScannerInput();
+  }, [state, manualMode, setupDialogOpen, focusScannerInput]);
+
+  useEffect(() => {
+    if (manualMode || setupDialogOpen || state !== 'ready') return;
+    const id = window.setInterval(() => {
+      if (document.hasFocus && !document.hasFocus()) return;
+      const el = scannerInputRef.current;
+      if (el && !el.disabled && document.activeElement !== el) focusScannerInput();
+    }, 800);
+    const onWindowFocus = () => focusScannerInput();
+    window.addEventListener('focus', onWindowFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', onWindowFocus);
+    };
+  }, [state, manualMode, setupDialogOpen, focusScannerInput]);
+
   const toggleManualMode = () => {
     if (state !== 'ready') return;
     setManualMode((current) => !current);
     setUid('');
     setManualUid('');
-    if (!manualMode) focusManualInput();
+    scanBufferRef.current = '';
+    burstArmed.current = false;
+    rapidKeyCount.current = 0;
+    lastScanKeyAt.current = 0;
+    if (scannerIdleTimer.current) { clearTimeout(scannerIdleTimer.current); scannerIdleTimer.current = null; }
+    focusScannerInput();
   };
 
   const displayDate = new Intl.DateTimeFormat('en-PH', {
@@ -335,7 +454,7 @@ export default function App() {
   })();
 
   const heroTitle = state === 'processing' ? 'Reading card…' : greetingForDate(now, config.timezone);
-  const heroSub = state === 'processing' ? 'Checking your attendance' : 'Scan card';
+  const heroSub = state === 'processing' ? 'Checking your attendance' : manualMode ? 'Enter a card ID below' : 'Tap your card on the reader';
 
   return (
     <main className={`kiosk-shell state-${state}`}>
@@ -392,25 +511,36 @@ export default function App() {
           </div>
         )}
 
-        {manualMode && (
-          <div className="manual-entry" aria-label="Manual card entry">
-            <label htmlFor="manual-uid">Manual card ID</label>
+        {(state === 'ready' || state === 'processing') && (
+          <div className={`scan-console${manualMode ? ' is-manual' : ''}`} aria-label={manualMode ? 'Manual card entry' : 'RFID scanner'}>
+            <div className="scan-console-head">
+              <span className="scan-console-title">{manualMode ? 'Manual card ID' : 'RFID reader'}</span>
+            </div>
             <div className="input-row">
+              {!manualMode && <span className="scan-input-icon" aria-hidden="true"><Nfc size={22} /></span>}
               <input
-                ref={manualRef}
-                id="manual-uid"
-                aria-label="Manual card ID"
-                value={manualUid}
-                onChange={(event) => setManualUid(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submit(manualUid, 'MANUAL_TEST'); } }}
-                placeholder="Enter a card ID"
+                ref={scannerInputRef}
+                id="scanner-uid"
+                aria-label={manualMode ? 'Manual card ID' : 'Scanner card ID'}
+                value={manualMode ? manualUid : uid}
+                readOnly={!manualMode}
+                onChange={(event) => { if (manualMode) setManualUid(event.target.value); }}
+                onKeyDown={manualMode ? handleManualKeyDown : handleScannerKeyDown}
+                placeholder={manualMode ? 'Enter a card ID' : 'Waiting for card…'}
                 autoComplete="off"
                 spellCheck={false}
                 disabled={state !== 'ready'}
+                autoFocus={!manualMode}
               />
-              <button className="submit-button" type="button" onClick={() => void submit(manualUid, 'MANUAL_TEST')} disabled={!manualUid.trim()}><ArrowRight size={18} /> Record</button>
+              {manualMode && (
+                <button className="submit-button" type="button" onClick={() => void submit(manualUid, 'MANUAL_TEST')} disabled={!manualUid.trim() || state !== 'ready'}><ArrowRight size={18} /> Record</button>
+              )}
             </div>
-            <p className="input-hint"><Keyboard size={14} /> Press Enter or use the button — a fallback when the reader is unavailable</p>
+            <p className="input-hint">
+              {manualMode
+                ? <><Keyboard size={14} /> Press Enter or use the button — a fallback when the reader is unavailable</>
+                : <><span className="scan-live"><i aria-hidden="true" />Locked</span> — tap your card, or use Manual entry to type an ID</>}
+            </p>
           </div>
         )}
 

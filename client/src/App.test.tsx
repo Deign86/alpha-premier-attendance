@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as eventApi from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -91,12 +91,45 @@ describe('RFID kiosk', () => {
     expect(shouldRouteGlobalRfidToSetup(false, 'setup-token', 'scan')).toBe(false);
   });
 
-  it('shows a welcoming greeting and smaller scan instruction with no visible RFID text input', async () => {
+  it('shows a welcoming greeting and a scanner text box that is always focused and read-only', async () => {
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument();
-    expect(screen.getByText(/^scan card$/i)).toHaveClass('hero-sub');
-    expect(screen.queryByLabelText(/scanner card id/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^tap your card on the reader$/i)).toHaveClass('hero-sub');
+    const input = screen.getByLabelText(/scanner card id/i) as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    // The kiosk box is locked for scanning: no typing or editing until Manual entry.
+    expect(input).toHaveAttribute('readonly');
+    expect(input).toHaveFocus();
+  });
+
+  it('captures a rapid keyboard-wedge scan into the read-only box and submits it as RFID', async () => {
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    expect(input).toHaveAttribute('readonly');
+    // A reader types the whole UID in a fast burst, then Enter.
+    for (const key of ['0', '4', 'a', '1', 'b', '2', 'c', '3']) {
+      fireEvent.keyDown(input, { key });
+    }
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: '04A1B2C3', source: 'RFID' }) }),
+    ));
+  });
+
+  it('keeps the scanner box locked against slow manual typing (Manual entry is opt-in)', async () => {
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    // A person typing with normal pauses never arms a scan…
+    for (const key of ['1', '2', '3', '4']) {
+      fireEvent.keyDown(input, { key });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+    }
+    // …and Enter alone does not bypass the lock.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
   });
 
   it('submits a native scan event and shows the employee photo', async () => {

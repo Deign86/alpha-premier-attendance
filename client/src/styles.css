@@ -90,9 +90,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-card-button:hover { background: var(--gold-bright); }
 .reset-hint { margin: 0; color: var(--quiet); font-size: .72rem; }
 
-/* Manual entry: small, clearly a fallback, never the main control. */
-.manual-entry { display: grid; gap: 8px; width: min(460px, 100%); padding: 16px 18px 18px; background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: 6px; }
-.manual-entry label { color: var(--ink); font-size: .74rem; font-weight: 600; }
 .input-row { display: flex; gap: 10px; }
 .input-row input { min-width: 0; flex: 1; height: 48px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; padding: 0 14px; font-size: .95rem; }
 .input-row input::placeholder { color: var(--quiet); }
@@ -173,6 +170,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .result-photo { width: min(200px, 60vw); }
   .input-row { flex-direction: column; }
   .input-row .submit-button { width: 100%; }
+  .scan-input-icon { display: none; }
   .kiosk-actions { gap: 7px; }
   .kiosk-action { flex: 1 1 auto; min-width: 0; padding: 8px 9px; font-size: .7rem; }
   .setup-backdrop { padding: 12px; }
