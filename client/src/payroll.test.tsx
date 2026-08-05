@@ -40,7 +40,7 @@ describe('PayrollWorkspace', () => {
     const user = userEvent.setup();
     render(
       <PayrollWorkspace
-        users={[{ userId: 'EMP-1', rfidUid: 'ABCD1234', fullName: 'Ada Lovelace', department: null, status: 'ACTIVE', employeeType: 'EMPLOYEE', dailyRate: 500, payrollProfileId: 'BEA_STANDARD', photoUrl: null }]}
+        users={[{ userId: 'EMP-1', rfidUid: 'ABCD1234', fullName: 'Ada Lovelace', department: null, status: 'ACTIVE', employeeType: 'EMPLOYEE', gender: null, dailyRate: 500, payrollProfileId: 'BEA_STANDARD', photoUrl: null }]}
         profiles={[{ profileId: 'BEA_STANDARD', label: 'Bea standard', payrollFrequency: 'SEMI_MONTHLY', standardWorkingDaysPerCutoff: 11, incentivesAllowance: 0, specialAllowance: 0, specialHolidayMultiplier: 0.3, regularHolidayMultiplier: 1, halfDayFraction: 0.5, overtimeRate: 0 }]}
         records={[]}
         onSaved={vi.fn()}
@@ -85,7 +85,7 @@ describe('PayrollWorkspace', () => {
     const user = userEvent.setup();
     render(
       <PayrollWorkspace
-        users={[{ userId: 'INT-001', rfidUid: 'ABCD5678', fullName: 'Maria Santos', department: null, status: 'ACTIVE', employeeType: 'INTERN', dailyRate: null, payrollProfileId: null, photoUrl: null }]}
+        users={[{ userId: 'INT-001', rfidUid: 'ABCD5678', fullName: 'Maria Santos', department: null, status: 'ACTIVE', employeeType: 'INTERN', gender: 'FEMALE', dailyRate: null, payrollProfileId: null, photoUrl: null }]}
         profiles={printProfiles}
         records={[samplePayrollRecord({
           payrollId: 'P-INT-001', employeeId: 'INT-001', employeeName: 'Maria Santos', employeeType: 'INTERN',
@@ -129,7 +129,7 @@ describe('PayrollWorkspace', () => {
     const user = userEvent.setup();
     render(
       <PayrollWorkspace
-        users={[{ userId: 'EMP-1', rfidUid: 'ABCD1234', fullName: 'Ada Lovelace', department: null, status: 'ACTIVE', employeeType: 'EMPLOYEE', dailyRate: 500, payrollProfileId: 'BEA_STANDARD', photoUrl: null }]}
+        users={[{ userId: 'EMP-1', rfidUid: 'ABCD1234', fullName: 'Ada Lovelace', department: null, status: 'ACTIVE', employeeType: 'EMPLOYEE', gender: null, dailyRate: 500, payrollProfileId: 'BEA_STANDARD', photoUrl: null }]}
         profiles={printProfiles}
         records={[]}
         onSaved={vi.fn()}

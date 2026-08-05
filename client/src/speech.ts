@@ -1,3 +1,5 @@
+import type { UserGender } from '@rfid-attendance/shared';
+
 /**
  * Kiosk voice announcements via the Web Speech API.
  *
@@ -90,10 +92,13 @@ export function speak(phrase: string, { rate = 1, pitch = 1 }: SpeakOptions = {}
 
 /**
  * Time-in announcement: the time-appropriate greeting ("Good morning") plus
- * the employee's name, e.g. "Good morning Sir Ada Lovelace".
+ * the employee's honorific and name, e.g. "Good morning Sir Ada Lovelace" or
+ * "Good morning Ma'am Maria Santos". Falls back to "Sir" when gender is
+ * unset, preserving the original behavior.
  */
-export function announceTimeIn(greeting: string, employeeName: string) {
-  speak(`${greeting} Sir ${employeeName}`);
+export function announceTimeIn(greeting: string, employeeName: string, gender: UserGender | null | undefined) {
+  const title = gender === 'FEMALE' ? 'Ma\'am' : 'Sir';
+  speak(`${greeting} ${title} ${employeeName}`);
 }
 
 /** Time-out announcement: a farewell. */

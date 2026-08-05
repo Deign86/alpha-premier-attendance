@@ -38,7 +38,7 @@ export class AdminService {
 
   async saveUser(input: unknown, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
-    const value = input as Partial<{ userId: string; rfidUid: string; fullName: string; department: string; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; dailyRate: number | null; payrollProfileId: string | null; photoUrl: string | null }>;
+    const value = input as Partial<{ userId: string; rfidUid: string; fullName: string; department: string; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; gender: 'MALE' | 'FEMALE' | null; dailyRate: number | null; payrollProfileId: string | null; photoUrl: string | null }>;
     const userId = existingUserId ?? value.userId?.trim();
     if (!userId || typeof value.rfidUid !== 'string' || !value.rfidUid.trim() || !value.fullName?.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
     if (existingUserId && value.userId && value.userId !== existingUserId) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
@@ -50,7 +50,8 @@ export class AdminService {
     const employeeType = value.employeeType ?? current?.employeeType ?? 'INTERN';
     const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
     if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Employees require a positive daily rate.');
-    const user: SheetUser = { userId, rfidUid, fullName: value.fullName.trim(), department: value.department?.trim() || null, active: value.status === 'ACTIVE', employeeType, dailyRate, payrollProfileId: value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
+    if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.');
+    const user: SheetUser = { userId, rfidUid, fullName: value.fullName.trim(), department: value.department?.trim() || null, active: value.status === 'ACTIVE', employeeType, gender: value.gender === undefined ? current?.gender ?? null : value.gender, dailyRate, payrollProfileId: value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
     try {
       const saved = await this.sheets.upsertUser(user);
       await this.sheets.writeAudit({ eventType: current ? 'ADMIN_USER_UPDATED' : 'ADMIN_USER_CREATED', userId: user.userId, rfidUid: user.rfidUid, message: current ? 'User profile updated by administrator' : 'User profile created by administrator', requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
@@ -171,7 +172,7 @@ export class AdminService {
   private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
   private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
 }
-function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null }; }
+function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', gender: user.gender ?? null, dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null }; }
 function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department }; }
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }
 

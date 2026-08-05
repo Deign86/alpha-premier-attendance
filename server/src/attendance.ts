@@ -138,8 +138,8 @@ export class AttendanceService {
     }
   }
 
-  private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null; employeeType?: 'INTERN' | 'EMPLOYEE'; photoUrl?: string | null }): ScanSuccessResponse {
-    const userSummary: UserSummary = { userId: user.userId, fullName: user.fullName, department: user.department, employeeType: user.employeeType ?? 'INTERN', photoUrl: user.photoUrl ?? null };
+  private successResponse(requestId: string, action: (typeof attendanceActions)[number], attendance: SheetAttendance, user: { userId: string; fullName: string; department: string | null; employeeType?: 'INTERN' | 'EMPLOYEE'; gender?: 'MALE' | 'FEMALE' | null; photoUrl?: string | null }): ScanSuccessResponse {
+    const userSummary: UserSummary = { userId: user.userId, fullName: user.fullName, department: user.department, employeeType: user.employeeType ?? 'INTERN', gender: user.gender ?? null, photoUrl: user.photoUrl ?? null };
     const message = action === 'TIME_IN'
       ? 'Time In recorded successfully.'
       : attendance.status === 'LATE_TIMEOUT'

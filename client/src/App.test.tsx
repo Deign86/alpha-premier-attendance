@@ -62,7 +62,7 @@ const successResponse = {
     timeOut: null,
     status: 'WORKING',
   },
-  user: { userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', photoUrl: 'asset://localhost/C:/photos/ada.webp' },
+  user: { userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', gender: 'FEMALE', photoUrl: 'asset://localhost/C:/photos/ada.webp' },
 };
 
 function mockFetch(response: unknown = successResponse) {
@@ -160,7 +160,7 @@ describe('RFID kiosk', () => {
     render(<App />);
     act(() => mockEventBridge.__emit('rfid-scan', '04A1B2C3'));
     await screen.findByText('Ada Lovelace');
-    expect(vi.mocked(announceTimeIn)).toHaveBeenCalledWith(expect.stringMatching(/^Good (morning|afternoon|evening)$/), 'Ada Lovelace');
+    expect(vi.mocked(announceTimeIn)).toHaveBeenCalledWith(expect.stringMatching(/^Good (morning|afternoon|evening)$/), 'Ada Lovelace', 'FEMALE');
     expect(vi.mocked(announceTimeOut)).not.toHaveBeenCalled();
   });
 

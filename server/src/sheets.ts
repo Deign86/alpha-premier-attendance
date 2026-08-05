@@ -13,6 +13,7 @@ export type SheetUser = {
   department: string | null;
   active: boolean;
   employeeType?: 'INTERN' | 'EMPLOYEE';
+  gender?: 'MALE' | 'FEMALE' | null;
   dailyRate?: number | null;
   payrollProfileId?: string | null;
   photoUrl?: string | null;

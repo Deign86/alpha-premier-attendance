@@ -8,6 +8,9 @@ export type ScanSource = (typeof scanSources)[number];
 export const attendanceActions = ['TIME_IN', 'TIME_OUT'] as const;
 export type AttendanceAction = (typeof attendanceActions)[number];
 
+export const userGenders = ['MALE', 'FEMALE'] as const;
+export type UserGender = (typeof userGenders)[number];
+
 export const attendanceStatuses = ['WORKING', 'COMPLETED', 'MISSED', 'LATE_TIMEOUT'] as const;
 export type AttendanceStatus = (typeof attendanceStatuses)[number];
 
@@ -54,6 +57,8 @@ export type UserSummary = {
   department: string | null;
   employeeType: 'INTERN' | 'EMPLOYEE';
   photoUrl: string | null;
+  /** Honorific basis for spoken greetings (Sir/Ma'am); null when unset. */
+  gender: UserGender | null;
 };
 
 export type AttendanceSummary = {
@@ -418,6 +423,7 @@ export type SetupUser = {
   department: string | null;
   status: 'ACTIVE' | 'INACTIVE';
   employeeType: 'INTERN' | 'EMPLOYEE';
+  gender: UserGender | null;
   dailyRate: number | null;
   payrollProfileId?: PayrollProfileId | null;
   photoUrl: string | null;
@@ -444,6 +450,7 @@ export type SetupUpsertRequest = {
   department?: string;
   status: 'ACTIVE' | 'INACTIVE';
   employeeType?: 'INTERN' | 'EMPLOYEE';
+  gender?: UserGender | null;
   dailyRate?: number | null;
   payrollProfileId?: PayrollProfileId | null;
   photoUrl?: string | null;

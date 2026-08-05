@@ -58,11 +58,25 @@ describe('pickFemaleVoice', () => {
 });
 
 describe('announceTimeIn', () => {
-  it('composes the greeting with the employee name', () => {
+  it('composes the greeting with the employee name and male honorific', () => {
     const { synthesis } = stubSpeechSynthesis([voice('Microsoft Zira - English (United States)')]);
-    announceTimeIn('Good afternoon', 'Deign Lazaro');
+    announceTimeIn('Good afternoon', 'Deign Lazaro', 'MALE');
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.text).toBe('Good afternoon Sir Deign Lazaro');
+  });
+
+  it('uses Ma\'am for female employees', () => {
+    const { synthesis } = stubSpeechSynthesis([]);
+    announceTimeIn('Good morning', 'Maria Santos', 'FEMALE');
+    const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+    expect(utterance.text).toBe('Good morning Ma\'am Maria Santos');
+  });
+
+  it('falls back to Sir when gender is unset', () => {
+    const { synthesis } = stubSpeechSynthesis([]);
+    announceTimeIn('Good morning', 'Deign Lazaro', null);
+    const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+    expect(utterance.text).toBe('Good morning Sir Deign Lazaro');
   });
 });
 

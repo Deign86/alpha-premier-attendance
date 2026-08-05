@@ -36,6 +36,7 @@ export type SetupUserInput = {
   department?: string | null;
   status?: 'ACTIVE' | 'INACTIVE';
   employeeType?: 'INTERN' | 'EMPLOYEE';
+  gender?: 'MALE' | 'FEMALE' | null;
   dailyRate?: number | null;
   photoUrl?: string | null;
 };
@@ -95,6 +96,7 @@ export class SetupService {
     const employeeType = value.employeeType ?? existing?.employeeType ?? 'INTERN';
     const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
     if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Employees require a positive daily rate.', 400);
+    if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new SetupError('SETUP_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.', 400);
     if (value.photoUrl !== undefined && value.photoUrl !== null && !isPhotoUrl(value.photoUrl)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Photo URL must be HTTPS.', 400);
     const user: SheetUser = {
       userId: value.userId.trim(),
@@ -103,6 +105,7 @@ export class SetupService {
       department: typeof value.department === 'string' && value.department.trim() ? value.department.trim() : null,
       active: value.status === 'ACTIVE',
       employeeType,
+      gender: value.gender === undefined ? existing?.gender ?? null : value.gender,
       dailyRate,
       photoUrl: value.photoUrl === undefined ? existing?.photoUrl ?? null : isPhotoUrl(value.photoUrl) ? value.photoUrl : null,
     };
