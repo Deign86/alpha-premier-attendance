@@ -100,6 +100,27 @@ fn normalize_gender(value: Option<&str>) -> Option<String> {
         .filter(|g| !g.is_empty())
 }
 
+async fn upsert_user_record(
+    db: &sqlx::SqlitePool,
+    user_id: &str,
+    rfid_uid: &str,
+    full_name: &str,
+    department: Option<&str>,
+    status: &str,
+    employee_type: &str,
+    gender: Option<&str>,
+    daily_rate_centavos: Option<i64>,
+    payroll_profile_id: Option<&str>,
+    photo_url: Option<&str>,
+    now: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("INSERT INTO users (user_id, rfid_uid, full_name, department, status, created_at, employee_type, daily_rate_centavos, payroll_profile_id, photo_url, gender, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET rfid_uid=excluded.rfid_uid, full_name=excluded.full_name, department=excluded.department, status=excluded.status, employee_type=excluded.employee_type, gender=COALESCE(excluded.gender, users.gender), daily_rate_centavos=excluded.daily_rate_centavos, payroll_profile_id=excluded.payroll_profile_id, photo_url=excluded.photo_url, revision=users.revision+1, updated_at=excluded.updated_at")
+        .bind(user_id).bind(rfid_uid).bind(full_name).bind(department).bind(status).bind(now).bind(employee_type)
+        .bind(daily_rate_centavos).bind(payroll_profile_id).bind(photo_url).bind(gender).bind(now)
+        .execute(db).await?;
+    Ok(result.rows_affected())
+}
+
 #[tauri::command]
 async fn admin_upsert_user(
     state: State<'_, AppState>,
@@ -148,11 +169,14 @@ async fn admin_upsert_user(
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
     let now = chrono::Utc::now().to_rfc3339();
-    let result = sqlx::query("INSERT INTO users (user_id, rfid_uid, full_name, department, status, created_at, employee_type, daily_rate_centavos, payroll_profile_id, photo_url, gender, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET rfid_uid=excluded.rfid_uid, full_name=excluded.full_name, department=excluded.department, status=excluded.status, employee_type=excluded.employee_type, gender=COALESCE(excluded.gender, users.gender), daily_rate_centavos=excluded.daily_rate_centavos, payroll_profile_id=excluded.payroll_profile_id, photo_url=excluded.photo_url, revision=users.revision+1, updated_at=excluded.updated_at")
-        .bind(user_id).bind(&rfid_uid).bind(full_name).bind(user.get("department").and_then(|v| v.as_str())).bind(status).bind(&now).bind(employee_type).bind(gender.as_deref()).bind(user.get("dailyRate").and_then(|v| v.as_i64()).map(|v| v * 100)).bind(user.get("payrollProfileId").and_then(|v| v.as_str())).bind(user.get("photoUrl").and_then(|v| v.as_str())).bind(&now).execute(&state.db).await.map_err(|e| if e.to_string().contains("UNIQUE") { "USER_CONFLICT".into() } else { e.to_string() })?;
+    let result = upsert_user_record(&state.db, user_id, &rfid_uid, full_name,
+        user.get("department").and_then(|v| v.as_str()), status, employee_type,
+        gender.as_deref(), user.get("dailyRate").and_then(|v| v.as_i64()).map(|v| v * 100),
+        user.get("payrollProfileId").and_then(|v| v.as_str()), user.get("photoUrl").and_then(|v| v.as_str()), &now)
+        .await.map_err(|e| if e.to_string().contains("UNIQUE") { "USER_CONFLICT".into() } else { e.to_string() })?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     enqueue_sync(&state, "Users", user_id, "UPSERT", &user).await;
-    Ok(serde_json::json!({"success":true,"created":result.rows_affected()==1,"userId":user_id}))
+    Ok(serde_json::json!({"success":true,"created":result == 1,"userId":user_id}))
 }
 
 #[tauri::command]
@@ -2234,10 +2258,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_exports_path, enrich_cutoff_input, generated_file_metadata, normalize_gender, php_to_centavos, photo_is_within_limits};
+    use super::{canonical_exports_path, enrich_cutoff_input, generated_file_metadata, normalize_gender, php_to_centavos, photo_is_within_limits, upsert_user_record};
     use crate::config::{LanConfig, OfficeConfig};
     use crate::state::AppState;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::{sqlite::SqlitePoolOptions, Row};
 
     #[test]
     fn gender_normalization_can_never_violate_the_check_constraint() {
@@ -2252,6 +2276,20 @@ mod tests {
         assert_eq!(normalize_gender(Some(" Female ")), Some("FEMALE".to_string()));
         // Already-canonical values pass through untouched.
         assert_eq!(normalize_gender(Some("MALE")), Some("MALE".to_string()));
+    }
+
+    #[tokio::test]
+    async fn user_upsert_keeps_gender_and_photo_in_their_declared_columns() {
+        let db = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.expect("in-memory database");
+        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, rfid_uid TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, department TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, employee_type TEXT NOT NULL, daily_rate_centavos INTEGER, payroll_profile_id TEXT, photo_url TEXT, gender TEXT CHECK (gender IN ('MALE', 'FEMALE')), revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
+            .execute(&db).await.expect("users table");
+        upsert_user_record(&db, "u-1", "A1B2C3", "Ada Lovelace", None, "ACTIVE", "EMPLOYEE", Some("FEMALE"), Some(50_000), Some("BEA_STANDARD"), Some("https://example.com/ada.webp"), "2026-08-05T00:00:00Z")
+            .await.expect("valid gender and photo must save");
+        let row = sqlx::query("SELECT gender, photo_url, daily_rate_centavos, payroll_profile_id FROM users WHERE user_id = 'u-1'").fetch_one(&db).await.expect("saved user");
+        assert_eq!(row.get::<Option<String>, _>("gender").as_deref(), Some("FEMALE"));
+        assert_eq!(row.get::<Option<String>, _>("photo_url").as_deref(), Some("https://example.com/ada.webp"));
+        assert_eq!(row.get::<Option<i64>, _>("daily_rate_centavos"), Some(50_000));
+        assert_eq!(row.get::<Option<String>, _>("payroll_profile_id").as_deref(), Some("BEA_STANDARD"));
     }
 
     #[tokio::test]
