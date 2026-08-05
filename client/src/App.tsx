@@ -868,6 +868,49 @@ function PayrollTable({ records, onFinalized }: { records: PayrollCutoffRecord[]
 
 function php(value: number): string { return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number.isFinite(value) ? value : 0).replace('₱', 'PHP '); }
 
+/** Labels for fields stored inside the payroll calculation-breakdown blob. */
+const BREAKDOWN_LABELS: Record<string, string> = {
+  basicPay: 'Basic pay',
+  specialHolidayPay: 'Special holiday pay',
+  regularHolidayPay: 'Regular holiday pay',
+  totalCompensation: 'Total compensation',
+  totalAllowance: 'Total allowance',
+  overtimePay: 'Overtime pay',
+  manualAdjustment: 'Manual adjustment',
+  deductions: 'Deductions',
+  grossCompensation: 'Gross compensation',
+  netPay: 'Net pay',
+  lateDeduction: 'Late deduction',
+  halfDayDeduction: 'Half-day deduction',
+  absenceDeduction: 'Absence deduction',
+};
+
+/**
+ * The stored calculation breakdown is a JSON blob — centavo values from the
+ * native backend ({"basicPayCentavos":88000,...}) or peso values from the
+ * HTTP service ({"basicPay":880,...}). Render it as readable remarks text;
+ * non-JSON (already formatted) text passes through untouched.
+ */
+function formatCalculationBreakdown(raw: string): string {
+  const value = (raw ?? '').trim();
+  if (!value || value[0] !== '{') return value;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return value;
+    const parts: string[] = [];
+    for (const [key, amount] of Object.entries(parsed)) {
+      if (typeof amount !== 'number' || !Number.isFinite(amount)) continue;
+      const baseKey = key.endsWith('Centavos') ? key.slice(0, -'Centavos'.length) : key;
+      const label = BREAKDOWN_LABELS[baseKey] ?? baseKey;
+      const pesos = key.endsWith('Centavos') ? amount / 100 : amount;
+      parts.push(`${label} ${php(pesos)}`);
+    }
+    return parts.length ? `${parts.join('; ')}.` : value;
+  } catch {
+    return value;
+  }
+}
+
 /** Formats a YYYY-MM-DD date for printed worksheet labels (e.g. "Aug 4, 2026"). */
 function formatPrintDate(value: string): string {
   if (!value) return '—';
@@ -993,7 +1036,7 @@ function PayrollWorksheet({ row, office, profiles }: { row: PayrollCutoffRecord;
 
       <section className="pw-section">
         <h2 className="pw-section-title">Remarks</h2>
-        <p className="pw-remarks">{row.calculationBreakdown || '—'}</p>
+        <p className="pw-remarks">{formatCalculationBreakdown(row.calculationBreakdown) || '—'}</p>
         {row.adjustmentReason && <p className="pw-remarks">Adjustment reason: {row.adjustmentReason}.</p>}
         {row.approvedWorkingDayOverage && <p className="pw-remarks">Actual working days above the standard were approved for this cutoff.</p>}
       </section>
@@ -1097,7 +1140,7 @@ function InternPayrollWorksheet({ row, office }: { row: PayrollCutoffRecord; off
 
       <section className="pw-section">
         <h2 className="pw-section-title">Remarks</h2>
-        <p className="pw-remarks">{row.calculationBreakdown || '—'}</p>
+        <p className="pw-remarks">{formatCalculationBreakdown(row.calculationBreakdown) || '—'}</p>
         <p className="pw-remarks">Intern payroll policy: {php(INTERN_DAILY_RATE_PHP)} per day; {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour of lateness (after the weekly grace). Allowances, holiday pay, half-days, absences, and overtime do not apply to interns.</p>
         {row.adjustmentReason && <p className="pw-remarks">Adjustment reason: {row.adjustmentReason}.</p>}
       </section>

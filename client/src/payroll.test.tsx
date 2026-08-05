@@ -169,6 +169,45 @@ describe('PayrollWorkspace', () => {
     expect(screen.getAllByText(/5 hour\(s\) at PHP 50\.00 per hour/)).toHaveLength(1);
   });
 
+  it('renders the stored calculation-breakdown JSON as readable remarks instead of raw JSON', async () => {
+    const user = userEvent.setup();
+    render(
+      <PayrollWorkspace
+        users={[]}
+        profiles={printProfiles}
+        records={[samplePayrollRecord({
+          calculationBreakdown: JSON.stringify({ basicPayCentavos: 550000, totalCompensationCentavos: 550000, totalAllowanceCentavos: 0, lateDeductionCentavos: 0, halfDayDeductionCentavos: 25000, absenceDeductionCentavos: 0, overtimePayCentavos: 0, grossCompensationCentavos: 525000 }),
+        })]}
+        onSaved={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Print Employee Payroll' }));
+    // Native backend stores centavo values; remarks must show readable pesos, not raw JSON.
+    expect(screen.getByText(/Basic pay PHP 5,500\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Half-day deduction PHP 250\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Gross compensation PHP 5,250\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/basicPayCentavos/)).not.toBeInTheDocument();
+  });
+
+  it('formats HTTP-service peso breakdown JSON in worksheet remarks', async () => {
+    const user = userEvent.setup();
+    render(
+      <PayrollWorkspace
+        users={[]}
+        profiles={printProfiles}
+        records={[samplePayrollRecord({
+          calculationBreakdown: JSON.stringify({ basicPay: 5500, specialHolidayPay: 0, regularHolidayPay: 0, totalCompensation: 5500, totalAllowance: 0, overtimePay: 0, manualAdjustment: 0, deductions: 250, grossCompensation: 5250 }),
+        })]}
+        onSaved={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Print Employee Payroll' }));
+    expect(screen.getByText(/Basic pay PHP 5,500\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Deductions PHP 250\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Gross compensation PHP 5,250\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/"basicPay":/)).not.toBeInTheDocument();
+  });
+
   it('provides separate print actions that render only the matching payroll template', async () => {
     const user = userEvent.setup();
     render(
