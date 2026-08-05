@@ -2909,16 +2909,23 @@ export function PayrollWorkspace({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [printTarget]);
-  const printPayroll = () => {
-    if (!records.length) {
+  const printPayroll = (target: PayrollPrintTarget) => {
+    const available = records.some((row) =>
+      target === "INTERN"
+        ? row.employeeType === "INTERN"
+        : row.employeeType === "EMPLOYEE",
+    );
+    if (!available) {
       setPrintTarget(null);
       setPrintMessage(
-        "No payroll records to print. Create and save a cutoff payroll first.",
+        target === "INTERN"
+          ? "No intern payroll records to print. Create and save an intern cutoff payroll first."
+          : "No employee payroll records to print. Create and save an employee cutoff payroll first.",
       );
       return;
     }
     setPrintMessage("");
-    setPrintTarget("ALL");
+    setPrintTarget(target);
   };
   return (
     <section className="payroll-workspace">
@@ -2947,8 +2954,19 @@ export function PayrollWorkspace({
         >
           {exporting ? "Generating..." : "Register PDF"}
         </button>
-        <button className="admin-button" type="button" onClick={printPayroll}>
-          Print payroll
+        <button
+          className="admin-button"
+          type="button"
+          onClick={() => printPayroll("INTERN")}
+        >
+          Print Intern Payroll
+        </button>
+        <button
+          className="admin-button"
+          type="button"
+          onClick={() => printPayroll("EMPLOYEE")}
+        >
+          Print Employee Payroll
         </button>
       </div>
       {printMessage && <p className="dashboard-alert">{printMessage}</p>}
@@ -3360,6 +3378,7 @@ export function PayrollWorkspace({
           records={records}
           office={office}
           profiles={profiles}
+          target={printTarget}
         />
       )}
     </section>
@@ -3606,7 +3625,7 @@ function formatPrintDate(value: string): string {
 }
 
 /** Which payroll format is being printed. Interns and employees never share a print layout. */
-type PayrollPrintTarget = "ALL";
+type PayrollPrintTarget = "INTERN" | "EMPLOYEE";
 
 /**
  * Print-only payroll worksheet template. Hidden on screen; rendered on paper via @media print.
@@ -3618,17 +3637,23 @@ function PayrollPrintView({
   records,
   office,
   profiles,
+  target,
 }: {
   records: PayrollCutoffRecord[];
   office: OfficeIdentity;
   profiles: PayrollCalculationProfile[];
+  target: PayrollPrintTarget;
 }) {
-  const matching = records;
+  const intern = target === "INTERN";
+  const matching = records.filter((row) =>
+    intern ? row.employeeType === "INTERN" : row.employeeType === "EMPLOYEE",
+  );
   if (!matching.length)
     return (
       <div className="print-payroll-view print-only">
         <p className="pw-empty-note">
-          No payroll records are available to print. Create and save a cutoff
+          No {intern ? "intern" : "employee"} payroll records are available to
+          print. Create and save a {intern ? "intern" : "employee"} cutoff
           payroll first.
         </p>
       </div>
@@ -3680,9 +3705,7 @@ function PayrollWorksheet({
   return (
     <article className="pw-sheet">
       <header className="pw-header">
-        <div className="pw-brand-plate">
-          <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
-        </div>
+        <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
         <p className="pw-address">{office.officeDisplayFull}</p>
         <h1 className="pw-title">Payroll Worksheet</h1>
         <div className="pw-meta">
@@ -4010,9 +4033,7 @@ function InternPayrollWorksheet({
   return (
     <article className="pw-sheet">
       <header className="pw-header">
-        <div className="pw-brand-plate">
-          <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
-        </div>
+        <img className="pw-logo" src={logoFull} alt="Alpha Premier logo" />
         <p className="pw-address">{office.officeDisplayFull}</p>
         <h1 className="pw-title">Intern Payroll Worksheet</h1>
         <div className="pw-meta">

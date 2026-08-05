@@ -325,8 +325,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 
   /* Header block. */
   .pw-header { margin: 0 0 8px; padding: 0 0 5px; border-bottom: 2px solid #000; text-align: center; }
-  .pw-brand-plate { display: grid; place-items: center; width: max-content; margin: 0 auto 3px; padding: 2.5mm 8mm 2mm; background: #111; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .pw-logo { display: block; height: 17mm; width: auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .pw-logo { display: block; height: 17mm; width: auto; margin: 0 auto 3px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .pw-address { margin: 2px 0 0; font-size: 8pt; color: #222; }
   .pw-title { margin: 8px 0 0; font-size: 12.5pt; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
   .pw-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px 14px; margin-top: 4px; font-size: 7pt; color: #222; }

@@ -157,10 +157,13 @@ describe("PayrollWorkspace", () => {
       />,
     );
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
     );
     expect(screen.getAllByText("Payroll Worksheet")).toHaveLength(2);
     expect(screen.getAllByAltText("Alpha Premier logo")).toHaveLength(2);
+    expect(screen.getAllByAltText("Alpha Premier logo")[0].parentElement).toHaveClass(
+      "pw-header",
+    );
     expect(
       screen.getAllByText(
         "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila",
@@ -239,7 +242,7 @@ describe("PayrollWorkspace", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Intern Payroll" }),
     );
 
     // Intern worksheet-specific labels and fixed intern values.
@@ -333,7 +336,7 @@ describe("PayrollWorkspace", () => {
       />,
     );
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
     );
     expect(
       screen.getAllByText(/5 hour\(s\) at PHP 50\.00 per hour/),
@@ -364,7 +367,7 @@ describe("PayrollWorkspace", () => {
       />,
     );
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
     );
     // Native backend stores centavo values; remarks must show readable pesos, not raw JSON.
     expect(screen.getByText(/Basic pay PHP 5,500\.00/)).toBeInTheDocument();
@@ -402,7 +405,7 @@ describe("PayrollWorkspace", () => {
       />,
     );
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
     );
     expect(screen.getByText(/Basic pay PHP 5,500\.00/)).toBeInTheDocument();
     expect(screen.getByText(/Deductions PHP 250\.00/)).toBeInTheDocument();
@@ -412,7 +415,7 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByText(/"basicPay":/)).not.toBeInTheDocument();
   });
 
-  it("provides one print payroll action that renders each matching payroll template", async () => {
+  it("provides separate print actions that render only the matching payroll template", async () => {
     const user = userEvent.setup();
     render(
       <PayrollWorkspace
@@ -454,7 +457,12 @@ describe("PayrollWorkspace", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Print payroll" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Print Intern Payroll" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
+    ).toBeInTheDocument();
     // No template is loaded until a print action is chosen.
     expect(screen.queryByText("Payroll Worksheet")).not.toBeInTheDocument();
     expect(
@@ -462,18 +470,25 @@ describe("PayrollWorkspace", () => {
     ).not.toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
     );
     expect(screen.getAllByText("Payroll Worksheet")).toHaveLength(1);
-    expect(screen.getAllByText("Intern Payroll Worksheet")).toHaveLength(1);
     expect(screen.getAllByText("Ada Lovelace").length).toBeGreaterThanOrEqual(
       2,
     );
+    expect(screen.queryByText("Intern Payroll Worksheet")).not.toBeInTheDocument();
+    expect(screen.queryByText("Intern details")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Print Intern Payroll" }),
+    );
+    expect(screen.getAllByText("Intern Payroll Worksheet")).toHaveLength(1);
     expect(screen.getAllByText("Maria Santos (Intern)")).toHaveLength(1);
     expect(screen.getAllByText("Maria Santos").length).toBeGreaterThanOrEqual(
       1,
     );
-    expect(screen.getAllByText("Employee details")).toHaveLength(1);
+    expect(screen.queryByText("Payroll Worksheet")).not.toBeInTheDocument();
+    expect(screen.queryByText("Employee details")).not.toBeInTheDocument();
   });
 
   it("shows a message instead of opening the print dialog when there are no records", async () => {
@@ -488,9 +503,9 @@ describe("PayrollWorkspace", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Print payroll" }),
+      screen.getByRole("button", { name: "Print Employee Payroll" }),
     );
-    expect(screen.getByText(/No payroll records to print/)).toBeInTheDocument();
+    expect(screen.getByText(/No employee payroll records to print/)).toBeInTheDocument();
     expect(screen.queryByText("Payroll Worksheet")).not.toBeInTheDocument();
     expect(window.print).not.toHaveBeenCalled();
 
