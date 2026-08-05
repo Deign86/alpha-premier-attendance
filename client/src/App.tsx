@@ -4,7 +4,7 @@ import type { ScanErrorResponse, ScanSuccessResponse, SetupUser, AttendanceListI
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, OFFICE_HOURS_END, isLateTimeout } from '@rfid-attendance/shared';
 import { DEFAULT_CONFIG, checkAdminSession, deleteAdminAttendance, deleteAdminUser, exportAttendanceXlsx, exportPayrollCsv, exportPayrollXlsx, finalizePayrollCutoff, generatePayrollPayslipPdf, generatePayrollRegisterPdf, getLanStatus, loadAttendance, loadAdminAttendance, loadAdminUsers, loadConfig, loadPayrollCutoffs, loadPayrollProfiles, lockAdmin, lockSetup, lookupSetupCard, nukeSheetsResync, openViewerUrl, photoSource, saveAdminAttendance, saveAdminUser, savePayrollCutoff, startLanViewer, stopLanViewer, submitScan, unlockAdmin, unlockSetup, uploadSetupPhoto, upsertSetupUser } from './api';
 import './styles.css';
-import { listenForGlobalRfid, listenForScannerStatus, getScannerStatus, setScannerPaused, type ScannerStatus } from './tauri-api';
+import { listenForGlobalRfid, listenForScannerStatus, getScannerStatus, setScannerPaused, tauriApi, type ScannerStatus } from './tauri-api';
 import { GeneratedFileActions, type GeneratedFileResult } from './file-actions';
 import logoPhoenix from './assets/branding/logo-phoenix.png';
 import logoFull from './assets/branding/logo-full.png';
@@ -970,8 +970,14 @@ export function PayrollWorkspace({ users, profiles, records, onSaved }: { users:
   const [printMessage, setPrintMessage] = useState('');
   useEffect(() => {
     if (!printTarget) return;
-    // Wait for the chosen template to commit before opening the browser print dialog.
-    const timer = window.setTimeout(() => window.print(), 0);
+    // Wait for the chosen template to commit before opening native print.
+    const timer = window.setTimeout(() => {
+      if ('__TAURI_INTERNALS__' in window) {
+        void tauriApi.printPayroll().catch(() => setPrintMessage('Unable to open the printer.'));
+      } else {
+        window.print();
+      }
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [printTarget]);
   const printPayroll = (target: PayrollPrintTarget) => {

@@ -22,6 +22,11 @@ use tauri_plugin_opener::OpenerExt;
 use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID};
 
 #[tauri::command]
+fn print_payroll(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_health(state: State<'_, AppState>) -> serde_json::Value {
     serde_json::json!({"success":true,"service":"rfid-attendance-api","timestamp":chrono::Utc::now(),"timezone":"Asia/Manila","sqlite":"connected","lanEnabled":state.lan.enabled,"lan":{"bindAddress":state.lan.bind_address.map(|v|v.to_string()),"port":state.lan.port,"connectedSseClients":state.connected_sse_clients.load(std::sync::atomic::Ordering::Relaxed)},"googleSheetsExport":if state.lan.sheets_sync_endpoint.is_some() || state.lan.google_spreadsheet_id.is_some() { "configured" } else { "disabled" }})
 }
@@ -1962,6 +1967,7 @@ pub fn run() {
             scan_rfid,
             scanner_status,
             scanner_pause,
+            print_payroll,
             upload_photo,
             admin_users,
             admin_list_users,

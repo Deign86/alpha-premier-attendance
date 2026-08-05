@@ -6,6 +6,7 @@ import type { ArtifactExportResponse, AttendanceXlsxExportResponse, LanStatusRes
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
   getHealth: () => invoke<Record<string, unknown>>('get_health'),
+  printPayroll: () => invoke<void>('print_payroll'),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),
   lanStatus: () => invoke<LanStatusResponse>('lan_status'),
   lanStart: () => invoke<LanStatusResponse>('lan_start'),
