@@ -2374,6 +2374,9 @@ function UserEditor({
     event.preventDefault();
     const payload = {
       ...form,
+      // "Not set" renders as "" in the select; send null so the backend
+      // clears the field instead of writing an empty string.
+      gender: form.gender || null,
       dailyRate: form.employeeType === "EMPLOYEE" ? form.dailyRate : null,
       payrollProfileId:
         form.employeeType === "EMPLOYEE" ? form.payrollProfileId : null,

@@ -121,11 +121,6 @@ pub struct DatabaseConfig {
     pub path: Option<String>,
 }
 
-impl DatabaseConfig {
-    pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, _, _, database)| database)
-    }
-}
 
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -140,17 +135,8 @@ impl Default for ScannerConfig {
     }
 }
 
-impl ScannerConfig {
-    pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, _, scanner, _)| scanner)
-    }
-}
 
 impl LanConfig {
-    pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(lan, _, _, _)| lan)
-    }
-
     pub fn validate(&self) -> Result<(), String> {
         if !self.enabled { return Ok(()); }
         self.validate_runtime()
@@ -350,7 +336,6 @@ fn is_private(address: IpAddr) -> bool {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
-    use uuid::Uuid;
 
     #[test]
     fn defaults_disable_lan() {

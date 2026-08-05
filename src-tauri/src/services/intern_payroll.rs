@@ -11,10 +11,6 @@ pub const INTERN_LATE_DEDUCTION_PER_HOUR_PHP: i64 = 10;
 /// Payroll profile id stored on intern cutoff records (not a payroll_profiles row).
 pub const INTERN_PAYROLL_PROFILE_ID: &str = "INTERN_STANDARD";
 
-pub fn late_deduction_centavos(daily_rate_centavos: i64, late_hours: i64, grace_hours: i64) -> i64 {
-    floor_zero((late_hours - grace_hours).max(0) * daily_rate_centavos / 8)
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct InternPayrollResult { pub computed_time_in: String, pub computed_time_out: String, pub late_hours: i64, pub late_deduction_centavos: i64, pub grace_used: bool, pub base_pay_centavos: i64, pub daily_pay_centavos: i64, pub worked_hours: i64 }
 
@@ -39,7 +35,6 @@ fn ceil_hour(value: DateTime<chrono_tz::Tz>) -> DateTime<chrono_tz::Tz> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn grace_and_floor_are_applied() { assert_eq!(late_deduction_centavos(80000, 3, 1), 20000); assert_eq!(late_deduction_centavos(100, 0, 1), 0); }
     #[test] fn worked_hours_exclude_lunch_but_keep_fixed_daily_pay() {
         // 08:00–17:00 → 8 paid hours after the 12:00–13:00 lunch cut.
         let result = calculate("2026-08-01", "2026-08-01T08:00:00+08:00", "2026-08-01T17:00:00+08:00", true).unwrap();

@@ -43,8 +43,10 @@ pub enum LanAttendanceEvent {
     #[serde(rename = "attendance-updated")]
     AttendanceUpdated { event_id: String, server_instance_id: String, sequence: u64, occurred_at: DateTime<Utc>, request_id: String, attendance_date: String, attendance_id: String, cause: String, mutation: String, attendance: Option<LanAttendanceRow> },
     #[serde(rename = "connection-status")]
+    #[allow(dead_code)] // protocol contract: the viewer HTML listens for this event; the server does not currently emit it
     ConnectionStatus { event_id: String, server_instance_id: String, sequence: u64, occurred_at: DateTime<Utc>, status: String, connection_id: String },
     #[serde(rename = "stale-data")]
+    #[allow(dead_code)] // protocol contract: the viewer HTML listens for this event; stream errors emit a raw stale-data SSE event instead
     StaleData { event_id: String, server_instance_id: String, sequence: u64, occurred_at: DateTime<Utc>, reason: String, should_refetch: bool },
 }
 
@@ -82,6 +84,10 @@ impl LanIssue {
 /// phase and the diagnostic issue shown by the Live Attendance panel.
 #[derive(Debug, Clone)]
 pub enum LanStartError {
+    /// Maps to `LanIssue::ConfigInvalid` → the viewer's `config_invalid`
+    /// guidance panel. Config validation currently runs at app startup, so
+    /// this is never raised at runtime; kept for the frontend contract.
+    #[allow(dead_code)]
     Config(String),
     NoLanIp,
     LoopbackBind,

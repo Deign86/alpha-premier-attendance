@@ -34,7 +34,7 @@ pub fn lunch_excluded_seconds(start: DateTime<Tz>, end: DateTime<Tz>) -> i64 {
             )
             .single()
             .expect("12:00 is always a valid Manila time");
-        let lunch_end = lunch_start + Duration::hours(1);
+        let lunch_end = lunch_start + Duration::hours(i64::from(LUNCH_END_HOUR - LUNCH_START_HOUR));
         let overlap_start = start.max(lunch_start);
         let overlap_end = end.min(lunch_end);
         if overlap_end > overlap_start {

@@ -305,7 +305,7 @@ pub async fn process_restore_request(data_dir: &Path, db_path: &Path) -> Restore
 mod tests {
     use super::*;
     use crate::config::ScannerConfig;
-    use crate::state::{AppState, MIGRATOR};
+    use crate::state::AppState;
     use sqlx::sqlite::SqlitePoolOptions;
 
     /// Build a real attendance database at `path` with one seeded user.

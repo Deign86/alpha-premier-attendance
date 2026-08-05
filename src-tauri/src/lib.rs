@@ -90,6 +90,16 @@ async fn admin_list_users(
     admin_users(state, token).await
 }
 
+/// Normalize a gender payload before it hits the `gender IN ('MALE','FEMALE')`
+/// CHECK constraint: trim + uppercase (`"male"` → `"MALE"`) and treat
+/// empty/whitespace as unset so the editor's "Not set" option clears the
+/// field instead of writing a value the database rejects.
+fn normalize_gender(value: Option<&str>) -> Option<String> {
+    value
+        .map(|g| g.trim().to_ascii_uppercase())
+        .filter(|g| !g.is_empty())
+}
+
 #[tauri::command]
 async fn admin_upsert_user(
     state: State<'_, AppState>,
@@ -123,19 +133,23 @@ async fn admin_upsert_user(
         .get("employeeType")
         .and_then(|v| v.as_str())
         .unwrap_or("INTERN");
-    let gender = user.get("gender").and_then(|v| v.as_str());
+    // Normalize so no value can violate the `gender IN ('MALE','FEMALE')`
+    // CHECK constraint (see `normalize_gender`).
+    let gender = normalize_gender(user.get("gender").and_then(|v| v.as_str()));
     if user_id.is_empty()
         || rfid_uid.is_empty()
         || full_name.is_empty()
         || !matches!(status, "ACTIVE" | "INACTIVE")
         || !matches!(employee_type, "INTERN" | "EMPLOYEE")
-        || gender.is_some_and(|g| !matches!(g, "MALE" | "FEMALE"))
+        || gender
+            .as_deref()
+            .is_some_and(|g| !matches!(g, "MALE" | "FEMALE"))
     {
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
     let now = chrono::Utc::now().to_rfc3339();
     let result = sqlx::query("INSERT INTO users (user_id, rfid_uid, full_name, department, status, created_at, employee_type, daily_rate_centavos, payroll_profile_id, photo_url, gender, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET rfid_uid=excluded.rfid_uid, full_name=excluded.full_name, department=excluded.department, status=excluded.status, employee_type=excluded.employee_type, gender=COALESCE(excluded.gender, users.gender), daily_rate_centavos=excluded.daily_rate_centavos, payroll_profile_id=excluded.payroll_profile_id, photo_url=excluded.photo_url, revision=users.revision+1, updated_at=excluded.updated_at")
-        .bind(user_id).bind(&rfid_uid).bind(full_name).bind(user.get("department").and_then(|v| v.as_str())).bind(status).bind(&now).bind(employee_type).bind(gender).bind(user.get("dailyRate").and_then(|v| v.as_i64()).map(|v| v * 100)).bind(user.get("payrollProfileId").and_then(|v| v.as_str())).bind(user.get("photoUrl").and_then(|v| v.as_str())).bind(&now).execute(&state.db).await.map_err(|e| if e.to_string().contains("UNIQUE") { "USER_CONFLICT".into() } else { e.to_string() })?;
+        .bind(user_id).bind(&rfid_uid).bind(full_name).bind(user.get("department").and_then(|v| v.as_str())).bind(status).bind(&now).bind(employee_type).bind(gender.as_deref()).bind(user.get("dailyRate").and_then(|v| v.as_i64()).map(|v| v * 100)).bind(user.get("payrollProfileId").and_then(|v| v.as_str())).bind(user.get("photoUrl").and_then(|v| v.as_str())).bind(&now).execute(&state.db).await.map_err(|e| if e.to_string().contains("UNIQUE") { "USER_CONFLICT".into() } else { e.to_string() })?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     enqueue_sync(&state, "Users", user_id, "UPSERT", &user).await;
     Ok(serde_json::json!({"success":true,"created":result.rows_affected()==1,"userId":user_id}))
@@ -2220,10 +2234,25 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_exports_path, enrich_cutoff_input, generated_file_metadata, php_to_centavos, photo_is_within_limits};
+    use super::{canonical_exports_path, enrich_cutoff_input, generated_file_metadata, normalize_gender, php_to_centavos, photo_is_within_limits};
     use crate::config::{LanConfig, OfficeConfig};
     use crate::state::AppState;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[test]
+    fn gender_normalization_can_never_violate_the_check_constraint() {
+        // NULL / absent stays unset.
+        assert_eq!(normalize_gender(None), None);
+        // "Not set" (empty / whitespace) clears the field instead of writing
+        // an empty string the `CHECK (gender IN ('MALE','FEMALE'))` rejects.
+        assert_eq!(normalize_gender(Some("")), None);
+        assert_eq!(normalize_gender(Some("   ")), None);
+        // Casing and padding are normalized to the stored uppercase form.
+        assert_eq!(normalize_gender(Some("male")), Some("MALE".to_string()));
+        assert_eq!(normalize_gender(Some(" Female ")), Some("FEMALE".to_string()));
+        // Already-canonical values pass through untouched.
+        assert_eq!(normalize_gender(Some("MALE")), Some("MALE".to_string()));
+    }
 
     #[tokio::test]
     async fn enriches_cutoff_input_from_the_selected_employee() {

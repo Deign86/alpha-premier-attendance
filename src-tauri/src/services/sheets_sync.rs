@@ -21,6 +21,9 @@ struct JwtClaims<'a> {
     exp: i64,
 }
 
+/// Reserved for schema-version negotiation with the Google Sheets endpoint;
+/// kept so the version intent is documented in one place.
+#[allow(dead_code)]
 pub const SHEETS_SCHEMA_VERSION: i64 = 2;
 const SHEETS_SCHEMA_MISMATCH_ERROR: &str = "Google Sheets schema mismatch";
 const SHEETS_ROW_ID_MISSING_ERROR: &str = "Google Sheets row identity is missing";
