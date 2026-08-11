@@ -61,15 +61,17 @@ fn default_allow_runtime_start() -> bool { true }
 #[serde(rename_all = "lowercase")]
 pub enum ScannerMode {
     /// The reader behaves as a keyboard wedge: it types the card UID followed
-    /// by Enter. A global low-level keyboard hook captures the stream even when
-    /// the webview is not focused. This is the default and recommended mode for
-    /// the common USB RFID readers.
+    /// by Enter. Generic keyboard capture is intentionally disabled for
+    /// background attendance because it cannot isolate the physical reader
+    /// from ordinary foreground typing.
     #[default]
     Keyboard,
     /// The reader exposes raw HID reports. Requires `scanner.hid_vid` and
     /// `scanner.hid_pid` so the app never guesses which HID device is the
     /// reader.
     Hid,
+    /// The reader exposes a serial/COM port and writes ASCII UID bytes.
+    Serial,
     /// Use HID when `scanner.hid_vid`/`scanner.hid_pid` are configured,
     /// otherwise fall back to the keyboard wedge.
     Auto,
@@ -100,11 +102,18 @@ pub struct ScannerConfig {
     /// HID mode only: product id of the RFID reader (e.g. 0x5678).
     #[serde(default)]
     pub hid_pid: Option<u16>,
+    /// Serial mode only: COM device path (for example `COM4`).
+    #[serde(default)]
+    pub serial_port: Option<String>,
+    /// Serial mode only: baud rate used by the reader.
+    #[serde(default = "default_serial_baud_rate")]
+    pub serial_baud_rate: u32,
 }
 
 fn default_enter_suffix() -> bool { true }
 fn default_idle_timeout_ms() -> u64 { 150 }
 fn default_dedup_ms() -> u64 { 300 }
+fn default_serial_baud_rate() -> u32 { 115_200 }
 
 /// Local SQLite database location override (`[database]` in config.toml).
 ///
@@ -131,6 +140,21 @@ impl Default for ScannerConfig {
             dedup_ms: default_dedup_ms(),
             hid_vid: None,
             hid_pid: None,
+            serial_port: None,
+            serial_baud_rate: default_serial_baud_rate(),
+        }
+    }
+}
+
+impl ScannerConfig {
+    /// A background capture path is safe only when the configured reader is a
+    /// uniquely addressed raw HID device. Keyboard-wedge input is deliberately
+    /// excluded because it is delivered to the foreground application too.
+    pub fn background_capture_allowed(&self) -> bool {
+        match self.mode {
+            ScannerMode::Hid | ScannerMode::Auto => self.hid_vid.is_some() && self.hid_pid.is_some(),
+            ScannerMode::Serial => self.serial_port.as_ref().is_some_and(|port| !port.trim().is_empty()),
+            ScannerMode::Keyboard => false,
         }
     }
 }
@@ -442,6 +466,24 @@ mod tests {
         assert_eq!(root.scanner.idle_timeout_ms, 200);
         assert_eq!(root.scanner.hid_vid, Some(0x1234));
         assert_eq!(root.scanner.hid_pid, Some(0x5678));
+    }
+
+    #[test]
+    fn keyboard_wedge_is_not_background_safe() {
+        assert!(!ScannerConfig::default().background_capture_allowed());
+        let hid = ScannerConfig {
+            mode: ScannerMode::Hid,
+            hid_vid: Some(0x1234),
+            hid_pid: Some(0x5678),
+            ..ScannerConfig::default()
+        };
+        assert!(hid.background_capture_allowed());
+        let serial = ScannerConfig {
+            mode: ScannerMode::Serial,
+            serial_port: Some("COM4".into()),
+            ..ScannerConfig::default()
+        };
+        assert!(serial.background_capture_allowed());
     }
 
     #[test]

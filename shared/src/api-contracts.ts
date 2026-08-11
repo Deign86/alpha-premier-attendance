@@ -5,6 +5,33 @@ export { DEFAULT_OFFICE_IDENTITY, OFFICE_FALLBACK_DISPLAY, composeOfficeAddress,
 export const scanSources = ['RFID', 'MANUAL_TEST'] as const;
 export type ScanSource = (typeof scanSources)[number];
 
+/** Native scanner transports. Keyboard-wedge detection is never a verified background source. */
+export const scannerTransports = ['raw_hid', 'serial', 'vendor_sdk', 'keyboard_wedge_detection', 'disabled'] as const;
+export type ScannerTransport = (typeof scannerTransports)[number];
+
+/** Confidence is about the capture path, not about timing or UID shape alone. */
+export const scannerConfidences = ['device_verified', 'prefix_suffix_verified', 'heuristic_candidate', 'rejected'] as const;
+export type ScannerConfidence = (typeof scannerConfidences)[number];
+
+export type ForegroundInputProtection = 'guaranteed' | 'not_guaranteed' | 'not_applicable';
+
+export type ScannerStatus = {
+  state: 'idle' | 'collecting' | 'validated' | 'rejected' | 'cooldown' | 'suspended' | 'offline' | 'error';
+  transport: ScannerTransport;
+  confidence: ScannerConfidence | null;
+  captureReady: boolean;
+  foregroundInputProtection: ForegroundInputProtection;
+  paused: boolean;
+  message: string;
+  reasonCode?: string | null;
+  observedAt: string;
+};
+
+/** Only verified device-specific, non-keyboard transports may write while hidden. */
+export function canCreateBackgroundAttendance(confidence: ScannerConfidence, transport: ScannerTransport): boolean {
+  return confidence === 'device_verified' && ['raw_hid', 'serial', 'vendor_sdk'].includes(transport);
+}
+
 export const attendanceActions = ['TIME_IN', 'TIME_OUT'] as const;
 export type AttendanceAction = (typeof attendanceActions)[number];
 

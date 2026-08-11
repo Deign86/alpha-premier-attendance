@@ -1,49 +1,116 @@
-# LAN Live Attendance Viewer Fix
+# Background RFID Scan Support
 
-## Root causes found
+**Goal:** Receive verified RFID scans while the Windows Tauri app is minimized or tray-hidden without changing foreground keyboard input.
 
-- The legacy Node server called `app.listen(port)` and only advertised `localhost`; bind host and LAN diagnostics were not configurable.
-- The Vite proxy target was hardcoded to `http://localhost:3001`.
-- Browser API calls were scattered across `client/src/api.ts`, so a separately hosted viewer could not consistently honor an API host override.
-- The Tauri viewer already had a read-only Axum server, private IPv4 selection, SSE, polling fallback, and connection status; those existing safeguards are retained.
+**Implemented boundary:** Tauri v2 owns native capture. Only configured raw HID, serial, or vendor transports may be treated as device-verified background input. Generic keyboard-wedge input is disabled for background attendance.
 
-## Files changed
+## Current Repository Findings
 
-- `client/src/network.ts`, `client/src/network.test.ts`: centralized browser API, SSE, and WebSocket URL resolution.
-- `client/src/api.ts`: route all web API requests through the resolver.
-- `client/src/dev-server-config.ts`, `client/vite.config.ts`: configurable proxy and LAN-accessible Vite host.
-- `client/src/vite-config.test.ts`: proxy contract test.
-- `client/.env.example`, `server/.env.example`: documented LAN endpoint and bind settings.
-- `server/src/config.ts`, `server/src/app.ts`, `server/src/index.ts`: configurable host, targeted CORS, LAN URL diagnostics.
-- `scripts/start-dev.mjs`: LAN bind defaults for the development server.
-- `README.md`: same-Wi-Fi setup, platform IP lookup, firewall and troubleshooting guidance.
+- The packaged app is Windows 10/11-first, uses Tauri v2, Rust, SQLite, and a queued Sheets exporter.
+- `src-tauri/src/services/scanner.rs` previously installed a global `rdev` hook and could not identify the physical input device.
+- `client/src/App.tsx` previously auto-focused a scanner input and classified browser key bursts; this could steal focus and could not affect other applications.
+- The native HID path already uses `hidapi` with configured VID/PID values.
+- Tauri had no tray lifecycle; close only triggered a best-effort database backup.
 
-## LAN architecture
+## Problem Model and Constraints
 
-The packaged flow remains `Tauri -> Axum LAN server -> read-only browser viewer`. The Rust server binds the configured private IPv4 or the detected active LAN IPv4, serves the snapshot and SSE stream, reconnects with polling fallback, and exposes only attendance/health routes. The web development flow uses Vite on `0.0.0.0`; browser requests default to the current origin and can be redirected with `VITE_API_BASE_URL`.
+- A browser listener cannot monitor system-wide input while minimized and cannot suppress keystrokes in another application.
+- Timing, length, and character heuristics cannot identify a physical reader and must never be treated as device certainty.
+- `preventDefault()` is limited to the webview and is not a solution for foreground applications.
+- The generic keyboard hook is therefore disabled for background capture. Keyboard-wedge hardware must be reconfigured to a device-specific transport before production background use.
 
-The Node API binds to `HOST` (default `0.0.0.0`) and `PORT` (default `3001`), prints loopback plus detected RFC1918 URLs, and permits only configured CORS origins for cross-origin requests.
+## Recommended Architecture
 
-## Test matrix
+- `scanner.rs` remains the native capture boundary and feeds the existing normalization, deduplication, and Tauri event pipeline.
+- Configured raw-HID readers use `hidapi`; configured serial/COM readers use `serialport`; keyboard mode reports offline instead of installing a global hook.
+- The UI listens for native events but never focuses a scanner input automatically. Manual entry remains an explicit opt-in workflow.
+- A Tauri system tray is installed at startup with Show and Exit actions. Closing the main window hides it; tray Exit requests process termination.
+- Local SQLite remains authoritative; existing LAN events, audit rows, and sync queue behavior remain unchanged.
 
-| Scenario | Expected result |
-| --- | --- |
-| Host machine opens localhost | Snapshot and health succeed. |
-| Device 1 opens host LAN IPv4 | Viewer loads without localhost requests. |
-| Device 2 opens host LAN IPv4 | Same live snapshot and SSE stream are available. |
-| New scan while both viewers are open | Both viewers update without refresh. |
-| SSE disconnect | Viewer shows reconnecting/offline status, then refreshes current state and avoids duplicate rows. |
-| Untrusted CORS origin | API rejects the cross-origin request unless explicitly configured. |
+## Alternatives and Trade-offs
 
-## Manual verification
+| Approach | Background-safe | Decision |
+| --- | --- | --- |
+| Configured raw HID/serial/vendor device | Yes, when the transport is non-keyboard | Preferred |
+| Raw Input observation | Identifies devices but does not suppress legacy keyboard delivery | Discovery only |
+| Keyboard prefix/suffix or timing | Classifies content but can leak into the focused app | Detection-only/unsupported for background writes |
+| Generic global hook | Cannot prove source device | Disabled |
 
-1. Start `npm run tauri:dev` or the packaged executable with `[lan] enabled = true` and confirm the printed/panel URL is a private LAN IPv4.
-2. On the host, run `Invoke-WebRequest http://127.0.0.1:4173/api/health`.
-3. On two separate same-Wi-Fi devices, open `http://<host-lan-ip>:4173/attendance`.
-4. Scan an enrolled card and confirm the row appears on both devices within two seconds.
-5. Temporarily block or disconnect the host network; confirm status changes to reconnecting/offline, then reconnect and confirm the current snapshot returns.
-6. For web development, open the Vite LAN URL and verify `VITE_API_BASE_URL` is empty or points to the intended API host.
+Windows is the supported packaged target. macOS and Linux require separate HID/serial adapters and platform permission work; no browser-only global listener is supported.
 
-## Limitations and security
+## Input Classification Contract
 
-Windows Firewall and Wi-Fi AP/client isolation remain environmental controls. The viewer is intentionally read-only and private-network scoped; admin, setup, payroll, exports, photos, and secrets remain local. Do not forward the port publicly, enable UPnP, or use a public network profile for office sharing.
+The shared contract in `shared/src/api-contracts.ts` defines:
+
+- Transports: `raw_hid`, `serial`, `vendor_sdk`, `keyboard_wedge_detection`, `disabled`.
+- Confidence: `device_verified`, `prefix_suffix_verified`, `heuristic_candidate`, `rejected`.
+- `canCreateBackgroundAttendance()` returns true only for `device_verified` raw HID, serial, or vendor input.
+- Scanner status includes capture readiness, transport, confidence, pause state, and safe reason metadata; it does not include typed keyboard content.
+
+## Data Flow and State Model
+
+Native reader -> scan buffer -> normalization -> confidence gate -> `rfid-scan` event -> existing native/Tauri attendance command -> SQLite -> attendance event and sync queue.
+
+States are idle/connected, scanning, invalid/error, offline, and paused. Repeated UIDs are rejected first by native deduplication and then by the existing backend cooldown. Offline export does not invalidate a committed local attendance row.
+
+## Implementation Phases
+
+1. Repository and hardware audit: record reader model, transport, VID/PID, UID lengths, terminator, and leading-zero behavior.
+2. Safe capture proof: use configured raw HID or another device-specific transport; keep keyboard-wedge mode disabled for background writes.
+3. Native lifecycle: tray, hide-on-close, explicit exit, reconnect/error status, and no focus changes.
+4. Admin calibration/settings: add only after the deployed reader transport is confirmed; protect changes with the existing admin session.
+5. Hardware/security rollout: validate Windows builds, signing, antivirus/EDR behavior, notifications, sleep/resume, and offline sync.
+
+## File-by-File Change Plan
+
+- `src-tauri/Cargo.toml`: enable Tauri `tray-icon`, add the maintained serial transport, and remove the global `rdev` dependency.
+- `src-tauri/src/services/scanner.rs`: refuse generic keyboard background capture while preserving raw-HID buffering, normalization, deduplication, and status events.
+- `src-tauri/src/config.rs`: add serial settings, `background_capture_allowed()`, and document the keyboard safety policy.
+- `src-tauri/src/lifecycle.rs`: provide tray installation, hide/exit policy, and tray actions.
+- `src-tauri/src/lib.rs`: install the tray and hide the main window on ordinary close while preserving explicit Exit.
+- `client/src/App.tsx`: remove scanner auto-focus, browser key-burst classification, and background keyboard interception.
+- `client/src/App.test.tsx`: verify no focus stealing and no keyboard-burst submission.
+- `shared/src/api-contracts.ts` and its tests: define scanner transports, confidence levels, status shape, and background-write policy.
+- `README.md`, `docs/hardware-verification.md`, and `src-tauri/config.example.toml`: replace unsafe global-hook/keyboard-wedge claims with the device-specific transport requirement.
+
+## Configuration and Settings
+
+- `scanner.mode = "hid"` requires `hid_vid` and `hid_pid`; `auto` uses HID only when both are present.
+- `scanner.mode = "keyboard"` is retained for configuration compatibility but reports offline and does not install a global listener.
+- Existing `enter_suffix`, idle timeout, and dedup settings remain available for verified HID report assembly.
+- Admin calibration, serial/vendor settings, and diagnostics remain a follow-up gated by hardware confirmation.
+
+## Privacy, Security, and Permissions
+
+- Ordinary keyboard input is not captured, delayed, replayed, suppressed, or logged.
+- Canonical attendance/audit storage retains only the identifiers required by the existing attendance model.
+- Do not add a kernel filter driver or generic keyboard suppression without a separate signing, antivirus, licensing, and endpoint-security review.
+- Reader permission or connection failure is surfaced as offline/error with no heuristic fallback.
+
+## Test Plan
+
+- Shared unit tests cover transport/confidence literals and the background-write gate.
+- Rust tests cover keyboard safety configuration, tray hide/exit policy, scanner normalization, idle completion, duplicate handling, and the existing SQLite/sync behavior.
+- Client tests cover native event submission, manual entry, no auto-focus, no browser key-burst submission, and existing result/error flows.
+- Full regression includes normal typing, fast typing, paste, IME, RDP, multiple keyboards, malformed input, minimized/unfocused UI, offline export, and app build checks.
+- Physical hardware validation remains required for the actual deployed reader before enabling background attendance.
+
+## Acceptance Criteria
+
+- Configured device-specific HID scans can be received while the app is minimized or tray-hidden without focus changes.
+- Ordinary keyboard input is not blocked, modified, delayed, replayed, or logged.
+- Keyboard-wedge/timing-only input cannot create background attendance records.
+- Invalid and duplicate scans remain deterministic and do not create unintended rows.
+- Closing hides the app; tray Exit terminates it explicitly.
+- Missing reader, permission failure, or unsupported transport degrades to an offline state.
+
+## Open Questions / Decisions Needed
+
+- Confirm the deployed reader model and whether it exposes non-keyboard HID, serial, or vendor SDK access.
+- Confirm valid UID lengths, character set, terminator, and leading-zero behavior.
+- Confirm whether post-restart auto-launch is required; explicit process exit currently stops scanning.
+- Confirm whether the existing admin PIN is the correct role for future scanner settings and diagnostics.
+
+## Out of Scope
+
+- Generic global keyboard interception, browser-only background capture, kernel filter drivers, remote/public attendance writers, multi-writer deployments, and scanning after the process has explicitly exited.

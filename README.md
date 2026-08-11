@@ -30,7 +30,7 @@ SQLite is the source of truth. Google Sheets is an optional write-only export ta
 - Node.js 20 or newer and npm for development
 - Rust stable with the Windows desktop toolchain for Tauri development
 - Microsoft WebView2 Runtime on the target Windows machine when using the portable executable
-- A USB RFID reader. Keyboard-wedge readers (they type the card UID followed by Enter) work out of the box; raw HID readers can be enabled per-device through `scanner.hid_vid` / `scanner.hid_pid` in `config.toml`
+- An RFID reader. Background scanning requires a configured serial/COM, vendor-SDK, or uniquely addressed raw-HID reader through `[scanner]`; keyboard-wedge input is detection-only because a generic hook cannot isolate it from ordinary foreground typing.
 
 ## Install And Run
 
@@ -224,7 +224,7 @@ No public bind, router forwarding, UPnP mapping, public DNS record, or cloud tun
 
 ## RFID And Attendance Rules
 
-- Card taps are captured at the native layer: a global keyboard-wedge hook (default) or raw HID reads (configured per device) feed one normalized scan pipeline in Rust.
+- Card taps are captured at the native layer from a configured device-specific transport. Generic keyboard-wedge capture is intentionally disabled for background attendance because it cannot be isolated from the foreground application.
 - The webview never needs a focused text box. The Rust layer completes a scan on the reader's Enter suffix or an idle-timeout fallback, sanitizes the UID to uppercase hex, strips separators, validates length, and dedupes repeats within a short window.
 - The kiosk receives clean `rfid-scan` events and drives fast feedback: processing, success with the employee photo, unknown card, duplicate cooldown, and error states.
 - The scanner listener pauses while the operator types in admin, setup, or manual-entry screens so keystrokes are never misread as card taps.

@@ -5,9 +5,9 @@
 //! depending on a focused webview text input.
 //!
 //! Two hardware modes are supported and normalized into one pipeline:
-//! - `keyboard` (default): the reader behaves as a keyboard wedge and types the
-//!   card UID followed by Enter. A global low-level keyboard hook (`rdev`)
-//!   captures the stream even when the webview is not focused.
+//! - `keyboard`: legacy keyboard-wedge configuration is recognized but not
+//!   started by the background service because a generic hook cannot isolate
+//!   the reader from ordinary foreground typing.
 //! - `hid`: the reader exposes raw HID reports. With explicit
 //!   `scanner.hid_vid` / `scanner.hid_pid` configuration the app opens the
 //!   device directly and extracts the ASCII UID from its reports.
@@ -72,12 +72,21 @@ pub struct ScannerHandle {
 impl ScannerHandle {
     pub fn new(config: ScannerConfig) -> Self {
         let mode = mode_label(config.mode);
+        let (state, message, detail) = if config.background_capture_allowed() {
+            (ScannerState::Offline, "Scanner starting", None)
+        } else {
+            (
+                ScannerState::Offline,
+                "Keyboard wedge disabled for background scanning",
+                Some("Configure a serial, vendor SDK, or uniquely addressed raw HID reader".into()),
+            )
+        };
         Self {
             config,
             status: Mutex::new(ScannerStatus {
-                state: ScannerState::Connected,
-                message: "Waiting for card".into(),
-                detail: None,
+                state,
+                message: message.into(),
+                detail,
                 mode,
                 paused: false,
             }),
@@ -104,6 +113,7 @@ pub fn mode_label(mode: ScannerMode) -> String {
     match mode {
         ScannerMode::Keyboard => "keyboard",
         ScannerMode::Hid => "hid",
+        ScannerMode::Serial => "serial",
         ScannerMode::Auto => "auto",
     }
     .to_string()
@@ -177,6 +187,7 @@ pub fn start(app: AppHandle, handle: Arc<ScannerHandle>) {
     match config.mode {
         ScannerMode::Keyboard => spawn_keyboard(&runtime, config),
         ScannerMode::Hid => spawn_hid(&runtime, config),
+        ScannerMode::Serial => spawn_serial(&runtime, config),
         ScannerMode::Auto => {
             if config.hid_vid.is_some() && config.hid_pid.is_some() {
                 spawn_hid(&runtime, config);
@@ -191,38 +202,70 @@ pub fn start(app: AppHandle, handle: Arc<ScannerHandle>) {
 // Sources
 // ---------------------------------------------------------------------------
 
-/// Keyboard-wedge source: global low-level keyboard hook. Works whether or not
-/// the webview (or any other window) has focus.
-fn spawn_keyboard(runtime: &Arc<Runtime>, config: ScannerConfig) {
-    let hook_runtime = Arc::clone(runtime);
-    let status_runtime = Arc::clone(runtime);
-    let enter_suffix = config.enter_suffix;
+/// Keyboard-wedge capture is intentionally not started by the background
+/// service. A generic keyboard hook cannot prove which physical device emitted
+/// a key, so enabling it would risk leaking ordinary typing into another app.
+fn spawn_keyboard(runtime: &Arc<Runtime>, _config: ScannerConfig) {
+    let _ = _config.enter_suffix;
+    set_status(
+        runtime,
+        ScannerState::Offline,
+        "Keyboard wedge disabled for background scanning",
+        Some("Foreground keyboard input cannot be isolated by a generic hook".into()),
+    );
+}
+
+/// Serial source: reads ASCII bytes from a configured COM/tty device. This is
+/// a device-specific transport and therefore does not touch foreground input.
+fn spawn_serial(runtime: &Arc<Runtime>, config: ScannerConfig) {
+    let runtime = Arc::clone(runtime);
     std::thread::spawn(move || {
-        let result = rdev::listen(move |event| {
-            let rdev::EventType::KeyPress(key) = event.event_type else {
-                return;
-            };
-            if is_enter(key) && enter_suffix {
-                flush_buffer(&hook_runtime);
-                return;
-            }
-            // Deterministic VK-to-character mapping only. Card UIDs are hex, so
-            // relying on the active keyboard layout (`Event.name` on Windows
-            // runs AttachThreadInput + ToUnicodeEx for every keystroke) risks
-            // wrong characters on non-US layouts and is slow enough to exceed
-            // the low-level-hook timeout, after which Windows silently removes
-            // the hook and the kiosk stops responding to card taps.
-            if let Some(ch) = key_text(key) {
-                push_char(&hook_runtime, ch);
-            }
-        });
-        if let Err(error) = result {
+        let Some(port_name) = config.serial_port.clone().filter(|value| !value.trim().is_empty()) else {
             set_status(
-                &status_runtime,
-                ScannerState::Offline,
+                &runtime,
+                ScannerState::Error,
                 "Scanner unavailable",
-                Some(format!("keyboard hook failed: {error:?}")),
+                Some("Serial mode requires scanner.serial_port".into()),
             );
+            return;
+        };
+        let mut port = match serialport::new(&port_name, config.serial_baud_rate)
+            .timeout(Duration::from_millis(100))
+            .open()
+        {
+            Ok(port) => port,
+            Err(error) => {
+                set_status(
+                    &runtime,
+                    ScannerState::Offline,
+                    "Scanner unavailable",
+                    Some(format!("open serial device {port_name} failed: {error}")),
+                );
+                return;
+            }
+        };
+        set_status(
+            &runtime,
+            ScannerState::Connected,
+            "Scanner connected",
+            Some(format!("serial {port_name}")),
+        );
+        let mut bytes = [0u8; 256];
+        loop {
+            match std::io::Read::read(&mut *port, &mut bytes) {
+                Ok(0) => continue,
+                Ok(length) => feed_bytes(&runtime, &bytes[..length]),
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+                Err(error) => {
+                    set_status(
+                        &runtime,
+                        ScannerState::Offline,
+                        "Scanner unavailable",
+                        Some(format!("serial read failed: {error}")),
+                    );
+                    break;
+                }
+            }
         }
     });
 }
@@ -289,59 +332,6 @@ fn spawn_hid(runtime: &Arc<Runtime>, config: ScannerConfig) {
             }
         }
     });
-}
-
-fn is_enter(key: rdev::Key) -> bool {
-    matches!(key, rdev::Key::Return | rdev::Key::KpReturn)
-}
-
-/// Layout-independent fallback for drivers that do not populate `Event.name`.
-/// Accepts only the characters keyboard-wedge readers actually send.
-///
-/// This is now the primary capture path: card UIDs are uppercase hex, so a
-/// deterministic virtual-key mapping is always correct and never touches the
-/// active keyboard layout or the slow Win32 name lookup.
-fn key_text(key: rdev::Key) -> Option<char> {
-    use rdev::Key::*;
-    match key {
-        Num0 | Kp0 => Some('0'),
-        Num1 | Kp1 => Some('1'),
-        Num2 | Kp2 => Some('2'),
-        Num3 | Kp3 => Some('3'),
-        Num4 | Kp4 => Some('4'),
-        Num5 | Kp5 => Some('5'),
-        Num6 | Kp6 => Some('6'),
-        Num7 | Kp7 => Some('7'),
-        Num8 | Kp8 => Some('8'),
-        Num9 | Kp9 => Some('9'),
-        KeyA => Some('A'),
-        KeyB => Some('B'),
-        KeyC => Some('C'),
-        KeyD => Some('D'),
-        KeyE => Some('E'),
-        KeyF => Some('F'),
-        KeyG => Some('G'),
-        KeyH => Some('H'),
-        KeyI => Some('I'),
-        KeyJ => Some('J'),
-        KeyK => Some('K'),
-        KeyL => Some('L'),
-        KeyM => Some('M'),
-        KeyN => Some('N'),
-        KeyO => Some('O'),
-        KeyP => Some('P'),
-        KeyQ => Some('Q'),
-        KeyR => Some('R'),
-        KeyS => Some('S'),
-        KeyT => Some('T'),
-        KeyU => Some('U'),
-        KeyV => Some('V'),
-        KeyW => Some('W'),
-        KeyX => Some('X'),
-        KeyY => Some('Y'),
-        KeyZ => Some('Z'),
-        _ => None,
-    }
 }
 
 /// Feed raw report bytes from an HID reader into the shared scan buffer.
@@ -533,8 +523,7 @@ fn set_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{key_text, normalize, ScanBuffer, ScanParse};
-    use rdev::Key;
+    use super::{normalize, ScanBuffer, ScanParse};
     use std::time::{Duration, Instant};
 
     fn valid(raw: &str) -> String {
@@ -542,21 +531,6 @@ mod tests {
             ScanParse::Valid(uid) => uid,
             other => panic!("expected valid scan for {raw:?}, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn key_text_covers_hex_digits_and_letters_layout_independently() {
-        assert_eq!(key_text(Key::Num0), Some('0'));
-        assert_eq!(key_text(Key::Num9), Some('9'));
-        assert_eq!(key_text(Key::Kp5), Some('5'));
-        assert_eq!(key_text(Key::KeyA), Some('A'));
-        assert_eq!(key_text(Key::KeyF), Some('F'));
-        assert_eq!(key_text(Key::KeyZ), Some('Z'));
-        // Non-UID keys never enter the scan buffer.
-        assert_eq!(key_text(Key::SemiColon), None);
-        assert_eq!(key_text(Key::Space), None);
-        assert_eq!(key_text(Key::Return), None);
-        assert_eq!(key_text(Key::Tab), None);
     }
 
     #[test]

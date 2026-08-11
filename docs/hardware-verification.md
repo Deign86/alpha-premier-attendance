@@ -1,6 +1,6 @@
 # Hardware Verification Runbook
 
-Use this runbook before enabling real cards and after replacing a reader, kiosk PC, or USB port. It assumes an RFID reader operating as a USB HID keyboard wedge and a running kiosk client.
+Use this runbook before enabling real cards and after replacing a reader, kiosk PC, or USB port. It assumes a configured device-specific reader transport (raw HID, serial, or vendor SDK) and a running kiosk client. Keyboard-wedge readers are detection-only and cannot satisfy the background no-leakage requirement.
 
 ## Acceptance Criteria
 
@@ -21,9 +21,9 @@ Prepare one active test user, one inactive test user, one unknown card, and a di
 ## Procedure
 
 1. **Inspect the physical connection.** Plug the reader directly into the kiosk PC, avoid an unpowered hub, and confirm the reader's status light. In Device Manager, confirm it is listed under keyboards or HID devices.
-2. **Confirm keyboard mode.** Open Notepad outside the kiosk and scan the active test card. The UID should appear as printable characters. Verify whether the reader sends Enter. Delete the test text afterward.
+2. **Confirm the transport.** Record whether the reader exposes raw HID/serial/vendor access. If it is keyboard-wedge only, keep background attendance disabled; a Notepad test is diagnostic only and must not be treated as device verification.
 3. **Check UID formatting.** Compare the captured string with the `Users.rfid_uid` value. Confirm case, separators, leading zeros, and length. Normalize the roster or scanner configuration once; do not maintain multiple spellings.
-4. **Open the kiosk.** Load the kiosk window. No field needs to be focused: card taps are captured by the native Rust scanner listener even when the webview has no focus. Tap a card without clicking anything and confirm a result appears.
+4. **Open the kiosk.** Load the kiosk window. No field needs to be focused: verified device-specific input is captured by the native Rust scanner listener even when the webview has no focus. Tap a card without clicking anything and confirm a result appears.
 5. **Test Enter-suffixed scans.** Scan the active card. Confirm one request, a `TIME_IN` result, and one `WORKING` Attendance row. Note the `requestId`.
 6. **Test cooldown.** Present the same card again immediately. Confirm the UI reports cooldown/duplicate behavior and no second row is created.
 7. **Complete attendance.** After the cooldown, scan the same card once. Confirm one `TIME_OUT` result and that the original row has `time_out` populated and `status=COMPLETED`.

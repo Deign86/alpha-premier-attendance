@@ -112,10 +112,7 @@ const emptySetupForm: SetupForm = {
   photoUrl: "",
 };
 
-/** Keyboard-wedge readers type a burst of characters; humans do not. */
-const SCANNER_BURST_GAP_MS = 100;
-const SCANNER_MIN_BURST = 3;
-/** The scanner box and the native pipeline both capture the same tap; swallow the second copy. */
+/** The native pipeline deduplicates device events before they reach the UI. */
 const SCAN_DEDUP_WINDOW_MS = 2000;
 
 export function greetingForDate(date: Date, timeZone: string): string {
@@ -163,16 +160,8 @@ export default function App() {
           paused: true,
         },
   );
-  const scannerInputRef = useRef<HTMLInputElement>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestController = useRef<AbortController | null>(null);
-  // Keyboard-wedge capture state for the read-only scanner box: the burst is
-  // the only evidence that keystrokes came from a reader, not a person.
-  const scannerIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scanBufferRef = useRef("");
-  const burstArmed = useRef(false);
-  const lastScanKeyAt = useRef(0);
-  const rapidKeyCount = useRef(0);
   const recentScans = useRef(new Map<string, number>());
   // Synchronous in-flight guard: set before the first await so two rapid native
   // scan events can never start two attendance writes for the same tap.
@@ -207,20 +196,10 @@ export default function App() {
     window.requestAnimationFrame(() => setupInputRef.current?.focus());
   }, []);
 
-  const focusScannerInput = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      const el = scannerInputRef.current;
-      if (!el || el.disabled) return;
-      if (document.hasFocus && !document.hasFocus()) return;
-      el.focus({ preventScroll: true });
-    });
-  }, []);
-
   useEffect(
     () => () => {
       if (resetTimer.current) clearTimeout(resetTimer.current);
       requestController.current?.abort();
-      if (scannerIdleTimer.current) clearTimeout(scannerIdleTimer.current);
       if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
       if (setupSessionTimer.current) {
         clearInterval(setupSessionTimer.current);
@@ -261,14 +240,6 @@ export default function App() {
     setResult(null);
     setUid("");
     setManualUid("");
-    scanBufferRef.current = "";
-    burstArmed.current = false;
-    rapidKeyCount.current = 0;
-    lastScanKeyAt.current = 0;
-    if (scannerIdleTimer.current) {
-      clearTimeout(scannerIdleTimer.current);
-      scannerIdleTimer.current = null;
-    }
   }, []);
 
   const openSetup = useCallback(
@@ -524,72 +495,6 @@ export default function App() {
     [config.resultResetDelayMs, config.timezone, resetToReady],
   );
 
-  /** Flush the scanner burst as an attendance scan (keyboard-wedge path). */
-  const commitScanBuffer = useCallback(() => {
-    if (scannerIdleTimer.current) {
-      clearTimeout(scannerIdleTimer.current);
-      scannerIdleTimer.current = null;
-    }
-    burstArmed.current = false;
-    rapidKeyCount.current = 0;
-    lastScanKeyAt.current = 0;
-    const value = scanBufferRef.current;
-    scanBufferRef.current = "";
-    if (!value) return;
-    void submit(value, "RFID");
-  }, [submit]);
-
-  /**
-   * Scanner-mode key capture. The box is read-only, so keystrokes only come
-   * from a keyboard-wedge reader (or a deliberate fast burst). A run of rapid
-   * characters arms the submit — the reader signature — while slow human
-   * typing never arms, so the kiosk box cannot be used to type a fake card ID.
-   * Manual entry is the opt-in path for typing.
-   */
-  const handleScannerKeyDown = (
-    event: React.KeyboardEvent<HTMLInputElement>,
-  ) => {
-    if (state !== "ready" || manualMode) return;
-    if (event.key === "Enter") {
-      event.preventDefault();
-      if (burstArmed.current) {
-        commitScanBuffer();
-      } else {
-        // A lone Enter from a person is not a scan: discard the partial buffer.
-        scanBufferRef.current = "";
-        setUid("");
-      }
-      return;
-    }
-    if (
-      event.key.length !== 1 ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey
-    )
-      return;
-    const ch = event.key.toUpperCase();
-    if (!/[0-9A-F]/.test(ch)) return;
-    event.preventDefault();
-    const now = performance.now();
-    const gap =
-      lastScanKeyAt.current === 0
-        ? Number.POSITIVE_INFINITY
-        : now - lastScanKeyAt.current;
-    lastScanKeyAt.current = now;
-    rapidKeyCount.current =
-      gap <= SCANNER_BURST_GAP_MS ? rapidKeyCount.current + 1 : 1;
-    if (rapidKeyCount.current >= SCANNER_MIN_BURST) burstArmed.current = true;
-    scanBufferRef.current = (scanBufferRef.current + ch).slice(0, 64);
-    setUid(scanBufferRef.current);
-    if (scannerIdleTimer.current) clearTimeout(scannerIdleTimer.current);
-    if (burstArmed.current)
-      scannerIdleTimer.current = setTimeout(
-        () => commitScanBuffer(),
-        config.rfidAutoSubmitDelayMs,
-      );
-  };
-
   const handleManualKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement>,
   ) => {
@@ -655,45 +560,11 @@ export default function App() {
     });
   }, [manualMode, setupDialogOpen, setupStep, setupToken]);
 
-  // The scanner box must be focused before a keyboard-wedge reader can type
-  // into it: focus on mount, whenever the kiosk returns to ready, when the
-  // window regains focus, and on a light interval so dialogs or focus loss
-  // never leave the kiosk unable to scan.
-  useEffect(() => {
-    if (manualMode || setupDialogOpen) return;
-    focusScannerInput();
-  }, [state, manualMode, setupDialogOpen, focusScannerInput]);
-
-  useEffect(() => {
-    if (manualMode || setupDialogOpen || state !== "ready") return;
-    const id = window.setInterval(() => {
-      if (document.hasFocus && !document.hasFocus()) return;
-      const el = scannerInputRef.current;
-      if (el && !el.disabled && document.activeElement !== el)
-        focusScannerInput();
-    }, 800);
-    const onWindowFocus = () => focusScannerInput();
-    window.addEventListener("focus", onWindowFocus);
-    return () => {
-      window.clearInterval(id);
-      window.removeEventListener("focus", onWindowFocus);
-    };
-  }, [state, manualMode, setupDialogOpen, focusScannerInput]);
-
   const toggleManualMode = () => {
     if (state !== "ready") return;
     setManualMode((current) => !current);
     setUid("");
     setManualUid("");
-    scanBufferRef.current = "";
-    burstArmed.current = false;
-    rapidKeyCount.current = 0;
-    lastScanKeyAt.current = 0;
-    if (scannerIdleTimer.current) {
-      clearTimeout(scannerIdleTimer.current);
-      scannerIdleTimer.current = null;
-    }
-    focusScannerInput();
   };
 
   const displayDate = new Intl.DateTimeFormat("en-PH", {
@@ -890,7 +761,6 @@ export default function App() {
                 </span>
               )}
               <input
-                ref={scannerInputRef}
                 id="scanner-uid"
                 aria-label={manualMode ? "Manual card ID" : "Scanner card ID"}
                 value={manualMode ? manualUid : uid}
@@ -898,16 +768,14 @@ export default function App() {
                 onChange={(event) => {
                   if (manualMode) setManualUid(event.target.value);
                 }}
-                onKeyDown={
-                  manualMode ? handleManualKeyDown : handleScannerKeyDown
-                }
+                onKeyDown={manualMode ? handleManualKeyDown : undefined}
                 placeholder={
                   manualMode ? "Enter a card ID" : "Waiting for card…"
                 }
                 autoComplete="off"
                 spellCheck={false}
                 disabled={state !== "ready"}
-                autoFocus={!manualMode}
+                autoFocus={false}
               />
               {manualMode && (
                 <button

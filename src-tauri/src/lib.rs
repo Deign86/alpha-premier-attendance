@@ -3,6 +3,7 @@ mod database;
 mod error;
 mod lan_net;
 mod lan_server;
+mod lifecycle;
 mod paths;
 pub mod reporting;
 mod services;
@@ -2105,6 +2106,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            lifecycle::install_tray(app).expect("install system tray");
             let paths = crate::paths::resolve(app.handle())
                 .expect("resolve application paths");
             std::fs::create_dir_all(&paths.config_dir).expect("create application config directory");
@@ -2173,8 +2175,14 @@ pub fn run() {
             // closing the app.
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
+                let window_for_events = window.clone();
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if !lifecycle::should_hide_on_close(lifecycle::CloseBehavior::HideToTray, true) {
+                            return;
+                        }
+                        api.prevent_close();
+                        let _ = window_for_events.hide();
                         let handle = handle.clone();
                         if let Some(state) = handle.try_state::<AppState>() {
                             let data_dir = state.data_dir.clone();

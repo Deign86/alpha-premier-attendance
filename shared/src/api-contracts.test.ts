@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes } from './api-contracts.js';
+import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes, scannerConfidences, scannerTransports, canCreateBackgroundAttendance } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources and attendance states stable', () => {
@@ -11,6 +11,17 @@ describe('shared API contract literals', () => {
   it('exposes protected setup error codes for both workspaces', () => {
     expect(setupErrorCodes).toContain('SETUP_AUTH_REQUIRED');
     expect(setupErrorCodes).toContain('USER_CONFLICT');
+  });
+});
+
+describe('background scanner safety contract', () => {
+  it('allows background attendance only for verified device transports', () => {
+    expect(scannerConfidences).toEqual(['device_verified', 'prefix_suffix_verified', 'heuristic_candidate', 'rejected']);
+    expect(scannerTransports).toEqual(['raw_hid', 'serial', 'vendor_sdk', 'keyboard_wedge_detection', 'disabled']);
+    expect(canCreateBackgroundAttendance('device_verified', 'raw_hid')).toBe(true);
+    expect(canCreateBackgroundAttendance('device_verified', 'serial')).toBe(true);
+    expect(canCreateBackgroundAttendance('prefix_suffix_verified', 'keyboard_wedge_detection')).toBe(false);
+    expect(canCreateBackgroundAttendance('heuristic_candidate', 'keyboard_wedge_detection')).toBe(false);
   });
 });
 

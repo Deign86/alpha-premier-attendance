@@ -100,7 +100,7 @@ describe('RFID kiosk', () => {
     expect(shouldRouteGlobalRfidToSetup(false, 'setup-token', 'scan')).toBe(false);
   });
 
-  it('shows a welcoming greeting and a scanner text box that is always focused and read-only', async () => {
+  it('shows a welcoming greeting without stealing focus for keyboard-wedge capture', async () => {
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument();
@@ -109,28 +109,26 @@ describe('RFID kiosk', () => {
     expect(input).toBeInTheDocument();
     // The kiosk box is locked for scanning: no typing or editing until Manual entry.
     expect(input).toHaveAttribute('readonly');
-    expect(input).toHaveFocus();
+    expect(input).not.toHaveFocus();
   });
 
-  it('captures a rapid keyboard-wedge scan into the read-only box and submits it as RFID', async () => {
+  it('does not classify ordinary keyboard-wedge keystrokes as a background scan', async () => {
     render(<App />);
     const input = screen.getByLabelText(/scanner card id/i);
     expect(input).toHaveAttribute('readonly');
-    // A reader types the whole UID in a fast burst, then Enter.
+    // A keyboard-wedge stream is not a safe background source because the
+    // originating device cannot be identified or isolated from another app.
     for (const key of ['0', '4', 'a', '1', 'b', '2', 'c', '3']) {
       fireEvent.keyDown(input, { key });
     }
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
-      '/api/attendance/scan',
-      expect.objectContaining({ body: JSON.stringify({ rfidUid: '04A1B2C3', source: 'RFID' }) }),
-    ));
+    await waitFor(() => expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything()));
   });
 
-  it('keeps the scanner box locked against slow manual typing (Manual entry is opt-in)', async () => {
+  it('keeps the scanner box locked against all keyboard typing (Manual entry is opt-in)', async () => {
     render(<App />);
     const input = screen.getByLabelText(/scanner card id/i);
-    // A person typing with normal pauses never arms a scan…
+    // No keyboard stream is treated as a background scanner source.
     for (const key of ['1', '2', '3', '4']) {
       fireEvent.keyDown(input, { key });
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
