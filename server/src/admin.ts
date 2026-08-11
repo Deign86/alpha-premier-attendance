@@ -196,7 +196,8 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
 /**
  * Builds the shared cutoff input for an intern record using the fixed intern
  * policy: PHP 80.00 per day and PHP 10.00 per hour of lateness. No holiday
- * premium, allowances, half-days, absences, or overtime apply to interns.
+ * premium, allowances, or overtime apply to interns. Absence days are derived
+ * from standard less actual working days, while half-days remain inputtable.
  */
 function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: CutoffInputBuilder): CutoffInput {
   const lateUnits = Math.max(0, number('lateUnits', 0));
@@ -211,7 +212,8 @@ function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: 
     lateUnits,
     // Late deduction is PHP 10.00 per hour, computed from the total late hours.
     lateDeduction: Math.round(lateUnits * INTERN_LATE_DEDUCTION_PER_HOUR_PHP),
-    halfDayCount: 0, halfDayFraction: 0, absentDays: 0,
+    halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
+    absentDays: Math.max(0, number('standardWorkingDays', 11) - number('actualWorkingDays', 11)),
     overtimeHours: 0, overtimeRate: 0,
     manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''),
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',

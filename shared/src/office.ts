@@ -11,6 +11,8 @@
 
 export type OfficeIdentity = {
   companyName: string;
+  /** Optional tax identifier shown on printed payroll sheets. */
+  taxIdentificationNumber?: string;
   officeLabel: string;
   officeAddressLine1: string;
   officeBuilding: string;
@@ -26,6 +28,7 @@ export type OfficeIdentity = {
 
 export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
   companyName: 'Alpha Premier',
+  taxIdentificationNumber: '010-871-213-0000',
   officeLabel: 'Main Office',
   officeAddressLine1: 'Unit 3104C',
   officeBuilding: 'Tektite East Tower',

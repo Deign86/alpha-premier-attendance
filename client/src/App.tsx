@@ -2669,8 +2669,10 @@ export function PayrollWorkspace({
       payload.regularHolidayDays = 0;
       payload.incentivesAllowance = 0;
       payload.specialAllowance = 0;
-      payload.halfDayCount = 0;
-      payload.absentDays = 0;
+      payload.absentDays = Math.max(
+        0,
+        Number(payload.standardWorkingDays) - Number(payload.actualWorkingDays),
+      );
       payload.overtimeHours = 0;
       payload.overtimeRate = 0;
     }
@@ -2858,8 +2860,9 @@ export function PayrollWorkspace({
               <p className="setup-copy">
                 Intern payroll uses a fixed {php(INTERN_DAILY_RATE_PHP)} per day
                 and a {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour late
-                deduction (after weekly grace). Allowances, holiday pay,
-                half-days, absences, and overtime do not apply.
+                deduction (after weekly grace). Allowances, holiday pay, and
+                overtime do not apply. Absences are calculated from standard
+                less actual working days; half-days remain inputtable.
               </p>
             )}
             <div className="setup-fields">
@@ -3093,30 +3096,40 @@ export function PayrollWorkspace({
                   </label>
                 </>
               )}
+              <label>
+                Half-days
+                <input
+                  type="number"
+                  min="0"
+                  value={form.halfDayCount}
+                  onChange={(event) =>
+                    update("halfDayCount", event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                Absent days
+                <input
+                  type="number"
+                  min="0"
+                  readOnly={isIntern}
+                  value={
+                    isIntern
+                      ? Math.max(
+                          0,
+                          (Number(form.standardWorkingDays) || 0) -
+                            (Number(form.actualWorkingDays) || 0),
+                        )
+                      : form.absentDays
+                  }
+                  onChange={(event) =>
+                    update("absentDays", event.target.value)
+                  }
+                />
+                {isIntern && <small>Calculated from standard less actual days</small>}
+              </label>
               {!isIntern && (
                 <>
-                  <label>
-                    Half-days
-                    <input
-                      type="number"
-                      min="0"
-                      value={form.halfDayCount}
-                      onChange={(event) =>
-                        update("halfDayCount", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Absent days
-                    <input
-                      type="number"
-                      min="0"
-                      value={form.absentDays}
-                      onChange={(event) =>
-                        update("absentDays", event.target.value)
-                      }
-                    />
-                  </label>
                   <label>
                     Overtime hours
                     <input
@@ -3411,7 +3424,9 @@ function PayrollPrintSheet({
       <header className="payroll-sheet-header">
         <div className="payroll-sheet-company">
           <strong>{office.companyName}</strong>
-          <span>TIN: ____________________</span>
+          {office.taxIdentificationNumber && (
+            <span>TIN: {office.taxIdentificationNumber}</span>
+          )}
           <span className="payroll-sheet-cutoff">
             {formatCutoffRangeUpper(cutoff.cutoffStart, cutoff.cutoffEnd)}
           </span>
@@ -3445,7 +3460,7 @@ function PayrollPrintSheet({
             <tr key={row.payrollId}>
               <td>{row.employeeId}</td>
               <td>{row.employeeName}</td>
-              <td>{row.payrollCutoffLabel}</td>
+              <td>{php(row.dailyRate * row.standardWorkingDays)}</td>
               <td>{php(row.dailyRate)}</td>
               <td>{row.actualWorkingDays}</td>
               <td>{row.standardWorkingDays}</td>

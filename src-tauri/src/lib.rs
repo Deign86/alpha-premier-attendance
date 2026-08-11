@@ -898,8 +898,8 @@ async fn enrich_cutoff_input(
 
 /// Enforces the fixed intern payroll policy on a cutoff input before the
 /// generic cutoff calculator runs: PHP 80.00/day, PHP 10.00/hour late
-/// deduction, and no holiday premium, allowances, half-days, absences, or
-/// overtime. Employees pass through untouched.
+/// deduction, and no holiday premium, allowances, or overtime. Absences are
+/// derived from standard less actual working days; half-days remain inputtable.
 async fn apply_intern_rules(
     db: &sqlx::SqlitePool,
     input: &mut serde_json::Value,
@@ -926,6 +926,16 @@ async fn apply_intern_rules(
         .and_then(|value| value.as_f64())
         .unwrap_or(0.0)
         .max(0.0);
+    let standard_working_days = input
+        .get("standardWorkingDays")
+        .and_then(|value| value.as_f64())
+        .unwrap_or(11.0)
+        .max(0.0);
+    let actual_working_days = input
+        .get("actualWorkingDays")
+        .and_then(|value| value.as_f64())
+        .unwrap_or(11.0)
+        .max(0.0);
     let Some(object) = input.as_object_mut() else {
         return Err("ADMIN_VALIDATION_ERROR".into());
     };
@@ -943,13 +953,16 @@ async fn apply_intern_rules(
         "specialAllowance",
         "specialHolidayDays",
         "regularHolidayDays",
-        "halfDayCount",
-        "absentDays",
         "overtimeHours",
         "overtimeRate",
     ] {
         object.insert(field.into(), serde_json::json!(0.0));
     }
+    object.insert("halfDayFraction".into(), serde_json::json!(0.5));
+    object.insert(
+        "absentDays".into(),
+        serde_json::json!((standard_working_days - actual_working_days).max(0.0)),
+    );
     Ok(())
 }
 

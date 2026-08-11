@@ -107,6 +107,8 @@ describe("PayrollWorkspace", () => {
     const sheet = sheetTable(container);
     expect(within(sheet).getByText("Ada Lovelace")).toBeInTheDocument();
     expect(within(sheet).queryByText("Maria Santos")).not.toBeInTheDocument();
+    const employeeCells = sheet.querySelectorAll("tbody tr:not(.payroll-sheet-total) td");
+    expect(employeeCells[2]).toHaveTextContent("PHP 5,500.00");
     // Exact reference column set, in order; no Holiday column.
     const headers = Array.from(sheet.querySelectorAll("thead th")).map((th) => th.textContent);
     expect(headers).toEqual([
@@ -166,8 +168,10 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "Print Employee Payroll" }));
 
     const sheet = sheetTable(container);
-    expect(within(sheet).queryByText("September 1-15, 2026")).toBeInTheDocument();
-    expect(within(sheet).queryByText("August 1-15, 2026")).not.toBeInTheDocument();
+    expect(within(container).getByText("SEPTEMBER 1-15, 2026")).toBeInTheDocument();
+    const printedRows = sheet.querySelectorAll("tbody tr:not(.payroll-sheet-total)");
+    expect(printedRows).toHaveLength(1);
+    expect(printedRows[0].querySelectorAll("td")[2]).toHaveTextContent("PHP 5,500.00");
     expect(within(sheetTotalRow(container)).getByText("PHP 7,000.00")).toBeInTheDocument();
     await waitFor(() => expect(window.print).toHaveBeenCalled());
   });
@@ -180,6 +184,7 @@ describe("PayrollWorkspace", () => {
     const header = container.querySelector(".payroll-sheet-header");
     expect(header).not.toBeNull();
     expect(within(header as HTMLElement).getByText("Alpha Premier")).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("TIN: 010-871-213-0000")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("AUGUST 1-15, 2026")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("Note: Cut off")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("1-15th of the month")).toBeInTheDocument();
@@ -218,5 +223,28 @@ describe("PayrollWorkspace", () => {
     await user.clear(screen.getByLabelText("Late deduction rate (PHP/hr)"));
     await user.type(screen.getByLabelText("Late deduction rate (PHP/hr)"), "50");
     expect(screen.getByLabelText(/Late deduction \(PHP\)/)).toHaveValue(250);
+  });
+
+  it("derives intern absence deduction from standard minus actual days and keeps half-days", async () => {
+    vi.mocked(savePayrollCutoff).mockResolvedValueOnce({ success: true } as never);
+    const user = userEvent.setup();
+    render(<PayrollWorkspace users={[{
+      userId: "INT-1", rfidUid: "INT12345", fullName: "Maria Santos", department: null, status: "ACTIVE",
+      employeeType: "INTERN", gender: null, dailyRate: null, payrollProfileId: null, photoUrl: null,
+    }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Personnel"), "INT-1");
+    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
+    await user.clear(screen.getByLabelText("Standard days"));
+    await user.type(screen.getByLabelText("Standard days"), "12");
+    await user.clear(screen.getByLabelText("Actual days"));
+    await user.type(screen.getByLabelText("Actual days"), "10");
+    await user.clear(screen.getByLabelText("Half-days"));
+    await user.type(screen.getByLabelText("Half-days"), "1");
+    expect(screen.getByDisplayValue("2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save cutoff payroll" }));
+    await waitFor(() => expect(savePayrollCutoff).toHaveBeenCalled());
+    const payload = vi.mocked(savePayrollCutoff).mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.absentDays).toBe(2);
+    expect(payload.halfDayCount).toBe(1);
   });
 });
