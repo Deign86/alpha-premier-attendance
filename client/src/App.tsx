@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -42,11 +42,7 @@ import {
   deleteAdminAttendance,
   deleteAdminUser,
   exportAttendanceXlsx,
-  exportPayrollCsv,
-  exportPayrollXlsx,
   finalizePayrollCutoff,
-  generatePayrollPayslipPdf,
-  generatePayrollRegisterPdf,
   getLanStatus,
   loadAttendance,
   loadAdminAttendance,
@@ -2572,14 +2568,10 @@ export function PayrollWorkspace({
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(
-    null,
-  );
   const [cutoffMonth, setCutoffMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
-  const [exporting, setExporting] = useState(false);
   const selectedUser = users.find((item) => item.userId === form.employeeId);
   const isIntern = selectedUser
     ? selectedUser.employeeType !== "EMPLOYEE"
@@ -2704,60 +2696,55 @@ export function PayrollWorkspace({
       setSaving(false);
     }
   };
-  const exportCsv = async () => {
-    setExporting(true);
-    try {
-      const result = await exportPayrollCsv();
-      if (result.success) {
-        setMessage(`Generated ${result.fileName}.`);
-        setFileResult({
-          filePath: result.filePath,
-          directoryPath: result.directoryPath,
-          fileName: result.fileName,
-          fileKind: result.fileKind,
-          isPortableMode: result.isPortableMode,
-        });
-      } else setMessage(result.error.message);
-    } finally {
-      setExporting(false);
+  // The selected payroll cutoff drives both consolidated print sheets: the
+  // cutoff picked in the create form when set, otherwise the most recent
+  // cutoff found in the saved records.
+  const selectedCutoff = useMemo<{
+    cutoffStart: string;
+    cutoffEnd: string;
+    label: string;
+  } | null>(() => {
+    if (form.cutoffStart && form.cutoffEnd) {
+      return {
+        cutoffStart: form.cutoffStart,
+        cutoffEnd: form.cutoffEnd,
+        label:
+          form.payrollCutoffLabel ||
+          `${form.cutoffStart} to ${form.cutoffEnd}`,
+      };
     }
-  };
-  const exportWorkbook = async () => {
-    setExporting(true);
-    const result = await exportPayrollXlsx();
-    setExporting(false);
-    if (result.success) {
-      setMessage(
-        `Generated ${result.fileName} (${result.rowCount ?? 0} rows).`,
+    const latest = records.reduce<PayrollCutoffRecord | null>(
+      (best, row) => (!best || row.cutoffStart > best.cutoffStart ? row : best),
+      null,
+    );
+    return latest
+      ? {
+          cutoffStart: latest.cutoffStart,
+          cutoffEnd: latest.cutoffEnd,
+          label: latest.payrollCutoffLabel,
+        }
+      : null;
+  }, [form.cutoffStart, form.cutoffEnd, form.payrollCutoffLabel, records]);
+
+  // Both print buttons share one implementation; the only difference is the
+  // worker-type filter (EMPLOYEE vs everything else = intern).
+  const payrollRowsFor = useCallback(
+    (workerType: "employee" | "intern") => {
+      if (!selectedCutoff) return [];
+      return records.filter(
+        (row) =>
+          row.cutoffStart === selectedCutoff.cutoffStart &&
+          row.cutoffEnd === selectedCutoff.cutoffEnd &&
+          (workerType === "employee"
+            ? row.employeeType === "EMPLOYEE"
+            : row.employeeType !== "EMPLOYEE"),
       );
-      setFileResult({
-        filePath: result.filePath,
-        directoryPath: result.directoryPath,
-        fileName: result.fileName,
-        fileKind: result.fileKind,
-        isPortableMode: result.isPortableMode,
-      });
-    } else setMessage(result.error.message);
-  };
-  const registerPdf = async () => {
-    setExporting(true);
-    const result = await generatePayrollRegisterPdf();
-    setExporting(false);
-    if (result.success) {
-      setMessage(
-        `Generated ${result.fileName} (${result.rowCount ?? 0} rows).`,
-      );
-      setFileResult({
-        filePath: result.filePath,
-        directoryPath: result.directoryPath,
-        fileName: result.fileName,
-        fileKind: result.fileKind,
-        isPortableMode: result.isPortableMode,
-      });
-    } else setMessage(result.error.message);
-  };
-  // One print action produces the shared landscape payroll register.
-  const [printTarget, setPrintTarget] = useState(false);
+    },
+    [records, selectedCutoff],
+  );
+  const [printTarget, setPrintTarget] = useState<"employee" | "intern" | null>(
+    null,
+  );
   const [printMessage, setPrintMessage] = useState("");
   useEffect(() => {
     if (!printTarget) return;
@@ -2773,15 +2760,26 @@ export function PayrollWorkspace({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [printTarget]);
-  const printPayroll = () => {
-    const available = records.length > 0;
-    if (!available) {
-      setPrintTarget(false);
-      setPrintMessage("No payroll records to print. Create and save a payroll first.");
+  const printWorkerSheet = (workerType: "employee" | "intern") => {
+    if (!selectedCutoff) {
+      setPrintTarget(null);
+      setPrintMessage(
+        "No payroll records to print. Create and save a payroll first.",
+      );
+      return;
+    }
+    const rows = payrollRowsFor(workerType);
+    if (!rows.length) {
+      setPrintTarget(null);
+      setPrintMessage(
+        workerType === "employee"
+          ? `No employee payroll records for ${selectedCutoff.label}. Create and save an employee payroll for this cutoff first.`
+          : `No intern payroll records for ${selectedCutoff.label}. Create and save an intern payroll for this cutoff first.`,
+      );
       return;
     }
     setPrintMessage("");
-    setPrintTarget(true);
+    setPrintTarget(workerType);
   };
   return (
     <section className="payroll-workspace">
@@ -2789,33 +2787,19 @@ export function PayrollWorkspace({
         <button
           className="admin-button"
           type="button"
-          disabled={exporting}
-          onClick={() => void exportCsv()}
+          onClick={() => printWorkerSheet("employee")}
         >
-          {exporting ? "Generating..." : "Export CSV"}
+          Print Employee Payroll
         </button>
         <button
           className="admin-button"
           type="button"
-          disabled={exporting}
-          onClick={() => void exportWorkbook()}
+          onClick={() => printWorkerSheet("intern")}
         >
-          {exporting ? "Generating..." : "Export Excel"}
-        </button>
-        <button
-          className="admin-button"
-          type="button"
-          disabled={exporting}
-          onClick={() => void registerPdf()}
-        >
-          {exporting ? "Generating..." : "Register PDF"}
-        </button>
-        <button className="admin-button" type="button" onClick={printPayroll}>
-          Print Payroll
+          Print Intern Payroll
         </button>
       </div>
       {printMessage && <p className="dashboard-alert">{printMessage}</p>}
-      <GeneratedFileActions result={fileResult} label="Payroll export" />
       <div className="admin-grid">
         <section className="admin-form print-hidden">
           <h2>Create cutoff payroll</h2>
@@ -3218,10 +3202,16 @@ export function PayrollWorkspace({
           <PayrollTable records={records} onFinalized={onSaved} />
         </section>
       </div>
-      {printTarget && (
-        <PayrollPrintView
-          records={records}
+      {printTarget && selectedCutoff && (
+        <PayrollPrintSheet
+          cutoff={selectedCutoff}
+          workerType={printTarget}
+          records={payrollRowsFor(printTarget)}
           office={office}
+          grandTotal={payrollRowsFor(printTarget).reduce(
+            (sum, row) => sum + row.grossCompensation,
+            0,
+          )}
         />
       )}
     </section>
@@ -3236,10 +3226,6 @@ function PayrollTable({
   onFinalized: () => void;
 }) {
   const [message, setMessage] = useState("");
-  const [generatingId, setGeneratingId] = useState("");
-  const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(
-    null,
-  );
   const finalize = async (payrollId: string) => {
     const response = await finalizePayrollCutoff(payrollId);
     if ((response as { success?: boolean }).success) {
@@ -3250,21 +3236,6 @@ function PayrollTable({
         (response as { error?: { message?: string } }).error?.message ??
           "Unable to finalize payroll.",
       );
-  };
-  const payslip = async (payrollId: string) => {
-    setGeneratingId(payrollId);
-    const response = await generatePayrollPayslipPdf(payrollId);
-    setGeneratingId("");
-    if (response.success) {
-      setMessage(`Generated ${response.fileName}.`);
-      setFileResult({
-        filePath: response.filePath,
-        directoryPath: response.directoryPath,
-        fileName: response.fileName,
-        fileKind: response.fileKind,
-        isPortableMode: response.isPortableMode,
-      });
-    } else setMessage(response.error.message);
   };
   if (!records.length)
     return (
@@ -3366,15 +3337,6 @@ function PayrollTable({
                       <p>
                         Status: {row.status}. Net pay: {php(row.netPay)}.
                       </p>
-                      <button
-                        className="text-button print-hidden"
-                        disabled={generatingId === row.payrollId}
-                        onClick={() => void payslip(row.payrollId)}
-                      >
-                        {generatingId === row.payrollId
-                          ? "Generating..."
-                          : "Payslip"}
-                      </button>
                       {row.status === "DRAFT" && (
                         <button
                           className="text-button print-hidden"
@@ -3391,7 +3353,6 @@ function PayrollTable({
           </tbody>
         </table>
       </div>
-      <GeneratedFileActions result={fileResult} label="Payslip PDF" />
       {message && <p className="dashboard-alert">{message}</p>}
     </>
   );
@@ -3408,106 +3369,63 @@ function php(value: number): string {
     .replace("₱", "PHP ");
 }
 
-/** Labels for fields stored inside the payroll calculation-breakdown blob. */
-const BREAKDOWN_LABELS: Record<string, string> = {
-  basicPay: "Basic pay",
-  specialHolidayPay: "Special holiday pay",
-  regularHolidayPay: "Regular holiday pay",
-  totalCompensation: "Total compensation",
-  totalAllowance: "Total allowance",
-  overtimePay: "Overtime pay",
-  manualAdjustment: "Manual adjustment",
-  deductions: "Deductions",
-  grossCompensation: "Gross compensation",
-  netPay: "Net pay",
-  lateDeduction: "Late deduction",
-  halfDayDeduction: "Half-day deduction",
-  absenceDeduction: "Absence deduction",
-};
-
 /**
- * The stored calculation breakdown is a JSON blob — centavo values from the
- * native backend ({"basicPayCentavos":88000,...}) or peso values from the
- * HTTP service ({"basicPay":880,...}). Render it as readable remarks text;
- * non-JSON (already formatted) text passes through untouched.
+ * Formats YYYY-MM-DD cutoff bounds as the all-caps reference label, e.g.
+ * "JULY 1-15, 2026" or "JULY 16-31, 2026".
  */
-function formatCalculationBreakdown(raw: string): string {
-  const value = (raw ?? "").trim();
-  if (!value || value[0] !== "{") return value;
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return value;
-    const parts: string[] = [];
-    for (const [key, amount] of Object.entries(parsed)) {
-      if (typeof amount !== "number" || !Number.isFinite(amount)) continue;
-      const baseKey = key.endsWith("Centavos")
-        ? key.slice(0, -"Centavos".length)
-        : key;
-      const label = BREAKDOWN_LABELS[baseKey] ?? baseKey;
-      const pesos = key.endsWith("Centavos") ? amount / 100 : amount;
-      parts.push(`${label} ${php(pesos)}`);
-    }
-    return parts.length ? `${parts.join("; ")}.` : value;
-  } catch {
-    return value;
-  }
-}
-
-/** Formats a YYYY-MM-DD date for printed worksheet labels (e.g. "Aug 4, 2026"). */
-function formatPrintDate(value: string): string {
-  if (!value) return "—";
-  const parsed = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat("en-PH", {
-    timeZone: "UTC",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(parsed);
+function formatCutoffRangeUpper(cutoffStart: string, cutoffEnd: string): string {
+  const start = new Date(`${cutoffStart}T00:00:00Z`);
+  const end = new Date(`${cutoffEnd}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()))
+    return `${cutoffStart} to ${cutoffEnd}`;
+  const monthName = monthNames[end.getUTCMonth()].toUpperCase();
+  return `${monthName} ${start.getUTCDate()}-${end.getUTCDate()}, ${end.getUTCFullYear()}`;
 }
 
 /**
- * Print-only payroll register. Interns and employees intentionally share one
- * landscape format so payroll can be reviewed and signed as one document.
+ * Reusable consolidated payroll print sheet. Employees and interns share one
+ * landscape layout that mirrors the physical payroll reference format: company
+ * identity and cutoff note in the header, the exact reference column set, a
+ * blank Signature column for manual signing, and a yellow-highlighted Gross
+ * Compensation grand total. The only difference between the two sheets is the
+ * worker-type filter applied before rendering.
  */
-function PayrollPrintView({
+function PayrollPrintSheet({
+  cutoff,
+  workerType,
   records,
   office,
+  grandTotal,
 }: {
+  cutoff: { cutoffStart: string; cutoffEnd: string; label: string };
+  workerType: "employee" | "intern";
   records: PayrollCutoffRecord[];
   office: OfficeIdentity;
+  grandTotal: number;
 }) {
-  if (!records.length)
-    return (
-      <div className="print-payroll-view print-only">
-        <p className="pw-empty-note">No payroll records are available to print.</p>
-      </div>
-    );
-  const first = records[0];
-  const cutoffLabel = records.every(
-    (row) => row.payrollCutoffLabel === first.payrollCutoffLabel,
-  )
-    ? first.payrollCutoffLabel
-    : "Multiple cutoff periods";
-  const totalGross = records.reduce((sum, row) => sum + row.grossCompensation, 0);
   return (
-    <div className="print-payroll-view print-only payroll-register-print">
-      <header className="payroll-register-header">
-        <div>
+    <div
+      className="print-payroll-view print-only payroll-sheet-print"
+      data-worker-type={workerType}
+    >
+      <header className="payroll-sheet-header">
+        <div className="payroll-sheet-company">
           <strong>{office.companyName}</strong>
-          <span>{office.officeDisplayFull}</span>
-          <span>{first.cutoffStart} - {first.cutoffEnd}</span>
+          <span>TIN: ____________________</span>
+          <span className="payroll-sheet-cutoff">
+            {formatCutoffRangeUpper(cutoff.cutoffStart, cutoff.cutoffEnd)}
+          </span>
         </div>
-        <div className="payroll-register-cutoff">
-          <span>Payroll cut off:</span>
-          <strong>{cutoffLabel}</strong>
+        <div className="payroll-sheet-note">
+          <strong>Note: Cut off</strong>
+          <span>1-15th of the month</span>
+          <span>16-31st</span>
         </div>
       </header>
-      <table className="payroll-register-table">
+      <table className="payroll-sheet-table">
         <thead>
           <tr>
-            <th>Employee</th>
+            <th>Employee #</th>
             <th>Employee Name</th>
             <th>Cut Off Rate</th>
             <th>Daily Rate</th>
@@ -3515,7 +3433,7 @@ function PayrollPrintView({
             <th>Standard Working Days</th>
             <th>Basic Rate</th>
             <th>Total Compensation</th>
-            <th>Late 10 /Hr</th>
+            <th>Late 10 /hr</th>
             <th>Halfday</th>
             <th>Absent</th>
             <th>Gross Compensation</th>
@@ -3537,606 +3455,17 @@ function PayrollPrintView({
               <td>{php(row.halfDayDeduction)}</td>
               <td>{php(row.absenceDeduction)}</td>
               <td>{php(row.grossCompensation)}</td>
-              <td>{row.signaturePlaceholder || ""}</td>
+              <td />
             </tr>
           ))}
-          <tr className="payroll-register-total">
-            <td colSpan={11}></td>
-            <td>{php(totalGross)}</td>
-            <td></td>
+          <tr className="payroll-sheet-total">
+            <td colSpan={11}>Grand Total</td>
+            <td>{php(grandTotal)}</td>
+            <td />
           </tr>
         </tbody>
       </table>
     </div>
-  );
-}
-
-function PayrollWorksheet({
-  row,
-  office,
-  profiles,
-}: {
-  row: PayrollCutoffRecord;
-  office: OfficeIdentity;
-  profiles: PayrollCalculationProfile[];
-}) {
-  const profile = profiles.find(
-    (item) => item.profileId === row.payrollProfileId,
-  );
-  const profileLabel = profile?.label ?? row.payrollProfileId;
-  const frequencyLabel =
-    row.payrollFrequency === "SEMI_MONTHLY"
-      ? "Semi-monthly"
-      : row.payrollFrequency;
-  const specialPercent = Math.round(row.specialHolidayMultiplier * 100);
-  const regularPercent = Math.round(row.regularHolidayMultiplier * 100);
-  const halfDayPercent = Math.round((profile?.halfDayFraction ?? 0.5) * 100);
-  const totalDeductions =
-    row.lateDeduction + row.halfDayDeduction + row.absenceDeduction;
-  return (
-    <article className="pw-sheet">
-      <header className="pw-header">
-        <img className="pw-logo" src={logoPhoenix} alt="Phoenix logo" />
-        <p className="pw-address">{office.officeDisplayFull}</p>
-        <h1 className="pw-title">Payroll Worksheet</h1>
-        <div className="pw-meta">
-          <span>
-            Pay period: <strong>{row.payrollCutoffLabel}</strong>
-          </span>
-          <span>
-            Cutoff:{" "}
-            <strong>
-              {formatPrintDate(row.cutoffStart)} –{" "}
-              {formatPrintDate(row.cutoffEnd)}
-            </strong>
-          </span>
-          <span>
-            Prepared: <strong>{formatPrintDate(localDate())}</strong>
-          </span>
-          <span>
-            Status: <strong>{row.status}</strong>
-          </span>
-        </div>
-      </header>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Employee details</h2>
-        <div className="pw-grid">
-          <div className="pw-field">
-            <span className="pw-label">Employee name</span>
-            <span className="pw-value">{row.employeeName}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Employee number</span>
-            <span className="pw-value">{row.employeeId}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Daily rate</span>
-            <span className="pw-value">{php(row.dailyRate)}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Payroll calculation</span>
-            <span className="pw-value">{profileLabel}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Pay frequency</span>
-            <span className="pw-value">{frequencyLabel}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Cutoff period</span>
-            <span className="pw-value">{row.payrollCutoffLabel}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Attendance and pay basis</h2>
-        <table className="pw-table">
-          <thead>
-            <tr>
-              <th className="pw-col-num">#</th>
-              <th>Item</th>
-              <th className="pw-col-num">Value</th>
-              <th>Remarks</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="pw-col-num">1</td>
-              <td>Standard working days</td>
-              <td className="pw-col-num">{row.standardWorkingDays}</td>
-              <td>Days expected in this cutoff</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">2</td>
-              <td>Actual working days</td>
-              <td className="pw-col-num">{row.actualWorkingDays}</td>
-              <td>
-                {row.approvedWorkingDayOverage
-                  ? "Actual days approved above standard"
-                  : "Days actually rendered"}
-              </td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">3</td>
-              <td>Special holiday days</td>
-              <td className="pw-col-num">{row.specialHolidayDays}</td>
-              <td>Paid at {specialPercent}% premium</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">4</td>
-              <td>Regular holiday days</td>
-              <td className="pw-col-num">{row.regularHolidayDays}</td>
-              <td>Paid at {regularPercent}% premium</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">5</td>
-              <td>Half-days</td>
-              <td className="pw-col-num">{row.halfDayCount}</td>
-              <td>Each half-day counted at {halfDayPercent}% of a day</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">6</td>
-              <td>Absent days</td>
-              <td className="pw-col-num">{row.absentDays}</td>
-              <td>Deducted from gross pay</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">7</td>
-              <td>Overtime hours</td>
-              <td className="pw-col-num">{row.overtimeHours}</td>
-              <td>At {php(row.overtimeRate)} per hour</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Earnings</h2>
-        <table className="pw-table">
-          <thead>
-            <tr>
-              <th className="pw-col-num">#</th>
-              <th>Description</th>
-              <th className="pw-col-amount">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="pw-col-num">1</td>
-              <td>
-                Basic pay — {row.actualWorkingDays} day(s) at{" "}
-                {php(row.dailyRate)} per day
-              </td>
-              <td className="pw-col-amount">{php(row.basicPay)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">2</td>
-              <td>
-                Special holiday pay — {row.specialHolidayDays} day(s) at{" "}
-                {specialPercent}%
-              </td>
-              <td className="pw-col-amount">{php(row.specialHolidayPay)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">3</td>
-              <td>
-                Regular holiday pay — {row.regularHolidayDays} day(s) at{" "}
-                {regularPercent}%
-              </td>
-              <td className="pw-col-amount">{php(row.regularHolidayPay)}</td>
-            </tr>
-            <tr className="pw-subtotal">
-              <td className="pw-col-num" colSpan={2}>
-                Total compensation
-              </td>
-              <td className="pw-col-amount">{php(row.totalCompensation)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">4</td>
-              <td>Incentives allowance</td>
-              <td className="pw-col-amount">{php(row.incentivesAllowance)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">5</td>
-              <td>Special allowance</td>
-              <td className="pw-col-amount">{php(row.specialAllowance)}</td>
-            </tr>
-            <tr className="pw-subtotal">
-              <td className="pw-col-num" colSpan={2}>
-                Total allowances
-              </td>
-              <td className="pw-col-amount">{php(row.totalAllowance)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">6</td>
-              <td>
-                Overtime pay — {row.overtimeHours} hour(s) at{" "}
-                {php(row.overtimeRate)} per hour
-              </td>
-              <td className="pw-col-amount">{php(row.overtimePay)}</td>
-            </tr>
-            {row.manualAdjustment !== 0 && (
-              <tr>
-                <td className="pw-col-num">7</td>
-                <td>
-                  Manual adjustment
-                  {row.adjustmentReason ? ` — ${row.adjustmentReason}` : ""}
-                </td>
-                <td className="pw-col-amount">{php(row.manualAdjustment)}</td>
-              </tr>
-            )}
-            <tr className="pw-grand">
-              <td className="pw-col-num" colSpan={2}>
-                Gross compensation
-              </td>
-              <td className="pw-col-amount">{php(row.grossCompensation)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Deductions</h2>
-        <table className="pw-table">
-          <thead>
-            <tr>
-              <th className="pw-col-num">#</th>
-              <th>Description</th>
-              <th className="pw-col-amount">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="pw-col-num">1</td>
-              <td>
-                Late deduction
-                {row.lateUnits > 0
-                  ? ` — ${row.lateUnits} hour(s) at ${php(row.lateDeduction / row.lateUnits)} per hour`
-                  : ""}
-              </td>
-              <td className="pw-col-amount">{php(row.lateDeduction)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">2</td>
-              <td>Half-day deduction — {row.halfDayCount} half-day(s)</td>
-              <td className="pw-col-amount">{php(row.halfDayDeduction)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">3</td>
-              <td>Absence deduction — {row.absentDays} absent day(s)</td>
-              <td className="pw-col-amount">{php(row.absenceDeduction)}</td>
-            </tr>
-            <tr className="pw-grand">
-              <td className="pw-col-num" colSpan={2}>
-                Total deductions
-              </td>
-              <td className="pw-col-amount">{php(totalDeductions)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Pay summary</h2>
-        <div className="pw-summary">
-          <div className="pw-summary-cell">
-            <span className="pw-label">Gross compensation</span>
-            <span className="pw-value">{php(row.grossCompensation)}</span>
-          </div>
-          <div className="pw-summary-cell">
-            <span className="pw-label">Total deductions</span>
-            <span className="pw-value">− {php(totalDeductions)}</span>
-          </div>
-          <div className="pw-summary-cell pw-summary-net">
-            <span className="pw-label">Net pay</span>
-            <span className="pw-value">{php(row.netPay)}</span>
-          </div>
-          <div className="pw-summary-cell">
-            <span className="pw-label">Status</span>
-            <span className="pw-value">{row.status}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Remarks</h2>
-        <p className="pw-remarks">
-          {formatCalculationBreakdown(row.calculationBreakdown) || "—"}
-        </p>
-        {row.adjustmentReason && (
-          <p className="pw-remarks">
-            Adjustment reason: {row.adjustmentReason}.
-          </p>
-        )}
-        {row.approvedWorkingDayOverage && (
-          <p className="pw-remarks">
-            Actual working days above the standard were approved for this
-            cutoff.
-          </p>
-        )}
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Signatures</h2>
-        <div className="pw-signatures">
-          <div className="pw-signature">
-            <span className="pw-sign-line">
-              {row.signaturePlaceholder || "____________________________"}
-            </span>
-            <span className="pw-sign-caption">Prepared by</span>
-          </div>
-          <div className="pw-signature">
-            <span className="pw-sign-line">____________________________</span>
-            <span className="pw-sign-caption">Checked by</span>
-          </div>
-          <div className="pw-signature">
-            <span className="pw-sign-line">____________________________</span>
-            <span className="pw-sign-caption">Employee signature</span>
-          </div>
-        </div>
-      </section>
-
-      <footer className="pw-footer">
-        {office.companyName} · Confidential — for authorized payroll use only
-      </footer>
-    </article>
-  );
-}
-
-/**
- * Print-only worksheet for intern payroll records. Simplified payslip layout that
- * surfaces the fixed intern policy: PHP 80.00/day, PHP 10.00/hour late deduction,
- * counted days, total late hours, and net pay. Only fields that apply to interns
- * appear — no holiday pay, allowances, or overtime lines, so the intern format
- * stays clean, compact, and easy to read.
- */
-function InternPayrollWorksheet({
-  row,
-  office,
-}: {
-  row: PayrollCutoffRecord;
-  office: OfficeIdentity;
-}) {
-  const lateHours = row.lateUnits;
-  const totalDeductions =
-    row.lateDeduction + row.halfDayDeduction + row.absenceDeduction;
-  return (
-    <article className="pw-sheet">
-      <header className="pw-header">
-        <img className="pw-logo" src={logoPhoenix} alt="Phoenix logo" />
-        <p className="pw-address">{office.officeDisplayFull}</p>
-        <h1 className="pw-title">Intern Payroll Worksheet</h1>
-        <div className="pw-meta">
-          <span>
-            Pay period: <strong>{row.payrollCutoffLabel}</strong>
-          </span>
-          <span>
-            Cutoff:{" "}
-            <strong>
-              {formatPrintDate(row.cutoffStart)} –{" "}
-              {formatPrintDate(row.cutoffEnd)}
-            </strong>
-          </span>
-          <span>
-            Prepared: <strong>{formatPrintDate(localDate())}</strong>
-          </span>
-          <span>
-            Status: <strong>{row.status}</strong>
-          </span>
-        </div>
-      </header>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Intern details</h2>
-        <div className="pw-grid">
-          <div className="pw-field">
-            <span className="pw-label">Intern name</span>
-            <span className="pw-value">{row.employeeName}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Intern number</span>
-            <span className="pw-value">{row.employeeId}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Classification</span>
-            <span className="pw-value">Intern</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Daily rate (fixed)</span>
-            <span className="pw-value">{php(INTERN_DAILY_RATE_PHP)}</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Pay frequency</span>
-            <span className="pw-value">Semi-monthly</span>
-          </div>
-          <div className="pw-field">
-            <span className="pw-label">Cutoff period</span>
-            <span className="pw-value">{row.payrollCutoffLabel}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Attendance and pay basis</h2>
-        <table className="pw-table">
-          <thead>
-            <tr>
-              <th className="pw-col-num">#</th>
-              <th>Item</th>
-              <th className="pw-col-num">Value</th>
-              <th>Remarks</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="pw-col-num">1</td>
-              <td>Standard working days</td>
-              <td className="pw-col-num">{row.standardWorkingDays}</td>
-              <td>Days expected in this cutoff</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">2</td>
-              <td>Counted days (days worked)</td>
-              <td className="pw-col-num">{row.actualWorkingDays}</td>
-              <td>
-                Days actually rendered at {php(INTERN_DAILY_RATE_PHP)} per day
-              </td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">3</td>
-              <td>Total late hours</td>
-              <td className="pw-col-num">{lateHours}</td>
-              <td>
-                Deducted at {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Earnings</h2>
-        <table className="pw-table">
-          <thead>
-            <tr>
-              <th className="pw-col-num">#</th>
-              <th>Description</th>
-              <th className="pw-col-amount">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="pw-col-num">1</td>
-              <td>
-                Basic pay — {row.actualWorkingDays} day(s) at{" "}
-                {php(INTERN_DAILY_RATE_PHP)} per day
-              </td>
-              <td className="pw-col-amount">{php(row.basicPay)}</td>
-            </tr>
-            {row.manualAdjustment !== 0 && (
-              <tr>
-                <td className="pw-col-num">2</td>
-                <td>
-                  Manual adjustment
-                  {row.adjustmentReason ? ` — ${row.adjustmentReason}` : ""}
-                </td>
-                <td className="pw-col-amount">{php(row.manualAdjustment)}</td>
-              </tr>
-            )}
-            <tr className="pw-grand">
-              <td className="pw-col-num" colSpan={2}>
-                Total earnings
-              </td>
-              <td className="pw-col-amount">{php(row.grossCompensation)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Deductions</h2>
-        <table className="pw-table">
-          <thead>
-            <tr>
-              <th className="pw-col-num">#</th>
-              <th>Description</th>
-              <th className="pw-col-amount">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="pw-col-num">1</td>
-              <td>
-                Late — {lateHours} hour(s) at{" "}
-                {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour
-              </td>
-              <td className="pw-col-amount">{php(row.lateDeduction)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">2</td>
-              <td>Half-day — {row.halfDayCount} half-day(s)</td>
-              <td className="pw-col-amount">{php(row.halfDayDeduction)}</td>
-            </tr>
-            <tr>
-              <td className="pw-col-num">3</td>
-              <td>Absence — {row.absentDays} absent day(s)</td>
-              <td className="pw-col-amount">{php(row.absenceDeduction)}</td>
-            </tr>
-            <tr className="pw-grand">
-              <td className="pw-col-num" colSpan={2}>
-                Total deductions
-              </td>
-              <td className="pw-col-amount">{php(totalDeductions)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Pay summary</h2>
-        <div className="pw-summary">
-          <div className="pw-summary-cell">
-            <span className="pw-label">Total earnings</span>
-            <span className="pw-value">{php(row.grossCompensation)}</span>
-          </div>
-          <div className="pw-summary-cell">
-            <span className="pw-label">Total deductions</span>
-            <span className="pw-value">− {php(totalDeductions)}</span>
-          </div>
-          <div className="pw-summary-cell pw-summary-net">
-            <span className="pw-label">Net pay</span>
-            <span className="pw-value">{php(row.netPay)}</span>
-          </div>
-          <div className="pw-summary-cell">
-            <span className="pw-label">Status</span>
-            <span className="pw-value">{row.status}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Remarks</h2>
-        <p className="pw-remarks">
-          {formatCalculationBreakdown(row.calculationBreakdown) || "—"}
-        </p>
-        <p className="pw-remarks">
-          Intern payroll policy: {php(INTERN_DAILY_RATE_PHP)} per day;{" "}
-          {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour of lateness (after
-          the weekly grace). Allowances, holiday pay, half-days, absences, and
-          overtime do not apply to interns.
-        </p>
-        {row.adjustmentReason && (
-          <p className="pw-remarks">
-            Adjustment reason: {row.adjustmentReason}.
-          </p>
-        )}
-      </section>
-
-      <section className="pw-section">
-        <h2 className="pw-section-title">Signatures</h2>
-        <div className="pw-signatures">
-          <div className="pw-signature">
-            <span className="pw-sign-line">
-              {row.signaturePlaceholder || "____________________________"}
-            </span>
-            <span className="pw-sign-caption">Prepared by</span>
-          </div>
-          <div className="pw-signature">
-            <span className="pw-sign-line">____________________________</span>
-            <span className="pw-sign-caption">Checked by</span>
-          </div>
-          <div className="pw-signature">
-            <span className="pw-sign-line">____________________________</span>
-            <span className="pw-sign-caption">Intern signature</span>
-          </div>
-        </div>
-      </section>
-
-      <footer className="pw-footer">
-        {office.companyName} · Confidential — for authorized payroll use only
-      </footer>
-    </article>
   );
 }
 

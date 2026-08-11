@@ -300,8 +300,9 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .profile-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
 .profile-toggle button { min-height: 48px; padding: 8px 10px; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; font-weight: 700; }
 .profile-toggle button.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
-/* Printable payroll worksheet — A4, black on white, form-style layout.
-   The on-screen payroll table stays untouched; printing swaps to this template. */
+/* Consolidated payroll print sheet — A4 landscape, black on white,
+   spreadsheet-style layout matching the physical payroll reference format.
+   The on-screen payroll table stays untouched; printing swaps to this sheet. */
 @media print {
   @page { size: A4 landscape; margin: 8mm 7mm; }
 
@@ -317,79 +318,39 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
   .dashboard-shell { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; color: #000 !important; }
 
   .print-payroll-view { display: block !important; color: #000; }
-  .print-payroll-view .pw-empty-note { margin: 0; padding: 18px; border: 1px solid #000; font-size: 10pt; }
 
-  /* One worksheet per page, with a repeating company header block. */
-  .pw-sheet { break-after: page; page-break-after: always; }
-  .pw-sheet:last-child { break-after: auto; page-break-after: auto; }
+  /* Consolidated payroll sheet header: company identity and cutoff range on
+     the left, static cutoff note legend on the right. */
+  .payroll-sheet-print { width: 100%; color: #000; font-family: 'Segoe UI', Arial, sans-serif; }
+  .payroll-sheet-header { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 0 6mm; padding: 0 3mm 4mm; border-bottom: 1px solid #000; font-size: 8pt; }
+  .payroll-sheet-company { display: grid; gap: 1mm; }
+  .payroll-sheet-company strong { font-size: 11pt; }
+  .payroll-sheet-cutoff { font-size: 9pt; font-weight: 700; }
+  .payroll-sheet-note { display: grid; gap: 1mm; min-width: 42mm; }
+  .payroll-sheet-note strong { font-size: 9pt; }
 
-  /* Header block. */
-  .pw-header { margin: 0 0 8px; padding: 0 0 5px; border-bottom: 2px solid #000; text-align: center; }
-  .pw-logo { display: block; height: 17mm; width: auto; margin: 0 auto 3px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .pw-address { margin: 2px 0 0; font-size: 8pt; color: #222; }
-  .pw-title { margin: 8px 0 0; font-size: 12.5pt; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-  .pw-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px 14px; margin-top: 4px; font-size: 7pt; color: #222; }
-  .pw-meta strong { color: #000; font-weight: 700; }
+  /* Reference table: compact, fully bordered, fixed layout. The header row
+     repeats on every printed page; rows never split mid-line. */
+  .payroll-sheet-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 7pt; line-height: 1.15; }
+  .payroll-sheet-table thead { display: table-header-group; }
+  .payroll-sheet-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .payroll-sheet-table th, .payroll-sheet-table td { padding: 1.7mm 1.2mm; border: 1px solid #000; text-align: center; vertical-align: middle; overflow-wrap: anywhere; }
+  .payroll-sheet-table th { font-size: 6.2pt; font-weight: 700; text-transform: uppercase; }
+  .payroll-sheet-table th:nth-child(1) { width: 10%; }
+  .payroll-sheet-table th:nth-child(2) { width: 15%; }
+  .payroll-sheet-table th:nth-child(3) { width: 8%; }
+  .payroll-sheet-table th:nth-child(4) { width: 7%; }
+  .payroll-sheet-table th:nth-child(5), .payroll-sheet-table th:nth-child(6) { width: 6.5%; }
+  .payroll-sheet-table th:nth-child(7), .payroll-sheet-table th:nth-child(8) { width: 8%; }
+  .payroll-sheet-table th:nth-child(9), .payroll-sheet-table th:nth-child(10), .payroll-sheet-table th:nth-child(11) { width: 6%; }
+  .payroll-sheet-table th:nth-child(12) { width: 9%; }
+  .payroll-sheet-table th:nth-child(13) { width: 8%; }
+  .payroll-sheet-table td:nth-child(1), .payroll-sheet-table td:nth-child(2) { text-align: left; }
 
-  /* Sections never split awkwardly across pages. */
-  .pw-section { margin: 8px 0 0; break-inside: avoid; page-break-inside: avoid; }
-  .pw-section-title { margin: 0 0 3px; padding-bottom: 2px; border-bottom: 1px solid #000; font-size: 8.5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-
-  /* Employee details: ruled label/value rows. */
-  .pw-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 26px; }
-  .pw-field { display: flex; align-items: baseline; gap: 8px; padding: 2.5px 0; border-bottom: 1px dotted #999; }
-  .pw-field .pw-label { flex: 0 0 auto; font-size: 8pt; color: #333; }
-  .pw-field .pw-value { margin-left: auto; font-size: 8.5pt; font-weight: 600; text-align: right; }
-
-  /* Worksheet tables: bordered, fixed layout so nothing overflows the page. */
-  .pw-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; line-height: 1.2; }
-  .pw-table thead { display: table-header-group; }
-  .pw-table th, .pw-table td { padding: 2px 5px; border: 1px solid #000; text-align: left; vertical-align: top; overflow-wrap: break-word; }
-  .pw-table th { font-size: 6.5pt; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; background: #fff; }
-  .pw-table .pw-col-num { width: 30px; text-align: center; }
-  .pw-table .pw-col-amount { width: 90px; text-align: right; white-space: nowrap; }
-  .pw-table .pw-subtotal td { font-weight: 700; }
-  .pw-table .pw-grand td { font-weight: 700; border-top: 2px solid #000; background: #f2f2f2; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-
-  /* Pay summary boxes. */
-  .pw-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-  .pw-summary-cell { display: grid; gap: 2px; padding: 4px 7px; border: 1px solid #000; }
-  .pw-summary-cell .pw-label { font-size: 7pt; color: #333; }
-  .pw-summary-cell .pw-value { font-size: 9pt; font-weight: 700; }
-  .pw-summary-net { background: #f2f2f2; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .pw-summary-net .pw-value { font-size: 11pt; }
-
-  .pw-remarks { margin: 0; font-size: 7.5pt; line-height: 1.35; color: #111; }
-
-  /* Signature lines. */
-  .pw-signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 10px; text-align: center; }
-  .pw-signature { display: grid; gap: 2px; }
-  .pw-sign-line { min-height: 18px; border-bottom: 1px solid #000; }
-  .pw-sign-caption { font-size: 7pt; color: #222; }
-
-  .pw-footer { margin-top: 8px; padding-top: 3px; border-top: 1px solid #000; text-align: center; font-size: 6.5pt; color: #333; }
-
-  .payroll-register-print { width: 100%; color: #000; font-family: 'Segoe UI', Arial, sans-serif; }
-  .payroll-register-header { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 0 6mm; padding: 0 3mm 3mm; border-bottom: 1px solid #000; font-size: 8pt; }
-  .payroll-register-header > div { display: grid; gap: 1mm; }
-  .payroll-register-header strong { font-size: 10pt; }
-  .payroll-register-cutoff { min-width: 42mm; }
-  .payroll-register-cutoff strong { font-size: 9pt; }
-  .payroll-register-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 7pt; line-height: 1.15; }
-  .payroll-register-table th, .payroll-register-table td { padding: 1.7mm 1.2mm; border: 1px solid #000; text-align: center; vertical-align: middle; overflow-wrap: anywhere; }
-  .payroll-register-table th { font-size: 6.2pt; font-weight: 700; text-transform: uppercase; }
-  .payroll-register-table th:nth-child(1) { width: 10%; }
-  .payroll-register-table th:nth-child(2) { width: 15%; }
-  .payroll-register-table th:nth-child(3) { width: 8%; }
-  .payroll-register-table th:nth-child(4) { width: 7%; }
-  .payroll-register-table th:nth-child(5), .payroll-register-table th:nth-child(6) { width: 6.5%; }
-  .payroll-register-table th:nth-child(7), .payroll-register-table th:nth-child(8) { width: 8%; }
-  .payroll-register-table th:nth-child(9), .payroll-register-table th:nth-child(10), .payroll-register-table th:nth-child(11) { width: 6%; }
-  .payroll-register-table th:nth-child(12) { width: 9%; }
-  .payroll-register-table th:nth-child(13) { width: 8%; }
-  .payroll-register-table td:nth-child(1), .payroll-register-table td:nth-child(2) { text-align: left; }
-  .payroll-register-total td { height: 7mm; font-weight: 700; }
-  .payroll-register-total td:nth-child(12) { background: #f3df3f; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  /* Grand total row; the Gross Compensation cell is highlighted in yellow
+     like the reference sheet. */
+  .payroll-sheet-total td { height: 7mm; font-weight: 700; }
+  .payroll-sheet-total td:nth-child(12) { background: #f3df3f; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 
 /* Product UI refinement: dense, calm, and consistent across kiosk, attendance, and admin. */
