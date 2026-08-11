@@ -61,7 +61,7 @@ import {
   requestDatabaseRestore,
   saveAdminAttendance,
   saveAdminUser,
-  savePayrollCutoff,
+  generatePayrollCutoff,
   startLanViewer,
   stopLanViewer,
   submitScan,
@@ -2697,45 +2697,19 @@ export function PayrollWorkspace({
   };
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
-    setSaving(true);
-    const numberFields: Array<keyof PayrollForm> = [
-      "standardWorkingDays",
-      "actualWorkingDays",
-      "specialHolidayDays",
-      "regularHolidayDays",
-      "incentivesAllowance",
-      "specialAllowance",
-      "lateUnits",
-      "lateDeductionRate",
-      "lateDeduction",
-      "halfDayCount",
-      "absentDays",
-      "overtimeHours",
-      "overtimeRate",
-      "manualAdjustment",
-    ];
-    const payload: Record<string, unknown> = { ...form };
-    numberFields.forEach((field) => {
-      payload[field] = Number(form[field]);
-    });
-    if (isIntern) {
-      payload.dailyRate = INTERN_DAILY_RATE_PHP;
-      payload.lateDeduction = internLateDeduction;
-      payload.specialHolidayDays = 0;
-      payload.regularHolidayDays = 0;
-      payload.incentivesAllowance = 0;
-      payload.specialAllowance = 0;
-      payload.absentDays = Math.max(
-        0,
-        Number(payload.standardWorkingDays) - Number(payload.actualWorkingDays),
-      );
-      payload.overtimeHours = 0;
-      payload.overtimeRate = 0;
+    if (!form.cutoffStart || !form.cutoffEnd) {
+      setMessage("Select a cutoff period first.");
+      return;
     }
+    setSaving(true);
     try {
-      const response = await savePayrollCutoff(payload);
+      const response = await generatePayrollCutoff(
+        form.cutoffStart,
+        form.cutoffEnd,
+        form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
+      );
       if ((response as { success?: boolean }).success) {
-        setMessage("Cutoff payroll saved as a draft.");
+        setMessage("Payroll drafts were generated from completed attendance.");
         onSaved();
       } else
         setMessage(
@@ -2860,8 +2834,29 @@ export function PayrollWorkspace({
       {printMessage && <p className="dashboard-alert">{printMessage}</p>}
       <div className="admin-grid">
         <section className="admin-form print-hidden">
-          <h2>Create cutoff payroll</h2>
+          <h2>Generate cutoff payroll</h2>
           <form onSubmit={save}>
+            <div className="payroll-generate-controls">
+              <div className="cutoff-period">
+                <label>
+                  Cutoff month
+                  <input type="month" value={cutoffMonth} onChange={(event) => setCutoffMonth(event.target.value)} />
+                </label>
+                <div className="cutoff-fill-buttons">
+                  <button className="admin-button" type="button" onClick={() => applyCutoffHalf("first")}>1st&ndash;15th</button>
+                  <button className="admin-button" type="button" onClick={() => applyCutoffHalf("second")}>16th&ndash;last day</button>
+                </div>
+              </div>
+              <label>
+                Cutoff start
+                <input required type="date" value={form.cutoffStart} onChange={(event) => update("cutoffStart", event.target.value)} />
+              </label>
+              <label>
+                Cutoff end
+                <input required type="date" value={form.cutoffEnd} onChange={(event) => update("cutoffEnd", event.target.value)} />
+              </label>
+            </div>
+            <fieldset disabled hidden>
             <label>
               Personnel
               <select
@@ -3261,9 +3256,10 @@ export function PayrollWorkspace({
                 {selectedProfile.regularHolidayMultiplier * 100}% regular.
               </p>
             )}
+            </fieldset>
             {message && <p className="dashboard-alert">{message}</p>}
             <button className="submit-button" disabled={saving}>
-              {saving ? "Saving..." : "Save cutoff payroll"}
+              {saving ? "Generating..." : "Generate from attendance"}
             </button>
           </form>
         </section>

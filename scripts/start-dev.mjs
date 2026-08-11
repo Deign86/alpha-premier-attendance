@@ -8,21 +8,28 @@ const root = path.resolve(import.meta.dirname, '..');
 const credentialsPath = path.join(root, 'credentials', 'rfid-attendance-api.json');
 const pinPath = path.join(root, 'credentials', 'rfid-attendance-admin-pin.txt');
 const secretPath = path.join(root, 'credentials', 'rfid-attendance-admin-secret.txt');
+const sheetsMode = process.env.SHEETS_MODE?.trim() || 'memory';
 
-if (!fs.existsSync(credentialsPath)) {
-  throw new Error(`Missing ${credentialsPath}. Provision the Google service account key before starting the kiosk.`);
+let credentials;
+if (sheetsMode === 'google') {
+  if (!fs.existsSync(credentialsPath)) {
+    throw new Error(`Missing ${credentialsPath}. Provision the Google service account key before starting with SHEETS_MODE=google.`);
+  }
+  credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
 }
 
-const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+fs.mkdirSync(path.dirname(pinPath), { recursive: true });
 const adminPin = process.env.SETUP_ADMIN_PIN?.trim() || readOrCreatePin();
 const adminSessionSecret = process.env.ADMIN_SESSION_SECRET?.trim() || readOrCreateSecret();
 
 const environment = {
   ...process.env,
-  SHEETS_MODE: process.env.SHEETS_MODE?.trim() || 'memory',
-  GOOGLE_SHEET_ID: '1wWR9C9gzhsTj1ZLPc_1O-U4MBvb-q6lSd363GPvzvjM',
-  GOOGLE_SERVICE_ACCOUNT_EMAIL: credentials.client_email,
-  GOOGLE_PRIVATE_KEY: credentials.private_key,
+  SHEETS_MODE: sheetsMode,
+  ...(credentials ? {
+    GOOGLE_SHEET_ID: process.env.GOOGLE_SHEET_ID || '1wWR9C9gzhsTj1ZLPc_1O-U4MBvb-q6lSd363GPvzvjM',
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: credentials.client_email,
+    GOOGLE_PRIVATE_KEY: credentials.private_key,
+  } : {}),
   TIMEZONE: 'Asia/Manila',
   HOST: process.env.HOST?.trim() || '0.0.0.0',
   PORT: '3001',

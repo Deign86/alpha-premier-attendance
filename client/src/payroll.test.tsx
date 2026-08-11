@@ -5,10 +5,10 @@ import type { PayrollCalculationProfile, PayrollCutoffRecord } from "@rfid-atten
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, savePayrollCutoff: vi.fn() };
+  return { ...actual, generatePayrollCutoff: vi.fn() };
 });
 
-import { savePayrollCutoff } from "./api";
+import { generatePayrollCutoff } from "./api";
 import { PayrollWorkspace } from "./App";
 
 const profiles: PayrollCalculationProfile[] = [{
@@ -70,21 +70,21 @@ function sheetTotalRow(container: HTMLElement): HTMLElement {
 describe("PayrollWorkspace", () => {
   beforeEach(() => {
     window.print = vi.fn();
-    vi.mocked(savePayrollCutoff).mockReset();
+    vi.mocked(generatePayrollCutoff).mockReset();
   });
 
-  it("releases the save button and shows backend errors", async () => {
-    vi.mocked(savePayrollCutoff).mockRejectedValueOnce("Employee and valid cutoff dates are required.");
+  it("generates payroll from a selected cutoff and shows backend errors", async () => {
+    vi.mocked(generatePayrollCutoff).mockRejectedValueOnce("Unable to generate payroll.");
     const user = userEvent.setup();
     render(<PayrollWorkspace users={[{
       userId: "EMP-1", rfidUid: "ABCD1234", fullName: "Ada Lovelace", department: null, status: "ACTIVE",
       employeeType: "EMPLOYEE", gender: null, dailyRate: 500, payrollProfileId: "BEA_STANDARD", photoUrl: null,
     }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
-    await user.selectOptions(screen.getByLabelText("Personnel"), "EMP-1");
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
-    await user.click(screen.getByRole("button", { name: "Save cutoff payroll" }));
-    expect(await screen.findByText("Employee and valid cutoff dates are required.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save cutoff payroll" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+    expect(await screen.findByText("Unable to generate payroll.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
+    expect(generatePayrollCutoff).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
   });
 
   it("shows exactly the two required payroll print buttons and no payslip/export actions", () => {
@@ -209,42 +209,11 @@ describe("PayrollWorkspace", () => {
     expect(window.print).not.toHaveBeenCalled();
   });
 
-  it("computes employee late deductions from hours times rate", async () => {
-    vi.mocked(savePayrollCutoff).mockResolvedValueOnce({ success: true } as never);
-    const user = userEvent.setup();
-    render(<PayrollWorkspace users={[{
-      userId: "EMP-1", rfidUid: "ABCD1234", fullName: "Ada Lovelace", department: null, status: "ACTIVE",
-      employeeType: "EMPLOYEE", gender: null, dailyRate: 500, payrollProfileId: "BEA_STANDARD", photoUrl: null,
-    }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
-    await user.selectOptions(screen.getByLabelText("Personnel"), "EMP-1");
-    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
-    await user.clear(screen.getByLabelText("Total late hours"));
-    await user.type(screen.getByLabelText("Total late hours"), "5");
-    await user.clear(screen.getByLabelText("Late deduction rate (PHP/hr)"));
-    await user.type(screen.getByLabelText("Late deduction rate (PHP/hr)"), "50");
-    expect(screen.getByLabelText(/Late deduction \(PHP\)/)).toHaveValue(250);
-  });
-
-  it("derives intern absence deduction from standard minus actual days and keeps half-days", async () => {
-    vi.mocked(savePayrollCutoff).mockResolvedValueOnce({ success: true } as never);
-    const user = userEvent.setup();
-    render(<PayrollWorkspace users={[{
-      userId: "INT-1", rfidUid: "INT12345", fullName: "Maria Santos", department: null, status: "ACTIVE",
-      employeeType: "INTERN", gender: null, dailyRate: null, payrollProfileId: null, photoUrl: null,
-    }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
-    await user.selectOptions(screen.getByLabelText("Personnel"), "INT-1");
-    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
-    await user.clear(screen.getByLabelText("Standard days"));
-    await user.type(screen.getByLabelText("Standard days"), "12");
-    await user.clear(screen.getByLabelText("Actual days"));
-    await user.type(screen.getByLabelText("Actual days"), "10");
-    await user.clear(screen.getByLabelText("Half-days"));
-    await user.type(screen.getByLabelText("Half-days"), "1");
-    expect(screen.getByDisplayValue("2")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Save cutoff payroll" }));
-    await waitFor(() => expect(savePayrollCutoff).toHaveBeenCalled());
-    const payload = vi.mocked(savePayrollCutoff).mock.calls[0][0] as Record<string, unknown>;
-    expect(payload.absentDays).toBe(2);
-    expect(payload.halfDayCount).toBe(1);
+  it("does not expose manual payroll entry fields", () => {
+    renderWorkspace([]);
+    expect(screen.queryByRole("combobox", { name: "Personnel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Actual days" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Manual adjustment (PHP)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
   });
 });

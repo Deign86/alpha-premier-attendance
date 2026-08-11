@@ -29,6 +29,7 @@ export const tauriApi = {
   payrollProfiles: (token: string) => invoke('payroll_list_profiles', { token }),
   payrollUpsertProfile: (token: string, profile: unknown) => invoke('payroll_upsert_profile', { token, profile }),
   payrollCutoffs: (token: string) => invoke('payroll_list_cutoffs', { token }),
+  payrollGenerateCutoff: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string) => invoke('payroll_generate_cutoff', { token, cutoffStart, cutoffEnd, payrollCutoffLabel }),
   payrollCreateCutoff: (token: string, input: unknown) => invoke('payroll_create_cutoff', { token, input }),
   payrollUpdateCutoff: (token: string, input: unknown) => invoke('payroll_update_cutoff', { token, input }),
   payrollFinalizeCutoff: (token: string, payrollId: string) => invoke('payroll_finalize_cutoff', { token, payrollId }),

@@ -677,3 +677,15 @@ td small { font-size: .7rem; }
     font-size: .68rem;
   }
 }
+.payroll-workspace .admin-form > form > label,
+.payroll-workspace .admin-form > form > .profile-toggle,
+.payroll-workspace .admin-form > form > .setup-copy,
+.payroll-workspace .admin-form > form > .setup-fields,
+.payroll-workspace .admin-form > form > .checkbox-label {
+  display: none;
+}
+
+.payroll-generate-controls {
+  display: grid;
+  gap: 12px;
+}
