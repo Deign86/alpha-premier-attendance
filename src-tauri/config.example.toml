@@ -35,13 +35,12 @@ admin_session_minutes = 15
 # surfaced to the UI as `rfid-scan` events, so card taps work without a focused
 # webview text box.
 [scanner]
-# "keyboard" (legacy): the reader behaves as a keyboard wedge. It is retained
-# for configuration compatibility but is disabled for background attendance;
-# a generic hook cannot isolate it from ordinary foreground typing.
+# "keyboard": the reader behaves as a keyboard wedge. The kiosk captures its
+# fast foreground key burst while the kiosk window is active.
 # "hid": raw HID access to a true HID reader; requires hid_vid/hid_pid below.
 # "serial": reads ASCII UID bytes from a configured serial/COM port.
-# "auto": use HID when hid_vid/hid_pid are set, otherwise remain offline and
-# require an explicitly configured device-specific transport.
+# "auto": use HID when hid_vid/hid_pid are set, otherwise use the foreground
+# keyboard-wedge path.
 mode = "keyboard"
 # Most keyboard-wedge readers append Enter after the UID. Set false when the
 # reader only types the UID (the app then completes scans by idle timeout).

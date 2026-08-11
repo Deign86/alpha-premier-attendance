@@ -202,16 +202,16 @@ pub fn start(app: AppHandle, handle: Arc<ScannerHandle>) {
 // Sources
 // ---------------------------------------------------------------------------
 
-/// Keyboard-wedge capture is intentionally not started by the background
-/// service. A generic keyboard hook cannot prove which physical device emitted
-/// a key, so enabling it would risk leaking ordinary typing into another app.
+/// Keyboard-wedge capture is handled by the foreground kiosk webview. The
+/// native layer reports it as ready so the UI can enable that protected path;
+/// it does not install a process-wide keyboard hook.
 fn spawn_keyboard(runtime: &Arc<Runtime>, _config: ScannerConfig) {
     let _ = _config.enter_suffix;
     set_status(
         runtime,
-        ScannerState::Offline,
-        "Keyboard wedge disabled for background scanning",
-        Some("Foreground keyboard input cannot be isolated by a generic hook".into()),
+        ScannerState::Connected,
+        "Keyboard-wedge reader ready",
+        Some("Scans are captured only while the kiosk window is active".into()),
     );
 }
 

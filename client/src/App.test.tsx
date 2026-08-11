@@ -112,17 +112,20 @@ describe('RFID kiosk', () => {
     expect(input).not.toHaveFocus();
   });
 
-  it('does not classify ordinary keyboard-wedge keystrokes as a background scan', async () => {
+  it('captures a fast keyboard-wedge burst while the kiosk is active', async () => {
     render(<App />);
     const input = screen.getByLabelText(/scanner card id/i);
     expect(input).toHaveAttribute('readonly');
-    // A keyboard-wedge stream is not a safe background source because the
-    // originating device cannot be identified or isolated from another app.
     for (const key of ['0', '4', 'a', '1', 'b', '2', 'c', '3']) {
       fireEvent.keyDown(input, { key });
     }
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything()));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({
+        body: JSON.stringify({ rfidUid: '04a1b2c3', source: 'RFID' }),
+      }),
+    ));
   });
 
   it('keeps the scanner box locked against all keyboard typing (Manual entry is opt-in)', async () => {

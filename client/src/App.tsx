@@ -145,15 +145,15 @@ export default function App() {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [now, setNow] = useState(() => new Date());
   const [scannerStatus, setScannerStatus] = useState<ScannerStatus | null>(() =>
-    // Browser dev mode has no native scanner pipeline; show it as unavailable.
+    // Browser/keyboard-wedge mode uses the kiosk's foreground key stream.
     "__TAURI_INTERNALS__" in window
       ? null
       : {
-          state: "offline",
-          message: "Scanner unavailable",
-          detail: "Native scanner events are only available in the desktop app",
+          state: "connected",
+          message: "Keyboard-wedge reader ready",
+          detail: "Keep the kiosk window active while using a USB keyboard-wedge reader",
           mode: "web",
-          paused: true,
+          paused: false,
         },
   );
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -510,6 +510,62 @@ export default function App() {
       void submit(value, "RFID");
     }
   };
+
+  // Keyboard-wedge readers emit a tight burst of key events followed by Enter.
+  // Capture that burst at the kiosk window so the reader works even though the
+  // visible scanner field remains read-only. Text-entry screens are excluded.
+  useEffect(() => {
+    if (!scannerStatus || !["keyboard", "web"].includes(scannerStatus.mode)) return;
+    let buffer = "";
+    let lastKeyAt = 0;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flush = () => {
+      const value = buffer;
+      buffer = "";
+      if (flushTimer) clearTimeout(flushTimer);
+      flushTimer = null;
+      if (value.length >= 4) {
+        if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
+          handleSetupInput(value);
+        } else if (!manualMode && !setupDialogOpen) {
+          void submit(value, "RFID");
+        }
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTextEntry = Boolean(
+        target &&
+          (target.matches("textarea, select, [contenteditable='true']") ||
+            (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid")),
+      );
+      if (isTextEntry || manualMode || (setupDialogOpen && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
+        buffer = "";
+        return;
+      }
+      const now = Date.now();
+      if (now - lastKeyAt > 250) buffer = "";
+      lastKeyAt = now;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        flush();
+        return;
+      }
+      if (/^[0-9a-fA-F]$/.test(event.key)) {
+        buffer += event.key;
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = setTimeout(flush, 150);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (flushTimer) clearTimeout(flushTimer);
+    };
+  }, [handleSetupInput, manualMode, scannerStatus, setupDialogOpen, setupStep, setupToken, submit]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
