@@ -2974,30 +2974,6 @@ export function PayrollWorkspace({
                 </optgroup>
               </select>
             </label>
-            {!isIntern && (
-              <div
-                className="profile-toggle"
-                role="radiogroup"
-                aria-label="Payroll calculation"
-              >
-                {profiles.map((profile) => (
-                  <button
-                    key={profile.profileId}
-                    type="button"
-                    role="radio"
-                    aria-checked={form.payrollProfileId === profile.profileId}
-                    className={
-                      form.payrollProfileId === profile.profileId
-                        ? "is-active"
-                        : ""
-                    }
-                    onClick={() => applyProfile(profile.profileId)}
-                  >
-                    {profile.label}
-                  </button>
-                ))}
-              </div>
-            )}
             {isIntern && (
               <p className="setup-copy">
                 Intern payroll uses a fixed {php(INTERN_DAILY_RATE_PHP)} per day
