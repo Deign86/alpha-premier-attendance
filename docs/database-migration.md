@@ -56,7 +56,7 @@ backup panel).
 
 1. **On the old PC** — open **Admin → Data and backup** and press
    **Create backup now**. The app writes
-   `attendance-backup-YYYYMMDD-HHMMSS.db` into
+   `attendance-backup-YYYYMMDD-HHMMSS.apbackup` into
    `%LOCALAPPDATA%\com.alphapremier.attendance\backups` (or
    `<exe folder>\Data\backups` in portable mode) and keeps the newest 10.
    A backup is also written automatically every time the app closes cleanly,
@@ -88,7 +88,7 @@ helper script — the app must be closed:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\migrate-database.ps1 `
-  -BackupFile "D:\attendance-backup-20260805-143000.db"
+  -BackupFile "D:\attendance-backup-20260805-143000.apbackup"
 ```
 
 The script locates the live database (portable vs installed, honouring
@@ -111,7 +111,7 @@ app; the restore happens before the database is opened, then the variable can
 be dropped:
 
 ```powershell
-$env:ALPHA_PREMIER_RESTORE_FROM = "D:\attendance-backup-20260805-143000.db"
+$env:ALPHA_PREMIER_RESTORE_FROM = "D:\attendance-backup-20260805-143000.apbackup"
 & ".\alpha-premier-attendance.exe"
 Remove-Item Env:\ALPHA_PREMIER_RESTORE_FROM
 ```
@@ -133,7 +133,7 @@ file in the data directory takes priority when both are present.
 
 ## Backups lifecycle
 
-- Backups live in `data_dir\backups` (`attendance-backup-*.db`).
+- Backups live in `data_dir\backups` (`attendance-backup-*.apbackup`). Each archive contains the complete application state: SQLite, photos, exports, sync files, and `config.toml`.
 - Automatic: one is created on every clean app exit.
 - Manual: Admin → Data and backup → Create backup now.
 - Rotation: the newest 10 are kept; older backups are deleted automatically.

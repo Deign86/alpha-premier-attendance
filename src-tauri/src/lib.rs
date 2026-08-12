@@ -1359,13 +1359,15 @@ async fn db_info(state: State<'_, AppState>) -> Result<serde_json::Value, String
 /// Create a consistent timestamped backup of the SQLite database into
 /// `data_dir/backups` (keeps the newest 10). Safe while the app is running.
 async fn db_backup(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let file_path = crate::database::create_backup(&state.db, &state.data_dir).await?;
+    let config_dir = crate::paths::resolve(&app)?.config_dir;
+    let file_path = crate::database::create_portable_backup(&state.db, &state.data_dir, &config_dir, &state.db_path).await?;
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -1403,9 +1405,12 @@ async fn db_restore_request(
     if !source.is_file() {
         return Err("RESTORE_SOURCE_NOT_FOUND".into());
     }
-    crate::database::validate_database_file(&source)
-        .await
-        .map_err(|error| format!("RESTORE_SOURCE_INVALID: {error}"))?;
+    let validation = if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup")) {
+        crate::database::validate_portable_backup(&source)
+    } else {
+        crate::database::validate_database_file(&source).await
+    };
+    validation.map_err(|error| format!("RESTORE_SOURCE_INVALID: {error}"))?;
     let marker = crate::database::restore_request_path(&state.data_dir);
     std::fs::write(&marker, source.to_string_lossy().into_owned())
         .map_err(|error| format!("cannot write restore request: {error}"))?;
@@ -2289,6 +2294,7 @@ pub fn run() {
             // records the problem in `restore.failed`.
             match tauri::async_runtime::block_on(crate::database::process_restore_request(
                 &paths.data_dir,
+                &paths.config_dir,
                 &db_path,
             )) {
                 crate::database::RestoreOutcome::None => {}
@@ -2345,6 +2351,7 @@ pub fn run() {
             // closing the app.
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
+                let config_dir = paths.config_dir.clone();
                 let window_for_events = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -2356,9 +2363,11 @@ pub fn run() {
                         let handle = handle.clone();
                         if let Some(state) = handle.try_state::<AppState>() {
                             let data_dir = state.data_dir.clone();
+                            let db_path = state.db_path.clone();
                             let db = state.db.clone();
+                            let config_dir = config_dir.clone();
                             let _ = tauri::async_runtime::block_on(async move {
-                                match crate::database::create_backup(&db, &data_dir).await {
+                                match crate::database::create_portable_backup(&db, &data_dir, &config_dir, &db_path).await {
                                     Ok(path) => log::info!(
                                         "automatic backup on exit saved to {}",
                                         path.display()

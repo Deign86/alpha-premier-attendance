@@ -10,7 +10,9 @@
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
 /// Marker file written by the admin "Restore from backup" flow. When present at
 /// startup, the app restores the database from the recorded source file before
@@ -24,6 +26,7 @@ pub const RESTORE_FAILED_FILE: &str = "restore.failed";
 pub const ENV_RESTORE_FROM: &str = "ALPHA_PREMIER_RESTORE_FROM";
 /// Number of timestamped backups kept in `data_dir/backups`.
 pub const BACKUP_KEEP_COUNT: usize = 10;
+const PORTABLE_BACKUP_VERSION: u32 = 1;
 
 pub fn backups_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("backups")
@@ -37,10 +40,10 @@ pub fn restore_failed_path(data_dir: &Path) -> PathBuf {
     data_dir.join(RESTORE_FAILED_FILE)
 }
 
-/// Timestamped backup file name, e.g. `attendance-backup-20260805-143000.db`.
+/// Timestamped backup file name, e.g. `attendance-backup-20260805-143000.apbackup`.
 /// Names sort lexicographically newest-first, which backup rotation relies on.
 pub fn backup_file_name(now: &chrono::DateTime<chrono::Utc>) -> String {
-    format!("attendance-backup-{}.db", now.format("%Y%m%d-%H%M%S"))
+    format!("attendance-backup-{}.apbackup", now.format("%Y%m%d-%H%M%S"))
 }
 
 /// Escape a value for a single-quoted SQLite string literal.
@@ -116,27 +119,74 @@ pub async fn snapshot_database(source: &Path, dest: &Path) -> Result<(), String>
     Ok(())
 }
 
-/// Create a timestamped backup of the live pool into `data_dir/backups` and
-/// prune old backups, keeping the newest `BACKUP_KEEP_COUNT`. Safe to call
-/// while the app is recording scans.
-pub async fn create_backup(db: &SqlitePool, data_dir: &Path) -> Result<PathBuf, String> {
+pub fn validate_portable_backup(path: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("cannot open backup: {e}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("not a portable backup archive: {e}"))?;
+    let mut manifest = String::new();
+    archive.by_name("manifest.json").map_err(|_| "portable backup manifest is missing".to_string())?.read_to_string(&mut manifest).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| format!("invalid portable backup manifest: {e}"))?;
+    if value.get("format").and_then(|v| v.as_str()) != Some("alpha-premier-application-backup") || value.get("version").and_then(|v| v.as_u64()) != Some(PORTABLE_BACKUP_VERSION as u64) { return Err("unsupported Alpha Premier portable backup format".into()); }
+    if archive.by_name("database/attendance.db").is_err() { return Err("portable backup database is missing".into()); }
+    Ok(())
+}
+
+/// Create a self-contained application backup. It includes the database,
+/// photos, generated files, sync state, and config so it can be moved between PCs.
+pub async fn create_portable_backup(
+    db: &SqlitePool,
+    data_dir: &Path,
+    config_dir: &Path,
+    _db_path: &Path,
+) -> Result<PathBuf, String> {
     let dir = backups_dir(data_dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create backup folder: {e}"))?;
     let file_name = backup_file_name(&chrono::Utc::now());
     let dest = dir.join(&file_name);
-    let sql = format!(
-        "VACUUM INTO '{}'",
-        sql_quote(&dest.to_string_lossy().replace('\\', "/"))
-    );
-    sqlx::query(&sql)
-        .execute(db)
-        .await
-        .map_err(|e| format!("online backup failed: {e}"))?;
-    if !dest.is_file() {
-        return Err("backup did not produce a file".into());
-    }
+    let temp_db = dir.join(format!("{}.db.tmp", uuid::Uuid::new_v4()));
+    snapshot_database_from_pool(db, &temp_db).await?;
+    let temp_archive = dest.with_extension("tmp-apbackup");
+    let archive_file = std::fs::File::create(&temp_archive).map_err(|e| format!("cannot create backup: {e}"))?;
+    let mut writer = ZipWriter::new(archive_file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let manifest = serde_json::json!({"format":"alpha-premier-application-backup","version":PORTABLE_BACKUP_VERSION,"database":"database/attendance.db"});
+    writer.start_file("manifest.json", options).map_err(|e| e.to_string())?;
+    writer.write_all(manifest.to_string().as_bytes()).map_err(|e| e.to_string())?;
+    add_file_to_archive(&mut writer, &temp_db, "database/attendance.db", options)?;
+    add_directory_to_archive(&mut writer, data_dir, data_dir, options, &["backups", "restore.request", "restore.failed"])?;
+    let config = config_dir.join("config.toml");
+    if config.is_file() { add_file_to_archive(&mut writer, &config, "config/config.toml", options)?; }
+    writer.finish().map_err(|e| format!("cannot finalize backup: {e}"))?;
+    std::fs::remove_file(&temp_db).ok();
+    if dest.exists() { std::fs::remove_file(&dest).map_err(|e| e.to_string())?; }
+    std::fs::rename(&temp_archive, &dest).map_err(|e| format!("cannot finalize backup: {e}"))?;
     let _ = prune_backups(&dir, BACKUP_KEEP_COUNT).await;
     Ok(dest)
+}
+
+async fn snapshot_database_from_pool(db: &SqlitePool, dest: &Path) -> Result<(), String> {
+    if dest.exists() { std::fs::remove_file(dest).ok(); }
+    let sql = format!("VACUUM INTO '{}'", sql_quote(&dest.to_string_lossy().replace('\\', "/")));
+    sqlx::query(&sql).execute(db).await.map_err(|e| format!("online backup failed: {e}"))?;
+    if dest.is_file() { Ok(()) } else { Err("backup did not produce a database snapshot".into()) }
+}
+
+fn add_file_to_archive(writer: &mut ZipWriter<std::fs::File>, source: &Path, name: &str, options: SimpleFileOptions) -> Result<(), String> {
+    let mut file = std::fs::File::open(source).map_err(|e| format!("cannot read {}: {e}", source.display()))?;
+    writer.start_file(name.replace('\\', "/"), options).map_err(|e| e.to_string())?;
+    std::io::copy(&mut file, writer).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn add_directory_to_archive(writer: &mut ZipWriter<std::fs::File>, root: &Path, current: &Path, options: SimpleFileOptions, excluded: &[&str]) -> Result<(), String> {
+    for entry in std::fs::read_dir(current).map_err(|e| format!("cannot read {}: {e}", current.display()))? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
+        if relative == Path::new("attendance.db") || relative.extension().is_some_and(|ext| ext == "db" && relative.starts_with("backups")) { continue; }
+        if relative.components().next().is_some_and(|component| excluded.iter().any(|item| component.as_os_str() == *item)) { continue; }
+        if path.is_dir() { add_directory_to_archive(writer, root, &path, options, excluded)?; }
+        else if path.is_file() { add_file_to_archive(writer, &path, &format!("data/{}", relative.to_string_lossy()), options)?; }
+    }
+    Ok(())
 }
 
 /// Delete backups beyond `keep` newest (names are timestamped and sort
@@ -151,7 +201,7 @@ pub async fn prune_backups(dir: &Path, keep: usize) -> Result<Vec<PathBuf>, Stri
                 && path
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("db"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup") || ext.eq_ignore_ascii_case("db"))
         })
         .collect();
     entries.sort();
@@ -177,7 +227,7 @@ pub async fn list_backups(data_dir: &Path) -> Result<Vec<(PathBuf, u64)>, String
                 && path
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("db"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup") || ext.eq_ignore_ascii_case("db"))
         })
         .map(|path| {
             let size = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
@@ -218,7 +268,7 @@ pub enum RestoreOutcome {
 /// consistently. The marker is deleted on success and preserved as
 /// `restore.failed` on any problem, and the app always starts with a valid
 /// database — a failed restore never bricks the kiosk.
-pub async fn process_restore_request(data_dir: &Path, db_path: &Path) -> RestoreOutcome {
+pub async fn process_restore_request(data_dir: &Path, config_dir: &Path, db_path: &Path) -> RestoreOutcome {
     let marker = restore_request_path(data_dir);
     let env_source = std::env::var_os(ENV_RESTORE_FROM)
         .map(|value| value.to_string_lossy().into_owned())
@@ -254,7 +304,12 @@ pub async fn process_restore_request(data_dir: &Path, db_path: &Path) -> Restore
         );
         return outcome;
     }
-    if let Err(error) = validate_database_file(&source).await {
+    let validation = if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup")) {
+        validate_portable_backup(&source)
+    } else {
+        validate_database_file(&source).await
+    };
+    if let Err(error) = validation {
         let outcome = RestoreOutcome::Failed {
             source: source.clone(),
             error: error.clone(),
@@ -283,7 +338,12 @@ pub async fn process_restore_request(data_dir: &Path, db_path: &Path) -> Restore
             log::error!("cannot create database folder {}: {error}", parent.display());
         }
     }
-    if let Err(error) = snapshot_database(&source, db_path).await {
+    let restore_result = if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup")) {
+        restore_portable_backup(&source, data_dir, config_dir, db_path).await
+    } else {
+        snapshot_database(&source, db_path).await
+    };
+    if let Err(error) = restore_result {
         let outcome = RestoreOutcome::Failed {
             source: source.clone(),
             error: error.clone(),
@@ -299,6 +359,57 @@ pub async fn process_restore_request(data_dir: &Path, db_path: &Path) -> Restore
     }
     log::info!("database restored from {}", source.display());
     RestoreOutcome::Restored { source }
+}
+
+async fn restore_portable_backup(source: &Path, data_dir: &Path, config_dir: &Path, db_path: &Path) -> Result<(), String> {
+    let staging = data_dir.join(format!(".restore-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    let file = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        let name = entry.enclosed_name().ok_or_else(|| "portable backup contains an unsafe path".to_string())?.to_path_buf();
+        let target = staging.join(name);
+        if entry.is_dir() { std::fs::create_dir_all(&target).map_err(|e| e.to_string())?; continue; }
+        if let Some(parent) = target.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+        let mut out = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    }
+    validate_database_file(&staging.join("database/attendance.db")).await?;
+    snapshot_database(&staging.join("database/attendance.db"), db_path).await?;
+    if staging.join("data").is_dir() {
+        clear_restorable_data(data_dir)?;
+        copy_directory_contents(&staging.join("data"), data_dir)?;
+    }
+    let restored_config = staging.join("config/config.toml");
+    if restored_config.is_file() {
+        std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        std::fs::copy(restored_config, config_dir.join("config.toml")).map_err(|e| format!("cannot restore config: {e}"))?;
+    }
+    std::fs::remove_dir_all(&staging).ok();
+    Ok(())
+}
+
+fn clear_restorable_data(data_dir: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(data_dir).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+        if name == "backups" || name == RESTORE_REQUEST_FILE || name == RESTORE_FAILED_FILE || name == "attendance.db" || name == "attendance.db-wal" || name == "attendance.db-shm" { continue; }
+        if path.is_dir() { std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?; }
+        else { std::fs::remove_file(&path).map_err(|e| e.to_string())?; }
+    }
+    Ok(())
+}
+
+fn copy_directory_contents(source: &Path, target: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let relative = path.strip_prefix(source).map_err(|e| e.to_string())?;
+        let destination = target.join(relative);
+        if path.is_dir() { std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?; copy_directory_contents(&path, &destination)?; }
+        else { if let Some(parent) = destination.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; } std::fs::copy(&path, &destination).map_err(|e| e.to_string())?; }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -341,17 +452,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("alpha-backup-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let state = seed_database(&dir).await;
-        let backup = create_backup(&state.db, &dir).await.expect("backup");
+        let backup = create_portable_backup(&state.db, &dir, &dir, &state.db_path).await.expect("backup");
         assert!(backup.is_file());
         assert!(backup.file_name().unwrap().to_string_lossy().starts_with("attendance-backup-"));
-        validate_database_file(&backup).await.expect("backup is a valid attendance db");
-        let pool = open_readonly(&backup).await.unwrap();
+        validate_portable_backup(&backup).expect("backup is a valid portable archive");
+        let file = std::fs::File::open(&backup).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let embedded = dir.join("embedded.db");
+        std::io::copy(&mut archive.by_name("database/attendance.db").unwrap(), &mut std::fs::File::create(&embedded).unwrap()).unwrap();
+        let pool = open_readonly(&embedded).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(count, 1);
         pool.close().await;
+        let _ = std::fs::remove_file(embedded);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -361,15 +477,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("alpha-prune-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         for name in [
-            "attendance-backup-20260801-000000.db",
-            "attendance-backup-20260802-000000.db",
-            "attendance-backup-20260803-000000.db",
+            "attendance-backup-20260801-000000.apbackup",
+            "attendance-backup-20260802-000000.apbackup",
+            "attendance-backup-20260803-000000.apbackup",
         ] {
             std::fs::write(dir.join(name), "x").unwrap();
         }
         let removed = prune_backups(&dir, 2).await.expect("prune");
         assert_eq!(removed.len(), 1);
-        assert_eq!(removed[0].file_name().unwrap(), "attendance-backup-20260801-000000.db");
+        assert_eq!(removed[0].file_name().unwrap(), "attendance-backup-20260801-000000.apbackup");
         let remaining = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|entry| entry.ok())
@@ -442,7 +558,7 @@ mod tests {
         std::fs::write(&marker, backup.to_string_lossy().into_owned()).unwrap();
 
         let db_path = dir.join("attendance.db");
-        let outcome = process_restore_request(&dir, &db_path).await;
+        let outcome = process_restore_request(&dir, &dir, &db_path).await;
         assert_eq!(outcome, RestoreOutcome::Restored { source: backup.clone() });
         assert!(!marker.exists(), "marker must be removed after a successful restore");
         assert!(!restore_failed_path(&dir).exists());
@@ -491,7 +607,7 @@ mod tests {
         let marker = restore_request_path(&dir);
         std::fs::write(&marker, dir.join("gone.db").to_string_lossy().into_owned()).unwrap();
         let db_path = dir.join("attendance.db");
-        let outcome = process_restore_request(&dir, &db_path).await;
+        let outcome = process_restore_request(&dir, &dir, &db_path).await;
         assert!(matches!(outcome, RestoreOutcome::SkippedMissingSource { .. }));
         assert!(restore_failed_path(&dir).exists());
         assert!(db_path.exists(), "current database must be kept");

@@ -47,6 +47,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net",
 tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 urlencoding = "2"
+zip = "8"
 tauri-plugin-mcp-bridge = "0.12.0"
 
 [dev-dependencies]

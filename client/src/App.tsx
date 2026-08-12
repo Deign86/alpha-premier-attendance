@@ -2127,7 +2127,7 @@ function DatabasePanel() {
       const selected = await openFileDialog({
         multiple: false,
         directory: false,
-        filters: [{ name: "SQLite database backup", extensions: ["db"] }],
+        filters: [{ name: "Alpha Premier portable backup", extensions: ["apbackup", "db"] }],
       });
       if (!selected || typeof selected !== "string") return;
       if (
@@ -2240,7 +2240,7 @@ function DatabasePanel() {
             even while the app is running) and keeps the newest 10.
           </li>
           <li>
-            Copy the <code>attendance-backup-*.db</code> file to a USB drive (or
+            Copy the <code>attendance-backup-*.apbackup</code> file to a USB drive (or
             the office network) and plug it into the <strong>new PC</strong>.
           </li>
           <li>

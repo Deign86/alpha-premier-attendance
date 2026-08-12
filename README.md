@@ -282,7 +282,7 @@ The importer applies numbered SQLite migrations, imports the available tabs, and
 SQLite is the source of truth, and the whole database lives in one file (`attendance.db`). To move the app to the actual front-desk PC — or any replacement machine — use **Admin → Data and backup**:
 
 1. On the old PC: **Create backup now** (the app writes a consistent snapshot via SQLite's online backup engine — safe even while the app is running — into `backups/`; one is also written automatically on every clean exit).
-2. Copy `attendance-backup-*.db` to a USB drive.
+2. Copy `attendance-backup-*.apbackup` to a USB drive. This archive contains the complete application state: database, photos, exports, sync state, and configuration.
 3. On the new PC: **Restore from backup file…** and confirm. The app closes, validates the file, restores on the next launch (the previous database is saved first as `backups/pre-restore-*.db`), and runs migrations automatically.
 
 The database location is configurable — `[database] path` in `config.toml` (relative to the config directory, so portable deployments travel with their data) or the `ALPHA_PREMIER_DB_PATH` environment variable — and defaults to the data directory. A technician/installer flow exists at [scripts/migrate-database.ps1](scripts/migrate-database.ps1) and `ALPHA_PREMIER_RESTORE_FROM` for automated provisioning. Full runbook and troubleshooting: [docs/database-migration.md](docs/database-migration.md). Never copy `attendance.db` while the app is open — WAL writes can be lost.

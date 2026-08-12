@@ -1,6 +1,6 @@
 # Restores the Alpha Premier Attendance SQLite database onto a (new) front-desk PC.
 #
-#   .\migrate-database.ps1 -BackupFile "D:\attendance-backup-20260805-143000.db"
+#   .\migrate-database.ps1 -BackupFile "D:\attendance-backup-20260805-143000.apbackup"
 #
 # This is the manual installer path. The preferred flow is the in-app
 # Admin -> Data and backup -> "Restore from backup file..." button, which
@@ -21,7 +21,7 @@
 #
 # Parameter   Description
 # ---------   -----------
-# BackupFile  Path to the .db backup file to restore.
+# BackupFile  Path to the .apbackup portable backup archive to restore.
 # ExeDir      Optional. Directory of alpha-premier-attendance.exe. When the
 #             deployment is portable (portable.dat marker next to the .exe, or
 #             ALPHA_PREMIER_PORTABLE set), the database lives in .\Data next to

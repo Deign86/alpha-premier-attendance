@@ -355,7 +355,7 @@ export type GeneratedFileMetadata = {
   message?: string;
 };
 
-/** One SQLite backup file stored in the app backups directory. */
+/** One portable application backup stored in the app backups directory. */
 export type DatabaseBackupInfo = {
   fileName: string;
   filePath: string;
