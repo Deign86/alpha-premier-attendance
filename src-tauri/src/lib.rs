@@ -633,13 +633,39 @@ fn payroll_cutoff_json(row: &SqliteRow, employee_type: Option<&str>) -> serde_js
     insert("adjustmentReason", serde_json::json!(row.get::<Option<String>, _>("adjustment_reason")));
     insert("grossCompensation", serde_json::json!(row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0));
     insert("netPay", serde_json::json!(row.get::<i64, _>("net_pay_centavos") as f64 / 100.0));
-    insert("signaturePlaceholder", serde_json::json!(row.get::<String, _>("signature_placeholder")));
     insert("calculationBreakdown", serde_json::json!(row.get::<String, _>("calculation_breakdown")));
     insert("approvedWorkingDayOverage", serde_json::json!(row.get::<i64, _>("approved_working_day_overage") != 0));
     insert("status", serde_json::json!(row.get::<String, _>("status")));
     insert("finalizedAt", serde_json::json!(row.get::<Option<String>, _>("finalized_at")));
     insert("revision", serde_json::json!(row.get::<i64, _>("revision")));
     serde_json::Value::Object(map)
+}
+
+#[tauri::command]
+async fn payroll_intern_report(
+    state: State<'_, AppState>,
+    token: String,
+    cutoff_start: String,
+    cutoff_end: String,
+    payroll_cutoff_label: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await { return Err("ADMIN_AUTH_REQUIRED".into()); }
+    chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
+    chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
+    if cutoff_end < cutoff_start { return Err("INVALID_CUTOFF_DATES".into()); }
+    let rows = sqlx::query("SELECT u.user_id, u.full_name, COALESCE(COUNT(p.payroll_id),0) AS actual_days, COALESCE(SUM(p.base_pay_centavos),0) AS basic_pay, COALESCE(SUM(p.late_hours),0) AS late_units, COALESCE(SUM(p.late_deduction_centavos),0) AS late_deduction, COALESCE(SUM(p.daily_pay_centavos),0) AS gross_pay FROM users u LEFT JOIN payroll p ON p.user_id=u.user_id AND p.attendance_date >= ? AND p.attendance_date <= ? WHERE u.employee_type='INTERN' GROUP BY u.user_id, u.full_name ORDER BY u.full_name")
+        .bind(&cutoff_start).bind(&cutoff_end).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    let payroll = rows.into_iter().map(|row| {
+        let actual_days = row.get::<i64,_>("actual_days") as f64;
+        let basic = row.get::<i64,_>("basic_pay");
+        let late = row.get::<i64,_>("late_deduction");
+        let gross = row.get::<i64,_>("gross_pay");
+        let user_id = row.get::<String,_>("user_id");
+        serde_json::json!({
+            "payrollId": format!("INTERN-{}-{}-{}", user_id, cutoff_start, cutoff_end), "employeeId": user_id, "employeeName": row.get::<String,_>("full_name"), "employeeType":"INTERN", "payrollProfileId":"INTERN_STANDARD", "payrollCutoffLabel": payroll_cutoff_label, "cutoffStart": cutoff_start, "cutoffEnd": cutoff_end, "payrollFrequency":"SEMI_MONTHLY", "dailyRate":80, "standardWorkingDays":11, "actualWorkingDays":actual_days, "basicPay":basic as f64 / 100.0, "specialHolidayDays":0, "specialHolidayMultiplier":0, "specialHolidayPay":0, "regularHolidayDays":0, "regularHolidayMultiplier":0, "regularHolidayPay":0, "incentivesAllowance":0, "specialAllowance":0, "totalCompensation":basic as f64 / 100.0, "totalAllowance":0, "lateUnits":row.get::<i64,_>("late_units") as f64, "lateDeduction":late as f64 / 100.0, "halfDayCount":0, "halfDayDeduction":0, "absentDays":0, "absenceDeduction":0, "overtimeHours":0, "overtimeRate":0, "overtimePay":0, "manualAdjustment":0, "adjustmentReason":null, "grossCompensation":gross as f64 / 100.0, "netPay":gross as f64 / 100.0, "calculationBreakdown":"attendance report", "approvedWorkingDayOverage":true, "status":"REPORT", "finalizedAt":null, "revision":1
+        })
+    }).collect::<Vec<_>>();
+    Ok(serde_json::json!({"success":true,"payroll":payroll}))
 }
 
 /// Build the printable payroll register from completed attendance payroll rows.
@@ -652,6 +678,7 @@ async fn payroll_generate_cutoff(
     cutoff_start: String,
     cutoff_end: String,
     payroll_cutoff_label: String,
+    customization: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     if !admin_authorized(&state, &token).await { return Err("ADMIN_AUTH_REQUIRED".into()); }
     chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
@@ -660,8 +687,13 @@ async fn payroll_generate_cutoff(
 
     // A draft is a live view of attendance. Remove the prior generated draft
     // before rebuilding it, while preserving approved cutoff records.
-    sqlx::query("DELETE FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='DRAFT'")
-        .bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
+    if let Some(selected_id) = customization.get("employeeId").and_then(|v| v.as_str()) {
+        sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='DRAFT'")
+            .bind(selected_id).bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query("DELETE FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='DRAFT'")
+            .bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
+    }
 
     let rows = sqlx::query(
         "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, MAX(p.base_pay_centavos) AS daily_rate_centavos, COUNT(*) AS actual_days, SUM(p.late_hours) AS late_units, SUM(p.late_deduction_centavos) AS late_deduction_centavos, u.payroll_profile_id FROM payroll p JOIN users u ON u.user_id=p.user_id WHERE p.attendance_date >= ? AND p.attendance_date <= ? GROUP BY p.user_id, u.payroll_profile_id ORDER BY full_name"
@@ -671,33 +703,55 @@ async fn payroll_generate_cutoff(
     let mut generated = 0usize;
     for row in rows {
         let employee_id: String = row.get("user_id");
+        if let Some(selected_id) = customization.get("employeeId").and_then(|v| v.as_str()) {
+            if selected_id != employee_id { continue; }
+        }
         let employee_name: String = row.get("full_name");
         let employee_type: String = row.get("employee_type");
         let is_intern = employee_type != "EMPLOYEE";
+        // Interns are reported directly from attendance; they never create
+        // cutoff draft records.
+        if is_intern { continue; }
         let finalized_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='FINALIZED'")
             .bind(&employee_id).bind(&cutoff_start).bind(&cutoff_end).fetch_one(&state.db).await.map_err(|e| e.to_string())? > 0;
         if finalized_exists { continue; }
-        let profile_id = if is_intern { INTERN_PAYROLL_PROFILE_ID.to_string() } else { row.get::<Option<String>, _>("payroll_profile_id").unwrap_or_else(|| "BEA_STANDARD".into()) };
+        let profile_id = if is_intern {
+            INTERN_PAYROLL_PROFILE_ID.to_string()
+        } else {
+            customization.get("payrollProfileId").and_then(|v| v.as_str()).map(String::from)
+                .or_else(|| row.get::<Option<String>, _>("payroll_profile_id"))
+                .unwrap_or_else(|| "BEA_STANDARD".into())
+        };
         let profile = sqlx::query("SELECT standard_working_days_per_cutoff,incentives_allowance_centavos,special_allowance_centavos,special_holiday_multiplier,regular_holiday_multiplier,half_day_fraction,overtime_rate_centavos FROM payroll_profiles WHERE profile_id=?")
             .bind(&profile_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
-        let standard_days = profile.as_ref().map(|p| p.get::<f64,_>("standard_working_days_per_cutoff")).unwrap_or(11.0);
+        let custom_number = |name: &str| customization.get(name).and_then(|v| v.as_f64());
+        let standard_days = custom_number("standardWorkingDays")
+            .or_else(|| profile.as_ref().map(|p| p.get::<f64,_>("standard_working_days_per_cutoff")))
+            .unwrap_or(11.0);
         let daily_rate_centavos = if is_intern { INTERN_DAILY_RATE_PHP * 100 } else { row.get::<i64,_>("daily_rate_centavos") };
         let actual_days = row.get::<i64,_>("actual_days") as f64;
         let late_units = row.get::<i64,_>("late_units") as f64;
         let late_deduction_centavos = if is_intern { row.get::<i64,_>("late_deduction_centavos") } else { 0 };
-        let incentives_centavos = if is_intern { 0 } else { profile.as_ref().map(|p| p.get::<i64,_>("incentives_allowance_centavos")).unwrap_or(0) };
-        let special_allowance_centavos = if is_intern { 0 } else { profile.as_ref().map(|p| p.get::<i64,_>("special_allowance_centavos")).unwrap_or(0) };
-        let special_multiplier = if is_intern { 0.0 } else { profile.as_ref().map(|p| p.get::<f64,_>("special_holiday_multiplier")).unwrap_or(0.3) };
-        let regular_multiplier = if is_intern { 0.0 } else { profile.as_ref().map(|p| p.get::<f64,_>("regular_holiday_multiplier")).unwrap_or(1.0) };
+        let incentives_centavos = if is_intern { 0 } else { custom_number("incentivesAllowance").map(|v| (v * 100.0).round() as i64).or_else(|| profile.as_ref().map(|p| p.get::<i64,_>("incentives_allowance_centavos"))).unwrap_or(0) };
+        let special_allowance_centavos = if is_intern { 0 } else { custom_number("specialAllowance").map(|v| (v * 100.0).round() as i64).or_else(|| profile.as_ref().map(|p| p.get::<i64,_>("special_allowance_centavos"))).unwrap_or(0) };
+        let special_multiplier = if is_intern { 0.0 } else { custom_number("specialHolidayMultiplier").or_else(|| profile.as_ref().map(|p| p.get::<f64,_>("special_holiday_multiplier"))).unwrap_or(0.3) };
+        let regular_multiplier = if is_intern { 0.0 } else { custom_number("regularHolidayMultiplier").or_else(|| profile.as_ref().map(|p| p.get::<f64,_>("regular_holiday_multiplier"))).unwrap_or(1.0) };
         let half_day_fraction = profile.as_ref().map(|p| p.get::<f64,_>("half_day_fraction")).unwrap_or(0.5);
-        let overtime_rate_centavos = if is_intern { 0 } else { profile.as_ref().map(|p| p.get::<i64,_>("overtime_rate_centavos")).unwrap_or(0) };
+        let overtime_rate_centavos = if is_intern { 0 } else { custom_number("overtimeRate").map(|v| (v * 100.0).round() as i64).or_else(|| profile.as_ref().map(|p| p.get::<i64,_>("overtime_rate_centavos"))).unwrap_or(0) };
+        let special_holiday_days = if is_intern { 0.0 } else { custom_number("specialHolidayDays").unwrap_or(0.0) };
+        let regular_holiday_days = if is_intern { 0.0 } else { custom_number("regularHolidayDays").unwrap_or(0.0) };
+        let half_day_count = if is_intern { 0.0 } else { custom_number("halfDayCount").unwrap_or(0.0) };
+        let overtime_hours = if is_intern { 0.0 } else { custom_number("overtimeHours").unwrap_or(0.0) };
+        let late_rate = custom_number("lateDeductionRate").unwrap_or(0.0);
+        let late_deduction = if is_intern { late_deduction_centavos as f64 / 100.0 } else { late_units * late_rate };
+        let manual_adjustment = custom_number("manualAdjustment").unwrap_or(0.0);
         let input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: employee_id.clone(), employee_name: employee_name.clone(), cutoff_start: cutoff_start.clone(), cutoff_end: cutoff_end.clone(),
             daily_rate: daily_rate_centavos as f64 / 100.0, standard_working_days: standard_days, actual_working_days: actual_days,
-            special_holiday_days: 0.0, special_holiday_multiplier: special_multiplier, regular_holiday_days: 0.0, regular_holiday_multiplier: regular_multiplier,
+            special_holiday_days, special_holiday_multiplier: special_multiplier, regular_holiday_days, regular_holiday_multiplier: regular_multiplier,
             incentives_allowance: incentives_centavos as f64 / 100.0, special_allowance: special_allowance_centavos as f64 / 100.0,
-            late_deduction: late_deduction_centavos as f64 / 100.0, half_day_count: 0.0, half_day_fraction, absent_days: 0.0,
-            overtime_hours: 0.0, overtime_rate: overtime_rate_centavos as f64 / 100.0, manual_adjustment: 0.0, adjustment_reason: None,
+            late_deduction, half_day_count, half_day_fraction, absent_days: (standard_days - actual_days).max(0.0),
+            overtime_hours, overtime_rate: overtime_rate_centavos as f64 / 100.0, manual_adjustment, adjustment_reason: customization.get("adjustmentReason").and_then(|v| v.as_str()).map(String::from),
             approved_working_day_overage: true,
         };
         let calculated = crate::services::cutoff_payroll::calculate(&input)?;
@@ -872,6 +926,34 @@ async fn payroll_finalize_cutoff(
     Ok(
         serde_json::json!({"success":true,"payrollId":payroll_id,"status":"FINALIZED","finalizedAt":now}),
     )
+}
+
+#[tauri::command]
+async fn payroll_delete_cutoff(
+    state: State<'_, AppState>,
+    token: String,
+    payroll_id: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let row = sqlx::query("SELECT status,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end FROM payroll_cutoffs WHERE payroll_id=?")
+        .bind(&payroll_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?
+        .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
+    if row.get::<String, _>("status") == "FINALIZED" {
+        return Err("FINALIZED_PAYROLL_CANNOT_BE_DELETED".into());
+    }
+    sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=? AND status='DRAFT'")
+        .bind(&payroll_id).execute(&state.db).await.map_err(|e| e.to_string())?;
+    enqueue_sync(&state, "PayrollCutoffs", &payroll_id, "DELETE", &serde_json::json!({
+        "payrollId": payroll_id,
+        "employeeId": row.get::<String, _>("employee_id"),
+        "employeeName": row.get::<String, _>("employee_name"),
+        "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
+        "cutoffStart": row.get::<String, _>("cutoff_start"),
+        "cutoffEnd": row.get::<String, _>("cutoff_end")
+    })).await;
+    Ok(serde_json::json!({"success":true,"payrollId":payroll_id}))
 }
 
 #[tauri::command]
@@ -2316,10 +2398,12 @@ pub fn run() {
             payroll_list_profiles,
             payroll_upsert_profile,
             payroll_list_cutoffs,
+            payroll_intern_report,
             payroll_generate_cutoff,
             payroll_create_cutoff,
             payroll_update_cutoff,
             payroll_finalize_cutoff,
+            payroll_delete_cutoff,
             payroll_export_csv,
             export_attendance_xlsx,
             export_payroll_xlsx,

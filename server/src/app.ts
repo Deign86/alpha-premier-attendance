@@ -114,13 +114,14 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.post('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body, req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/payroll/cutoffs/:payrollId/finalize', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.finalizeCutoffPayroll(req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.delete('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); await admin.deleteCutoffPayroll(req.params.payrollId); res.json({ success: true }); } catch (error) { sendAdminError(req, res, error); } });
   app.get('/api/admin/payroll/export', async (req, res) => {
     try {
       requireAdmin(req);
       const office = options.config.office ?? DEFAULT_OFFICE_IDENTITY;
       const rows = await admin.cutoffPayroll();
-      const headers = ['Employee #', 'Employee Name', 'Cut Off Rate', 'Daily Rate', 'Standard Working Days', 'Actual Working Days', 'Basic Rate', 'Special Holidays (30%)', 'Regular Holiday (100%)', 'Total Compensation', 'Incentives Allowance', 'Special Allowance', 'Total Allowance', 'Late', 'Halfday', 'Absent', 'Overtime', 'Gross Compensation', 'Signature'];
-      const values = rows.map((item) => [item.employeeId, item.employeeName, item.payrollCutoffLabel, item.dailyRate, item.standardWorkingDays, item.actualWorkingDays, item.basicPay, item.specialHolidayPay, item.regularHolidayPay, item.totalCompensation, item.incentivesAllowance, item.specialAllowance, item.totalAllowance, item.lateDeduction, item.halfDayDeduction, item.absenceDeduction, item.overtimePay, item.grossCompensation, item.signaturePlaceholder]);
+      const headers = ['Employee #', 'Employee Name', 'Cut Off Rate', 'Daily Rate', 'Standard Working Days', 'Actual Working Days', 'Basic Rate', 'Special Holidays (30%)', 'Regular Holiday (100%)', 'Total Compensation', 'Incentives Allowance', 'Special Allowance', 'Total Allowance', 'Late', 'Halfday', 'Absent', 'Overtime', 'Gross Compensation'];
+      const values = rows.map((item) => [item.employeeId, item.employeeName, item.payrollCutoffLabel, item.dailyRate, item.standardWorkingDays, item.actualWorkingDays, item.basicPay, item.specialHolidayPay, item.regularHolidayPay, item.totalCompensation, item.incentivesAllowance, item.specialAllowance, item.totalAllowance, item.lateDeduction, item.halfDayDeduction, item.absenceDeduction, item.overtimePay, item.grossCompensation]);
       const csv = [
         ['Company', office.companyName],
         ['Office', resolveOfficeDisplay(office, 'full')],

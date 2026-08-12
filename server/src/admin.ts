@@ -169,6 +169,13 @@ export class AdminService {
     return this.sheets.upsertPayrollCutoff({ ...record, status: 'FINALIZED', finalizedAt: new Date().toISOString() });
   }
 
+  async deleteCutoffPayroll(payrollId: string): Promise<void> {
+    const record = await this.sheets.findPayrollCutoff(payrollId);
+    if (!record) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
+    if (record.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be deleted.');
+    await this.sheets.deletePayrollCutoff(payrollId);
+  }
+
   private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
   private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
 }
@@ -188,7 +195,7 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
     lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
     halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0),
     overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
-    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''),
+    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null,
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
   };
 }
@@ -215,7 +222,7 @@ function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: 
     halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
     absentDays: Math.max(0, number('standardWorkingDays', 11) - number('actualWorkingDays', 11)),
     overtimeHours: 0, overtimeRate: 0,
-    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null, signaturePlaceholder: String(value.signaturePlaceholder ?? ''),
+    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null,
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
   };
 }

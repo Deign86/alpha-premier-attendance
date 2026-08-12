@@ -40,6 +40,7 @@ import {
   DEFAULT_CONFIG,
   checkAdminSession,
   createDatabaseBackup,
+  deletePayrollCutoff,
   deleteAdminAttendance,
   deleteAdminUser,
   finalizePayrollCutoff,
@@ -50,6 +51,7 @@ import {
   loadConfig,
   loadDatabaseInfo,
   loadPayrollCutoffs,
+  loadInternPayrollReport,
   loadPayrollProfiles,
   lockAdmin,
   lockSetup,
@@ -2587,7 +2589,6 @@ type PayrollForm = {
   manualAdjustment: string;
   adjustmentReason: string;
   approvedWorkingDayOverage: boolean;
-  signaturePlaceholder: string;
 };
 const emptyPayrollForm: PayrollForm = {
   employeeId: "",
@@ -2611,7 +2612,6 @@ const emptyPayrollForm: PayrollForm = {
   manualAdjustment: "0",
   adjustmentReason: "",
   approvedWorkingDayOverage: false,
-  signaturePlaceholder: "",
 };
 
 const monthNames = [
@@ -2666,7 +2666,6 @@ export function PayrollWorkspace({
 }) {
   const office = useOfficeIdentity();
   const employees = users.filter((user) => user.employeeType === "EMPLOYEE");
-  const interns = users.filter((user) => user.employeeType !== "EMPLOYEE");
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2752,7 +2751,11 @@ export function PayrollWorkspace({
       setMessage("Cutoff start must be on or before cutoff end.");
       return;
     }
-    if (records.some((record) => record.cutoffStart === form.cutoffStart && record.cutoffEnd === form.cutoffEnd)) {
+    if (!form.employeeId) {
+      setMessage("Select an employee before generating payroll.");
+      return;
+    }
+    if (records.some((record) => record.employeeId === form.employeeId && record.cutoffStart === form.cutoffStart && record.cutoffEnd === form.cutoffEnd)) {
       setMessage("Payroll already exists for this cutoff. Duplicate generation was blocked.");
       return;
     }
@@ -2768,6 +2771,24 @@ export function PayrollWorkspace({
         form.cutoffStart,
         form.cutoffEnd,
         form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
+        {
+          employeeId: form.employeeId,
+          payrollProfileId: form.payrollProfileId,
+          standardWorkingDays: Number(form.standardWorkingDays) || 0,
+          incentivesAllowance: Number(form.incentivesAllowance) || 0,
+          specialAllowance: Number(form.specialAllowance) || 0,
+          specialHolidayDays: Number(form.specialHolidayDays) || 0,
+          regularHolidayDays: Number(form.regularHolidayDays) || 0,
+          specialHolidayMultiplier: selectedProfile?.specialHolidayMultiplier ?? 0.3,
+          regularHolidayMultiplier: selectedProfile?.regularHolidayMultiplier ?? 1,
+          halfDayCount: Number(form.halfDayCount) || 0,
+          overtimeHours: Number(form.overtimeHours) || 0,
+          overtimeRate: Number(form.overtimeRate) || 0,
+          lateDeductionRate: Number(form.lateDeductionRate) || 0,
+          manualAdjustment: Number(form.manualAdjustment) || 0,
+          adjustmentReason: form.adjustmentReason || null,
+          approvedWorkingDayOverage: form.approvedWorkingDayOverage,
+        },
       );
       if ((response as { success?: boolean }).success) {
         setMessage("Payroll drafts were generated from completed attendance.");
@@ -2839,6 +2860,7 @@ export function PayrollWorkspace({
     null,
   );
   const [printMessage, setPrintMessage] = useState("");
+  const [internPrintRows, setInternPrintRows] = useState<PayrollCutoffRecord[]>([]);
   useEffect(() => {
     if (!printTarget) return;
     // Wait for the chosen template to commit before opening native print.
@@ -2857,8 +2879,25 @@ export function PayrollWorkspace({
     if (!selectedCutoff) {
       setPrintTarget(null);
       setPrintMessage(
-        "No payroll records to print. Create and save a payroll first.",
+        "No payroll records to generate. Create and save a payroll first.",
       );
+      return;
+    }
+    if (workerType === "intern") {
+      setPrintMessage("");
+      void loadInternPayrollReport(selectedCutoff.cutoffStart, selectedCutoff.cutoffEnd, selectedCutoff.label)
+        .then((response) => {
+          const reportRows = response.success && response.payroll.length
+            ? response.payroll
+            : payrollRowsFor("intern");
+          if (!reportRows.length) {
+            setPrintMessage(`No registered interns for ${selectedCutoff.label}.`);
+            return;
+          }
+          setInternPrintRows(reportRows);
+          setPrintTarget("intern");
+        })
+        .catch(() => setPrintMessage("Unable to load intern payroll."));
       return;
     }
     const rows = payrollRowsFor(workerType);
@@ -2882,14 +2921,14 @@ export function PayrollWorkspace({
           type="button"
           onClick={() => printWorkerSheet("employee")}
         >
-          Print Employee Payroll
+          Generate Employee Payroll
         </button>
         <button
           className="admin-button"
           type="button"
           onClick={() => printWorkerSheet("intern")}
         >
-          Print Intern Payroll
+          Generate Intern Payroll
         </button>
       </div>
       {printMessage && <p className="dashboard-alert">{printMessage}</p>}
@@ -2917,7 +2956,7 @@ export function PayrollWorkspace({
                 <input required type="date" value={form.cutoffEnd} onChange={(event) => update("cutoffEnd", event.target.value)} />
               </label>
             </div>
-            <fieldset disabled hidden>
+            <fieldset>
             <label>
               Personnel
               <select
@@ -2933,15 +2972,6 @@ export function PayrollWorkspace({
                     </option>
                   ))}
                 </optgroup>
-                {interns.length > 0 && (
-                  <optgroup label="Interns">
-                    {interns.map((user) => (
-                      <option key={user.userId} value={user.userId}>
-                        {user.userId} - {user.fullName}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
               </select>
             </label>
             {!isIntern && (
@@ -2978,37 +3008,11 @@ export function PayrollWorkspace({
               </p>
             )}
             <div className="setup-fields">
-              <div className="cutoff-period">
-                <label>
-                  Cutoff month
-                  <input
-                    type="month"
-                    value={cutoffMonth}
-                    onChange={(event) => setCutoffMonth(event.target.value)}
-                  />
-                </label>
-                <div className="cutoff-fill-buttons">
-                  <button
-                    className="admin-button"
-                    type="button"
-                    onClick={() => applyCutoffHalf("first")}
-                  >
-                    1st&ndash;15th
-                  </button>
-                  <button
-                    className="admin-button"
-                    type="button"
-                    onClick={() => applyCutoffHalf("second")}
-                  >
-                    16th&ndash;last day
-                  </button>
-                </div>
-              </div>
               <label>
                 Daily rate (PHP)
-                <input
-                  readOnly
-                  value={
+              <input
+                readOnly
+                value={
                     isIntern
                       ? String(INTERN_DAILY_RATE_PHP)
                       : String(selectedUser?.dailyRate ?? 0)
@@ -3080,10 +3084,9 @@ export function PayrollWorkspace({
                 <input
                   type="number"
                   min="0"
+                  readOnly
                   value={form.actualWorkingDays}
-                  onChange={(event) =>
-                    update("actualWorkingDays", event.target.value)
-                  }
+                    onChange={() => undefined}
                 />
               </label>
               {!isIntern && (
@@ -3153,20 +3156,9 @@ export function PayrollWorkspace({
                       type="number"
                       min="0"
                       step="0.01"
+                      readOnly
                       value={form.lateUnits}
-                      onChange={(event) => {
-                        const hours = event.target.value;
-                        update("lateUnits", hours);
-                        update(
-                          "lateDeduction",
-                          String(
-                            Math.round(
-                              (Number(hours) || 0) *
-                                (Number(form.lateDeductionRate) || 0),
-                            ),
-                          ),
-                        );
-                      }}
+                      onChange={() => undefined}
                     />
                   </label>
                   <label>
@@ -3290,16 +3282,6 @@ export function PayrollWorkspace({
                 placeholder="Required for a non-zero adjustment"
               />
             </label>
-            <label>
-              Signature placeholder
-              <input
-                value={form.signaturePlaceholder}
-                onChange={(event) =>
-                  update("signaturePlaceholder", event.target.value)
-                }
-                placeholder="Employee signature"
-              />
-            </label>
             <label className="checkbox-label">
               <input
                 type="checkbox"
@@ -3332,9 +3314,9 @@ export function PayrollWorkspace({
         <PayrollPrintSheet
           cutoff={selectedCutoff}
           workerType={printTarget}
-          records={payrollRowsFor(printTarget)}
+          records={printTarget === "intern" ? internPrintRows : payrollRowsFor(printTarget)}
           office={office}
-          grandTotal={payrollRowsFor(printTarget).reduce(
+          grandTotal={(printTarget === "intern" ? internPrintRows : payrollRowsFor(printTarget)).reduce(
             (sum, row) => sum + row.grossCompensation,
             0,
           )}
@@ -3393,6 +3375,7 @@ function PayrollTable({
   onFinalized: () => void;
 }) {
   const [message, setMessage] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
   const finalize = async (payrollId: string) => {
     const response = await finalizePayrollCutoff(payrollId);
     if ((response as { success?: boolean }).success) {
@@ -3403,6 +3386,21 @@ function PayrollTable({
         (response as { error?: { message?: string } }).error?.message ??
           "Unable to finalize payroll.",
       );
+  };
+  const remove = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    const response = await deletePayrollCutoff(target.payrollId);
+    if ((response as { success?: boolean }).success) {
+      setMessage("Payroll deleted.");
+      onFinalized();
+    } else {
+      setMessage(
+        (response as { error?: { message?: string } }).error?.message ??
+          "Unable to delete payroll.",
+      );
+    }
   };
   if (!records.length)
     return (
@@ -3430,9 +3428,9 @@ function PayrollTable({
               <th>Late</th>
               <th>Halfday</th>
               <th>Absent</th>
-              <th>Overtime</th>
-              <th>Gross Compensation</th>
-              <th>Signature</th>
+                <th>Overtime</th>
+                <th>Gross Compensation</th>
+                <th className="print-hidden">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -3463,7 +3461,28 @@ function PayrollTable({
                   <td>
                     <strong>{php(row.grossCompensation)}</strong>
                   </td>
-                  <td>{row.signaturePlaceholder || "________________"}</td>
+                  <td className="payroll-actions-cell print-hidden">
+                    {row.status === "DRAFT" ? (
+                      <span className="payroll-row-actions">
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => void finalize(row.payrollId)}
+                        >
+                          Finalize
+                        </button>
+                        <button
+                          className="text-button danger-button"
+                          type="button"
+                          onClick={() => setDeleteTarget(row)}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="payroll-finalized-label">Finalized</span>
+                    )}
+                  </td>
                 </tr>
                 <tr key={`${row.payrollId}-details`} className="payroll-detail">
                   <td colSpan={19}>
@@ -3504,14 +3523,6 @@ function PayrollTable({
                       <p>
                         Status: {row.status}. Net pay: {php(row.netPay)}.
                       </p>
-                      {row.status === "DRAFT" && (
-                        <button
-                          className="text-button print-hidden"
-                          onClick={() => void finalize(row.payrollId)}
-                        >
-                          Finalize
-                        </button>
-                      )}
                     </details>
                   </td>
                 </tr>
@@ -3521,6 +3532,14 @@ function PayrollTable({
         </table>
       </div>
       {message && <p className="dashboard-alert">{message}</p>}
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        busy={false}
+        title="Delete saved payroll?"
+        message={deleteTarget ? `This will permanently delete the draft payroll for ${deleteTarget.employeeName} (${deleteTarget.payrollCutoffLabel}). Finalized payrolls cannot be deleted.` : ""}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void remove()}
+      />
     </>
   );
 }
@@ -3553,8 +3572,8 @@ function formatCutoffRangeUpper(cutoffStart: string, cutoffEnd: string): string 
  * Reusable consolidated payroll print sheet. Employees and interns share one
  * landscape layout that mirrors the physical payroll reference format: company
  * identity and cutoff note in the header, the exact reference column set, a
- * blank Signature column for manual signing, and a yellow-highlighted Gross
- * Compensation grand total. The only difference between the two sheets is the
+  * yellow-highlighted Gross Compensation grand total. The only difference
+  * between the two sheets is the
  * worker-type filter applied before rendering.
  */
 function PayrollPrintSheet({
@@ -3606,7 +3625,6 @@ function PayrollPrintSheet({
             <th>Halfday</th>
             <th>Absent</th>
             <th>Gross Compensation</th>
-            <th>Signature</th>
           </tr>
         </thead>
         <tbody>
@@ -3624,13 +3642,11 @@ function PayrollPrintSheet({
               <td>{php(row.halfDayDeduction)}</td>
               <td>{php(row.absenceDeduction)}</td>
               <td>{php(row.grossCompensation)}</td>
-              <td />
             </tr>
           ))}
           <tr className="payroll-sheet-total">
             <td colSpan={11}>Grand Total</td>
             <td>{php(grandTotal)}</td>
-            <td />
           </tr>
         </tbody>
       </table>

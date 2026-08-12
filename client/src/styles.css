@@ -416,6 +416,22 @@ td small { font-size: .7rem; }
 .admin-login h1 { margin: 7px 0 20px; font-size: 2rem; line-height: 1.1; }
 .admin-login label, .admin-form label, .date-filter { gap: 7px; margin: 14px 0; font-size: .78rem; }
 .admin-login input, .admin-form input, .admin-form select, .date-filter input, td input { height: 44px; border-radius: var(--radius-sm); }
+.admin-form select, .date-filter select {
+  appearance: none;
+  min-width: 156px;
+  padding: 0 34px 0 12px;
+  color: var(--ink);
+  background-color: var(--surface-input);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='m3.25 5.25 3.75 3.5 3.75-3.5' stroke='%23e1c477' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  border: 1px solid var(--line-bright);
+  font-size: .76rem;
+  cursor: pointer;
+}
+.admin-form select:hover, .date-filter select:hover { border-color: var(--gold); background-color: var(--surface-raised); }
+.admin-form select:focus, .date-filter select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .12); outline: none; }
+.admin-form select option, .date-filter select option { color: var(--ink); background: var(--surface); }
 .admin-tabs { gap: 4px; margin: 22px 0 20px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
 .admin-tabs button { min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .75rem; }
 .admin-tabs button:hover { color: var(--ink); background: var(--surface-raised); }
@@ -440,12 +456,21 @@ td small { font-size: .7rem; }
 .user-photo, .user-photo-fallback { display: inline-grid; place-items: center; width: 34px; height: 34px; margin: 0 9px 5px 0; vertical-align: middle; border-radius: 50%; object-fit: cover; color: var(--gold-bright); background: var(--surface-raised); border: 1px solid var(--line-bright); }
 .admin-form .submit-button { width: 100%; margin-top: 5px; }
 .text-button { min-height: 36px; padding: 6px 9px; border-radius: var(--radius-sm); }
+.payroll-row-actions { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.payroll-actions-cell { min-width: 150px; }
+.payroll-finalized-label { color: var(--quiet); font-size: .7rem; }
 .text-button:hover { background: var(--surface-raised); }
 .danger-button:hover { background: #2a1b18; }
 .payroll-actions { gap: 8px; margin-bottom: 14px; }
 .payroll-actions .admin-button { font-size: .74rem; }
 .payroll-workspace .admin-grid { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr); }
 .payroll-workspace .admin-form { min-height: calc(100dvh - 250px); overflow: visible; }
+.payroll-workspace fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .payroll-workspace .setup-fields { gap: 10px; }
 .payroll-workspace .setup-fields label { margin: 8px 0; }
 .payroll-table .table-wrap { overflow: auto; }
@@ -461,6 +486,8 @@ td small { font-size: .7rem; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 .date-filter { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
 .date-filter label { min-width: 150px; margin: 0; }
+.date-filter label:nth-of-type(3) { min-width: 176px; }
+.date-filter label:nth-of-type(4) { min-width: 164px; }
 .date-filter small { align-self: center; color: var(--muted); }
 
 @media (max-width: 920px) {

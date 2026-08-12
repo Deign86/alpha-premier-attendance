@@ -332,7 +332,6 @@ export type PayrollCutoffRecord = {
   adjustmentReason: string | null;
   grossCompensation: number;
   netPay: number;
-  signaturePlaceholder: string;
   calculationBreakdown: string;
   approvedWorkingDayOverage: boolean;
   status: 'DRAFT' | 'FINALIZED';
@@ -384,6 +383,7 @@ export type DatabaseBackupResponse = { success: true } & GeneratedFileMetadata;
 
 export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculationProfile[] };
 export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
+export type InternPayrollReportResponse = { success: true; payroll: PayrollCutoffRecord[] };
 export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number } & GeneratedFileMetadata;
 export type ArtifactExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount?: number; status?: string } & GeneratedFileMetadata;
 export type PayrollCsvExportResponse = { success: true; fileName: string } & GeneratedFileMetadata;

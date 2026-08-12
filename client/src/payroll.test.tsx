@@ -32,7 +32,7 @@ function record(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffReco
     specialHolidayDays: 0, specialHolidayMultiplier: 0.3, specialHolidayPay: 0, regularHolidayDays: 0, regularHolidayMultiplier: 1, regularHolidayPay: 0,
     incentivesAllowance: 0, specialAllowance: 0, totalCompensation: 5500, totalAllowance: 0, lateUnits: 0, lateDeduction: 0,
     halfDayCount: 0, halfDayDeduction: 0, absentDays: 0, absenceDeduction: 0, overtimeHours: 0, overtimeRate: 0, overtimePay: 0,
-    manualAdjustment: 0, adjustmentReason: null, grossCompensation: 5500, netPay: 5500, signaturePlaceholder: "",
+    manualAdjustment: 0, adjustmentReason: null, grossCompensation: 5500, netPay: 5500,
     calculationBreakdown: "PHP 5,500.00 basic = PHP 5,500.00", approvedWorkingDayOverage: false, status: "FINALIZED", finalizedAt: null,
     ...overrides,
   };
@@ -91,8 +91,8 @@ describe("PayrollWorkspace", () => {
 
   it("shows exactly the two required payroll print buttons and no payslip/export actions", () => {
     renderWorkspace([record()]);
-    expect(screen.getByRole("button", { name: "Print Employee Payroll" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Print Intern Payroll" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Employee Payroll" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll" })).toBeInTheDocument();
     // No individual payslip, register, CSV/XLSX/PDF, or other payroll print actions.
     expect(screen.queryByRole("button", { name: /payslip/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
@@ -104,7 +104,7 @@ describe("PayrollWorkspace", () => {
   it("prints one employee payroll sheet excluding interns", async () => {
     const user = userEvent.setup();
     const { container } = renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Print Employee Payroll" }));
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
 
     const sheet = sheetTable(container);
     expect(within(sheet).getByText("Ada Lovelace")).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe("PayrollWorkspace", () => {
     expect(headers).toEqual([
       "Employee #", "Employee Name", "Cut Off Rate", "Daily Rate", "Actual Working Days",
       "Standard Working Days", "Basic Rate", "Total Compensation", "Late 10 /hr", "Halfday",
-      "Absent", "Gross Compensation", "Signature",
+      "Absent", "Gross Compensation",
     ]);
     // Grand total = sum of employee gross only (5,500.00).
     expect(within(sheetTotalRow(container)).getByText("Grand Total")).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("PayrollWorkspace", () => {
   it("prints one intern payroll sheet excluding employees", async () => {
     const user = userEvent.setup();
     const { container } = renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Print Intern Payroll" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll" }));
 
     const sheet = sheetTable(container);
     expect(within(sheet).getByText("Maria Santos")).toBeInTheDocument();
@@ -145,7 +145,7 @@ describe("PayrollWorkspace", () => {
       record({ payrollId: "P-002", employeeId: "EMP-002", employeeName: "Grace Hopper", grossCompensation: 6000, netPay: 6000 }),
       internRecord(), // 770.00 intern — excluded from the employee sheet
     ]);
-    await user.click(screen.getByRole("button", { name: "Print Employee Payroll" }));
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
 
     const sheet = sheetTable(container);
     expect(within(sheet).getByText("Ada Lovelace")).toBeInTheDocument();
@@ -167,7 +167,7 @@ describe("PayrollWorkspace", () => {
     ]);
     // No form cutoff has been chosen, so the most recent saved cutoff
     // (September 1-15, 2026) is the selected payroll cutoff.
-    await user.click(screen.getByRole("button", { name: "Print Employee Payroll" }));
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
 
     const sheet = sheetTable(container);
     expect(within(container).getByText("SEPTEMBER 1-15, 2026")).toBeInTheDocument();
@@ -181,7 +181,7 @@ describe("PayrollWorkspace", () => {
   it("shows the header with company identity, cutoff range, and cutoff note", async () => {
     const user = userEvent.setup();
     const { container } = renderWorkspace([record()]);
-    await user.click(screen.getByRole("button", { name: "Print Employee Payroll" }));
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
 
     const header = container.querySelector(".payroll-sheet-header");
     expect(header).not.toBeNull();
@@ -197,15 +197,15 @@ describe("PayrollWorkspace", () => {
   it("shows a message instead of opening print when there are no records", async () => {
     const user = userEvent.setup();
     renderWorkspace([]);
-    await user.click(screen.getByRole("button", { name: "Print Employee Payroll" }));
-    expect(screen.getByText(/No payroll records to print/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
+    expect(screen.getByText(/No payroll records to generate/)).toBeInTheDocument();
     expect(window.print).not.toHaveBeenCalled();
   });
 
   it("shows a message when the selected cutoff has no records for the worker type", async () => {
     const user = userEvent.setup();
     renderWorkspace([record()]); // only an employee record
-    await user.click(screen.getByRole("button", { name: "Print Intern Payroll" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll" }));
     expect(screen.getByText(/No intern payroll records/)).toBeInTheDocument();
     expect(screen.queryByText("Grand Total")).not.toBeInTheDocument();
     expect(window.print).not.toHaveBeenCalled();
