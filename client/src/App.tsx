@@ -5,6 +5,7 @@ import {
   CircleAlert,
   CreditCard,
   Database,
+  Download,
   ImagePlus,
   Keyboard,
   LoaderCircle,
@@ -41,7 +42,6 @@ import {
   createDatabaseBackup,
   deleteAdminAttendance,
   deleteAdminUser,
-  exportAttendanceXlsx,
   finalizePayrollCutoff,
   getLanStatus,
   loadAttendance,
@@ -1714,9 +1714,13 @@ function LanViewerPanel({
 /** Read-only scanner diagnostics for the admin panel: state, mode, detail. */
 function ScannerDiagnostics() {
   const [status, setStatus] = useState<ScannerStatus | null>(null);
+  const [lastActivity, setLastActivity] = useState<string | null>(null);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listenForScannerStatus(setStatus)
+    void listenForScannerStatus((nextStatus) => {
+        setStatus(nextStatus);
+        setLastActivity(new Date().toISOString());
+      })
       .then((cleanup) => {
         unlisten = cleanup;
       })
@@ -1724,13 +1728,21 @@ function ScannerDiagnostics() {
         /* web mode */
       });
     void getScannerStatus()
-      .then(setStatus)
+      .then((nextStatus) => {
+        setStatus(nextStatus);
+        setLastActivity(new Date().toISOString());
+      })
       .catch(() => {
         /* web mode */
       });
     return () => unlisten?.();
   }, []);
-  if (!status) return null;
+  if (!status)
+    return (
+      <div className="scanner-diag" role="status" aria-live="polite">
+        <LoaderCircle className="spin" size={15} /> Checking sensor connection...
+      </div>
+    );
   const stateLabel: Record<ScannerStatus["state"], string> = {
     connected: "Waiting for card",
     scanning: "Scan received",
@@ -1746,6 +1758,9 @@ function ScannerDiagnostics() {
           : stateLabel[status.state]}
       </span>
       <span className="scanner-diag-mode">Mode: {status.mode}</span>
+      <span className="scanner-diag-activity">
+        Last activity: {lastActivity ? formatTime(lastActivity, "Asia/Manila") : "Not yet recorded"}
+      </span>
       {status.detail && (
         <span className="scanner-diag-detail">{status.detail}</span>
       )}
@@ -2334,7 +2349,22 @@ function UserEditor({
   return (
     <div className="admin-grid">
       <section className="admin-form">
-        <h2>{editing ? "Edit user" : "Add user"}</h2>
+        <div className="editor-heading">
+          <div>
+            <p className="section-kicker">User registration</p>
+            <h2>{editing ? `Editing ${editing.fullName}` : "Add user"}</h2>
+          </div>
+          {editing && (
+            <button className="text-button" type="button" onClick={() => setEditing(null)}>
+              Cancel edit
+            </button>
+          )}
+        </div>
+        {editing && (
+          <p className="edit-context" role="status">
+            Active record: <strong>{editing.userId}</strong> · RFID {editing.rfidUid}
+          </p>
+        )}
         <form onSubmit={save}>
           <label>
             User ID
@@ -2475,8 +2505,9 @@ function UserEditor({
             </thead>
             <tbody>
               {users.map((user) => (
-                <tr key={user.userId}>
+                <tr key={user.userId} className={editing?.userId === user.userId ? "is-editing" : ""}>
                   <td>
+                    <UserPhoto photoUrl={user.photoUrl} name={user.fullName} />
                     <strong>{user.fullName}</strong>
                     <small>{user.userId}</small>
                   </td>
@@ -2516,6 +2547,21 @@ function UserEditor({
         </div>
       </section>
     </div>
+  );
+}
+
+function UserPhoto({ photoUrl, name }: { photoUrl?: string | null; name: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!photoUrl || failed) {
+    return <span className="user-photo-fallback" aria-label={`${name} has no available photo`}><UserRound size={16} /></span>;
+  }
+  return (
+    <img
+      className="user-photo"
+      src={photoSource(photoUrl)}
+      alt={`${name} profile`}
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -2624,6 +2670,7 @@ export function PayrollWorkspace({
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [cutoffMonth, setCutoffMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -2701,7 +2748,21 @@ export function PayrollWorkspace({
       setMessage("Select a cutoff period first.");
       return;
     }
+    if (form.cutoffStart > form.cutoffEnd) {
+      setMessage("Cutoff start must be on or before cutoff end.");
+      return;
+    }
+    if (records.some((record) => record.cutoffStart === form.cutoffStart && record.cutoffEnd === form.cutoffEnd)) {
+      setMessage("Payroll already exists for this cutoff. Duplicate generation was blocked.");
+      return;
+    }
+    setMessage("");
+    setConfirmOpen(true);
+  };
+  const confirmGenerate = async () => {
+    if (saving) return;
     setSaving(true);
+    setConfirmOpen(false);
     try {
       const response = await generatePayrollCutoff(
         form.cutoffStart,
@@ -3258,7 +3319,7 @@ export function PayrollWorkspace({
             )}
             </fieldset>
             {message && <p className="dashboard-alert">{message}</p>}
-            <button className="submit-button" disabled={saving}>
+            <button className="submit-button" type="submit" disabled={saving || !form.cutoffStart || !form.cutoffEnd}>
               {saving ? "Generating..." : "Generate from attendance"}
             </button>
           </form>
@@ -3279,7 +3340,48 @@ export function PayrollWorkspace({
           )}
         />
       )}
+      <ConfirmDialog
+        open={confirmOpen}
+        busy={saving}
+        title="Generate payroll drafts?"
+        message={`This will generate payroll records for ${form.cutoffStart} through ${form.cutoffEnd} from completed attendance. Incomplete or late-timeout attendance will not be paid. Continue?`}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => void confirmGenerate()}
+      />
     </section>
+  );
+}
+
+function ConfirmDialog({
+  open,
+  busy,
+  title,
+  message,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  busy: boolean;
+  title: string;
+  message: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="confirm-backdrop" role="presentation">
+      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-heading">
+        <CircleAlert size={22} aria-hidden="true" />
+        <h2 id="confirm-heading">{title}</h2>
+        <p>{message}</p>
+        <div className="confirm-actions">
+          <button className="text-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+          <button className="submit-button" type="button" disabled={busy} onClick={onConfirm}>
+            {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Confirm
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -3552,20 +3654,29 @@ function AdminAttendance({
   const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(
     null,
   );
+  const [employeeFilter, setEmployeeFilter] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const filteredRows = rows.filter((row) =>
+    (!employeeFilter || `${row.fullName} ${row.userId}`.toLowerCase().includes(employeeFilter.toLowerCase())) &&
+    (!departmentFilter || row.department === departmentFilter) &&
+    (!statusFilter || row.status === statusFilter),
+  );
+  const departments = [...new Set(rows.map((row) => row.department).filter(Boolean))] as string[];
   const exportWorkbook = async () => {
     setExporting(true);
-    const result = await exportAttendanceXlsx(date);
+    const result = exportAttendanceCsv(filteredRows, date);
     setExporting(false);
     if (result.success) {
-      setMessage(`Generated ${result.fileName} (${result.rowCount} rows).`);
+      setMessage(`Generated ${result.fileName} (${filteredRows.length} rows).`);
       setFileResult({
         filePath: result.filePath,
         directoryPath: result.directoryPath,
         fileName: result.fileName,
-        fileKind: result.fileKind,
-        isPortableMode: result.isPortableMode,
+        fileKind: "csv",
+        isPortableMode: false,
       });
-    } else setMessage(result.error.message);
+    } else setMessage(result.message);
   };
   return (
     <section>
@@ -3578,15 +3689,33 @@ function AdminAttendance({
             onChange={(event) => setDate(event.target.value)}
           />
         </label>
+        <label>
+          Employee
+          <input placeholder="Name or ID" value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} />
+        </label>
+        <label>
+          Department
+          <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
+            <option value="">All departments</option>
+            {departments.map((department) => <option key={department} value={department}>{department}</option>)}
+          </select>
+        </label>
+        <label>
+          Status
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="">All statuses</option>
+            {['WORKING', 'COMPLETED', 'MISSED', 'LATE_TIMEOUT'].map((status) => <option key={status} value={status}>{status}</option>)}
+          </select>
+        </label>
         <button
           className="admin-button"
           type="button"
           disabled={exporting}
           onClick={() => void exportWorkbook()}
         >
-          {exporting ? "Generating..." : "Export Excel"}
+          {exporting ? "Preparing..." : <><Download size={15} /> Export CSV</>}
         </button>
-        {message && <small>{message}</small>}
+        {message && <small role="status">{message}</small>}
       </div>
       <GeneratedFileActions result={fileResult} label="Attendance export" />
       <div className="table-wrap">
@@ -3601,7 +3730,7 @@ function AdminAttendance({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {filteredRows.map((row) => (
               <AttendanceEditRow
                 key={row.attendanceId}
                 row={row}
@@ -3613,6 +3742,30 @@ function AdminAttendance({
       </div>
     </section>
   );
+}
+
+function exportAttendanceCsv(rows: AttendanceListItem[], date: string): { success: true; fileName: string; content: string; filePath: null; directoryPath: null } | { success: false; message: string } {
+  const fileName = `attendance-export-${date}-to-${date}.csv`;
+  const headers = ["Employee name", "Employee ID", "Department", "Date", "Time in", "Time out", "Status", "Total hours"];
+  const csvCell = (value: string | number | null) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const totalHours = (row: AttendanceListItem) => {
+    if (!row.timeIn || !row.timeOut) return "";
+    const hours = (new Date(row.timeOut).getTime() - new Date(row.timeIn).getTime()) / 3_600_000;
+    return Number.isFinite(hours) && hours >= 0 ? hours.toFixed(2) : "";
+  };
+  const content = [headers, ...rows.map((row) => [row.fullName, row.userId, row.department, row.attendanceDate, row.timeIn, row.timeOut, row.status, totalHours(row)])]
+    .map((line) => line.map(csvCell).join(","))
+    .join("\r\n");
+  if (!rows.length) return { success: false, message: "No attendance matches the active filters; nothing was exported." };
+  const url = URL.createObjectURL(new Blob([`\ufeff${content}\r\n`], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  return { success: true, fileName, content, filePath: null, directoryPath: null };
 }
 
 function AttendanceEditRow({

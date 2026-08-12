@@ -82,6 +82,8 @@ describe("PayrollWorkspace", () => {
     }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /confirm/i }));
     expect(await screen.findByText("Unable to generate payroll.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
     expect(generatePayrollCutoff).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
@@ -215,5 +217,25 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByRole("spinbutton", { name: "Actual days" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Manual adjustment (PHP)" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
+  });
+
+  it("allows payroll generation to be cancelled before the backend is called", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([]);
+    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(generatePayrollCutoff).not.toHaveBeenCalled();
+  });
+
+  it("blocks duplicate cutoff generation", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([record({ status: "DRAFT" })]);
+    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+    expect(screen.getByText(/Duplicate generation was blocked/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(generatePayrollCutoff).not.toHaveBeenCalled();
   });
 });
