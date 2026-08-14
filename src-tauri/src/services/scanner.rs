@@ -1,22 +1,11 @@
-//! Native RFID scanner pipeline.
+//! Keyboard-mode RFID scanner pipeline.
 //!
-//! The scanner interaction is the product: a card tap must be captured at the
-//! native layer and turned into one clean scan event for the UI, without
-//! depending on a focused webview text input.
-//!
-//! Two hardware modes are supported and normalized into one pipeline:
-//! - `keyboard`: legacy keyboard-wedge configuration is recognized but not
-//!   started by the background service because a generic hook cannot isolate
-//!   the reader from ordinary foreground typing.
-//! - `hid`: the reader exposes raw HID reports. With explicit
-//!   `scanner.hid_vid` / `scanner.hid_pid` configuration the app opens the
-//!   device directly and extracts the ASCII UID from its reports.
-//!
-//! Both sources feed the same buffer/completion logic (Enter suffix or idle
-//! timeout), the same normalization (uppercase hex, separators stripped), the
-//! same backend-parity validation, and a short native dedup window. Completed
-//! scans are emitted to the webview as `rfid-scan` (string UID) and lifecycle /
-//! diagnostic changes as `scanner-status`.
+//! Supported operation:
+//! The RFID reader operates as a USB keyboard-wedge device. Keystrokes are
+//! received while the attendance window is focused. The pipeline normalizes
+//! UIDs (uppercase hex/decimal, separator stripping, bounds checking),
+//! deduplicates rapid reads, and emits valid completed scans to the webview
+//! as `rfid-scan` events.
 
 use serde::Serialize;
 use std::{
@@ -29,32 +18,25 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
-use crate::config::{ScannerCharacterSet, ScannerConfig, ScannerMode};
+use crate::config::{ScannerCharacterSet, ScannerConfig};
 
 pub const SCAN_EVENT: &str = "rfid-scan";
 pub const STATUS_EVENT: &str = "scanner-status";
 
 /// Machine-readable scanner lifecycle state surfaced to the UI.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScannerState {
-    /// Reader attached and listening for a card.
+    /// Reader ready and listening for card input.
     Connected,
-    /// A card read is in progress or was just completed.
+    /// A card read is in progress or was just received.
     Scanning,
-    /// No reader/listener is available (hook failed, device missing, ...).
+    /// Scanner listener offline.
     Offline,
     /// A scan was received but could not be interpreted.
     Error,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScannerTransport { RawHid, Serial, KeyboardWedgeDetection, #[allow(dead_code)] Disabled }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScannerConfidence { DeviceVerified, HeuristicCandidate, Rejected }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ScannerStatus {
@@ -62,8 +44,6 @@ pub struct ScannerStatus {
     pub message: String,
     pub detail: Option<String>,
     pub mode: String,
-    pub transport: ScannerTransport,
-    pub confidence: Option<ScannerConfidence>,
     pub paused: bool,
 }
 
@@ -78,27 +58,13 @@ pub struct ScannerHandle {
 
 impl ScannerHandle {
     pub fn new(config: ScannerConfig) -> Self {
-        let mode = mode_label(config.mode);
-        let transport = transport_for(&config);
-        let (state, message, detail) = if config.background_capture_allowed() {
-            (ScannerState::Offline, "Scanner starting", None)
-        } else {
-            (
-                ScannerState::Offline,
-                "Keyboard wedge disabled for background scanning",
-                Some("Configure a serial, vendor SDK, or uniquely addressed raw HID reader".into()),
-            )
-        };
-        let initial_confidence = confidence_for(transport, state, false);
         Self {
             config,
             status: Mutex::new(ScannerStatus {
-                state,
-                message: message.into(),
-                detail,
-                mode,
-                transport,
-                confidence: initial_confidence,
+                state: ScannerState::Connected,
+                message: "Keyboard-mode RFID reader ready".into(),
+                detail: Some("Keep the attendance window focused before scanning".into()),
+                mode: "keyboard".into(),
                 paused: false,
             }),
             paused: AtomicBool::new(false),
@@ -120,33 +86,11 @@ impl ScannerHandle {
     }
 }
 
-fn transport_for(config: &ScannerConfig) -> ScannerTransport {
-    match config.mode { ScannerMode::Hid => ScannerTransport::RawHid, ScannerMode::Serial => ScannerTransport::Serial, ScannerMode::Keyboard => ScannerTransport::KeyboardWedgeDetection, ScannerMode::Auto => if config.hid_vid.is_some() && config.hid_pid.is_some() { ScannerTransport::RawHid } else { ScannerTransport::KeyboardWedgeDetection } }
-}
-fn confidence_for(transport: ScannerTransport, state: ScannerState, rejected: bool) -> Option<ScannerConfidence> {
-    if rejected { return Some(ScannerConfidence::Rejected); }
-    match (transport, state) {
-        (ScannerTransport::RawHid | ScannerTransport::Serial, ScannerState::Connected | ScannerState::Scanning) => Some(ScannerConfidence::DeviceVerified),
-        (ScannerTransport::KeyboardWedgeDetection, ScannerState::Connected) => Some(ScannerConfidence::HeuristicCandidate),
-        _ => None,
-    }
-}
-
-pub fn mode_label(mode: ScannerMode) -> String {
-    match mode {
-        ScannerMode::Keyboard => "keyboard",
-        ScannerMode::Hid => "hid",
-        ScannerMode::Serial => "serial",
-        ScannerMode::Auto => "auto",
-    }
-    .to_string()
-}
-
-/// Buffer that accumulates characters from any reader source until the scan is
-/// considered complete (Enter suffix, CR/LF byte, or idle timeout).
-struct ScanBuffer {
-    data: String,
-    last_at: Instant,
+/// Buffer that accumulates characters until the scan is considered complete.
+#[allow(dead_code)]
+pub struct ScanBuffer {
+    pub data: String,
+    pub last_at: Instant,
 }
 
 impl Default for ScanBuffer {
@@ -158,8 +102,9 @@ impl Default for ScanBuffer {
     }
 }
 
+#[allow(dead_code)]
 impl ScanBuffer {
-    fn take_if_idle(&mut self, now: Instant, idle_timeout: Duration) -> Option<String> {
+    pub fn take_if_idle(&mut self, now: Instant, idle_timeout: Duration) -> Option<String> {
         if self.data.is_empty()
             || now.saturating_duration_since(self.last_at) < idle_timeout
         {
@@ -174,253 +119,27 @@ impl ScanBuffer {
 struct Runtime {
     app: AppHandle,
     handle: Arc<ScannerHandle>,
-    buffer: Mutex<ScanBuffer>,
     recent: Mutex<VecDeque<(String, Instant)>>,
 }
 
-/// Spawn the scanner sources. The native listener owns the pipeline; the webview
-/// only receives `rfid-scan` events for completed, valid scans.
+/// Initialize the native scanner pipeline.
 pub fn start(app: AppHandle, handle: Arc<ScannerHandle>) {
-    let config = handle.config.clone();
     let runtime = Arc::new(Runtime {
         app,
         handle,
-        buffer: Mutex::new(ScanBuffer::default()),
         recent: Mutex::new(VecDeque::new()),
     });
 
-    // Idle-timeout flusher: completes scans for readers without an Enter
-    // suffix, separates consecutive taps, and guarantees the buffer never
-    // lingers.
-    {
-        let runtime = Arc::clone(&runtime);
-        let idle_timeout = Duration::from_millis(config.idle_timeout_ms.max(20));
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(20));
-            let value = {
-                let mut buffer = runtime.buffer.lock().expect("scanner buffer lock");
-                buffer.take_if_idle(Instant::now(), idle_timeout)
-            };
-            if let Some(value) = value {
-                emit_scan(&runtime, value);
-            }
-        });
-    }
-
-    match config.mode {
-        ScannerMode::Keyboard => spawn_keyboard(&runtime, config),
-        ScannerMode::Hid => spawn_hid(&runtime, config),
-        ScannerMode::Serial => spawn_serial(&runtime, config),
-        ScannerMode::Auto => {
-            if config.hid_vid.is_some() && config.hid_pid.is_some() {
-                spawn_hid(&runtime, config);
-            } else {
-                spawn_keyboard(&runtime, config);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sources
-// ---------------------------------------------------------------------------
-
-/// Keyboard-wedge capture is handled by the foreground kiosk webview. The
-/// native layer reports it as ready so the UI can enable that protected path;
-/// it does not install a process-wide keyboard hook.
-fn spawn_keyboard(runtime: &Arc<Runtime>, _config: ScannerConfig) {
-    let _ = _config.enter_suffix;
     set_status(
-        runtime,
+        &runtime,
         ScannerState::Connected,
-        "Keyboard-wedge reader ready",
-        Some("Scans are captured only while the kiosk window is active".into()),
+        "Keyboard-mode RFID reader ready",
+        Some("Keep the attendance window focused before scanning".into()),
     );
 }
 
-/// Serial source: reads ASCII bytes from a configured COM/tty device. This is
-/// a device-specific transport and therefore does not touch foreground input.
-fn spawn_serial(runtime: &Arc<Runtime>, config: ScannerConfig) {
-    let runtime = Arc::clone(runtime);
-    std::thread::spawn(move || {
-        let Some(port_name) = config.serial_port.clone().filter(|value| !value.trim().is_empty()) else {
-            set_status(
-                &runtime,
-                ScannerState::Error,
-                "Scanner unavailable",
-                Some("Serial mode requires scanner.serial_port".into()),
-            );
-            return;
-        };
-        let mut attempt = 0usize;
-        loop {
-            let mut port = match serialport::new(&port_name, config.serial_baud_rate).timeout(Duration::from_millis(100)).open() {
-                Ok(port) => port,
-                Err(error) => {
-                    set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("open serial device {port_name} failed: {error}")));
-                    std::thread::sleep(reconnect_backoff(attempt));
-                    attempt += 1;
-                    continue;
-                }
-            };
-            attempt = 0;
-            set_status(
-                &runtime,
-                ScannerState::Connected,
-                "Scanner connected",
-                Some(format!("serial {port_name}")),
-            );
-            let mut bytes = [0u8; 256];
-            loop {
-                match std::io::Read::read(&mut *port, &mut bytes) {
-                    Ok(0) => continue,
-                    Ok(length) => feed_bytes(&runtime, &bytes[..length]),
-                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
-                    Err(error) => {
-                        set_status(
-                            &runtime,
-                            ScannerState::Offline,
-                            "Scanner unavailable",
-                            Some(format!("serial read failed: {error}")),
-                        );
-                        break;
-                    }
-                }
-            }
-            std::thread::sleep(reconnect_backoff(attempt));
-            attempt += 1;
-        }
-    });
-}
-
-/// Raw HID source: opens the configured device and extracts ASCII UIDs from its
-/// input reports. Opt-in only (`scanner.mode = "hid"` plus vid/pid) so the app
-/// never guesses which HID device is the reader.
-fn reconnect_backoff(attempt: usize) -> Duration {
-    Duration::from_secs(1u64 << attempt.min(3))
-}
-
-fn spawn_hid(runtime: &Arc<Runtime>, config: ScannerConfig) {
-    let runtime = Arc::clone(runtime);
-    std::thread::spawn(move || {
-        let (Some(vid), Some(pid)) = (config.hid_vid, config.hid_pid) else {
-            set_status(&runtime, ScannerState::Error, "Scanner unavailable", Some("HID mode requires scanner.hid_vid and scanner.hid_pid in config.toml".into()));
-            return;
-        };
-        let mut attempt = 0usize;
-        loop {
-            let api = match hidapi::HidApi::new() {
-                Ok(api) => api,
-                Err(error) => {
-                    set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("HID initialization failed: {error}")));
-                    std::thread::sleep(reconnect_backoff(attempt));
-                    attempt += 1;
-                    continue;
-                }
-            };
-            let device = match api.open(vid, pid) {
-                Ok(device) => device,
-                Err(error) => {
-                    set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("open HID {vid:04x}:{pid:04x} failed: {error}")));
-                    std::thread::sleep(reconnect_backoff(attempt));
-                    attempt += 1;
-                    continue;
-                }
-            };
-            attempt = 0;
-            set_status(&runtime, ScannerState::Connected, "Scanner connected", Some(format!("HID {vid:04x}:{pid:04x}")));
-            let mut report = [0u8; 256];
-            loop {
-                match device.read_timeout(&mut report, 100) {
-                    Ok(0) => continue,
-                    Ok(length) => feed_bytes(&runtime, &report[..length]),
-                    Err(error) => {
-                        set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("HID read failed: {error}")));
-                        break;
-                    }
-                }
-            }
-            std::thread::sleep(reconnect_backoff(attempt));
-            attempt += 1;
-        }
-    });
-}
-
-/// Feed raw report bytes from an HID reader into the shared scan buffer.
-/// CR/LF finalizes the current scan; printable ASCII is accumulated.
-fn feed_bytes(runtime: &Arc<Runtime>, bytes: &[u8]) {
-    if runtime.handle.paused() {
-        clear_buffer(runtime);
-        return;
-    }
-    let charset = runtime.handle.config.character_set;
-    for &byte in bytes {
-        if byte == b'\r' || byte == b'\n' {
-            flush_buffer(runtime);
-            continue;
-        }
-        let valid = match charset {
-            ScannerCharacterSet::Decimal => byte.is_ascii_digit(),
-            ScannerCharacterSet::Hex => byte.is_ascii_hexdigit(),
-        };
-        if valid || matches!(byte, b':' | b'-' | b' ') {
-            push_char(runtime, byte as char);
-        } else if byte.is_ascii_alphanumeric() {
-            // A character outside the configured charset invalidates the
-            // current candidate instead of being silently dropped, so a
-            // malformed read can never merge with a later scan.
-            clear_buffer(runtime);
-        }
-        // control/padding bytes are ignored
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Shared pipeline
-// ---------------------------------------------------------------------------
-
-/// While paused (operator typing in admin/setup/manual entry) ignore the reader
-/// stream and drop any partial buffer so it cannot flush as a false scan later.
-fn clear_buffer(runtime: &Arc<Runtime>) {
-    let mut buffer = runtime.buffer.lock().expect("scanner buffer lock");
-    buffer.data.clear();
-    buffer.last_at = Instant::now();
-}
-
-fn push_char(runtime: &Arc<Runtime>, ch: char) {
-    if runtime.handle.paused() {
-        clear_buffer(runtime);
-        return;
-    }
-    let was_empty = {
-        let mut buffer = runtime.buffer.lock().expect("scanner buffer lock");
-        let was_empty = buffer.data.is_empty();
-        if buffer.data.len() < 256 {
-            buffer.data.push(ch);
-        }
-        buffer.last_at = Instant::now();
-        was_empty
-    };
-    if was_empty {
-        set_status(runtime, ScannerState::Scanning, "Scan received", None);
-    }
-}
-
-fn flush_buffer(runtime: &Arc<Runtime>) {
-    let value = {
-        let mut buffer = runtime.buffer.lock().expect("scanner buffer lock");
-        if buffer.data.is_empty() {
-            return;
-        }
-        let value = std::mem::take(&mut buffer.data);
-        buffer.last_at = Instant::now();
-        value
-    };
-    emit_scan(runtime, value);
-}
-
-#[derive(Debug)]
-enum ScanParse {
+#[derive(Debug, PartialEq, Eq)]
+pub enum ScanParse {
     Valid(String),
     Invalid(String),
     /// Not a scan attempt (too short / separators only): ignore silently.
@@ -429,11 +148,11 @@ enum ScanParse {
 
 /// Sanitize and normalize a raw reader string into a card UID.
 ///
-/// Rules mirror the backend exactly (uppercase hex, 4..=64 characters) so the
-/// native layer never accepts something the attendance writer would reject, and
-/// never drops something it would accept. Separators (`:`, `-`, space) are
+/// Rules mirror the backend exactly (uppercase hex/decimal, 4..=64 characters)
+/// so the native layer never accepts something the attendance writer would reject,
+/// and never drops something it would accept. Separators (`:`, `-`, space) are
 /// stripped so formatted UIDs still work.
-fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
+pub fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
     let mut value = String::with_capacity(raw.len());
     let mut saw_content = false;
     for ch in raw.chars() {
@@ -455,6 +174,7 @@ fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
     ScanParse::Valid(value)
 }
 
+#[allow(dead_code)]
 fn emit_scan(runtime: &Arc<Runtime>, raw: String) {
     if runtime.handle.paused() {
         return;
@@ -469,8 +189,6 @@ fn emit_scan(runtime: &Arc<Runtime>, raw: String) {
         }
         ScanParse::Invalid(detail) => {
             set_status(runtime, ScannerState::Error, "Invalid scan format", Some(detail));
-            // Auto-recover to waiting shortly after a bad read so the kiosk
-            // does not stay stuck in the error state after one bad tap.
             let recovery_runtime = Arc::clone(runtime);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(2500));
@@ -489,9 +207,8 @@ fn emit_scan(runtime: &Arc<Runtime>, raw: String) {
 }
 
 /// Native dedup: identical UIDs within the configured window are swallowed so
-/// one physical tap never becomes two scan requests. The backend's own guard
-/// and 10 s physical cooldown remain the source of truth for the UI's
-/// "already scanned" feedback.
+/// one physical tap never produces two scan requests.
+#[allow(dead_code)]
 fn is_recent(runtime: &Arc<Runtime>, uid: &str) -> bool {
     let window = Duration::from_millis(runtime.handle.config.dedup_ms.max(50));
     let mut recent = runtime.recent.lock().expect("scanner recent lock");
@@ -521,9 +238,7 @@ fn set_status(
         state,
         message: message.to_string(),
         detail,
-        mode: mode_label(runtime.handle.config.mode),
-        transport: transport_for(&runtime.handle.config),
-        confidence: confidence_for(transport_for(&runtime.handle.config), state, message == "Invalid scan format"),
+        mode: "keyboard".to_string(),
         paused: runtime.handle.paused(),
     };
     {
@@ -541,39 +256,16 @@ fn set_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{confidence_for, normalize, reconnect_backoff, transport_for, ScanBuffer, ScanParse, ScannerConfidence, ScannerState, ScannerTransport};
-    use crate::config::{ScannerConfig, ScannerMode};
+    use super::{normalize, ScanBuffer, ScanParse};
+    use crate::config::{ScannerCharacterSet, ScannerConfig};
     use std::time::{Duration, Instant};
 
     fn valid(raw: &str) -> String {
-        let profile = ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() };
+        let profile = ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() };
         match normalize(raw, &profile) {
             ScanParse::Valid(uid) => uid,
             other => panic!("expected valid scan for {raw:?}, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn transport_and_confidence_are_profile_aware() {
-        let hid = ScannerConfig { mode: ScannerMode::Hid, ..ScannerConfig::default() };
-        let serial = ScannerConfig { mode: ScannerMode::Serial, ..ScannerConfig::default() };
-        let auto_hid = ScannerConfig { mode: ScannerMode::Auto, hid_vid: Some(1), hid_pid: Some(2), ..ScannerConfig::default() };
-        assert_eq!(transport_for(&ScannerConfig::default()), ScannerTransport::KeyboardWedgeDetection);
-        assert_eq!(transport_for(&hid), ScannerTransport::RawHid);
-        assert_eq!(transport_for(&serial), ScannerTransport::Serial);
-        assert_eq!(transport_for(&auto_hid), ScannerTransport::RawHid);
-        assert_eq!(confidence_for(ScannerTransport::RawHid, ScannerState::Connected, false), Some(ScannerConfidence::DeviceVerified));
-        assert_eq!(confidence_for(ScannerTransport::Serial, ScannerState::Scanning, false), Some(ScannerConfidence::DeviceVerified));
-        assert_eq!(confidence_for(ScannerTransport::KeyboardWedgeDetection, ScannerState::Connected, false), Some(ScannerConfidence::HeuristicCandidate));
-        assert_eq!(confidence_for(ScannerTransport::KeyboardWedgeDetection, ScannerState::Error, true), Some(ScannerConfidence::Rejected));
-        assert_eq!(confidence_for(ScannerTransport::RawHid, ScannerState::Offline, false), None);
-        // Auto mode that resolved to raw HID must be device-verified, not heuristic.
-        assert_eq!(confidence_for(transport_for(&auto_hid), ScannerState::Connected, false), Some(ScannerConfidence::DeviceVerified));
-    }
-
-    #[test]
-    fn reconnect_backoff_is_capped() {
-        assert_eq!((0..6).map(reconnect_backoff).collect::<Vec<_>>(), vec![Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(8), Duration::from_secs(8)]);
     }
 
     #[test]
@@ -607,31 +299,58 @@ mod tests {
 
     #[test]
     fn accepts_default_decimal_and_rejects_letters() {
-        assert!(matches!(normalize("0123456789", &ScannerConfig::default()), ScanParse::Valid(value) if value == "0123456789"));
+        assert_eq!(
+            normalize("0123456789", &ScannerConfig::default()),
+            ScanParse::Valid("0123456789".into())
+        );
         assert!(matches!(normalize("04A1B2C3", &ScannerConfig::default()), ScanParse::Invalid(_)));
         assert!(matches!(normalize("1234", &ScannerConfig::default()), ScanParse::Invalid(_)));
     }
 
     #[test]
+    fn accepts_variable_length_when_expected_length_zero() {
+        let variable_decimal = ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Decimal, ..ScannerConfig::default() };
+        assert_eq!(
+            normalize("1234", &variable_decimal),
+            ScanParse::Valid("1234".into())
+        );
+        assert_eq!(
+            normalize("123456789012345", &variable_decimal),
+            ScanParse::Valid("123456789012345".into())
+        );
+    }
+
+    #[test]
+    fn enforces_fixed_expected_length() {
+        let fixed_eight_hex = ScannerConfig { expected_length: 8, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() };
+        assert_eq!(
+            normalize("04A1B2C3", &fixed_eight_hex),
+            ScanParse::Valid("04A1B2C3".into())
+        );
+        assert!(matches!(normalize("04A1B2", &fixed_eight_hex), ScanParse::Invalid(_)));
+        assert!(matches!(normalize("04A1B2C3D4", &fixed_eight_hex), ScanParse::Invalid(_)));
+    }
+
+    #[test]
     fn rejects_non_hex_content() {
         assert!(matches!(
-            normalize("CARD1234", &ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
+            normalize("CARD1234", &ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
             ScanParse::Invalid(_)
         ));
-        assert!(matches!(normalize("hello", &ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() }), ScanParse::Invalid(_)));
+        assert!(matches!(normalize("hello", &ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() }), ScanParse::Invalid(_)));
     }
 
     #[test]
     fn ignores_separator_only_or_too_short_input() {
-        assert!(matches!(normalize("", &ScannerConfig::default()), ScanParse::Ignored));
-        assert!(matches!(normalize("--::  ", &ScannerConfig::default()), ScanParse::Ignored));
+        assert_eq!(normalize("", &ScannerConfig::default()), ScanParse::Ignored);
+        assert_eq!(normalize("--::  ", &ScannerConfig::default()), ScanParse::Ignored);
         assert!(matches!(normalize("12", &ScannerConfig::default()), ScanParse::Invalid(_)));
     }
 
     #[test]
     fn rejects_overlong_input() {
         assert!(matches!(
-            normalize(&"A".repeat(65), &ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
+            normalize(&"A".repeat(65), &ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
             ScanParse::Invalid(_)
         ));
     }

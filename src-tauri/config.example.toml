@@ -31,16 +31,10 @@ sse_keep_alive_seconds = 15
 admin_pin = "293906"
 admin_session_minutes = 15
 
-# Native RFID scanner pipeline. The scanner is captured at the Rust layer and
-# surfaced to the UI as `rfid-scan` events, so card taps work without a focused
-# webview text box.
+# Keyboard-mode RFID scanner configuration.
+# The reader operates as a USB keyboard wedge and sends card values as keystrokes.
+# The attendance window must remain focused while scanning.
 [scanner]
-# "keyboard": the reader behaves as a keyboard wedge. The kiosk captures its
-# fast foreground key burst while the kiosk window is active.
-# "hid": raw HID access to a true HID reader; requires hid_vid/hid_pid below.
-# "serial": reads ASCII UID bytes from a configured serial/COM port.
-# "auto": use HID when hid_vid/hid_pid are set, otherwise use the foreground
-# keyboard-wedge path.
 mode = "keyboard"
 # Most keyboard-wedge readers append Enter after the UID. Set false when the
 # reader only types the UID (the app then completes scans by idle timeout).
@@ -57,12 +51,6 @@ dedup_ms = 300
 # to disable exact length while retaining the 4..=64 safety bound.
 expected_length = 10
 character_set = "decimal"
-# Raw HID mode only: vendor/product id of the RFID reader (hex, e.g. 0x1234).
-# hid_vid = 0x1234
-# hid_pid = 0x5678
-# Serial mode only.
-# serial_port = "COM4"
-# serial_baud_rate = 115200
 
 # Canonical company office identity shown across the kiosk, dashboard, exports,
 # and printed references. All values are configurable; the defaults are the real

@@ -149,6 +149,81 @@ describe('RFID kiosk', () => {
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
   });
 
+  it('submits variable-length scans when expectedLength is 0', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    mockFetch({
+      ...successResponse,
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === '/api/config') {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            timezone: 'Asia/Manila',
+            rfidAutoSubmitDelayMs: 30,
+            resultResetDelayMs: 500,
+            scanner: { expectedLength: 0, characterSet: 'decimal' },
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => successResponse } as Response;
+    });
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['1', '2', '3', '4', '5']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({
+        body: JSON.stringify({ rfidUid: '12345', source: 'RFID' }),
+      }),
+    ));
+  });
+
+  it('clears the scan buffer when Escape is pressed', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['0', '1', '2', '3', '4']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    for (const key of ['5', '6', '7', '8', '9']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    // Partial buffer was cleared by Escape so final buffer was only 5 digits (wrong length)
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+  });
+
+  it('clears the scan buffer when the window loses focus (blur)', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['0', '1', '2', '3', '4']) fireEvent.keyDown(input, { key });
+    fireEvent.blur(window);
+    for (const key of ['5', '6', '7', '8', '9']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+  });
+
+  it('clears the buffer on slow manual typing with gaps exceeding 250ms', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['0', '1', '2', '3', '4']) {
+      fireEvent.keyDown(input, { key });
+    }
+    // Wait >250ms
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    for (const key of ['5', '6', '7', '8', '9']) {
+      fireEvent.keyDown(input, { key });
+    }
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+  });
+
   it('keeps the scanner box locked against all keyboard typing (Manual entry is opt-in)', async () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     render(<App />);
@@ -404,18 +479,22 @@ describe('RFID kiosk', () => {
 });
 
 describe('ScannerDiagnostics', () => {
-  it('lists HID devices and warns that keyboard HID interfaces are foreground-only', async () => {
+  it('presents the scanner as a keyboard-mode RFID reader with focus guidance', async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === 'scanner_status')
-        return Promise.resolve({ state: 'connected', message: 'Scanner connected', detail: null, mode: 'hid', transport: 'raw_hid', confidence: 'device_verified', paused: false });
-      if (cmd === 'scanner_devices')
-        return Promise.resolve([{ path: 'HID\\VID_1234&PID_5678', vendorId: 0x1234, productId: 0x5678, productString: 'EM4100 USB Reader', usagePage: 1, usage: 6, interfaceNumber: 0, readerHint: true }]);
+        return Promise.resolve({
+          state: 'connected',
+          message: 'Keyboard-mode RFID reader ready',
+          detail: 'Keep the attendance window focused before scanning',
+          mode: 'keyboard',
+          paused: false,
+        });
       return Promise.reject(new Error('web mode'));
     });
     render(<ScannerDiagnostics />);
-    expect(await screen.findByText(/EM4100 USB Reader/)).toBeInTheDocument();
-    expect(screen.getByText(/VID\/PID: 0x1234 \/ 0x5678/)).toBeInTheDocument();
-    expect(screen.getByText(/Keyboard HID interface — foreground kiosk capture only/)).toBeInTheDocument();
+    expect(await screen.findByText(/Reader: Keyboard-mode RFID reader/)).toBeInTheDocument();
+    expect(screen.getByText(/Keep the attendance window focused before scanning\./)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for card/)).toBeInTheDocument();
   });
 });
 

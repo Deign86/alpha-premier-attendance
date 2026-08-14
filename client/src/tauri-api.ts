@@ -58,9 +58,6 @@ export const tauriApi = {
 
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));
 
-/** Scanner lifecycle state reported by the native pipeline. */
-export type ScannerDevice = { path: string; vendorId: number; productId: number; productString: string | null; usagePage: number; usage: number; interfaceNumber: number; readerHint: boolean };
-export const getScannerDevices = () => invoke<ScannerDevice[]>('scanner_devices');
 export const notifyScanSuccess = (name: string) => invoke<void>('notify_scan_success', { fullName: name });
 
 /** Native scanner status changes (`scanner-status` events). */

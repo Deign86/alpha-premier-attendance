@@ -56,6 +56,7 @@ export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   enableCardSetup: false,
   enableAdmin: false,
   office: DEFAULT_OFFICE_IDENTITY,
+  scanner: { mode: 'keyboard', paused: false, expectedLength: 10, characterSet: 'decimal' },
 };
 
 /**
@@ -110,6 +111,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
         enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
         enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
         office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
+        scanner: data.scanner ?? DEFAULT_CONFIG.scanner,
       };
     }
     const response = await fetch(apiUrl('/api/config'), { signal });
@@ -122,6 +124,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
       enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
       enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
       office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
+      scanner: data.scanner ?? DEFAULT_CONFIG.scanner,
     };
   } catch {
     return DEFAULT_CONFIG;

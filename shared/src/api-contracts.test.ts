@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes, scannerConfidences, scannerTransports, canCreateBackgroundAttendance, type ScannerStatus } from './api-contracts.js';
+import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources and attendance states stable', () => {
@@ -14,37 +14,24 @@ describe('shared API contract literals', () => {
   });
 });
 
-describe('background scanner safety contract', () => {
-  it('serializes the full seven-field scanner status wire shape', () => {
+describe('scanner status contract', () => {
+  it('serializes the simplified scanner status shape', () => {
     const status: ScannerStatus = {
       state: 'connected',
-      message: 'Scanner connected',
-      detail: 'HID 1234:5678',
-      mode: 'hid',
-      transport: 'raw_hid',
-      confidence: 'device_verified',
+      message: 'Keyboard-mode RFID reader ready',
+      detail: 'Keep the attendance window focused before scanning',
+      mode: 'keyboard',
       paused: false,
     };
     expect(Object.keys(status).sort()).toEqual([
-      'confidence',
       'detail',
       'message',
       'mode',
       'paused',
       'state',
-      'transport',
     ]);
-    expect(status.confidence).toMatch(/^(device_verified|prefix_suffix_verified|heuristic_candidate|rejected|null)$/);
-    expect(status.transport).toMatch(/^(raw_hid|serial|vendor_sdk|keyboard_wedge_detection|disabled)$/);
-  });
-
-  it('allows background attendance only for verified device transports', () => {
-    expect(scannerConfidences).toEqual(['device_verified', 'prefix_suffix_verified', 'heuristic_candidate', 'rejected']);
-    expect(scannerTransports).toEqual(['raw_hid', 'serial', 'vendor_sdk', 'keyboard_wedge_detection', 'disabled']);
-    expect(canCreateBackgroundAttendance('device_verified', 'raw_hid')).toBe(true);
-    expect(canCreateBackgroundAttendance('device_verified', 'serial')).toBe(true);
-    expect(canCreateBackgroundAttendance('prefix_suffix_verified', 'keyboard_wedge_detection')).toBe(false);
-    expect(canCreateBackgroundAttendance('heuristic_candidate', 'keyboard_wedge_detection')).toBe(false);
+    expect(status.mode).toBe('keyboard');
+    expect(status.state).toBe('connected');
   });
 });
 
