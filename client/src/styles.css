@@ -678,3 +678,34 @@ td small { font-size: .7rem; }
   display: grid;
   gap: 12px;
 }
+
+.form-message {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.form-message.is-success {
+  color: #98d2a8;
+  background: rgba(152, 210, 168, 0.12);
+  border: 1px solid rgba(152, 210, 168, 0.28);
+}
+
+.form-message.is-error {
+  color: #efaa92;
+  background: rgba(239, 170, 146, 0.12);
+  border: 1px solid rgba(239, 170, 146, 0.32);
+}
+
+.table-empty-cell {
+  padding: 24px 16px !important;
+  text-align: center;
+}
+
+.table-empty-cell .empty-state {
+  margin-top: 0;
+}
+
