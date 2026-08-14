@@ -2,6 +2,16 @@
 
 Use this runbook before enabling real cards and after replacing a reader, kiosk PC, or USB port. It assumes a configured device-specific reader transport (raw HID, serial, or vendor SDK) and a running kiosk client. Keyboard-wedge readers are detection-only and cannot satisfy the background no-leakage requirement.
 
+## Deployed Reader: 125 kHz EM4100 USB (Keyboard Wedge)
+
+The deployed reader is a 125 kHz EM4100 contactless card reader on a USB keyboard interface. Expected behavior:
+
+- **Tap profile:** a card tap emits a burst of decimal digits (typically 10) followed by Enter in under 100 ms, with an audible beep. The default profile is `scanner.expected_length = 10` and `scanner.character_set = "decimal"` in `config.toml`; readers programmed to emit 8 hexadecimal characters must set `expected_length = 8` and `character_set = "hex"`.
+- **Foreground capture:** while the kiosk window is focused, a tap is captured by the kiosk's wedge burst classifier and submits one `rfid-scan`. Confirm the kiosk result appears without clicking or focusing any field.
+- **Background limitation:** this reader exposes only a keyboard HID interface. It is therefore foreground-only: taps while the kiosk is minimized/tray-hidden must NOT create attendance, and taps while another app is focused must NOT be swallowed by the kiosk (verify with a Notepad test — the digits must appear in Notepad). Admin → Scanner diagnostics lists the device (path, VID/PID, usage page 1 / usage 6) and labels it keyboard-only.
+- **No hidden writes:** with the kiosk hidden and another app focused, tap a card and confirm no attendance row is created and the other app's typing is untouched. This is a required safety check for this reader.
+- **Reconnect checks (configured raw-HID/serial readers only):** unplug/replug the reader and confirm the scanner returns to Connected automatically (capped 1s→8s backoff); after sleep/resume, confirm the same without restarting the app.
+
 ## Acceptance Criteria
 
 - The reader appears in Windows as a keyboard/HID device without an unknown-device warning.

@@ -29,7 +29,7 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
-use crate::config::{ScannerConfig, ScannerMode};
+use crate::config::{ScannerCharacterSet, ScannerConfig, ScannerMode};
 
 pub const SCAN_EVENT: &str = "rfid-scan";
 pub const STATUS_EVENT: &str = "scanner-status";
@@ -48,15 +48,22 @@ pub enum ScannerState {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScannerTransport { RawHid, Serial, KeyboardWedgeDetection, #[allow(dead_code)] Disabled }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScannerConfidence { DeviceVerified, HeuristicCandidate, Rejected }
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ScannerStatus {
     pub state: ScannerState,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub mode: String,
-    /// True while the operator types in admin/setup/manual-entry screens, so
-    /// keystrokes are never misread as card taps.
+    pub transport: ScannerTransport,
+    pub confidence: Option<ScannerConfidence>,
     pub paused: bool,
 }
 
@@ -72,6 +79,7 @@ pub struct ScannerHandle {
 impl ScannerHandle {
     pub fn new(config: ScannerConfig) -> Self {
         let mode = mode_label(config.mode);
+        let transport = transport_for(&config);
         let (state, message, detail) = if config.background_capture_allowed() {
             (ScannerState::Offline, "Scanner starting", None)
         } else {
@@ -81,6 +89,7 @@ impl ScannerHandle {
                 Some("Configure a serial, vendor SDK, or uniquely addressed raw HID reader".into()),
             )
         };
+        let initial_confidence = confidence_for(transport, state, false);
         Self {
             config,
             status: Mutex::new(ScannerStatus {
@@ -88,6 +97,8 @@ impl ScannerHandle {
                 message: message.into(),
                 detail,
                 mode,
+                transport,
+                confidence: initial_confidence,
                 paused: false,
             }),
             paused: AtomicBool::new(false),
@@ -106,6 +117,18 @@ impl ScannerHandle {
         let mut status = self.status.lock().expect("scanner status lock").clone();
         status.paused = self.paused.load(Ordering::SeqCst);
         status
+    }
+}
+
+fn transport_for(config: &ScannerConfig) -> ScannerTransport {
+    match config.mode { ScannerMode::Hid => ScannerTransport::RawHid, ScannerMode::Serial => ScannerTransport::Serial, ScannerMode::Keyboard => ScannerTransport::KeyboardWedgeDetection, ScannerMode::Auto => if config.hid_vid.is_some() && config.hid_pid.is_some() { ScannerTransport::RawHid } else { ScannerTransport::KeyboardWedgeDetection } }
+}
+fn confidence_for(transport: ScannerTransport, state: ScannerState, rejected: bool) -> Option<ScannerConfidence> {
+    if rejected { return Some(ScannerConfidence::Rejected); }
+    match (transport, state) {
+        (ScannerTransport::RawHid | ScannerTransport::Serial, ScannerState::Connected | ScannerState::Scanning) => Some(ScannerConfidence::DeviceVerified),
+        (ScannerTransport::KeyboardWedgeDetection, ScannerState::Connected) => Some(ScannerConfidence::HeuristicCandidate),
+        _ => None,
     }
 }
 
@@ -229,43 +252,43 @@ fn spawn_serial(runtime: &Arc<Runtime>, config: ScannerConfig) {
             );
             return;
         };
-        let mut port = match serialport::new(&port_name, config.serial_baud_rate)
-            .timeout(Duration::from_millis(100))
-            .open()
-        {
-            Ok(port) => port,
-            Err(error) => {
-                set_status(
-                    &runtime,
-                    ScannerState::Offline,
-                    "Scanner unavailable",
-                    Some(format!("open serial device {port_name} failed: {error}")),
-                );
-                return;
-            }
-        };
-        set_status(
-            &runtime,
-            ScannerState::Connected,
-            "Scanner connected",
-            Some(format!("serial {port_name}")),
-        );
-        let mut bytes = [0u8; 256];
+        let mut attempt = 0usize;
         loop {
-            match std::io::Read::read(&mut *port, &mut bytes) {
-                Ok(0) => continue,
-                Ok(length) => feed_bytes(&runtime, &bytes[..length]),
-                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+            let mut port = match serialport::new(&port_name, config.serial_baud_rate).timeout(Duration::from_millis(100)).open() {
+                Ok(port) => port,
                 Err(error) => {
-                    set_status(
-                        &runtime,
-                        ScannerState::Offline,
-                        "Scanner unavailable",
-                        Some(format!("serial read failed: {error}")),
-                    );
-                    break;
+                    set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("open serial device {port_name} failed: {error}")));
+                    std::thread::sleep(reconnect_backoff(attempt));
+                    attempt += 1;
+                    continue;
+                }
+            };
+            attempt = 0;
+            set_status(
+                &runtime,
+                ScannerState::Connected,
+                "Scanner connected",
+                Some(format!("serial {port_name}")),
+            );
+            let mut bytes = [0u8; 256];
+            loop {
+                match std::io::Read::read(&mut *port, &mut bytes) {
+                    Ok(0) => continue,
+                    Ok(length) => feed_bytes(&runtime, &bytes[..length]),
+                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+                    Err(error) => {
+                        set_status(
+                            &runtime,
+                            ScannerState::Offline,
+                            "Scanner unavailable",
+                            Some(format!("serial read failed: {error}")),
+                        );
+                        break;
+                    }
                 }
             }
+            std::thread::sleep(reconnect_backoff(attempt));
+            attempt += 1;
         }
     });
 }
@@ -273,63 +296,52 @@ fn spawn_serial(runtime: &Arc<Runtime>, config: ScannerConfig) {
 /// Raw HID source: opens the configured device and extracts ASCII UIDs from its
 /// input reports. Opt-in only (`scanner.mode = "hid"` plus vid/pid) so the app
 /// never guesses which HID device is the reader.
+fn reconnect_backoff(attempt: usize) -> Duration {
+    Duration::from_secs(1u64 << attempt.min(3))
+}
+
 fn spawn_hid(runtime: &Arc<Runtime>, config: ScannerConfig) {
     let runtime = Arc::clone(runtime);
     std::thread::spawn(move || {
-        let api = match hidapi::HidApi::new() {
-            Ok(api) => api,
-            Err(error) => {
-                set_status(
-                    &runtime,
-                    ScannerState::Offline,
-                    "Scanner unavailable",
-                    Some(format!("HID initialization failed: {error}")),
-                );
-                return;
-            }
-        };
         let (Some(vid), Some(pid)) = (config.hid_vid, config.hid_pid) else {
-            set_status(
-                &runtime,
-                ScannerState::Error,
-                "Scanner unavailable",
-                Some("HID mode requires scanner.hid_vid and scanner.hid_pid in config.toml".into()),
-            );
+            set_status(&runtime, ScannerState::Error, "Scanner unavailable", Some("HID mode requires scanner.hid_vid and scanner.hid_pid in config.toml".into()));
             return;
         };
-        let device = match api.open(vid, pid) {
-            Ok(device) => device,
-            Err(error) => {
-                set_status(
-                    &runtime,
-                    ScannerState::Offline,
-                    "Scanner unavailable",
-                    Some(format!("open HID {vid:04x}:{pid:04x} failed: {error}")),
-                );
-                return;
-            }
-        };
-        set_status(
-            &runtime,
-            ScannerState::Connected,
-            "Scanner connected",
-            Some(format!("HID {vid:04x}:{pid:04x}")),
-        );
-        let mut report = [0u8; 256];
+        let mut attempt = 0usize;
         loop {
-            match device.read_timeout(&mut report, 100) {
-                Ok(0) => continue,
-                Ok(length) => feed_bytes(&runtime, &report[..length]),
+            let api = match hidapi::HidApi::new() {
+                Ok(api) => api,
                 Err(error) => {
-                    set_status(
-                        &runtime,
-                        ScannerState::Offline,
-                        "Scanner unavailable",
-                        Some(format!("HID read failed: {error}")),
-                    );
-                    break;
+                    set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("HID initialization failed: {error}")));
+                    std::thread::sleep(reconnect_backoff(attempt));
+                    attempt += 1;
+                    continue;
+                }
+            };
+            let device = match api.open(vid, pid) {
+                Ok(device) => device,
+                Err(error) => {
+                    set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("open HID {vid:04x}:{pid:04x} failed: {error}")));
+                    std::thread::sleep(reconnect_backoff(attempt));
+                    attempt += 1;
+                    continue;
+                }
+            };
+            attempt = 0;
+            set_status(&runtime, ScannerState::Connected, "Scanner connected", Some(format!("HID {vid:04x}:{pid:04x}")));
+            let mut report = [0u8; 256];
+            loop {
+                match device.read_timeout(&mut report, 100) {
+                    Ok(0) => continue,
+                    Ok(length) => feed_bytes(&runtime, &report[..length]),
+                    Err(error) => {
+                        set_status(&runtime, ScannerState::Offline, "Scanner unavailable", Some(format!("HID read failed: {error}")));
+                        break;
+                    }
                 }
             }
+            std::thread::sleep(reconnect_backoff(attempt));
+            attempt += 1;
         }
     });
 }
@@ -341,14 +353,25 @@ fn feed_bytes(runtime: &Arc<Runtime>, bytes: &[u8]) {
         clear_buffer(runtime);
         return;
     }
+    let charset = runtime.handle.config.character_set;
     for &byte in bytes {
         if byte == b'\r' || byte == b'\n' {
             flush_buffer(runtime);
             continue;
         }
-        if byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b' ') {
+        let valid = match charset {
+            ScannerCharacterSet::Decimal => byte.is_ascii_digit(),
+            ScannerCharacterSet::Hex => byte.is_ascii_hexdigit(),
+        };
+        if valid || matches!(byte, b':' | b'-' | b' ') {
             push_char(runtime, byte as char);
+        } else if byte.is_ascii_alphanumeric() {
+            // A character outside the configured charset invalidates the
+            // current candidate instead of being silently dropped, so a
+            // malformed read can never merge with a later scan.
+            clear_buffer(runtime);
         }
+        // control/padding bytes are ignored
     }
 }
 
@@ -410,40 +433,33 @@ enum ScanParse {
 /// native layer never accepts something the attendance writer would reject, and
 /// never drops something it would accept. Separators (`:`, `-`, space) are
 /// stripped so formatted UIDs still work.
-fn normalize(raw: &str) -> ScanParse {
-    let mut hex = String::with_capacity(raw.len());
-    let mut saw_non_hex_alnum = false;
+fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
+    let mut value = String::with_capacity(raw.len());
     let mut saw_content = false;
     for ch in raw.chars() {
-        if ch.is_ascii_hexdigit() {
-            saw_content = true;
-            hex.push(ch.to_ascii_uppercase());
-        } else if ch.is_ascii_alphanumeric() {
-            saw_content = true;
-            saw_non_hex_alnum = true;
-        }
-        // whitespace and punctuation separators are skipped
+        if matches!(ch, ':' | '-' | ' ' | '\r' | '\n' | '\t') { continue; }
+        saw_content = true;
+        let accepted = match profile.character_set {
+            ScannerCharacterSet::Decimal => ch.is_ascii_digit(),
+            ScannerCharacterSet::Hex => ch.is_ascii_hexdigit(),
+        };
+        if !accepted { return ScanParse::Invalid(format!("invalid character in reader input: {raw:?}")); }
+        value.push(ch.to_ascii_uppercase());
     }
-    if !saw_content || hex.is_empty() {
-        return ScanParse::Ignored;
+    if !saw_content || value.is_empty() { return ScanParse::Ignored; }
+    if value.len() < 4 { return ScanParse::Invalid(format!("card ID too short ({} digits)", value.len())); }
+    if value.len() > 64 { return ScanParse::Invalid(format!("card ID too long ({} digits)", value.len())); }
+    if profile.expected_length > 0 && value.len() != profile.expected_length as usize {
+        return ScanParse::Invalid(format!("card ID must be exactly {} characters", profile.expected_length));
     }
-    if saw_non_hex_alnum {
-        return ScanParse::Invalid(format!("non-hex characters in reader input: {raw:?}"));
-    }
-    if hex.len() < 4 {
-        return ScanParse::Invalid(format!("card ID too short ({} digits)", hex.len()));
-    }
-    if hex.len() > 64 {
-        return ScanParse::Invalid(format!("card ID too long ({} digits)", hex.len()));
-    }
-    ScanParse::Valid(hex)
+    ScanParse::Valid(value)
 }
 
 fn emit_scan(runtime: &Arc<Runtime>, raw: String) {
     if runtime.handle.paused() {
         return;
     }
-    match normalize(&raw) {
+    match normalize(&raw, &runtime.handle.config) {
         ScanParse::Valid(uid) => {
             if is_recent(runtime, &uid) {
                 return;
@@ -506,6 +522,8 @@ fn set_status(
         message: message.to_string(),
         detail,
         mode: mode_label(runtime.handle.config.mode),
+        transport: transport_for(&runtime.handle.config),
+        confidence: confidence_for(transport_for(&runtime.handle.config), state, message == "Invalid scan format"),
         paused: runtime.handle.paused(),
     };
     {
@@ -523,14 +541,39 @@ fn set_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, ScanBuffer, ScanParse};
+    use super::{confidence_for, normalize, reconnect_backoff, transport_for, ScanBuffer, ScanParse, ScannerConfidence, ScannerState, ScannerTransport};
+    use crate::config::{ScannerConfig, ScannerMode};
     use std::time::{Duration, Instant};
 
     fn valid(raw: &str) -> String {
-        match normalize(raw) {
+        let profile = ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() };
+        match normalize(raw, &profile) {
             ScanParse::Valid(uid) => uid,
             other => panic!("expected valid scan for {raw:?}, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn transport_and_confidence_are_profile_aware() {
+        let hid = ScannerConfig { mode: ScannerMode::Hid, ..ScannerConfig::default() };
+        let serial = ScannerConfig { mode: ScannerMode::Serial, ..ScannerConfig::default() };
+        let auto_hid = ScannerConfig { mode: ScannerMode::Auto, hid_vid: Some(1), hid_pid: Some(2), ..ScannerConfig::default() };
+        assert_eq!(transport_for(&ScannerConfig::default()), ScannerTransport::KeyboardWedgeDetection);
+        assert_eq!(transport_for(&hid), ScannerTransport::RawHid);
+        assert_eq!(transport_for(&serial), ScannerTransport::Serial);
+        assert_eq!(transport_for(&auto_hid), ScannerTransport::RawHid);
+        assert_eq!(confidence_for(ScannerTransport::RawHid, ScannerState::Connected, false), Some(ScannerConfidence::DeviceVerified));
+        assert_eq!(confidence_for(ScannerTransport::Serial, ScannerState::Scanning, false), Some(ScannerConfidence::DeviceVerified));
+        assert_eq!(confidence_for(ScannerTransport::KeyboardWedgeDetection, ScannerState::Connected, false), Some(ScannerConfidence::HeuristicCandidate));
+        assert_eq!(confidence_for(ScannerTransport::KeyboardWedgeDetection, ScannerState::Error, true), Some(ScannerConfidence::Rejected));
+        assert_eq!(confidence_for(ScannerTransport::RawHid, ScannerState::Offline, false), None);
+        // Auto mode that resolved to raw HID must be device-verified, not heuristic.
+        assert_eq!(confidence_for(transport_for(&auto_hid), ScannerState::Connected, false), Some(ScannerConfidence::DeviceVerified));
+    }
+
+    #[test]
+    fn reconnect_backoff_is_capped() {
+        assert_eq!((0..6).map(reconnect_backoff).collect::<Vec<_>>(), vec![Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(8), Duration::from_secs(8)]);
     }
 
     #[test]
@@ -563,25 +606,32 @@ mod tests {
     }
 
     #[test]
+    fn accepts_default_decimal_and_rejects_letters() {
+        assert!(matches!(normalize("0123456789", &ScannerConfig::default()), ScanParse::Valid(value) if value == "0123456789"));
+        assert!(matches!(normalize("04A1B2C3", &ScannerConfig::default()), ScanParse::Invalid(_)));
+        assert!(matches!(normalize("1234", &ScannerConfig::default()), ScanParse::Invalid(_)));
+    }
+
+    #[test]
     fn rejects_non_hex_content() {
         assert!(matches!(
-            normalize("CARD1234"),
+            normalize("CARD1234", &ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
             ScanParse::Invalid(_)
         ));
-        assert!(matches!(normalize("hello"), ScanParse::Invalid(_)));
+        assert!(matches!(normalize("hello", &ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() }), ScanParse::Invalid(_)));
     }
 
     #[test]
     fn ignores_separator_only_or_too_short_input() {
-        assert!(matches!(normalize(""), ScanParse::Ignored));
-        assert!(matches!(normalize("--::  "), ScanParse::Ignored));
-        assert!(matches!(normalize("12"), ScanParse::Invalid(_)));
+        assert!(matches!(normalize("", &ScannerConfig::default()), ScanParse::Ignored));
+        assert!(matches!(normalize("--::  ", &ScannerConfig::default()), ScanParse::Ignored));
+        assert!(matches!(normalize("12", &ScannerConfig::default()), ScanParse::Invalid(_)));
     }
 
     #[test]
     fn rejects_overlong_input() {
         assert!(matches!(
-            normalize(&"A".repeat(65)),
+            normalize(&"A".repeat(65), &ScannerConfig { expected_length: 0, character_set: crate::config::ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
             ScanParse::Invalid(_)
         ));
     }

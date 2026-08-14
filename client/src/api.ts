@@ -24,6 +24,9 @@ import type {
   PayrollCutoffsResponse,
   InternPayrollReportResponse,
   PayrollProfilesResponse,
+  PayrollPdfGenerateRequest,
+  PayrollPdfGenerateResponse,
+  PayrollPdfListResponse,
 } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -259,12 +262,27 @@ export async function deleteAdminAttendance(attendanceId: string, date: string):
 export async function loadPayrollProfiles(): Promise<PayrollProfilesResponse> { if (runningInTauri()) return await tauriApi.payrollProfiles(nativeAdminToken ?? '') as PayrollProfilesResponse; return (await fetch(apiUrl('/api/admin/payroll/profiles'))).json() as Promise<PayrollProfilesResponse>; }
 export async function savePayrollProfile(profile: PayrollCalculationProfile): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollUpsertProfile(nativeAdminToken ?? '', profile); const response = await fetch(apiUrl(`/api/admin/payroll/profiles/${encodeURIComponent(profile.profileId)}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) }); return response.json(); }
 export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> { if (runningInTauri()) return await tauriApi.payrollCutoffs(nativeAdminToken ?? '') as PayrollCutoffsResponse; return (await fetch(apiUrl('/api/admin/payroll/cutoffs'))).json() as Promise<PayrollCutoffsResponse>; }
+export async function generatePayrollPdf(request: PayrollPdfGenerateRequest): Promise<PayrollPdfGenerateResponse> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.generatePayrollPdf(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd, request.payrollCutoffLabel ?? '', request.workerType.toUpperCase());
+    } catch { return { success: false, error: { message: 'Unable to generate the payroll PDF.' } }; }
+  }
+  return { success: false, error: { message: 'Payroll PDFs are generated in the desktop application.' } };
+}
+export async function loadPayrollPdfs(): Promise<PayrollPdfListResponse> {
+  if (runningInTauri()) {
+    try { return await tauriApi.listPayrollPdfs(nativeAdminToken ?? ''); }
+    catch { return { success: false, error: { message: 'Unable to load payroll PDFs.' } }; }
+  }
+  return { success: false, error: { message: 'Payroll PDFs are available in the desktop application.' } };
+}
 export async function loadInternPayrollReport(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string): Promise<InternPayrollReportResponse> {
   if (runningInTauri()) return await tauriApi.internPayrollReport(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel) as InternPayrollReportResponse;
   return { success: true, payroll: [] };
 }
 export async function savePayrollCutoff(payroll: unknown, payrollId?: string): Promise<unknown> { if (runningInTauri()) return payrollId ? tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', { ...(payroll as object), payrollId }) : tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll); const response = await fetch(apiUrl(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs'), { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) }); return response.json(); }
-export async function generatePayrollCutoff(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: unknown): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, customization); return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } }; }
+export async function generatePayrollCutoff(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: unknown = {}): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, customization); return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } }; }
 export async function finalizePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`), { method: 'POST' }); return response.json(); }
 export async function deletePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollDeleteCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}`), { method: 'DELETE' }); return response.json(); }
 export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }

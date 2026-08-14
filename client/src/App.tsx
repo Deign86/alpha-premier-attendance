@@ -27,6 +27,7 @@ import type {
   OfficeIdentity,
   LanStatusResponse,
   DatabaseInfoResponse,
+  PayrollPdfRecord,
 } from "@rfid-attendance/shared";
 import {
   DEFAULT_OFFICE_IDENTITY,
@@ -51,7 +52,6 @@ import {
   loadConfig,
   loadDatabaseInfo,
   loadPayrollCutoffs,
-  loadInternPayrollReport,
   loadPayrollProfiles,
   lockAdmin,
   lockSetup,
@@ -64,6 +64,10 @@ import {
   saveAdminAttendance,
   saveAdminUser,
   generatePayrollCutoff,
+  generatePayrollPdf,
+  loadPayrollPdfs,
+  openGeneratedFile,
+  revealGeneratedFile,
   startLanViewer,
   stopLanViewer,
   submitScan,
@@ -72,15 +76,27 @@ import {
   uploadSetupPhoto,
   upsertSetupUser,
 } from "./api";
+import type { FileActionResult } from "./api";
 import "./styles.css";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
   getScannerStatus,
+  getScannerDevices,
   setScannerPaused,
-  tauriApi,
-  type ScannerStatus,
+  notifyScanSuccess,
 } from "./tauri-api";
+
+type ScannerStatus = {
+  state: "connected" | "scanning" | "offline" | "error";
+  message: string;
+  detail: string | null;
+  mode: string;
+  transport: "raw_hid" | "serial" | "keyboard_wedge_detection" | string;
+  confidence: "device_verified" | "heuristic_candidate" | "rejected" | null;
+  paused: boolean;
+};
+
 import { GeneratedFileActions, type GeneratedFileResult } from "./file-actions";
 import { announceTimeIn, announceTimeOut } from "./speech";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -155,6 +171,8 @@ export default function App() {
           message: "Keyboard-wedge reader ready",
           detail: "Keep the kiosk window active while using a USB keyboard-wedge reader",
           mode: "web",
+          transport: "keyboard_wedge_detection",
+          confidence: "heuristic_candidate",
           paused: false,
         },
   );
@@ -479,6 +497,7 @@ export default function App() {
       setState(nextState);
       // Voice announcement: greet the employee by name on time-in, say goodbye on time-out.
       if (response.success) {
+        if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         if (response.action === "TIME_IN")
           announceTimeIn(
             greetingForDate(new Date(), config.timezone),
@@ -527,7 +546,8 @@ export default function App() {
       buffer = "";
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
-      if (value.length >= 4) {
+      const expectedLength = Number((config as typeof config & { scanner?: { expectedLength?: number; characterSet?: string } }).scanner?.expectedLength ?? 10);
+      if (value.length >= 4 && value.length <= 64 && (expectedLength === 0 ? true : value.length === expectedLength)) {
         if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
           handleSetupInput(value);
         } else if (!manualMode && !setupDialogOpen) {
@@ -537,6 +557,9 @@ export default function App() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // The kiosk only captures wedge bursts while its own window is focused;
+      // an unfocused webview must never observe or consume keys.
+      if (!document.hasFocus()) return;
       const target = event.target as HTMLElement | null;
       const isTextEntry = Boolean(
         target &&
@@ -555,10 +578,16 @@ export default function App() {
         flush();
         return;
       }
-      if (/^[0-9a-fA-F]$/.test(event.key)) {
+      const characterSet = (config as typeof config & { scanner?: { characterSet?: string } }).scanner?.characterSet ?? "decimal";
+      const allowed = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
+      if (allowed.test(event.key)) {
         buffer += event.key;
         if (flushTimer) clearTimeout(flushTimer);
         flushTimer = setTimeout(flush, 150);
+      } else if (/^[a-zA-Z0-9]$/.test(event.key)) {
+        buffer = "";
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = null;
       }
     };
 
@@ -567,7 +596,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       if (flushTimer) clearTimeout(flushTimer);
     };
-  }, [handleSetupInput, manualMode, scannerStatus, setupDialogOpen, setupStep, setupToken, submit]);
+  }, [config, handleSetupInput, manualMode, scannerStatus, setupDialogOpen, setupStep, setupToken, submit]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -582,7 +611,7 @@ export default function App() {
       .catch(() => {
         /* web mode */
       });
-    void listenForScannerStatus(setScannerStatus)
+    void listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus as unknown as ScannerStatus))
       .then((cleanup) => {
         unlistenStatus = cleanup;
       })
@@ -590,7 +619,7 @@ export default function App() {
         /* web mode */
       });
     void getScannerStatus()
-      .then(setScannerStatus)
+      .then((nextStatus) => setScannerStatus(nextStatus as unknown as ScannerStatus))
       .catch(() => {
         /* web mode */
       });
@@ -669,6 +698,8 @@ export default function App() {
           state: "error" as const,
           detail: scannerStatus.detail ?? scannerStatus.message,
         };
+      default:
+        return { label: "Connecting…", state: "scanning" as const, detail: scannerStatus.message };
     }
   })();
 
@@ -1713,14 +1744,22 @@ function LanViewerPanel({
   );
 }
 
-/** Read-only scanner diagnostics for the admin panel: state, mode, detail. */
-function ScannerDiagnostics() {
+/** Read-only scanner diagnostics for the admin panel: state, transport, and devices. */
+export function ScannerDiagnostics() {
   const [status, setStatus] = useState<ScannerStatus | null>(null);
   const [lastActivity, setLastActivity] = useState<string | null>(null);
+  const [devices, setDevices] = useState<import("./tauri-api").ScannerDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(true);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const refreshDevices = useCallback(() => {
+    setDevicesLoading(true);
+    setDevicesError(null);
+    void getScannerDevices().then(setDevices).catch(() => setDevicesError("Unable to inspect scanner devices. Check the native kiosk connection and try again.")).finally(() => setDevicesLoading(false));
+  }, []);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenForScannerStatus((nextStatus) => {
-        setStatus(nextStatus);
+        setStatus(nextStatus as unknown as ScannerStatus);
         setLastActivity(new Date().toISOString());
       })
       .then((cleanup) => {
@@ -1731,14 +1770,15 @@ function ScannerDiagnostics() {
       });
     void getScannerStatus()
       .then((nextStatus) => {
-        setStatus(nextStatus);
+        setStatus(nextStatus as unknown as ScannerStatus);
         setLastActivity(new Date().toISOString());
       })
       .catch(() => {
         /* web mode */
       });
+    refreshDevices();
     return () => unlisten?.();
-  }, []);
+  }, [refreshDevices]);
   if (!status)
     return (
       <div className="scanner-diag" role="status" aria-live="polite">
@@ -1763,9 +1803,22 @@ function ScannerDiagnostics() {
       <span className="scanner-diag-activity">
         Last activity: {lastActivity ? formatTime(lastActivity, "Asia/Manila") : "Not yet recorded"}
       </span>
-      {status.detail && (
-        <span className="scanner-diag-detail">{status.detail}</span>
-      )}
+      <span className="scanner-diag-detail">Transport: {status.transport === "raw_hid" || status.transport === "serial" ? "Verified device capture" : status.transport === "keyboard_wedge_detection" ? "Foreground keyboard capture only (heuristic)" : status.transport}</span>
+      <span className="scanner-diag-detail">Confidence: {status.confidence === "device_verified" ? "Device verified" : status.confidence === "heuristic_candidate" ? "Heuristic candidate" : status.confidence === "rejected" ? "Rejected" : "Not available"}</span>
+      {status.detail && <span className="scanner-diag-detail">{status.detail}</span>}
+      <section className="scanner-devices" aria-label="Scanner devices">
+        <div className="scanner-devices-heading"><strong>Scanner devices</strong><button type="button" className="admin-button" onClick={refreshDevices}>Refresh</button></div>
+        {devicesLoading && <p className="setup-copy">Checking connected HID devices...</p>}
+        {devicesError && <p className="dashboard-alert">{devicesError}</p>}
+        {!devicesLoading && !devicesError && !devices.length && <p className="setup-copy">No HID devices detected. Connect a reader or configure serial scanning.</p>}
+        {!devicesLoading && devices.map((device) => <article className="scanner-device" key={`${device.path}-${device.interfaceNumber}`}>
+          <strong>{device.path}</strong>
+          <span>VID/PID: 0x{device.vendorId.toString(16).padStart(4, "0").toUpperCase()} / 0x{device.productId.toString(16).padStart(4, "0").toUpperCase()}</span>
+          <span>Product: {device.productString || "Unknown"}</span>
+          <span>Usage page: {device.usagePage} | Usage: {device.usage} | Interface: {device.interfaceNumber}</span>
+          {device.readerHint && <p className="dashboard-alert">Keyboard HID interface — foreground kiosk capture only; cannot provide verified background capture. Configure a raw-HID or serial reader for background scanning.</p>}
+        </article>)}
+      </section>
     </div>
   );
 }
@@ -2664,7 +2717,6 @@ export function PayrollWorkspace({
   records: PayrollCutoffRecord[];
   onSaved: () => void;
 }) {
-  const office = useOfficeIdentity();
   const employees = users.filter((user) => user.employeeType === "EMPLOYEE");
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
   const [message, setMessage] = useState("");
@@ -2751,11 +2803,7 @@ export function PayrollWorkspace({
       setMessage("Cutoff start must be on or before cutoff end.");
       return;
     }
-    if (!form.employeeId) {
-      setMessage("Select an employee before generating payroll.");
-      return;
-    }
-    if (records.some((record) => record.employeeId === form.employeeId && record.cutoffStart === form.cutoffStart && record.cutoffEnd === form.cutoffEnd)) {
+    if (records.some((record) => record.status === "DRAFT" && record.cutoffStart === form.cutoffStart && record.cutoffEnd === form.cutoffEnd)) {
       setMessage("Payroll already exists for this cutoff. Duplicate generation was blocked.");
       return;
     }
@@ -2765,39 +2813,22 @@ export function PayrollWorkspace({
   const confirmGenerate = async () => {
     if (saving) return;
     setSaving(true);
-    setConfirmOpen(false);
     try {
       const response = await generatePayrollCutoff(
         form.cutoffStart,
         form.cutoffEnd,
         form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
-        {
-          employeeId: form.employeeId,
-          payrollProfileId: form.payrollProfileId,
-          standardWorkingDays: Number(form.standardWorkingDays) || 0,
-          incentivesAllowance: Number(form.incentivesAllowance) || 0,
-          specialAllowance: Number(form.specialAllowance) || 0,
-          specialHolidayDays: Number(form.specialHolidayDays) || 0,
-          regularHolidayDays: Number(form.regularHolidayDays) || 0,
-          specialHolidayMultiplier: selectedProfile?.specialHolidayMultiplier ?? 0.3,
-          regularHolidayMultiplier: selectedProfile?.regularHolidayMultiplier ?? 1,
-          halfDayCount: Number(form.halfDayCount) || 0,
-          overtimeHours: Number(form.overtimeHours) || 0,
-          overtimeRate: Number(form.overtimeRate) || 0,
-          lateDeductionRate: Number(form.lateDeductionRate) || 0,
-          manualAdjustment: Number(form.manualAdjustment) || 0,
-          adjustmentReason: form.adjustmentReason || null,
-          approvedWorkingDayOverage: form.approvedWorkingDayOverage,
-        },
       );
       if ((response as { success?: boolean }).success) {
         setMessage("Payroll drafts were generated from completed attendance.");
         onSaved();
-      } else
+        setConfirmOpen(false);
+      } else {
         setMessage(
           (response as { error?: { message?: string } }).error?.message ??
             "Unable to save payroll.",
         );
+      }
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -2810,7 +2841,7 @@ export function PayrollWorkspace({
       setSaving(false);
     }
   };
-  // The selected payroll cutoff drives both consolidated print sheets: the
+  // The selected payroll cutoff drives both generated payroll PDFs: the
   // cutoff picked in the create form when set, otherwise the most recent
   // cutoff found in the saved records.
   const selectedCutoff = useMemo<{
@@ -2840,78 +2871,20 @@ export function PayrollWorkspace({
       : null;
   }, [form.cutoffStart, form.cutoffEnd, form.payrollCutoffLabel, records]);
 
-  // Both print buttons share one implementation; the only difference is the
-  // worker-type filter (EMPLOYEE vs everything else = intern).
-  const payrollRowsFor = useCallback(
-    (workerType: "employee" | "intern") => {
-      if (!selectedCutoff) return [];
-      return records.filter(
-        (row) =>
-          row.cutoffStart === selectedCutoff.cutoffStart &&
-          row.cutoffEnd === selectedCutoff.cutoffEnd &&
-          (workerType === "employee"
-            ? row.employeeType === "EMPLOYEE"
-            : row.employeeType !== "EMPLOYEE"),
-      );
-    },
-    [records, selectedCutoff],
-  );
-  const [printTarget, setPrintTarget] = useState<"employee" | "intern" | null>(
-    null,
-  );
-  const [printMessage, setPrintMessage] = useState("");
-  const [internPrintRows, setInternPrintRows] = useState<PayrollCutoffRecord[]>([]);
-  useEffect(() => {
-    if (!printTarget) return;
-    // Wait for the chosen template to commit before opening native print.
-    const timer = window.setTimeout(() => {
-      if ("__TAURI_INTERNALS__" in window) {
-        void tauriApi
-          .printPayroll()
-          .catch(() => setPrintMessage("Unable to open the printer."));
-      } else {
-        window.print();
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [printTarget]);
-  const printWorkerSheet = (workerType: "employee" | "intern") => {
-    if (!selectedCutoff) {
-      setPrintTarget(null);
-      setPrintMessage(
-        "No payroll records to generate. Create and save a payroll first.",
-      );
-      return;
-    }
-    if (workerType === "intern") {
-      setPrintMessage("");
-      void loadInternPayrollReport(selectedCutoff.cutoffStart, selectedCutoff.cutoffEnd, selectedCutoff.label)
-        .then((response) => {
-          const reportRows = response.success && response.payroll.length
-            ? response.payroll
-            : payrollRowsFor("intern");
-          if (!reportRows.length) {
-            setPrintMessage(`No registered interns for ${selectedCutoff.label}.`);
-            return;
-          }
-          setInternPrintRows(reportRows);
-          setPrintTarget("intern");
-        })
-        .catch(() => setPrintMessage("Unable to load intern payroll."));
-      return;
-    }
-    const rows = payrollRowsFor(workerType);
-    if (!rows.length) {
-      setPrintTarget(null);
-      setPrintMessage(
-        workerType === "employee"
-          ? `No employee payroll records for ${selectedCutoff.label}. Create and save an employee payroll for this cutoff first.`
-          : `No intern payroll records for ${selectedCutoff.label}. Create and save an intern payroll for this cutoff first.`,
-      );
-      return;
-    }
-    setPrintMessage("");
-    setPrintTarget(workerType);
+  const [pdfMessage, setPdfMessage] = useState("");
+  const [generating, setGenerating] = useState<null | "employee" | "intern">(null);
+  const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
+  useEffect(() => { void loadPayrollPdfs().then((response) => { if (response.success) setPayrollPdfs(response.payrollPdfs); }); }, []);
+  const generatePdf = async (workerType: "employee" | "intern") => {
+    if (generating) return;
+    if (!selectedCutoff) { setPdfMessage("No payroll records to generate. Create and save a payroll first."); return; }
+    setGenerating(workerType); setPdfMessage("");
+    try {
+      const response = await generatePayrollPdf({ cutoffStart: selectedCutoff.cutoffStart, cutoffEnd: selectedCutoff.cutoffEnd, payrollCutoffLabel: selectedCutoff.label, workerType });
+      if (response.success) { setPayrollPdfs((current) => [response.pdf, ...current.filter((item) => item.payrollPdfId !== response.pdf.payrollPdfId)]); setPdfMessage(`Payroll PDF generated for ${selectedCutoff.label}.`); }
+      else setPdfMessage(response.error.message);
+    } catch (error) { setPdfMessage(error instanceof Error ? error.message : "Unable to generate the payroll PDF."); }
+    finally { setGenerating(null); }
   };
   return (
     <section className="payroll-workspace">
@@ -2919,21 +2892,23 @@ export function PayrollWorkspace({
         <button
           className="admin-button"
           type="button"
-          onClick={() => printWorkerSheet("employee")}
+          onClick={() => void generatePdf("employee")}
+          disabled={generating !== null}
         >
-          Generate Employee Payroll
+          {generating === "employee" ? "Generating..." : "Generate Employee Payroll PDF"}
         </button>
         <button
           className="admin-button"
           type="button"
-          onClick={() => printWorkerSheet("intern")}
+          onClick={() => void generatePdf("intern")}
+          disabled={generating !== null}
         >
-          Generate Intern Payroll
+          {generating === "intern" ? "Generating..." : "Generate Intern Payroll PDF"}
         </button>
       </div>
-      {printMessage && <p className="dashboard-alert">{printMessage}</p>}
+      {pdfMessage && <p className="dashboard-alert">{pdfMessage}</p>}
       <div className="admin-grid">
-        <section className="admin-form print-hidden">
+        <section className="admin-form">
           <h2>Generate cutoff payroll</h2>
           <form onSubmit={save}>
             <div className="payroll-generate-controls">
@@ -2957,23 +2932,6 @@ export function PayrollWorkspace({
               </label>
             </div>
             <fieldset>
-            <label>
-              Personnel
-              <select
-                required
-                value={form.employeeId}
-                onChange={(event) => selectPerson(event.target.value)}
-              >
-                <option value="">Select employee or intern</option>
-                <optgroup label="Employees">
-                  {employees.map((user) => (
-                    <option key={user.userId} value={user.userId}>
-                      {user.userId} - {user.fullName}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
-            </label>
             {isIntern && (
               <p className="setup-copy">
                 Intern payroll uses a fixed {php(INTERN_DAILY_RATE_PHP)} per day
@@ -3053,16 +3011,6 @@ export function PayrollWorkspace({
                   onChange={(event) =>
                     update("standardWorkingDays", event.target.value)
                   }
-                />
-              </label>
-              <label>
-                Actual days
-                <input
-                  type="number"
-                  min="0"
-                  readOnly
-                  value={form.actualWorkingDays}
-                    onChange={() => undefined}
                 />
               </label>
               {!isIntern && (
@@ -3236,17 +3184,6 @@ export function PayrollWorkspace({
                   </label>
                 </>
               )}
-              <label>
-                Manual adjustment (PHP)
-                <input
-                  type="number"
-                  step="0.01"
-                  value={form.manualAdjustment}
-                  onChange={(event) =>
-                    update("manualAdjustment", event.target.value)
-                  }
-                />
-              </label>
             </div>
             <label>
               Adjustment reason
@@ -3286,18 +3223,10 @@ export function PayrollWorkspace({
           <PayrollTable records={records} onFinalized={onSaved} />
         </section>
       </div>
-      {printTarget && selectedCutoff && (
-        <PayrollPrintSheet
-          cutoff={selectedCutoff}
-          workerType={printTarget}
-          records={printTarget === "intern" ? internPrintRows : payrollRowsFor(printTarget)}
-          office={office}
-          grandTotal={(printTarget === "intern" ? internPrintRows : payrollRowsFor(printTarget)).reduce(
-            (sum, row) => sum + row.grossCompensation,
-            0,
-          )}
-        />
-      )}
+      <section>
+        <h2>Generated payroll PDFs</h2>
+        <PayrollPdfList pdfs={payrollPdfs} />
+      </section>
       <ConfirmDialog
         open={confirmOpen}
         busy={saving}
@@ -3384,7 +3313,7 @@ function PayrollTable({
     );
   return (
     <>
-      <div className="table-wrap payroll-print">
+      <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -3406,7 +3335,7 @@ function PayrollTable({
               <th>Absent</th>
                 <th>Overtime</th>
                 <th>Gross Compensation</th>
-                <th className="print-hidden">Actions</th>
+                <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -3437,7 +3366,7 @@ function PayrollTable({
                   <td>
                     <strong>{php(row.grossCompensation)}</strong>
                   </td>
-                  <td className="payroll-actions-cell print-hidden">
+                  <td className="payroll-actions-cell">
                     {row.status === "DRAFT" ? (
                       <span className="payroll-row-actions">
                         <button
@@ -3532,101 +3461,97 @@ function php(value: number): string {
 }
 
 /**
- * Formats YYYY-MM-DD cutoff bounds as the all-caps reference label, e.g.
- * "JULY 1-15, 2026" or "JULY 16-31, 2026".
+ * Formats the Manila ISO timestamp of a generated payroll PDF for the history
+ * list (e.g. "Aug 14, 2026, 10:30 AM"). Falls back to the raw value when the
+ * timestamp cannot be parsed.
  */
-function formatCutoffRangeUpper(cutoffStart: string, cutoffEnd: string): string {
-  const start = new Date(`${cutoffStart}T00:00:00Z`);
-  const end = new Date(`${cutoffEnd}T00:00:00Z`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()))
-    return `${cutoffStart} to ${cutoffEnd}`;
-  const monthName = monthNames[end.getUTCMonth()].toUpperCase();
-  return `${monthName} ${start.getUTCDate()}-${end.getUTCDate()}, ${end.getUTCFullYear()}`;
+function formatGeneratedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 /**
- * Reusable consolidated payroll print sheet. Employees and interns share one
- * landscape layout that mirrors the physical payroll reference format: company
- * identity and cutoff note in the header, the exact reference column set, a
-  * yellow-highlighted Gross Compensation grand total. The only difference
-  * between the two sheets is the
- * worker-type filter applied before rendering.
+ * History of generated payroll PDFs produced by the Tauri backend. Each row
+ * offers Open PDF (system default viewer) and Show in Folder actions backed by
+ * the existing opener commands; nothing is ever printed from the browser.
  */
-function PayrollPrintSheet({
-  cutoff,
-  workerType,
-  records,
-  office,
-  grandTotal,
-}: {
-  cutoff: { cutoffStart: string; cutoffEnd: string; label: string };
-  workerType: "employee" | "intern";
-  records: PayrollCutoffRecord[];
-  office: OfficeIdentity;
-  grandTotal: number;
-}) {
+function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
+  const [actionMessage, setActionMessage] = useState("");
+  const runAction = async (
+    action: (filePath: string) => Promise<FileActionResult>,
+    filePath: string,
+  ) => {
+    const result = await action(filePath);
+    setActionMessage(result.ok ? "" : result.message);
+  };
+  const sorted = [...pdfs].sort((a, b) =>
+    b.generatedAt.localeCompare(a.generatedAt),
+  );
+  if (!sorted.length)
+    return (
+      <div className="empty-state">No payroll PDFs have been generated yet.</div>
+    );
   return (
-    <div
-      className="print-payroll-view print-only payroll-sheet-print"
-      data-worker-type={workerType}
-    >
-      <header className="payroll-sheet-header">
-        <div className="payroll-sheet-company">
-          <strong>{office.companyName}</strong>
-          {office.taxIdentificationNumber && (
-            <span>TIN: {office.taxIdentificationNumber}</span>
-          )}
-          <span className="payroll-sheet-cutoff">
-            {formatCutoffRangeUpper(cutoff.cutoffStart, cutoff.cutoffEnd)}
-          </span>
-        </div>
-        <div className="payroll-sheet-note">
-          <strong>Note: Cut off</strong>
-          <span>1-15th of the month</span>
-          <span>16-31st</span>
-        </div>
-      </header>
-      <table className="payroll-sheet-table">
-        <thead>
-          <tr>
-            <th>Employee #</th>
-            <th>Employee Name</th>
-            <th>Cut Off Rate</th>
-            <th>Daily Rate</th>
-            <th>Actual Working Days</th>
-            <th>Standard Working Days</th>
-            <th>Basic Rate</th>
-            <th>Total Compensation</th>
-            <th>Late 10 /hr</th>
-            <th>Halfday</th>
-            <th>Absent</th>
-            <th>Gross Compensation</th>
-          </tr>
-        </thead>
-        <tbody>
-          {records.map((row) => (
-            <tr key={row.payrollId}>
-              <td>{row.employeeId}</td>
-              <td>{row.employeeName}</td>
-              <td>{php(row.dailyRate * row.standardWorkingDays)}</td>
-              <td>{php(row.dailyRate)}</td>
-              <td>{row.actualWorkingDays}</td>
-              <td>{row.standardWorkingDays}</td>
-              <td>{php(row.basicPay)}</td>
-              <td>{php(row.totalCompensation)}</td>
-              <td>{php(row.lateDeduction)}</td>
-              <td>{php(row.halfDayDeduction)}</td>
-              <td>{php(row.absenceDeduction)}</td>
-              <td>{php(row.grossCompensation)}</td>
+    <>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Period</th>
+              <th>Type</th>
+              <th>Generated</th>
+              <th>Employees</th>
+              <th>Total</th>
+              <th>Actions</th>
             </tr>
-          ))}
-          <tr className="payroll-sheet-total">
-            <td colSpan={11}>Grand Total</td>
-            <td>{php(grandTotal)}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {sorted.map((pdf) => (
+              <tr key={pdf.payrollPdfId}>
+                <td>
+                  <strong>{pdf.payrollCutoffLabel}</strong>
+                  <small>
+                    {pdf.cutoffStart} to {pdf.cutoffEnd}
+                  </small>
+                </td>
+                <td>{pdf.workerType === "employee" ? "Employee" : "Intern"}</td>
+                <td>{formatGeneratedAt(pdf.generatedAt)}</td>
+                <td>{pdf.employeeCount}</td>
+                <td>
+                  <strong>{php(pdf.totalAmount)}</strong>
+                </td>
+                <td className="payroll-pdf-actions">
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() => void runAction(openGeneratedFile, pdf.filePath)}
+                  >
+                    Open PDF
+                  </button>
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() =>
+                      void runAction(revealGeneratedFile, pdf.filePath)
+                    }
+                  >
+                    Show in Folder
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {actionMessage && <p className="dashboard-alert">{actionMessage}</p>}
+    </>
   );
 }
 

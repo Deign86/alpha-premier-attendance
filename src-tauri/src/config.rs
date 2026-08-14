@@ -78,10 +78,24 @@ pub enum ScannerMode {
 }
 
 /// Native RFID scanner configuration (`[scanner]` in config.toml).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ScannerCharacterSet {
+    #[default]
+    Decimal,
+    Hex,
+}
+
+fn default_expected_length() -> u32 { 10 }
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScannerConfig {
     #[serde(default)]
     pub mode: ScannerMode,
+    #[serde(default = "default_expected_length")]
+    pub expected_length: u32,
+    #[serde(default)]
+    pub character_set: ScannerCharacterSet,
     /// Most keyboard-wedge readers append Enter after the card UID. When true
     /// (default), an Enter key press finalizes the current input immediately.
     #[serde(default = "default_enter_suffix")]
@@ -135,6 +149,8 @@ impl Default for ScannerConfig {
     fn default() -> Self {
         Self {
             mode: ScannerMode::default(),
+            expected_length: default_expected_length(),
+            character_set: ScannerCharacterSet::default(),
             enter_suffix: default_enter_suffix(),
             idle_timeout_ms: default_idle_timeout_ms(),
             dedup_ms: default_dedup_ms(),
@@ -218,6 +234,9 @@ pub struct OfficeConfig {
     pub office_country: String,
     #[serde(default)]
     pub office_postal_code: String,
+    /// Optional tax identifier shown on generated payroll PDFs when set.
+    #[serde(default)]
+    pub tax_identification_number: Option<String>,
     #[serde(default = "default_display_short")]
     pub office_display_short: String,
     #[serde(default = "default_display_full")]
@@ -249,6 +268,7 @@ impl Default for OfficeConfig {
             office_region: default_region(),
             office_country: default_country(),
             office_postal_code: String::new(),
+            tax_identification_number: None,
             office_display_short: default_display_short(),
             office_display_full: default_display_full(),
         }
@@ -382,6 +402,23 @@ mod tests {
         assert_eq!(office.display_full(), "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila");
         assert_eq!(office.display_short(), "Tektite East Tower, Ortigas Center, Pasig");
         assert!(office.office_postal_code.is_empty(), "postal code must stay unset until confirmed");
+        assert!(office.tax_identification_number.is_none(), "TIN stays unset until configured");
+    }
+
+    #[test]
+    fn office_parses_optional_tax_identification_number() {
+        #[derive(Deserialize)]
+        struct Root {
+            #[serde(default)]
+            office: OfficeConfig,
+        }
+        let root: Root =
+            toml::from_str("[office]\ntax_identification_number = \"010-871-213-0000\"\n")
+                .expect("office config");
+        assert_eq!(
+            root.office.tax_identification_number.as_deref(),
+            Some("010-871-213-0000")
+        );
     }
 
     #[test]
@@ -448,6 +485,17 @@ mod tests {
         assert_eq!(scanner.dedup_ms, 300);
         assert_eq!(scanner.hid_vid, None);
         assert_eq!(scanner.hid_pid, None);
+        assert_eq!(scanner.expected_length, 10);
+        assert_eq!(scanner.character_set, ScannerCharacterSet::Decimal);
+    }
+
+    #[test]
+    fn scanner_parses_eight_character_hex_profile() {
+        #[derive(Deserialize)]
+        struct Root { #[serde(default)] scanner: ScannerConfig }
+        let root: Root = toml::from_str("[scanner]\ncharacter_set = \"hex\"\nexpected_length = 8\n").expect("scanner profile");
+        assert_eq!(root.scanner.character_set, ScannerCharacterSet::Hex);
+        assert_eq!(root.scanner.expected_length, 8);
     }
 
     #[test]

@@ -16,15 +16,13 @@ export type ScannerConfidence = (typeof scannerConfidences)[number];
 export type ForegroundInputProtection = 'guaranteed' | 'not_guaranteed' | 'not_applicable';
 
 export type ScannerStatus = {
-  state: 'idle' | 'collecting' | 'validated' | 'rejected' | 'cooldown' | 'suspended' | 'offline' | 'error';
+  state: 'connected' | 'scanning' | 'offline' | 'error';
+  message: string;
+  detail: string | null;
+  mode: 'keyboard' | 'hid' | 'serial' | 'auto';
   transport: ScannerTransport;
   confidence: ScannerConfidence | null;
-  captureReady: boolean;
-  foregroundInputProtection: ForegroundInputProtection;
   paused: boolean;
-  message: string;
-  reasonCode?: string | null;
-  observedAt: string;
 };
 
 /** Only verified device-specific, non-keyboard transports may write while hidden. */
@@ -384,6 +382,51 @@ export type DatabaseBackupResponse = { success: true } & GeneratedFileMetadata;
 export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculationProfile[] };
 export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
 export type InternPayrollReportResponse = { success: true; payroll: PayrollCutoffRecord[] };
+
+/** Payroll PDF generation targets: employees only, or interns only. */
+export const payrollPdfWorkerTypes = ['employee', 'intern'] as const;
+export type PayrollPdfWorkerType = (typeof payrollPdfWorkerTypes)[number];
+
+/**
+ * Metadata for one generated payroll PDF. Produced entirely by the Tauri
+ * backend (printpdf) and listed in the Payroll tab history; never printed
+ * from the browser.
+ */
+export type PayrollPdfRecord = {
+  /** Stable id: the PDF filename without the `.pdf` extension. */
+  payrollPdfId: string;
+  fileName: string;
+  /** Absolute path to the PDF on the local machine (desktop app). */
+  filePath: string;
+  /** Absolute path to the folder containing the PDF. */
+  directoryPath: string;
+  cutoffStart: string;
+  cutoffEnd: string;
+  /** Human period label, e.g. "August 1-15, 2026". */
+  payrollCutoffLabel: string;
+  workerType: PayrollPdfWorkerType;
+  /** ISO timestamp (Asia/Manila). */
+  generatedAt: string;
+  employeeCount: number;
+  /** Sum of gross compensation in PHP. */
+  totalAmount: number;
+  sizeBytes: number;
+};
+
+export type PayrollPdfGenerateRequest = {
+  cutoffStart: string;
+  cutoffEnd: string;
+  payrollCutoffLabel?: string;
+  workerType: PayrollPdfWorkerType;
+};
+
+export type PayrollPdfGenerateResponse =
+  | ({ success: true; pdf: PayrollPdfRecord } & GeneratedFileMetadata)
+  | { success: false; error: { message: string } };
+
+export type PayrollPdfListResponse =
+  | { success: true; payrollPdfs: PayrollPdfRecord[] }
+  | { success: false; error: { message: string } };
 export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number } & GeneratedFileMetadata;
 export type ArtifactExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount?: number; status?: string } & GeneratedFileMetadata;
 export type PayrollCsvExportResponse = { success: true; fileName: string } & GeneratedFileMetadata;
@@ -441,6 +484,7 @@ export type SafeConfigResponse = {
   enableAdmin?: boolean;
   /** Office identity used for production-facing place labels, exports, and reports. */
   office?: OfficeIdentity;
+  scanner?: { mode: 'keyboard' | 'hid' | 'serial' | 'auto'; paused: boolean; expectedLength: number; characterSet: 'decimal' | 'hex' };
 };
 
 export type SetupUser = {

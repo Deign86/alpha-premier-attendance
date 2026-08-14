@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes, scannerConfidences, scannerTransports, canCreateBackgroundAttendance } from './api-contracts.js';
+import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes, scannerConfidences, scannerTransports, canCreateBackgroundAttendance, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources and attendance states stable', () => {
@@ -15,6 +15,29 @@ describe('shared API contract literals', () => {
 });
 
 describe('background scanner safety contract', () => {
+  it('serializes the full seven-field scanner status wire shape', () => {
+    const status: ScannerStatus = {
+      state: 'connected',
+      message: 'Scanner connected',
+      detail: 'HID 1234:5678',
+      mode: 'hid',
+      transport: 'raw_hid',
+      confidence: 'device_verified',
+      paused: false,
+    };
+    expect(Object.keys(status).sort()).toEqual([
+      'confidence',
+      'detail',
+      'message',
+      'mode',
+      'paused',
+      'state',
+      'transport',
+    ]);
+    expect(status.confidence).toMatch(/^(device_verified|prefix_suffix_verified|heuristic_candidate|rejected|null)$/);
+    expect(status.transport).toMatch(/^(raw_hid|serial|vendor_sdk|keyboard_wedge_detection|disabled)$/);
+  });
+
   it('allows background attendance only for verified device transports', () => {
     expect(scannerConfidences).toEqual(['device_verified', 'prefix_suffix_verified', 'heuristic_candidate', 'rejected']);
     expect(scannerTransports).toEqual(['raw_hid', 'serial', 'vendor_sdk', 'keyboard_wedge_detection', 'disabled']);

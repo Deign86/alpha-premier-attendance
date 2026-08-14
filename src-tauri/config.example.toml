@@ -52,9 +52,14 @@ idle_timeout_ms = 150
 # swallowed so one physical tap never produces two scan requests. The backend
 # keeps its own 500 ms guard and 10 s physical cooldown for the UI feedback.
 dedup_ms = 300
+# EM4100 readers typically emit 10 decimal digits followed by Enter in <100ms.
+# Alternate profiles may use 8 hexadecimal characters. Set expected_length = 0
+# to disable exact length while retaining the 4..=64 safety bound.
+expected_length = 10
+character_set = "decimal"
 # Raw HID mode only: vendor/product id of the RFID reader (hex, e.g. 0x1234).
-hid_vid = 0
-hid_pid = 0
+# hid_vid = 0x1234
+# hid_pid = 0x5678
 # Serial mode only.
 # serial_port = "COM4"
 # serial_baud_rate = 115200
@@ -72,6 +77,8 @@ office_city = "Pasig"
 office_region = "Metro Manila"
 office_country = "Philippines"
 office_postal_code = ""
+# Optional tax identifier shown on generated payroll PDFs when set.
+# tax_identification_number = "010-871-213-0000"
 office_display_short = "Tektite East Tower, Ortigas Center, Pasig"
 office_display_full = "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"
 

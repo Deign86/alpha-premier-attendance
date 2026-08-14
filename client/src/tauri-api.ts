@@ -1,12 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, ScanRequest, ScanResponse, SafeConfigResponse } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus } from '@rfid-attendance/shared';
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
   getHealth: () => invoke<Record<string, unknown>>('get_health'),
-  printPayroll: () => invoke<void>('print_payroll'),
+  generatePayrollPdf: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, workerType: string) => invoke<PayrollPdfGenerateResponse>('generate_payroll_pdf', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, workerType }),
+  listPayrollPdfs: (token: string) => invoke<PayrollPdfListResponse>('list_payroll_pdfs', { token }),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),
   lanStatus: () => invoke<LanStatusResponse>('lan_status'),
   lanStart: () => invoke<LanStatusResponse>('lan_start'),
@@ -58,15 +59,9 @@ export const tauriApi = {
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));
 
 /** Scanner lifecycle state reported by the native pipeline. */
-export type ScannerState = 'connected' | 'scanning' | 'offline' | 'error';
-export type ScannerStatus = {
-  state: ScannerState;
-  message: string;
-  detail?: string | null;
-  mode: string;
-  /** True while the operator types in admin/setup/manual-entry screens. */
-  paused: boolean;
-};
+export type ScannerDevice = { path: string; vendorId: number; productId: number; productString: string | null; usagePage: number; usage: number; interfaceNumber: number; readerHint: boolean };
+export const getScannerDevices = () => invoke<ScannerDevice[]>('scanner_devices');
+export const notifyScanSuccess = (name: string) => invoke<void>('notify_scan_success', { fullName: name });
 
 /** Native scanner status changes (`scanner-status` events). */
 export const listenForScannerStatus = (handler: (status: ScannerStatus) => void) =>

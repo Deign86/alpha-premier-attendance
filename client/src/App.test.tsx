@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import * as eventApi from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import App, { greetingForDate, shouldRouteGlobalRfidToSetup } from './App';
+import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
 import { announceTimeIn, announceTimeOut } from './speech';
 
 /** Speech announcements are asserted via the mocked module, never spoken in tests. */
@@ -113,22 +113,44 @@ describe('RFID kiosk', () => {
   });
 
   it('captures a fast keyboard-wedge burst while the kiosk is active', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     render(<App />);
     const input = screen.getByLabelText(/scanner card id/i);
     expect(input).toHaveAttribute('readonly');
-    for (const key of ['0', '4', 'a', '1', 'b', '2', 'c', '3']) {
+    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']) {
       fireEvent.keyDown(input, { key });
     }
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/attendance/scan',
       expect.objectContaining({
-        body: JSON.stringify({ rfidUid: '04a1b2c3', source: 'RFID' }),
+        body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }),
       }),
     ));
   });
 
+  it('does not submit a wrong-length keyboard-wedge burst', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+  });
+
+  it('rejects letters in decimal keyboard-wedge input without later partial submission', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['0', '4', 'A', '1', '2', '3', '4', '5', '6', '7', '8', '9']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+  });
+
   it('keeps the scanner box locked against all keyboard typing (Manual entry is opt-in)', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     render(<App />);
     const input = screen.getByLabelText(/scanner card id/i);
     // No keyboard stream is treated as a background scanner source.
@@ -378,5 +400,49 @@ describe('RFID kiosk', () => {
     await user.click(screen.getByRole('button', { name: /save user/i }));
     expect(await screen.findByText('Card enrolled successfully.')).toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/setup/users', expect.objectContaining({ method: 'POST' }));
+  });
+});
+
+describe('ScannerDiagnostics', () => {
+  it('lists HID devices and warns that keyboard HID interfaces are foreground-only', async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'scanner_status')
+        return Promise.resolve({ state: 'connected', message: 'Scanner connected', detail: null, mode: 'hid', transport: 'raw_hid', confidence: 'device_verified', paused: false });
+      if (cmd === 'scanner_devices')
+        return Promise.resolve([{ path: 'HID\\VID_1234&PID_5678', vendorId: 0x1234, productId: 0x5678, productString: 'EM4100 USB Reader', usagePage: 1, usage: 6, interfaceNumber: 0, readerHint: true }]);
+      return Promise.reject(new Error('web mode'));
+    });
+    render(<ScannerDiagnostics />);
+    expect(await screen.findByText(/EM4100 USB Reader/)).toBeInTheDocument();
+    expect(screen.getByText(/VID\/PID: 0x1234 \/ 0x5678/)).toBeInTheDocument();
+    expect(screen.getByText(/Keyboard HID interface — foreground kiosk capture only/)).toBeInTheDocument();
+  });
+});
+
+describe('hidden-window scan notification', () => {
+  it('notifies only when the window is hidden/unfocused and the scan succeeds', async () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => mockEventBridge.__emit('rfid-scan', '0123456789'));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }) }),
+    ));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('notify_scan_success', { fullName: 'Ada Lovelace' }));
+    hasFocus.mockRestore();
+  });
+
+  it('never notifies for a foreground scan', async () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => mockEventBridge.__emit('rfid-scan', '0123456789'));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }) }),
+    ));
+    expect(invokeMock).not.toHaveBeenCalledWith('notify_scan_success', expect.anything());
+    hasFocus.mockRestore();
   });
 });

@@ -8,6 +8,7 @@
     "sql:default",
     "opener:default",
     "dialog:default",
+    "notification:default",
     "mcp-bridge:default"
   ]
 }

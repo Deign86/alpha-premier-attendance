@@ -22,7 +22,7 @@
 ## Recommended Architecture
 
 - `scanner.rs` remains the native capture boundary and feeds the existing normalization, deduplication, and Tauri event pipeline.
-- Configured raw-HID readers use `hidapi`; configured serial/COM readers use `serialport`; keyboard mode reports offline instead of installing a global hook.
+- Configured raw-HID readers use `hidapi`; configured serial/COM readers use `serialport`; keyboard mode installs no global hook and reports `Connected` with a foreground-only message (scans are captured only while the kiosk window is active).
 - The UI listens for native events but never focuses a scanner input automatically. Manual entry remains an explicit opt-in workflow.
 - A Tauri system tray is installed at startup with Show and Exit actions. Closing the main window hides it; tray Exit requests process termination.
 - Local SQLite remains authoritative; existing LAN events, audit rows, and sync queue behavior remain unchanged.
@@ -76,7 +76,7 @@ States are idle/connected, scanning, invalid/error, offline, and paused. Repeate
 ## Configuration and Settings
 
 - `scanner.mode = "hid"` requires `hid_vid` and `hid_pid`; `auto` uses HID only when both are present.
-- `scanner.mode = "keyboard"` is retained for configuration compatibility but reports offline and does not install a global listener.
+- `scanner.mode = "keyboard"` is retained for configuration compatibility and reports `Connected` with a foreground-only message; it installs no global listener, so background capture from keyboard-wedge input is impossible by design.
 - Existing `enter_suffix`, idle timeout, and dedup settings remain available for verified HID report assembly.
 - Admin calibration, serial/vendor settings, and diagnostics remain a follow-up gated by hardware confirmation.
 
@@ -103,6 +103,10 @@ States are idle/connected, scanning, invalid/error, offline, and paused. Repeate
 - Invalid and duplicate scans remain deterministic and do not create unintended rows.
 - Closing hides the app; tray Exit terminates it explicitly.
 - Missing reader, permission failure, or unsupported transport degrades to an offline state.
+
+## Deployed EM4100 Reader Profile
+
+The deployed 125 kHz EM4100 USB reader is a keyboard-wedge device. The default scanner profile (`expected_length = 10`, `character_set = "decimal"`) matches its typical 10-digit decimal + Enter burst; 8-hex readers set `expected_length = 8`, `character_set = "hex"`, and `expected_length = 0` disables exact-length matching. Admin → Scanner diagnostics enumerates HID devices (path, VID/PID, product, usage page/usage, interface) and flags keyboard-interface devices as foreground-only, so the operator can identify the reader and configure a raw-HID/serial transport when one is available. Keyboard-only readers cannot provide verified background capture without a signed filter driver (out of scope).
 
 ## Open Questions / Decisions Needed
 

@@ -242,10 +242,113 @@ mod tests {
         assert!(!filename.contains("Ana-Santos"));
     }
 
+    #[test]
+    fn generates_payroll_sheet_pdf_with_reference_columns_and_grand_total() {
+        let rows = vec![
+            PayrollSheetRow {
+                employee_id: "E-1".into(),
+                employee_name: "Ada Lovelace".into(),
+                employee_type: "EMPLOYEE".into(),
+                cutoff_rate_centavos: 55_000_00,
+                daily_rate_centavos: 500_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 550_000,
+                total_compensation_centavos: 550_000,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 550_000,
+            },
+            PayrollSheetRow {
+                employee_id: "INT-1".into(),
+                employee_name: "Maria Santos".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 8_800_00,
+                daily_rate_centavos: 80_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 88_000,
+                total_compensation_centavos: 88_000,
+                late_deduction_centavos: 3_000,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 85_000,
+            },
+        ];
+        let base = std::env::temp_dir().join(format!("payroll-sheet-{}", uuid::Uuid::new_v4()));
+        let pdf = base.with_extension("pdf");
+        generate_payroll_sheet_pdf(&rows, "August 1-15, 2026", "EMPLOYEE", &office(), &pdf)
+            .unwrap();
+        let bytes = std::fs::read(&pdf).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+        let _ = std::fs::remove_file(&pdf);
+    }
+
+    #[test]
+    fn payroll_sheet_paginates_long_registers_onto_multiple_pages() {
+        let rows: Vec<PayrollSheetRow> = (0..(SHEET_ROWS_PER_PAGE + 3))
+            .map(|index| PayrollSheetRow {
+                employee_id: format!("E-{index}"),
+                employee_name: format!("Employee {index}"),
+                employee_type: "EMPLOYEE".into(),
+                cutoff_rate_centavos: 55_000_00,
+                daily_rate_centavos: 500_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 550_000,
+                total_compensation_centavos: 550_000,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 550_000,
+            })
+            .collect();
+        let base = std::env::temp_dir().join(format!("payroll-sheet-pages-{}", uuid::Uuid::new_v4()));
+        let pdf = base.with_extension("pdf");
+        generate_payroll_sheet_pdf(&rows, "August 1-15, 2026", "EMPLOYEE", &office(), &pdf)
+            .unwrap();
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+        let _ = std::fs::remove_file(&pdf);
+    }
+
+    #[test]
+    fn payroll_sheet_cutoff_rate_rounds_daily_rate_times_standard_days() {
+        let rows = vec![PayrollSheetRow {
+            employee_id: "E-1".into(),
+            employee_name: "Ada Lovelace".into(),
+            employee_type: "EMPLOYEE".into(),
+            cutoff_rate_centavos: (123_45_i64 as f64 * 10.5).round() as i64,
+            daily_rate_centavos: 123_45,
+            actual_working_days: 10.5,
+            standard_working_days: 10.5,
+            basic_pay_centavos: 550_000,
+            total_compensation_centavos: 550_000,
+            late_deduction_centavos: 0,
+            half_day_deduction_centavos: 0,
+            absence_deduction_centavos: 0,
+            gross_compensation_centavos: 550_000,
+        }];
+        assert_eq!(rows[0].cutoff_rate_centavos, (123_45_i64 as f64 * 10.5).round() as i64);
+        let base = std::env::temp_dir().join(format!("payroll-sheet-rate-{}", uuid::Uuid::new_v4()));
+        let pdf = base.with_extension("pdf");
+        generate_payroll_sheet_pdf(&rows, "August 1-15, 2026", "EMPLOYEE", &office(), &pdf)
+            .unwrap();
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+        let _ = std::fs::remove_file(&pdf);
+    }
+
+    #[test]
+    fn format_days_omits_trailing_decimal_for_whole_day_counts() {
+        assert_eq!(format_days(11.0), "11");
+        assert_eq!(format_days(10.5), "10.5");
+        assert_eq!(format_days(0.0), "0");
+    }
+
 }
 use printpdf::{
-    BuiltinFont, Mm, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt, RawImage,
-    TextItem, XObjectTransform,
+    BuiltinFont, Mm, Op, PaintMode, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt,
+    RawImage, Rect, TextItem, XObjectTransform,
 };
 
 /// Phoenix brand mark embedded at compile time so PDF reports never depend on
@@ -991,6 +1094,351 @@ pub fn generate_payroll_register_pdf(
             false,
         );
         pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
+    }
+    let bytes = document
+        .with_pages(pages)
+        .save(&PdfSaveOptions::default(), &mut Vec::new());
+    std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+
+/// One row of the consolidated payroll sheet. Mirrors the reference column
+/// layout of the printable payroll worksheet (Employee #, Employee Name,
+/// Cut Off Rate, Daily Rate, Actual Working Days, Standard Working Days,
+/// Basic Rate, Total Compensation, Late 10 /hr, Halfday, Absent, Gross
+/// Compensation) so the generated PDF matches the on-paper payroll reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PayrollSheetRow {
+    pub employee_id: String,
+    pub employee_name: String,
+    pub employee_type: String,
+    /// Daily rate x standard working days (rounded to the nearest centavo).
+    pub cutoff_rate_centavos: i64,
+    pub daily_rate_centavos: i64,
+    pub actual_working_days: f64,
+    pub standard_working_days: f64,
+    pub basic_pay_centavos: i64,
+    pub total_compensation_centavos: i64,
+    pub late_deduction_centavos: i64,
+    pub half_day_deduction_centavos: i64,
+    pub absence_deduction_centavos: i64,
+    pub gross_compensation_centavos: i64,
+}
+
+/// Loads the payroll sheet rows for one cutoff, filtered to `worker_type`
+/// ("EMPLOYEE" keeps employees; anything else keeps interns). Payroll cutoff
+/// rows do not store an employee type column, so it is derived from the live
+/// Users register (defaulting to INTERN when the user is missing).
+pub async fn load_payroll_sheet_rows(
+    db: &sqlx::SqlitePool,
+    cutoff_start: &str,
+    cutoff_end: &str,
+    worker_type: &str,
+) -> Result<Vec<PayrollSheetRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT pc.employee_id, pc.employee_name, pc.daily_rate_centavos, \
+         pc.standard_working_days, pc.actual_working_days, pc.basic_pay_centavos, \
+         pc.total_compensation_centavos, pc.late_deduction_centavos, \
+         pc.half_day_deduction_centavos, pc.absence_deduction_centavos, \
+         pc.gross_compensation_centavos, COALESCE(u.employee_type, 'INTERN') AS employee_type \
+         FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
+         WHERE pc.cutoff_start = ? AND pc.cutoff_end = ? \
+         ORDER BY pc.employee_name, pc.employee_id",
+    )
+    .bind(cutoff_start)
+    .bind(cutoff_end)
+    .fetch_all(db)
+    .await?;
+    let keep_employee = worker_type == "EMPLOYEE";
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            let employee_type = row.get::<String, _>("employee_type");
+            if keep_employee {
+                employee_type == "EMPLOYEE"
+            } else {
+                employee_type != "EMPLOYEE"
+            }
+        })
+        .map(|row| {
+            let daily_rate_centavos = row.get::<i64, _>("daily_rate_centavos");
+            let standard_working_days = row.get::<f64, _>("standard_working_days");
+            PayrollSheetRow {
+                employee_id: row.get("employee_id"),
+                employee_name: row.get("employee_name"),
+                employee_type: row.get("employee_type"),
+                cutoff_rate_centavos: (daily_rate_centavos as f64 * standard_working_days)
+                    .round() as i64,
+                daily_rate_centavos,
+                actual_working_days: row.get("actual_working_days"),
+                standard_working_days,
+                basic_pay_centavos: row.get("basic_pay_centavos"),
+                total_compensation_centavos: row.get("total_compensation_centavos"),
+                late_deduction_centavos: row.get("late_deduction_centavos"),
+                half_day_deduction_centavos: row.get("half_day_deduction_centavos"),
+                absence_deduction_centavos: row.get("absence_deduction_centavos"),
+                gross_compensation_centavos: row.get("gross_compensation_centavos"),
+            }
+        })
+        .collect())
+}
+
+/// Formats a working-day count without a trailing `.0` ("11", "11.5").
+fn format_days(value: f64) -> String {
+    if value.fract().abs() < f64::EPSILON {
+        format!("{}", value as i64)
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+/// Estimated width of `text` at `size_pt` in millimeters (Helvetica averages
+/// about 0.5em per glyph) — used to center cell text without font measuring.
+fn text_width_mm(text: &str, size_pt: f32) -> f32 {
+    text.chars().count() as f32 * size_pt * 0.5 * 25.4 / 72.0
+}
+
+fn mm_to_pt(mm: f32) -> Pt {
+    Pt(mm * 72.0 / 25.4)
+}
+
+/// Places a single line of text at a page position (bottom-left origin).
+fn sheet_text(ops: &mut Vec<Op>, text: String, x: f32, y: f32, size: f32, bold: bool) {
+    ops.extend([
+        Op::StartTextSection,
+        Op::SetTextCursor {
+            pos: Point::new(Mm(x), Mm(y)),
+        },
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(if bold {
+                BuiltinFont::HelveticaBold
+            } else {
+                BuiltinFont::Helvetica
+            }),
+            size: Pt(size),
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text(text)],
+        },
+        Op::EndTextSection,
+    ]);
+}
+
+/// Draws one table cell: optional yellow highlight, black border, and text
+/// aligned left (first two reference columns) or centered.
+#[allow(clippy::too_many_arguments)]
+fn sheet_cell(
+    ops: &mut Vec<Op>,
+    x_mm: f32,
+    y_mm: f32,
+    w_mm: f32,
+    h_mm: f32,
+    text: &str,
+    size_pt: f32,
+    bold: bool,
+    align_left: bool,
+    highlight: bool,
+) {
+    let rect = Rect {
+        x: mm_to_pt(x_mm),
+        y: mm_to_pt(y_mm),
+        width: mm_to_pt(w_mm),
+        height: mm_to_pt(h_mm),
+        mode: None,
+        winding_order: None,
+    };
+    if highlight {
+        // Yellow-highlighted Gross Compensation grand total like the reference.
+        ops.push(Op::SaveGraphicsState);
+        ops.push(Op::SetFillColor {
+            col: printpdf::Color::Rgb(printpdf::Rgb::new(0.953, 0.875, 0.247, None)),
+        });
+        ops.push(Op::DrawRectangle {
+            rectangle: Rect {
+                mode: Some(PaintMode::Fill),
+                ..rect.clone()
+            },
+        });
+        ops.push(Op::RestoreGraphicsState);
+    }
+    ops.push(Op::SaveGraphicsState);
+    ops.push(Op::SetOutlineColor {
+        col: printpdf::Color::Rgb(printpdf::Rgb::new(0.0, 0.0, 0.0, None)),
+    });
+    ops.push(Op::SetOutlineThickness { pt: Pt(0.4) });
+    ops.push(Op::DrawRectangle {
+        rectangle: Rect {
+            mode: Some(PaintMode::Stroke),
+            ..rect.clone()
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+
+    let text_w = text_width_mm(text, size_pt);
+    let tx = if align_left {
+        x_mm + 2.0
+    } else {
+        (x_mm + (w_mm - text_w) / 2.0).max(x_mm + 1.0)
+    };
+    // Vertical centering: baseline sits just below the vertical middle.
+    let ty = y_mm + (h_mm - size_pt * 25.4 / 72.0) / 2.0 - 0.6;
+    ops.push(Op::StartTextSection);
+    ops.push(Op::SetTextCursor {
+        pos: Point::new(Mm(tx), Mm(ty)),
+    });
+    ops.push(Op::SetFont {
+        font: PdfFontHandle::Builtin(if bold {
+            BuiltinFont::HelveticaBold
+        } else {
+            BuiltinFont::Helvetica
+        }),
+        size: Pt(size_pt),
+    });
+    ops.push(Op::ShowText {
+        items: vec![TextItem::Text(text.to_string())],
+    });
+    ops.push(Op::EndTextSection);
+}
+
+/// Column widths of the reference payroll sheet in millimeters (usable width
+/// is 297 - 2 * 12 = 273 mm).
+const SHEET_COL_WIDTHS_MM: [f32; 12] = [
+    27.0, 41.0, 22.0, 19.0, 18.0, 18.0, 22.0, 22.0, 16.5, 16.5, 16.5, 35.0,
+];
+const SHEET_LEFT_MM: f32 = 12.0;
+const SHEET_ROW_H_MM: f32 = 7.0;
+const SHEET_ROWS_PER_PAGE: usize = 18;
+
+/// Consolidated payroll sheet PDF, A4 landscape, black on white with the same
+/// reference column set as the printable worksheet. One sheet per `worker_type`
+/// (EMPLOYEE vs INTERN). The document body contains only company identity,
+/// cutoff, and payroll values — no timestamps, URLs, or browser artifacts.
+pub fn generate_payroll_sheet_pdf(
+    rows: &[PayrollSheetRow],
+    cutoff_label: &str,
+    worker_type: &str,
+    office: &crate::config::OfficeConfig,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let mut document = PdfDocument::new(&format!("Alpha Premier Payroll Sheet {worker_type}"));
+    let mark = brand_mark_image(&mut document, 12.0);
+    let chunks: Vec<&[PayrollSheetRow]> = if rows.is_empty() {
+        vec![&[]]
+    } else {
+        rows.chunks(SHEET_ROWS_PER_PAGE).collect()
+    };
+    let mut pages = Vec::new();
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let mut ops = Vec::new();
+        if let Some((id, dpi)) = &mark {
+            ops.push(brand_mark_op(id.clone(), *dpi, 277.0, 196.0));
+        }
+
+        // --- header block: company identity + cutoff on the left, cutoff
+        // note legend on the right (mirrors the reference sheet). ---
+        sheet_text(&mut ops, office.company_name.to_uppercase(), 12.0, 197.0, 14.0, true);
+        let mut header_y = 191.0;
+        if let Some(tin) = office.tax_identification_number.as_deref() {
+            if !tin.trim().is_empty() {
+                sheet_text(&mut ops, format!("TIN: {tin}"), 12.0, header_y, 8.5, false);
+                header_y -= 6.0;
+            }
+        }
+        sheet_text(&mut ops, cutoff_label.to_uppercase(), 12.0, header_y, 11.0, true);
+        sheet_text(&mut ops, "Note: Cut off".into(), 240.0, 197.0, 9.0, true);
+        sheet_text(&mut ops, "1-15th of the month".into(), 240.0, 191.0, 8.0, false);
+        sheet_text(&mut ops, "16-31st".into(), 240.0, 185.0, 8.0, false);
+        // Separator under the header block.
+        ops.push(Op::SaveGraphicsState);
+        ops.push(Op::SetOutlineColor {
+            col: printpdf::Color::Rgb(printpdf::Rgb::new(0.0, 0.0, 0.0, None)),
+        });
+        ops.push(Op::SetOutlineThickness { pt: Pt(0.6) });
+        ops.push(Op::DrawLine {
+            line: printpdf::Line {
+                points: vec![
+                    printpdf::LinePoint {
+                        p: Point::new(Mm(12.0), Mm(176.0)),
+                        bezier: false,
+                    },
+                    printpdf::LinePoint {
+                        p: Point::new(Mm(285.0), Mm(176.0)),
+                        bezier: false,
+                    },
+                ],
+                is_closed: false,
+            },
+        });
+        ops.push(Op::RestoreGraphicsState);
+
+        // --- table header row ---
+        const HEADERS: [&str; 12] = [
+            "Employee #",
+            "Employee Name",
+            "Cut Off Rate",
+            "Daily Rate",
+            "Actual Working Days",
+            "Standard Working Days",
+            "Basic Rate",
+            "Total Compensation",
+            "Late 10 /hr",
+            "Halfday",
+            "Absent",
+            "Gross Compensation",
+        ];
+        let table_top_y = 170.0;
+        let header_h = 8.0;
+        let mut x = SHEET_LEFT_MM;
+        for (index, header) in HEADERS.iter().enumerate() {
+            let w = SHEET_COL_WIDTHS_MM[index];
+            sheet_cell(&mut ops, x, table_top_y - header_h, w, header_h, header, 6.0, true, false, false);
+            x += w;
+        }
+
+        // --- data rows ---
+        let mut row_y = table_top_y - header_h - SHEET_ROW_H_MM;
+        for row in chunk.iter() {
+            let cells: [String; 12] = [
+                row.employee_id.clone(),
+                row.employee_name.clone(),
+                format_php(row.cutoff_rate_centavos),
+                format_php(row.daily_rate_centavos),
+                format_days(row.actual_working_days),
+                format_days(row.standard_working_days),
+                format_php(row.basic_pay_centavos),
+                format_php(row.total_compensation_centavos),
+                format_php(row.late_deduction_centavos),
+                format_php(row.half_day_deduction_centavos),
+                format_php(row.absence_deduction_centavos),
+                format_php(row.gross_compensation_centavos),
+            ];
+            x = SHEET_LEFT_MM;
+            for (index, cell) in cells.iter().enumerate() {
+                let w = SHEET_COL_WIDTHS_MM[index];
+                sheet_cell(&mut ops, x, row_y, w, SHEET_ROW_H_MM, cell, 7.0, false, index < 2, false);
+                x += w;
+            }
+            row_y -= SHEET_ROW_H_MM;
+        }
+
+        // --- grand total row (last page only), yellow-highlighted gross ---
+        if chunk_index == chunks.len() - 1 {
+            let total_gross: i64 = rows.iter().map(|row| row.gross_compensation_centavos).sum();
+            let total_w: f32 = SHEET_COL_WIDTHS_MM[..11].iter().sum();
+            sheet_cell(&mut ops, SHEET_LEFT_MM, row_y, total_w, SHEET_ROW_H_MM, "Grand Total", 7.0, true, true, false);
+            let last_x = SHEET_LEFT_MM + total_w;
+            sheet_cell(&mut ops, last_x, row_y, SHEET_COL_WIDTHS_MM[11], SHEET_ROW_H_MM, &format_php(total_gross), 7.0, true, false, true);
+        }
+
+        // --- footer ---
+        sheet_text(
+            &mut ops,
+            "CONFIDENTIAL - For authorized payroll use only".into(),
+            12.0,
+            10.0,
+            7.0,
+            false,
+        );
+        pages.push(PdfPage::new(Mm(297.0), Mm(210.0), ops));
     }
     let bytes = document
         .with_pages(pages)

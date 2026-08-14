@@ -24,18 +24,27 @@ use tauri_plugin_opener::OpenerExt;
 use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID};
 
 #[tauri::command]
-fn print_payroll(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.print().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn get_health(state: State<'_, AppState>) -> serde_json::Value {
     serde_json::json!({"success":true,"service":"rfid-attendance-api","timestamp":chrono::Utc::now(),"timezone":"Asia/Manila","sqlite":"connected","lanEnabled":state.lan.enabled,"lan":{"bindAddress":state.lan.bind_address.map(|v|v.to_string()),"port":state.lan.port,"connectedSseClients":state.connected_sse_clients.load(std::sync::atomic::Ordering::Relaxed)},"googleSheetsExport":if state.lan.sheets_sync_endpoint.is_some() || state.lan.google_spreadsheet_id.is_some() { "configured" } else { "disabled" }})
 }
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":crate::services::scanner::mode_label(state.scanner.config.mode),"paused":state.scanner.paused()},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
+    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":crate::services::scanner::mode_label(state.scanner.config.mode),"paused":state.scanner.paused(),"expectedLength":state.scanner.config.expected_length,"characterSet":if matches!(state.scanner.config.character_set, crate::config::ScannerCharacterSet::Hex) { "hex" } else { "decimal" }},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
+}
+
+#[tauri::command]
+fn scanner_devices() -> Result<Vec<serde_json::Value>, String> {
+    let api = hidapi::HidApi::new().map_err(|e| e.to_string())?;
+    Ok(api.device_list().map(|d| serde_json::json!({"path": d.path().to_string_lossy(), "vendorId": d.vendor_id(), "productId": d.product_id(), "productString": d.product_string(), "usagePage": d.usage_page(), "usage": d.usage(), "interfaceNumber": d.interface_number(), "readerHint": d.usage_page() == 1 && d.usage() == 6})).collect())
+}
+
+#[tauri::command]
+fn notify_scan_success(app: tauri::AppHandle, full_name: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    let name = full_name.trim().chars().take(60).collect::<String>();
+    if name.is_empty() { return Ok(()); }
+    app.notification().builder().title("Attendance recorded").body(format!("Time in/out recorded for {name}")).show().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1897,6 +1906,177 @@ async fn generate_payroll_register_pdf(
     Ok(serde_json::Value::Object(response))
 }
 
+/// A payroll sheet PDF is self-registered in the `payroll_pdfs` table (the
+/// Payroll tab history source) rather than `export_jobs`/`generated_artifacts`
+/// because `export_jobs.kind` is CHECK-constrained to the workbook/payslip
+/// kinds and has no sheet-PDF kind; rebuilding that table for one new kind is
+/// not worth the migration risk. The file still lands in `exports_dir` so the
+/// existing Open PDF / Show in folder commands work unchanged.
+#[tauri::command]
+async fn generate_payroll_pdf(
+    state: State<'_, AppState>,
+    token: String,
+    cutoff_start: String,
+    cutoff_end: String,
+    payroll_cutoff_label: String,
+    worker_type: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    if !valid_cutoff_date(&cutoff_start) || !valid_cutoff_date(&cutoff_end) {
+        return Err("INVALID_CUTOFF_PERIOD".into());
+    }
+    if cutoff_end < cutoff_start {
+        return Err("INVALID_CUTOFF_PERIOD".into());
+    }
+    let worker_upper = match worker_type.as_str() {
+        "EMPLOYEE" => "EMPLOYEE",
+        "INTERN" => "INTERN",
+        _ => return Err("INVALID_WORKER_TYPE".into()),
+    };
+    let worker_lower = if worker_upper == "EMPLOYEE" {
+        "employee"
+    } else {
+        "intern"
+    };
+    let label = if payroll_cutoff_label.trim().is_empty() {
+        format!("{cutoff_start} to {cutoff_end}")
+    } else {
+        payroll_cutoff_label.trim().to_string()
+    };
+    let rows = crate::reporting::load_payroll_sheet_rows(
+        &state.db,
+        &cutoff_start,
+        &cutoff_end,
+        worker_upper,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        return Err(format!(
+            "NO_PAYROLL_RECORDS: No {worker_lower} payroll records for {label}. Create and save a {worker_lower} payroll for this cutoff first."
+        ));
+    }
+    let manila_now = chrono::Utc::now().with_timezone(&Manila);
+    let file_name = format!(
+        "payroll_{}_{}.pdf",
+        manila_now.format("%Y-%m-%d_%H-%M-%S"),
+        worker_lower
+    );
+    let relative_path = std::path::PathBuf::from("exports").join(&file_name);
+    let output_path = state.exports_dir.join(&file_name);
+    let generated_at = manila_now.to_rfc3339();
+    if let Err(error) = (|| {
+        std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
+            .map_err(|e| e.to_string())?;
+        crate::reporting::generate_payroll_sheet_pdf(
+            &rows,
+            &label,
+            worker_upper,
+            &state.office,
+            &output_path,
+        )
+    })() {
+        log::error!("payroll sheet PDF generation failed: {error}");
+        return Err(error);
+    }
+    let bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let total_amount_centavos: i64 = rows
+        .iter()
+        .map(|row| row.gross_compensation_centavos)
+        .sum();
+    let payroll_pdf_id = file_name.trim_end_matches(".pdf").to_string();
+    sqlx::query(
+        "INSERT INTO payroll_pdfs (payroll_pdf_id,file_name,managed_relative_path,cutoff_start,cutoff_end,payroll_cutoff_label,worker_type,employee_count,total_amount_centavos,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(&payroll_pdf_id)
+    .bind(&file_name)
+    .bind(relative_path.to_string_lossy().replace('\\', "/"))
+    .bind(&cutoff_start)
+    .bind(&cutoff_end)
+    .bind(&label)
+    .bind(worker_upper)
+    .bind(rows.len() as i64)
+    .bind(total_amount_centavos)
+    .bind(&hash)
+    .bind(bytes.len() as i64)
+    .bind(&generated_at)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let message = format!("Payroll PDF generated for {label} ({worker_lower}).");
+    let metadata = generated_file_metadata(&state, &file_name, &output_path, "pdf", message);
+    let mut response = metadata.as_object().cloned().unwrap_or_default();
+    response.insert("pdf".into(), serde_json::json!({
+        "payrollPdfId": payroll_pdf_id,
+        "fileName": file_name,
+        "filePath": output_path.to_string_lossy(),
+        "directoryPath": state.exports_dir.to_string_lossy(),
+        "cutoffStart": cutoff_start,
+        "cutoffEnd": cutoff_end,
+        "payrollCutoffLabel": label,
+        "workerType": worker_lower,
+        "generatedAt": generated_at,
+        "employeeCount": rows.len(),
+        "totalAmount": total_amount_centavos as f64 / 100.0,
+        "sizeBytes": bytes.len(),
+    }));
+    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
+    response.insert("sha256".into(), serde_json::json!(hash));
+    Ok(serde_json::Value::Object(response))
+}
+
+#[tauri::command]
+async fn list_payroll_pdfs(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let rows = sqlx::query(
+        "SELECT payroll_pdf_id,file_name,managed_relative_path,cutoff_start,cutoff_end,payroll_cutoff_label,worker_type,employee_count,total_amount_centavos,sha256,size_bytes,created_at FROM payroll_pdfs ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let payroll_pdfs = rows
+        .into_iter()
+        .map(|row| {
+            let relative: String = row.get("managed_relative_path");
+            let file_name: String = row.get("file_name");
+            serde_json::json!({
+                "payrollPdfId": row.get::<String, _>("payroll_pdf_id"),
+                "fileName": file_name,
+                "filePath": state.data_dir.join(relative).to_string_lossy(),
+                "directoryPath": state.exports_dir.to_string_lossy(),
+                "cutoffStart": row.get::<String, _>("cutoff_start"),
+                "cutoffEnd": row.get::<String, _>("cutoff_end"),
+                "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
+                "workerType": if row.get::<String, _>("worker_type") == "EMPLOYEE" { "employee" } else { "intern" },
+                "generatedAt": row.get::<String, _>("created_at"),
+                "employeeCount": row.get::<i64, _>("employee_count"),
+                "totalAmount": row.get::<i64, _>("total_amount_centavos") as f64 / 100.0,
+                "sizeBytes": row.get::<i64, _>("size_bytes"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({"success": true, "payrollPdfs": payroll_pdfs}))
+}
+
+fn valid_cutoff_date(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes().iter().enumerate().all(|(index, byte)| {
+            if index == 4 || index == 7 {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+}
+
 #[tauri::command]
 async fn open_generated_artifact(
     state: State<'_, AppState>,
@@ -2274,7 +2454,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_log::Builder::default().build());
+        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(tauri_plugin_notification::init());
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -2391,7 +2572,8 @@ pub fn run() {
             scan_rfid,
             scanner_status,
             scanner_pause,
-            print_payroll,
+            scanner_devices,
+            notify_scan_success,
             upload_photo,
             admin_users,
             admin_list_users,
@@ -2418,6 +2600,8 @@ pub fn run() {
             export_payroll_xlsx,
             generate_payroll_payslip_pdf,
             generate_payroll_register_pdf,
+            generate_payroll_pdf,
+            list_payroll_pdfs,
             open_generated_file,
             reveal_generated_file,
             open_generated_directory,

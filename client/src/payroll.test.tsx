@@ -1,14 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { PayrollCalculationProfile, PayrollCutoffRecord } from "@rfid-attendance/shared";
+import type {
+  PayrollCalculationProfile,
+  PayrollCutoffRecord,
+  PayrollPdfRecord,
+} from "@rfid-attendance/shared";
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
-  return { ...actual, generatePayrollCutoff: vi.fn() };
+  return {
+    ...actual,
+    generatePayrollCutoff: vi.fn(),
+    generatePayrollPdf: vi.fn(),
+    loadPayrollPdfs: vi.fn(),
+  };
 });
 
-import { generatePayrollCutoff } from "./api";
+import {
+  generatePayrollCutoff,
+  generatePayrollPdf,
+  loadPayrollPdfs,
+} from "./api";
 import { PayrollWorkspace } from "./App";
 
 const profiles: PayrollCalculationProfile[] = [{
@@ -48,29 +61,38 @@ function internRecord(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCuto
   });
 }
 
-/** Renders the PayrollWorkspace and returns the printed sheet table (if any). */
+/** A generated payroll PDF as returned by the Tauri backend. */
+function pdfRecord(overrides: Partial<PayrollPdfRecord> = {}): PayrollPdfRecord {
+  return {
+    payrollPdfId: "payroll-2026-08-14_10-30-00_employee",
+    fileName: "payroll-2026-08-14_10-30-00_employee.pdf",
+    filePath: "C:\\data\\exports\\payroll-2026-08-14_10-30-00_employee.pdf",
+    directoryPath: "C:\\data\\exports",
+    cutoffStart: "2026-08-01",
+    cutoffEnd: "2026-08-15",
+    payrollCutoffLabel: "August 1-15, 2026",
+    workerType: "employee",
+    generatedAt: "2026-08-14T10:30:00+08:00",
+    employeeCount: 1,
+    totalAmount: 5500,
+    sizeBytes: 1024,
+    ...overrides,
+  };
+}
+
 function renderWorkspace(records: PayrollCutoffRecord[]) {
   return render(
     <PayrollWorkspace users={[]} profiles={profiles} records={records} onSaved={vi.fn()} />,
   );
 }
 
-function sheetTable(container: HTMLElement): HTMLElement {
-  const sheet = container.querySelector(".payroll-sheet-table");
-  expect(sheet).not.toBeNull();
-  return sheet as HTMLElement;
-}
-
-function sheetTotalRow(container: HTMLElement): HTMLElement {
-  const row = container.querySelector(".payroll-sheet-total");
-  expect(row).not.toBeNull();
-  return row as HTMLElement;
-}
-
 describe("PayrollWorkspace", () => {
   beforeEach(() => {
     window.print = vi.fn();
     vi.mocked(generatePayrollCutoff).mockReset();
+    vi.mocked(generatePayrollPdf).mockReset();
+    vi.mocked(loadPayrollPdfs).mockReset();
+    vi.mocked(loadPayrollPdfs).mockResolvedValue({ success: true, payrollPdfs: [] });
   });
 
   it("generates payroll from a selected cutoff and shows backend errors", async () => {
@@ -89,126 +111,144 @@ describe("PayrollWorkspace", () => {
     expect(generatePayrollCutoff).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
   });
 
-  it("shows exactly the two required payroll print buttons and no payslip/export actions", () => {
+  it("shows exactly the two generate payroll PDF buttons and no print/export actions", () => {
     renderWorkspace([record()]);
-    expect(screen.getByRole("button", { name: "Generate Employee Payroll" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate Intern Payroll" })).toBeInTheDocument();
-    // No individual payslip, register, CSV/XLSX/PDF, or other payroll print actions.
+    expect(screen.getByRole("button", { name: "Generate Employee Payroll PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
+    // No payslip, register, CSV/XLSX, or browser print actions.
     expect(screen.queryByRole("button", { name: /payslip/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /register/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /print payroll$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /pdf|csv|xlsx|excel/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /csv|xlsx|excel/i })).not.toBeInTheDocument();
   });
 
-  it("prints one employee payroll sheet excluding interns", async () => {
+  it("generates an employee payroll PDF for the selected cutoff and shows the link list", async () => {
+    const pdf = pdfRecord();
+    vi.mocked(generatePayrollPdf).mockResolvedValue({
+      success: true,
+      pdf,
+      filePath: pdf.filePath,
+      directoryPath: pdf.directoryPath,
+      fileName: pdf.fileName,
+      fileKind: "pdf",
+      isPortableMode: false,
+    });
     const user = userEvent.setup();
-    const { container } = renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
+    renderWorkspace([record(), internRecord()]);
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
 
-    const sheet = sheetTable(container);
-    expect(within(sheet).getByText("Ada Lovelace")).toBeInTheDocument();
-    expect(within(sheet).queryByText("Maria Santos")).not.toBeInTheDocument();
-    const employeeCells = sheet.querySelectorAll("tbody tr:not(.payroll-sheet-total) td");
-    expect(employeeCells[2]).toHaveTextContent("PHP 5,500.00");
-    // Exact reference column set, in order; no Holiday column.
-    const headers = Array.from(sheet.querySelectorAll("thead th")).map((th) => th.textContent);
-    expect(headers).toEqual([
-      "Employee #", "Employee Name", "Cut Off Rate", "Daily Rate", "Actual Working Days",
-      "Standard Working Days", "Basic Rate", "Total Compensation", "Late 10 /hr", "Halfday",
-      "Absent", "Gross Compensation",
-    ]);
-    // Grand total = sum of employee gross only (5,500.00).
-    expect(within(sheetTotalRow(container)).getByText("Grand Total")).toBeInTheDocument();
-    expect(within(sheetTotalRow(container)).getByText("PHP 5,500.00")).toBeInTheDocument();
-    await waitFor(() => expect(window.print).toHaveBeenCalled());
-  });
-
-  it("prints one intern payroll sheet excluding employees", async () => {
-    const user = userEvent.setup();
-    const { container } = renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll" }));
-
-    const sheet = sheetTable(container);
-    expect(within(sheet).getByText("Maria Santos")).toBeInTheDocument();
-    expect(within(sheet).queryByText("Ada Lovelace")).not.toBeInTheDocument();
-    // Grand total = sum of intern gross only (770.00).
-    expect(within(sheetTotalRow(container)).getByText("Grand Total")).toBeInTheDocument();
-    expect(within(sheetTotalRow(container)).getByText("PHP 770.00")).toBeInTheDocument();
-    await waitFor(() => expect(window.print).toHaveBeenCalled());
-  });
-
-  it("sums the gross compensation grand total across every printed row", async () => {
-    const user = userEvent.setup();
-    const { container } = renderWorkspace([
-      record(), // 5,500.00
-      record({ payrollId: "P-002", employeeId: "EMP-002", employeeName: "Grace Hopper", grossCompensation: 6000, netPay: 6000 }),
-      internRecord(), // 770.00 intern — excluded from the employee sheet
-    ]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
-
-    const sheet = sheetTable(container);
-    expect(within(sheet).getByText("Ada Lovelace")).toBeInTheDocument();
-    expect(within(sheet).getByText("Grace Hopper")).toBeInTheDocument();
-    expect(within(sheet).queryByText("Maria Santos")).not.toBeInTheDocument();
-    // 5,500.00 + 6,000.00 = 11,500.00.
-    expect(within(sheetTotalRow(container)).getByText("PHP 11,500.00")).toBeInTheDocument();
-    await waitFor(() => expect(window.print).toHaveBeenCalled());
-  });
-
-  it("only prints records for the selected cutoff period", async () => {
-    const user = userEvent.setup();
-    const { container } = renderWorkspace([
-      record(), // August 1-15, 2026
-      record({
-        payrollId: "P-SEP", cutoffStart: "2026-09-01", cutoffEnd: "2026-09-15",
-        payrollCutoffLabel: "September 1-15, 2026", grossCompensation: 7000, netPay: 7000,
+    await waitFor(() =>
+      expect(generatePayrollPdf).toHaveBeenCalledWith({
+        cutoffStart: "2026-08-01",
+        cutoffEnd: "2026-08-15",
+        payrollCutoffLabel: "August 1-15, 2026",
+        workerType: "employee",
       }),
-    ]);
-    // No form cutoff has been chosen, so the most recent saved cutoff
-    // (September 1-15, 2026) is the selected payroll cutoff.
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
-
-    const sheet = sheetTable(container);
-    expect(within(container).getByText("SEPTEMBER 1-15, 2026")).toBeInTheDocument();
-    const printedRows = sheet.querySelectorAll("tbody tr:not(.payroll-sheet-total)");
-    expect(printedRows).toHaveLength(1);
-    expect(printedRows[0].querySelectorAll("td")[2]).toHaveTextContent("PHP 5,500.00");
-    expect(within(sheetTotalRow(container)).getByText("PHP 7,000.00")).toBeInTheDocument();
-    await waitFor(() => expect(window.print).toHaveBeenCalled());
+    );
+    expect(
+      await screen.findByText("Payroll PDF generated for August 1-15, 2026."),
+    ).toBeInTheDocument();
+    // The period appears both in the saved payroll table and the PDF history.
+    expect(screen.getAllByText("August 1-15, 2026").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Open PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
+    // The employee PDF total is the employee gross only (appears in the PDF
+    // history list alongside the saved payroll table values).
+    expect(screen.getAllByText("PHP 5,500.00").length).toBeGreaterThan(0);
+    expect(window.print).not.toHaveBeenCalled();
   });
 
-  it("shows the header with company identity, cutoff range, and cutoff note", async () => {
+  it("generates an intern payroll PDF with the intern worker type", async () => {
+    const pdf = pdfRecord({
+      payrollPdfId: "payroll-2026-08-14_10-31-00_intern",
+      fileName: "payroll-2026-08-14_10-31-00_intern.pdf",
+      filePath: "C:\\data\\exports\\payroll-2026-08-14_10-31-00_intern.pdf",
+      workerType: "intern",
+      totalAmount: 770,
+    });
+    vi.mocked(generatePayrollPdf).mockResolvedValue({
+      success: true,
+      pdf,
+      filePath: pdf.filePath,
+      directoryPath: pdf.directoryPath,
+      fileName: pdf.fileName,
+      fileKind: "pdf",
+      isPortableMode: false,
+    });
     const user = userEvent.setup();
-    const { container } = renderWorkspace([record()]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
+    renderWorkspace([record(), internRecord()]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
 
-    const header = container.querySelector(".payroll-sheet-header");
-    expect(header).not.toBeNull();
-    expect(within(header as HTMLElement).getByText("Alpha Premier")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("TIN: 010-871-213-0000")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("AUGUST 1-15, 2026")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("Note: Cut off")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("1-15th of the month")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("16-31st")).toBeInTheDocument();
-    await waitFor(() => expect(window.print).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(generatePayrollPdf).toHaveBeenCalledWith({
+        cutoffStart: "2026-08-01",
+        cutoffEnd: "2026-08-15",
+        payrollCutoffLabel: "August 1-15, 2026",
+        workerType: "intern",
+      }),
+    );
+    expect(
+      await screen.findByText("Payroll PDF generated for August 1-15, 2026."),
+    ).toBeInTheDocument();
   });
 
-  it("shows a message instead of opening print when there are no records", async () => {
+  it("shows backend errors and never opens the browser print dialog", async () => {
+    vi.mocked(generatePayrollPdf).mockResolvedValue({
+      success: false,
+      error: { message: "Unable to generate the payroll PDF." },
+    });
+    const user = userEvent.setup();
+    renderWorkspace([record()]);
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
+    expect(
+      await screen.findByText("Unable to generate the payroll PDF."),
+    ).toBeInTheDocument();
+    expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it("shows a message instead of generating when there are no records", async () => {
     const user = userEvent.setup();
     renderWorkspace([]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll" }));
-    expect(screen.getByText(/No payroll records to generate/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
+    expect(
+      screen.getByText("No payroll records to generate. Create and save a payroll first."),
+    ).toBeInTheDocument();
+    expect(generatePayrollPdf).not.toHaveBeenCalled();
     expect(window.print).not.toHaveBeenCalled();
   });
 
-  it("shows a message when the selected cutoff has no records for the worker type", async () => {
-    const user = userEvent.setup();
-    renderWorkspace([record()]); // only an employee record
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll" }));
-    expect(screen.getByText(/No intern payroll records/)).toBeInTheDocument();
-    expect(screen.queryByText("Grand Total")).not.toBeInTheDocument();
+  it("lists previously generated payroll PDFs with open and reveal actions", async () => {
+    const employeePdf = pdfRecord();
+    const internPdf = pdfRecord({
+      payrollPdfId: "payroll-2026-08-14_10-31-00_intern",
+      fileName: "payroll-2026-08-14_10-31-00_intern.pdf",
+      filePath: "C:\\data\\exports\\payroll-2026-08-14_10-31-00_intern.pdf",
+      workerType: "intern",
+      totalAmount: 770,
+    });
+    vi.mocked(loadPayrollPdfs).mockResolvedValue({
+      success: true,
+      payrollPdfs: [employeePdf, internPdf],
+    });
+    renderWorkspace([record(), internRecord()]);
+
+    // The period label appears in the PDF history rows (the saved payroll
+    // table renders it too, so exact-match queries would be ambiguous).
+    expect(await screen.findAllByText("August 1-15, 2026")).not.toHaveLength(0);
+    expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Show in Folder" })).toHaveLength(2);
+    expect(screen.getAllByText("Employee")).toHaveLength(1);
+    expect(screen.getAllByText("Intern")).toHaveLength(1);
     expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it("shows an empty state when no payroll PDFs exist", async () => {
+    renderWorkspace([]);
+    expect(
+      await screen.findByText("No payroll PDFs have been generated yet."),
+    ).toBeInTheDocument();
   });
 
   it("does not expose manual payroll entry fields", () => {
