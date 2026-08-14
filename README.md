@@ -29,8 +29,7 @@ SQLite is the source of truth. Google Sheets is an optional write-only export ta
 - Windows 10 or Windows 11 for the packaged application
 - Node.js 20 or newer and npm for development
 - Rust stable with the Windows desktop toolchain for Tauri development
-- Microsoft WebView2 Runtime on the target Windows machine when using the portable executable
-- An RFID reader. The default profile targets 125 kHz EM4100 USB readers (keyboard wedge: 10 decimal digits followed by Enter, burst under 100 ms). Background scanning requires a configured serial/COM or uniquely addressed raw-HID reader through `[scanner]`; keyboard-wedge input is foreground-only and detection-based because a generic hook cannot isolate it from ordinary foreground typing.
+- An RFID reader. The attendance system operates with USB keyboard-wedge RFID readers (e.g. 125 kHz EM4100 sending decimal or hexadecimal characters followed by Enter). The attendance window must remain focused before scanning.
 
 ## Install And Run
 
@@ -224,9 +223,9 @@ No public bind, router forwarding, UPnP mapping, public DNS record, or cloud tun
 
 ## RFID And Attendance Rules
 
-- Card taps are captured at the native layer from a configured device-specific transport (raw HID or serial). Keyboard-wedge readers are captured only while the kiosk window is focused (foreground, heuristic classification); background attendance from keyboard-wedge input is intentionally disabled because the keystrokes also reach the foreground application and cannot be isolated from it.
-- The webview never needs a focused text box. The Rust layer completes a scan on the reader's Enter suffix or an idle-timeout fallback, sanitizes the UID to uppercase hex, strips separators, validates length, and dedupes repeats within a short window.
-- The kiosk receives clean `rfid-scan` events and drives fast feedback: processing, success with the employee photo, unknown card, duplicate cooldown, and error states.
+- Card taps are captured from the keyboard-mode RFID reader while the attendance window has focus. Keystroke bursts are buffered and finalized on Enter (or idle timeout), validated against configured character set and length rules, and submitted.
+- Keep the attendance window focused before scanning cards.
+- The kiosk receives clean scan events and drives fast feedback: processing, success with the employee photo, unknown card, duplicate cooldown, and error states.
 - The scanner listener pauses while the operator types in admin, setup, or manual-entry screens so keystrokes are never misread as card taps.
 - Each user has one Time In and one Time Out per Manila calendar day (`Asia/Manila`).
 - **Late time-outs.** The office does not allow overtime. A time-out recorded strictly after 17:00 Manila is saved as `LATE_TIMEOUT` instead of `COMPLETED`: the record is kept and shown with a distinct state on the live attendance screens (in-app dashboard and LAN viewer), no payroll row is generated, and the attendance editor flags it for manual re-input of the official time-out. Re-entering a time-out at or before 17:00 completes the shift normally. The rule lives in `shared/src/api-contracts.ts` (`isLateTimeout`, `OFFICE_HOURS_END`) and is mirrored in `src-tauri/src/services/office_hours.rs` for the desktop app.
@@ -249,11 +248,9 @@ Photos are stored locally under the Tauri application data directory as `{user_i
 
 ## Window, Tray, And Scanner Setup
 
-**Window and tray.** Closing the main window hides the app to the system tray instead of exiting; scanning and the LAN viewer keep running. The tray menu offers **Show attendance app** and **Exit application** — only Exit terminates the process (and stops scanning). A successful scan recorded while the window is hidden or unfocused shows a Windows toast notification without stealing focus.
+**Window and tray.** Closing the main window hides the app to the system tray instead of exiting; the LAN viewer keeps running. The tray menu offers **Show attendance app** and **Exit application** — only Exit terminates the process.
 
-**EM4100 reader setup.** The reader ships as a USB keyboard wedge: a card tap types the 10-digit decimal ID plus Enter. With the default `scanner.mode = "keyboard"` the kiosk captures this burst only while its window is focused — tap a card without clicking anything and the scan is recorded. The default profile is `scanner.expected_length = 10` and `scanner.character_set = "decimal"`; readers programmed to emit 8 hexadecimal characters use `expected_length = 8`, `character_set = "hex"`, and `expected_length = 0` disables exact-length matching (4–64 characters still applies).
-
-**Background scanning.** Verified background capture (minimized/tray-hidden, no focus required) is possible only for a uniquely addressed raw-HID reader (`scanner.mode = "hid"` with `scanner.hid_vid`/`scanner.hid_pid`) or a serial reader (`scanner.mode = "serial"` with `scanner.serial_port`). Keyboard-only readers cannot provide verified background capture without a signed filter driver, which is out of scope. The admin **Scanner diagnostics** panel lists all HID devices (path, VID/PID, product, usage page/usage, interface) and flags keyboard-interface devices so the reader can be identified and configured; a keyboard HID interface is labeled foreground-only.
+**Keyboard-mode RFID reader setup.** The reader ships as a USB keyboard wedge: a card tap types the card ID plus Enter. With the default `scanner.mode = "keyboard"` the kiosk captures this burst while its window is focused. Keep the attendance window focused before scanning cards. The default profile is `scanner.expected_length = 10` and `scanner.character_set = "decimal"`; readers programmed to emit 8 hexadecimal characters use `expected_length = 8`, `character_set = "hex"`, and `expected_length = 0` disables exact-length matching (4–64 characters still applies).
 
 Admin and setup sessions are short-lived in-memory Tauri state. The admin PIN, viewer token hash, and Google credentials are local configuration values and are never sent to the boss browser. The LAN viewer is read-only and subnet restricted.
 

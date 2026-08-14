@@ -27,7 +27,7 @@ The server also needs the normal Google Sheets variables: `GOOGLE_SHEET_ID`, `GO
 6. Set `Status` to `Active`, then select `Save user`.
 7. Lock the admin session and scan the same card on the normal attendance screen.
 
-Card taps are captured at the native Rust layer through a configured device-specific transport (raw HID or serial) or, for keyboard-wedge readers, the focused kiosk window's burst capture; they surface to the kiosk as `rfid-scan` events. No global keyboard hook is installed. While the kiosk window is focused, no webview field needs to be selected; operators can tap cards at any time, and the scanner pauses only while the operator types in admin, setup, or manual-entry screens. Keyboard-wedge input is foreground-only: it cannot create attendance records while the kiosk is minimized or tray-hidden, because a generic hook cannot isolate the reader from ordinary foreground typing.
+Card taps are captured from the USB keyboard-mode RFID reader while the attendance window has focus. Keep the attendance window focused before scanning cards. The scanner pauses while the operator types in admin, setup, or manual-entry screens so keystrokes are never misread as card taps.
 
 For Deign Lazaro, the profile should look like:
 
