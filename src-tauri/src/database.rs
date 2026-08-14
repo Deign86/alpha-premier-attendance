@@ -46,6 +46,7 @@ pub fn backup_file_name(now: &chrono::DateTime<chrono::Utc>) -> String {
     format!("attendance-backup-{}.apbackup", now.format("%Y%m%d-%H%M%S"))
 }
 
+
 /// Escape a value for a single-quoted SQLite string literal.
 fn sql_quote(value: &str) -> String {
     value.replace('\'', "''")
@@ -152,7 +153,7 @@ pub async fn create_portable_backup(
     writer.start_file("manifest.json", options).map_err(|e| e.to_string())?;
     writer.write_all(manifest.to_string().as_bytes()).map_err(|e| e.to_string())?;
     add_file_to_archive(&mut writer, &temp_db, "database/attendance.db", options)?;
-    add_directory_to_archive(&mut writer, data_dir, data_dir, options, &["backups", "restore.request", "restore.failed"])?;
+    add_directory_to_archive(&mut writer, data_dir, data_dir, options, &["backups", "ebwebview", "restore.request", "restore.failed"])?;
     let config = config_dir.join("config.toml");
     if config.is_file() { add_file_to_archive(&mut writer, &config, "config/config.toml", options)?; }
     writer.finish().map_err(|e| format!("cannot finalize backup: {e}"))?;
@@ -171,7 +172,13 @@ async fn snapshot_database_from_pool(db: &SqlitePool, dest: &Path) -> Result<(),
 }
 
 fn add_file_to_archive(writer: &mut ZipWriter<std::fs::File>, source: &Path, name: &str, options: SimpleFileOptions) -> Result<(), String> {
-    let mut file = std::fs::File::open(source).map_err(|e| format!("cannot read {}: {e}", source.display()))?;
+    let mut file = match std::fs::File::open(source) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("skipping unreadable or locked file {}: {e}", source.display());
+            return Ok(());
+        }
+    };
     writer.start_file(name.replace('\\', "/"), options).map_err(|e| e.to_string())?;
     std::io::copy(&mut file, writer).map_err(|e| e.to_string())?;
     Ok(())
@@ -181,8 +188,16 @@ fn add_directory_to_archive(writer: &mut ZipWriter<std::fs::File>, root: &Path, 
     for entry in std::fs::read_dir(current).map_err(|e| format!("cannot read {}: {e}", current.display()))? {
         let path = entry.map_err(|e| e.to_string())?.path();
         let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
-        if relative == Path::new("attendance.db") || relative.extension().is_some_and(|ext| ext == "db" && relative.starts_with("backups")) { continue; }
-        if relative.components().next().is_some_and(|component| excluded.iter().any(|item| component.as_os_str() == *item)) { continue; }
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if file_name.starts_with("attendance.db") || file_name.ends_with(".db.tmp") || file_name.ends_with(".tmp-backup") || file_name.ends_with(".tmp-apbackup") {
+            continue;
+        }
+        if relative.components().next().is_some_and(|component| {
+            let comp_str = component.as_os_str().to_string_lossy();
+            excluded.iter().any(|item| comp_str.eq_ignore_ascii_case(item))
+        }) {
+            continue;
+        }
         if path.is_dir() { add_directory_to_archive(writer, root, &path, options, excluded)?; }
         else if path.is_file() { add_file_to_archive(writer, &path, &format!("data/{}", relative.to_string_lossy()), options)?; }
     }

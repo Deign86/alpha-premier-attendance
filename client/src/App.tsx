@@ -82,7 +82,6 @@ import {
   listenForGlobalRfid,
   listenForScannerStatus,
   getScannerStatus,
-  getScannerDevices,
   setScannerPaused,
   notifyScanSuccess,
 } from "./tauri-api";
@@ -92,8 +91,6 @@ type ScannerStatus = {
   message: string;
   detail: string | null;
   mode: string;
-  transport: "raw_hid" | "serial" | "keyboard_wedge_detection" | string;
-  confidence: "device_verified" | "heuristic_candidate" | "rejected" | null;
   paused: boolean;
 };
 
@@ -163,16 +160,14 @@ export default function App() {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [now, setNow] = useState(() => new Date());
   const [scannerStatus, setScannerStatus] = useState<ScannerStatus | null>(() =>
-    // Browser/keyboard-wedge mode uses the kiosk's foreground key stream.
+    // Keyboard-mode RFID reader uses the kiosk window's key stream.
     "__TAURI_INTERNALS__" in window
       ? null
       : {
           state: "connected",
-          message: "Keyboard-wedge reader ready",
-          detail: "Keep the kiosk window active while using a USB keyboard-wedge reader",
-          mode: "web",
-          transport: "keyboard_wedge_detection",
-          confidence: "heuristic_candidate",
+          message: "Keyboard-mode RFID reader ready",
+          detail: "Keep the attendance window focused before scanning",
+          mode: "keyboard",
           paused: false,
         },
   );
@@ -532,34 +527,46 @@ export default function App() {
     }
   };
 
-  // Keyboard-wedge readers emit a tight burst of key events followed by Enter.
-  // Capture that burst at the kiosk window so the reader works even though the
-  // visible scanner field remains read-only. Text-entry screens are excluded.
+  // Keyboard-mode RFID reader scan handling.
+  // The reader acts as a keyboard wedge emitting a rapid sequence of keypresses
+  // terminated with Enter. Scans are captured only while the kiosk window is focused.
   useEffect(() => {
-    if (!scannerStatus || !["keyboard", "web"].includes(scannerStatus.mode)) return;
     let buffer = "";
     let lastKeyAt = 0;
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const resetBuffer = () => {
+      buffer = "";
+      lastKeyAt = 0;
+    };
 
     const flush = () => {
-      const value = buffer;
-      buffer = "";
-      if (flushTimer) clearTimeout(flushTimer);
-      flushTimer = null;
+      const candidate = buffer;
+      resetBuffer();
       const expectedLength = Number((config as typeof config & { scanner?: { expectedLength?: number; characterSet?: string } }).scanner?.expectedLength ?? 10);
-      if (value.length >= 4 && value.length <= 64 && (expectedLength === 0 ? true : value.length === expectedLength)) {
-        if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
-          handleSetupInput(value);
-        } else if (!manualMode && !setupDialogOpen) {
-          void submit(value, "RFID");
-        }
+      const characterSet = (config as typeof config & { scanner?: { expectedLength?: number; characterSet?: string } }).scanner?.characterSet ?? "decimal";
+      const allowedRegex = characterSet === "hex" ? /^[0-9a-fA-F]+$/ : /^[0-9]+$/;
+
+      if (!allowedRegex.test(candidate)) return;
+      if (candidate.length < 4 || candidate.length > 64) return;
+      if (expectedLength > 0 && candidate.length !== expectedLength) return;
+
+      const normalized = candidate.toUpperCase();
+      if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
+        handleSetupInput(normalized);
+      } else if (!manualMode && !setupDialogOpen) {
+        void submit(normalized, "RFID");
       }
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      // The kiosk only captures wedge bursts while its own window is focused;
-      // an unfocused webview must never observe or consume keys.
-      if (!document.hasFocus()) return;
+      if (!document.hasFocus()) {
+        resetBuffer();
+        return;
+      }
+      if (event.key === "Escape") {
+        resetBuffer();
+        return;
+      }
       const target = event.target as HTMLElement | null;
       const isTextEntry = Boolean(
         target &&
@@ -567,36 +574,45 @@ export default function App() {
             (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid")),
       );
       if (isTextEntry || manualMode || (setupDialogOpen && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
-        buffer = "";
+        resetBuffer();
         return;
       }
+
       const now = Date.now();
-      if (now - lastKeyAt > 250) buffer = "";
+      const interKeyTimeout = 250;
+      if (lastKeyAt > 0 && now - lastKeyAt > interKeyTimeout) {
+        resetBuffer();
+      }
       lastKeyAt = now;
+
       if (event.key === "Enter") {
         event.preventDefault();
         flush();
         return;
       }
+
       const characterSet = (config as typeof config & { scanner?: { characterSet?: string } }).scanner?.characterSet ?? "decimal";
-      const allowed = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
-      if (allowed.test(event.key)) {
+      const allowedCharRegex = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
+      if (allowedCharRegex.test(event.key)) {
         buffer += event.key;
-        if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = setTimeout(flush, 150);
-      } else if (/^[a-zA-Z0-9]$/.test(event.key)) {
-        buffer = "";
-        if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = null;
+      } else {
+        // Any character outside the configured character set invalidates the buffer immediately.
+        resetBuffer();
       }
     };
 
+    const onBlur = () => {
+      resetBuffer();
+    };
+
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      if (flushTimer) clearTimeout(flushTimer);
+      window.removeEventListener("blur", onBlur);
+      resetBuffer();
     };
-  }, [config, handleSetupInput, manualMode, scannerStatus, setupDialogOpen, setupStep, setupToken, submit]);
+  }, [config, handleSetupInput, manualMode, setupDialogOpen, setupStep, setupToken, submit]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -995,8 +1011,26 @@ type SetupDialogProps = {
 };
 
 function SetupDialog(props: SetupDialogProps) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        props.onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [props.onClose]);
+
   return (
-    <div className="setup-backdrop" role="presentation">
+    <div
+      className="setup-backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          props.onClose();
+        }
+      }}
+    >
       <section
         className="setup-dialog"
         role="dialog"
@@ -1744,18 +1778,11 @@ function LanViewerPanel({
   );
 }
 
-/** Read-only scanner diagnostics for the admin panel: state, transport, and devices. */
+/** Read-only scanner diagnostics for the admin panel: status and focus guidance. */
 export function ScannerDiagnostics() {
   const [status, setStatus] = useState<ScannerStatus | null>(null);
   const [lastActivity, setLastActivity] = useState<string | null>(null);
-  const [devices, setDevices] = useState<import("./tauri-api").ScannerDevice[]>([]);
-  const [devicesLoading, setDevicesLoading] = useState(true);
-  const [devicesError, setDevicesError] = useState<string | null>(null);
-  const refreshDevices = useCallback(() => {
-    setDevicesLoading(true);
-    setDevicesError(null);
-    void getScannerDevices().then(setDevices).catch(() => setDevicesError("Unable to inspect scanner devices. Check the native kiosk connection and try again.")).finally(() => setDevicesLoading(false));
-  }, []);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenForScannerStatus((nextStatus) => {
@@ -1776,21 +1803,23 @@ export function ScannerDiagnostics() {
       .catch(() => {
         /* web mode */
       });
-    refreshDevices();
     return () => unlisten?.();
-  }, [refreshDevices]);
+  }, []);
+
   if (!status)
     return (
       <div className="scanner-diag" role="status" aria-live="polite">
         <LoaderCircle className="spin" size={15} /> Checking sensor connection...
       </div>
     );
+
   const stateLabel: Record<ScannerStatus["state"], string> = {
     connected: "Waiting for card",
     scanning: "Scan received",
     offline: "Scanner unavailable",
     error: "Scan error",
   };
+
   return (
     <div className="scanner-diag" role="status">
       <span className={`scanner-diag-state is-${status.state}`}>
@@ -1799,26 +1828,14 @@ export function ScannerDiagnostics() {
           ? "Paused — this screen is typing"
           : stateLabel[status.state]}
       </span>
-      <span className="scanner-diag-mode">Mode: {status.mode}</span>
+      <span className="scanner-diag-mode">Reader: Keyboard-mode RFID reader</span>
       <span className="scanner-diag-activity">
         Last activity: {lastActivity ? formatTime(lastActivity, "Asia/Manila") : "Not yet recorded"}
       </span>
-      <span className="scanner-diag-detail">Transport: {status.transport === "raw_hid" || status.transport === "serial" ? "Verified device capture" : status.transport === "keyboard_wedge_detection" ? "Foreground keyboard capture only (heuristic)" : status.transport}</span>
-      <span className="scanner-diag-detail">Confidence: {status.confidence === "device_verified" ? "Device verified" : status.confidence === "heuristic_candidate" ? "Heuristic candidate" : status.confidence === "rejected" ? "Rejected" : "Not available"}</span>
-      {status.detail && <span className="scanner-diag-detail">{status.detail}</span>}
-      <section className="scanner-devices" aria-label="Scanner devices">
-        <div className="scanner-devices-heading"><strong>Scanner devices</strong><button type="button" className="admin-button" onClick={refreshDevices}>Refresh</button></div>
-        {devicesLoading && <p className="setup-copy">Checking connected HID devices...</p>}
-        {devicesError && <p className="dashboard-alert">{devicesError}</p>}
-        {!devicesLoading && !devicesError && !devices.length && <p className="setup-copy">No HID devices detected. Connect a reader or configure serial scanning.</p>}
-        {!devicesLoading && devices.map((device) => <article className="scanner-device" key={`${device.path}-${device.interfaceNumber}`}>
-          <strong>{device.path}</strong>
-          <span>VID/PID: 0x{device.vendorId.toString(16).padStart(4, "0").toUpperCase()} / 0x{device.productId.toString(16).padStart(4, "0").toUpperCase()}</span>
-          <span>Product: {device.productString || "Unknown"}</span>
-          <span>Usage page: {device.usagePage} | Usage: {device.usage} | Interface: {device.interfaceNumber}</span>
-          {device.readerHint && <p className="dashboard-alert">Keyboard HID interface — foreground kiosk capture only; cannot provide verified background capture. Configure a raw-HID or serial reader for background scanning.</p>}
-        </article>)}
-      </section>
+      <span className="scanner-diag-detail">Keep the attendance window focused before scanning.</span>
+      {status.detail && status.detail !== "Keep the attendance window focused before scanning" && (
+        <span className="scanner-diag-detail">{status.detail}</span>
+      )}
     </div>
   );
 }
@@ -2358,48 +2375,67 @@ function UserEditor({
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
   const [message, setMessage] = useState("");
   const [deletingUserId, setDeletingUserId] = useState("");
-  useEffect(() => setForm(editing ?? blankUser), [editing]);
+  useEffect(() => {
+    setForm(editing ?? blankUser);
+    setMessage("");
+  }, [editing]);
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
-    const payload = {
-      ...form,
-      // "Not set" renders as "" in the select; send null so the backend
-      // clears the field instead of writing an empty string.
-      gender: form.gender || null,
-      dailyRate: form.employeeType === "EMPLOYEE" ? form.dailyRate : null,
-      payrollProfileId:
-        form.employeeType === "EMPLOYEE" ? form.payrollProfileId : null,
-    };
-    const response = await saveAdminUser(payload, editing?.userId);
-    if ((response as { success?: boolean }).success) {
-      setMessage("Saved.");
-      setEditing(null);
-      onSaved();
-    } else
-      setMessage(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Unable to save user.",
-      );
+    try {
+      const payload = {
+        ...form,
+        // "Not set" renders as "" in the select; send null so the backend
+        // clears the field instead of writing an empty string.
+        gender: form.gender || null,
+        dailyRate: form.employeeType === "EMPLOYEE" ? form.dailyRate : null,
+        payrollProfileId:
+          form.employeeType === "EMPLOYEE" ? form.payrollProfileId : null,
+      };
+      const response = await saveAdminUser(payload, editing?.userId);
+      if ((response as { success?: boolean })?.success) {
+        setMessage("Saved.");
+        setEditing(null);
+        onSaved();
+      } else {
+        setMessage(
+          (response as { error?: { message?: string } })?.error?.message ??
+            "Unable to save user.",
+        );
+      }
+    } catch (err) {
+      const errMsg = typeof err === "string" ? err : (err as Error)?.message || "Unable to save user.";
+      if (errMsg.includes("USER_CONFLICT")) {
+        setMessage("This RFID card or User ID is already assigned to another user.");
+      } else {
+        setMessage(errMsg);
+      }
+    }
   };
   const remove = async (user: AdminUser) => {
     if (
       !window.confirm(
-        `Delete ${user.fullName} and remove their RFID assignment? Existing attendance records will remain.`,
+        `Are you sure you want to delete ${user.fullName} (${user.userId})? This cannot be undone.`,
       )
     )
       return;
     setDeletingUserId(user.userId);
-    const response = await deleteAdminUser(user.userId);
-    setDeletingUserId("");
-    if ((response as { success?: boolean }).success) {
-      if (editing?.userId === user.userId) setEditing(null);
-      setMessage("User deleted.");
-      onSaved();
-    } else
-      setMessage(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Unable to delete user.",
-      );
+    try {
+      const response = await deleteAdminUser(user.userId);
+      if ((response as { success?: boolean })?.success) {
+        setMessage(`Deleted ${user.fullName}.`);
+        if (editing?.userId === user.userId) setEditing(null);
+        onSaved();
+      } else {
+        setMessage(
+          (response as { error?: { message?: string } })?.error?.message ??
+            "Unable to delete user.",
+        );
+      }
+    } catch (err) {
+      setMessage(typeof err === "string" ? err : (err as Error)?.message || "Unable to delete user.");
+    } finally {
+      setDeletingUserId("");
+    }
   };
   return (
     <div className="admin-grid">
@@ -2418,6 +2454,21 @@ function UserEditor({
         {editing && (
           <p className="edit-context" role="status">
             Active record: <strong>{editing.userId}</strong> · RFID {editing.rfidUid}
+          </p>
+        )}
+        {message && (
+          <p
+            className={`form-message ${
+              message.includes("already") ||
+              message.includes("Unable") ||
+              message.includes("conflict") ||
+              message.includes("Error")
+                ? "is-error"
+                : "is-success"
+            }`}
+            role="status"
+          >
+            {message}
           </p>
         )}
         <form onSubmit={save}>
@@ -3647,13 +3698,27 @@ function AdminAttendance({
             </tr>
           </thead>
           <tbody>
-            {filteredRows.map((row) => (
-              <AttendanceEditRow
-                key={row.attendanceId}
-                row={row}
-                onSaved={onSaved}
-              />
-            ))}
+            {filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="table-empty-cell">
+                  <div className="empty-state">
+                    No attendance records found for {date}
+                    {employeeFilter || departmentFilter || statusFilter
+                      ? " matching the selected filters"
+                      : ""}
+                    .
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              filteredRows.map((row) => (
+                <AttendanceEditRow
+                  key={row.attendanceId}
+                  row={row}
+                  onSaved={onSaved}
+                />
+              ))
+            )}
           </tbody>
         </table>
       </div>
