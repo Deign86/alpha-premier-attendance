@@ -51,6 +51,15 @@ fn looks_virtual(name: &str) -> bool {
         .any(|hint| lower.contains(hint))
 }
 
+fn is_known_virtual_host_only(ip: IpAddr) -> bool {
+    matches!(ip, IpAddr::V4(v4) if v4.octets()[0] == 192 && v4.octets()[1] == 168 && v4.octets()[2] == 56)
+}
+
+fn is_wireless(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("wi-fi") || lower.contains("wifi") || lower.contains("wlan") || lower.contains("wireless")
+}
+
 /// Most offices use a 192.168.x.x Wi-Fi/LAN subnet; prefer it, then 10.x.x.x,
 /// then 172.16-31.x.x. This is only a tie-breaker after virtual filtering.
 fn is_preferred_private(ip: IpAddr) -> bool {
@@ -76,7 +85,13 @@ pub fn detect_lan_interfaces() -> Vec<LanInterface> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    candidates.sort_by_key(|item| (looks_virtual(&item.name), !is_preferred_private(item.ip)));
+    candidates.sort_by_key(|item| {
+        (
+            looks_virtual(&item.name) || is_known_virtual_host_only(item.ip),
+            !is_wireless(&item.name),
+            !is_preferred_private(item.ip),
+        )
+    });
     candidates
 }
 

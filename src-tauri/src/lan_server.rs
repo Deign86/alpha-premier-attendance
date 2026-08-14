@@ -89,6 +89,7 @@ pub enum LanStartError {
     /// this is never raised at runtime; kept for the frontend contract.
     #[allow(dead_code)]
     Config(String),
+    #[allow(dead_code)]
     NoLanIp,
     LoopbackBind,
     BindAddressNotPresent,
@@ -149,8 +150,7 @@ fn resolve_bind_address(lan: &LanConfig) -> Result<SocketAddr, LanStartError> {
         }
         return Ok(SocketAddr::new(address, lan.port));
     }
-    let ip = crate::lan_net::pick_active_lan_ip().ok_or(LanStartError::NoLanIp)?;
-    Ok(SocketAddr::new(ip, lan.port))
+    Ok(SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), lan.port))
 }
 
 /// Bind the viewer to the resolved LAN address and serve until aborted.

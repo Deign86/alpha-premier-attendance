@@ -179,37 +179,42 @@ ipconfig getifaddr en0     # macOS Wi-Fi
 hostname -I                # Linux
 ```
 
-Open `http://<host-lan-ip>:4173/attendance` for the Tauri viewer, or the Vite URL printed by Vite during web development. Do not replace `<host-lan-ip>` with `localhost` or `127.0.0.1` on another device.
+Open `http://<host-lan-ip>:4173/attendance` on your mobile phone or browser (the exact link is also shown in the desktop app's Live Attendance screen). Do not use `localhost` or `127.0.0.1` on another device.
 
-Give the front-desk laptop a stable private address using a DHCP reservation or a static address. Set the Windows network profile to **Private**, then allow only the office subnet through Windows Defender Firewall:
+### Windows Firewall Configuration (One-Time Setup)
 
-```powershell
-New-NetFirewallRule -DisplayName "Alpha Premier Attendance LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 4173 -Profile Private -RemoteAddress 192.168.1.0/24
-```
-
-From the boss PC, verify connectivity:
+If devices on the same Wi-Fi hang or show "Connecting..." / load indefinitely, allow port 4173 in Windows Defender Firewall. Open **PowerShell as Administrator** on the host PC:
 
 ```powershell
-Test-NetConnection 192.168.1.50 -Port 4173
-Invoke-WebRequest http://192.168.1.50:4173/api/health -UseBasicParsing
+netsh advfirewall firewall add rule name="Alpha Premier Live Attendance" dir=in action=allow protocol=TCP localport=4173
 ```
 
-Open:
+Or for subnet-specific scoping:
+
+```powershell
+New-NetFirewallRule -DisplayName "Alpha Premier Attendance LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 4173 -Profile Private
+```
+
+From another PC or phone on the same Wi-Fi, verify and connect:
+
+```powershell
+Test-NetConnection <host-lan-ip> -Port 4173
+Invoke-WebRequest http://<host-lan-ip>:4173/api/health -UseBasicParsing
+```
+
+Open in mobile Safari / Chrome:
 
 ```text
-http://192.168.1.50:4173/attendance
+http://<host-lan-ip>:4173/attendance
 ```
 
-The dashboard loads a Manila-date snapshot, subscribes to `GET /api/events/attendance` using Server-Sent Events, and falls back to five-second polling when the stream is unavailable. A committed scan remains successful even when the boss browser or network is offline.
-
-The web client resolves API requests from the current browser origin by default. Set `client/.env` `VITE_API_BASE_URL` only when the API is hosted separately; use `VITE_API_PROXY_TARGET` for the development proxy. The Node API uses `HOST=0.0.0.0` by default, with `PORT` configurable, and accepts comma-separated trusted `CLIENT_ORIGIN` values for cross-origin deployments.
+The mobile dashboard loads the attendance snapshot and connects to `GET /api/events/attendance` via Server-Sent Events (SSE) with background polling fallback. When an employee scans their RFID tag on the desktop kiosk, the mobile phone updates **immediately in real time with zero latency**.
 
 Troubleshooting:
 
-- Viewer cannot connect: run `Test-NetConnection <host-lan-ip> -Port 4173`, check the Windows Firewall rule and Private network profile, then confirm guest Wi-Fi/AP isolation is disabled.
-- Viewer opens but has no updates: check `/api/health`, keep the page open while reconnecting, and confirm the SSE status changes from Connecting/Reconnecting to Live; polling remains the fallback.
-- Viewer connects to localhost: use the LAN URL printed by the host, clear any `VITE_API_BASE_URL` pointing to localhost, and rebuild/restart the client.
-- WebSocket/SSE errors: verify the correct `http`/`https` origin, firewall access, trusted CORS origin when using a separate API host, and that the port is not already in use.
+- **Phone page hangs / loads forever:** Run the `netsh advfirewall` command above as Administrator. Verify your phone is on the same Wi-Fi network and that the router does not have "AP/Client Isolation" enabled.
+- **Viewer opens but has no updates:** Check `/api/health`, keep the page open; SSE reconnects automatically.
+- **Viewer connects to localhost:** Use the LAN IP (e.g. `http://192.168.x.x:4173/attendance`), not `127.0.0.1`.
 
 The LAN routes are:
 

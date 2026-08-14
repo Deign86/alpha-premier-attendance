@@ -11,9 +11,12 @@ import {
   LoaderCircle,
   LockKeyhole,
   Nfc,
+  RefreshCw,
   ShieldCheck,
   Upload,
   UserRound,
+  Wifi,
+  WifiOff,
   X,
 } from "lucide-react";
 import type {
@@ -76,11 +79,13 @@ import {
   uploadSetupPhoto,
   upsertSetupUser,
 } from "./api";
+import { sseUrl } from "./network";
 import type { FileActionResult } from "./api";
 import "./styles.css";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
+  listenForAttendanceUpdates,
   getScannerStatus,
   setScannerPaused,
   notifyScanSuccess,
@@ -1426,18 +1431,52 @@ function LiveAttendance() {
       setError("Live attendance is temporarily unavailable.");
     }
   }, []);
+
   useEffect(() => {
     void refresh();
+
+    // 1. Listen for native desktop Tauri events
+    let unlistenUpdated: (() => void) | undefined;
+    void listenForAttendanceUpdates(() => {
+      void refresh();
+    }).then((cleanup) => {
+      unlistenUpdated = cleanup;
+    }).catch(() => {
+      /* web mode */
+    });
+
+    // 2. Connect to LAN SSE stream for remote browser viewer
+    let sse: EventSource | null = null;
+    try {
+      sse = new EventSource(sseUrl("/api/events/attendance"));
+      sse.addEventListener("attendance-updated", () => {
+        void refresh();
+      });
+      sse.addEventListener("message", () => {
+        void refresh();
+      });
+      sse.onerror = () => {
+        /* fallback gracefully to polling */
+      };
+    } catch {
+      /* SSE unavailable */
+    }
+
+    // 3. Fallback polling timer (every 5 seconds)
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, 5_000);
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
+
     return () => {
+      unlistenUpdated?.();
+      sse?.close();
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
     };
   }, [refresh]);
+
   const refreshLan = useCallback(async () => {
     setLan(await getLanStatus());
   }, []);
@@ -1467,8 +1506,7 @@ function LiveAttendance() {
           <p className="section-kicker">Live attendance</p>
           <h1>Today’s timing</h1>
           <p className="section-description">
-            {resolveOfficeDisplay(office, "short")} · {localDate()} · updates
-            every five seconds
+            {resolveOfficeDisplay(office, "short")} · {localDate()} · Realtime Live Updates
           </p>
         </div>
         <nav>

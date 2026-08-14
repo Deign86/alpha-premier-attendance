@@ -72,3 +72,8 @@ export const getScannerStatus = () => invoke<ScannerStatus>('scanner_status');
  * setup, manual entry) so keystrokes are never misread as card scans.
  */
 export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause', { paused });
+
+/** Listen for native real-time attendance changes from the Rust/SQLite layer. */
+export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
+  listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
+

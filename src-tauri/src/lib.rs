@@ -2294,7 +2294,18 @@ async fn scan_rfid(
                 status: attendance_status.to_string(),
             }),
         });
-    let _ = app.emit("attendance-updated", serde_json::json!({"attendanceId":attendance_id.clone(),"attendanceDate":date.clone(),"action":action,"sequence":seq}));
+    let event_payload = serde_json::json!({
+        "attendanceId": attendance_id.clone(),
+        "attendanceDate": date.clone(),
+        "userId": user_id.clone(),
+        "action": action,
+        "timeIn": time_in,
+        "timeOut": time_out,
+        "status": attendance_status,
+        "sequence": seq
+    });
+    let _ = app.emit("attendance-updated", &event_payload);
+    let _ = app.emit("attendance-changed", &event_payload);
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&timestamp).bind(&uid).bind(&user_id).bind(format!("{} recorded", action)).bind(&request_id).execute(&state.db).await;
     let payload = serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"userId":user_id,"action":action,"timeIn":time_in,"timeOut":time_out});
     enqueue_sync(
