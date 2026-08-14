@@ -1974,6 +1974,7 @@ function AdminPanel() {
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
   const [nuking, setNuking] = useState(false);
+  const [nukeConfirmOpen, setNukeConfirmOpen] = useState(false);
   const unlock = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
@@ -1988,12 +1989,7 @@ function AdminPanel() {
     setError("");
   };
   const nukeSheets = async () => {
-    if (
-      !window.confirm(
-        "This will wipe all Google Sheets data and re-export from SQLite. Continue?",
-      )
-    )
-      return;
+    setNukeConfirmOpen(false);
     setNuking(true);
     setError("");
     const response = await nukeSheetsResync(true);
@@ -2096,7 +2092,7 @@ function AdminPanel() {
               className="text-button"
               type="button"
               disabled={nuking}
-              onClick={() => void nukeSheets()}
+              onClick={() => setNukeConfirmOpen(true)}
             >
               {nuking ? "Nuking…" : "Nuke & resync Sheets"}
             </button>
@@ -2167,6 +2163,14 @@ function AdminPanel() {
       ) : (
         <DatabasePanel />
       )}
+      <ConfirmDialog
+        open={nukeConfirmOpen}
+        busy={nuking}
+        title="Wipe Google Sheets?"
+        message="This will wipe all Google Sheets data and re-export everything from SQLite. This cannot be undone."
+        onCancel={() => setNukeConfirmOpen(false)}
+        onConfirm={() => void nukeSheets()}
+      />
     </main>
   );
 }
@@ -2193,6 +2197,7 @@ function DatabasePanel() {
   const [backupResult, setBackupResult] = useState<GeneratedFileResult | null>(
     null,
   );
+  const [restoreFile, setRestoreFile] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const response = await loadDatabaseInfo();
@@ -2238,22 +2243,23 @@ function DatabasePanel() {
         filters: [{ name: "Alpha Premier portable backup", extensions: ["apbackup", "db"] }],
       });
       if (!selected || typeof selected !== "string") return;
-      if (
-        !window.confirm(
-          "The app will close and restore the database from this file on the next launch. Continue?",
-        )
-      )
-        return;
-      setBusy(true);
-      setError("");
-      setNotice("");
-      const response = await requestDatabaseRestore(selected);
-      setBusy(false);
-      if (response.success) setNotice(response.message);
-      else setError(response.error.message);
+      setRestoreFile(selected);
     } catch {
       setError("Unable to open the file picker.");
     }
+  };
+
+  const confirmRestore = async () => {
+    if (!restoreFile) return;
+    const file = restoreFile;
+    setRestoreFile(null);
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const response = await requestDatabaseRestore(file);
+    setBusy(false);
+    if (response.success) setNotice(response.message);
+    else setError(response.error.message);
   };
 
   const openBackups = async () => {
@@ -2383,6 +2389,14 @@ function DatabasePanel() {
           </ul>
         </div>
       )}
+      <ConfirmDialog
+        open={Boolean(restoreFile)}
+        busy={busy}
+        title="Restore database from backup?"
+        message="The app will close and restore the database from the selected file on the next launch. Any data on this device will be replaced."
+        onCancel={() => setRestoreFile(null)}
+        onConfirm={() => void confirmRestore()}
+      />
     </section>
   );
 }
@@ -2413,6 +2427,7 @@ function UserEditor({
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
   const [message, setMessage] = useState("");
   const [deletingUserId, setDeletingUserId] = useState("");
+  const [deleteUserTarget, setDeleteUserTarget] = useState<AdminUser | null>(null);
   useEffect(() => {
     setForm(editing ?? blankUser);
     setMessage("");
@@ -2449,13 +2464,10 @@ function UserEditor({
       }
     }
   };
-  const remove = async (user: AdminUser) => {
-    if (
-      !window.confirm(
-        `Are you sure you want to delete ${user.fullName} (${user.userId})? This cannot be undone.`,
-      )
-    )
-      return;
+  const remove = async () => {
+    if (!deleteUserTarget) return;
+    const user = deleteUserTarget;
+    setDeleteUserTarget(null);
     setDeletingUserId(user.userId);
     try {
       const response = await deleteAdminUser(user.userId);
@@ -2677,7 +2689,7 @@ function UserEditor({
                     <button
                       className="text-button danger-button"
                       disabled={deletingUserId === user.userId}
-                      onClick={() => void remove(user)}
+                      onClick={() => setDeleteUserTarget(user)}
                     >
                       {deletingUserId === user.userId
                         ? "Deleting..."
@@ -2690,6 +2702,14 @@ function UserEditor({
           </table>
         </div>
       </section>
+      <ConfirmDialog
+        open={Boolean(deleteUserTarget)}
+        busy={Boolean(deletingUserId)}
+        title="Delete user?"
+        message={deleteUserTarget ? `Are you sure you want to delete ${deleteUserTarget.fullName} (${deleteUserTarget.userId})? This cannot be undone.` : ""}
+        onCancel={() => setDeleteUserTarget(null)}
+        onConfirm={() => void remove()}
+      />
     </div>
   );
 }
@@ -3370,8 +3390,15 @@ function PayrollTable({
 }) {
   const [message, setMessage] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
-  const finalize = async (payrollId: string) => {
-    const response = await finalizePayrollCutoff(payrollId);
+  const [finalizeTarget, setFinalizeTarget] = useState<PayrollCutoffRecord | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
+  const finalize = async () => {
+    if (!finalizeTarget) return;
+    const target = finalizeTarget;
+    setFinalizeTarget(null);
+    setFinalizing(true);
+    const response = await finalizePayrollCutoff(target.payrollId);
+    setFinalizing(false);
     if ((response as { success?: boolean }).success) {
       setMessage("Payroll finalized.");
       onFinalized();
@@ -3461,7 +3488,8 @@ function PayrollTable({
                         <button
                           className="text-button"
                           type="button"
-                          onClick={() => void finalize(row.payrollId)}
+                          disabled={finalizing}
+                          onClick={() => setFinalizeTarget(row)}
                         >
                           Finalize
                         </button>
@@ -3533,6 +3561,14 @@ function PayrollTable({
         message={deleteTarget ? `This will permanently delete the draft payroll for ${deleteTarget.employeeName} (${deleteTarget.payrollCutoffLabel}). Finalized payrolls cannot be deleted.` : ""}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => void remove()}
+      />
+      <ConfirmDialog
+        open={Boolean(finalizeTarget)}
+        busy={finalizing}
+        title="Finalize payroll?"
+        message={finalizeTarget ? `This will finalize the payroll for ${finalizeTarget.employeeName} (${finalizeTarget.payrollCutoffLabel}). Finalized payrolls cannot be edited or deleted.` : ""}
+        onCancel={() => setFinalizeTarget(null)}
+        onConfirm={() => void finalize()}
       />
     </>
   );
@@ -3803,6 +3839,7 @@ function AttendanceEditRow({
   );
   const [message, setMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [deleteAttendanceConfirm, setDeleteAttendanceConfirm] = useState(false);
   const late = row.status === "LATE_TIMEOUT";
   const save = async () => {
     const toIso = (value: string) =>
@@ -3829,12 +3866,7 @@ function AttendanceEditRow({
       );
   };
   const remove = async () => {
-    if (
-      !window.confirm(
-        `Delete ${row.fullName}'s ${row.attendanceDate} time-in/time-out record?`,
-      )
-    )
-      return;
+    setDeleteAttendanceConfirm(false);
     setDeleting(true);
     const response = await deleteAdminAttendance(
       row.attendanceId,
@@ -3895,13 +3927,27 @@ function AttendanceEditRow({
           <button
             className="text-button danger-button"
             disabled={deleting}
-            onClick={() => void remove()}
+            onClick={() => setDeleteAttendanceConfirm(true)}
           >
             {deleting ? "Deleting..." : "Delete"}
           </button>
           {message && <small>{message}</small>}
         </td>
       </tr>
+      {deleteAttendanceConfirm && (
+        <tr>
+          <td colSpan={5} style={{ padding: 0 }}>
+            <ConfirmDialog
+              open={true}
+              busy={deleting}
+              title="Delete attendance record?"
+              message={`This will permanently delete ${row.fullName}'s time-in/time-out record for ${row.attendanceDate}. This cannot be undone.`}
+              onCancel={() => setDeleteAttendanceConfirm(false)}
+              onConfirm={() => void remove()}
+            />
+          </td>
+        </tr>
+      )}
     </>
   );
 }
