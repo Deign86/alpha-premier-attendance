@@ -5,30 +5,13 @@ export { DEFAULT_OFFICE_IDENTITY, OFFICE_FALLBACK_DISPLAY, composeOfficeAddress,
 export const scanSources = ['RFID', 'MANUAL_TEST'] as const;
 export type ScanSource = (typeof scanSources)[number];
 
-/** Native scanner transports. Keyboard-wedge detection is never a verified background source. */
-export const scannerTransports = ['raw_hid', 'serial', 'vendor_sdk', 'keyboard_wedge_detection', 'disabled'] as const;
-export type ScannerTransport = (typeof scannerTransports)[number];
-
-/** Confidence is about the capture path, not about timing or UID shape alone. */
-export const scannerConfidences = ['device_verified', 'prefix_suffix_verified', 'heuristic_candidate', 'rejected'] as const;
-export type ScannerConfidence = (typeof scannerConfidences)[number];
-
-export type ForegroundInputProtection = 'guaranteed' | 'not_guaranteed' | 'not_applicable';
-
 export type ScannerStatus = {
   state: 'connected' | 'scanning' | 'offline' | 'error';
   message: string;
   detail: string | null;
-  mode: 'keyboard' | 'hid' | 'serial' | 'auto';
-  transport: ScannerTransport;
-  confidence: ScannerConfidence | null;
+  mode: 'keyboard';
   paused: boolean;
 };
-
-/** Only verified device-specific, non-keyboard transports may write while hidden. */
-export function canCreateBackgroundAttendance(confidence: ScannerConfidence, transport: ScannerTransport): boolean {
-  return confidence === 'device_verified' && ['raw_hid', 'serial', 'vendor_sdk'].includes(transport);
-}
 
 export const attendanceActions = ['TIME_IN', 'TIME_OUT'] as const;
 export type AttendanceAction = (typeof attendanceActions)[number];
@@ -484,7 +467,7 @@ export type SafeConfigResponse = {
   enableAdmin?: boolean;
   /** Office identity used for production-facing place labels, exports, and reports. */
   office?: OfficeIdentity;
-  scanner?: { mode: 'keyboard' | 'hid' | 'serial' | 'auto'; paused: boolean; expectedLength: number; characterSet: 'decimal' | 'hex' };
+  scanner?: { mode?: 'keyboard'; paused: boolean; expectedLength: number; characterSet: 'decimal' | 'hex' };
 };
 
 export type SetupUser = {

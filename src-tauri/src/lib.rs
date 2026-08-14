@@ -30,13 +30,7 @@ fn get_health(state: State<'_, AppState>) -> serde_json::Value {
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":crate::services::scanner::mode_label(state.scanner.config.mode),"paused":state.scanner.paused(),"expectedLength":state.scanner.config.expected_length,"characterSet":if matches!(state.scanner.config.character_set, crate::config::ScannerCharacterSet::Hex) { "hex" } else { "decimal" }},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
-}
-
-#[tauri::command]
-fn scanner_devices() -> Result<Vec<serde_json::Value>, String> {
-    let api = hidapi::HidApi::new().map_err(|e| e.to_string())?;
-    Ok(api.device_list().map(|d| serde_json::json!({"path": d.path().to_string_lossy(), "vendorId": d.vendor_id(), "productId": d.product_id(), "productString": d.product_string(), "usagePage": d.usage_page(), "usage": d.usage(), "interfaceNumber": d.interface_number(), "readerHint": d.usage_page() == 1 && d.usage() == 6})).collect())
+    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":"keyboard","paused":state.scanner.paused(),"expectedLength":state.scanner.config.expected_length,"characterSet":if matches!(state.scanner.config.character_set, crate::config::ScannerCharacterSet::Hex) { "hex" } else { "decimal" }},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
 }
 
 #[tauri::command]
@@ -2572,7 +2566,6 @@ pub fn run() {
             scan_rfid,
             scanner_status,
             scanner_pause,
-            scanner_devices,
             notify_scan_success,
             upload_photo,
             admin_users,
