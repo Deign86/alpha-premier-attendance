@@ -205,7 +205,8 @@ pub struct OfficeConfig {
 
 const OFFICE_FALLBACK_DISPLAY: &str = "Alpha Premier Office";
 
-fn default_company_name() -> String { "Alpha Premier".into() }
+fn default_company_name() -> String { "Alpha Premier Group of Companies OPC.".into() }
+fn default_tax_identification_number() -> Option<String> { Some("010-871-213-0000".into()) }
 fn default_office_label() -> String { "Main Office".into() }
 fn default_address_line_1() -> String { "Unit 3104C".into() }
 fn default_building() -> String { "Tektite East Tower".into() }
@@ -228,7 +229,7 @@ impl Default for OfficeConfig {
             office_region: default_region(),
             office_country: default_country(),
             office_postal_code: String::new(),
-            tax_identification_number: None,
+            tax_identification_number: default_tax_identification_number(),
             office_display_short: default_display_short(),
             office_display_full: default_display_full(),
         }
@@ -358,11 +359,11 @@ mod tests {
     #[test]
     fn office_defaults_match_the_canonical_address() {
         let office = OfficeConfig::default();
-        assert_eq!(office.company_name, "Alpha Premier");
+        assert_eq!(office.company_name, "Alpha Premier Group of Companies OPC.");
         assert_eq!(office.display_full(), "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila");
         assert_eq!(office.display_short(), "Tektite East Tower, Ortigas Center, Pasig");
         assert!(office.office_postal_code.is_empty(), "postal code must stay unset until confirmed");
-        assert!(office.tax_identification_number.is_none(), "TIN stays unset until configured");
+        assert_eq!(office.tax_identification_number.as_deref(), Some("010-871-213-0000"));
     }
 
     #[test]
@@ -430,7 +431,7 @@ mod tests {
         assert_eq!(
             office.metadata_lines(),
             vec![
-                "Company: Alpha Premier".to_string(),
+                "Company: Alpha Premier Group of Companies OPC.".to_string(),
                 "Office: Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".to_string(),
             ]
         );

@@ -1301,8 +1301,8 @@ fn sheet_cell(
 
 /// Column widths of the reference payroll sheet in millimeters (usable width
 /// is 297 - 2 * 12 = 273 mm).
-const SHEET_COL_WIDTHS_MM: [f32; 12] = [
-    27.0, 41.0, 22.0, 19.0, 18.0, 18.0, 22.0, 22.0, 16.5, 16.5, 16.5, 35.0,
+const SHEET_COL_WIDTHS_MM: [f32; 13] = [
+    24.0, 36.0, 20.0, 17.0, 16.0, 16.0, 20.0, 20.0, 15.0, 15.0, 15.0, 25.0, 34.0,
 ];
 const SHEET_LEFT_MM: f32 = 12.0;
 const SHEET_ROW_H_MM: f32 = 7.0;
@@ -1339,7 +1339,7 @@ pub fn generate_payroll_sheet_pdf(
         let mut header_y = 191.0;
         if let Some(tin) = office.tax_identification_number.as_deref() {
             if !tin.trim().is_empty() {
-                sheet_text(&mut ops, format!("TIN: {tin}"), 12.0, header_y, 8.5, false);
+                sheet_text(&mut ops, format!("TIN# {tin}"), 12.0, header_y, 8.5, false);
                 header_y -= 6.0;
             }
         }
@@ -1371,7 +1371,7 @@ pub fn generate_payroll_sheet_pdf(
         ops.push(Op::RestoreGraphicsState);
 
         // --- table header row ---
-        const HEADERS: [&str; 12] = [
+        const HEADERS: [&str; 13] = [
             "Employee #",
             "Employee Name",
             "Cut Off Rate",
@@ -1384,6 +1384,7 @@ pub fn generate_payroll_sheet_pdf(
             "Halfday",
             "Absent",
             "Gross Compensation",
+            "Signature",
         ];
         let table_top_y = 170.0;
         let header_h = 8.0;
@@ -1397,7 +1398,7 @@ pub fn generate_payroll_sheet_pdf(
         // --- data rows ---
         let mut row_y = table_top_y - header_h - SHEET_ROW_H_MM;
         for row in chunk.iter() {
-            let cells: [String; 12] = [
+            let cells: [String; 13] = [
                 row.employee_id.clone(),
                 row.employee_name.clone(),
                 format_php(row.cutoff_rate_centavos),
@@ -1410,6 +1411,7 @@ pub fn generate_payroll_sheet_pdf(
                 format_php(row.half_day_deduction_centavos),
                 format_php(row.absence_deduction_centavos),
                 format_php(row.gross_compensation_centavos),
+                String::new(), // Signature blank for physical signing
             ];
             x = SHEET_LEFT_MM;
             for (index, cell) in cells.iter().enumerate() {
@@ -1427,6 +1429,8 @@ pub fn generate_payroll_sheet_pdf(
             sheet_cell(&mut ops, SHEET_LEFT_MM, row_y, total_w, SHEET_ROW_H_MM, "Grand Total", 7.0, true, true, false);
             let last_x = SHEET_LEFT_MM + total_w;
             sheet_cell(&mut ops, last_x, row_y, SHEET_COL_WIDTHS_MM[11], SHEET_ROW_H_MM, &format_php(total_gross), 7.0, true, false, true);
+            let sig_x = last_x + SHEET_COL_WIDTHS_MM[11];
+            sheet_cell(&mut ops, sig_x, row_y, SHEET_COL_WIDTHS_MM[12], SHEET_ROW_H_MM, "", 7.0, false, false, false);
         }
 
         // --- footer ---

@@ -77,11 +77,11 @@ describe('office identity', () => {
 
   it('builds clean Company/Office metadata lines', () => {
     expect(officeMetadataLines(DEFAULT_OFFICE_IDENTITY)).toEqual([
-      'Company: Alpha Premier',
+      'Company: Alpha Premier Group of Companies OPC.',
       'Office: Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila',
     ]);
     expect(officeMetadataLines(undefined)).toEqual([
-      'Company: Alpha Premier',
+      'Company: Alpha Premier Group of Companies OPC.',
       'Office: Alpha Premier Office',
     ]);
   });

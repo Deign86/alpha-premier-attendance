@@ -27,7 +27,7 @@ export type OfficeIdentity = {
 };
 
 export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
-  companyName: 'Alpha Premier',
+  companyName: 'Alpha Premier Group of Companies OPC.',
   taxIdentificationNumber: '010-871-213-0000',
   officeLabel: 'Main Office',
   officeAddressLine1: 'Unit 3104C',
