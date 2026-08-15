@@ -2,6 +2,7 @@ use crate::{
     config::{LanConfig, OfficeConfig, ScannerConfig},
     error::AppError,
     lan_server::{self, LanIssue},
+    services::sheets_sync::GoogleSheetsTarget,
 };
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{
@@ -160,6 +161,11 @@ pub struct AppState {
     /// Native RFID scanner control surface (status + pause) shared with the
     /// scanner worker threads.
     pub scanner: Arc<crate::services::scanner::ScannerHandle>,
+    /// Cached resolved Google Sheets/Drive target from the provisioning step.
+    /// Kept in-process so the periodic sync worker reuses the same IDs instead
+    /// of re-provisioning on every pass; the authoritative IDs are persisted
+    /// in `data_dir/google-sheets-state.json`.
+    pub google_sheets_target: Arc<tokio::sync::RwLock<Option<GoogleSheetsTarget>>>,
 }
 
 #[derive(Clone)]
@@ -219,6 +225,7 @@ impl AppState {
             admin_session: Arc::new(tokio::sync::Mutex::new(None)),
             lan_runtime: Arc::new(LanRuntime::new()),
             scanner: Arc::new(crate::services::scanner::ScannerHandle::new(scanner)),
+            google_sheets_target: Arc::new(tokio::sync::RwLock::new(None)),
         })
     }
 

@@ -3,13 +3,24 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Asia::Manila;
 use sqlx::Row;
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct ServiceAccount {
     client_email: String,
     private_key: String,
     token_uri: Option<String>,
+}
+
+impl std::fmt::Debug for ServiceAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceAccount")
+            .field("client_email", &self.client_email)
+            .field("private_key", &"[redacted]")
+            .field("token_uri", &self.token_uri)
+            .finish()
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -32,6 +43,38 @@ const SHEETS_INVALID_PAYLOAD_ERROR: &str = "Google Sheets sync payload is invali
 const SHEETS_REQUEST_FAILED_ERROR: &str = "Google Sheets sync failed";
 const PROCESSING_LEASE_TIMEOUT_MINUTES: i64 = 5;
 const SYNC_BATCH_SIZE: i64 = 50;
+
+/// Google API error codes surfaced to the sync queue. They intentionally
+/// contain no credentials, paths, or response bodies.
+pub const GOOGLE_NOT_FOUND: &str = "GOOGLE_NOT_FOUND";
+pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
+pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
+pub const GOOGLE_RATE_LIMITED: &str = "GOOGLE_RATE_LIMITED";
+pub const GOOGLE_REQUEST_FAILED: &str = "GOOGLE_REQUEST_FAILED";
+const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+const GOOGLE_SHEETS_SCOPE: &str = "https://www.googleapis.com/auth/spreadsheets";
+const GOOGLE_DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
+const GOOGLE_SCOPES: &str =
+    "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive";
+
+/// Persisted in `data_dir/google-sheets-state.json`. Only generated resource
+/// IDs live here; never service-account keys or tokens.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct GoogleSheetsState {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub drive_folder_id: Option<String>,
+    #[serde(default)]
+    pub spreadsheet_id: Option<String>,
+}
+
+/// Resolved provisioning target used by the sync queue worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleSheetsTarget {
+    pub spreadsheet_id: String,
+    pub drive_folder_id: Option<String>,
+}
 
 /// Every tab that is managed (written, deleted, formatted) by the exporter.
 /// Tab names must exactly match the CSV/export names.
@@ -647,7 +690,7 @@ async fn google_access_token(path: &str) -> Result<String, String> {
     let now = chrono::Utc::now().timestamp();
     let claims = JwtClaims {
         iss: &account.client_email,
-        scope: "https://www.googleapis.com/auth/spreadsheets",
+        scope: GOOGLE_SCOPES,
         aud: account
             .token_uri
             .as_deref()
@@ -679,6 +722,417 @@ async fn google_access_token(path: &str) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .map(str::to_owned)
         .ok_or_else(|| "Google token response did not contain access_token".into())
+}
+
+fn google_status_error(status: reqwest::StatusCode) -> &'static str {
+    match status.as_u16() {
+        401 => GOOGLE_AUTH_FAILED,
+        403 => GOOGLE_PERMISSION_DENIED,
+        404 => GOOGLE_NOT_FOUND,
+        429 => GOOGLE_RATE_LIMITED,
+        _ => GOOGLE_REQUEST_FAILED,
+    }
+}
+
+async fn google_json_response(response: reqwest::Response) -> Result<serde_json::Value, String> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(google_status_error(status).to_string());
+    }
+    response
+        .json()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())
+}
+
+fn drive_folder_url(folder_id: &str) -> String {
+    format!(
+        "https://www.googleapis.com/drive/v3/files/{folder_id}?fields=id,mimeType&supportsAllDrives=true"
+    )
+}
+
+fn drive_create_folder_url() -> &'static str {
+    "https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true"
+}
+
+fn drive_parents_url(file_id: &str) -> String {
+    format!(
+        "https://www.googleapis.com/drive/v3/files/{file_id}?fields=parents&supportsAllDrives=true"
+    )
+}
+
+/// `addParents` adds the folder without removing any existing parent; the
+/// spreadsheet remains visible everywhere it already lives.
+fn drive_add_parent_url(file_id: &str, folder_id: &str) -> String {
+    format!(
+        "https://www.googleapis.com/drive/v3/files/{file_id}?addParents={folder_id}&fields=id,parents&supportsAllDrives=true"
+    )
+}
+
+fn sheets_spreadsheet_url(spreadsheet_id: &str) -> String {
+    format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=spreadsheetId")
+}
+
+fn sheets_create_spreadsheet_url() -> &'static str {
+    "https://sheets.googleapis.com/v4/spreadsheets?fields=spreadsheetId"
+}
+
+fn google_state_file(state: &AppState) -> PathBuf {
+    state.data_dir.join("google-sheets-state.json")
+}
+
+fn read_google_state(file: &Path) -> Result<GoogleSheetsState, String> {
+    let raw = match std::fs::read_to_string(file) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GoogleSheetsState::default());
+        }
+        Err(error) => return Err(format!("Google Sheets state file is not readable: {error}")),
+    };
+    serde_json::from_str(&raw).map_err(|_| "Google Sheets state file is not valid JSON".to_string())
+}
+
+fn write_google_state(file: &Path, state: &GoogleSheetsState) -> Result<(), String> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create Google Sheets state directory: {error}"))?;
+    }
+    let name = file
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("google-sheets-state.json");
+    let temp = file.with_file_name(format!("{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("serialize Google Sheets state: {error}"))?;
+    std::fs::write(&temp, format!("{json}\n"))
+        .map_err(|error| format!("write Google Sheets state: {error}"))?;
+    std::fs::rename(&temp, file).map_err(|error| format!("replace Google Sheets state: {error}"))
+}
+
+async fn drive_folder_exists(
+    client: &reqwest::Client,
+    token: &str,
+    folder_id: &str,
+) -> Result<bool, String> {
+    let response = client
+        .get(drive_folder_url(folder_id))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    if response.status().as_u16() == 404 {
+        return Ok(false);
+    }
+    let json = google_json_response(response).await?;
+    Ok(json.get("mimeType").and_then(|value| value.as_str()) == Some(GOOGLE_DRIVE_FOLDER_MIME))
+}
+
+async fn drive_create_folder(
+    client: &reqwest::Client,
+    token: &str,
+    name: &str,
+) -> Result<String, String> {
+    let response = client
+        .post(drive_create_folder_url())
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "name": name,
+            "mimeType": GOOGLE_DRIVE_FOLDER_MIME
+        }))
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    let json = google_json_response(response).await?;
+    json.get("id")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| GOOGLE_REQUEST_FAILED.to_string())
+}
+
+async fn drive_parents(
+    client: &reqwest::Client,
+    token: &str,
+    file_id: &str,
+) -> Result<Vec<String>, String> {
+    let response = client
+        .get(drive_parents_url(file_id))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    if response.status().as_u16() == 404 {
+        return Ok(Vec::new());
+    }
+    let json = google_json_response(response).await?;
+    Ok(json
+        .get("parents")
+        .and_then(|value| value.as_array())
+        .map(|parents| {
+            parents
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Adds `folder_id` as a parent of `file_id` using `addParents`, which keeps
+/// every existing parent intact (it never moves the file out of another
+/// folder).
+async fn drive_add_parent(
+    client: &reqwest::Client,
+    token: &str,
+    file_id: &str,
+    folder_id: &str,
+) -> Result<(), String> {
+    let response = client
+        .patch(drive_add_parent_url(file_id, folder_id))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(google_status_error(status).to_string());
+    }
+    Ok(())
+}
+
+async fn sheets_spreadsheet_exists(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+) -> Result<bool, String> {
+    let response = client
+        .get(sheets_spreadsheet_url(spreadsheet_id))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    if response.status().as_u16() == 404 {
+        return Ok(false);
+    }
+    google_json_response(response).await.map(|_| true)
+}
+
+async fn sheets_create_spreadsheet(
+    client: &reqwest::Client,
+    token: &str,
+    title: &str,
+) -> Result<String, String> {
+    let response = client
+        .post(sheets_create_spreadsheet_url())
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "properties": { "title": title } }))
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    let json = google_json_response(response).await?;
+    json.get("spreadsheetId")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| GOOGLE_REQUEST_FAILED.to_string())
+}
+
+async fn ensure_spreadsheet_in_folder(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    folder_id: &str,
+) -> Result<(), String> {
+    let parents = drive_parents(client, token, spreadsheet_id).await?;
+    if !parents.iter().any(|parent| parent == folder_id) {
+        drive_add_parent(client, token, spreadsheet_id, folder_id).await?;
+    }
+    Ok(())
+}
+
+/// Writes the managed header row when the tab's first row is blank. The
+/// header values are the canonical `MANAGED_TABLES` camelCase labels used by
+/// the rest of the sync pipeline.
+async fn ensure_tab_header(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    table_name: &str,
+) -> Result<(), String> {
+    let read_range = format!("{table_name}!A1:Z1");
+    let response = client
+        .get(format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+            urlencoding::encode(&read_range)
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    let existing = google_json_response(response).await?;
+    let rows = existing
+        .get("values")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let first_row_empty = rows.first().map_or(true, sheet_row_is_empty);
+    if !first_row_empty {
+        return Ok(());
+    }
+    let header_body = serde_json::json!({ "values": [sheet_headers(table_name)] });
+    let response = client
+        .put(format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}!A1?valueInputOption=RAW",
+            urlencoding::encode(table_name)
+        ))
+        .bearer_auth(token)
+        .json(&header_body)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(google_status_error(status).to_string());
+    }
+    Ok(())
+}
+
+async fn resolve_drive_folder(
+    client: &reqwest::Client,
+    token: &str,
+    state: &AppState,
+    persisted: &mut GoogleSheetsState,
+) -> Result<Option<String>, String> {
+    let configured = state
+        .lan
+        .google_drive_folder_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(folder_id) = configured {
+        if drive_folder_exists(client, token, folder_id).await? {
+            return Ok(Some(folder_id.to_string()));
+        }
+        if state.lan.google_create_folder_if_missing {
+            let created =
+                drive_create_folder(client, token, state.lan.google_drive_folder_name.trim())
+                    .await?;
+            persisted.drive_folder_id = Some(created.clone());
+            return Ok(Some(created));
+        }
+        return Err("GOOGLE_DRIVE_FOLDER_NOT_ACCESSIBLE".to_string());
+    }
+
+    if let Some(folder_id) = persisted.drive_folder_id.clone() {
+        if drive_folder_exists(client, token, &folder_id).await? {
+            return Ok(Some(folder_id));
+        }
+        persisted.drive_folder_id = None;
+    }
+
+    if state.lan.google_create_folder_if_missing {
+        let created =
+            drive_create_folder(client, token, state.lan.google_drive_folder_name.trim()).await?;
+        persisted.drive_folder_id = Some(created.clone());
+        return Ok(Some(created));
+    }
+
+    Ok(None)
+}
+
+/// Resolves (and when permitted creates) the Drive folder + Sheets spreadsheet
+/// used as the export target, then reconciles every managed tab's header,
+/// freeze, and formatting. Returns `None` when Google export is not configured.
+///
+/// Explicit `google_spreadsheet_id` always wins and is never silently replaced:
+/// a missing configured spreadsheet is an error rather than a trigger to
+/// auto-create a new one.
+pub async fn provision_google_sheets(
+    state: &AppState,
+) -> Result<Option<GoogleSheetsTarget>, String> {
+    let Some(path) = state.lan.google_service_account_json_path.as_deref() else {
+        return Ok(None);
+    };
+    let has_explicit_spreadsheet = state
+        .lan
+        .google_spreadsheet_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_folder = state
+        .lan
+        .google_drive_folder_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if !has_explicit_spreadsheet && !has_folder && !state.lan.google_create_folder_if_missing {
+        return Ok(None);
+    }
+
+    let token = google_access_token(path).await?;
+    let client = reqwest::Client::new();
+    let file = google_state_file(state);
+    let mut persisted = read_google_state(&file)?;
+    let folder_id = resolve_drive_folder(&client, &token, state, &mut persisted).await?;
+
+    let explicit_spreadsheet = state
+        .lan
+        .google_spreadsheet_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let mut spreadsheet_id = explicit_spreadsheet
+        .clone()
+        .or_else(|| persisted.spreadsheet_id.clone());
+
+    if let Some(id) = spreadsheet_id.as_deref() {
+        if sheets_spreadsheet_exists(&client, &token, id).await? {
+            // Reuse the existing spreadsheet.
+        } else if explicit_spreadsheet.is_some() {
+            return Err("GOOGLE_CONFIGURED_SPREADSHEET_NOT_ACCESSIBLE".to_string());
+        } else {
+            spreadsheet_id = None;
+            persisted.spreadsheet_id = None;
+        }
+    }
+
+    if spreadsheet_id.is_none() {
+        if folder_id.is_none() {
+            return Err("GOOGLE_DRIVE_FOLDER_REQUIRED".to_string());
+        }
+        let created =
+            sheets_create_spreadsheet(&client, &token, state.lan.google_spreadsheet_title.trim())
+                .await?;
+        spreadsheet_id = Some(created);
+        persisted.spreadsheet_id = spreadsheet_id.clone();
+    }
+
+    let spreadsheet_id = spreadsheet_id.ok_or_else(|| GOOGLE_REQUEST_FAILED.to_string())?;
+    if let Some(folder) = folder_id.as_deref() {
+        ensure_spreadsheet_in_folder(&client, &token, &spreadsheet_id, folder).await?;
+        persisted.drive_folder_id = Some(folder.to_string());
+    }
+
+    for table_name in MANAGED_TABLES {
+        ensure_tab_exists(&client, &token, &spreadsheet_id, table_name).await?;
+        ensure_tab_header(&client, &token, &spreadsheet_id, table_name).await?;
+        google_format_sheet_with_token(&client, &token, &spreadsheet_id, table_name).await?;
+    }
+
+    write_google_state(&file, &persisted)?;
+    Ok(Some(GoogleSheetsTarget {
+        spreadsheet_id,
+        drive_folder_id: folder_id,
+    }))
+}
+
+/// In-process provisioning cache: provisioning runs once per app session, then
+/// the sync worker reuses the resolved spreadsheet/folder IDs.
+async fn ensure_provisioned(state: &AppState) -> Result<Option<GoogleSheetsTarget>, String> {
+    if let Some(target) = state.google_sheets_target.read().await.clone() {
+        return Ok(Some(target));
+    }
+    let target = provision_google_sheets(state).await?;
+    if target.is_some() {
+        *state.google_sheets_target.write().await = target.clone();
+    }
+    Ok(target)
 }
 
 fn color_rgb(hex: u32) -> serde_json::Value {
@@ -939,6 +1393,15 @@ async fn google_format_sheet(
 ) -> Result<(), String> {
     let token = google_access_token(path).await?;
     let client = reqwest::Client::new();
+    google_format_sheet_with_token(&client, &token, spreadsheet_id, table_name).await
+}
+
+async fn google_format_sheet_with_token(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    table_name: &str,
+) -> Result<(), String> {
     let headers = sheet_headers(table_name);
     let col_count = headers.len();
 
@@ -946,7 +1409,7 @@ async fn google_format_sheet(
         .get(format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(sheetId,properties(sheetId,title,gridProperties(rowCount)),bandedRanges(bandedRangeId))"
         ))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .send()
         .await
         .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
@@ -987,7 +1450,7 @@ async fn google_format_sheet(
             "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
             urlencoding::encode(&read_range)
         ))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .send()
         .await
         .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
@@ -1121,7 +1584,7 @@ async fn google_format_sheet(
             .post(format!(
                 "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
             ))
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .json(&serde_json::json!({ "requests": chunk }))
             .send()
             .await
@@ -1289,18 +1752,21 @@ async fn load_table_payloads(
 /// header), drops stale queued operations, then re-enqueues the current SQLite
 /// state as fresh upserts so the queue drains the spreadsheet back into sync.
 pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, String> {
-    let (Some(path), Some(spreadsheet)) = (
-        state.lan.google_service_account_json_path.as_deref(),
-        state.lan.google_spreadsheet_id.as_deref(),
-    ) else {
+    let Some(target) = provision_google_sheets(state).await? else {
         return Err("GOOGLE_SHEETS_NOT_CONFIGURED".into());
     };
+    let spreadsheet = target.spreadsheet_id;
+    let path = state
+        .lan
+        .google_service_account_json_path
+        .as_deref()
+        .ok_or_else(|| "GOOGLE_SHEETS_NOT_CONFIGURED".to_string())?;
     let client = reqwest::Client::new();
     let token = google_access_token(path).await?;
     let mut cleared = 0usize;
     let mut queued = 0usize;
     for table_name in MANAGED_TABLES {
-        ensure_tab_exists(&client, &token, spreadsheet, table_name).await?;
+        ensure_tab_exists(&client, &token, &spreadsheet, table_name).await?;
         let clear_range = format!("{}!A2:Z", table_name);
         client
             .post(format!(
@@ -1338,10 +1804,12 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
 pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, String> {
     let now_at = Utc::now();
     recover_stale_processing_leases(state, now_at).await?;
-    if endpoint.is_none()
-        && (state.lan.google_service_account_json_path.is_none()
-            || state.lan.google_spreadsheet_id.is_none())
-    {
+    let google_target = if endpoint.is_none() {
+        ensure_provisioned(state).await?
+    } else {
+        None
+    };
+    if endpoint.is_none() && google_target.is_none() {
         return Ok(0);
     }
 
@@ -1354,7 +1822,9 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
 
     let google_mode = endpoint.is_none();
     let google_path = state.lan.google_service_account_json_path.as_deref();
-    let spreadsheet_id = state.lan.google_spreadsheet_id.as_deref();
+    let spreadsheet_id = google_target
+        .as_ref()
+        .map(|target| target.spreadsheet_id.as_str());
 
     if google_mode {
         if let (Some(path), Some(spreadsheet)) = (google_path, spreadsheet_id) {
