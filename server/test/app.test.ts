@@ -22,7 +22,7 @@ describe('HTTP API', () => {
     const config = await request(app).get('/api/config').expect(200);
     expect(config.body.timezone).toBe('Asia/Manila');
     expect(config.body.office).toMatchObject({
-      companyName: 'Alpha Premier',
+      companyName: 'Alpha Premier Group of Companies OPC.',
       officeAddressLine1: 'Unit 3104C',
       officeBuilding: 'Tektite East Tower',
       officeCity: 'Pasig',

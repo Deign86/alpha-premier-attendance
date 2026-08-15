@@ -317,6 +317,17 @@ export type PayrollCutoffRecord = {
   approvedWorkingDayOverage: boolean;
   status: 'DRAFT' | 'FINALIZED';
   finalizedAt: string | null;
+  department?: string;
+  designation?: string;
+  tin?: string;
+  bankName?: string;
+  accountNumber?: string;
+  hra?: number;
+  sss?: number;
+  phic?: number;
+  hdmf?: number;
+  salaryAdvance?: number;
+  totalDeductions?: number;
 };
 
 export const generatedFileKinds = ['csv', 'xlsx', 'pdf', 'backup', 'report', 'other'] as const;
