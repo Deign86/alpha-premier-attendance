@@ -34,6 +34,17 @@ ADMIN_SESSION_SECRET=<long-random-server-secret>
 ADMIN_SESSION_MINUTES=15
 ```
 
+Optional Drive folder auto-create/reuse (see [google-sheets-setup.md](google-sheets-setup.md)):
+
+```text
+GOOGLE_DRIVE_FOLDER_ID=<drive-folder-id>
+GOOGLE_DRIVE_FOLDER_NAME=Alpha Premier Attendance
+GOOGLE_CREATE_FOLDER_IF_MISSING=false
+GOOGLE_SHEETS_STATE_FILE=C:\ProgramData\AlphaPremierAttendance\google-sheets-state.json
+```
+
+When Drive management is enabled, the server verifies/moves the spreadsheet into the target folder and reconciles tabs on startup. Leave `GOOGLE_SHEETS_STATE_FILE` on a stable writable path so an auto-created folder (or spreadsheet) is reused after restart; the default is `~/.rfid-attendance/google-sheets-state.json`.
+
 Office identity is optional in the web-compatible server; when unset the canonical defaults are used. Configure the same values as the desktop `[office]` section when the server must show a different office:
 
 ```text

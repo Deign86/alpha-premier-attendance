@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
-import { google, type sheets_v4 } from 'googleapis';
+import fs from 'node:fs';
+import path from 'node:path';
+import { google, type sheets_v4, type drive_v3 } from 'googleapis';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaTimestamp } from './time.js';
 import type { PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
@@ -200,9 +202,14 @@ export class InMemorySheetsService implements GoogleSheetsService {
 }
 
 type GoogleSheetsOptions = {
-  spreadsheetId: string;
-  clientEmail: string;
-  privateKey: string;
+  spreadsheetId?: string;
+  spreadsheetTitle?: string;
+  clientEmail?: string;
+  privateKey?: string;
+  driveFolderId?: string;
+  driveFolderName?: string;
+  createFolderIfMissing?: boolean;
+  stateFile?: string;
   usersRange?: string;
   attendanceRange?: string;
   auditRange?: string;
@@ -212,7 +219,36 @@ type GoogleSheetsOptions = {
   payrollCutoffsRange?: string;
 };
 
+type ResolvedGoogleSheetsOptions = {
+  spreadsheetId: string;
+  spreadsheetTitle: string;
+  clientEmail: string;
+  privateKey: string;
+  driveFolderId?: string;
+  driveFolderName: string;
+  createFolderIfMissing: boolean;
+  stateFile?: string;
+  usersRange: string;
+  attendanceRange: string;
+  auditRange: string;
+  payrollRange: string;
+  internGraceRange: string;
+  payrollProfilesRange: string;
+  payrollCutoffsRange: string;
+};
+
+type GoogleSheetsState = {
+  version: number;
+  driveFolderId?: string;
+  spreadsheetId?: string;
+};
+
 type Table = { headers: string[]; rows: string[][] };
+
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive',
+];
 
 const requiredHeaders = {
   Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'photourl'],
@@ -225,30 +261,65 @@ const requiredHeaders = {
 } as const;
 const optionalHeaders = { Users: ['payrollprofileid'] } as const;
 
+/**
+ * Human-readable row-1 headers written when the adapter creates or repairs a
+ * tab. They mirror the operator runbook and canonicalize to `requiredHeaders`
+ * when read back, so existing snake_case and legacy flat header styles both
+ * validate.
+ */
+const sheetHeaderLabels: Record<keyof typeof requiredHeaders, string[]> = {
+  Users: ['user_id', 'rfid_uid', 'full_name', 'department', 'status', 'created_at', 'employee_type', 'daily_rate', 'photo_url', 'payroll_profile_id'],
+  Attendance: ['attendance_id', 'attendance_date', 'user_id', 'rfid_uid', 'full_name', 'department', 'time_in', 'time_out', 'status', 'source', 'notes'],
+  AuditLogs: ['log_id', 'timestamp', 'event_type', 'rfid_uid', 'user_id', 'message', 'request_id'],
+  Payroll: ['payroll_id', 'attendance_id', 'user_id', 'full_name', 'employee_type', 'attendance_date', 'actual_time_in', 'actual_time_out', 'computed_time_in', 'computed_time_out', 'grace_used', 'late_hours', 'late_deduction', 'base_pay', 'daily_pay', 'notes'],
+  InternGrace: ['grace_id', 'user_id', 'week_start', 'attendance_id', 'used_at'],
+  PayrollProfiles: ['profile_id', 'label', 'payroll_frequency', 'standard_working_days_per_cutoff', 'incentives_allowance', 'special_allowance', 'special_holiday_multiplier', 'regular_holiday_multiplier', 'half_day_fraction', 'overtime_rate'],
+  PayrollCutoffs: ['payroll_id', 'employee_id', 'employee_name', 'payroll_profile_id', 'payroll_cutoff_label', 'cutoff_start', 'cutoff_end', 'payroll_frequency', 'daily_rate', 'standard_working_days', 'actual_working_days', 'basic_pay', 'special_holiday_days', 'special_holiday_multiplier', 'special_holiday_pay', 'regular_holiday_days', 'regular_holiday_multiplier', 'regular_holiday_pay', 'incentives_allowance', 'special_allowance', 'total_compensation', 'total_allowance', 'late_units', 'late_deduction', 'half_day_count', 'half_day_deduction', 'absent_days', 'absence_deduction', 'overtime_hours', 'overtime_rate', 'overtime_pay', 'manual_adjustment', 'adjustment_reason', 'gross_compensation', 'net_pay', 'calculation_breakdown', 'approved_working_day_overage', 'status', 'finalized_at'],
+};
+
 export class GoogleSheetsAdapter implements GoogleSheetsService {
   private readonly api: sheets_v4.Sheets;
-  private readonly options: Required<GoogleSheetsOptions>;
+  private driveApi?: drive_v3.Drive;
+  private authInstance?: InstanceType<typeof google.auth.JWT>;
+  private readonly options: ResolvedGoogleSheetsOptions;
+  private state: GoogleSheetsState | undefined;
 
-  constructor(options: GoogleSheetsOptions, api?: sheets_v4.Sheets) {
+  constructor(options: GoogleSheetsOptions = {}, api?: sheets_v4.Sheets, driveApi?: drive_v3.Drive) {
     this.options = {
-      usersRange: 'Users',
-      attendanceRange: 'Attendance',
-      auditRange: 'AuditLogs',
-      payrollRange: 'Payroll',
-      internGraceRange: 'InternGrace',
-      payrollProfilesRange: 'PayrollProfiles',
-      payrollCutoffsRange: 'PayrollCutoffs',
-      ...options,
+      spreadsheetId: options.spreadsheetId ?? '',
+      spreadsheetTitle: options.spreadsheetTitle ?? 'Alpha Premier Attendance',
+      clientEmail: options.clientEmail ?? '',
+      privateKey: options.privateKey ?? '',
+      driveFolderId: options.driveFolderId,
+      driveFolderName: options.driveFolderName ?? 'Alpha Premier Attendance',
+      createFolderIfMissing: options.createFolderIfMissing ?? false,
+      stateFile: options.stateFile,
+      usersRange: options.usersRange ?? 'Users',
+      attendanceRange: options.attendanceRange ?? 'Attendance',
+      auditRange: options.auditRange ?? 'AuditLogs',
+      payrollRange: options.payrollRange ?? 'Payroll',
+      internGraceRange: options.internGraceRange ?? 'InternGrace',
+      payrollProfilesRange: options.payrollProfilesRange ?? 'PayrollProfiles',
+      payrollCutoffsRange: options.payrollCutoffsRange ?? 'PayrollCutoffs',
     };
-    if (api) this.api = api;
-    else {
-      const auth = new google.auth.JWT({
+    if (driveApi) this.driveApi = driveApi;
+    this.api = api ?? google.sheets({ version: 'v4', auth: this.auth });
+  }
+
+  private get auth(): InstanceType<typeof google.auth.JWT> {
+    if (!this.authInstance) {
+      this.authInstance = new google.auth.JWT({
         email: this.options.clientEmail,
         key: this.options.privateKey,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        scopes: GOOGLE_SCOPES,
       });
-      this.api = google.sheets({ version: 'v4', auth });
     }
+    return this.authInstance;
+  }
+
+  private get drive(): drive_v3.Drive {
+    if (!this.driveApi) this.driveApi = google.drive({ version: 'v3', auth: this.auth });
+    return this.driveApi;
   }
 
   private readonly headersCache = new Map<keyof typeof requiredHeaders, { headers: string[]; fetchedAt: number }>();
@@ -269,6 +340,305 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       case 'PayrollProfiles': return this.options.payrollProfilesRange;
       case 'PayrollCutoffs': return this.options.payrollCutoffsRange;
     }
+  }
+
+  private tabSpecs(): Array<{ sheet: keyof typeof requiredHeaders; title: string; headers: string[] }> {
+    return [
+      { sheet: 'Users', title: this.options.usersRange, headers: sheetHeaderLabels.Users },
+      { sheet: 'Attendance', title: this.options.attendanceRange, headers: sheetHeaderLabels.Attendance },
+      { sheet: 'AuditLogs', title: this.options.auditRange, headers: sheetHeaderLabels.AuditLogs },
+      { sheet: 'Payroll', title: this.options.payrollRange, headers: sheetHeaderLabels.Payroll },
+      { sheet: 'InternGrace', title: this.options.internGraceRange, headers: sheetHeaderLabels.InternGrace },
+      { sheet: 'PayrollProfiles', title: this.options.payrollProfilesRange, headers: sheetHeaderLabels.PayrollProfiles },
+      { sheet: 'PayrollCutoffs', title: this.options.payrollCutoffsRange, headers: sheetHeaderLabels.PayrollCutoffs },
+    ];
+  }
+
+  private async getState(): Promise<GoogleSheetsState> {
+    if (!this.state) this.state = await this.readState();
+    return this.state;
+  }
+
+  private async readState(): Promise<GoogleSheetsState> {
+    if (!this.options.stateFile) return { version: 1 };
+    const file = path.resolve(this.options.stateFile);
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(file, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1 };
+      throw new Error(`Google Sheets state file is not readable: ${file}`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`Google Sheets state file is not valid JSON: ${file}`);
+    }
+    const value = parsed as Partial<GoogleSheetsState> | null;
+    return {
+      version: typeof value?.version === 'number' ? value.version : 1,
+      driveFolderId: typeof value?.driveFolderId === 'string' && value.driveFolderId ? value.driveFolderId : undefined,
+      spreadsheetId: typeof value?.spreadsheetId === 'string' && value.spreadsheetId ? value.spreadsheetId : undefined,
+    };
+  }
+
+  private async writeState(patch: Partial<GoogleSheetsState>): Promise<void> {
+    const current = this.state ?? await this.readState();
+    this.state = { version: 1, ...current, ...patch };
+    if (!this.options.stateFile) return;
+    const file = path.resolve(this.options.stateFile);
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await fs.promises.writeFile(temp, `${JSON.stringify(this.state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await fs.promises.rename(temp, file);
+  }
+
+  private async driveFolderExists(folderId: string): Promise<boolean> {
+    try {
+      const result = await this.drive.files.get({ fileId: folderId, fields: 'id, mimeType' });
+      return result.data.mimeType === 'application/vnd.google-apps.folder';
+    } catch {
+      return false;
+    }
+  }
+
+  private async createDriveFolder(name: string): Promise<string> {
+    const result = await this.drive.files.create({
+      requestBody: { name, mimeType: 'application/vnd.google-apps.folder' },
+      fields: 'id',
+    });
+    const id = result.data.id;
+    if (!id) throw new Error('Google Drive did not return a folder ID');
+    return id;
+  }
+
+  private async resolveTargetFolder(): Promise<string | null> {
+    const configured = this.options.driveFolderId;
+    if (configured) {
+      if (await this.driveFolderExists(configured)) return configured;
+      if (this.options.createFolderIfMissing) {
+        const id = await this.createDriveFolder(this.options.driveFolderName);
+        await this.writeState({ driveFolderId: id });
+        return id;
+      }
+      throw new Error(`Google Drive folder ${configured} is not accessible`);
+    }
+
+    const state = await this.getState();
+    if (state.driveFolderId && await this.driveFolderExists(state.driveFolderId)) {
+      return state.driveFolderId;
+    }
+
+    if (this.options.createFolderIfMissing) {
+      const id = await this.createDriveFolder(this.options.driveFolderName);
+      await this.writeState({ driveFolderId: id });
+      return id;
+    }
+
+    return null;
+  }
+
+  private async spreadsheetExists(spreadsheetId: string): Promise<boolean> {
+    try {
+      await this.api.spreadsheets.get({ spreadsheetId, fields: 'spreadsheetId' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async createSpreadsheet(title: string, folderId: string | null): Promise<string> {
+    const result = await this.api.spreadsheets.create({
+      requestBody: { properties: { title } },
+      fields: 'spreadsheetId',
+    });
+    const spreadsheetId = result.data.spreadsheetId;
+    if (!spreadsheetId) throw new Error('Google Sheets did not return a spreadsheet ID');
+    if (folderId) {
+      await this.drive.files.update({ fileId: spreadsheetId, addParents: folderId, fields: 'id, parents' });
+    }
+    return spreadsheetId;
+  }
+
+  private async ensureSpreadsheetInFolder(spreadsheetId: string, folderId: string): Promise<void> {
+    let parents: string[] = [];
+    try {
+      const metadata = await this.drive.files.get({ fileId: spreadsheetId, fields: 'id, parents' });
+      parents = metadata.data.parents ?? [];
+    } catch {
+      // The file is still reachable through the Sheets API; let the update
+      // below surface any Drive permission problem.
+    }
+    if (!parents.includes(folderId)) {
+      const request: drive_v3.Params$Resource$Files$Update = {
+        fileId: spreadsheetId,
+        addParents: folderId,
+        fields: 'id, parents',
+      };
+      if (parents.length > 0) request.removeParents = parents.join(',');
+      await this.drive.files.update(request);
+    }
+  }
+
+  /**
+   * Production entry point for the Drive folder auto-create/reuse path.
+   *
+   * 1. Resolve the target Drive folder from `driveFolderId`, the persisted
+   *    state file, or a newly created folder when `createFolderIfMissing` is
+   *    enabled.
+   * 2. Reuse `spreadsheetId` when configured/persisted and still reachable;
+   *    otherwise create a spreadsheet inside the resolved folder.
+   * 3. Move an existing spreadsheet into the folder and reconcile the tab
+   *    schema (create missing tabs, write missing headers, format new tabs,
+   *    and seed default payroll profiles when the tab is empty).
+   */
+  async ensureSpreadsheet(): Promise<string> {
+    const persisted = await this.getState();
+    const folderId = await this.resolveTargetFolder();
+
+    let spreadsheetId = this.options.spreadsheetId || persisted.spreadsheetId || '';
+    const explicitSpreadsheetId = Boolean(this.options.spreadsheetId);
+
+    if (spreadsheetId && !(await this.spreadsheetExists(spreadsheetId))) {
+      if (explicitSpreadsheetId) {
+        throw new Error(`Configured Google spreadsheet ${spreadsheetId} is not accessible`);
+      }
+      spreadsheetId = '';
+    }
+
+    if (!spreadsheetId) {
+      if (!folderId) {
+        throw new Error('A Google Drive folder is required to auto-create a spreadsheet. Set GOOGLE_DRIVE_FOLDER_ID or GOOGLE_CREATE_FOLDER_IF_MISSING.');
+      }
+      spreadsheetId = await this.createSpreadsheet(this.options.spreadsheetTitle, folderId);
+      await this.writeState({ spreadsheetId });
+    } else if (folderId) {
+      await this.ensureSpreadsheetInFolder(spreadsheetId, folderId);
+    }
+
+    this.options.spreadsheetId = spreadsheetId;
+
+    await this.reconcileTabs();
+
+    if (folderId) await this.writeState({ driveFolderId: folderId });
+
+    return spreadsheetId;
+  }
+
+  private async writeHeaderRow(title: string, headers: string[]): Promise<void> {
+    await this.api.spreadsheets.values.update({
+      spreadsheetId: this.options.spreadsheetId,
+      range: `${title}!A1:${columnName(headers.length - 1)}1`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [headers] },
+    });
+  }
+
+  private async formatTabs(sheetIds: Map<string, { sheetId: number; columnCount: number }>): Promise<void> {
+    if (sheetIds.size === 0) return;
+    const requests: sheets_v4.Schema$Request[] = [];
+    for (const { sheetId, columnCount } of sheetIds.values()) {
+      requests.push(
+        {
+          repeatCell: {
+            range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: columnCount },
+            cell: {
+              userEnteredFormat: {
+                textFormat: { bold: true },
+                backgroundColorStyle: { rgbColor: { red: 0.85, green: 0.87, blue: 0.93 } },
+              },
+            },
+            fields: 'userEnteredFormat(textFormat,backgroundColorStyle)',
+          },
+        },
+        {
+          updateSheetProperties: {
+            properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+            fields: 'gridProperties.frozenRowCount',
+          },
+        },
+        {
+          autoResizeDimensions: {
+            dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: columnCount },
+          },
+        },
+      );
+    }
+    await this.api.spreadsheets.batchUpdate({
+      spreadsheetId: this.options.spreadsheetId,
+      requestBody: { requests },
+    });
+  }
+
+  private async reconcileTabs(): Promise<void> {
+    const spreadsheetId = this.options.spreadsheetId;
+    const metadata = await this.api.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
+    const existing = new Map<string, number>();
+    for (const sheet of metadata.data.sheets ?? []) {
+      const title = sheet.properties?.title;
+      const sheetId = sheet.properties?.sheetId;
+      if (title && sheetId !== undefined) existing.set(title, sheetId);
+    }
+
+    const specs = this.tabSpecs();
+    const missing = specs.filter((spec) => !existing.has(spec.title));
+    const toFormat = new Map<string, { sheetId: number; columnCount: number }>();
+
+    const addRequests = missing.map((spec) => ({ addSheet: { properties: { title: spec.title } } }));
+    if (addRequests.length > 0) {
+      const result = await this.api.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: addRequests },
+      });
+      result.data.replies?.forEach((reply, index) => {
+        const spec = missing[index];
+        const sheetId = reply.addSheet?.properties?.sheetId;
+        if (spec && sheetId !== undefined) toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
+      });
+    }
+
+    for (const spec of missing) {
+      await this.writeHeaderRow(spec.title, spec.headers);
+    }
+
+    for (const spec of specs) {
+      if (existing.has(spec.title)) {
+        const rows = await this.values(spec.title);
+        const headerRow = rows[0] ?? [];
+        if (headerRow.length === 0 || headerRow.every((cell) => String(cell ?? '').trim() === '')) {
+          await this.writeHeaderRow(spec.title, spec.headers);
+          const sheetId = existing.get(spec.title);
+          if (sheetId !== undefined) toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
+        } else {
+          validateHeaders(spec.sheet, headerRow.map(canonicalHeader));
+        }
+      }
+    }
+
+    await this.formatTabs(toFormat);
+
+    // Seed adapter-owned defaults so the admin workspace reads the same
+    // profiles as the in-memory adapter, but never overwrite operator data.
+    await this.seedDefaultPayrollProfiles();
+  }
+
+  private async seedDefaultPayrollProfiles(): Promise<void> {
+    try {
+      const { rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
+      if (rows.length > 0) return;
+    } catch {
+      return;
+    }
+    const headers = [...requiredHeaders.PayrollProfiles];
+    const values = defaultPayrollProfiles.map((profile) => valuesForPayrollProfile(headers, profile));
+    await this.api.spreadsheets.values.append({
+      spreadsheetId: this.options.spreadsheetId,
+      range: this.options.payrollProfilesRange,
+      valueInputOption: 'RAW',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values },
+    });
   }
 
   /**

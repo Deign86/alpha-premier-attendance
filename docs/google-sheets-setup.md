@@ -6,7 +6,7 @@ This runbook provisions the service account and spreadsheet used by the RFID att
 
 1. Open Google Cloud Console and create/select a dedicated project for the kiosk.
 2. Enable billing if required by the console. The Sheets API itself is typically quota-limited rather than chargeable, but the project must be valid.
-3. Enable **Google Sheets API** under APIs & Services. Do not enable unrelated APIs unless a later deployment requires them.
+3. Enable **Google Sheets API** under APIs & Services. If the server will use the Drive folder auto-create/reuse path, also enable **Google Drive API**. Do not enable unrelated APIs unless a later deployment requires them.
 
 ## 2. Create a Service Account
 
@@ -95,20 +95,43 @@ For the inactive row, use a different UID and `status: INACTIVE`. Keep `user_id`
 Set secrets only on the server process account. Use a protected `.env` file or Windows environment variables; never put them in the client build.
 
 ```text
-GOOGLE_SHEETS_SPREADSHEET_ID=<spreadsheet-id>
-GOOGLE_SERVICE_ACCOUNT_JSON=<minified-json-or-protected-key-path>
+SHEETS_MODE=google
+GOOGLE_SHEET_ID=<spreadsheet-id>
+GOOGLE_SERVICE_ACCOUNT_EMAIL=<service-account-email>
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n<private-key>\n-----END PRIVATE KEY-----\n"
 TIMEZONE=Asia/Manila
 HOST=127.0.0.1
-PORT=3000
+PORT=3001
 ENABLE_CARD_SETUP=false
 SETUP_ADMIN_PIN=<server-only-pin-when-setup-is-needed>
 SETUP_SESSION_MINUTES=15
 BLOB_READ_WRITE_TOKEN=<server-only-vercel-blob-token>
 ```
 
-If the implementation uses a key path instead of inline JSON, set that variable according to the server config module and ACL the file so ordinary kiosk users cannot read it. Keep a non-secret `.env.example` with variable names only.
+Keep a non-secret `server/.env.example` with variable names only. The private key is passed inline to the backend through `GOOGLE_PRIVATE_KEY`; store and ACL the `.env` file so ordinary kiosk users cannot read it.
 
 `ENABLE_CARD_SETUP` defaults to `false`. When it is `true`, `SETUP_ADMIN_PIN` is required and the API accepts setup requests only during a short-lived session (`SETUP_SESSION_MINUTES`, default 15). Do not put the PIN in the client environment or build output. Keep setup disabled during ordinary attendance operation and enable it only for a supervised enrollment window.
+
+### 6.1 Drive Folder Auto-Create/Reuse (Optional)
+
+The server can verify, create, and reuse a Google Drive folder and reconcile the spreadsheet schema on startup. `GOOGLE_SHEET_ID` remains the source of truth when provided; the Drive path only manages the folder location and can create a spreadsheet when `GOOGLE_SHEET_ID` is intentionally left unset.
+
+```text
+GOOGLE_DRIVE_FOLDER_ID=<existing-drive-folder-id>
+GOOGLE_DRIVE_FOLDER_NAME=Alpha Premier Attendance
+GOOGLE_CREATE_FOLDER_IF_MISSING=false
+GOOGLE_SHEETS_STATE_FILE=C:\ProgramData\AlphaPremierAttendance\google-sheets-state.json
+```
+
+Behavior:
+
+- `GOOGLE_DRIVE_FOLDER_ID` verifies the folder is reachable and moves the configured/persisted spreadsheet into it (`addParents` + `removeParents`).
+- If the folder is missing and `GOOGLE_CREATE_FOLDER_IF_MISSING=true`, the server creates a folder named `GOOGLE_DRIVE_FOLDER_NAME` (default `Alpha Premier Attendance`) and persists the new folder ID.
+- If `GOOGLE_SHEET_ID` is unset and the Drive path is enabled, the server creates a new spreadsheet inside the folder and persists its ID too.
+- `GOOGLE_SHEETS_STATE_FILE` defaults to `~/.rfid-attendance/google-sheets-state.json`. Point it at a stable, writable, ACL-protected path on Windows so restarts reuse the same folder and auto-created spreadsheet.
+- Startup reconciliation creates any missing tab, writes the exact row-1 headers, freezes/bolds header rows, auto-sizes columns on new tabs, and seeds `JEAN_TENURED`/`BEA_STANDARD` payroll profiles when `PayrollProfiles` is empty. It never overwrites existing rows or reorders an existing tab's headers.
+
+The service account needs **Editor** access to the target spreadsheet and folder. When Drive management is enabled, the backend uses the Drive scope in addition to Sheets; no separate key is required.
 
 ## 7. Validate Before Starting the Kiosk
 
