@@ -2074,7 +2074,9 @@ function AdminPanel() {
       </main>
     );
   return (
-    <main className="dashboard-shell">
+    <main
+      className={`dashboard-shell ${tab === "payroll" ? "dashboard-shell-payroll" : ""}`}
+    >
       <header className="dashboard-header">
         <div>
           <DashboardBrand />
@@ -2816,8 +2818,6 @@ function computeSemiMonthlyCutoff(
 }
 
 export function PayrollWorkspace({
-  users,
-  profiles,
   records,
   onSaved,
 }: {
@@ -2826,7 +2826,6 @@ export function PayrollWorkspace({
   records: PayrollCutoffRecord[];
   onSaved: () => void;
 }) {
-  const employees = users.filter((user) => user.employeeType === "EMPLOYEE");
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2835,19 +2834,7 @@ export function PayrollWorkspace({
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
-  const selectedUser = users.find((item) => item.userId === form.employeeId);
-  const isIntern = selectedUser
-    ? selectedUser.employeeType !== "EMPLOYEE"
-    : false;
-  // Intern late deduction is always PHP 10.00 x total late hours, never manual.
-  const internLateDeduction = isIntern
-    ? Math.round(
-        (Number(form.lateUnits) || 0) * INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
-      )
-    : Number(form.lateDeduction) || 0;
-  const selectedProfile = profiles.find(
-    (profile) => profile.profileId === form.payrollProfileId,
-  );
+
   // Keep the browser print header (if any) on-brand instead of the generic kiosk title.
   useEffect(() => {
     const previous = document.title;
@@ -2856,43 +2843,10 @@ export function PayrollWorkspace({
       document.title = previous;
     };
   }, []);
-  const applyProfile = (profileId: string) => {
-    const profile = profiles.find((item) => item.profileId === profileId);
-    setForm((current) => ({
-      ...current,
-      payrollProfileId: profileId,
-      standardWorkingDays: String(
-        profile?.standardWorkingDaysPerCutoff ?? current.standardWorkingDays,
-      ),
-      incentivesAllowance: String(profile?.incentivesAllowance ?? 0),
-      specialAllowance: String(profile?.specialAllowance ?? 0),
-      overtimeRate: String(profile?.overtimeRate ?? 0),
-    }));
-  };
-  const selectPerson = (employeeId: string) => {
-    const user = users.find((item) => item.userId === employeeId);
-    const internSelected = user ? user.employeeType !== "EMPLOYEE" : false;
-    const profile =
-      profiles.find((item) => item.profileId === user?.payrollProfileId) ??
-      profiles.find((item) => item.profileId === "BEA_STANDARD");
-    applyProfile(profile?.profileId ?? form.payrollProfileId);
-    setForm((current) => ({
-      ...current,
-      employeeId,
-      // Interns use a fixed formula: no profile picker, auto PHP 10/hr deduction.
-      ...(internSelected
-        ? {
-            payrollProfileId: "",
-            lateDeduction: String(
-              (Number(current.lateUnits) || 0) *
-                INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
-            ),
-          }
-        : {}),
-    }));
-  };
+
   const update = (field: keyof PayrollForm, value: string | boolean) =>
     setForm((current) => ({ ...current, [field]: value }));
+
   const applyCutoffHalf = (half: "first" | "second") => {
     const range = computeSemiMonthlyCutoff(cutoffMonth, half);
     setForm((current) => ({
@@ -2902,6 +2856,7 @@ export function PayrollWorkspace({
       payrollCutoffLabel: range.payrollCutoffLabel,
     }));
   };
+
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!form.cutoffStart || !form.cutoffEnd) {
@@ -2912,13 +2867,23 @@ export function PayrollWorkspace({
       setMessage("Cutoff start must be on or before cutoff end.");
       return;
     }
-    if (records.some((record) => record.status === "DRAFT" && record.cutoffStart === form.cutoffStart && record.cutoffEnd === form.cutoffEnd)) {
-      setMessage("Payroll already exists for this cutoff. Duplicate generation was blocked.");
+    if (
+      records.some(
+        (record) =>
+          record.status === "DRAFT" &&
+          record.cutoffStart === form.cutoffStart &&
+          record.cutoffEnd === form.cutoffEnd,
+      )
+    ) {
+      setMessage(
+        "Payroll already exists for this cutoff. Duplicate generation was blocked.",
+      );
       return;
     }
     setMessage("");
     setConfirmOpen(true);
   };
+
   const confirmGenerate = async () => {
     if (saving) return;
     setSaving(true);
@@ -2950,6 +2915,7 @@ export function PayrollWorkspace({
       setSaving(false);
     }
   };
+
   // The selected payroll cutoff drives both generated payroll PDFs: the
   // cutoff picked in the create form when set, otherwise the most recent
   // cutoff found in the saved records.
@@ -2983,359 +2949,149 @@ export function PayrollWorkspace({
   const [pdfMessage, setPdfMessage] = useState("");
   const [generating, setGenerating] = useState<null | "employee" | "intern">(null);
   const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
-  useEffect(() => { void loadPayrollPdfs().then((response) => { if (response.success) setPayrollPdfs(response.payrollPdfs); }); }, []);
+
+  useEffect(() => {
+    void loadPayrollPdfs().then((response) => {
+      if (response.success) setPayrollPdfs(response.payrollPdfs);
+    });
+  }, []);
+
   const generatePdf = async (workerType: "employee" | "intern") => {
     if (generating) return;
-    if (!selectedCutoff) { setPdfMessage("No payroll records to generate. Create and save a payroll first."); return; }
-    setGenerating(workerType); setPdfMessage("");
+    if (!selectedCutoff) {
+      setPdfMessage(
+        "No payroll records to generate. Create and save a payroll first.",
+      );
+      return;
+    }
+    setGenerating(workerType);
+    setPdfMessage("");
     try {
-      const response = await generatePayrollPdf({ cutoffStart: selectedCutoff.cutoffStart, cutoffEnd: selectedCutoff.cutoffEnd, payrollCutoffLabel: selectedCutoff.label, workerType });
-      if (response.success) { setPayrollPdfs((current) => [response.pdf, ...current.filter((item) => item.payrollPdfId !== response.pdf.payrollPdfId)]); setPdfMessage(`Payroll PDF generated for ${selectedCutoff.label}.`); }
-      else setPdfMessage(response.error.message);
-    } catch (error) { setPdfMessage(error instanceof Error ? error.message : "Unable to generate the payroll PDF."); }
-    finally { setGenerating(null); }
+      const response = await generatePayrollPdf({
+        cutoffStart: selectedCutoff.cutoffStart,
+        cutoffEnd: selectedCutoff.cutoffEnd,
+        payrollCutoffLabel: selectedCutoff.label,
+        workerType,
+      });
+      if (response.success) {
+        setPayrollPdfs((current) => [
+          response.pdf,
+          ...current.filter(
+            (item) => item.payrollPdfId !== response.pdf.payrollPdfId,
+          ),
+        ]);
+        setPdfMessage(`Payroll PDF generated for ${selectedCutoff.label}.`);
+      } else setPdfMessage(response.error.message);
+    } catch (error) {
+      setPdfMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate the payroll PDF.",
+      );
+    } finally {
+      setGenerating(null);
+    }
   };
+
   return (
     <section className="payroll-workspace">
-      <div className="payroll-actions">
-        <button
-          className="admin-button"
-          type="button"
-          onClick={() => void generatePdf("employee")}
-          disabled={generating !== null}
-        >
-          {generating === "employee" ? "Generating..." : "Generate Employee Payroll PDF"}
-        </button>
-        <button
-          className="admin-button"
-          type="button"
-          onClick={() => void generatePdf("intern")}
-          disabled={generating !== null}
-        >
-          {generating === "intern" ? "Generating..." : "Generate Intern Payroll PDF"}
-        </button>
-      </div>
-      {pdfMessage && <p className="dashboard-alert">{pdfMessage}</p>}
-      <div className="admin-grid">
-        <section className="admin-form">
-          <h2>Generate cutoff payroll</h2>
-          <form onSubmit={save}>
-            <div className="payroll-generate-controls">
-              <div className="cutoff-period">
-                <label>
-                  Cutoff month
-                  <input type="month" value={cutoffMonth} onChange={(event) => setCutoffMonth(event.target.value)} />
-                </label>
-                <div className="cutoff-fill-buttons">
-                  <button className="admin-button" type="button" onClick={() => applyCutoffHalf("first")}>1st&ndash;15th</button>
-                  <button className="admin-button" type="button" onClick={() => applyCutoffHalf("second")}>16th&ndash;last day</button>
-                </div>
+      <div className="payroll-toolbar">
+        <form className="payroll-generate-panel" onSubmit={save}>
+          <div className="payroll-panel-heading">
+            <h2>Generate cutoff payroll</h2>
+          </div>
+          <div className="payroll-generate-controls">
+            <div className="cutoff-period">
+              <label>
+                Cutoff month
+                <input
+                  type="month"
+                  value={cutoffMonth}
+                  onChange={(event) => setCutoffMonth(event.target.value)}
+                />
+              </label>
+              <div className="cutoff-fill-buttons">
+                <button
+                  className="admin-button"
+                  type="button"
+                  onClick={() => applyCutoffHalf("first")}
+                >
+                  1st&ndash;15th
+                </button>
+                <button
+                  className="admin-button"
+                  type="button"
+                  onClick={() => applyCutoffHalf("second")}
+                >
+                  16th&ndash;last day
+                </button>
               </div>
-              <label>
-                Cutoff start
-                <input required type="date" value={form.cutoffStart} onChange={(event) => update("cutoffStart", event.target.value)} />
-              </label>
-              <label>
-                Cutoff end
-                <input required type="date" value={form.cutoffEnd} onChange={(event) => update("cutoffEnd", event.target.value)} />
-              </label>
-            </div>
-            <fieldset>
-            {isIntern && (
-              <p className="setup-copy">
-                Intern payroll uses a fixed {php(INTERN_DAILY_RATE_PHP)} per day
-                and a {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour late
-                deduction (after weekly grace). Allowances, holiday pay, and
-                overtime do not apply. Absences are calculated from standard
-                less actual working days; half-days remain inputtable.
-              </p>
-            )}
-            <div className="setup-fields">
-              <label>
-                Daily rate (PHP)
-              <input
-                readOnly
-                value={
-                    isIntern
-                      ? String(INTERN_DAILY_RATE_PHP)
-                      : String(selectedUser?.dailyRate ?? 0)
-                  }
-                />
-                <small>
-                  {isIntern
-                    ? `Fixed intern rate of ${php(INTERN_DAILY_RATE_PHP)}`
-                    : "From the user profile"}
-                </small>
-              </label>
-              {isIntern && (
-                <label>
-                  Total late hours
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.lateUnits}
-                    onChange={(event) => {
-                      const hours = event.target.value;
-                      update("lateUnits", hours);
-                      update(
-                        "lateDeduction",
-                        String(
-                          Math.round(
-                            (Number(hours) || 0) *
-                              INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
-                          ),
-                        ),
-                      );
-                    }}
-                  />
-                </label>
-              )}
-              <label>
-                Cutoff start
-                <input
-                  required
-                  type="date"
-                  value={form.cutoffStart}
-                  onChange={(event) =>
-                    update("cutoffStart", event.target.value)
-                  }
-                />
-              </label>
-              <label>
-                Cutoff end
-                <input
-                  required
-                  type="date"
-                  value={form.cutoffEnd}
-                  onChange={(event) => update("cutoffEnd", event.target.value)}
-                />
-              </label>
-              <label>
-                Standard days
-                <input
-                  type="number"
-                  min="0"
-                  value={form.standardWorkingDays}
-                  onChange={(event) =>
-                    update("standardWorkingDays", event.target.value)
-                  }
-                />
-              </label>
-              {!isIntern && (
-                <>
-                  <label>
-                    Special holidays
-                    <input
-                      type="number"
-                      min="0"
-                      value={form.specialHolidayDays}
-                      onChange={(event) =>
-                        update("specialHolidayDays", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Regular holidays
-                    <input
-                      type="number"
-                      min="0"
-                      value={form.regularHolidayDays}
-                      onChange={(event) =>
-                        update("regularHolidayDays", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Incentives (PHP)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.incentivesAllowance}
-                      onChange={(event) =>
-                        update("incentivesAllowance", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Special allowance (PHP)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.specialAllowance}
-                      onChange={(event) =>
-                        update("specialAllowance", event.target.value)
-                      }
-                    />
-                  </label>
-                </>
-              )}
-              {isIntern ? (
-                <label>
-                  Late deduction (PHP)
-                  <input readOnly value={internLateDeduction} />
-                  <small>
-                    Auto: {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} ×{" "}
-                    {form.lateUnits || 0} late hour(s)
-                  </small>
-                </label>
-              ) : (
-                <>
-                  <label>
-                    Total late hours
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      readOnly
-                      value={form.lateUnits}
-                      onChange={() => undefined}
-                    />
-                  </label>
-                  <label>
-                    Late deduction rate (PHP/hr)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.lateDeductionRate}
-                      onChange={(event) => {
-                        const rate = event.target.value;
-                        update("lateDeductionRate", rate);
-                        update(
-                          "lateDeduction",
-                          String(
-                            Math.round(
-                              (Number(form.lateUnits) || 0) *
-                                (Number(rate) || 0),
-                            ),
-                          ),
-                        );
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Late deduction (PHP)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.lateDeduction}
-                      onChange={(event) =>
-                        update("lateDeduction", event.target.value)
-                      }
-                    />
-                    <small>
-                      Auto: late hours × rate per hour — edit to override
-                    </small>
-                  </label>
-                </>
-              )}
-              <label>
-                Half-days
-                <input
-                  type="number"
-                  min="0"
-                  value={form.halfDayCount}
-                  onChange={(event) =>
-                    update("halfDayCount", event.target.value)
-                  }
-                />
-              </label>
-              <label>
-                Absent days
-                <input
-                  type="number"
-                  min="0"
-                  readOnly={isIntern}
-                  value={
-                    isIntern
-                      ? Math.max(
-                          0,
-                          (Number(form.standardWorkingDays) || 0) -
-                            (Number(form.actualWorkingDays) || 0),
-                        )
-                      : form.absentDays
-                  }
-                  onChange={(event) =>
-                    update("absentDays", event.target.value)
-                  }
-                />
-                {isIntern && <small>Calculated from standard less actual days</small>}
-              </label>
-              {!isIntern && (
-                <>
-                  <label>
-                    Overtime hours
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.overtimeHours}
-                      onChange={(event) =>
-                        update("overtimeHours", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Overtime rate (PHP/hr)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.overtimeRate}
-                      onChange={(event) =>
-                        update("overtimeRate", event.target.value)
-                      }
-                    />
-                  </label>
-                </>
-              )}
             </div>
             <label>
-              Adjustment reason
+              Cutoff start
               <input
-                value={form.adjustmentReason}
-                onChange={(event) =>
-                  update("adjustmentReason", event.target.value)
-                }
-                placeholder="Required for a non-zero adjustment"
+                required
+                type="date"
+                value={form.cutoffStart}
+                onChange={(event) => update("cutoffStart", event.target.value)}
               />
             </label>
-            <label className="checkbox-label">
+            <label>
+              Cutoff end
               <input
-                type="checkbox"
-                checked={form.approvedWorkingDayOverage}
-                onChange={(event) =>
-                  update("approvedWorkingDayOverage", event.target.checked)
-                }
-              />{" "}
-              Approve actual days above standard
+                required
+                type="date"
+                value={form.cutoffEnd}
+                onChange={(event) => update("cutoffEnd", event.target.value)}
+              />
             </label>
-            {selectedProfile && (
-              <p className="setup-copy">
-                Holiday premiums:{" "}
-                {selectedProfile.specialHolidayMultiplier * 100}% special,{" "}
-                {selectedProfile.regularHolidayMultiplier * 100}% regular.
-              </p>
-            )}
-            </fieldset>
-            {message && <p className="dashboard-alert">{message}</p>}
-            <button className="submit-button" type="submit" disabled={saving || !form.cutoffStart || !form.cutoffEnd}>
+            <button
+              className="submit-button payroll-generate-submit"
+              type="submit"
+              disabled={saving || !form.cutoffStart || !form.cutoffEnd}
+            >
               {saving ? "Generating..." : "Generate from attendance"}
             </button>
-          </form>
-        </section>
-        <section className="payroll-table">
-          <PayrollTable records={records} onFinalized={onSaved} />
-        </section>
+          </div>
+        </form>
+
+        <div className="payroll-pdf-actions-panel">
+          <div className="payroll-panel-heading">
+            <h2>Export payroll</h2>
+          </div>
+          <div className="payroll-actions">
+            <button
+              className="admin-button"
+              type="button"
+              onClick={() => void generatePdf("employee")}
+              disabled={generating !== null}
+            >
+              {generating === "employee" ? "Generating..." : "Generate Employee Payroll PDF"}
+            </button>
+            <button
+              className="admin-button"
+              type="button"
+              onClick={() => void generatePdf("intern")}
+              disabled={generating !== null}
+            >
+              {generating === "intern" ? "Generating..." : "Generate Intern Payroll PDF"}
+            </button>
+          </div>
+        </div>
       </div>
-      <section>
+
+      {message && <p className="dashboard-alert">{message}</p>}
+      {pdfMessage && <p className="dashboard-alert">{pdfMessage}</p>}
+
+      <section className="payroll-table">
+        <PayrollTable records={records} onFinalized={onSaved} />
+      </section>
+
+      <section className="payroll-pdf-section">
         <h2>Generated payroll PDFs</h2>
         <PayrollPdfList pdfs={payrollPdfs} />
       </section>
+
       <ConfirmDialog
         open={confirmOpen}
         busy={saving}
