@@ -52,8 +52,6 @@ pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
 pub const GOOGLE_RATE_LIMITED: &str = "GOOGLE_RATE_LIMITED";
 pub const GOOGLE_REQUEST_FAILED: &str = "GOOGLE_REQUEST_FAILED";
 const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
-const GOOGLE_SHEETS_SCOPE: &str = "https://www.googleapis.com/auth/spreadsheets";
-const GOOGLE_DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
 const GOOGLE_SCOPES: &str =
     "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive";
 

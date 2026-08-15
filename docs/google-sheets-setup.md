@@ -15,9 +15,9 @@ This runbook provisions the service account and spreadsheet used by the RFID att
 3. Create one JSON key for the deployment owner, download it once, and store it in a protected location. Treat it as a password.
 4. Copy the service-account email; it will be used to share the spreadsheet.
 
-## 3. Create the Spreadsheet
+## 3. Spreadsheet schema
 
-Create one spreadsheet and add tabs named exactly `Users`, `Attendance`, `AuditLogs`, `Payroll`, `InternGrace`, `PayrollProfiles`, and `PayrollCutoffs`. Put the following headers in row 1, in this exact order. Do not add a title row above them.
+The server can create the spreadsheet automatically; you do not need to create it manually when using Drive-folder mode. Managed tabs are named exactly `Users`, `Attendance`, `AuditLogs`, `Payroll`, `InternGrace`, `PayrollProfiles`, and `PayrollCutoffs`. Put the following headers in row 1, in this exact order. Do not add a title row above them.
 
 ### Users
 
@@ -125,7 +125,7 @@ GOOGLE_SHEETS_STATE_FILE=C:\ProgramData\AlphaPremierAttendance\google-sheets-sta
 
 Behavior:
 
-- `GOOGLE_DRIVE_FOLDER_ID` verifies the folder is reachable and moves the configured/persisted spreadsheet into it (`addParents` + `removeParents`).
+- `GOOGLE_DRIVE_FOLDER_ID` verifies the folder is reachable and adds the configured/persisted spreadsheet to it without removing any existing Drive parents.
 - If the folder is missing and `GOOGLE_CREATE_FOLDER_IF_MISSING=true`, the server creates a folder named `GOOGLE_DRIVE_FOLDER_NAME` (default `Alpha Premier Attendance`) and persists the new folder ID.
 - If `GOOGLE_SHEET_ID` is unset and the Drive path is enabled, the server creates a new spreadsheet inside the folder and persists its ID too.
 - `GOOGLE_SHEETS_STATE_FILE` defaults to `~/.rfid-attendance/google-sheets-state.json`. Point it at a stable, writable, ACL-protected path on Windows so restarts reuse the same folder and auto-created spreadsheet.
@@ -142,7 +142,7 @@ npm install
 npm run validate:sheets -w server
 ```
 
-The validator must confirm the spreadsheet ID is reachable, all five tabs exist, and every header matches exactly. It should fail closed for a missing tab, renamed header, duplicate header, or insufficient permission. Run `npm run migrate:payroll -w server` once for the payroll schema preflight, then perform the printed header migration with the spreadsheet owner before enabling payroll.
+The validator must confirm the spreadsheet ID is reachable, all seven managed tabs exist, and every header matches exactly. It should fail closed for a missing tab, renamed header, duplicate header, or insufficient permission. Run `npm run migrate:payroll -w server` once for the payroll schema preflight, then perform the printed header migration with the spreadsheet owner before enabling payroll.
 
 Then start the API and check:
 
@@ -174,6 +174,10 @@ Setup mode is separate from attendance. An unknown card must continue to return 
 The setup contract is: unlock (`POST /api/setup/unlock`), lock (`POST /api/setup/lock`), card lookup (`GET /api/setup/card?rfidUid=...`), and Users upsert (`POST /api/setup/users`). Setup errors include `SETUP_DISABLED`, `INVALID_SETUP_PIN`, `SETUP_AUTH_REQUIRED`, `SETUP_SESSION_EXPIRED`, `SETUP_VALIDATION_ERROR`, `USER_CONFLICT`, and `GOOGLE_SHEETS_UNAVAILABLE`.
 
 ## 10. Rotation and Recovery
+
+For the supplied Drive folder, set `GOOGLE_DRIVE_FOLDER_ID=1GXeGULYswb7jXcMGCCRm2RQ_h0EKsDll` only in the protected server environment. The service account must be shared on that folder with Editor or Content manager access; a public sharing URL alone does not grant API access. Do not commit this deployment value.
+
+If the spreadsheet is lost, stop the API and remove only the `spreadsheetId` property from the protected state JSON (or point `GOOGLE_SHEETS_STATE_FILE` at a new empty file), then restart. Existing spreadsheets are never deleted automatically; an explicit `GOOGLE_SHEET_ID` always takes precedence.
 
 - Create a replacement service-account key before revoking the old one; update the protected deployment secret and restart the API.
 - Verify `/api/health` and one controlled scan after rotation.

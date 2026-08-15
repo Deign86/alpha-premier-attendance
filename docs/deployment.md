@@ -43,7 +43,7 @@ GOOGLE_CREATE_FOLDER_IF_MISSING=false
 GOOGLE_SHEETS_STATE_FILE=C:\ProgramData\AlphaPremierAttendance\google-sheets-state.json
 ```
 
-When Drive management is enabled, the server verifies/moves the spreadsheet into the target folder and reconciles tabs on startup. Leave `GOOGLE_SHEETS_STATE_FILE` on a stable writable path so an auto-created folder (or spreadsheet) is reused after restart; the default is `~/.rfid-attendance/google-sheets-state.json`.
+When Drive management is enabled, the server verifies the folder, adds the spreadsheet to the target folder without removing existing parents, and reconciles tabs on startup. In the Tauri desktop deployment, SQLite remains the source of truth and its existing sync queue drives row reconciliation; the Node web adapter handles API-owned Sheet writes. Leave `GOOGLE_SHEETS_STATE_FILE` on a stable writable path so an auto-created folder (or spreadsheet) is reused after restart; the default is `~/.rfid-attendance/google-sheets-state.json`.
 
 Office identity is optional in the web-compatible server; when unset the canonical defaults are used. Configure the same values as the desktop `[office]` section when the server must show a different office:
 

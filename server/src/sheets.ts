@@ -385,7 +385,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
 
   private async writeState(patch: Partial<GoogleSheetsState>): Promise<void> {
     const current = this.state ?? await this.readState();
-    this.state = { version: 1, ...current, ...patch };
+    this.state = { ...current, ...patch, version: patch.version ?? current.version ?? 1 };
     if (!this.options.stateFile) return;
     const file = path.resolve(this.options.stateFile);
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
@@ -520,6 +520,10 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     }
 
     this.options.spreadsheetId = spreadsheetId;
+    // Persist the effective target even when it was supplied explicitly. This
+    // makes the target durable for later folder-based migrations without ever
+    // replacing the explicit GOOGLE_SHEET_ID precedence.
+    await this.writeState({ spreadsheetId });
 
     await this.reconcileTabs();
 
@@ -580,7 +584,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     for (const sheet of metadata.data.sheets ?? []) {
       const title = sheet.properties?.title;
       const sheetId = sheet.properties?.sheetId;
-      if (title && sheetId !== undefined) existing.set(title, sheetId);
+      if (title && typeof sheetId === 'number') existing.set(title, sheetId);
     }
 
     const specs = this.tabSpecs();
@@ -596,7 +600,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       result.data.replies?.forEach((reply, index) => {
         const spec = missing[index];
         const sheetId = reply.addSheet?.properties?.sheetId;
-        if (spec && sheetId !== undefined) toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
+        if (spec && typeof sheetId === 'number') toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
       });
     }
 
@@ -611,7 +615,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
         if (headerRow.length === 0 || headerRow.every((cell) => String(cell ?? '').trim() === '')) {
           await this.writeHeaderRow(spec.title, spec.headers);
           const sheetId = existing.get(spec.title);
-          if (sheetId !== undefined) toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
+          if (typeof sheetId === 'number') toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
         } else {
           try {
             validateHeaders(spec.sheet, headerRow.map(canonicalHeader));

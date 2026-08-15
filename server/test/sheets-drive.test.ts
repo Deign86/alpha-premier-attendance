@@ -22,7 +22,12 @@ type StoredSpreadsheet = { id: string; title: string; sheets: StoredSheet[]; nex
 
 function makeSheetsApi(seed?: { id: string; titles?: string[]; users?: string[][]; profiles?: string[][] }) {
   const spreadsheets = new Map<string, StoredSpreadsheet>();
-  const calls = { creates: 0, batchUpdates: [] as unknown[][], updates: [] as string[], appends: [] as string[] };
+  const calls = { creates: 0, batchUpdates: [] as unknown[][], gets: [] as string[], updates: [] as string[], appends: [] as string[] };
+
+  function titleFromRange(range: string): string {
+    const token = range.split('!')[0];
+    return token.startsWith("'") && token.endsWith("'") ? token.slice(1, -1).replace(/''/g, "'") : token;
+  }
 
   function getSpreadsheet(id: string): StoredSpreadsheet {
     const spreadsheet = spreadsheets.get(id);
@@ -42,15 +47,17 @@ function makeSheetsApi(seed?: { id: string; titles?: string[]; users?: string[][
 
   const values = {
     get: async ({ spreadsheetId, range }: { spreadsheetId: string; range: string }) => {
+      calls.gets.push(range);
       const spreadsheet = getSpreadsheet(spreadsheetId);
-      const title = range.split('!')[0];
+      const title = titleFromRange(range);
       const sheet = spreadsheet.sheets.find((item) => item.title === title);
-      return { data: { values: sheet ? sheet.rows : [] } };
+      const rows = sheet ? sheet.rows : [];
+      return { data: { values: range.endsWith('!1:1') ? rows.slice(0, 1) : rows } };
     },
     update: async ({ spreadsheetId, range, requestBody }: { spreadsheetId: string; range: string; requestBody: { values: string[][] } }) => {
       calls.updates.push(range);
       const spreadsheet = getSpreadsheet(spreadsheetId);
-      const title = range.split('!')[0];
+      const title = titleFromRange(range);
       const sheet = spreadsheet.sheets.find((item) => item.title === title);
       if (sheet) sheet.rows[0] = requestBody.values[0];
       return { data: {} };
@@ -58,7 +65,7 @@ function makeSheetsApi(seed?: { id: string; titles?: string[]; users?: string[][
     append: async ({ spreadsheetId, range, requestBody }: { spreadsheetId: string; range: string; requestBody: { values: string[][] } }) => {
       calls.appends.push(range);
       const spreadsheet = getSpreadsheet(spreadsheetId);
-      const title = range.split('!')[0];
+      const title = titleFromRange(range);
       const sheet = spreadsheet.sheets.find((item) => item.title === title);
       if (sheet) sheet.rows.push(...requestBody.values);
       return { data: {} };
@@ -98,22 +105,24 @@ function makeSheetsApi(seed?: { id: string; titles?: string[]; users?: string[][
   return { api: api as unknown as sheets_v4.Sheets, spreadsheets, calls };
 }
 
-function makeDriveApi(seedFolder?: { id: string; name: string }, seedParents?: Record<string, string[]>) {
+function makeDriveApi(seedFolder?: { id: string; name: string }, seedParents?: Record<string, string[]>, getError?: unknown) {
   const folders = new Map<string, { id: string; name: string }>();
   const fileParents = new Map<string, string[]>(Object.entries(seedParents ?? {}));
-  const calls = { creates: [] as string[], updates: [] as Array<{ fileId: string; addParents?: string; removeParents?: string }> };
+  const calls = { creates: [] as string[], gets: [] as Array<{ fileId: string; supportsAllDrives?: boolean }>, updates: [] as Array<{ fileId: string; addParents?: string; removeParents?: string; supportsAllDrives?: boolean }> };
 
   if (seedFolder) folders.set(seedFolder.id, seedFolder);
 
   const api = {
     files: {
-      get: async ({ fileId, fields }: { fileId: string; fields?: string }) => {
+      get: async ({ fileId, fields, supportsAllDrives }: { fileId: string; fields?: string; supportsAllDrives?: boolean }) => {
+        calls.gets.push({ fileId, supportsAllDrives });
+        if (getError) throw getError;
         const folder = folders.get(fileId);
         if (folder) return { data: { id: fileId, mimeType: 'application/vnd.google-apps.folder' } };
         if (fileId.startsWith('sheet-') || fileId === 'sheet-1') {
           return { data: { id: fileId, parents: fileParents.get(fileId) ?? [] } };
         }
-        throw new Error('not found');
+        throw Object.assign(new Error('not found'), { code: 404 });
       },
       create: async ({ requestBody }: { requestBody: { name: string; mimeType: string } }) => {
         calls.creates.push(requestBody.name);
@@ -121,8 +130,8 @@ function makeDriveApi(seedFolder?: { id: string; name: string }, seedParents?: R
         folders.set(id, { id, name: requestBody.name });
         return { data: { id } };
       },
-      update: async (params: { fileId: string; addParents?: string; removeParents?: string }) => {
-        calls.updates.push({ fileId: params.fileId, addParents: params.addParents, removeParents: params.removeParents });
+      update: async (params: { fileId: string; addParents?: string; removeParents?: string; supportsAllDrives?: boolean }) => {
+        calls.updates.push({ fileId: params.fileId, addParents: params.addParents, removeParents: params.removeParents, supportsAllDrives: params.supportsAllDrives });
         if (params.fileId && params.addParents) {
           const current = fileParents.get(params.fileId) ?? [];
           const next = current.filter((parent) => params.removeParents?.split(',').includes(parent) === false);
@@ -169,7 +178,11 @@ describe('GoogleSheetsAdapter Drive folder auto-create/reuse', () => {
 
     await expect(adapter.ensureSpreadsheet()).resolves.toBe('sheet-1');
 
-    expect(drive.calls.updates.some((call) => call.fileId === 'sheet-1' && call.addParents === 'folder-1')).toBe(true);
+    const moveCall = drive.calls.updates.find((call) => call.fileId === 'sheet-1' && call.addParents === 'folder-1');
+    expect(moveCall).toMatchObject({ supportsAllDrives: true });
+    expect(moveCall?.removeParents).toBeUndefined();
+    expect(drive.calls.gets.every((call) => call.supportsAllDrives === true)).toBe(true);
+    expect(sheets.calls.gets).toContain("'Users'!1:1");
     const addSheetCount = sheets.calls.batchUpdates
       .flat()
       .filter((request) => (request as { addSheet?: unknown }).addSheet).length;
@@ -192,6 +205,20 @@ describe('GoogleSheetsAdapter Drive folder auto-create/reuse', () => {
     await expect(adapter.ensureSpreadsheet()).resolves.toBe('sheet-1');
     expect(drive.calls.creates).toEqual(['Alpha Premier Attendance']);
     expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toMatchObject({ driveFolderId: 'folder-1', spreadsheetId: 'sheet-1' });
+    expect(sheets.calls.creates).toBe(0);
+  });
+
+  it('propagates Drive permission failures instead of creating a duplicate folder', async () => {
+    const sheets = makeSheetsApi({ id: 'sheet-1' });
+    const drive = makeDriveApi(undefined, undefined, Object.assign(new Error('forbidden'), { code: 403 }));
+    const adapter = new GoogleSheetsAdapter(
+      { driveFolderId: 'folder-1', createFolderIfMissing: true, stateFile: tempStateFile() },
+      sheets.api,
+      drive.api,
+    );
+
+    await expect(adapter.ensureSpreadsheet()).rejects.toMatchObject({ code: 403 });
+    expect(drive.calls.creates).toHaveLength(0);
     expect(sheets.calls.creates).toBe(0);
   });
 

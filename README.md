@@ -105,7 +105,7 @@ google_spreadsheet_id = "<spreadsheet-id>"
 
 Secrets stay on the front-desk laptop and must never be committed. The service-account JSON path is constrained to the application config directory when configured.
 
-The web-compatible Node server (`server/`) keeps `GOOGLE_SHEET_ID` as the spreadsheet source of truth and can optionally auto-create/reuse a Google Drive folder and reconcile the spreadsheet schema on startup. Set `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_CREATE_FOLDER_IF_MISSING`, and `GOOGLE_SHEETS_STATE_FILE`; see [docs/google-sheets-setup.md](docs/google-sheets-setup.md) and [docs/deployment.md](docs/deployment.md).
+The web-compatible Node server (`server/`) keeps `GOOGLE_SHEET_ID` as the spreadsheet source of truth and can optionally auto-create/reuse a Google Drive folder and reconcile the spreadsheet schema on startup. The desktop/Tauri app keeps SQLite as the source of truth and uses its existing sync queue for row reconciliation. Set `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_CREATE_FOLDER_IF_MISSING`, and `GOOGLE_SHEETS_STATE_FILE`; see [docs/google-sheets-setup.md](docs/google-sheets-setup.md) and [docs/deployment.md](docs/deployment.md).
 
 ## Office Identity
 

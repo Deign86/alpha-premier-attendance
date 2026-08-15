@@ -73,7 +73,13 @@ office_display_full = "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Me
 # Optional HTTPS exporter endpoint used by the bounded sync worker.
 sheets_sync_endpoint = ""
 google_service_account_json_path = ""
+# Existing spreadsheet ID takes precedence over Drive auto-provisioning.
 google_spreadsheet_id = ""
+# Optional folder ID. The service account must have editor/content-manager access.
+google_drive_folder_id = "1GXeGULYswb7jXcMGCCRm2RQ_h0EKsDll"
+google_drive_folder_name = "Alpha Premier Attendance"
+google_create_folder_if_missing = false
+google_spreadsheet_title = "Alpha Premier Attendance"
 
 # Local SQLite database location. Optional — leave unset to use the default
 # `attendance.db` inside the app data directory
