@@ -994,11 +994,80 @@ async fn ensure_tab_header(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FolderResolution {
+    UseConfigured,
+    UsePersisted,
+    Create,
+    NotAccessible,
+    None,
+}
+
+/// Pure decision logic for Drive folder resolution. The async resolver below
+/// performs the existence probes and then dispatches on this result so the
+/// stale-configured-folder replacement behavior can be unit tested.
+fn resolve_folder_decision(
+    configured: Option<&str>,
+    persisted: Option<&str>,
+    configured_exists: bool,
+    persisted_exists: bool,
+    create_if_missing: bool,
+) -> FolderResolution {
+    match configured {
+        Some(configured_id) => {
+            if configured_exists {
+                return FolderResolution::UseConfigured;
+            }
+            if persisted.is_some_and(|id| id != configured_id) && persisted_exists {
+                return FolderResolution::UsePersisted;
+            }
+            if create_if_missing {
+                FolderResolution::Create
+            } else {
+                FolderResolution::NotAccessible
+            }
+        }
+        None => {
+            if persisted.is_some() && persisted_exists {
+                FolderResolution::UsePersisted
+            } else if create_if_missing {
+                FolderResolution::Create
+            } else {
+                FolderResolution::None
+            }
+        }
+    }
+}
+
+/// Whether Google provisioning has anything to resolve: an explicit/config
+/// source, a create flag, or a previously persisted generated ID. This is
+/// checked after the persisted state file is read so valid persisted IDs are
+/// still reused when `google_create_folder_if_missing` is later disabled.
+fn has_google_provisioning_source(
+    explicit_spreadsheet: bool,
+    configured_folder: bool,
+    create_if_missing: bool,
+    persisted: &GoogleSheetsState,
+) -> bool {
+    explicit_spreadsheet
+        || configured_folder
+        || create_if_missing
+        || persisted
+            .spreadsheet_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || persisted
+            .drive_folder_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 async fn resolve_drive_folder(
     client: &reqwest::Client,
     token: &str,
     state: &AppState,
     persisted: &mut GoogleSheetsState,
+    file: &Path,
 ) -> Result<Option<String>, String> {
     let configured = state
         .lan
@@ -1006,35 +1075,52 @@ async fn resolve_drive_folder(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if let Some(folder_id) = configured {
-        if drive_folder_exists(client, token, folder_id).await? {
-            return Ok(Some(folder_id.to_string()));
+
+    let configured_exists = match configured {
+        Some(folder_id) => drive_folder_exists(client, token, folder_id).await?,
+        None => false,
+    };
+
+    let persisted_id = persisted
+        .drive_folder_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    // Avoid a duplicate existence probe when the persisted ID is the same as
+    // the configured ID; the configured probe already answered it.
+    let persisted_exists = match persisted_id {
+        Some(folder_id) if Some(folder_id) != configured => {
+            drive_folder_exists(client, token, folder_id).await?
         }
-        if state.lan.google_create_folder_if_missing {
+        _ => false,
+    };
+
+    let decision = resolve_folder_decision(
+        configured,
+        persisted_id,
+        configured_exists,
+        persisted_exists,
+        state.lan.google_create_folder_if_missing,
+    );
+
+    match decision {
+        FolderResolution::UseConfigured => Ok(configured.map(str::to_owned)),
+        FolderResolution::UsePersisted => Ok(persisted_id.map(str::to_owned)),
+        FolderResolution::Create => {
             let created =
                 drive_create_folder(client, token, state.lan.google_drive_folder_name.trim())
                     .await?;
             persisted.drive_folder_id = Some(created.clone());
-            return Ok(Some(created));
+            write_google_state(file, persisted)?;
+            Ok(Some(created))
         }
-        return Err("GOOGLE_DRIVE_FOLDER_NOT_ACCESSIBLE".to_string());
-    }
-
-    if let Some(folder_id) = persisted.drive_folder_id.clone() {
-        if drive_folder_exists(client, token, &folder_id).await? {
-            return Ok(Some(folder_id));
+        FolderResolution::NotAccessible => Err("GOOGLE_DRIVE_FOLDER_NOT_ACCESSIBLE".to_string()),
+        FolderResolution::None => {
+            persisted.drive_folder_id = None;
+            Ok(None)
         }
-        persisted.drive_folder_id = None;
     }
-
-    if state.lan.google_create_folder_if_missing {
-        let created =
-            drive_create_folder(client, token, state.lan.google_drive_folder_name.trim()).await?;
-        persisted.drive_folder_id = Some(created.clone());
-        return Ok(Some(created));
-    }
-
-    Ok(None)
 }
 
 /// Resolves (and when permitted creates) the Drive folder + Sheets spreadsheet
@@ -1050,6 +1136,10 @@ pub async fn provision_google_sheets(
     let Some(path) = state.lan.google_service_account_json_path.as_deref() else {
         return Ok(None);
     };
+
+    let file = google_state_file(state);
+    let mut persisted = read_google_state(&file)?;
+
     let has_explicit_spreadsheet = state
         .lan
         .google_spreadsheet_id
@@ -1060,15 +1150,18 @@ pub async fn provision_google_sheets(
         .google_drive_folder_id
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty());
-    if !has_explicit_spreadsheet && !has_folder && !state.lan.google_create_folder_if_missing {
+    if !has_google_provisioning_source(
+        has_explicit_spreadsheet,
+        has_folder,
+        state.lan.google_create_folder_if_missing,
+        &persisted,
+    ) {
         return Ok(None);
     }
 
     let token = google_access_token(path).await?;
     let client = reqwest::Client::new();
-    let file = google_state_file(state);
-    let mut persisted = read_google_state(&file)?;
-    let folder_id = resolve_drive_folder(&client, &token, state, &mut persisted).await?;
+    let folder_id = resolve_drive_folder(&client, &token, state, &mut persisted, &file).await?;
 
     let explicit_spreadsheet = state
         .lan
@@ -1089,6 +1182,7 @@ pub async fn provision_google_sheets(
         } else {
             spreadsheet_id = None;
             persisted.spreadsheet_id = None;
+            write_google_state(&file, &persisted)?;
         }
     }
 
@@ -1099,8 +1193,9 @@ pub async fn provision_google_sheets(
         let created =
             sheets_create_spreadsheet(&client, &token, state.lan.google_spreadsheet_title.trim())
                 .await?;
+        persisted.spreadsheet_id = Some(created.clone());
+        write_google_state(&file, &persisted)?;
         spreadsheet_id = Some(created);
-        persisted.spreadsheet_id = spreadsheet_id.clone();
     }
 
     let spreadsheet_id = spreadsheet_id.ok_or_else(|| GOOGLE_REQUEST_FAILED.to_string())?;
@@ -1752,7 +1847,7 @@ async fn load_table_payloads(
 /// header), drops stale queued operations, then re-enqueues the current SQLite
 /// state as fresh upserts so the queue drains the spreadsheet back into sync.
 pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, String> {
-    let Some(target) = provision_google_sheets(state).await? else {
+    let Some(target) = ensure_provisioned(state).await? else {
         return Err("GOOGLE_SHEETS_NOT_CONFIGURED".into());
     };
     let spreadsheet = target.spreadsheet_id;
@@ -2178,5 +2273,133 @@ mod tests {
         assert!(processing_lease_is_stale(Some(&stale), &now));
         assert!(!processing_lease_is_stale(Some(&active), &now));
         assert!(!processing_lease_is_stale(None, &now));
+    }
+
+    #[test]
+    fn provisioning_source_includes_persisted_ids_when_create_flag_is_off() {
+        assert!(!has_google_provisioning_source(
+            false,
+            false,
+            false,
+            &GoogleSheetsState::default()
+        ));
+
+        let persisted_folder = GoogleSheetsState {
+            drive_folder_id: Some("folder-persisted".into()),
+            ..GoogleSheetsState::default()
+        };
+        assert!(has_google_provisioning_source(
+            false,
+            false,
+            false,
+            &persisted_folder
+        ));
+
+        let persisted_sheet = GoogleSheetsState {
+            spreadsheet_id: Some("sheet-persisted".into()),
+            ..GoogleSheetsState::default()
+        };
+        assert!(has_google_provisioning_source(
+            false,
+            false,
+            false,
+            &persisted_sheet
+        ));
+
+        assert!(has_google_provisioning_source(
+            false,
+            false,
+            true,
+            &GoogleSheetsState::default()
+        ));
+        assert!(has_google_provisioning_source(
+            true,
+            false,
+            false,
+            &GoogleSheetsState::default()
+        ));
+        assert!(has_google_provisioning_source(
+            false,
+            true,
+            false,
+            &GoogleSheetsState::default()
+        ));
+    }
+
+    #[test]
+    fn folder_resolution_prefers_persisted_replacement_for_stale_config() {
+        assert_eq!(
+            resolve_folder_decision(
+                Some("configured-stale"),
+                Some("replacement"),
+                false,
+                true,
+                true,
+            ),
+            FolderResolution::UsePersisted
+        );
+        assert_eq!(
+            resolve_folder_decision(Some("configured-stale"), None, false, false, true),
+            FolderResolution::Create
+        );
+        assert_eq!(
+            resolve_folder_decision(
+                Some("configured-stale"),
+                Some("replacement"),
+                false,
+                false,
+                false,
+            ),
+            FolderResolution::NotAccessible
+        );
+        assert_eq!(
+            resolve_folder_decision(Some("configured"), Some("replacement"), true, true, false,),
+            FolderResolution::UseConfigured
+        );
+        // A persisted ID equal to the stale configured ID is not a replacement;
+        // with creation enabled a fresh folder is created instead.
+        assert_eq!(
+            resolve_folder_decision(Some("same-id"), Some("same-id"), false, false, true),
+            FolderResolution::Create
+        );
+    }
+
+    #[test]
+    fn folder_resolution_without_config_reuses_or_creates_persisted_folder() {
+        assert_eq!(
+            resolve_folder_decision(None, Some("persisted"), false, true, false),
+            FolderResolution::UsePersisted
+        );
+        assert_eq!(
+            resolve_folder_decision(None, Some("stale"), false, false, true),
+            FolderResolution::Create
+        );
+        assert_eq!(
+            resolve_folder_decision(None, None, false, false, false),
+            FolderResolution::None
+        );
+    }
+
+    #[test]
+    fn google_state_roundtrip_preserves_persisted_ids() {
+        let dir = std::env::temp_dir().join(format!("alpha-gsheets-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("google-sheets-state.json");
+        let state = GoogleSheetsState {
+            version: 1,
+            drive_folder_id: Some("folder-123".into()),
+            spreadsheet_id: Some("sheet-456".into()),
+        };
+        write_google_state(&file, &state).unwrap();
+        let persisted = read_google_state(&file).unwrap();
+        assert_eq!(persisted.drive_folder_id.as_deref(), Some("folder-123"));
+        assert_eq!(persisted.spreadsheet_id.as_deref(), Some("sheet-456"));
+
+        let missing = dir.join("missing.json");
+        let default = read_google_state(&missing).unwrap();
+        assert_eq!(default.drive_folder_id, None);
+        assert_eq!(default.spreadsheet_id, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
