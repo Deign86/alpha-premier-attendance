@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { isValidTimezone } from './time.js';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay, type OfficeIdentity } from '@rfid-attendance/shared';
 
@@ -15,6 +17,10 @@ export type AppConfig = {
   googleSheetsId?: string;
   googleServiceAccountEmail?: string;
   googlePrivateKey?: string;
+  googleDriveFolderId?: string;
+  googleDriveFolderName?: string;
+  googleCreateFolderIfMissing: boolean;
+  googleSheetsStateFile?: string;
   enableCardSetup: boolean;
   setupAdminPin?: string;
   setupSessionMinutes: number;
@@ -67,7 +73,9 @@ function officeEnv(env: NodeJS.ProcessEnv): OfficeIdentity {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const timezone = env.TIMEZONE || env.APP_TIMEZONE || 'Asia/Manila';
   if (!isValidTimezone(timezone)) throw new Error(`TIMEZONE is invalid: ${timezone}`);
-  const hasGoogleConfig = Boolean(env.GOOGLE_SHEET_ID && env.GOOGLE_SERVICE_ACCOUNT_EMAIL && env.GOOGLE_PRIVATE_KEY);
+  const googleCreateFolderIfMissing = boolEnv(env, 'GOOGLE_CREATE_FOLDER_IF_MISSING', false);
+  const hasGoogleConfig = Boolean(env.GOOGLE_SERVICE_ACCOUNT_EMAIL && env.GOOGLE_PRIVATE_KEY)
+    && Boolean(env.GOOGLE_SHEET_ID || env.GOOGLE_SHEETS_ID || env.GOOGLE_DRIVE_FOLDER_ID || googleCreateFolderIfMissing);
   const requestedMode = (env.SHEETS_MODE || '').toLowerCase();
   const sheetsMode = requestedMode || (hasGoogleConfig ? 'google' : 'memory');
   if (sheetsMode !== 'memory' && sheetsMode !== 'google') throw new Error('SHEETS_MODE must be memory or google');
@@ -85,6 +93,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     googleSheetsId: env.GOOGLE_SHEET_ID || env.GOOGLE_SHEETS_ID,
     googleServiceAccountEmail: env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     googlePrivateKey: env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    googleDriveFolderId: env.GOOGLE_DRIVE_FOLDER_ID,
+    googleDriveFolderName: env.GOOGLE_DRIVE_FOLDER_NAME,
+    googleCreateFolderIfMissing,
+    googleSheetsStateFile: env.GOOGLE_SHEETS_STATE_FILE || path.join(os.homedir(), '.rfid-attendance', 'google-sheets-state.json'),
     enableCardSetup: boolEnv(env, 'ENABLE_CARD_SETUP', false),
     setupAdminPin: env.SETUP_ADMIN_PIN,
     setupSessionMinutes: numberEnv(env, 'SETUP_SESSION_MINUTES', 15, 1),
@@ -95,8 +107,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     office: officeEnv(env),
   };
   if (sheetsMode === 'google') {
-    if (!config.googleSheetsId || !config.googleServiceAccountEmail || !config.googlePrivateKey) {
-      throw new Error('Google Sheets mode requires GOOGLE_SHEETS_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY');
+    if (!config.googleServiceAccountEmail || !config.googlePrivateKey) {
+      throw new Error('Google Sheets mode requires GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY');
+    }
+    if (!config.googleSheetsId && !config.googleDriveFolderId && !config.googleCreateFolderIfMissing) {
+      throw new Error('Google Sheets mode requires GOOGLE_SHEET_ID, or a Drive target (GOOGLE_DRIVE_FOLDER_ID / GOOGLE_CREATE_FOLDER_IF_MISSING) for auto-create');
     }
   }
   if (env.NODE_ENV === 'production' && sheetsMode !== 'google') {
