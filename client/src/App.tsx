@@ -3435,121 +3435,170 @@ function PayrollTable({
             <tr>
               <th>Employee #</th>
               <th>Employee Name</th>
-              <th>Cut Off Rate</th>
-              <th>Daily Rate</th>
+              <th>Dept / Role</th>
+              <th>Bank / A/C</th>
+              <th>TIN #</th>
               <th>Standard</th>
-              <th>Actual</th>
-              <th>Basic Rate</th>
-              <th>Special Holidays (30%)</th>
-              <th>Regular Holiday (100%)</th>
-              <th>Total Compensation</th>
-              <th>Incentives Allowance</th>
-              <th>Special Allowance</th>
-              <th>Total Allowance</th>
-              <th>Late</th>
-              <th>Halfday</th>
+              <th>Paid Days</th>
+              <th>LWOP</th>
+              <th>Daily Rate</th>
+              <th>Basic Pay</th>
+              <th>HRA</th>
+              <th>Incentives</th>
+              <th>Special Allow.</th>
+              <th>Total Allow.</th>
+              <th>Reg. Hol.</th>
+              <th>Spec. Hol.</th>
+              <th>Overtime</th>
+              <th>Total Earnings</th>
+              <th>SSS</th>
+              <th>PhilHealth</th>
+              <th>HDMF</th>
+              <th>Advance</th>
               <th>Absent</th>
-                <th>Overtime</th>
-                <th>Gross Compensation</th>
-                <th>Actions</th>
+              <th>Late / Halfday</th>
+              <th>Total Deductions</th>
+              <th>Net Pay</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {records.map((row) => (
-              <Fragment key={row.payrollId}>
-                <tr key={row.payrollId}>
-                  <td>{row.employeeId}</td>
-                  <td>
-                    {row.employeeType === "INTERN"
-                      ? `${row.employeeName} (Intern)`
-                      : row.employeeName}
-                  </td>
-                  <td>{row.payrollCutoffLabel}</td>
-                  <td>{php(row.dailyRate)}</td>
-                  <td>{row.standardWorkingDays}</td>
-                  <td>{row.actualWorkingDays}</td>
-                  <td>{php(row.basicPay)}</td>
-                  <td>{php(row.specialHolidayPay)}</td>
-                  <td>{php(row.regularHolidayPay)}</td>
-                  <td>{php(row.totalCompensation)}</td>
-                  <td>{php(row.incentivesAllowance)}</td>
-                  <td>{php(row.specialAllowance)}</td>
-                  <td>{php(row.totalAllowance)}</td>
-                  <td>{php(row.lateDeduction)}</td>
-                  <td>{php(row.halfDayDeduction)}</td>
-                  <td>{php(row.absenceDeduction)}</td>
-                  <td>{php(row.overtimePay)}</td>
-                  <td>
-                    <strong>{php(row.grossCompensation)}</strong>
-                  </td>
-                  <td className="payroll-actions-cell">
-                    {row.status === "DRAFT" ? (
-                      <span className="payroll-row-actions">
-                        <button
-                          className="text-button"
-                          type="button"
-                          disabled={finalizing}
-                          onClick={() => setFinalizeTarget(row)}
-                        >
-                          Finalize
-                        </button>
-                        <button
-                          className="text-button danger-button"
-                          type="button"
-                          onClick={() => setDeleteTarget(row)}
-                        >
-                          Delete
-                        </button>
-                      </span>
-                    ) : (
-                      <span className="payroll-finalized-label">Finalized</span>
-                    )}
-                  </td>
-                </tr>
-                <tr key={`${row.payrollId}-details`} className="payroll-detail">
-                  <td colSpan={19}>
-                    <details>
-                      <summary>Calculation breakdown</summary>
-                      {row.employeeType === "INTERN" ? (
-                        <p>
-                          {php(row.basicPay)} basic ({row.actualWorkingDays}{" "}
-                          day(s) at {php(INTERN_DAILY_RATE_PHP)} per day)
-                          {row.manualAdjustment !== 0
-                            ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
-                            : ""}{" "}
-                          - {php(row.lateDeduction)} late deduction (
-                          {row.lateUnits} hour(s) at{" "}
-                          {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour) ={" "}
-                          <strong>{php(row.grossCompensation)}</strong>.
-                        </p>
+            {records.map((row) => {
+              const sss = row.sss ?? 0;
+              const phic = row.phic ?? 0;
+              const hdmf = row.hdmf ?? 0;
+              const advance = row.salaryAdvance ?? 0;
+              const totalDeductions =
+                row.totalDeductions ??
+                row.lateDeduction +
+                  row.halfDayDeduction +
+                  row.absenceDeduction +
+                  sss +
+                  phic +
+                  hdmf +
+                  advance;
+
+              return (
+                <Fragment key={row.payrollId}>
+                  <tr key={row.payrollId}>
+                    <td>{row.employeeId}</td>
+                    <td>
+                      <strong>
+                        {row.employeeType === "INTERN"
+                          ? `${row.employeeName} (Intern)`
+                          : row.employeeName}
+                      </strong>
+                    </td>
+                    <td>
+                      {row.department || row.designation
+                        ? `${row.department ?? ""}${row.department && row.designation ? " — " : ""}${row.designation ?? ""}`
+                        : "—"}
+                    </td>
+                    <td>
+                      {row.bankName || row.accountNumber
+                        ? `${row.bankName ?? "CASH"} / ${row.accountNumber ?? "0000"}`
+                        : "CASH / 0000"}
+                    </td>
+                    <td>{row.tin || "—"}</td>
+                    <td>{row.standardWorkingDays}</td>
+                    <td>{row.actualWorkingDays}</td>
+                    <td>{row.absentDays}</td>
+                    <td>{php(row.dailyRate)}</td>
+                    <td>{php(row.basicPay)}</td>
+                    <td>{php(row.hra ?? 0)}</td>
+                    <td>{php(row.incentivesAllowance)}</td>
+                    <td>{php(row.specialAllowance)}</td>
+                    <td>{php(row.totalAllowance)}</td>
+                    <td>{php(row.regularHolidayPay)}</td>
+                    <td>{php(row.specialHolidayPay)}</td>
+                    <td>{php(row.overtimePay)}</td>
+                    <td>
+                      <strong>{php(row.grossCompensation)}</strong>
+                    </td>
+                    <td>{php(sss)}</td>
+                    <td>{php(phic)}</td>
+                    <td>{php(hdmf)}</td>
+                    <td>{php(advance)}</td>
+                    <td>{php(row.absenceDeduction)}</td>
+                    <td>{php(row.lateDeduction + row.halfDayDeduction)}</td>
+                    <td>
+                      <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>
+                    </td>
+                    <td style={{ backgroundColor: "#fef08a" }}>
+                      <strong style={{ color: "#854d0e" }}>{php(row.netPay)}</strong>
+                    </td>
+                    <td className="payroll-actions-cell">
+                      {row.status === "DRAFT" ? (
+                        <span className="payroll-row-actions">
+                          <button
+                            className="text-button"
+                            type="button"
+                            disabled={finalizing}
+                            onClick={() => setFinalizeTarget(row)}
+                          >
+                            Finalize
+                          </button>
+                          <button
+                            className="text-button danger-button"
+                            type="button"
+                            onClick={() => setDeleteTarget(row)}
+                          >
+                            Delete
+                          </button>
+                        </span>
                       ) : (
-                        <p>
-                          {php(row.basicPay)} basic +{" "}
-                          {php(row.specialHolidayPay)} special holiday +{" "}
-                          {php(row.regularHolidayPay)} regular holiday +{" "}
-                          {php(row.totalAllowance)} allowances +{" "}
-                          {php(row.overtimePay)} overtime{" "}
-                          {row.manualAdjustment !== 0
-                            ? `+ ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
-                            : ""}{" "}
-                          -{" "}
-                          {php(
-                            row.lateDeduction +
-                              row.halfDayDeduction +
-                              row.absenceDeduction,
-                          )}{" "}
-                          deductions ={" "}
-                          <strong>{php(row.grossCompensation)}</strong>.
-                        </p>
+                        <span className="payroll-finalized-label">Finalized</span>
                       )}
-                      <p>
-                        Status: {row.status}. Net pay: {php(row.netPay)}.
-                      </p>
-                    </details>
-                  </td>
-                </tr>
-              </Fragment>
-            ))}
+                    </td>
+                  </tr>
+                  <tr key={`${row.payrollId}-details`} className="payroll-detail">
+                    <td colSpan={27}>
+                      <details>
+                        <summary>Calculation breakdown & payslip detail</summary>
+                        {row.employeeType === "INTERN" ? (
+                          <p>
+                            {php(row.basicPay)} basic ({row.actualWorkingDays}{" "}
+                            day(s) at {php(INTERN_DAILY_RATE_PHP)} per day)
+                            {row.manualAdjustment !== 0
+                              ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
+                              : ""}{" "}
+                            - {php(row.lateDeduction)} late deduction (
+                            {row.lateUnits} hour(s) at{" "}
+                            {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour)
+                            {row.halfDayDeduction > 0
+                              ? ` - ${php(row.halfDayDeduction)} half-day deduction`
+                              : ""} ={" "}
+                            <strong>{php(row.grossCompensation)}</strong>.
+                          </p>
+                        ) : (
+                          <p>
+                            <strong>Earnings:</strong> {php(row.basicPay)} basic +{" "}
+                            {php(row.hra ?? 0)} HRA +{" "}
+                            {php(row.incentivesAllowance)} incentives +{" "}
+                            {php(row.specialAllowance)} special allow. +{" "}
+                            {php(row.regularHolidayPay)} reg. hol. +{" "}
+                            {php(row.specialHolidayPay)} spec. hol. +{" "}
+                            {php(row.overtimePay)} overtime ={" "}
+                            <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
+                            <br />
+                            <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
+                            <strong>{php(totalDeductions)}</strong> (Total Deductions).
+                            <br />
+                            <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+                            <strong style={{ color: "#854d0e", backgroundColor: "#fef08a", padding: "2px 6px", borderRadius: "3px" }}>
+                              {php(row.netPay)}
+                            </strong>
+                          </p>
+                        )}
+                        <p>
+                          Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({row.cutoffStart} to {row.cutoffEnd}).
+                        </p>
+                      </details>
+                    </td>
+                  </tr>
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
