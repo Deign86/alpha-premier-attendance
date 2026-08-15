@@ -1939,19 +1939,6 @@ async fn generate_payroll_pdf(
     } else {
         payroll_cutoff_label.trim().to_string()
     };
-    let rows = crate::reporting::load_payroll_sheet_rows(
-        &state.db,
-        &cutoff_start,
-        &cutoff_end,
-        worker_upper,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    if rows.is_empty() {
-        return Err(format!(
-            "NO_PAYROLL_RECORDS: No {worker_lower} payroll records for {label}. Create and save a {worker_lower} payroll for this cutoff first."
-        ));
-    }
     let manila_now = chrono::Utc::now().with_timezone(&Manila);
     let file_name = format!(
         "payroll_{}_{}.pdf",
@@ -1961,26 +1948,69 @@ async fn generate_payroll_pdf(
     let relative_path = std::path::PathBuf::from("exports").join(&file_name);
     let output_path = state.exports_dir.join(&file_name);
     let generated_at = manila_now.to_rfc3339();
-    if let Err(error) = (|| {
-        std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
-            .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_sheet_pdf(
-            &rows,
-            &label,
-            worker_upper,
-            &state.office,
-            &output_path,
+
+    let (employee_count, total_amount_centavos) = if worker_upper == "EMPLOYEE" {
+        let emp_rows = crate::reporting::load_employee_payslip_rows(
+            &state.db,
+            &cutoff_start,
+            &cutoff_end,
         )
-    })() {
-        log::error!("payroll sheet PDF generation failed: {error}");
-        return Err(error);
-    }
+        .await
+        .map_err(|e| e.to_string())?;
+        if emp_rows.is_empty() {
+            return Err(format!(
+                "NO_PAYROLL_RECORDS: No employee payroll records for {label}. Create and save an employee payroll for this cutoff first."
+            ));
+        }
+        if let Err(error) = (|| {
+            std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
+                .map_err(|e| e.to_string())?;
+            crate::reporting::generate_employee_payslip_document(
+                &emp_rows,
+                &label,
+                &state.office,
+                &output_path,
+            )
+        })() {
+            log::error!("employee payroll payslip PDF generation failed: {error}");
+            return Err(error);
+        }
+        let total: i64 = emp_rows.iter().map(|r| r.gross_compensation_centavos).sum();
+        (emp_rows.len() as i64, total)
+    } else {
+        let rows = crate::reporting::load_payroll_sheet_rows(
+            &state.db,
+            &cutoff_start,
+            &cutoff_end,
+            worker_upper,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        if rows.is_empty() {
+            return Err(format!(
+                "NO_PAYROLL_RECORDS: No intern payroll records for {label}. Create and save an intern payroll for this cutoff first."
+            ));
+        }
+        if let Err(error) = (|| {
+            std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
+                .map_err(|e| e.to_string())?;
+            crate::reporting::generate_payroll_sheet_pdf(
+                &rows,
+                &label,
+                worker_upper,
+                &state.office,
+                &output_path,
+            )
+        })() {
+            log::error!("payroll sheet PDF generation failed: {error}");
+            return Err(error);
+        }
+        let total: i64 = rows.iter().map(|r| r.gross_compensation_centavos).sum();
+        (rows.len() as i64, total)
+    };
+
     let bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
-    let total_amount_centavos: i64 = rows
-        .iter()
-        .map(|row| row.gross_compensation_centavos)
-        .sum();
     let payroll_pdf_id = file_name.trim_end_matches(".pdf").to_string();
     sqlx::query(
         "INSERT INTO payroll_pdfs (payroll_pdf_id,file_name,managed_relative_path,cutoff_start,cutoff_end,payroll_cutoff_label,worker_type,employee_count,total_amount_centavos,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1992,7 +2022,7 @@ async fn generate_payroll_pdf(
     .bind(&cutoff_end)
     .bind(&label)
     .bind(worker_upper)
-    .bind(rows.len() as i64)
+    .bind(employee_count)
     .bind(total_amount_centavos)
     .bind(&hash)
     .bind(bytes.len() as i64)
@@ -2013,7 +2043,7 @@ async fn generate_payroll_pdf(
         "payrollCutoffLabel": label,
         "workerType": worker_lower,
         "generatedAt": generated_at,
-        "employeeCount": rows.len(),
+        "employeeCount": employee_count,
         "totalAmount": total_amount_centavos as f64 / 100.0,
         "sizeBytes": bytes.len(),
     }));

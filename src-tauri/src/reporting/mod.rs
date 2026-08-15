@@ -286,6 +286,49 @@ mod tests {
     }
 
     #[test]
+    fn generates_employee_payslip_document_with_official_format() {
+        let rows = vec![EmployeePayslipData {
+            payroll_id: "P-EMP-1".into(),
+            employee_id: "APGCO-25-013".into(),
+            employee_name: "CHICO, JEAN ASHLEY".into(),
+            department: "HR-MARKETING".into(),
+            designation: "EMPLOYEE".into(),
+            tin: "010-871-213-0000".into(),
+            bank_name: "CASH".into(),
+            account_number: "0000".into(),
+            standard_working_days: 11.0,
+            paid_days: 11.0,
+            lwop_days: 0.0,
+            daily_rate_centavos: 705_00,
+            basic_pay_centavos: 7_755_00,
+            hra_centavos: 0,
+            incentives_allowance_centavos: 6_600_00,
+            special_allowance_centavos: 150_00,
+            total_allowance_centavos: 16_005_00,
+            regular_holiday_pay_centavos: 0,
+            special_holiday_pay_centavos: 211_50,
+            overtime_pay_centavos: 0,
+            gross_compensation_centavos: 16_216_50,
+            sss_centavos: 0,
+            phic_centavos: 0,
+            hdmf_centavos: 0,
+            salary_advance_centavos: 0,
+            absence_deduction_centavos: 0,
+            late_deduction_centavos: 0,
+            total_deductions_centavos: 0,
+            net_pay_centavos: 16_216_50,
+            cutoff_label: "JUNE 1-15 2026".into(),
+            status: "FINALIZED".into(),
+        }];
+        let base = std::env::temp_dir().join(format!("employee-payslip-{}", uuid::Uuid::new_v4()));
+        let pdf = base.with_extension("pdf");
+        generate_employee_payslip_document(&rows, "JUNE 1-15 2026", &office(), &pdf).unwrap();
+        let bytes = std::fs::read(&pdf).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+        let _ = std::fs::remove_file(&pdf);
+    }
+
+    #[test]
     fn payroll_sheet_paginates_long_registers_onto_multiple_pages() {
         let rows: Vec<PayrollSheetRow> = (0..(SHEET_ROWS_PER_PAGE + 3))
             .map(|index| PayrollSheetRow {
@@ -843,162 +886,405 @@ pub fn payroll_pdf_filename(payroll_id: &str, cutoff: &str, job_id: &str) -> Str
     )
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmployeePayslipData {
+    pub payroll_id: String,
+    pub employee_id: String,
+    pub employee_name: String,
+    pub department: String,
+    pub designation: String,
+    pub tin: String,
+    pub bank_name: String,
+    pub account_number: String,
+    pub standard_working_days: f64,
+    pub paid_days: f64,
+    pub lwop_days: f64,
+    pub daily_rate_centavos: i64,
+    pub basic_pay_centavos: i64,
+    pub hra_centavos: i64,
+    pub incentives_allowance_centavos: i64,
+    pub special_allowance_centavos: i64,
+    pub total_allowance_centavos: i64,
+    pub regular_holiday_pay_centavos: i64,
+    pub special_holiday_pay_centavos: i64,
+    pub overtime_pay_centavos: i64,
+    pub gross_compensation_centavos: i64,
+    pub sss_centavos: i64,
+    pub phic_centavos: i64,
+    pub hdmf_centavos: i64,
+    pub salary_advance_centavos: i64,
+    pub absence_deduction_centavos: i64,
+    pub late_deduction_centavos: i64,
+    pub total_deductions_centavos: i64,
+    pub net_pay_centavos: i64,
+    pub cutoff_label: String,
+    pub status: String,
+}
+
+pub fn format_amount_or_dash(centavos: i64) -> String {
+    if centavos == 0 {
+        "-".to_string()
+    } else {
+        let negative = centavos < 0;
+        let absolute = centavos.unsigned_abs();
+        let pesos = absolute / 100;
+        let cents = absolute % 100;
+        let digits = pesos.to_string();
+        let mut grouped = String::new();
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index) % 3 == 0 {
+                grouped.push(',');
+            }
+            grouped.push(digit);
+        }
+        if negative {
+            format!("-{grouped}.{cents:02}")
+        } else {
+            format!("{grouped}.{cents:02}")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PayslipAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn payslip_cell(
+    ops: &mut Vec<Op>,
+    x_mm: f32,
+    y_mm: f32,
+    w_mm: f32,
+    h_mm: f32,
+    text: &str,
+    size_pt: f32,
+    bold: bool,
+    align: PayslipAlign,
+    fill_color: Option<printpdf::Color>,
+    border: bool,
+    text_color: Option<printpdf::Color>,
+) {
+    let rect = Rect {
+        x: mm_to_pt(x_mm),
+        y: mm_to_pt(y_mm),
+        width: mm_to_pt(w_mm),
+        height: mm_to_pt(h_mm),
+        mode: None,
+        winding_order: None,
+    };
+    if let Some(fill) = fill_color {
+        ops.push(Op::SaveGraphicsState);
+        ops.push(Op::SetFillColor { col: fill });
+        ops.push(Op::DrawRectangle {
+            rectangle: Rect {
+                mode: Some(PaintMode::Fill),
+                ..rect.clone()
+            },
+        });
+        ops.push(Op::RestoreGraphicsState);
+    }
+    if border {
+        ops.push(Op::SaveGraphicsState);
+        ops.push(Op::SetOutlineColor {
+            col: printpdf::Color::Rgb(printpdf::Rgb::new(0.0, 0.0, 0.0, None)),
+        });
+        ops.push(Op::SetOutlineThickness { pt: Pt(0.4) });
+        ops.push(Op::DrawRectangle {
+            rectangle: Rect {
+                mode: Some(PaintMode::Stroke),
+                ..rect.clone()
+            },
+        });
+        ops.push(Op::RestoreGraphicsState);
+    }
+
+    if !text.is_empty() {
+        let text_w = text_width_mm(text, size_pt);
+        let tx = match align {
+            PayslipAlign::Left => x_mm + 2.0,
+            PayslipAlign::Center => (x_mm + (w_mm - text_w) / 2.0).max(x_mm + 1.0),
+            PayslipAlign::Right => (x_mm + w_mm - text_w - 2.0).max(x_mm + 1.0),
+        };
+        let ty = y_mm + (h_mm - size_pt * 25.4 / 72.0) / 2.0 - 0.4;
+
+        ops.push(Op::StartTextSection);
+        ops.push(Op::SetTextCursor {
+            pos: Point::new(Mm(tx), Mm(ty)),
+        });
+        if let Some(col) = text_color {
+            ops.push(Op::SetFillColor { col });
+        }
+        ops.push(Op::SetFont {
+            font: PdfFontHandle::Builtin(if bold {
+                BuiltinFont::HelveticaBold
+            } else {
+                BuiltinFont::Helvetica
+            }),
+            size: Pt(size_pt),
+        });
+        ops.push(Op::ShowText {
+            items: vec![TextItem::Text(text.to_string())],
+        });
+        ops.push(Op::EndTextSection);
+    }
+}
+
+fn draw_payslip_h_line(ops: &mut Vec<Op>, x1_mm: f32, x2_mm: f32, y_mm: f32, thickness_pt: f32) {
+    ops.push(Op::SaveGraphicsState);
+    ops.push(Op::SetOutlineColor {
+        col: printpdf::Color::Rgb(printpdf::Rgb::new(0.0, 0.0, 0.0, None)),
+    });
+    ops.push(Op::SetOutlineThickness { pt: Pt(thickness_pt) });
+    ops.push(Op::DrawLine {
+        line: printpdf::Line {
+            points: vec![
+                printpdf::LinePoint {
+                    p: Point::new(Mm(x1_mm), Mm(y_mm)),
+                    bezier: false,
+                },
+                printpdf::LinePoint {
+                    p: Point::new(Mm(x2_mm), Mm(y_mm)),
+                    bezier: false,
+                },
+            ],
+            is_closed: false,
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+}
+
+pub fn generate_employee_payslip_document(
+    rows: &[EmployeePayslipData],
+    cutoff_label: &str,
+    office: &crate::config::OfficeConfig,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Err("NO_RECORDS".into());
+    }
+    let mut document = PdfDocument::new("Alpha Premier Employee Payslip");
+    let mut pages = Vec::new();
+
+    for row in rows {
+        let mut ops = Vec::new();
+
+        // 1. Black Top Banner
+        payslip_cell(
+            &mut ops,
+            15.0,
+            262.0,
+            180.0,
+            20.0,
+            "",
+            10.0,
+            false,
+            PayslipAlign::Center,
+            Some(printpdf::Color::Rgb(printpdf::Rgb::new(0.0, 0.0, 0.0, None))),
+            false,
+            None,
+        );
+        payslip_cell(
+            &mut ops,
+            15.0,
+            272.0,
+            180.0,
+            8.0,
+            &office.company_name.to_uppercase(),
+            11.0,
+            true,
+            PayslipAlign::Center,
+            None,
+            false,
+            Some(printpdf::Color::Rgb(printpdf::Rgb::new(1.0, 1.0, 1.0, None))),
+        );
+        payslip_cell(
+            &mut ops,
+            15.0,
+            264.5,
+            180.0,
+            6.0,
+            &office.display_full().to_uppercase(),
+            7.5,
+            false,
+            PayslipAlign::Center,
+            None,
+            false,
+            Some(printpdf::Color::Rgb(printpdf::Rgb::new(1.0, 1.0, 1.0, None))),
+        );
+
+        // 2. Subheader (Period) Banner
+        let period_label = if !row.cutoff_label.is_empty() {
+            &row.cutoff_label
+        } else {
+            cutoff_label
+        };
+        payslip_cell(
+            &mut ops,
+            15.0,
+            254.0,
+            180.0,
+            8.0,
+            &format!("Payslip For the Month of {}", period_label.to_uppercase()),
+            9.5,
+            true,
+            PayslipAlign::Center,
+            Some(printpdf::Color::Rgb(printpdf::Rgb::new(0.92, 0.92, 0.92, None))),
+            true,
+            None,
+        );
+
+        // 3. Employee Details Grid (6 rows, 6.2mm each: from Y=216.8 to Y=254.0)
+        let col1_w = 34.0;
+        let col2_w = 56.0;
+        let col3_w = 48.0;
+        let col4_w = 42.0;
+        let row_h = 6.2;
+
+        let std_days_str = format_days(row.standard_working_days);
+        let paid_days_str = format_days(row.paid_days);
+        let lwop_str = if row.lwop_days > 0.0 { format_days(row.lwop_days) } else { String::new() };
+        let rate_str = format_amount_or_dash(row.daily_rate_centavos);
+
+        let details_rows = [
+            ("Employee ID:", row.employee_id.as_str(), true, "Bank Name:", row.bank_name.as_str(), false),
+            ("Employee Name:", row.employee_name.as_str(), true, "A/C #:", row.account_number.as_str(), false),
+            ("", row.department.as_str(), false, "Standard Working Days", std_days_str.as_str(), false),
+            ("Designation:", row.designation.as_str(), false, "Paid Days", paid_days_str.as_str(), false),
+            ("Tin#", row.tin.as_str(), false, "LWOP Days", lwop_str.as_str(), false),
+            ("", "", false, "Rate per day", rate_str.as_str(), false),
+        ];
+
+        let mut grid_y = 254.0 - row_h;
+        for (label1, val1, val1_bold, label2, val2, _) in &details_rows {
+            payslip_cell(&mut ops, 15.0, grid_y, col1_w, row_h, label1, 8.0, true, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, 15.0 + col1_w, grid_y, col2_w, row_h, val1, 8.0, *val1_bold, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, 105.0, grid_y, col3_w, row_h, label2, 8.0, true, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, 105.0 + col3_w, grid_y, col4_w, row_h, val2, 8.0, false, PayslipAlign::Right, None, true, None);
+            grid_y -= row_h;
+        }
+
+        // 4. Separator Line
+        draw_payslip_h_line(&mut ops, 15.0, 195.0, 214.5, 0.8);
+
+        // 5. Earnings & Deductions Table
+        let earn_lbl_w = 56.0;
+        let earn_val_w = 34.0;
+        let ded_lbl_w = 56.0;
+        let ded_val_w = 34.0;
+        let tbl_row_h = 5.6;
+
+        payslip_cell(&mut ops, 15.0, 207.5, earn_lbl_w, 7.0, "Earnings", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, 15.0 + earn_lbl_w, 207.5, earn_val_w, 7.0, "Amount", 8.5, true, PayslipAlign::Right, None, true, None);
+        payslip_cell(&mut ops, 105.0, 207.5, ded_lbl_w, 7.0, "Deductions", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, 105.0 + ded_lbl_w, 207.5, ded_val_w, 7.0, "Amount", 8.5, true, PayslipAlign::Right, None, true, None);
+
+        let table_rows = [
+            ("Basic", format_amount_or_dash(row.basic_pay_centavos), "SSS Employee Share", format_amount_or_dash(row.sss_centavos)),
+            ("HRA", format_amount_or_dash(row.hra_centavos), "Phic Employee Share", format_amount_or_dash(row.phic_centavos)),
+            ("Incentives Allowance", format_amount_or_dash(row.incentives_allowance_centavos), "HDMF Employee Share", format_amount_or_dash(row.hdmf_centavos)),
+            ("Special Allowance", format_amount_or_dash(row.special_allowance_centavos), "Salary Advance", format_amount_or_dash(row.salary_advance_centavos)),
+            ("Total Allowance", format_amount_or_dash(row.total_allowance_centavos), "", "".to_string()),
+            ("Other Earnings", "".to_string(), "ABSENT", format_amount_or_dash(row.absence_deduction_centavos)),
+            ("Reg. Holidayr", format_amount_or_dash(row.regular_holiday_pay_centavos), "LATE", format_amount_or_dash(row.late_deduction_centavos)),
+            ("Special Holiday", format_amount_or_dash(row.special_holiday_pay_centavos), "", "".to_string()),
+            ("Over Time Pay", format_amount_or_dash(row.overtime_pay_centavos), "", "".to_string()),
+        ];
+
+        let mut tbl_y = 207.5 - tbl_row_h;
+        for (e_lbl, e_val, d_lbl, d_val) in &table_rows {
+            let e_bold = *e_lbl == "Other Earnings";
+            payslip_cell(&mut ops, 15.0, tbl_y, earn_lbl_w, tbl_row_h, e_lbl, 8.0, e_bold, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, 15.0 + earn_lbl_w, tbl_y, earn_val_w, tbl_row_h, e_val, 8.0, false, PayslipAlign::Right, None, true, None);
+            payslip_cell(&mut ops, 105.0, tbl_y, ded_lbl_w, tbl_row_h, d_lbl, 8.0, false, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, 105.0 + ded_lbl_w, tbl_y, ded_val_w, tbl_row_h, d_val, 8.0, false, PayslipAlign::Right, None, true, None);
+            tbl_y -= tbl_row_h;
+        }
+
+        // Total Earnings / Total Deductions Row
+        let total_row_y = tbl_y;
+        payslip_cell(&mut ops, 15.0, total_row_y, earn_lbl_w, tbl_row_h, "Total Earnings", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, 15.0 + earn_lbl_w, total_row_y, earn_val_w, tbl_row_h, &format_amount_or_dash(row.gross_compensation_centavos), 8.5, true, PayslipAlign::Right, None, true, None);
+        payslip_cell(&mut ops, 105.0, total_row_y, ded_lbl_w, tbl_row_h, "Total Deductions", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, 105.0 + ded_lbl_w, total_row_y, ded_val_w, tbl_row_h, &format_amount_or_dash(row.total_deductions_centavos), 8.5, true, PayslipAlign::Right, None, true, None);
+
+        // 6. Net Pay Row (Yellow Highlighted Box)
+        let net_y = total_row_y - 8.5;
+        payslip_cell(&mut ops, 15.0, net_y, earn_lbl_w, 8.0, "Net Pay", 9.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(
+            &mut ops,
+            15.0 + earn_lbl_w,
+            net_y,
+            earn_val_w,
+            8.0,
+            &format_amount_or_dash(row.net_pay_centavos),
+            9.5,
+            true,
+            PayslipAlign::Right,
+            Some(printpdf::Color::Rgb(printpdf::Rgb::new(0.953, 0.875, 0.247, None))),
+            true,
+            None,
+        );
+        draw_payslip_h_line(&mut ops, 15.0 + earn_lbl_w, 15.0 + earn_lbl_w + earn_val_w, net_y - 0.8, 0.5);
+
+        // 7. Footer Signatures
+        let sig_line_y = net_y - 35.0;
+        draw_payslip_h_line(&mut ops, 15.0, 85.0, sig_line_y, 0.8);
+        draw_payslip_h_line(&mut ops, 125.0, 195.0, sig_line_y, 0.8);
+
+        payslip_cell(&mut ops, 15.0, sig_line_y - 6.0, 70.0, 5.0, "PREPARED BY:", 8.5, true, PayslipAlign::Left, None, false, None);
+        payslip_cell(&mut ops, 125.0, sig_line_y - 6.0, 70.0, 5.0, "EMPLOYEE SIGNATURE", 8.5, true, PayslipAlign::Left, None, false, None);
+
+        pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
+    }
+
+    let bytes = document
+        .with_pages(pages)
+        .save(&PdfSaveOptions::default(), &mut Vec::new());
+    std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+
 pub fn generate_payroll_pdf(
     row: &PayrollExportRow,
     office: &crate::config::OfficeConfig,
     path: &std::path::Path,
 ) -> Result<(), String> {
-    let mut document = PdfDocument::new("Alpha Premier Payroll Payslip");
-    let mark = brand_mark_image(&mut document, 15.0);
-    let mut ops = Vec::new();
-    if let Some((id, dpi)) = &mark {
-        ops.push(brand_mark_op(id.clone(), *dpi, 191.0, 264.0));
-    }
-    let mut add = |text: String, x: f32, y: f32, size: f32, bold: bool| {
-        ops.extend([
-            Op::StartTextSection,
-            Op::SetTextCursor {
-                pos: Point::new(Mm(x), Mm(y)),
-            },
-            Op::SetFont {
-                font: PdfFontHandle::Builtin(if bold {
-                    BuiltinFont::HelveticaBold
-                } else {
-                    BuiltinFont::Helvetica
-                }),
-                size: Pt(size),
-            },
-            Op::ShowText {
-                items: vec![TextItem::Text(text)],
-            },
-            Op::EndTextSection,
-        ]);
+    let payslip = EmployeePayslipData {
+        payroll_id: row.payroll_id.clone(),
+        employee_id: row.employee_id.clone(),
+        employee_name: row.employee_name.clone(),
+        department: String::new(),
+        designation: row.profile.clone(),
+        tin: office.tax_identification_number.clone().unwrap_or_default(),
+        bank_name: "CASH".into(),
+        account_number: "0000".into(),
+        standard_working_days: 11.0,
+        paid_days: 11.0,
+        lwop_days: 0.0,
+        daily_rate_centavos: row.basic_pay_centavos / 11,
+        basic_pay_centavos: row.basic_pay_centavos,
+        hra_centavos: 0,
+        incentives_allowance_centavos: row.incentives_centavos,
+        special_allowance_centavos: row.allowances_centavos,
+        total_allowance_centavos: row.allowances_centavos + row.incentives_centavos,
+        regular_holiday_pay_centavos: 0,
+        special_holiday_pay_centavos: 0,
+        overtime_pay_centavos: 0,
+        gross_compensation_centavos: row.gross_centavos,
+        sss_centavos: 0,
+        phic_centavos: 0,
+        hdmf_centavos: 0,
+        salary_advance_centavos: 0,
+        absence_deduction_centavos: 0,
+        late_deduction_centavos: row.late_deduction_centavos,
+        total_deductions_centavos: row.late_deduction_centavos + row.other_adjustments_centavos,
+        net_pay_centavos: row.net_centavos,
+        cutoff_label: row.cutoff_label.clone(),
+        status: row.status.clone(),
     };
-    add("ALPHA PREMIER".to_string(), 20.0, 276.0, 18.0, true);
-    add(office.display_full(), 20.0, 269.0, 9.0, false);
-    add(
-        format!(
-            "PAYSLIP - {}",
-            if row.status == "FINALIZED" {
-                "FINAL"
-            } else if row.status == "VOID" {
-                "VOID"
-            } else {
-                "DRAFT"
-            }
-        ),
-        20.0,
-        258.0,
-        12.0,
-        true,
-    );
-    add(
-        format!("Employee: {} ({})", row.employee_name, row.employee_id),
-        20.0,
-        248.0,
-        11.0,
-        false,
-    );
-    add(
-        format!(
-            "Profile: {}   Cutoff: {} ({} to {})",
-            row.profile, row.cutoff_label, row.cutoff_start, row.cutoff_end
-        ),
-        20.0,
-        239.0,
-        10.0,
-        false,
-    );
-    add("EARNINGS".to_string(), 20.0, 218.0, 11.0, true);
-    add(
-        format!(
-            "Basic Pay ................................ {}",
-            format_php(row.basic_pay_centavos)
-        ),
-        24.0,
-        207.0,
-        10.0,
-        false,
-    );
-    add(
-        format!(
-            "Allowances ............................. {}",
-            format_php(row.allowances_centavos)
-        ),
-        24.0,
-        198.0,
-        10.0,
-        false,
-    );
-    add(
-        format!(
-            "Incentives .............................. {}",
-            format_php(row.incentives_centavos)
-        ),
-        24.0,
-        189.0,
-        10.0,
-        false,
-    );
-    add(
-        "DEDUCTIONS / ADJUSTMENTS".to_string(),
-        20.0,
-        171.0,
-        11.0,
-        true,
-    );
-    add(
-        format!(
-            "Late deductions ......................... {}",
-            format_php(row.late_deduction_centavos)
-        ),
-        24.0,
-        160.0,
-        10.0,
-        false,
-    );
-    add(
-        format!(
-            "Other adjustments ...................... {}",
-            format_php(row.other_adjustments_centavos)
-        ),
-        24.0,
-        151.0,
-        10.0,
-        false,
-    );
-    add(
-        format!("GROSS PAY: {}", format_php(row.gross_centavos)),
-        20.0,
-        128.0,
-        12.0,
-        true,
-    );
-    add(
-        format!("NET PAY: {}", format_php(row.net_centavos)),
-        20.0,
-        114.0,
-        15.0,
-        true,
-    );
-    add(
-        format!("Status: {}   Document ID: {}", row.status, row.payroll_id),
-        20.0,
-        94.0,
-        9.0,
-        false,
-    );
-    add(
-        "CONFIDENTIAL - For authorized payroll use only".to_string(),
-        20.0,
-        24.0,
-        8.0,
-        false,
-    );
-    let bytes = document
-        .with_pages(vec![PdfPage::new(Mm(210.0), Mm(297.0), ops)])
-        .save(&PdfSaveOptions::default(), &mut Vec::new());
-    std::fs::write(path, bytes).map_err(|e| e.to_string())
+    generate_employee_payslip_document(std::slice::from_ref(&payslip), &row.cutoff_label, office, path)
 }
 
 pub fn payroll_register_pdf_filename(cutoff: &str, job_id: &str) -> String {
@@ -1122,6 +1408,84 @@ pub struct PayrollSheetRow {
     pub half_day_deduction_centavos: i64,
     pub absence_deduction_centavos: i64,
     pub gross_compensation_centavos: i64,
+}
+
+pub async fn load_employee_payslip_rows(
+    db: &sqlx::SqlitePool,
+    cutoff_start: &str,
+    cutoff_end: &str,
+) -> Result<Vec<EmployeePayslipData>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, COALESCE(u.department, '') AS department, \
+         COALESCE(u.employee_type, 'EMPLOYEE') AS designation, \
+         pc.payroll_cutoff_label, pc.daily_rate_centavos, pc.standard_working_days, pc.actual_working_days, \
+         pc.basic_pay_centavos, pc.incentives_allowance_centavos, pc.special_allowance_centavos, \
+         pc.total_allowance_centavos, pc.special_holiday_pay_centavos, pc.regular_holiday_pay_centavos, \
+         pc.overtime_pay_centavos, pc.late_deduction_centavos, pc.half_day_deduction_centavos, \
+         pc.absent_days, pc.absence_deduction_centavos, pc.gross_compensation_centavos, pc.net_pay_centavos, \
+         pc.status \
+         FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
+         WHERE pc.cutoff_start = ? AND pc.cutoff_end = ? AND COALESCE(u.employee_type, 'EMPLOYEE') = 'EMPLOYEE' \
+         ORDER BY pc.employee_name, pc.employee_id",
+    )
+    .bind(cutoff_start)
+    .bind(cutoff_end)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let daily_rate_centavos = row.get::<i64, _>("daily_rate_centavos");
+            let basic_pay_centavos = row.get::<i64, _>("basic_pay_centavos");
+            let incentives_allowance_centavos = row.get::<i64, _>("incentives_allowance_centavos");
+            let special_allowance_centavos = row.get::<i64, _>("special_allowance_centavos");
+            let total_allowance_centavos = row.get::<i64, _>("total_allowance_centavos");
+            let special_holiday_pay_centavos = row.get::<i64, _>("special_holiday_pay_centavos");
+            let regular_holiday_pay_centavos = row.get::<i64, _>("regular_holiday_pay_centavos");
+            let overtime_pay_centavos = row.get::<i64, _>("overtime_pay_centavos");
+            let gross_compensation_centavos = row.get::<i64, _>("gross_compensation_centavos");
+            let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
+            let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
+            let absence_deduction_centavos = row.get::<i64, _>("absence_deduction_centavos");
+            let total_deductions_centavos = late_deduction_centavos + half_day_deduction_centavos + absence_deduction_centavos;
+            let net_pay_centavos = row.get::<i64, _>("net_pay_centavos");
+
+            EmployeePayslipData {
+                payroll_id: row.get("payroll_id"),
+                employee_id: row.get("employee_id"),
+                employee_name: row.get("employee_name"),
+                department: row.get("department"),
+                designation: row.get("designation"),
+                tin: String::new(),
+                bank_name: "CASH".into(),
+                account_number: "0000".into(),
+                standard_working_days: row.get("standard_working_days"),
+                paid_days: row.get("actual_working_days"),
+                lwop_days: row.get("absent_days"),
+                daily_rate_centavos,
+                basic_pay_centavos,
+                hra_centavos: 0,
+                incentives_allowance_centavos,
+                special_allowance_centavos,
+                total_allowance_centavos,
+                regular_holiday_pay_centavos,
+                special_holiday_pay_centavos,
+                overtime_pay_centavos,
+                gross_compensation_centavos,
+                sss_centavos: 0,
+                phic_centavos: 0,
+                hdmf_centavos: 0,
+                salary_advance_centavos: 0,
+                absence_deduction_centavos,
+                late_deduction_centavos: late_deduction_centavos + half_day_deduction_centavos,
+                total_deductions_centavos,
+                net_pay_centavos,
+                cutoff_label: row.get("payroll_cutoff_label"),
+                status: row.get("status"),
+            }
+        })
+        .collect())
 }
 
 /// Loads the payroll sheet rows for one cutoff, filtered to `worker_type`
