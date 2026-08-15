@@ -407,18 +407,18 @@ td small { font-size: .7rem; }
 
 /* Full Landscape Dashboard Shell for Payroll */
 .dashboard-shell-payroll {
-  width: calc(100% - 16px);
+  width: min(calc(100% - 32px), 1920px);
   max-width: 100%;
-  padding: 16px 0 32px;
+  padding: 24px 0 40px;
 }
 
 /* Payroll Header Toolbar & Panels */
 .payroll-toolbar {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: stretch;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   flex-wrap: wrap;
 }
 
@@ -427,7 +427,7 @@ td small { font-size: .7rem; }
   background: var(--surface);
   border: 1px solid var(--line-bright);
   border-radius: var(--radius-md);
-  padding: 12px 16px;
+  padding: 14px 18px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .12);
 }
 
@@ -437,7 +437,7 @@ td small { font-size: .7rem; }
   background: var(--surface);
   border: 1px solid var(--line-bright);
   border-radius: var(--radius-md);
-  padding: 12px 16px;
+  padding: 14px 18px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .12);
   display: flex;
   flex-direction: column;
@@ -445,7 +445,7 @@ td small { font-size: .7rem; }
 }
 
 .payroll-panel-heading h2 {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   font-family: 'Orbitron', sans-serif;
   font-size: 0.92rem;
   font-weight: 600;
@@ -456,13 +456,13 @@ td small { font-size: .7rem; }
 .payroll-generate-controls {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
 .payroll-generate-controls label {
   display: grid;
-  gap: 5px;
+  gap: 6px;
   margin: 0;
   color: var(--ink);
   font-size: 0.74rem;
@@ -470,9 +470,9 @@ td small { font-size: .7rem; }
 }
 
 .payroll-generate-controls input {
-  height: 36px;
-  padding: 0 8px;
-  font-size: 0.74rem;
+  height: 38px;
+  padding: 0 10px;
+  font-size: 0.76rem;
   background: var(--surface-input);
   border: 1px solid var(--line-bright);
   color: var(--ink);
@@ -482,26 +482,26 @@ td small { font-size: .7rem; }
 .cutoff-period {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .cutoff-fill-buttons {
   display: flex;
-  gap: 5px;
+  gap: 6px;
 }
 
 .cutoff-fill-buttons .admin-button {
-  height: 36px;
-  padding: 0 8px;
+  height: 38px;
+  padding: 0 10px;
   font-size: 0.72rem;
   white-space: nowrap;
 }
 
 .payroll-generate-submit {
-  height: 36px;
-  padding: 0 16px;
-  font-size: 0.74rem;
+  height: 38px;
+  padding: 0 18px;
+  font-size: 0.76rem;
   font-weight: 600;
   white-space: nowrap;
   align-self: flex-end;
@@ -510,16 +510,16 @@ td small { font-size: .7rem; }
 .payroll-pdf-actions-panel .payroll-actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   justify-content: center;
   height: 100%;
 }
 
 .payroll-pdf-actions-panel .admin-button {
-  height: 36px;
-  padding: 0 10px;
-  font-size: 0.72rem;
+  height: 38px;
+  padding: 0 12px;
+  font-size: 0.74rem;
   width: 100%;
   text-align: center;
   white-space: nowrap;
@@ -528,7 +528,7 @@ td small { font-size: .7rem; }
 /* Full Landscape Draft Payroll Table */
 .payroll-table {
   width: 100%;
-  margin: 12px 0 20px;
+  margin: 16px 0 28px;
   min-width: 0;
 }
 
@@ -541,22 +541,38 @@ td small { font-size: .7rem; }
   box-shadow: 0 10px 32px rgba(0, 0, 0, .14);
 }
 
+.payroll-table .table-wrap::-webkit-scrollbar {
+  height: 8px;
+}
+
+.payroll-table .table-wrap::-webkit-scrollbar-track {
+  background: var(--surface-raised);
+}
+
+.payroll-table .table-wrap::-webkit-scrollbar-thumb {
+  background: var(--line-bright);
+  border-radius: 4px;
+}
+
+.payroll-table .table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--gold-soft);
+}
+
 .payroll-table table {
   width: 100%;
-  min-width: 100%;
+  min-width: 1980px;
   border-collapse: collapse;
-  font-size: 0.56rem;
-  letter-spacing: -0.01em;
+  font-size: 0.75rem;
   table-layout: auto;
 }
 
 .payroll-table th {
-  padding: 4px 1.5px;
-  font-size: 0.48rem;
+  padding: 10px 8px;
+  font-size: 0.62rem;
   font-weight: 700;
-  line-height: 1.05;
+  line-height: 1.25;
   text-transform: uppercase;
-  letter-spacing: 0;
+  letter-spacing: 0.03em;
   color: var(--gold-bright);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line-bright);
@@ -567,19 +583,19 @@ td small { font-size: .7rem; }
   vertical-align: middle;
 }
 
-.payroll-table th:nth-child(1) { min-width: 44px; }
-.payroll-table th:nth-child(2) { min-width: 58px; }
-.payroll-table th:nth-child(3) { min-width: 38px; }
-.payroll-table th:nth-child(4) { min-width: 38px; }
-.payroll-table th:nth-child(5) { min-width: 26px; }
-.payroll-table th:nth-child(6) { min-width: 28px; }
-.payroll-table th:nth-child(7) { min-width: 28px; }
-.payroll-table th:nth-child(8) { min-width: 24px; }
+.payroll-table th:nth-child(1) { min-width: 90px; }
+.payroll-table th:nth-child(2) { min-width: 130px; }
+.payroll-table th:nth-child(3) { min-width: 95px; }
+.payroll-table th:nth-child(4) { min-width: 95px; }
+.payroll-table th:nth-child(5) { min-width: 75px; }
+.payroll-table th:nth-child(6) { min-width: 65px; }
+.payroll-table th:nth-child(7) { min-width: 65px; }
+.payroll-table th:nth-child(8) { min-width: 60px; }
 
 .payroll-table td {
-  padding: 3px 1.5px;
-  font-size: 0.56rem;
-  line-height: 1.15;
+  padding: 8px 8px;
+  font-size: 0.75rem;
+  line-height: 1.35;
   border-bottom: 1px solid var(--line);
   text-align: right;
   white-space: nowrap;
@@ -615,18 +631,18 @@ td small { font-size: .7rem; }
 .payroll-row-actions {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 1px;
+  gap: 6px;
   justify-content: center;
 }
 
 .payroll-actions-cell {
-  min-width: 62px;
+  min-width: 110px;
 }
 
 .payroll-actions-cell .text-button {
-  min-height: 18px;
-  padding: 1px 3px;
-  font-size: 0.54rem;
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 0.66rem;
 }
 
 .payroll-finalized-label {
