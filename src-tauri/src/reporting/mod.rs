@@ -329,6 +329,225 @@ mod tests {
     }
 
     #[test]
+    fn generates_samples_to_exports_for_preview() {
+        let out_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("samples");
+        let _ = std::fs::create_dir_all(&out_dir);
+
+        // 1. Intern Payroll Sample
+        let intern_rows = vec![
+            PayrollSheetRow {
+                employee_id: "APG-2026-108".into(),
+                employee_name: "Raineer C. Rosado".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-102".into(),
+                employee_name: "Deign Grey O. Lazaro".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-113".into(),
+                employee_name: "Ar-jee Felizarte".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 10.5,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_150_00,
+                total_compensation_centavos: 3_150_00,
+                late_deduction_centavos: 10_00,
+                half_day_deduction_centavos: 150_00,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 2_990_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-111".into(),
+                employee_name: "Ma. Ellaine Zapico".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-109".into(),
+                employee_name: "Elaizah Jane Altiche".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-110".into(),
+                employee_name: "Bianca Marie Antoy".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-112".into(),
+                employee_name: "John Frederick Ruiz".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-099".into(),
+                employee_name: "Jeremy Bugarin".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+            PayrollSheetRow {
+                employee_id: "APG-2026-100".into(),
+                employee_name: "Kylle Ricio".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 3_300_00,
+                daily_rate_centavos: 300_00,
+                actual_working_days: 11.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 3_300_00,
+                total_compensation_centavos: 3_300_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 0,
+                absence_deduction_centavos: 0,
+                gross_compensation_centavos: 3_300_00,
+            },
+        ];
+        let intern_pdf = out_dir.join("sample_intern_payroll.pdf");
+        generate_payroll_sheet_pdf(&intern_rows, "JULY 16-31, 2026", "INTERN", &office(), &intern_pdf).unwrap();
+
+        // 2. Employee Payslip Sample
+        let emp_rows = vec![
+            EmployeePayslipData {
+                payroll_id: "P-EMP-001".into(),
+                employee_id: "APGCO-25-013".into(),
+                employee_name: "CHICO, JEAN ASHLEY".into(),
+                department: "HR-MARKETING".into(),
+                designation: "EMPLOYEE".into(),
+                tin: "010-871-213-0000".into(),
+                bank_name: "CASH".into(),
+                account_number: "0000".into(),
+                standard_working_days: 11.0,
+                paid_days: 11.0,
+                lwop_days: 0.0,
+                daily_rate_centavos: 705_00,
+                basic_pay_centavos: 7_755_00,
+                hra_centavos: 0,
+                incentives_allowance_centavos: 6_600_00,
+                special_allowance_centavos: 150_00,
+                total_allowance_centavos: 16_005_00,
+                regular_holiday_pay_centavos: 0,
+                special_holiday_pay_centavos: 211_50,
+                overtime_pay_centavos: 0,
+                gross_compensation_centavos: 16_216_50,
+                sss_centavos: 0,
+                phic_centavos: 0,
+                hdmf_centavos: 0,
+                salary_advance_centavos: 0,
+                absence_deduction_centavos: 0,
+                late_deduction_centavos: 0,
+                total_deductions_centavos: 0,
+                net_pay_centavos: 16_216_50,
+                cutoff_label: "JUNE 1-15 2026".into(),
+                status: "FINALIZED".into(),
+            },
+            EmployeePayslipData {
+                payroll_id: "P-EMP-002".into(),
+                employee_id: "APG-2026-019".into(),
+                employee_name: "BEATRIZ CONOS".into(),
+                department: "HR / MARKETING ASSOCIATE".into(),
+                designation: "EMPLOYEE".into(),
+                tin: "010-871-213-0000".into(),
+                bank_name: "CASH".into(),
+                account_number: "0000".into(),
+                standard_working_days: 11.0,
+                paid_days: 11.0,
+                lwop_days: 0.0,
+                daily_rate_centavos: 650_00,
+                basic_pay_centavos: 7_150_00,
+                hra_centavos: 0,
+                incentives_allowance_centavos: 5_000_00,
+                special_allowance_centavos: 0,
+                total_allowance_centavos: 12_150_00,
+                regular_holiday_pay_centavos: 0,
+                special_holiday_pay_centavos: 0,
+                overtime_pay_centavos: 0,
+                gross_compensation_centavos: 12_150_00,
+                sss_centavos: 0,
+                phic_centavos: 0,
+                hdmf_centavos: 0,
+                salary_advance_centavos: 0,
+                absence_deduction_centavos: 0,
+                late_deduction_centavos: 0,
+                total_deductions_centavos: 0,
+                net_pay_centavos: 12_150_00,
+                cutoff_label: "JUNE 1-15 2026".into(),
+                status: "FINALIZED".into(),
+            },
+        ];
+        let emp_pdf = out_dir.join("sample_employee_payslip.pdf");
+        generate_employee_payslip_document(&emp_rows, "JUNE 1-15 2026", &office(), &emp_pdf).unwrap();
+    }
+
+    #[test]
     fn payroll_sheet_paginates_long_registers_onto_multiple_pages() {
         let rows: Vec<PayrollSheetRow> = (0..(SHEET_ROWS_PER_PAGE + 3))
             .map(|index| PayrollSheetRow {
@@ -1004,9 +1223,9 @@ fn payslip_cell(
     if !text.is_empty() {
         let text_w = text_width_mm(text, size_pt);
         let tx = match align {
-            PayslipAlign::Left => x_mm + 2.0,
+            PayslipAlign::Left => x_mm + 2.5,
             PayslipAlign::Center => (x_mm + (w_mm - text_w) / 2.0).max(x_mm + 1.0),
-            PayslipAlign::Right => (x_mm + w_mm - text_w - 2.0).max(x_mm + 1.0),
+            PayslipAlign::Right => (x_mm + w_mm - text_w - 3.0).max(x_mm + 1.0),
         };
         let ty = y_mm + (h_mm - size_pt * 25.4 / 72.0) / 2.0 - 0.4;
 
@@ -1014,9 +1233,8 @@ fn payslip_cell(
         ops.push(Op::SetTextCursor {
             pos: Point::new(Mm(tx), Mm(ty)),
         });
-        if let Some(col) = text_color {
-            ops.push(Op::SetFillColor { col });
-        }
+        let col = text_color.unwrap_or(printpdf::Color::Rgb(printpdf::Rgb::new(0.0, 0.0, 0.0, None)));
+        ops.push(Op::SetFillColor { col });
         ops.push(Op::SetFont {
             font: PdfFontHandle::Builtin(if bold {
                 BuiltinFont::HelveticaBold
@@ -1637,30 +1855,38 @@ fn sheet_cell(
     });
     ops.push(Op::RestoreGraphicsState);
 
-    let text_w = text_width_mm(text, size_pt);
-    let tx = if align_left {
-        x_mm + 2.0
-    } else {
-        (x_mm + (w_mm - text_w) / 2.0).max(x_mm + 1.0)
-    };
-    // Vertical centering: baseline sits just below the vertical middle.
-    let ty = y_mm + (h_mm - size_pt * 25.4 / 72.0) / 2.0 - 0.6;
-    ops.push(Op::StartTextSection);
-    ops.push(Op::SetTextCursor {
-        pos: Point::new(Mm(tx), Mm(ty)),
-    });
-    ops.push(Op::SetFont {
-        font: PdfFontHandle::Builtin(if bold {
-            BuiltinFont::HelveticaBold
-        } else {
-            BuiltinFont::Helvetica
-        }),
-        size: Pt(size_pt),
-    });
-    ops.push(Op::ShowText {
-        items: vec![TextItem::Text(text.to_string())],
-    });
-    ops.push(Op::EndTextSection);
+    if !text.is_empty() {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let line_h_mm = size_pt * 25.4 / 72.0 * 1.15;
+        let total_h = lines.len() as f32 * line_h_mm;
+        let start_y = y_mm + (h_mm - total_h) / 2.0 + (lines.len() as f32 - 1.0) * line_h_mm + 0.2;
+
+        for (i, line) in lines.iter().enumerate() {
+            let text_w = text_width_mm(line, size_pt);
+            let tx = if align_left {
+                x_mm + 2.0
+            } else {
+                (x_mm + (w_mm - text_w) / 2.0).max(x_mm + 1.0)
+            };
+            let ty = start_y - (i as f32 * line_h_mm);
+            ops.push(Op::StartTextSection);
+            ops.push(Op::SetTextCursor {
+                pos: Point::new(Mm(tx), Mm(ty)),
+            });
+            ops.push(Op::SetFont {
+                font: PdfFontHandle::Builtin(if bold {
+                    BuiltinFont::HelveticaBold
+                } else {
+                    BuiltinFont::Helvetica
+                }),
+                size: Pt(size_pt),
+            });
+            ops.push(Op::ShowText {
+                items: vec![TextItem::Text(line.to_string())],
+            });
+            ops.push(Op::EndTextSection);
+        }
+    }
 }
 
 /// Column widths of the reference payroll sheet in millimeters (usable width
@@ -1738,24 +1964,24 @@ pub fn generate_payroll_sheet_pdf(
         const HEADERS: [&str; 13] = [
             "Employee #",
             "Employee Name",
-            "Cut Off Rate",
-            "Daily Rate",
-            "Actual Working Days",
-            "Standard Working Days",
-            "Basic Rate",
-            "Total Compensation",
-            "Late 10 /hr",
+            "Cut Off\nRate",
+            "Daily\nRate",
+            "Actual\nDays",
+            "Standard\nDays",
+            "Basic\nRate",
+            "Total\nCompensation",
+            "Late 10\n/hr",
             "Halfday",
             "Absent",
-            "Gross Compensation",
+            "Gross\nCompensation",
             "Signature",
         ];
         let table_top_y = 170.0;
-        let header_h = 8.0;
+        let header_h = 9.0;
         let mut x = SHEET_LEFT_MM;
         for (index, header) in HEADERS.iter().enumerate() {
             let w = SHEET_COL_WIDTHS_MM[index];
-            sheet_cell(&mut ops, x, table_top_y - header_h, w, header_h, header, 6.0, true, false, false);
+            sheet_cell(&mut ops, x, table_top_y - header_h, w, header_h, header, 5.5, true, false, false);
             x += w;
         }
 
