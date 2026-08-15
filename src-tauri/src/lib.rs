@@ -27,7 +27,7 @@ use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 fn get_health(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"service":"rfid-attendance-api","timestamp":chrono::Utc::now(),"timezone":"Asia/Manila","sqlite":"connected","lanEnabled":state.lan.enabled,"lan":{"bindAddress":state.lan.bind_address.map(|v|v.to_string()),"port":state.lan.port,"connectedSseClients":state.connected_sse_clients.load(std::sync::atomic::Ordering::Relaxed)},"googleSheetsExport":if state.lan.sheets_sync_endpoint.is_some() || state.lan.google_spreadsheet_id.is_some() { "configured" } else { "disabled" }})
+    serde_json::json!({"success":true,"service":"rfid-attendance-api","timestamp":chrono::Utc::now(),"timezone":"Asia/Manila","sqlite":"connected","lanEnabled":state.lan.enabled,"lan":{"bindAddress":state.lan.bind_address.map(|v|v.to_string()),"port":state.lan.port,"connectedSseClients":state.connected_sse_clients.load(std::sync::atomic::Ordering::Relaxed)},"googleSheetsExport":if state.lan.sheets_sync_endpoint.is_some() || state.lan.google_spreadsheet_id.is_some() || state.lan.google_drive_folder_id.is_some() || state.lan.google_create_folder_if_missing { "configured" } else { "disabled" }})
 }
 
 #[tauri::command]
@@ -2316,13 +2316,10 @@ async fn generate_payroll_pdf(
     let generated_at = manila_now.to_rfc3339();
 
     let (employee_count, total_amount_centavos) = if worker_upper == "EMPLOYEE" {
-        let emp_rows = crate::reporting::load_employee_payslip_rows(
-            &state.db,
-            &cutoff_start,
-            &cutoff_end,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        let emp_rows =
+            crate::reporting::load_employee_payslip_rows(&state.db, &cutoff_start, &cutoff_end)
+                .await
+                .map_err(|e| e.to_string())?;
         if emp_rows.is_empty() {
             return Err(format!(
                 "NO_PAYROLL_RECORDS: No employee payroll records for {label}. Create and save an employee payroll for this cutoff first."
@@ -2399,20 +2396,23 @@ async fn generate_payroll_pdf(
     let message = format!("Payroll PDF generated for {label} ({worker_lower}).");
     let metadata = generated_file_metadata(&state, &file_name, &output_path, "pdf", message);
     let mut response = metadata.as_object().cloned().unwrap_or_default();
-    response.insert("pdf".into(), serde_json::json!({
-        "payrollPdfId": payroll_pdf_id,
-        "fileName": file_name,
-        "filePath": output_path.to_string_lossy(),
-        "directoryPath": state.exports_dir.to_string_lossy(),
-        "cutoffStart": cutoff_start,
-        "cutoffEnd": cutoff_end,
-        "payrollCutoffLabel": label,
-        "workerType": worker_lower,
-        "generatedAt": generated_at,
-        "employeeCount": employee_count,
-        "totalAmount": total_amount_centavos as f64 / 100.0,
-        "sizeBytes": bytes.len(),
-    }));
+    response.insert(
+        "pdf".into(),
+        serde_json::json!({
+            "payrollPdfId": payroll_pdf_id,
+            "fileName": file_name,
+            "filePath": output_path.to_string_lossy(),
+            "directoryPath": state.exports_dir.to_string_lossy(),
+            "cutoffStart": cutoff_start,
+            "cutoffEnd": cutoff_end,
+            "payrollCutoffLabel": label,
+            "workerType": worker_lower,
+            "generatedAt": generated_at,
+            "employeeCount": employee_count,
+            "totalAmount": total_amount_centavos as f64 / 100.0,
+            "sizeBytes": bytes.len(),
+        }),
+    );
     response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
     response.insert("sha256".into(), serde_json::json!(hash));
     Ok(serde_json::Value::Object(response))

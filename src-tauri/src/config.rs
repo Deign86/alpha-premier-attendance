@@ -10,6 +10,22 @@ pub struct LanConfig {
     pub google_service_account_json_path: Option<String>,
     #[serde(default)]
     pub google_spreadsheet_id: Option<String>,
+    /// Preferred Google Drive folder (already created and shared with the
+    /// service account). When unset, the app reuses a previously generated
+    /// folder ID from the app data state file, or creates one when
+    /// `google_create_folder_if_missing` is enabled.
+    #[serde(default)]
+    pub google_drive_folder_id: Option<String>,
+    /// Name used when the app must create a Drive folder or spreadsheet.
+    #[serde(default = "default_google_drive_folder_name")]
+    pub google_drive_folder_name: String,
+    /// Allow the app to create the Drive folder (and/or spreadsheet) when the
+    /// configured/persisted IDs are missing or no longer accessible.
+    #[serde(default)]
+    pub google_create_folder_if_missing: bool,
+    /// Title for a newly created Google Sheets spreadsheet.
+    #[serde(default = "default_google_spreadsheet_title")]
+    pub google_spreadsheet_title: String,
     #[serde(default)]
     pub admin_pin: Option<String>,
     #[serde(default = "default_admin_session_minutes")]
@@ -42,6 +58,10 @@ impl Default for LanConfig {
             sheets_sync_endpoint: None,
             google_service_account_json_path: None,
             google_spreadsheet_id: None,
+            google_drive_folder_id: None,
+            google_drive_folder_name: default_google_drive_folder_name(),
+            google_create_folder_if_missing: false,
+            google_spreadsheet_title: default_google_spreadsheet_title(),
             admin_pin: Some("293906".into()),
             admin_session_minutes: 15,
             enabled: false,
@@ -80,6 +100,12 @@ fn default_admin_session_minutes() -> u64 {
 }
 fn default_allow_runtime_start() -> bool {
     true
+}
+fn default_google_drive_folder_name() -> String {
+    "Alpha Premier Attendance".into()
+}
+fn default_google_spreadsheet_title() -> String {
+    "Alpha Premier Attendance".into()
 }
 
 /// How the RFID reader is attached to the front-desk laptop.
@@ -241,17 +267,39 @@ pub struct OfficeConfig {
 
 const OFFICE_FALLBACK_DISPLAY: &str = "Alpha Premier Office";
 
-fn default_company_name() -> String { "Alpha Premier Group of Companies OPC.".into() }
-fn default_tax_identification_number() -> Option<String> { Some("010-871-213-0000".into()) }
-fn default_office_label() -> String { "Main Office".into() }
-fn default_address_line_1() -> String { "Unit 3104C".into() }
-fn default_building() -> String { "Tektite East Tower".into() }
-fn default_district() -> String { "Ortigas Center".into() }
-fn default_city() -> String { "Pasig".into() }
-fn default_region() -> String { "Metro Manila".into() }
-fn default_country() -> String { "Philippines".into() }
-fn default_display_short() -> String { "Tektite East Tower, Ortigas Center, Pasig".into() }
-fn default_display_full() -> String { "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".into() }
+fn default_company_name() -> String {
+    "Alpha Premier Group of Companies OPC.".into()
+}
+fn default_tax_identification_number() -> Option<String> {
+    Some("010-871-213-0000".into())
+}
+fn default_office_label() -> String {
+    "Main Office".into()
+}
+fn default_address_line_1() -> String {
+    "Unit 3104C".into()
+}
+fn default_building() -> String {
+    "Tektite East Tower".into()
+}
+fn default_district() -> String {
+    "Ortigas Center".into()
+}
+fn default_city() -> String {
+    "Pasig".into()
+}
+fn default_region() -> String {
+    "Metro Manila".into()
+}
+fn default_country() -> String {
+    "Philippines".into()
+}
+fn default_display_short() -> String {
+    "Tektite East Tower, Ortigas Center, Pasig".into()
+}
+fn default_display_full() -> String {
+    "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".into()
+}
 
 impl Default for OfficeConfig {
     fn default() -> Self {
@@ -400,6 +448,19 @@ pub fn load_config(
     {
         lan.google_spreadsheet_id = None;
     }
+    if lan
+        .google_drive_folder_id
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        lan.google_drive_folder_id = None;
+    }
+    if lan.google_drive_folder_name.trim().is_empty() {
+        lan.google_drive_folder_name = default_google_drive_folder_name();
+    }
+    if lan.google_spreadsheet_title.trim().is_empty() {
+        lan.google_spreadsheet_title = default_google_spreadsheet_title();
+    }
     if lan.admin_pin.as_deref().is_some_and(str::is_empty) {
         lan.admin_pin = None;
     }
@@ -452,6 +513,53 @@ mod tests {
     }
 
     #[test]
+    fn defaults_keep_google_drive_provisioning_disabled() {
+        let config = LanConfig::default();
+        assert_eq!(config.google_spreadsheet_id, None);
+        assert_eq!(config.google_drive_folder_id, None);
+        assert!(!config.google_create_folder_if_missing);
+        assert_eq!(config.google_drive_folder_name, "Alpha Premier Attendance");
+        assert_eq!(config.google_spreadsheet_title, "Alpha Premier Attendance");
+    }
+
+    #[test]
+    fn lan_parses_google_drive_provisioning_config() {
+        #[derive(Deserialize)]
+        struct Root {
+            #[serde(default)]
+            lan: LanConfig,
+        }
+        let root: Root = toml::from_str(
+            "[lan]\ngoogle_drive_folder_id = \"folder-123\"\ngoogle_drive_folder_name = \"Payroll Sync\"\ngoogle_create_folder_if_missing = true\ngoogle_spreadsheet_title = \"Attendance Export\"\n",
+        )
+        .expect("lan provisioning toml");
+        assert_eq!(
+            root.lan.google_drive_folder_id.as_deref(),
+            Some("folder-123")
+        );
+        assert_eq!(root.lan.google_drive_folder_name, "Payroll Sync");
+        assert!(root.lan.google_create_folder_if_missing);
+        assert_eq!(root.lan.google_spreadsheet_title, "Attendance Export");
+    }
+
+    #[test]
+    fn lan_normalizes_empty_google_ids_to_none() {
+        let temp =
+            std::env::temp_dir().join(format!("alpha-config-google-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(
+            temp.join("config.toml"),
+            "[lan]\ngoogle_drive_folder_id = \"\"\ngoogle_spreadsheet_id = \"\"\n",
+        )
+        .unwrap();
+        let (lan, _, _, _) = load_config(&temp).expect("load config");
+        assert_eq!(lan.google_drive_folder_id, None);
+        assert_eq!(lan.google_spreadsheet_id, None);
+        assert_eq!(lan.google_drive_folder_name, "Alpha Premier Attendance");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     fn wildcard_requires_explicit_subnet() {
         let config = LanConfig {
             enabled: true,
@@ -466,10 +574,22 @@ mod tests {
     fn office_defaults_match_the_canonical_address() {
         let office = OfficeConfig::default();
         assert_eq!(office.company_name, "Alpha Premier Group of Companies OPC.");
-        assert_eq!(office.display_full(), "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila");
-        assert_eq!(office.display_short(), "Tektite East Tower, Ortigas Center, Pasig");
-        assert!(office.office_postal_code.is_empty(), "postal code must stay unset until confirmed");
-        assert_eq!(office.tax_identification_number.as_deref(), Some("010-871-213-0000"));
+        assert_eq!(
+            office.display_full(),
+            "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"
+        );
+        assert_eq!(
+            office.display_short(),
+            "Tektite East Tower, Ortigas Center, Pasig"
+        );
+        assert!(
+            office.office_postal_code.is_empty(),
+            "postal code must stay unset until confirmed"
+        );
+        assert_eq!(
+            office.tax_identification_number.as_deref(),
+            Some("010-871-213-0000")
+        );
     }
 
     #[test]
@@ -541,7 +661,8 @@ mod tests {
             office.metadata_lines(),
             vec![
                 "Company: Alpha Premier Group of Companies OPC.".to_string(),
-                "Office: Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila".to_string(),
+                "Office: Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"
+                    .to_string(),
             ]
         );
     }
