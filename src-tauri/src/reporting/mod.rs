@@ -107,8 +107,8 @@ mod tests {
 
     #[test]
     fn attendance_workbook_metadata_contains_the_canonical_office_address() {
-        let path = std::env::temp_dir()
-            .join(format!("attendance-office-{}.xlsx", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("attendance-office-{}.xlsx", uuid::Uuid::new_v4()));
         let rows = vec![AttendanceExportRow {
             employee_id: "E-1".into(),
             employee_name: "Ana Santos".into(),
@@ -124,7 +124,9 @@ mod tests {
         generate_attendance_workbook(&rows, "2026-08-01", &office(), &path).unwrap();
         let shared = read_xlsx_shared_strings(&path);
         assert!(shared.contains("Company: Alpha Premier"));
-        assert!(shared.contains("Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"));
+        assert!(
+            shared.contains("Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila")
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -147,12 +149,20 @@ mod tests {
             net_centavos: 102_400,
             status: "FINALIZED".into(),
         };
-        let path = std::env::temp_dir().join(format!("payroll-office-{}.xlsx", uuid::Uuid::new_v4()));
-        generate_payroll_workbook(std::slice::from_ref(&row), "1st-Half-2026", &office(), &path)
-            .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("payroll-office-{}.xlsx", uuid::Uuid::new_v4()));
+        generate_payroll_workbook(
+            std::slice::from_ref(&row),
+            "1st-Half-2026",
+            &office(),
+            &path,
+        )
+        .unwrap();
         let shared = read_xlsx_shared_strings(&path);
         assert!(shared.contains("Company: Alpha Premier"));
-        assert!(shared.contains("Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"));
+        assert!(
+            shared.contains("Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila")
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -188,21 +198,34 @@ mod tests {
         let base = std::env::temp_dir().join(format!("payroll-report-{}", uuid::Uuid::new_v4()));
         let xlsx = base.with_extension("xlsx");
         let pdf = base.with_extension("pdf");
-        generate_payroll_workbook(std::slice::from_ref(&row), "1st-Half-2026", &office(), &xlsx).unwrap();
+        generate_payroll_workbook(
+            std::slice::from_ref(&row),
+            "1st-Half-2026",
+            &office(),
+            &xlsx,
+        )
+        .unwrap();
         generate_payroll_pdf(&row, &office(), &pdf).unwrap();
         assert!(std::fs::read(&xlsx).unwrap().starts_with(b"PK"));
         // The official brand mark is embedded as a workbook media file.
         {
             let archive = zip::ZipArchive::new(std::fs::File::open(&xlsx).unwrap()).unwrap();
             assert!(
-                archive.file_names().any(|name| name.starts_with("xl/media/")),
+                archive
+                    .file_names()
+                    .any(|name| name.starts_with("xl/media/")),
                 "payroll workbook should embed the brand mark media file"
             );
         }
         assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
         let register = base.with_extension("register.pdf");
-        generate_payroll_register_pdf(std::slice::from_ref(&row), "1st-Half-2026", &office(), &register)
-            .unwrap();
+        generate_payroll_register_pdf(
+            std::slice::from_ref(&row),
+            "1st-Half-2026",
+            &office(),
+            &register,
+        )
+        .unwrap();
         assert!(std::fs::read(&register).unwrap().starts_with(b"%PDF"));
         let _ = std::fs::remove_file(xlsx);
         let _ = std::fs::remove_file(pdf);
@@ -221,7 +244,10 @@ mod tests {
     fn brand_mark_decodes_and_registers_on_a_document() {
         let mut document = PdfDocument::new("brand mark test");
         let mark = brand_mark_image(&mut document, 15.0);
-        assert!(mark.is_some(), "embedded phoenix PNG should decode from the repo asset");
+        assert!(
+            mark.is_some(),
+            "embedded phoenix PNG should decode from the repo asset"
+        );
         let (id, dpi) = mark.expect("brand mark");
         let op = brand_mark_op(id, dpi, 10.0, 10.0);
         assert!(matches!(op, Op::UseXobject { .. }));
@@ -566,7 +592,8 @@ mod tests {
                 gross_compensation_centavos: 550_000,
             })
             .collect();
-        let base = std::env::temp_dir().join(format!("payroll-sheet-pages-{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("payroll-sheet-pages-{}", uuid::Uuid::new_v4()));
         let pdf = base.with_extension("pdf");
         generate_payroll_sheet_pdf(&rows, "August 1-15, 2026", "EMPLOYEE", &office(), &pdf)
             .unwrap();
@@ -591,8 +618,12 @@ mod tests {
             absence_deduction_centavos: 0,
             gross_compensation_centavos: 550_000,
         }];
-        assert_eq!(rows[0].cutoff_rate_centavos, (123_45_i64 as f64 * 10.5).round() as i64);
-        let base = std::env::temp_dir().join(format!("payroll-sheet-rate-{}", uuid::Uuid::new_v4()));
+        assert_eq!(
+            rows[0].cutoff_rate_centavos,
+            (123_45_i64 as f64 * 10.5).round() as i64
+        );
+        let base =
+            std::env::temp_dir().join(format!("payroll-sheet-rate-{}", uuid::Uuid::new_v4()));
         let pdf = base.with_extension("pdf");
         generate_payroll_sheet_pdf(&rows, "August 1-15, 2026", "EMPLOYEE", &office(), &pdf)
             .unwrap();
@@ -606,7 +637,6 @@ mod tests {
         assert_eq!(format_days(10.5), "10.5");
         assert_eq!(format_days(0.0), "0");
     }
-
 }
 use printpdf::{
     BuiltinFont, Mm, Op, PaintMode, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt,
@@ -621,7 +651,10 @@ const BRAND_PHOENIX_PNG: &[u8] = include_bytes!("../../../assets/logo_phoenix.pn
 /// id plus the dpi that renders the square mark `size_mm` tall. Registered once
 /// per document and reused on every page. Returns `None` (and logs) if the
 /// embedded PNG cannot be decoded so a decorative mark never fails a document.
-fn brand_mark_image(document: &mut PdfDocument, size_mm: f32) -> Option<(printpdf::XObjectId, f32)> {
+fn brand_mark_image(
+    document: &mut PdfDocument,
+    size_mm: f32,
+) -> Option<(printpdf::XObjectId, f32)> {
     match RawImage::decode_from_bytes(BRAND_PHOENIX_PNG, &mut Vec::new()) {
         Ok(image) => {
             // PDF maps the image to its natural size at `dpi`; choose the dpi
@@ -1773,8 +1806,8 @@ pub async fn load_payroll_sheet_rows(
                 employee_id: row.get("employee_id"),
                 employee_name: row.get("employee_name"),
                 employee_type: row.get("employee_type"),
-                cutoff_rate_centavos: (daily_rate_centavos as f64 * standard_working_days)
-                    .round() as i64,
+                cutoff_rate_centavos: (daily_rate_centavos as f64 * standard_working_days).round()
+                    as i64,
                 daily_rate_centavos,
                 actual_working_days: row.get("actual_working_days"),
                 standard_working_days,
@@ -1963,7 +1996,14 @@ pub fn generate_payroll_sheet_pdf(
         }
         sheet_text(&mut ops, cutoff_label.to_uppercase(), text_left, header_y, 11.0, true);
         sheet_text(&mut ops, "Note: Cut off".into(), 240.0, 197.0, 9.0, true);
-        sheet_text(&mut ops, "1-15th of the month".into(), 240.0, 191.0, 8.0, false);
+        sheet_text(
+            &mut ops,
+            "1-15th of the month".into(),
+            240.0,
+            191.0,
+            8.0,
+            false,
+        );
         sheet_text(&mut ops, "16-31st".into(), 240.0, 185.0, 8.0, false);
         // Separator under the header block.
         ops.push(Op::SaveGraphicsState);
@@ -2034,7 +2074,18 @@ pub fn generate_payroll_sheet_pdf(
             x = SHEET_LEFT_MM;
             for (index, cell) in cells.iter().enumerate() {
                 let w = SHEET_COL_WIDTHS_MM[index];
-                sheet_cell(&mut ops, x, row_y, w, SHEET_ROW_H_MM, cell, 7.0, false, index < 2, false);
+                sheet_cell(
+                    &mut ops,
+                    x,
+                    row_y,
+                    w,
+                    SHEET_ROW_H_MM,
+                    cell,
+                    7.0,
+                    false,
+                    index < 2,
+                    false,
+                );
                 x += w;
             }
             row_y -= SHEET_ROW_H_MM;
@@ -2044,7 +2095,18 @@ pub fn generate_payroll_sheet_pdf(
         if chunk_index == chunks.len() - 1 {
             let total_gross: i64 = rows.iter().map(|row| row.gross_compensation_centavos).sum();
             let total_w: f32 = SHEET_COL_WIDTHS_MM[..11].iter().sum();
-            sheet_cell(&mut ops, SHEET_LEFT_MM, row_y, total_w, SHEET_ROW_H_MM, "Grand Total", 7.0, true, true, false);
+            sheet_cell(
+                &mut ops,
+                SHEET_LEFT_MM,
+                row_y,
+                total_w,
+                SHEET_ROW_H_MM,
+                "Grand Total",
+                7.0,
+                true,
+                true,
+                false,
+            );
             let last_x = SHEET_LEFT_MM + total_w;
             sheet_cell(&mut ops, last_x, row_y, SHEET_COL_WIDTHS_MM[11], SHEET_ROW_H_MM, &format_php(total_gross), 7.0, true, false, true);
             let sig_x = last_x + SHEET_COL_WIDTHS_MM[11];

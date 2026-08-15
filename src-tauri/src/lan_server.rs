@@ -2,7 +2,10 @@ use crate::{config::LanConfig, state::AppState};
 use axum::{
     extract::{ConnectInfo, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::{sse::{Event, KeepAlive, Sse}, Html, IntoResponse},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse,
+    },
     routing::get,
     Json, Router,
 };
@@ -41,17 +44,47 @@ pub struct LanAttendanceSnapshot {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LanAttendanceEvent {
     #[serde(rename = "attendance-updated")]
-    AttendanceUpdated { event_id: String, server_instance_id: String, sequence: u64, occurred_at: DateTime<Utc>, request_id: String, attendance_date: String, attendance_id: String, cause: String, mutation: String, attendance: Option<LanAttendanceRow> },
+    AttendanceUpdated {
+        event_id: String,
+        server_instance_id: String,
+        sequence: u64,
+        occurred_at: DateTime<Utc>,
+        request_id: String,
+        attendance_date: String,
+        attendance_id: String,
+        cause: String,
+        mutation: String,
+        attendance: Option<LanAttendanceRow>,
+    },
     #[serde(rename = "connection-status")]
-    #[allow(dead_code)] // protocol contract: the viewer HTML listens for this event; the server does not currently emit it
-    ConnectionStatus { event_id: String, server_instance_id: String, sequence: u64, occurred_at: DateTime<Utc>, status: String, connection_id: String },
+    #[allow(dead_code)]
+    // protocol contract: the viewer HTML listens for this event; the server does not currently emit it
+    ConnectionStatus {
+        event_id: String,
+        server_instance_id: String,
+        sequence: u64,
+        occurred_at: DateTime<Utc>,
+        status: String,
+        connection_id: String,
+    },
     #[serde(rename = "stale-data")]
-    #[allow(dead_code)] // protocol contract: the viewer HTML listens for this event; stream errors emit a raw stale-data SSE event instead
-    StaleData { event_id: String, server_instance_id: String, sequence: u64, occurred_at: DateTime<Utc>, reason: String, should_refetch: bool },
+    #[allow(dead_code)]
+    // protocol contract: the viewer HTML listens for this event; stream errors emit a raw stale-data SSE event instead
+    StaleData {
+        event_id: String,
+        server_instance_id: String,
+        sequence: u64,
+        occurred_at: DateTime<Utc>,
+        reason: String,
+        should_refetch: bool,
+    },
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DateQuery { pub date: Option<String>, pub token: Option<String> }
+pub struct DateQuery {
+    pub date: Option<String>,
+    pub token: Option<String>,
+}
 
 /// Why the LAN viewer cannot serve, mapped to the shared client contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -150,7 +183,10 @@ fn resolve_bind_address(lan: &LanConfig) -> Result<SocketAddr, LanStartError> {
         }
         return Ok(SocketAddr::new(address, lan.port));
     }
-    Ok(SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), lan.port))
+    Ok(SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        lan.port,
+    ))
 }
 
 /// Bind the viewer to the resolved LAN address and serve until aborted.
@@ -173,8 +209,11 @@ pub async fn bind_and_serve(
         .local_addr()
         .map_err(|error| LanStartError::Bind(error.to_string()))?;
     let task = tauri::async_runtime::spawn(async move {
-        let _ = axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>())
-            .await;
+        let _ = axum::serve(
+            listener,
+            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
     });
     Ok((actual, task))
 }
@@ -262,7 +301,9 @@ pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
         .map(|ip| ip.to_string())
         .or_else(|| active_lan_ip.clone());
     let viewer_url = if running {
-        display_ip.as_ref().map(|ip| format!("http://{ip}:{}/attendance", state.lan.port))
+        display_ip
+            .as_ref()
+            .map(|ip| format!("http://{ip}:{}/attendance", state.lan.port))
     } else {
         None
     };
@@ -370,8 +411,8 @@ pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
         viewer_url,
         lan_ips,
         active_lan_ip,
-        network_scope: "Accessible to devices on the same office Wi-Fi / LAN (private network only)."
-            .into(),
+        network_scope:
+            "Accessible to devices on the same office Wi-Fi / LAN (private network only).".into(),
         network_profile: network_profile.as_str().into(),
         config_valid,
         config_error,
@@ -423,7 +464,12 @@ fn viewer_error_page(title: &str, message: &str) -> axum::response::Response {
     .into_response()
 }
 
-async fn attendance_page(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
+async fn attendance_page(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<DateQuery>,
+) -> impl IntoResponse {
     if !source_allowed(&state.lan, peer.ip()) {
         return viewer_error_page(
             "Outside the office network",
@@ -437,7 +483,11 @@ async fn attendance_page(State(state): State<AppState>, ConnectInfo(peer): Conne
         );
     }
     let company = html_escape(&state.office.company_name);
-    let office_line = html_escape(&format!("{} · {}", state.office.company_name, state.office.display_short()));
+    let office_line = html_escape(&format!(
+        "{} · {}",
+        state.office.company_name,
+        state.office.display_short()
+    ));
     Html(r#"<!doctype html>
 <html lang="en">
 <head>
@@ -636,11 +686,24 @@ setTimeout(() => { if (!everLoaded) { connMode = 'offline'; updateChip(); } }, O
         .into_response()
 }
 
-async fn attendance_today(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
-    if !viewer_allowed(&state, &headers, query.token.as_deref()) { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response(); }
-    if !source_allowed(&state.lan, peer.ip()) { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response(); }
-    let date = query.date.unwrap_or_else(|| Utc::now().with_timezone(&Manila).date_naive().to_string());
-    if date.len() != 10 { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success":false,"error":{"code":"INVALID_DATE","message":"date must be YYYY-MM-DD"}}))).into_response(); }
+async fn attendance_today(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<DateQuery>,
+) -> impl IntoResponse {
+    if !viewer_allowed(&state, &headers, query.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response();
+    }
+    if !source_allowed(&state.lan, peer.ip()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response();
+    }
+    let date = query
+        .date
+        .unwrap_or_else(|| Utc::now().with_timezone(&Manila).date_naive().to_string());
+    if date.len() != 10 {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success":false,"error":{"code":"INVALID_DATE","message":"date must be YYYY-MM-DD"}}))).into_response();
+    }
     let rows = sqlx::query("SELECT attendance_id, attendance_date, user_id, full_name, department, time_in, time_out, status FROM attendance WHERE attendance_date = ? ORDER BY COALESCE(time_out, time_in) DESC, full_name")
         .bind(&date).fetch_all(&state.db).await;
     match rows {
@@ -653,14 +716,34 @@ async fn attendance_today(State(state): State<AppState>, ConnectInfo(peer): Conn
 }
 
 #[derive(Debug)]
-struct SseClientGuard { clients: std::sync::Arc<std::sync::atomic::AtomicU64> }
-impl Drop for SseClientGuard { fn drop(&mut self) { self.clients.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); } }
+struct SseClientGuard {
+    clients: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+impl Drop for SseClientGuard {
+    fn drop(&mut self) {
+        self.clients
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
-async fn attendance_events(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
-    if !viewer_allowed(&state, &headers, query.token.as_deref()) { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response(); }
-    if !source_allowed(&state.lan, peer.ip()) { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response(); }
-    state.connected_sse_clients.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let guard = SseClientGuard { clients: state.connected_sse_clients.clone() };
+async fn attendance_events(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<DateQuery>,
+) -> impl IntoResponse {
+    if !viewer_allowed(&state, &headers, query.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response();
+    }
+    if !source_allowed(&state.lan, peer.ip()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response();
+    }
+    state
+        .connected_sse_clients
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let guard = SseClientGuard {
+        clients: state.connected_sse_clients.clone(),
+    };
     let rx = state.bus.sender.subscribe();
     let connection_id = uuid::Uuid::new_v4().to_string();
     let initial = Event::default().id(format!("{}:0", state.server_instance_id)).event("connection-status").retry(Duration::from_millis(2000)).data(serde_json::json!({"type":"connection-status","status":"connected","serverInstanceId":state.server_instance_id,"connectionId":connection_id,"occurredAt":Utc::now()}).to_string());
@@ -671,17 +754,36 @@ async fn attendance_events(State(state): State<AppState>, ConnectInfo(peer): Con
                 LanAttendanceEvent::ConnectionStatus { .. } => "connection-status",
                 LanAttendanceEvent::StaleData { .. } => "stale-data",
             };
-            let event_id = match &value { LanAttendanceEvent::AttendanceUpdated { event_id, .. } | LanAttendanceEvent::ConnectionStatus { event_id, .. } | LanAttendanceEvent::StaleData { event_id, .. } => event_id.clone() };
-            Some(Ok::<Event, Infallible>(Event::default().id(event_id)
-                .retry(Duration::from_millis(2000)).event(event_name)
-                .data(serde_json::to_string(&value).unwrap_or_default())))
+            let event_id = match &value {
+                LanAttendanceEvent::AttendanceUpdated { event_id, .. }
+                | LanAttendanceEvent::ConnectionStatus { event_id, .. }
+                | LanAttendanceEvent::StaleData { event_id, .. } => event_id.clone(),
+            };
+            Some(Ok::<Event, Infallible>(
+                Event::default()
+                    .id(event_id)
+                    .retry(Duration::from_millis(2000))
+                    .event(event_name)
+                    .data(serde_json::to_string(&value).unwrap_or_default()),
+            ))
         }
         Err(_) => Some(Ok(Event::default().event("stale-data").data(
             r#"{"type":"stale-data","reason":"event-gap","shouldRefetch":true}"#,
         ))),
     });
-    let stream = tokio_stream::once(Ok(initial)).chain(stream).map(move |item| { let _keep_guard_alive = &guard; item });
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(state.lan.sse_keep_alive_seconds.max(1))).text("keep-alive")).into_response()
+    let stream = tokio_stream::once(Ok(initial))
+        .chain(stream)
+        .map(move |item| {
+            let _keep_guard_alive = &guard;
+            item
+        });
+    Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(state.lan.sse_keep_alive_seconds.max(1)))
+                .text("keep-alive"),
+        )
+        .into_response()
 }
 
 fn source_allowed(config: &LanConfig, address: std::net::IpAddr) -> bool {
@@ -697,23 +799,46 @@ fn source_allowed(config: &LanConfig, address: std::net::IpAddr) -> bool {
             std::net::IpAddr::V6(_) => false,
         };
     }
-    config.allowed_subnets.iter().any(|subnet| subnet.contains(&address))
+    config
+        .allowed_subnets
+        .iter()
+        .any(|subnet| subnet.contains(&address))
 }
 
 fn viewer_allowed(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> bool {
-    if !matches!(state.lan.auth_mode, crate::config::ViewerAuthMode::Password) { return true; }
-    let Some(expected) = state.lan.viewer_password_hash.as_deref() else { return false; };
-    let token = headers.get("x-viewer-token").and_then(|v| v.to_str().ok()).or(query_token);
-    let Some(token) = token else { return false; };
+    if !matches!(state.lan.auth_mode, crate::config::ViewerAuthMode::Password) {
+        return true;
+    }
+    let Some(expected) = state.lan.viewer_password_hash.as_deref() else {
+        return false;
+    };
+    let token = headers
+        .get("x-viewer-token")
+        .and_then(|v| v.to_str().ok())
+        .or(query_token);
+    let Some(token) = token else {
+        return false;
+    };
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(token.as_bytes())) == expected
 }
 
-async fn health(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Query(query): Query<DateQuery>) -> impl IntoResponse {
-    if !viewer_allowed(&state, &headers, query.token.as_deref()) { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response(); }
-    if !source_allowed(&state.lan, peer.ip()) { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response(); }
+async fn health(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<DateQuery>,
+) -> impl IntoResponse {
+    if !viewer_allowed(&state, &headers, query.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"success":false,"error":{"code":"VIEWER_AUTH_REQUIRED","message":"Viewer authentication is required."}}))).into_response();
+    }
+    if !source_allowed(&state.lan, peer.ip()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"success":false,"error":{"code":"SOURCE_NOT_ALLOWED","message":"Viewer is outside the configured private network."}}))).into_response();
+    }
     let active_lan_ip = crate::lan_net::pick_active_lan_ip().map(|ip| ip.to_string());
-    let viewer_url = active_lan_ip.as_ref().map(|ip| format!("http://{ip}:{}/attendance", state.lan.port));
+    let viewer_url = active_lan_ip
+        .as_ref()
+        .map(|ip| format!("http://{ip}:{}/attendance", state.lan.port));
     (
         StatusCode::OK,
         [(header::CACHE_CONTROL, "no-store")],
@@ -730,8 +855,14 @@ mod tests {
     #[test]
     fn default_viewer_policy_allows_only_private_sources() {
         let config = LanConfig::default();
-        assert!(source_allowed(&config, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))));
-        assert!(!source_allowed(&config, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(source_allowed(
+            &config,
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))
+        ));
+        assert!(!source_allowed(
+            &config,
+            IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))
+        ));
     }
 
     #[test]
@@ -741,13 +872,21 @@ mod tests {
             ..Default::default()
         };
         assert!(source_allowed(&config, IpAddr::V4(Ipv4Addr::LOCALHOST)));
-        assert!(source_allowed(&config, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42))));
-        assert!(!source_allowed(&config, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9))));
+        assert!(source_allowed(
+            &config,
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42))
+        ));
+        assert!(!source_allowed(
+            &config,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9))
+        ));
     }
 
     #[test]
     fn error_messages_are_plain_language_for_operator_guidance() {
-        assert!(LanStartError::LoopbackBind.to_string().contains("localhost"));
+        assert!(LanStartError::LoopbackBind
+            .to_string()
+            .contains("localhost"));
         assert!(LanStartError::BindAddressNotPresent
             .to_string()
             .contains("does not match an active network adapter"));
@@ -755,13 +894,22 @@ mod tests {
 
     #[test]
     fn loopback_bind_is_rejected_for_the_shareable_viewer() {
-        let config = LanConfig { bind_address: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), ..Default::default() };
-        assert!(matches!(resolve_bind_address(&config), Err(LanStartError::LoopbackBind)));
+        let config = LanConfig {
+            bind_address: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            ..Default::default()
+        };
+        assert!(matches!(
+            resolve_bind_address(&config),
+            Err(LanStartError::LoopbackBind)
+        ));
     }
 
     #[test]
     fn configured_private_bind_is_used_verbatim() {
-        let config = LanConfig { bind_address: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 25))), ..Default::default() };
+        let config = LanConfig {
+            bind_address: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 25))),
+            ..Default::default()
+        };
         match resolve_bind_address(&config) {
             Ok(addr) => assert_eq!(addr.to_string(), "192.168.1.25:4173"),
             Err(other) => panic!("unexpected error: {other:?}"),
@@ -770,25 +918,57 @@ mod tests {
 
     #[tokio::test]
     async fn router_serves_snapshot_and_health_without_mutation_routes() {
-        let data_dir = std::env::temp_dir().join(format!("alpha-lan-test-{}", uuid::Uuid::new_v4()));
-        let state = AppState::new(data_dir.clone(), data_dir.join("attendance.db"), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-lan-test-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            crate::config::OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+        )
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('a1','2026-08-01','u1','ABCD1234','Ada','Ops','2026-08-01T08:00:00+08:00',NULL,'WORKING','RFID','2026-08-01T08:00:00Z','2026-08-01T08:00:00Z')").execute(&state.db).await.unwrap();
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
         let address = listener.local_addr().unwrap();
         let app_router = router(state.clone());
-        let task = tokio::spawn(async move { let _ = axum::serve(listener, app_router.into_make_service_with_connect_info::<SocketAddr>()).await; });
-        let snapshot = reqwest::get(format!("http://{address}/api/attendance/today?date=2026-08-01")).await.unwrap();
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app_router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        let snapshot = reqwest::get(format!(
+            "http://{address}/api/attendance/today?date=2026-08-01"
+        ))
+        .await
+        .unwrap();
         assert_eq!(snapshot.status(), StatusCode::OK);
         assert!(snapshot.text().await.unwrap().contains("Ada"));
-        let mutation = reqwest::Client::new().post(format!("http://{address}/api/attendance/today")).send().await.unwrap();
+        let mutation = reqwest::Client::new()
+            .post(format!("http://{address}/api/attendance/today"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(mutation.status(), StatusCode::METHOD_NOT_ALLOWED);
-        let page = reqwest::get(format!("http://{address}/attendance")).await.unwrap();
+        let page = reqwest::get(format!("http://{address}/attendance"))
+            .await
+            .unwrap();
         assert_eq!(page.status(), StatusCode::OK);
         let page_text = page.text().await.unwrap();
         assert!(page_text.contains("Live Attendance"));
         assert!(page_text.contains("Read-only live attendance"));
         assert!(page_text.contains("EventSource"));
-        assert!(!page_text.contains("admin"), "viewer page must not expose admin UI");
+        assert!(
+            !page_text.contains("admin"),
+            "viewer page must not expose admin UI"
+        );
         task.abort();
         state.db.close().await;
         let _ = std::fs::remove_dir_all(data_dir);
@@ -796,8 +976,19 @@ mod tests {
 
     #[tokio::test]
     async fn lan_status_reports_stopped_when_never_started() {
-        let data_dir = std::env::temp_dir().join(format!("alpha-lan-status-{}", uuid::Uuid::new_v4()));
-        let state = AppState::new(data_dir.clone(), data_dir.join("attendance.db"), data_dir.join("exports"), false, LanConfig::default(), crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-lan-status-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            crate::config::OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+        )
+        .await
+        .unwrap();
         let status = build_lan_status(&state).await;
         assert_eq!(status.state, "stopped");
         assert_eq!(status.viewer_url, None);
@@ -809,9 +1000,24 @@ mod tests {
 
     #[tokio::test]
     async fn lan_status_is_disabled_when_runtime_start_is_forbidden() {
-        let data_dir = std::env::temp_dir().join(format!("alpha-lan-disabled-{}", uuid::Uuid::new_v4()));
-        let lan = LanConfig { enabled: false, allow_runtime_start: false, ..Default::default() };
-        let state = AppState::new(data_dir.clone(), data_dir.join("attendance.db"), data_dir.join("exports"), false, lan, crate::config::OfficeConfig::default(), crate::config::ScannerConfig::default()).await.unwrap();
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-lan-disabled-{}", uuid::Uuid::new_v4()));
+        let lan = LanConfig {
+            enabled: false,
+            allow_runtime_start: false,
+            ..Default::default()
+        };
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            lan,
+            crate::config::OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+        )
+        .await
+        .unwrap();
         let status = build_lan_status(&state).await;
         assert_eq!(status.state, "disabled");
         assert_eq!(status.allow_runtime_start, false);

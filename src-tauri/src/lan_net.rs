@@ -57,7 +57,10 @@ fn is_known_virtual_host_only(ip: IpAddr) -> bool {
 
 fn is_wireless(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.contains("wi-fi") || lower.contains("wifi") || lower.contains("wlan") || lower.contains("wireless")
+    lower.contains("wi-fi")
+        || lower.contains("wifi")
+        || lower.contains("wlan")
+        || lower.contains("wireless")
 }
 
 /// Most offices use a 192.168.x.x Wi-Fi/LAN subnet; prefer it, then 10.x.x.x,
@@ -97,7 +100,10 @@ pub fn detect_lan_interfaces() -> Vec<LanInterface> {
 
 /// Best single LAN IP to bind and advertise, when one exists.
 pub fn pick_active_lan_ip() -> Option<IpAddr> {
-    detect_lan_interfaces().into_iter().map(|item| item.ip).next()
+    detect_lan_interfaces()
+        .into_iter()
+        .map(|item| item.ip)
+        .next()
 }
 
 /// True when `ip` belongs to an active network adapter on this machine
@@ -144,7 +150,9 @@ try {
         .await
         .ok()
         .and_then(|result| result.ok());
-    let Some(output) = output else { return None; };
+    let Some(output) = output else {
+        return None;
+    };
     match String::from_utf8_lossy(&output.stdout).trim() {
         "1" => Some(true),
         "0" => Some(false),
@@ -233,7 +241,9 @@ pub async fn detect_network_profile() -> NetworkProfile {
         .await
         .ok()
         .and_then(|result| result.ok());
-    let Some(output) = output else { return NetworkProfile::Unknown; };
+    let Some(output) = output else {
+        return NetworkProfile::Unknown;
+    };
     parse_network_category(&String::from_utf8_lossy(&output.stdout))
 }
 
@@ -244,17 +254,31 @@ mod tests {
 
     #[test]
     fn filters_loopback_and_link_local_and_ipv6() {
-        assert!(is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50))));
-        assert!(is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 8))));
-        assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
-        assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(169, 254, 10, 10))));
-        assert!(!is_office_lan_candidate(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)));
-        assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 50
+        ))));
+        assert!(is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(
+            10, 0, 0, 8
+        ))));
+        assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(
+            127, 0, 0, 1
+        ))));
+        assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 10, 10
+        ))));
+        assert!(!is_office_lan_candidate(IpAddr::V6(
+            std::net::Ipv6Addr::LOCALHOST
+        )));
+        assert!(!is_office_lan_candidate(IpAddr::V4(Ipv4Addr::new(
+            8, 8, 8, 8
+        ))));
     }
 
     #[test]
     fn loopback_counts_as_an_active_adapter() {
-        assert!(is_address_on_active_adapter(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(is_address_on_active_adapter(IpAddr::V4(
+            Ipv4Addr::LOCALHOST
+        )));
     }
 
     #[test]
@@ -269,9 +293,18 @@ mod tests {
     #[test]
     fn sorts_real_interfaces_first() {
         let mut candidates = vec![
-            LanInterface { name: "vEthernet (WSL)".into(), ip: IpAddr::V4(Ipv4Addr::new(172, 28, 0, 1)) },
-            LanInterface { name: "Wi-Fi".into(), ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)) },
-            LanInterface { name: "Ethernet".into(), ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 8)) },
+            LanInterface {
+                name: "vEthernet (WSL)".into(),
+                ip: IpAddr::V4(Ipv4Addr::new(172, 28, 0, 1)),
+            },
+            LanInterface {
+                name: "Wi-Fi".into(),
+                ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+            },
+            LanInterface {
+                name: "Ethernet".into(),
+                ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 8)),
+            },
         ];
         candidates.sort_by_key(|item| (looks_virtual(&item.name), !is_preferred_private(item.ip)));
         assert_eq!(candidates[0].ip.to_string(), "192.168.1.50");

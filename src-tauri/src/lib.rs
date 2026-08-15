@@ -9,6 +9,9 @@ pub mod reporting;
 mod services;
 mod state;
 
+use crate::services::intern_payroll::{
+    INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID,
+};
 use chrono::Datelike;
 use chrono_tz::Asia::Manila;
 use sha2::{Digest, Sha256};
@@ -21,7 +24,6 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID};
 
 #[tauri::command]
 fn get_health(state: State<'_, AppState>) -> serde_json::Value {
@@ -37,8 +39,15 @@ fn get_config(state: State<'_, AppState>) -> serde_json::Value {
 fn notify_scan_success(app: tauri::AppHandle, full_name: String) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     let name = full_name.trim().chars().take(60).collect::<String>();
-    if name.is_empty() { return Ok(()); }
-    app.notification().builder().title("Attendance recorded").body(format!("Time in/out recorded for {name}")).show().map_err(|e| e.to_string())
+    if name.is_empty() {
+        return Ok(());
+    }
+    app.notification()
+        .builder()
+        .title("Attendance recorded")
+        .body(format!("Time in/out recorded for {name}"))
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -173,11 +182,30 @@ async fn admin_upsert_user(
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
     let now = chrono::Utc::now().to_rfc3339();
-    let result = upsert_user_record(&state.db, user_id, &rfid_uid, full_name,
-        user.get("department").and_then(|v| v.as_str()), status, employee_type,
-        gender.as_deref(), user.get("dailyRate").and_then(|v| v.as_i64()).map(|v| v * 100),
-        user.get("payrollProfileId").and_then(|v| v.as_str()), user.get("photoUrl").and_then(|v| v.as_str()), &now)
-        .await.map_err(|e| if e.to_string().contains("UNIQUE") { "USER_CONFLICT".into() } else { e.to_string() })?;
+    let result = upsert_user_record(
+        &state.db,
+        user_id,
+        &rfid_uid,
+        full_name,
+        user.get("department").and_then(|v| v.as_str()),
+        status,
+        employee_type,
+        gender.as_deref(),
+        user.get("dailyRate")
+            .and_then(|v| v.as_i64())
+            .map(|v| v * 100),
+        user.get("payrollProfileId").and_then(|v| v.as_str()),
+        user.get("photoUrl").and_then(|v| v.as_str()),
+        &now,
+    )
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("UNIQUE") {
+            "USER_CONFLICT".into()
+        } else {
+            e.to_string()
+        }
+    })?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     enqueue_sync(&state, "Users", user_id, "UPSERT", &user).await;
     Ok(serde_json::json!({"success":true,"created":result == 1,"userId":user_id}))
@@ -326,22 +354,29 @@ async fn admin_update_attendance(
         return Err("ATTENDANCE_CONFLICT".into());
     }
     // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
-    let payroll_ids: Vec<String> = sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
-        .bind(&attendance_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|row| row.get::<String, _>("payroll_id"))
-        .collect();
-    let grace_rows: Vec<(String, String)> = sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
-        .bind(&attendance_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|row| (row.get::<String, _>("grace_id"), row.get::<String, _>("user_id")))
-        .collect();
+    let payroll_ids: Vec<String> =
+        sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
+            .bind(&attendance_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| row.get::<String, _>("payroll_id"))
+            .collect();
+    let grace_rows: Vec<(String, String)> =
+        sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
+            .bind(&attendance_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("grace_id"),
+                    row.get::<String, _>("user_id"),
+                )
+            })
+            .collect();
     let _ = sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
         .bind(&attendance_id)
         .execute(&state.db)
@@ -395,22 +430,29 @@ async fn admin_delete_attendance(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
-    let payroll_ids: Vec<String> = sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
-        .bind(&attendance_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|row| row.get::<String, _>("payroll_id"))
-        .collect();
-    let grace_rows: Vec<(String, String)> = sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
-        .bind(&attendance_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|row| (row.get::<String, _>("grace_id"), row.get::<String, _>("user_id")))
-        .collect();
+    let payroll_ids: Vec<String> =
+        sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
+            .bind(&attendance_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| row.get::<String, _>("payroll_id"))
+            .collect();
+    let grace_rows: Vec<(String, String)> =
+        sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
+            .bind(&attendance_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("grace_id"),
+                    row.get::<String, _>("user_id"),
+                )
+            })
+            .collect();
     let result = sqlx::query("DELETE FROM attendance WHERE attendance_id=? AND attendance_date=?")
         .bind(&attendance_id)
         .bind(&date)
@@ -585,61 +627,189 @@ async fn payroll_list_cutoffs(
     // Payroll cutoff rows do not store an employee type; derive intern vs
     // employee classification from the Users register so the printable
     // worksheet can apply the intern layout and labels.
-    let employee_types: HashMap<String, String> = sqlx::query("SELECT user_id, employee_type FROM users")
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|row| (row.get::<String, _>("user_id"), row.get::<String, _>("employee_type")))
-        .collect();
-    Ok(serde_json::json!({"success":true,"payroll":rows.iter().map(|row| payroll_cutoff_json(row, employee_types.get(&row.get::<String,_>("employee_id")).map(String::as_str))).collect::<Vec<_>>() }))
+    let employee_types: HashMap<String, String> =
+        sqlx::query("SELECT user_id, employee_type FROM users")
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("user_id"),
+                    row.get::<String, _>("employee_type"),
+                )
+            })
+            .collect();
+    Ok(
+        serde_json::json!({"success":true,"payroll":rows.iter().map(|row| payroll_cutoff_json(row, employee_types.get(&row.get::<String,_>("employee_id")).map(String::as_str))).collect::<Vec<_>>() }),
+    )
 }
 
 fn payroll_cutoff_json(row: &SqliteRow, employee_type: Option<&str>) -> serde_json::Value {
     // Built as an explicit map so the value never depends on the json! macro
     // recursion budget (the record is large and frequently extended).
     let mut map = serde_json::Map::new();
-    let mut insert = |key: &str, value: serde_json::Value| { map.insert(key.into(), value); };
-    insert("payrollId", serde_json::json!(row.get::<String, _>("payroll_id")));
-    insert("employeeId", serde_json::json!(row.get::<String, _>("employee_id")));
-    insert("employeeName", serde_json::json!(row.get::<String, _>("employee_name")));
-    insert("employeeType", serde_json::json!(if employee_type == Some("EMPLOYEE") { "EMPLOYEE" } else { "INTERN" }));
-    insert("payrollProfileId", serde_json::json!(row.get::<String, _>("payroll_profile_id")));
-    insert("payrollCutoffLabel", serde_json::json!(row.get::<String, _>("payroll_cutoff_label")));
-    insert("cutoffStart", serde_json::json!(row.get::<String, _>("cutoff_start")));
-    insert("cutoffEnd", serde_json::json!(row.get::<String, _>("cutoff_end")));
+    let mut insert = |key: &str, value: serde_json::Value| {
+        map.insert(key.into(), value);
+    };
+    insert(
+        "payrollId",
+        serde_json::json!(row.get::<String, _>("payroll_id")),
+    );
+    insert(
+        "employeeId",
+        serde_json::json!(row.get::<String, _>("employee_id")),
+    );
+    insert(
+        "employeeName",
+        serde_json::json!(row.get::<String, _>("employee_name")),
+    );
+    insert(
+        "employeeType",
+        serde_json::json!(if employee_type == Some("EMPLOYEE") {
+            "EMPLOYEE"
+        } else {
+            "INTERN"
+        }),
+    );
+    insert(
+        "payrollProfileId",
+        serde_json::json!(row.get::<String, _>("payroll_profile_id")),
+    );
+    insert(
+        "payrollCutoffLabel",
+        serde_json::json!(row.get::<String, _>("payroll_cutoff_label")),
+    );
+    insert(
+        "cutoffStart",
+        serde_json::json!(row.get::<String, _>("cutoff_start")),
+    );
+    insert(
+        "cutoffEnd",
+        serde_json::json!(row.get::<String, _>("cutoff_end")),
+    );
     insert("payrollFrequency", serde_json::json!("SEMI_MONTHLY"));
-    insert("dailyRate", serde_json::json!(row.get::<i64, _>("daily_rate_centavos") as f64 / 100.0));
-    insert("standardWorkingDays", serde_json::json!(row.get::<f64, _>("standard_working_days")));
-    insert("actualWorkingDays", serde_json::json!(row.get::<f64, _>("actual_working_days")));
-    insert("basicPay", serde_json::json!(row.get::<i64, _>("basic_pay_centavos") as f64 / 100.0));
-    insert("specialHolidayDays", serde_json::json!(row.get::<f64, _>("special_holiday_days")));
-    insert("specialHolidayMultiplier", serde_json::json!(row.get::<f64, _>("special_holiday_multiplier")));
-    insert("specialHolidayPay", serde_json::json!(row.get::<i64, _>("special_holiday_pay_centavos") as f64 / 100.0));
-    insert("regularHolidayDays", serde_json::json!(row.get::<f64, _>("regular_holiday_days")));
-    insert("regularHolidayMultiplier", serde_json::json!(row.get::<f64, _>("regular_holiday_multiplier")));
-    insert("regularHolidayPay", serde_json::json!(row.get::<i64, _>("regular_holiday_pay_centavos") as f64 / 100.0));
-    insert("incentivesAllowance", serde_json::json!(row.get::<i64, _>("incentives_allowance_centavos") as f64 / 100.0));
-    insert("specialAllowance", serde_json::json!(row.get::<i64, _>("special_allowance_centavos") as f64 / 100.0));
-    insert("totalCompensation", serde_json::json!(row.get::<i64, _>("total_compensation_centavos") as f64 / 100.0));
-    insert("totalAllowance", serde_json::json!(row.get::<i64, _>("total_allowance_centavos") as f64 / 100.0));
-    insert("lateUnits", serde_json::json!(row.get::<f64, _>("late_units")));
-    insert("lateDeduction", serde_json::json!(row.get::<i64, _>("late_deduction_centavos") as f64 / 100.0));
-    insert("halfDayCount", serde_json::json!(row.get::<f64, _>("half_day_count")));
-    insert("halfDayDeduction", serde_json::json!(row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0));
-    insert("absentDays", serde_json::json!(row.get::<f64, _>("absent_days")));
-    insert("absenceDeduction", serde_json::json!(row.get::<i64, _>("absence_deduction_centavos") as f64 / 100.0));
-    insert("overtimeHours", serde_json::json!(row.get::<f64, _>("overtime_hours")));
-    insert("overtimeRate", serde_json::json!(row.get::<i64, _>("overtime_rate_centavos") as f64 / 100.0));
-    insert("overtimePay", serde_json::json!(row.get::<i64, _>("overtime_pay_centavos") as f64 / 100.0));
-    insert("manualAdjustment", serde_json::json!(row.get::<i64, _>("manual_adjustment_centavos") as f64 / 100.0));
-    insert("adjustmentReason", serde_json::json!(row.get::<Option<String>, _>("adjustment_reason")));
-    insert("grossCompensation", serde_json::json!(row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0));
-    insert("netPay", serde_json::json!(row.get::<i64, _>("net_pay_centavos") as f64 / 100.0));
-    insert("calculationBreakdown", serde_json::json!(row.get::<String, _>("calculation_breakdown")));
-    insert("approvedWorkingDayOverage", serde_json::json!(row.get::<i64, _>("approved_working_day_overage") != 0));
+    insert(
+        "dailyRate",
+        serde_json::json!(row.get::<i64, _>("daily_rate_centavos") as f64 / 100.0),
+    );
+    insert(
+        "standardWorkingDays",
+        serde_json::json!(row.get::<f64, _>("standard_working_days")),
+    );
+    insert(
+        "actualWorkingDays",
+        serde_json::json!(row.get::<f64, _>("actual_working_days")),
+    );
+    insert(
+        "basicPay",
+        serde_json::json!(row.get::<i64, _>("basic_pay_centavos") as f64 / 100.0),
+    );
+    insert(
+        "specialHolidayDays",
+        serde_json::json!(row.get::<f64, _>("special_holiday_days")),
+    );
+    insert(
+        "specialHolidayMultiplier",
+        serde_json::json!(row.get::<f64, _>("special_holiday_multiplier")),
+    );
+    insert(
+        "specialHolidayPay",
+        serde_json::json!(row.get::<i64, _>("special_holiday_pay_centavos") as f64 / 100.0),
+    );
+    insert(
+        "regularHolidayDays",
+        serde_json::json!(row.get::<f64, _>("regular_holiday_days")),
+    );
+    insert(
+        "regularHolidayMultiplier",
+        serde_json::json!(row.get::<f64, _>("regular_holiday_multiplier")),
+    );
+    insert(
+        "regularHolidayPay",
+        serde_json::json!(row.get::<i64, _>("regular_holiday_pay_centavos") as f64 / 100.0),
+    );
+    insert(
+        "incentivesAllowance",
+        serde_json::json!(row.get::<i64, _>("incentives_allowance_centavos") as f64 / 100.0),
+    );
+    insert(
+        "specialAllowance",
+        serde_json::json!(row.get::<i64, _>("special_allowance_centavos") as f64 / 100.0),
+    );
+    insert(
+        "totalCompensation",
+        serde_json::json!(row.get::<i64, _>("total_compensation_centavos") as f64 / 100.0),
+    );
+    insert(
+        "totalAllowance",
+        serde_json::json!(row.get::<i64, _>("total_allowance_centavos") as f64 / 100.0),
+    );
+    insert(
+        "lateUnits",
+        serde_json::json!(row.get::<f64, _>("late_units")),
+    );
+    insert(
+        "lateDeduction",
+        serde_json::json!(row.get::<i64, _>("late_deduction_centavos") as f64 / 100.0),
+    );
+    insert(
+        "halfDayCount",
+        serde_json::json!(row.get::<f64, _>("half_day_count")),
+    );
+    insert(
+        "halfDayDeduction",
+        serde_json::json!(row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0),
+    );
+    insert(
+        "absentDays",
+        serde_json::json!(row.get::<f64, _>("absent_days")),
+    );
+    insert(
+        "absenceDeduction",
+        serde_json::json!(row.get::<i64, _>("absence_deduction_centavos") as f64 / 100.0),
+    );
+    insert(
+        "overtimeHours",
+        serde_json::json!(row.get::<f64, _>("overtime_hours")),
+    );
+    insert(
+        "overtimeRate",
+        serde_json::json!(row.get::<i64, _>("overtime_rate_centavos") as f64 / 100.0),
+    );
+    insert(
+        "overtimePay",
+        serde_json::json!(row.get::<i64, _>("overtime_pay_centavos") as f64 / 100.0),
+    );
+    insert(
+        "manualAdjustment",
+        serde_json::json!(row.get::<i64, _>("manual_adjustment_centavos") as f64 / 100.0),
+    );
+    insert(
+        "adjustmentReason",
+        serde_json::json!(row.get::<Option<String>, _>("adjustment_reason")),
+    );
+    insert(
+        "grossCompensation",
+        serde_json::json!(row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0),
+    );
+    insert(
+        "netPay",
+        serde_json::json!(row.get::<i64, _>("net_pay_centavos") as f64 / 100.0),
+    );
+    insert(
+        "calculationBreakdown",
+        serde_json::json!(row.get::<String, _>("calculation_breakdown")),
+    );
+    insert(
+        "approvedWorkingDayOverage",
+        serde_json::json!(row.get::<i64, _>("approved_working_day_overage") != 0),
+    );
     insert("status", serde_json::json!(row.get::<String, _>("status")));
-    insert("finalizedAt", serde_json::json!(row.get::<Option<String>, _>("finalized_at")));
+    insert(
+        "finalizedAt",
+        serde_json::json!(row.get::<Option<String>, _>("finalized_at")),
+    );
     insert("revision", serde_json::json!(row.get::<i64, _>("revision")));
     serde_json::Value::Object(map)
 }
@@ -652,10 +822,16 @@ async fn payroll_intern_report(
     cutoff_end: String,
     payroll_cutoff_label: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await { return Err("ADMIN_AUTH_REQUIRED".into()); }
-    chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
-    chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
-    if cutoff_end < cutoff_start { return Err("INVALID_CUTOFF_DATES".into()); }
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d")
+        .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
+    chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d")
+        .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
+    if cutoff_end < cutoff_start {
+        return Err("INVALID_CUTOFF_DATES".into());
+    }
     let rows = sqlx::query("SELECT u.user_id, u.full_name, COALESCE(COUNT(p.payroll_id),0) AS actual_days, COALESCE(SUM(p.base_pay_centavos),0) AS basic_pay, COALESCE(SUM(p.late_hours),0) AS late_units, COALESCE(SUM(p.late_deduction_centavos),0) AS late_deduction, COALESCE(SUM(p.daily_pay_centavos),0) AS gross_pay FROM users u LEFT JOIN payroll p ON p.user_id=u.user_id AND p.attendance_date >= ? AND p.attendance_date <= ? WHERE u.employee_type='INTERN' GROUP BY u.user_id, u.full_name ORDER BY u.full_name")
         .bind(&cutoff_start).bind(&cutoff_end).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     let payroll = rows.into_iter().map(|row| {
@@ -683,10 +859,16 @@ async fn payroll_generate_cutoff(
     payroll_cutoff_label: String,
     customization: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await { return Err("ADMIN_AUTH_REQUIRED".into()); }
-    chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
-    chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d").map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
-    if cutoff_end < cutoff_start { return Err("INVALID_CUTOFF_DATES".into()); }
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d")
+        .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
+    chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d")
+        .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
+    if cutoff_end < cutoff_start {
+        return Err("INVALID_CUTOFF_DATES".into());
+    }
 
     // A draft is a live view of attendance. Remove the prior generated draft
     // before rebuilding it, while preserving approved cutoff records.
@@ -694,8 +876,14 @@ async fn payroll_generate_cutoff(
         sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='DRAFT'")
             .bind(selected_id).bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
     } else {
-        sqlx::query("DELETE FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='DRAFT'")
-            .bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
+        sqlx::query(
+            "DELETE FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='DRAFT'",
+        )
+        .bind(&cutoff_start)
+        .bind(&cutoff_end)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     let rows = sqlx::query(
@@ -707,21 +895,30 @@ async fn payroll_generate_cutoff(
     for row in rows {
         let employee_id: String = row.get("user_id");
         if let Some(selected_id) = customization.get("employeeId").and_then(|v| v.as_str()) {
-            if selected_id != employee_id { continue; }
+            if selected_id != employee_id {
+                continue;
+            }
         }
         let employee_name: String = row.get("full_name");
         let employee_type: String = row.get("employee_type");
         let is_intern = employee_type != "EMPLOYEE";
         // Interns are reported directly from attendance; they never create
         // cutoff draft records.
-        if is_intern { continue; }
+        if is_intern {
+            continue;
+        }
         let finalized_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='FINALIZED'")
             .bind(&employee_id).bind(&cutoff_start).bind(&cutoff_end).fetch_one(&state.db).await.map_err(|e| e.to_string())? > 0;
-        if finalized_exists { continue; }
+        if finalized_exists {
+            continue;
+        }
         let profile_id = if is_intern {
             INTERN_PAYROLL_PROFILE_ID.to_string()
         } else {
-            customization.get("payrollProfileId").and_then(|v| v.as_str()).map(String::from)
+            customization
+                .get("payrollProfileId")
+                .and_then(|v| v.as_str())
+                .map(String::from)
                 .or_else(|| row.get::<Option<String>, _>("payroll_profile_id"))
                 .unwrap_or_else(|| "BEA_STANDARD".into())
         };
@@ -729,32 +926,138 @@ async fn payroll_generate_cutoff(
             .bind(&profile_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
         let custom_number = |name: &str| customization.get(name).and_then(|v| v.as_f64());
         let standard_days = custom_number("standardWorkingDays")
-            .or_else(|| profile.as_ref().map(|p| p.get::<f64,_>("standard_working_days_per_cutoff")))
+            .or_else(|| {
+                profile
+                    .as_ref()
+                    .map(|p| p.get::<f64, _>("standard_working_days_per_cutoff"))
+            })
             .unwrap_or(11.0);
-        let daily_rate_centavos = if is_intern { INTERN_DAILY_RATE_PHP * 100 } else { row.get::<i64,_>("daily_rate_centavos") };
-        let actual_days = row.get::<i64,_>("actual_days") as f64;
-        let late_units = row.get::<i64,_>("late_units") as f64;
-        let late_deduction_centavos = if is_intern { row.get::<i64,_>("late_deduction_centavos") } else { 0 };
-        let incentives_centavos = if is_intern { 0 } else { custom_number("incentivesAllowance").map(|v| (v * 100.0).round() as i64).or_else(|| profile.as_ref().map(|p| p.get::<i64,_>("incentives_allowance_centavos"))).unwrap_or(0) };
-        let special_allowance_centavos = if is_intern { 0 } else { custom_number("specialAllowance").map(|v| (v * 100.0).round() as i64).or_else(|| profile.as_ref().map(|p| p.get::<i64,_>("special_allowance_centavos"))).unwrap_or(0) };
-        let special_multiplier = if is_intern { 0.0 } else { custom_number("specialHolidayMultiplier").or_else(|| profile.as_ref().map(|p| p.get::<f64,_>("special_holiday_multiplier"))).unwrap_or(0.3) };
-        let regular_multiplier = if is_intern { 0.0 } else { custom_number("regularHolidayMultiplier").or_else(|| profile.as_ref().map(|p| p.get::<f64,_>("regular_holiday_multiplier"))).unwrap_or(1.0) };
-        let half_day_fraction = profile.as_ref().map(|p| p.get::<f64,_>("half_day_fraction")).unwrap_or(0.5);
-        let overtime_rate_centavos = if is_intern { 0 } else { custom_number("overtimeRate").map(|v| (v * 100.0).round() as i64).or_else(|| profile.as_ref().map(|p| p.get::<i64,_>("overtime_rate_centavos"))).unwrap_or(0) };
-        let special_holiday_days = if is_intern { 0.0 } else { custom_number("specialHolidayDays").unwrap_or(0.0) };
-        let regular_holiday_days = if is_intern { 0.0 } else { custom_number("regularHolidayDays").unwrap_or(0.0) };
-        let half_day_count = if is_intern { 0.0 } else { custom_number("halfDayCount").unwrap_or(0.0) };
-        let overtime_hours = if is_intern { 0.0 } else { custom_number("overtimeHours").unwrap_or(0.0) };
+        let daily_rate_centavos = if is_intern {
+            INTERN_DAILY_RATE_PHP * 100
+        } else {
+            row.get::<i64, _>("daily_rate_centavos")
+        };
+        let actual_days = row.get::<i64, _>("actual_days") as f64;
+        let late_units = row.get::<i64, _>("late_units") as f64;
+        let late_deduction_centavos = if is_intern {
+            row.get::<i64, _>("late_deduction_centavos")
+        } else {
+            0
+        };
+        let incentives_centavos = if is_intern {
+            0
+        } else {
+            custom_number("incentivesAllowance")
+                .map(|v| (v * 100.0).round() as i64)
+                .or_else(|| {
+                    profile
+                        .as_ref()
+                        .map(|p| p.get::<i64, _>("incentives_allowance_centavos"))
+                })
+                .unwrap_or(0)
+        };
+        let special_allowance_centavos = if is_intern {
+            0
+        } else {
+            custom_number("specialAllowance")
+                .map(|v| (v * 100.0).round() as i64)
+                .or_else(|| {
+                    profile
+                        .as_ref()
+                        .map(|p| p.get::<i64, _>("special_allowance_centavos"))
+                })
+                .unwrap_or(0)
+        };
+        let special_multiplier = if is_intern {
+            0.0
+        } else {
+            custom_number("specialHolidayMultiplier")
+                .or_else(|| {
+                    profile
+                        .as_ref()
+                        .map(|p| p.get::<f64, _>("special_holiday_multiplier"))
+                })
+                .unwrap_or(0.3)
+        };
+        let regular_multiplier = if is_intern {
+            0.0
+        } else {
+            custom_number("regularHolidayMultiplier")
+                .or_else(|| {
+                    profile
+                        .as_ref()
+                        .map(|p| p.get::<f64, _>("regular_holiday_multiplier"))
+                })
+                .unwrap_or(1.0)
+        };
+        let half_day_fraction = profile
+            .as_ref()
+            .map(|p| p.get::<f64, _>("half_day_fraction"))
+            .unwrap_or(0.5);
+        let overtime_rate_centavos = if is_intern {
+            0
+        } else {
+            custom_number("overtimeRate")
+                .map(|v| (v * 100.0).round() as i64)
+                .or_else(|| {
+                    profile
+                        .as_ref()
+                        .map(|p| p.get::<i64, _>("overtime_rate_centavos"))
+                })
+                .unwrap_or(0)
+        };
+        let special_holiday_days = if is_intern {
+            0.0
+        } else {
+            custom_number("specialHolidayDays").unwrap_or(0.0)
+        };
+        let regular_holiday_days = if is_intern {
+            0.0
+        } else {
+            custom_number("regularHolidayDays").unwrap_or(0.0)
+        };
+        let half_day_count = if is_intern {
+            0.0
+        } else {
+            custom_number("halfDayCount").unwrap_or(0.0)
+        };
+        let overtime_hours = if is_intern {
+            0.0
+        } else {
+            custom_number("overtimeHours").unwrap_or(0.0)
+        };
         let late_rate = custom_number("lateDeductionRate").unwrap_or(0.0);
-        let late_deduction = if is_intern { late_deduction_centavos as f64 / 100.0 } else { late_units * late_rate };
+        let late_deduction = if is_intern {
+            late_deduction_centavos as f64 / 100.0
+        } else {
+            late_units * late_rate
+        };
         let manual_adjustment = custom_number("manualAdjustment").unwrap_or(0.0);
         let input = crate::services::cutoff_payroll::CutoffInput {
-            employee_id: employee_id.clone(), employee_name: employee_name.clone(), cutoff_start: cutoff_start.clone(), cutoff_end: cutoff_end.clone(),
-            daily_rate: daily_rate_centavos as f64 / 100.0, standard_working_days: standard_days, actual_working_days: actual_days,
-            special_holiday_days, special_holiday_multiplier: special_multiplier, regular_holiday_days, regular_holiday_multiplier: regular_multiplier,
-            incentives_allowance: incentives_centavos as f64 / 100.0, special_allowance: special_allowance_centavos as f64 / 100.0,
-            late_deduction, half_day_count, half_day_fraction, absent_days: (standard_days - actual_days).max(0.0),
-            overtime_hours, overtime_rate: overtime_rate_centavos as f64 / 100.0, manual_adjustment, adjustment_reason: customization.get("adjustmentReason").and_then(|v| v.as_str()).map(String::from),
+            employee_id: employee_id.clone(),
+            employee_name: employee_name.clone(),
+            cutoff_start: cutoff_start.clone(),
+            cutoff_end: cutoff_end.clone(),
+            daily_rate: daily_rate_centavos as f64 / 100.0,
+            standard_working_days: standard_days,
+            actual_working_days: actual_days,
+            special_holiday_days,
+            special_holiday_multiplier: special_multiplier,
+            regular_holiday_days,
+            regular_holiday_multiplier: regular_multiplier,
+            incentives_allowance: incentives_centavos as f64 / 100.0,
+            special_allowance: special_allowance_centavos as f64 / 100.0,
+            late_deduction,
+            half_day_count,
+            half_day_fraction,
+            absent_days: (standard_days - actual_days).max(0.0),
+            overtime_hours,
+            overtime_rate: overtime_rate_centavos as f64 / 100.0,
+            manual_adjustment,
+            adjustment_reason: customization
+                .get("adjustmentReason")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             approved_working_day_overage: true,
         };
         let calculated = crate::services::cutoff_payroll::calculate(&input)?;
@@ -789,10 +1092,19 @@ async fn payroll_create_cutoff(
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let is_intern = input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
+    let is_intern =
+        input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
     // Intern payroll floors at zero for a cutoff (mirrors the daily rule).
-    let gross = if is_intern { result.gross_compensation.max(0) } else { result.gross_compensation };
-    let net = if is_intern { result.net_pay.max(0) } else { result.net_pay };
+    let gross = if is_intern {
+        result.gross_compensation.max(0)
+    } else {
+        result.gross_compensation
+    };
+    let net = if is_intern {
+        result.net_pay.max(0)
+    } else {
+        result.net_pay
+    };
     // Total late hours are fillable for employees (rate-based deduction) and
     // computed from late units for interns; persist the units on the record.
     let late_units = input
@@ -881,9 +1193,18 @@ async fn payroll_update_cutoff(
     let parsed = cutoff_input(&input);
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let is_intern = input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
-    let gross = if is_intern { result.gross_compensation.max(0) } else { result.gross_compensation };
-    let net = if is_intern { result.net_pay.max(0) } else { result.net_pay };
+    let is_intern =
+        input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
+    let gross = if is_intern {
+        result.gross_compensation.max(0)
+    } else {
+        result.gross_compensation
+    };
+    let net = if is_intern {
+        result.net_pay.max(0)
+    } else {
+        result.net_pay
+    };
     let late_units = input
         .get("lateUnits")
         .and_then(|v| v.as_f64())
@@ -947,27 +1268,46 @@ async fn payroll_delete_cutoff(
         return Err("FINALIZED_PAYROLL_CANNOT_BE_DELETED".into());
     }
     sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=? AND status='DRAFT'")
-        .bind(&payroll_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    enqueue_sync(&state, "PayrollCutoffs", &payroll_id, "DELETE", &serde_json::json!({
-        "payrollId": payroll_id,
-        "employeeId": row.get::<String, _>("employee_id"),
-        "employeeName": row.get::<String, _>("employee_name"),
-        "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
-        "cutoffStart": row.get::<String, _>("cutoff_start"),
-        "cutoffEnd": row.get::<String, _>("cutoff_end")
-    })).await;
+        .bind(&payroll_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    enqueue_sync(
+        &state,
+        "PayrollCutoffs",
+        &payroll_id,
+        "DELETE",
+        &serde_json::json!({
+            "payrollId": payroll_id,
+            "employeeId": row.get::<String, _>("employee_id"),
+            "employeeName": row.get::<String, _>("employee_name"),
+            "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
+            "cutoffStart": row.get::<String, _>("cutoff_start"),
+            "cutoffEnd": row.get::<String, _>("cutoff_end")
+        }),
+    )
+    .await;
     Ok(serde_json::json!({"success":true,"payrollId":payroll_id}))
 }
 
 #[tauri::command]
-async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result<serde_json::Value, String> {
+async fn payroll_export_csv(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end,gross_compensation_centavos,net_pay_centavos,status FROM payroll_cutoffs ORDER BY cutoff_start,employee_name").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     let mut output = String::new();
-    output.push_str(&format!("\"Company\",\"{}\"\n", state.office.company_name.replace('"', "\"\"")));
-    output.push_str(&format!("\"Office\",\"{}\"\n", state.office.display_full().replace('"', "\"\"")));
+    output.push_str(&format!(
+        "\"Company\",\"{}\"\n",
+        state.office.company_name.replace('"', "\"\"")
+    ));
+    output.push_str(&format!(
+        "\"Office\",\"{}\"\n",
+        state.office.display_full().replace('"', "\"\"")
+    ));
     output.push_str("PAYROLL_ID,EMPLOYEE_ID,EMPLOYEE_NAME,CUTOFF_LABEL,CUTOFF_START,CUTOFF_END,GROSS_PAY_PHP,NET_PAY_PHP,STATUS\n");
     for row in rows {
         let name = row.get::<String, _>("employee_name").replace('"', "\"\"");
@@ -987,7 +1327,10 @@ async fn payroll_export_csv(state: State<'_, AppState>, token: String) -> Result
             row.get::<String, _>("status")
         ));
     }
-    let date = chrono::Utc::now().with_timezone(&Manila).format("%Y-%m-%d").to_string();
+    let date = chrono::Utc::now()
+        .with_timezone(&Manila)
+        .format("%Y-%m-%d")
+        .to_string();
     let file_name = format!("payroll-{date}.csv");
     let output_path = state.exports_dir.join(&file_name);
     std::fs::create_dir_all(&state.exports_dir).map_err(|e| e.to_string())?;
@@ -1025,13 +1368,12 @@ async fn enrich_cutoff_input(
     if employee_id.is_empty() || (!needs_name && !needs_rate) {
         return Ok(input.clone());
     }
-    let employee = sqlx::query(
-        "SELECT full_name, daily_rate_centavos FROM users WHERE user_id = ?",
-    )
-    .bind(employee_id)
-    .fetch_optional(db)
-    .await
-    .map_err(|error| error.to_string())?;
+    let employee =
+        sqlx::query("SELECT full_name, daily_rate_centavos FROM users WHERE user_id = ?")
+            .bind(employee_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|error| error.to_string())?;
     let Some(employee) = employee else {
         return Ok(input.clone());
     };
@@ -1072,12 +1414,13 @@ async fn apply_intern_rules(
     if employee_id.is_empty() {
         return Ok(());
     }
-    let employee_type: Option<String> = sqlx::query("SELECT employee_type FROM users WHERE user_id = ?")
-        .bind(employee_id)
-        .fetch_optional(db)
-        .await
-        .map_err(|error| error.to_string())?
-        .map(|row| row.get("employee_type"));
+    let employee_type: Option<String> =
+        sqlx::query("SELECT employee_type FROM users WHERE user_id = ?")
+            .bind(employee_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|error| error.to_string())?
+            .map(|row| row.get("employee_type"));
     if employee_type.as_deref() != Some("INTERN") {
         return Ok(());
     }
@@ -1100,8 +1443,14 @@ async fn apply_intern_rules(
         return Err("ADMIN_VALIDATION_ERROR".into());
     };
     // Fixed intern rate; any submitted rate is ignored for interns.
-    object.insert("dailyRate".into(), serde_json::json!(INTERN_DAILY_RATE_PHP as f64));
-    object.insert("payrollProfileId".into(), serde_json::json!(INTERN_PAYROLL_PROFILE_ID));
+    object.insert(
+        "dailyRate".into(),
+        serde_json::json!(INTERN_DAILY_RATE_PHP as f64),
+    );
+    object.insert(
+        "payrollProfileId".into(),
+        serde_json::json!(INTERN_PAYROLL_PROFILE_ID),
+    );
     object.insert("lateUnits".into(), serde_json::json!(late_units));
     // Late deduction is PHP 10.00 per hour, computed from total late hours.
     object.insert(
@@ -1205,8 +1554,7 @@ fn generated_file_metadata(
 fn canonical_exports_path(state: &AppState, candidate: &Path) -> Result<PathBuf, String> {
     let root = std::fs::canonicalize(&state.exports_dir)
         .map_err(|_| "EXPORT_DIR_UNAVAILABLE".to_string())?;
-    let canonical =
-        std::fs::canonicalize(candidate).map_err(|_| "FILE_NOT_FOUND".to_string())?;
+    let canonical = std::fs::canonicalize(candidate).map_err(|_| "FILE_NOT_FOUND".to_string())?;
     if !canonical.starts_with(&root) {
         return Err("PATH_OUTSIDE_EXPORTS".into());
     }
@@ -1315,7 +1663,9 @@ async fn db_info(state: State<'_, AppState>) -> Result<serde_json::Value, String
     let marker = crate::database::restore_request_path(&state.data_dir);
     let restore_pending = marker.is_file();
     let restore_source = if restore_pending {
-        std::fs::read_to_string(&marker).ok().map(|text| text.trim().to_string())
+        std::fs::read_to_string(&marker)
+            .ok()
+            .map(|text| text.trim().to_string())
     } else {
         None
     };
@@ -1370,7 +1720,13 @@ async fn db_backup(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let config_dir = crate::paths::resolve(&app)?.config_dir;
-    let file_path = crate::database::create_portable_backup(&state.db, &state.data_dir, &config_dir, &state.db_path).await?;
+    let file_path = crate::database::create_portable_backup(
+        &state.db,
+        &state.data_dir,
+        &config_dir,
+        &state.db_path,
+    )
+    .await?;
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -1408,7 +1764,10 @@ async fn db_restore_request(
     if !source.is_file() {
         return Err("RESTORE_SOURCE_NOT_FOUND".into());
     }
-    let validation = if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup")) {
+    let validation = if source
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup"))
+    {
         crate::database::validate_portable_backup(&source)
     } else {
         crate::database::validate_database_file(&source).await
@@ -1442,7 +1801,8 @@ async fn db_open_backups_dir(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let dir = state.backups_dir.clone();
-    std::fs::create_dir_all(&dir).map_err(|error| format!("cannot create backup folder: {error}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create backup folder: {error}"))?;
     app.opener()
         .open_path(dir.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|error| {
@@ -1454,7 +1814,9 @@ async fn db_open_backups_dir(
 
 #[tauri::command]
 /// Read-only status of the LAN attendance viewer for the Live Attendance panel.
-async fn lan_status(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
+async fn lan_status(
+    state: State<'_, AppState>,
+) -> Result<crate::lan_server::LanStatusResponse, String> {
     Ok(crate::lan_server::build_lan_status(state.inner()).await)
 }
 
@@ -1462,7 +1824,9 @@ async fn lan_status(state: State<'_, AppState>) -> Result<crate::lan_server::Lan
 /// Start (or verify) the LAN attendance viewer from the Live Attendance panel.
 /// The viewer binds to the office LAN IP so devices on the same Wi-Fi/LAN can
 /// open it; it stays strictly read-only and never exposes admin or payroll.
-async fn lan_start(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
+async fn lan_start(
+    state: State<'_, AppState>,
+) -> Result<crate::lan_server::LanStatusResponse, String> {
     let lan = state.lan.clone();
     if !lan.enabled && !lan.allow_runtime_start {
         return Ok(crate::lan_server::build_lan_status(state.inner()).await);
@@ -1476,7 +1840,9 @@ async fn lan_start(state: State<'_, AppState>) -> Result<crate::lan_server::LanS
 #[tauri::command]
 /// Stop the LAN attendance viewer. Attendance recording on the front-desk
 /// laptop is unaffected; only the LAN viewer goes offline.
-async fn lan_stop(state: State<'_, AppState>) -> Result<crate::lan_server::LanStatusResponse, String> {
+async fn lan_stop(
+    state: State<'_, AppState>,
+) -> Result<crate::lan_server::LanStatusResponse, String> {
     state.lan_runtime.stop().await;
     Ok(crate::lan_server::build_lan_status(state.inner()).await)
 }
@@ -2498,11 +2864,13 @@ pub fn run() {
     builder
         .setup(|app| {
             lifecycle::install_tray(app).expect("install system tray");
-            let paths = crate::paths::resolve(app.handle())
-                .expect("resolve application paths");
-            std::fs::create_dir_all(&paths.config_dir).expect("create application config directory");
-            let (lan, office, scanner_config, database_config) = config::load_config(&paths.config_dir).expect("valid config.toml");
-            let db_path = crate::paths::resolve_db_path(&paths.config_dir, &paths.data_dir, &database_config);
+            let paths = crate::paths::resolve(app.handle()).expect("resolve application paths");
+            std::fs::create_dir_all(&paths.config_dir)
+                .expect("create application config directory");
+            let (lan, office, scanner_config, database_config) =
+                config::load_config(&paths.config_dir).expect("valid config.toml");
+            let db_path =
+                crate::paths::resolve_db_path(&paths.config_dir, &paths.data_dir, &database_config);
             // Apply any pending database restore (admin flow marker or
             // ALPHA_PREMIER_RESTORE_FROM) before the database is opened, so
             // the live file is never touched by two processes. A failed
@@ -2571,7 +2939,10 @@ pub fn run() {
                 let window_for_events = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        if !lifecycle::should_hide_on_close(lifecycle::CloseBehavior::HideToTray, true) {
+                        if !lifecycle::should_hide_on_close(
+                            lifecycle::CloseBehavior::HideToTray,
+                            true,
+                        ) {
                             return;
                         }
                         api.prevent_close();
@@ -2583,14 +2954,21 @@ pub fn run() {
                             let db = state.db.clone();
                             let config_dir = config_dir.clone();
                             let _ = tauri::async_runtime::block_on(async move {
-                                match crate::database::create_portable_backup(&db, &data_dir, &config_dir, &db_path).await {
+                                match crate::database::create_portable_backup(
+                                    &db,
+                                    &data_dir,
+                                    &config_dir,
+                                    &db_path,
+                                )
+                                .await
+                                {
                                     Ok(path) => log::info!(
                                         "automatic backup on exit saved to {}",
                                         path.display()
                                     ),
-                                    Err(error) => log::warn!(
-                                        "automatic backup on exit skipped: {error}"
-                                    ),
+                                    Err(error) => {
+                                        log::warn!("automatic backup on exit skipped: {error}")
+                                    }
                                 }
                             });
                         }
@@ -2666,7 +3044,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_exports_path, enrich_cutoff_input, generated_file_metadata, normalize_gender, php_to_centavos, photo_is_within_limits, upsert_user_record};
+    use super::{
+        canonical_exports_path, enrich_cutoff_input, generated_file_metadata, normalize_gender,
+        photo_is_within_limits, php_to_centavos, upsert_user_record,
+    };
     use crate::config::{LanConfig, OfficeConfig};
     use crate::state::AppState;
     use sqlx::{sqlite::SqlitePoolOptions, Row};
@@ -2681,23 +3062,57 @@ mod tests {
         assert_eq!(normalize_gender(Some("   ")), None);
         // Casing and padding are normalized to the stored uppercase form.
         assert_eq!(normalize_gender(Some("male")), Some("MALE".to_string()));
-        assert_eq!(normalize_gender(Some(" Female ")), Some("FEMALE".to_string()));
+        assert_eq!(
+            normalize_gender(Some(" Female ")),
+            Some("FEMALE".to_string())
+        );
         // Already-canonical values pass through untouched.
         assert_eq!(normalize_gender(Some("MALE")), Some("MALE".to_string()));
     }
 
     #[tokio::test]
     async fn user_upsert_keeps_gender_and_photo_in_their_declared_columns() {
-        let db = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.expect("in-memory database");
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
         sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, rfid_uid TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, department TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, employee_type TEXT NOT NULL, daily_rate_centavos INTEGER, payroll_profile_id TEXT, photo_url TEXT, gender TEXT CHECK (gender IN ('MALE', 'FEMALE')), revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
             .execute(&db).await.expect("users table");
-        upsert_user_record(&db, "u-1", "A1B2C3", "Ada Lovelace", None, "ACTIVE", "EMPLOYEE", Some("FEMALE"), Some(50_000), Some("BEA_STANDARD"), Some("https://example.com/ada.webp"), "2026-08-05T00:00:00Z")
-            .await.expect("valid gender and photo must save");
+        upsert_user_record(
+            &db,
+            "u-1",
+            "A1B2C3",
+            "Ada Lovelace",
+            None,
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("FEMALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            Some("https://example.com/ada.webp"),
+            "2026-08-05T00:00:00Z",
+        )
+        .await
+        .expect("valid gender and photo must save");
         let row = sqlx::query("SELECT gender, photo_url, daily_rate_centavos, payroll_profile_id FROM users WHERE user_id = 'u-1'").fetch_one(&db).await.expect("saved user");
-        assert_eq!(row.get::<Option<String>, _>("gender").as_deref(), Some("FEMALE"));
-        assert_eq!(row.get::<Option<String>, _>("photo_url").as_deref(), Some("https://example.com/ada.webp"));
-        assert_eq!(row.get::<Option<i64>, _>("daily_rate_centavos"), Some(50_000));
-        assert_eq!(row.get::<Option<String>, _>("payroll_profile_id").as_deref(), Some("BEA_STANDARD"));
+        assert_eq!(
+            row.get::<Option<String>, _>("gender").as_deref(),
+            Some("FEMALE")
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("photo_url").as_deref(),
+            Some("https://example.com/ada.webp")
+        );
+        assert_eq!(
+            row.get::<Option<i64>, _>("daily_rate_centavos"),
+            Some(50_000)
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("payroll_profile_id")
+                .as_deref(),
+            Some("BEA_STANDARD")
+        );
     }
 
     #[tokio::test]
@@ -2720,7 +3135,9 @@ mod tests {
             .expect("employee row");
 
         let input = serde_json::json!({"employeeId":"EMP-1","cutoffStart":"2026-08-01","cutoffEnd":"2026-08-15"});
-        let enriched = enrich_cutoff_input(&db, &input).await.expect("enriched input");
+        let enriched = enrich_cutoff_input(&db, &input)
+            .await
+            .expect("enriched input");
 
         assert_eq!(enriched["employeeName"], "Ada Lovelace");
         assert_eq!(enriched["dailyRate"], 500.0);
@@ -2752,7 +3169,9 @@ mod tests {
             "employeeId": "INT-1", "dailyRate": 500.0, "lateUnits": 3.0,
             "incentivesAllowance": 100.0, "specialHolidayDays": 1.0,
         });
-        super::apply_intern_rules(&db, &mut input).await.expect("intern rules applied");
+        super::apply_intern_rules(&db, &mut input)
+            .await
+            .expect("intern rules applied");
 
         assert_eq!(input["dailyRate"], 80.0);
         assert_eq!(input["lateDeduction"], 30.0);
@@ -2769,8 +3188,11 @@ mod tests {
             .execute(&db)
             .await
             .expect("employee row");
-        let mut employee_input = serde_json::json!({"employeeId": "EMP-1", "dailyRate": 500.0, "lateUnits": 1.0});
-        super::apply_intern_rules(&db, &mut employee_input).await.expect("employee rules pass through");
+        let mut employee_input =
+            serde_json::json!({"employeeId": "EMP-1", "dailyRate": 500.0, "lateUnits": 1.0});
+        super::apply_intern_rules(&db, &mut employee_input)
+            .await
+            .expect("employee rules pass through");
         assert_eq!(employee_input["dailyRate"], 500.0);
         assert_eq!(employee_input.get("lateDeduction"), None);
     }
@@ -2827,9 +3249,15 @@ mod tests {
         assert_eq!(metadata["fileKind"], "csv");
         assert_eq!(metadata["isPortableMode"], true);
         assert_eq!(metadata["fileName"], "payroll-2026-08-04.csv");
-        assert_eq!(metadata["directoryPath"], exports_dir.to_string_lossy().as_ref());
+        assert_eq!(
+            metadata["directoryPath"],
+            exports_dir.to_string_lossy().as_ref()
+        );
         assert_eq!(metadata["filePath"], file_path.to_string_lossy().as_ref());
-        assert!(metadata["message"].as_str().unwrap().contains("Payroll CSV generated"));
+        assert!(metadata["message"]
+            .as_str()
+            .unwrap()
+            .contains("Payroll CSV generated"));
         tauri::async_runtime::block_on(state.db.close());
         let _ = std::fs::remove_dir_all(&temp);
     }

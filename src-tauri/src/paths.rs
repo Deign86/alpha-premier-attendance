@@ -1,6 +1,6 @@
+use crate::config::DatabaseConfig;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
-use crate::config::DatabaseConfig;
 
 /// Resolved application paths.
 ///
@@ -107,7 +107,11 @@ pub fn resolve_db_path(config_dir: &Path, data_dir: &Path, database: &DatabaseCo
         },
     };
     let path = PathBuf::from(value);
-    let path = if path.is_absolute() { path } else { base.join(path) };
+    let path = if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    };
     if path.extension().is_some() || path.is_file() {
         path
     } else {
@@ -132,7 +136,8 @@ mod tests {
 
     #[test]
     fn portable_detection_ignores_a_marker_elsewhere() {
-        let temp = std::env::temp_dir().join(format!("alpha-portable-other-{}", uuid::Uuid::new_v4()));
+        let temp =
+            std::env::temp_dir().join(format!("alpha-portable-other-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         std::fs::write(temp.join("portable.dat"), "").unwrap();
         // A different exe directory without its own marker is not portable.
@@ -150,21 +155,27 @@ mod tests {
 
     #[test]
     fn db_path_override_treats_a_dot_extension_as_a_file() {
-        let database = DatabaseConfig { path: Some("D:/Attendance/attendance.db".into()) };
+        let database = DatabaseConfig {
+            path: Some("D:/Attendance/attendance.db".into()),
+        };
         let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
         assert_eq!(resolved, PathBuf::from("D:/Attendance/attendance.db"));
     }
 
     #[test]
     fn db_path_override_treats_a_directory_by_appending_attendance_db() {
-        let database = DatabaseConfig { path: Some("D:/Attendance".into()) };
+        let database = DatabaseConfig {
+            path: Some("D:/Attendance".into()),
+        };
         let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
         assert_eq!(resolved, PathBuf::from("D:/Attendance/attendance.db"));
     }
 
     #[test]
     fn db_path_override_resolves_relative_paths_against_the_config_dir() {
-        let database = DatabaseConfig { path: Some("data/attendance.db".into()) };
+        let database = DatabaseConfig {
+            path: Some("data/attendance.db".into()),
+        };
         let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
         assert_eq!(resolved, PathBuf::from("C:/cfg/data/attendance.db"));
     }

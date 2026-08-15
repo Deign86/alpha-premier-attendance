@@ -5,7 +5,9 @@ pub enum CloseBehavior {
 }
 
 pub fn should_hide_on_close(behavior: CloseBehavior, tray_available: bool) -> bool {
-    matches!(behavior, CloseBehavior::HideToTray) && tray_available && !EXIT_REQUESTED.load(Ordering::SeqCst)
+    matches!(behavior, CloseBehavior::HideToTray)
+        && tray_available
+        && !EXIT_REQUESTED.load(Ordering::SeqCst)
 }
 
 pub fn request_exit(app: &tauri::AppHandle) {
@@ -17,7 +19,11 @@ pub fn request_exit(app: &tauri::AppHandle) {
 }
 
 pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    use tauri::{menu::{Menu, MenuItem}, tray::TrayIconBuilder, Manager};
+    use tauri::{
+        menu::{Menu, MenuItem},
+        tray::TrayIconBuilder,
+        Manager,
+    };
 
     let show = MenuItem::with_id(app, "show", "Show attendance app", true, None::<&str>)?;
     let exit = MenuItem::with_id(app, "exit", "Exit application", true, None::<&str>)?;

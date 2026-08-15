@@ -38,7 +38,23 @@ pub struct LanConfig {
 
 impl Default for LanConfig {
     fn default() -> Self {
-        Self { sheets_sync_endpoint: None, google_service_account_json_path: None, google_spreadsheet_id: None, admin_pin: Some("293906".into()), admin_session_minutes: 15, enabled: false, allow_runtime_start: true, bind_address: None, port: default_port(), allow_wildcard_bind: false, allowed_subnets: Vec::new(), auth_mode: ViewerAuthMode::None, viewer_password_hash: None, viewer_session_minutes: default_session_minutes(), sse_keep_alive_seconds: default_keep_alive_seconds() }
+        Self {
+            sheets_sync_endpoint: None,
+            google_service_account_json_path: None,
+            google_spreadsheet_id: None,
+            admin_pin: Some("293906".into()),
+            admin_session_minutes: 15,
+            enabled: false,
+            allow_runtime_start: true,
+            bind_address: None,
+            port: default_port(),
+            allow_wildcard_bind: false,
+            allowed_subnets: Vec::new(),
+            auth_mode: ViewerAuthMode::None,
+            viewer_password_hash: None,
+            viewer_session_minutes: default_session_minutes(),
+            sse_keep_alive_seconds: default_keep_alive_seconds(),
+        }
     }
 }
 
@@ -50,11 +66,21 @@ pub enum ViewerAuthMode {
     Password,
 }
 
-fn default_port() -> u16 { 4173 }
-fn default_session_minutes() -> u64 { 480 }
-fn default_keep_alive_seconds() -> u64 { 15 }
-fn default_admin_session_minutes() -> u64 { 15 }
-fn default_allow_runtime_start() -> bool { true }
+fn default_port() -> u16 {
+    4173
+}
+fn default_session_minutes() -> u64 {
+    480
+}
+fn default_keep_alive_seconds() -> u64 {
+    15
+}
+fn default_admin_session_minutes() -> u64 {
+    15
+}
+fn default_allow_runtime_start() -> bool {
+    true
+}
 
 /// How the RFID reader is attached to the front-desk laptop.
 #[allow(dead_code)]
@@ -76,7 +102,9 @@ pub enum ScannerCharacterSet {
     Hex,
 }
 
-fn default_expected_length() -> u32 { 10 }
+fn default_expected_length() -> u32 {
+    10
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
@@ -103,9 +131,15 @@ pub struct ScannerConfig {
     pub dedup_ms: u64,
 }
 
-fn default_enter_suffix() -> bool { true }
-fn default_idle_timeout_ms() -> u64 { 150 }
-fn default_dedup_ms() -> u64 { 300 }
+fn default_enter_suffix() -> bool {
+    true
+}
+fn default_idle_timeout_ms() -> u64 {
+    150
+}
+fn default_dedup_ms() -> u64 {
+    300
+}
 
 /// Local SQLite database location override (`[database]` in config.toml).
 ///
@@ -135,10 +169,11 @@ impl Default for ScannerConfig {
     }
 }
 
-
 impl LanConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if !self.enabled { return Ok(()); }
+        if !self.enabled {
+            return Ok(());
+        }
         self.validate_runtime()
     }
 
@@ -158,7 +193,8 @@ impl LanConfig {
                 return Err("wildcard LAN bind requires at least one allowed subnet".into());
             }
         }
-        if matches!(self.auth_mode, ViewerAuthMode::Password) && self.viewer_password_hash.is_none() {
+        if matches!(self.auth_mode, ViewerAuthMode::Password) && self.viewer_password_hash.is_none()
+        {
             return Err("password viewer mode requires lan.viewer_password_hash".into());
         }
         Ok(())
@@ -281,25 +317,33 @@ impl OfficeConfig {
     /// Short display for compact UI, badges, and narrow cards.
     pub fn display_short(&self) -> String {
         let configured = self.office_display_short.trim();
-        if !configured.is_empty() { return configured.to_string(); }
+        if !configured.is_empty() {
+            return configured.to_string();
+        }
         let composed = self.compose_short();
-        if !composed.is_empty() { return composed; }
+        if !composed.is_empty() {
+            return composed;
+        }
         OFFICE_FALLBACK_DISPLAY.to_string()
     }
 
     /// Full display for settings, setup, exports, and printed headers.
     pub fn display_full(&self) -> String {
         let configured = self.office_display_full.trim();
-        if !configured.is_empty() { return configured.to_string(); }
+        if !configured.is_empty() {
+            return configured.to_string();
+        }
         let composed = self.compose_full();
-        if !composed.is_empty() { return composed; }
+        if !composed.is_empty() {
+            return composed;
+        }
         OFFICE_FALLBACK_DISPLAY.to_string()
     }
 
     /// `Company: X` / `Office: Y` metadata lines used by exports and headers.
     pub fn metadata_lines(&self) -> Vec<String> {
         vec![
-            format!("Company: {}", self.company_name.trim()), 
+            format!("Company: {}", self.company_name.trim()),
             format!("Office: {}", self.display_full()),
         ]
     }
@@ -307,26 +351,83 @@ impl OfficeConfig {
 
 /// Load the LAN, office, scanner, and database sections from `config.toml`
 /// (defaults when absent).
-pub fn load_config(config_dir: &Path) -> Result<(LanConfig, OfficeConfig, ScannerConfig, DatabaseConfig), String> {
+pub fn load_config(
+    config_dir: &Path,
+) -> Result<(LanConfig, OfficeConfig, ScannerConfig, DatabaseConfig), String> {
     let path = config_dir.join("config.toml");
-    if !path.exists() { return Ok((LanConfig::default(), OfficeConfig::default(), ScannerConfig::default(), DatabaseConfig::default())); }
-    let contents = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    #[derive(Deserialize, Default)] struct Root { #[serde(default)] lan: LanConfig, #[serde(default)] office: OfficeConfig, #[serde(default)] scanner: ScannerConfig, #[serde(default)] database: DatabaseConfig }
-    let root: Root = toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    if !path.exists() {
+        return Ok((
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            DatabaseConfig::default(),
+        ));
+    }
+    let contents =
+        fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    #[derive(Deserialize, Default)]
+    struct Root {
+        #[serde(default)]
+        lan: LanConfig,
+        #[serde(default)]
+        office: OfficeConfig,
+        #[serde(default)]
+        scanner: ScannerConfig,
+        #[serde(default)]
+        database: DatabaseConfig,
+    }
+    let root: Root =
+        toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
     let mut lan = root.lan;
-    if lan.sheets_sync_endpoint.as_deref().is_some_and(str::is_empty) { lan.sheets_sync_endpoint = None; }
-    if lan.google_service_account_json_path.as_deref().is_some_and(str::is_empty) { lan.google_service_account_json_path = None; }
-    if lan.google_spreadsheet_id.as_deref().is_some_and(str::is_empty) { lan.google_spreadsheet_id = None; }
-    if lan.admin_pin.as_deref().is_some_and(str::is_empty) { lan.admin_pin = None; }
-    if lan.viewer_password_hash.as_deref().is_some_and(str::is_empty) { lan.viewer_password_hash = None; }
+    if lan
+        .sheets_sync_endpoint
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        lan.sheets_sync_endpoint = None;
+    }
+    if lan
+        .google_service_account_json_path
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        lan.google_service_account_json_path = None;
+    }
+    if lan
+        .google_spreadsheet_id
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        lan.google_spreadsheet_id = None;
+    }
+    if lan.admin_pin.as_deref().is_some_and(str::is_empty) {
+        lan.admin_pin = None;
+    }
+    if lan
+        .viewer_password_hash
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        lan.viewer_password_hash = None;
+    }
     lan.validate()?;
     if let Some(secret_path) = lan.google_service_account_json_path.clone() {
         let path_value = Path::new(&secret_path);
-        if path_value.is_absolute() && !path_value.starts_with(config_dir) { return Err("google service-account path must remain under the application config directory".into()); }
-        if path_value.is_relative() { lan.google_service_account_json_path = Some(config_dir.join(path_value).to_string_lossy().into_owned()); }
+        if path_value.is_absolute() && !path_value.starts_with(config_dir) {
+            return Err(
+                "google service-account path must remain under the application config directory"
+                    .into(),
+            );
+        }
+        if path_value.is_relative() {
+            lan.google_service_account_json_path =
+                Some(config_dir.join(path_value).to_string_lossy().into_owned());
+        }
     }
     let mut database = root.database;
-    if database.path.as_deref().is_some_and(str::is_empty) { database.path = None; }
+    if database.path.as_deref().is_some_and(str::is_empty) {
+        database.path = None;
+    }
     Ok((lan, root.office, root.scanner, database))
 }
 
@@ -352,7 +453,12 @@ mod tests {
 
     #[test]
     fn wildcard_requires_explicit_subnet() {
-        let config = LanConfig { enabled: true, bind_address: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), allow_wildcard_bind: true, ..Default::default() };
+        let config = LanConfig {
+            enabled: true,
+            bind_address: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            allow_wildcard_bind: true,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
@@ -394,7 +500,10 @@ mod tests {
             office.display_full(),
             "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig 1600, Metro Manila"
         );
-        assert_eq!(office.display_short(), "Tektite East Tower, Ortigas Center, Pasig");
+        assert_eq!(
+            office.display_short(),
+            "Tektite East Tower, Ortigas Center, Pasig"
+        );
     }
 
     #[test]
@@ -451,8 +560,13 @@ mod tests {
     #[test]
     fn scanner_parses_eight_character_hex_profile() {
         #[derive(Deserialize)]
-        struct Root { #[serde(default)] scanner: ScannerConfig }
-        let root: Root = toml::from_str("[scanner]\ncharacter_set = \"hex\"\nexpected_length = 8\n").expect("scanner profile");
+        struct Root {
+            #[serde(default)]
+            scanner: ScannerConfig,
+        }
+        let root: Root =
+            toml::from_str("[scanner]\ncharacter_set = \"hex\"\nexpected_length = 8\n")
+                .expect("scanner profile");
         assert_eq!(root.scanner.character_set, ScannerCharacterSet::Hex);
         assert_eq!(root.scanner.expected_length, 8);
     }
@@ -460,8 +574,14 @@ mod tests {
     #[test]
     fn scanner_parses_variable_length_profile() {
         #[derive(Deserialize)]
-        struct Root { #[serde(default)] scanner: ScannerConfig }
-        let root: Root = toml::from_str("[scanner]\nexpected_length = 0\nenter_suffix = true\nidle_timeout_ms = 200\n").expect("scanner profile");
+        struct Root {
+            #[serde(default)]
+            scanner: ScannerConfig,
+        }
+        let root: Root = toml::from_str(
+            "[scanner]\nexpected_length = 0\nenter_suffix = true\nidle_timeout_ms = 200\n",
+        )
+        .expect("scanner profile");
         assert_eq!(root.scanner.expected_length, 0);
         assert!(root.scanner.enter_suffix);
         assert_eq!(root.scanner.idle_timeout_ms, 200);
@@ -474,8 +594,12 @@ mod tests {
             #[serde(default)]
             database: DatabaseConfig,
         }
-        let root: Root = toml::from_str("[database]\npath = \"D:/Attendance/attendance.db\"\n").expect("database toml");
-        assert_eq!(root.database.path.as_deref(), Some("D:/Attendance/attendance.db"));
+        let root: Root = toml::from_str("[database]\npath = \"D:/Attendance/attendance.db\"\n")
+            .expect("database toml");
+        assert_eq!(
+            root.database.path.as_deref(),
+            Some("D:/Attendance/attendance.db")
+        );
         let empty: Root = toml::from_str("").expect("empty toml");
         assert_eq!(empty.database.path, None);
     }

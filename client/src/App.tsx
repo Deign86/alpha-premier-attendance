@@ -2189,7 +2189,7 @@ type AdminUser = {
 };
 
 /** Data & backup panel: configurable DB location, safe backups, and the PC-switch restore flow. */
-function DatabasePanel() {
+export function DatabasePanel() {
   const [info, setInfo] = useState<DatabaseInfoResponse | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");

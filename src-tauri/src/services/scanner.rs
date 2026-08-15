@@ -105,9 +105,7 @@ impl Default for ScanBuffer {
 #[allow(dead_code)]
 impl ScanBuffer {
     pub fn take_if_idle(&mut self, now: Instant, idle_timeout: Duration) -> Option<String> {
-        if self.data.is_empty()
-            || now.saturating_duration_since(self.last_at) < idle_timeout
-        {
+        if self.data.is_empty() || now.saturating_duration_since(self.last_at) < idle_timeout {
             return None;
         }
         let value = std::mem::take(&mut self.data);
@@ -156,20 +154,33 @@ pub fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
     let mut value = String::with_capacity(raw.len());
     let mut saw_content = false;
     for ch in raw.chars() {
-        if matches!(ch, ':' | '-' | ' ' | '\r' | '\n' | '\t') { continue; }
+        if matches!(ch, ':' | '-' | ' ' | '\r' | '\n' | '\t') {
+            continue;
+        }
         saw_content = true;
         let accepted = match profile.character_set {
             ScannerCharacterSet::Decimal => ch.is_ascii_digit(),
             ScannerCharacterSet::Hex => ch.is_ascii_hexdigit(),
         };
-        if !accepted { return ScanParse::Invalid(format!("invalid character in reader input: {raw:?}")); }
+        if !accepted {
+            return ScanParse::Invalid(format!("invalid character in reader input: {raw:?}"));
+        }
         value.push(ch.to_ascii_uppercase());
     }
-    if !saw_content || value.is_empty() { return ScanParse::Ignored; }
-    if value.len() < 4 { return ScanParse::Invalid(format!("card ID too short ({} digits)", value.len())); }
-    if value.len() > 64 { return ScanParse::Invalid(format!("card ID too long ({} digits)", value.len())); }
+    if !saw_content || value.is_empty() {
+        return ScanParse::Ignored;
+    }
+    if value.len() < 4 {
+        return ScanParse::Invalid(format!("card ID too short ({} digits)", value.len()));
+    }
+    if value.len() > 64 {
+        return ScanParse::Invalid(format!("card ID too long ({} digits)", value.len()));
+    }
     if profile.expected_length > 0 && value.len() != profile.expected_length as usize {
-        return ScanParse::Invalid(format!("card ID must be exactly {} characters", profile.expected_length));
+        return ScanParse::Invalid(format!(
+            "card ID must be exactly {} characters",
+            profile.expected_length
+        ));
     }
     ScanParse::Valid(value)
 }
@@ -188,7 +199,12 @@ fn emit_scan(runtime: &Arc<Runtime>, raw: String) {
             set_status(runtime, ScannerState::Connected, "Waiting for card", None);
         }
         ScanParse::Invalid(detail) => {
-            set_status(runtime, ScannerState::Error, "Invalid scan format", Some(detail));
+            set_status(
+                runtime,
+                ScannerState::Error,
+                "Invalid scan format",
+                Some(detail),
+            );
             let recovery_runtime = Arc::clone(runtime);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(2500));
@@ -228,12 +244,7 @@ fn is_recent(runtime: &Arc<Runtime>, uid: &str) -> bool {
     false
 }
 
-fn set_status(
-    runtime: &Arc<Runtime>,
-    state: ScannerState,
-    message: &str,
-    detail: Option<String>,
-) {
+fn set_status(runtime: &Arc<Runtime>, state: ScannerState, message: &str, detail: Option<String>) {
     let status = ScannerStatus {
         state,
         message: message.to_string(),
@@ -261,7 +272,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn valid(raw: &str) -> String {
-        let profile = ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() };
+        let profile = ScannerConfig {
+            expected_length: 0,
+            character_set: ScannerCharacterSet::Hex,
+            ..ScannerConfig::default()
+        };
         match normalize(raw, &profile) {
             ScanParse::Valid(uid) => uid,
             other => panic!("expected valid scan for {raw:?}, got {other:?}"),
@@ -303,13 +318,23 @@ mod tests {
             normalize("0123456789", &ScannerConfig::default()),
             ScanParse::Valid("0123456789".into())
         );
-        assert!(matches!(normalize("04A1B2C3", &ScannerConfig::default()), ScanParse::Invalid(_)));
-        assert!(matches!(normalize("1234", &ScannerConfig::default()), ScanParse::Invalid(_)));
+        assert!(matches!(
+            normalize("04A1B2C3", &ScannerConfig::default()),
+            ScanParse::Invalid(_)
+        ));
+        assert!(matches!(
+            normalize("1234", &ScannerConfig::default()),
+            ScanParse::Invalid(_)
+        ));
     }
 
     #[test]
     fn accepts_variable_length_when_expected_length_zero() {
-        let variable_decimal = ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Decimal, ..ScannerConfig::default() };
+        let variable_decimal = ScannerConfig {
+            expected_length: 0,
+            character_set: ScannerCharacterSet::Decimal,
+            ..ScannerConfig::default()
+        };
         assert_eq!(
             normalize("1234", &variable_decimal),
             ScanParse::Valid("1234".into())
@@ -322,35 +347,75 @@ mod tests {
 
     #[test]
     fn enforces_fixed_expected_length() {
-        let fixed_eight_hex = ScannerConfig { expected_length: 8, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() };
+        let fixed_eight_hex = ScannerConfig {
+            expected_length: 8,
+            character_set: ScannerCharacterSet::Hex,
+            ..ScannerConfig::default()
+        };
         assert_eq!(
             normalize("04A1B2C3", &fixed_eight_hex),
             ScanParse::Valid("04A1B2C3".into())
         );
-        assert!(matches!(normalize("04A1B2", &fixed_eight_hex), ScanParse::Invalid(_)));
-        assert!(matches!(normalize("04A1B2C3D4", &fixed_eight_hex), ScanParse::Invalid(_)));
+        assert!(matches!(
+            normalize("04A1B2", &fixed_eight_hex),
+            ScanParse::Invalid(_)
+        ));
+        assert!(matches!(
+            normalize("04A1B2C3D4", &fixed_eight_hex),
+            ScanParse::Invalid(_)
+        ));
     }
 
     #[test]
     fn rejects_non_hex_content() {
         assert!(matches!(
-            normalize("CARD1234", &ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
+            normalize(
+                "CARD1234",
+                &ScannerConfig {
+                    expected_length: 0,
+                    character_set: ScannerCharacterSet::Hex,
+                    ..ScannerConfig::default()
+                }
+            ),
             ScanParse::Invalid(_)
         ));
-        assert!(matches!(normalize("hello", &ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() }), ScanParse::Invalid(_)));
+        assert!(matches!(
+            normalize(
+                "hello",
+                &ScannerConfig {
+                    expected_length: 0,
+                    character_set: ScannerCharacterSet::Hex,
+                    ..ScannerConfig::default()
+                }
+            ),
+            ScanParse::Invalid(_)
+        ));
     }
 
     #[test]
     fn ignores_separator_only_or_too_short_input() {
         assert_eq!(normalize("", &ScannerConfig::default()), ScanParse::Ignored);
-        assert_eq!(normalize("--::  ", &ScannerConfig::default()), ScanParse::Ignored);
-        assert!(matches!(normalize("12", &ScannerConfig::default()), ScanParse::Invalid(_)));
+        assert_eq!(
+            normalize("--::  ", &ScannerConfig::default()),
+            ScanParse::Ignored
+        );
+        assert!(matches!(
+            normalize("12", &ScannerConfig::default()),
+            ScanParse::Invalid(_)
+        ));
     }
 
     #[test]
     fn rejects_overlong_input() {
         assert!(matches!(
-            normalize(&"A".repeat(65), &ScannerConfig { expected_length: 0, character_set: ScannerCharacterSet::Hex, ..ScannerConfig::default() }),
+            normalize(
+                &"A".repeat(65),
+                &ScannerConfig {
+                    expected_length: 0,
+                    character_set: ScannerCharacterSet::Hex,
+                    ..ScannerConfig::default()
+                }
+            ),
             ScanParse::Invalid(_)
         ));
     }

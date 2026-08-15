@@ -73,7 +73,11 @@ struct ColumnSpec {
 }
 
 const fn spec(header: &'static str, kind: CellKind, source: &'static str) -> ColumnSpec {
-    ColumnSpec { header, kind, source }
+    ColumnSpec {
+        header,
+        kind,
+        source,
+    }
 }
 
 const USERS_SPECS: [ColumnSpec; 10] = [
@@ -148,7 +152,11 @@ const PAYROLL_PROFILES_SPECS: [ColumnSpec; 8] = [
         CellKind::PlainNumber,
         "standardWorkingDaysPerCutoff",
     ),
-    spec("incentivesAllowancePHP", CellKind::Money, "incentivesAllowance"),
+    spec(
+        "incentivesAllowancePHP",
+        CellKind::Money,
+        "incentivesAllowance",
+    ),
     spec("specialAllowancePHP", CellKind::Money, "specialAllowance"),
     spec("revision", CellKind::PlainNumber, "revision"),
     spec("updatedAt", CellKind::Timestamp, "updatedAt"),
@@ -378,7 +386,10 @@ fn format_date_value(value: &serde_json::Value) -> serde_json::Value {
     }
     if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
         return serde_json::Value::String(
-            timestamp.with_timezone(&Manila).format("%Y-%m-%d").to_string(),
+            timestamp
+                .with_timezone(&Manila)
+                .format("%Y-%m-%d")
+                .to_string(),
         );
     }
     serde_json::Value::String(raw.to_owned())
@@ -401,7 +412,10 @@ fn format_time_value(value: &serde_json::Value) -> serde_json::Value {
     }
     if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
         return serde_json::Value::String(
-            timestamp.with_timezone(&Manila).format("%H:%M:%S").to_string(),
+            timestamp
+                .with_timezone(&Manila)
+                .format("%H:%M:%S")
+                .to_string(),
         );
     }
     serde_json::Value::String(raw.to_owned())
@@ -427,7 +441,11 @@ fn format_boolean_value(value: &serde_json::Value) -> serde_json::Value {
 
 /// Normalizes a payload value for a column. `source` is the payload key, which
 /// determines whether a money value is stored in centavos.
-fn format_payload_value(kind: CellKind, source: &str, value: &serde_json::Value) -> serde_json::Value {
+fn format_payload_value(
+    kind: CellKind,
+    source: &str,
+    value: &serde_json::Value,
+) -> serde_json::Value {
     match kind {
         CellKind::Text | CellKind::Timestamp => sheet_cell_value(value),
         CellKind::Date => format_date_value(value),
@@ -477,7 +495,9 @@ fn project_row_values(
             if index == 0 {
                 serde_json::Value::String(row_id.to_owned())
             } else {
-                let direct = payload.get(spec.source).or_else(|| payload.get(spec.header));
+                let direct = payload
+                    .get(spec.source)
+                    .or_else(|| payload.get(spec.header));
                 match direct {
                     Some(value) => format_payload_value(spec.kind, spec.source, value),
                     None => existing
@@ -762,9 +782,7 @@ async fn sheet_id_for_tab(
                     .get("properties")
                     .and_then(|properties| properties.get("title"))
                     .and_then(|title| title.as_str());
-                let id = sheet
-                    .get("sheetId")
-                    .and_then(|value| value.as_i64());
+                let id = sheet.get("sheetId").and_then(|value| value.as_i64());
                 match (title, id) {
                     (Some(title), Some(id)) if title == table_name => Some(id),
                     _ => None,
@@ -1553,11 +1571,19 @@ mod tests {
     #[test]
     fn normalizes_dates_times_money_and_booleans() {
         assert_eq!(
-            format_payload_value(CellKind::Date, "attendanceDate", &json!("2026-08-01T00:00:00+08:00")),
+            format_payload_value(
+                CellKind::Date,
+                "attendanceDate",
+                &json!("2026-08-01T00:00:00+08:00")
+            ),
             json!("2026-08-01")
         );
         assert_eq!(
-            format_payload_value(CellKind::Time, "timeIn", &json!("2026-08-01T08:30:00+08:00")),
+            format_payload_value(
+                CellKind::Time,
+                "timeIn",
+                &json!("2026-08-01T08:30:00+08:00")
+            ),
             json!("08:30:00")
         );
         assert_eq!(
@@ -1602,11 +1628,24 @@ mod tests {
     fn delete_lookup_matches_key_column_and_disambiguates() {
         let rows = vec![
             json!(sheet_headers("InternGrace")),
-            json!(["g-1", "user-a", "2026-08-03", "att-1", "2026-08-03T08:00:00Z"]),
-            json!(["g-2", "user-a", "2026-08-10", "att-2", "2026-08-10T08:00:00Z"]),
+            json!([
+                "g-1",
+                "user-a",
+                "2026-08-03",
+                "att-1",
+                "2026-08-03T08:00:00Z"
+            ]),
+            json!([
+                "g-2",
+                "user-a",
+                "2026-08-10",
+                "att-2",
+                "2026-08-10T08:00:00Z"
+            ]),
         ];
-        let matches = find_rows_to_delete("InternGrace", &rows, "user-a", &json!({"userId":"user-a"}))
-            .unwrap();
+        let matches =
+            find_rows_to_delete("InternGrace", &rows, "user-a", &json!({"userId":"user-a"}))
+                .unwrap();
         assert_eq!(matches, vec![1, 2]);
         let matches = find_rows_to_delete(
             "InternGrace",
@@ -1620,9 +1659,13 @@ mod tests {
 
     #[test]
     fn delete_lookup_returns_empty_for_missing_rows() {
-        let rows = vec![json!(sheet_headers("Users")), json!(["u-1", "RFID-1", "Ada"])];
-        let matches = find_rows_to_delete("Users", &rows, "u-missing", &json!({"userId":"u-missing"}))
-            .unwrap();
+        let rows = vec![
+            json!(sheet_headers("Users")),
+            json!(["u-1", "RFID-1", "Ada"]),
+        ];
+        let matches =
+            find_rows_to_delete("Users", &rows, "u-missing", &json!({"userId":"u-missing"}))
+                .unwrap();
         assert!(matches.is_empty());
     }
 

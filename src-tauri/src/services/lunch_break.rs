@@ -24,14 +24,7 @@ pub fn lunch_excluded_seconds(start: DateTime<Tz>, end: DateTime<Tz>) -> i64 {
     let last_day = end.date_naive();
     while day <= last_day {
         let lunch_start = Manila
-            .with_ymd_and_hms(
-                day.year(),
-                day.month(),
-                day.day(),
-                LUNCH_START_HOUR,
-                0,
-                0,
-            )
+            .with_ymd_and_hms(day.year(), day.month(), day.day(), LUNCH_START_HOUR, 0, 0)
             .single()
             .expect("12:00 is always a valid Manila time");
         let lunch_end = lunch_start + Duration::hours(i64::from(LUNCH_END_HOUR - LUNCH_START_HOUR));

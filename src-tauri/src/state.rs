@@ -1,4 +1,8 @@
-use crate::{config::{LanConfig, OfficeConfig, ScannerConfig}, error::AppError, lan_server::{self, LanIssue}};
+use crate::{
+    config::{LanConfig, OfficeConfig, ScannerConfig},
+    error::AppError,
+    lan_server::{self, LanIssue},
+};
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{
     collections::HashMap,
@@ -178,8 +182,9 @@ impl AppState {
         std::fs::create_dir_all(&exports_dir)
             .map_err(|e| AppError::Configuration(e.to_string()))?;
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| AppError::Configuration(format!("create database folder {}: {e}", parent.display())))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AppError::Configuration(format!("create database folder {}: {e}", parent.display()))
+            })?;
         }
         let backups_dir = data_dir.join("backups");
         std::fs::create_dir_all(&backups_dir)
@@ -231,9 +236,17 @@ mod tests {
     async fn migrations_create_required_indexes_and_queue() {
         let data_dir = std::env::temp_dir().join(format!("alpha-data-{}", Uuid::new_v4()));
         let exports_dir = data_dir.join("exports");
-        let state = AppState::new(data_dir.clone(), data_dir.join("attendance.db"), exports_dir, false, LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())
-            .await
-            .unwrap();
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            exports_dir,
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+        )
+        .await
+        .unwrap();
         let names: Vec<String> =
             sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index'")
                 .fetch_all(&state.db)
@@ -270,10 +283,21 @@ mod tests {
         // The configured database path points into a directory that does not
         // exist yet; AppState::new must create it.
         let db_path = temp.join("shared").join("attendance.db");
-        let state = AppState::new(data_dir.clone(), db_path.clone(), data_dir.join("exports"), false, LanConfig::default(), OfficeConfig::default(), ScannerConfig::default())
-            .await
-            .unwrap();
-        assert!(db_path.is_file(), "database file must be created at the configured path");
+        let state = AppState::new(
+            data_dir.clone(),
+            db_path.clone(),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            db_path.is_file(),
+            "database file must be created at the configured path"
+        );
         let names: Vec<String> =
             sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
                 .fetch_all(&state.db)
