@@ -643,8 +643,8 @@ fn brand_mark_op(id: printpdf::XObjectId, dpi: f32, x_mm: f32, y_mm: f32) -> Op 
     Op::UseXobject {
         id,
         transform: XObjectTransform {
-            translate_x: Some(Pt(x_mm)),
-            translate_y: Some(Pt(y_mm)),
+            translate_x: Some(Pt(x_mm * 72.0 / 25.4)),
+            translate_y: Some(Pt(y_mm * 72.0 / 25.4)),
             dpi: Some(dpi),
             ..Default::default()
         },
@@ -1284,18 +1284,24 @@ pub fn generate_employee_payslip_document(
         return Err("NO_RECORDS".into());
     }
     let mut document = PdfDocument::new("Alpha Premier Employee Payslip");
+    let mark = brand_mark_image(&mut document, 16.0);
     let mut pages = Vec::new();
 
     for row in rows {
         let mut ops = Vec::new();
 
-        // 1. Black Top Banner
+        // 1. Black Top Banner (Landscape A4: 297mm x 210mm)
+        let page_left = 13.5;
+        let page_w = 270.0;
+        let banner_h = 20.0;
+        let banner_y = 182.0;
+
         payslip_cell(
             &mut ops,
-            15.0,
-            262.0,
-            180.0,
-            20.0,
+            page_left,
+            banner_y,
+            page_w,
+            banner_h,
             "",
             10.0,
             false,
@@ -1304,14 +1310,20 @@ pub fn generate_employee_payslip_document(
             false,
             None,
         );
+
+        // Logo inside the black banner on the left
+        if let Some((id, dpi)) = &mark {
+            ops.push(brand_mark_op(id.clone(), *dpi, page_left + 4.0, banner_y + 2.0));
+        }
+
         payslip_cell(
             &mut ops,
-            15.0,
-            272.0,
-            180.0,
+            page_left,
+            banner_y + 10.0,
+            page_w,
             8.0,
             &office.company_name.to_uppercase(),
-            11.0,
+            12.0,
             true,
             PayslipAlign::Center,
             None,
@@ -1320,12 +1332,12 @@ pub fn generate_employee_payslip_document(
         );
         payslip_cell(
             &mut ops,
-            15.0,
-            264.5,
-            180.0,
+            page_left,
+            banner_y + 3.0,
+            page_w,
             6.0,
             &office.display_full().to_uppercase(),
-            7.5,
+            8.0,
             false,
             PayslipAlign::Center,
             None,
@@ -1339,11 +1351,12 @@ pub fn generate_employee_payslip_document(
         } else {
             cutoff_label
         };
+        let subheader_y = banner_y - 8.0;
         payslip_cell(
             &mut ops,
-            15.0,
-            254.0,
-            180.0,
+            page_left,
+            subheader_y,
+            page_w,
             8.0,
             &format!("Payslip For the Month of {}", period_label.to_uppercase()),
             9.5,
@@ -1354,50 +1367,59 @@ pub fn generate_employee_payslip_document(
             None,
         );
 
-        // 3. Employee Details Grid (6 rows, 6.2mm each: from Y=216.8 to Y=254.0)
-        let col1_w = 34.0;
-        let col2_w = 56.0;
-        let col3_w = 48.0;
-        let col4_w = 42.0;
-        let row_h = 6.2;
+        // 3. Employee Details Grid (6 rows, 4.8mm each: from Y = 145.2 to Y = 174.0)
+        let col1_w = 38.0;
+        let col2_w = 97.0;
+        let col3_w = 58.0;
+        let col4_w = 77.0;
+        let row_h = 4.8;
 
         let std_days_str = format_days(row.standard_working_days);
         let paid_days_str = format_days(row.paid_days);
         let lwop_str = if row.lwop_days > 0.0 { format_days(row.lwop_days) } else { String::new() };
         let rate_str = format_amount_or_dash(row.daily_rate_centavos);
+        let tin_str = if !row.tin.is_empty() {
+            row.tin.clone()
+        } else if let Some(tin) = office.tax_identification_number.as_deref() {
+            tin.to_string()
+        } else {
+            String::new()
+        };
 
         let details_rows = [
             ("Employee ID:", row.employee_id.as_str(), true, "Bank Name:", row.bank_name.as_str(), false),
             ("Employee Name:", row.employee_name.as_str(), true, "A/C #:", row.account_number.as_str(), false),
             ("", row.department.as_str(), false, "Standard Working Days", std_days_str.as_str(), false),
             ("Designation:", row.designation.as_str(), false, "Paid Days", paid_days_str.as_str(), false),
-            ("Tin#", row.tin.as_str(), false, "LWOP Days", lwop_str.as_str(), false),
+            ("Tin#", tin_str.as_str(), false, "LWOP Days", lwop_str.as_str(), false),
             ("", "", false, "Rate per day", rate_str.as_str(), false),
         ];
 
-        let mut grid_y = 254.0 - row_h;
+        let mut grid_y = subheader_y - row_h;
         for (label1, val1, val1_bold, label2, val2, _) in &details_rows {
-            payslip_cell(&mut ops, 15.0, grid_y, col1_w, row_h, label1, 8.0, true, PayslipAlign::Left, None, true, None);
-            payslip_cell(&mut ops, 15.0 + col1_w, grid_y, col2_w, row_h, val1, 8.0, *val1_bold, PayslipAlign::Left, None, true, None);
-            payslip_cell(&mut ops, 105.0, grid_y, col3_w, row_h, label2, 8.0, true, PayslipAlign::Left, None, true, None);
-            payslip_cell(&mut ops, 105.0 + col3_w, grid_y, col4_w, row_h, val2, 8.0, false, PayslipAlign::Right, None, true, None);
+            payslip_cell(&mut ops, page_left, grid_y, col1_w, row_h, label1, 8.0, true, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, page_left + col1_w, grid_y, col2_w, row_h, val1, 8.0, *val1_bold, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, page_left + col1_w + col2_w, grid_y, col3_w, row_h, label2, 8.0, true, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, page_left + col1_w + col2_w + col3_w, grid_y, col4_w, row_h, val2, 8.0, false, PayslipAlign::Right, None, true, None);
             grid_y -= row_h;
         }
 
         // 4. Separator Line
-        draw_payslip_h_line(&mut ops, 15.0, 195.0, 214.5, 0.8);
+        let sep_y = grid_y - 2.0;
+        draw_payslip_h_line(&mut ops, page_left, page_left + page_w, sep_y, 0.8);
 
-        // 5. Earnings & Deductions Table
-        let earn_lbl_w = 56.0;
-        let earn_val_w = 34.0;
-        let ded_lbl_w = 56.0;
-        let ded_val_w = 34.0;
-        let tbl_row_h = 5.6;
+        // 5. Earnings & Deductions Table (Landscape 2-Column)
+        let earn_lbl_w = 85.0;
+        let earn_val_w = 50.0;
+        let ded_lbl_w = 85.0;
+        let ded_val_w = 50.0;
+        let tbl_row_h = 4.5;
 
-        payslip_cell(&mut ops, 15.0, 207.5, earn_lbl_w, 7.0, "Earnings", 8.5, true, PayslipAlign::Left, None, true, None);
-        payslip_cell(&mut ops, 15.0 + earn_lbl_w, 207.5, earn_val_w, 7.0, "Amount", 8.5, true, PayslipAlign::Right, None, true, None);
-        payslip_cell(&mut ops, 105.0, 207.5, ded_lbl_w, 7.0, "Deductions", 8.5, true, PayslipAlign::Left, None, true, None);
-        payslip_cell(&mut ops, 105.0 + ded_lbl_w, 207.5, ded_val_w, 7.0, "Amount", 8.5, true, PayslipAlign::Right, None, true, None);
+        let tbl_header_y = sep_y - 6.5;
+        payslip_cell(&mut ops, page_left, tbl_header_y, earn_lbl_w, 6.5, "Earnings", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, page_left + earn_lbl_w, tbl_header_y, earn_val_w, 6.5, "Amount", 8.5, true, PayslipAlign::Right, None, true, None);
+        payslip_cell(&mut ops, page_left + earn_lbl_w + earn_val_w, tbl_header_y, ded_lbl_w, 6.5, "Deductions", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, page_left + earn_lbl_w + earn_val_w + ded_lbl_w, tbl_header_y, ded_val_w, 6.5, "Amount", 8.5, true, PayslipAlign::Right, None, true, None);
 
         let table_rows = [
             ("Basic", format_amount_or_dash(row.basic_pay_centavos), "SSS Employee Share", format_amount_or_dash(row.sss_centavos)),
@@ -1411,32 +1433,32 @@ pub fn generate_employee_payslip_document(
             ("Over Time Pay", format_amount_or_dash(row.overtime_pay_centavos), "", "".to_string()),
         ];
 
-        let mut tbl_y = 207.5 - tbl_row_h;
+        let mut tbl_y = tbl_header_y - tbl_row_h;
         for (e_lbl, e_val, d_lbl, d_val) in &table_rows {
             let e_bold = *e_lbl == "Other Earnings";
-            payslip_cell(&mut ops, 15.0, tbl_y, earn_lbl_w, tbl_row_h, e_lbl, 8.0, e_bold, PayslipAlign::Left, None, true, None);
-            payslip_cell(&mut ops, 15.0 + earn_lbl_w, tbl_y, earn_val_w, tbl_row_h, e_val, 8.0, false, PayslipAlign::Right, None, true, None);
-            payslip_cell(&mut ops, 105.0, tbl_y, ded_lbl_w, tbl_row_h, d_lbl, 8.0, false, PayslipAlign::Left, None, true, None);
-            payslip_cell(&mut ops, 105.0 + ded_lbl_w, tbl_y, ded_val_w, tbl_row_h, d_val, 8.0, false, PayslipAlign::Right, None, true, None);
+            payslip_cell(&mut ops, page_left, tbl_y, earn_lbl_w, tbl_row_h, e_lbl, 8.0, e_bold, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, page_left + earn_lbl_w, tbl_y, earn_val_w, tbl_row_h, e_val, 8.0, false, PayslipAlign::Right, None, true, None);
+            payslip_cell(&mut ops, page_left + earn_lbl_w + earn_val_w, tbl_y, ded_lbl_w, tbl_row_h, d_lbl, 8.0, false, PayslipAlign::Left, None, true, None);
+            payslip_cell(&mut ops, page_left + earn_lbl_w + earn_val_w + ded_lbl_w, tbl_y, ded_val_w, tbl_row_h, d_val, 8.0, false, PayslipAlign::Right, None, true, None);
             tbl_y -= tbl_row_h;
         }
 
         // Total Earnings / Total Deductions Row
         let total_row_y = tbl_y;
-        payslip_cell(&mut ops, 15.0, total_row_y, earn_lbl_w, tbl_row_h, "Total Earnings", 8.5, true, PayslipAlign::Left, None, true, None);
-        payslip_cell(&mut ops, 15.0 + earn_lbl_w, total_row_y, earn_val_w, tbl_row_h, &format_amount_or_dash(row.gross_compensation_centavos), 8.5, true, PayslipAlign::Right, None, true, None);
-        payslip_cell(&mut ops, 105.0, total_row_y, ded_lbl_w, tbl_row_h, "Total Deductions", 8.5, true, PayslipAlign::Left, None, true, None);
-        payslip_cell(&mut ops, 105.0 + ded_lbl_w, total_row_y, ded_val_w, tbl_row_h, &format_amount_or_dash(row.total_deductions_centavos), 8.5, true, PayslipAlign::Right, None, true, None);
+        payslip_cell(&mut ops, page_left, total_row_y, earn_lbl_w, tbl_row_h, "Total Earnings", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, page_left + earn_lbl_w, total_row_y, earn_val_w, tbl_row_h, &format_amount_or_dash(row.gross_compensation_centavos), 8.5, true, PayslipAlign::Right, None, true, None);
+        payslip_cell(&mut ops, page_left + earn_lbl_w + earn_val_w, total_row_y, ded_lbl_w, tbl_row_h, "Total Deductions", 8.5, true, PayslipAlign::Left, None, true, None);
+        payslip_cell(&mut ops, page_left + earn_lbl_w + earn_val_w + ded_lbl_w, total_row_y, ded_val_w, tbl_row_h, &format_amount_or_dash(row.total_deductions_centavos), 8.5, true, PayslipAlign::Right, None, true, None);
 
         // 6. Net Pay Row (Yellow Highlighted Box)
-        let net_y = total_row_y - 8.5;
-        payslip_cell(&mut ops, 15.0, net_y, earn_lbl_w, 8.0, "Net Pay", 9.5, true, PayslipAlign::Left, None, true, None);
+        let net_y = total_row_y - 8.0;
+        payslip_cell(&mut ops, page_left, net_y, earn_lbl_w, 7.5, "Net Pay", 9.5, true, PayslipAlign::Left, None, true, None);
         payslip_cell(
             &mut ops,
-            15.0 + earn_lbl_w,
+            page_left + earn_lbl_w,
             net_y,
             earn_val_w,
-            8.0,
+            7.5,
             &format_amount_or_dash(row.net_pay_centavos),
             9.5,
             true,
@@ -1445,17 +1467,20 @@ pub fn generate_employee_payslip_document(
             true,
             None,
         );
-        draw_payslip_h_line(&mut ops, 15.0 + earn_lbl_w, 15.0 + earn_lbl_w + earn_val_w, net_y - 0.8, 0.5);
+        draw_payslip_h_line(&mut ops, page_left + earn_lbl_w, page_left + earn_lbl_w + earn_val_w, net_y - 0.8, 0.5);
 
         // 7. Footer Signatures
-        let sig_line_y = net_y - 35.0;
-        draw_payslip_h_line(&mut ops, 15.0, 85.0, sig_line_y, 0.8);
-        draw_payslip_h_line(&mut ops, 125.0, 195.0, sig_line_y, 0.8);
+        let sig_line_y = net_y - 25.0;
+        let sig_w = 86.0;
+        let right_sig_x = page_left + page_w - sig_w;
 
-        payslip_cell(&mut ops, 15.0, sig_line_y - 6.0, 70.0, 5.0, "PREPARED BY:", 8.5, true, PayslipAlign::Left, None, false, None);
-        payslip_cell(&mut ops, 125.0, sig_line_y - 6.0, 70.0, 5.0, "EMPLOYEE SIGNATURE", 8.5, true, PayslipAlign::Left, None, false, None);
+        draw_payslip_h_line(&mut ops, page_left, page_left + sig_w, sig_line_y, 0.8);
+        draw_payslip_h_line(&mut ops, right_sig_x, right_sig_x + sig_w, sig_line_y, 0.8);
 
-        pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
+        payslip_cell(&mut ops, page_left, sig_line_y - 6.0, sig_w, 5.0, "PREPARED BY:", 8.5, true, PayslipAlign::Left, None, false, None);
+        payslip_cell(&mut ops, right_sig_x, sig_line_y - 6.0, sig_w, 5.0, "EMPLOYEE SIGNATURE", 8.5, true, PayslipAlign::Left, None, false, None);
+
+        pages.push(PdfPage::new(Mm(297.0), Mm(210.0), ops));
     }
 
     let bytes = document
@@ -1910,7 +1935,7 @@ pub fn generate_payroll_sheet_pdf(
     path: &std::path::Path,
 ) -> Result<(), String> {
     let mut document = PdfDocument::new(&format!("Alpha Premier Payroll Sheet {worker_type}"));
-    let mark = brand_mark_image(&mut document, 12.0);
+    let mark = brand_mark_image(&mut document, 15.0);
     let chunks: Vec<&[PayrollSheetRow]> = if rows.is_empty() {
         vec![&[]]
     } else {
@@ -1919,21 +1944,24 @@ pub fn generate_payroll_sheet_pdf(
     let mut pages = Vec::new();
     for (chunk_index, chunk) in chunks.iter().enumerate() {
         let mut ops = Vec::new();
-        if let Some((id, dpi)) = &mark {
-            ops.push(brand_mark_op(id.clone(), *dpi, 277.0, 196.0));
-        }
+        let text_left = if let Some((id, dpi)) = &mark {
+            ops.push(brand_mark_op(id.clone(), *dpi, 12.0, 183.0));
+            31.0
+        } else {
+            12.0
+        };
 
         // --- header block: company identity + cutoff on the left, cutoff
         // note legend on the right (mirrors the reference sheet). ---
-        sheet_text(&mut ops, office.company_name.to_uppercase(), 12.0, 197.0, 14.0, true);
+        sheet_text(&mut ops, office.company_name.to_uppercase(), text_left, 197.0, 14.0, true);
         let mut header_y = 191.0;
         if let Some(tin) = office.tax_identification_number.as_deref() {
             if !tin.trim().is_empty() {
-                sheet_text(&mut ops, format!("TIN# {tin}"), 12.0, header_y, 8.5, false);
+                sheet_text(&mut ops, format!("TIN# {tin}"), text_left, header_y, 8.5, false);
                 header_y -= 6.0;
             }
         }
-        sheet_text(&mut ops, cutoff_label.to_uppercase(), 12.0, header_y, 11.0, true);
+        sheet_text(&mut ops, cutoff_label.to_uppercase(), text_left, header_y, 11.0, true);
         sheet_text(&mut ops, "Note: Cut off".into(), 240.0, 197.0, 9.0, true);
         sheet_text(&mut ops, "1-15th of the month".into(), 240.0, 191.0, 8.0, false);
         sheet_text(&mut ops, "16-31st".into(), 240.0, 185.0, 8.0, false);
