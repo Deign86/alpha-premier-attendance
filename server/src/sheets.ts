@@ -396,10 +396,11 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
 
   private async driveFolderExists(folderId: string): Promise<boolean> {
     try {
-      const result = await this.drive.files.get({ fileId: folderId, fields: 'id, mimeType' });
+      const result = await this.drive.files.get({ fileId: folderId, fields: 'id, mimeType', supportsAllDrives: true });
       return result.data.mimeType === 'application/vnd.google-apps.folder';
-    } catch {
-      return false;
+    } catch (error) {
+      if (googleApiStatus(error) === 404) return false;
+      throw error;
     }
   }
 
@@ -407,6 +408,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     const result = await this.drive.files.create({
       requestBody: { name, mimeType: 'application/vnd.google-apps.folder' },
       fields: 'id',
+      supportsAllDrives: true,
     });
     const id = result.data.id;
     if (!id) throw new Error('Google Drive did not return a folder ID');
@@ -443,8 +445,9 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     try {
       await this.api.spreadsheets.get({ spreadsheetId, fields: 'spreadsheetId' });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (googleApiStatus(error) === 404) return false;
+      throw error;
     }
   }
 
@@ -456,7 +459,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     const spreadsheetId = result.data.spreadsheetId;
     if (!spreadsheetId) throw new Error('Google Sheets did not return a spreadsheet ID');
     if (folderId) {
-      await this.drive.files.update({ fileId: spreadsheetId, addParents: folderId, fields: 'id, parents' });
+      await this.drive.files.update({ fileId: spreadsheetId, addParents: folderId, fields: 'id, parents', supportsAllDrives: true });
     }
     return spreadsheetId;
   }
@@ -464,19 +467,18 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   private async ensureSpreadsheetInFolder(spreadsheetId: string, folderId: string): Promise<void> {
     let parents: string[] = [];
     try {
-      const metadata = await this.drive.files.get({ fileId: spreadsheetId, fields: 'id, parents' });
+      const metadata = await this.drive.files.get({ fileId: spreadsheetId, fields: 'id, parents', supportsAllDrives: true });
       parents = metadata.data.parents ?? [];
-    } catch {
-      // The file is still reachable through the Sheets API; let the update
-      // below surface any Drive permission problem.
+    } catch (error) {
+      if (googleApiStatus(error) !== 404) throw error;
     }
     if (!parents.includes(folderId)) {
       const request: drive_v3.Params$Resource$Files$Update = {
         fileId: spreadsheetId,
         addParents: folderId,
         fields: 'id, parents',
+        supportsAllDrives: true,
       };
-      if (parents.length > 0) request.removeParents = parents.join(',');
       await this.drive.files.update(request);
     }
   }
@@ -529,7 +531,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   private async writeHeaderRow(title: string, headers: string[]): Promise<void> {
     await this.api.spreadsheets.values.update({
       spreadsheetId: this.options.spreadsheetId,
-      range: `${title}!A1:${columnName(headers.length - 1)}1`,
+      range: `${quoteA1SheetTitle(title)}!A1:${columnName(headers.length - 1)}1`,
       valueInputOption: 'RAW',
       requestBody: { values: [headers] },
     });
@@ -604,14 +606,18 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
 
     for (const spec of specs) {
       if (existing.has(spec.title)) {
-        const rows = await this.values(spec.title);
+        const rows = await this.values(`${quoteA1SheetTitle(spec.title)}!1:1`);
         const headerRow = rows[0] ?? [];
         if (headerRow.length === 0 || headerRow.every((cell) => String(cell ?? '').trim() === '')) {
           await this.writeHeaderRow(spec.title, spec.headers);
           const sheetId = existing.get(spec.title);
           if (sheetId !== undefined) toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
         } else {
-          validateHeaders(spec.sheet, headerRow.map(canonicalHeader));
+          try {
+            validateHeaders(spec.sheet, headerRow.map(canonicalHeader));
+          } catch (error) {
+            throw new Error(`Invalid ${spec.title} sheet headers: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+          }
         }
       }
     }
@@ -624,12 +630,8 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 
   private async seedDefaultPayrollProfiles(): Promise<void> {
-    try {
-      const { rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
-      if (rows.length > 0) return;
-    } catch {
-      return;
-    }
+    const { rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
+    if (rows.length > 0) return;
     const headers = [...requiredHeaders.PayrollProfiles];
     const values = defaultPayrollProfiles.map((profile) => valuesForPayrollProfile(headers, profile));
     await this.api.spreadsheets.values.append({
@@ -720,7 +722,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       const rowNumber = idMatches[0].rowNumber;
       await this.api.spreadsheets.values.update({
         spreadsheetId: this.options.spreadsheetId,
-        range: `${sheetName(this.options.usersRange)}!A${rowNumber}:${columnName(headers.length - 1)}${rowNumber}`,
+        range: `${quoteA1SheetTitle(sheetName(this.options.usersRange))}!A${rowNumber}:${columnName(headers.length - 1)}${rowNumber}`,
         valueInputOption: 'RAW',
         requestBody: { values: [values] },
       });
@@ -856,7 +858,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     const matches = rows.flatMap((row, offset) => row[index.profileid] === profile.profileId ? [offset + 2] : []);
     if (matches.length > 1) throw new Error('Duplicate payroll profile');
     const values = valuesForPayrollProfile(headers, profile);
-    if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${sheetName(this.options.payrollProfilesRange)}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
+    if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${quoteA1SheetTitle(sheetName(this.options.payrollProfilesRange))}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
     else await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollProfilesRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [values] } });
     return profile;
   }
@@ -879,7 +881,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     const matches = rows.flatMap((row, offset) => row[index.payrollid] === payroll.payrollId ? [offset + 2] : []);
     if (matches.length > 1) throw new Error('Duplicate cutoff payroll');
     const values = valuesForPayrollCutoff(headers, payroll);
-    if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${sheetName(this.options.payrollCutoffsRange)}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
+    if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${quoteA1SheetTitle(sheetName(this.options.payrollCutoffsRange))}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
     else await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollCutoffsRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [values] } });
     return payroll;
   }
@@ -944,6 +946,19 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 }
 
+function quoteA1SheetTitle(title: string): string {
+  const unquoted = title.replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+  return `'${unquoted.replace(/'/g, "''")}'`;
+}
+function googleApiStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const value = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
+  for (const candidate of [value.code, value.status, value.response?.status]) {
+    if (typeof candidate === 'number') return candidate;
+    if (typeof candidate === 'string' && /^\d+$/.test(candidate)) return Number(candidate);
+  }
+  return undefined;
+}
 function canonicalHeader(value: string): string { return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
 function normalizeCell(value: string | undefined): string {
   try { return normalizeRfidUid(value ?? ''); } catch { return String(value ?? '').trim().replace(/[\s:-]/g, '').toUpperCase(); }
