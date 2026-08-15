@@ -559,19 +559,11 @@ td small { font-size: .7rem; }
   color: var(--gold-bright);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line-bright);
-  text-align: right;
+  text-align: center;
   white-space: normal;
   word-break: keep-all;
   overflow-wrap: normal;
-  vertical-align: bottom;
-}
-
-.payroll-table th:first-child,
-.payroll-table th:nth-child(2),
-.payroll-table th:nth-child(3),
-.payroll-table th:nth-child(4),
-.payroll-table th:nth-child(5) {
-  text-align: left;
+  vertical-align: middle;
 }
 
 .payroll-table th:nth-child(1) { min-width: 52px; }
@@ -582,16 +574,6 @@ td small { font-size: .7rem; }
 .payroll-table th:nth-child(6) { min-width: 36px; }
 .payroll-table th:nth-child(7) { min-width: 34px; }
 .payroll-table th:nth-child(8) { min-width: 30px; }
-
-.payroll-table th:nth-child(6),
-.payroll-table th:nth-child(7),
-.payroll-table th:nth-child(8) {
-  text-align: center;
-}
-
-.payroll-table th:last-child {
-  text-align: center;
-}
 
 .payroll-table td {
   padding: 5px 2px;
