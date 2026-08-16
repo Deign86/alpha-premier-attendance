@@ -2,10 +2,16 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus } from '@rfid-attendance/shared';
 
+export interface HealthStatusResponse {
+  status: string;
+  uptimeSeconds?: number;
+  timestamp?: string;
+}
+
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
-  getHealth: () => invoke<Record<string, unknown>>('get_health'),
+  getHealth: () => invoke<HealthStatusResponse>('get_health'),
   generatePayrollPdf: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, workerType: string) => invoke<PayrollPdfGenerateResponse>('generate_payroll_pdf', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, workerType }),
   listPayrollPdfs: (token: string) => invoke<PayrollPdfListResponse>('list_payroll_pdfs', { token }),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),
@@ -17,24 +23,24 @@ export const tauriApi = {
   setupUnlock: (pin: string) => invoke<{ success: true; token: string; expiresAt: string }>('setup_unlock', { pin }),
   setupLock: () => invoke<{ success: true }>('setup_lock'),
   setupLookupCard: (token: string, rfidUid: string) => invoke('setup_lookup_card', { token, rfidUid }),
-  setupUpsertUser: (token: string, user: unknown) => invoke('setup_upsert_user', { token, user }),
+  setupUpsertUser: <T extends object>(token: string, user: T) => invoke('setup_upsert_user', { token, user }),
   adminGetSession: (token: string) => invoke('admin_get_session', { token }),
   adminUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_users', { token }),
   adminListUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_list_users', { token }),
-  adminUpsertUser: (token: string, user: unknown) => invoke('admin_upsert_user', { token, user }),
+  adminUpsertUser: <T extends object>(token: string, user: T) => invoke('admin_upsert_user', { token, user }),
   adminDeleteUser: (token: string, userId: string) => invoke('admin_delete_user', { token, userId }),
   adminAttendance: (token: string, date: string) => invoke('admin_attendance', { token, date }),
   adminListAttendance: (token: string, date: string) => invoke('admin_list_attendance', { token, date }),
-  adminUpdateAttendance: (token: string, attendanceId: string, payload: unknown) => invoke('admin_update_attendance', { token, attendanceId, payload }),
+  adminUpdateAttendance: <T extends object>(token: string, attendanceId: string, payload: T) => invoke('admin_update_attendance', { token, attendanceId, payload }),
   adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke('admin_delete_attendance', { token, attendanceId, date }),
   payrollProfiles: (token: string) => invoke('payroll_list_profiles', { token }),
-  payrollUpsertProfile: (token: string, profile: unknown) => invoke('payroll_upsert_profile', { token, profile }),
+  payrollUpsertProfile: <T extends object>(token: string, profile: T) => invoke('payroll_upsert_profile', { token, profile }),
   payrollCutoffs: (token: string) => invoke('payroll_list_cutoffs', { token }),
   internPayrollReport: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string) =>
     invoke('payroll_intern_report', { token, cutoffStart, cutoffEnd, payrollCutoffLabel }),
-  payrollGenerateCutoff: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: unknown) => invoke('payroll_generate_cutoff', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, customization }),
-  payrollCreateCutoff: (token: string, input: unknown) => invoke('payroll_create_cutoff', { token, input }),
-  payrollUpdateCutoff: (token: string, input: unknown) => invoke('payroll_update_cutoff', { token, input }),
+  payrollGenerateCutoff: <T extends object>(token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: T) => invoke('payroll_generate_cutoff', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, customization }),
+  payrollCreateCutoff: <T extends object>(token: string, input: T) => invoke('payroll_create_cutoff', { token, input }),
+  payrollUpdateCutoff: <T extends object>(token: string, input: T) => invoke('payroll_update_cutoff', { token, input }),
   payrollFinalizeCutoff: (token: string, payrollId: string) => invoke('payroll_finalize_cutoff', { token, payrollId }),
   payrollDeleteCutoff: (token: string, payrollId: string) => invoke('payroll_delete_cutoff', { token, payrollId }),
   payrollExportCsv: (token: string) => invoke<PayrollCsvExportResponse>('payroll_export_csv', { token }),

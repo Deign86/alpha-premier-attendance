@@ -3,9 +3,6 @@ import { manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type EmployeePayrollInput = { actualTimeIn: string; actualTimeOut: string; dailyRate: number };
 export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; basePay: number; dailyPay: number; workedHours: number };
-
-const timezone = 'Asia/Manila';
-
 export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeePayrollResult {
   if (!Number.isFinite(input.dailyRate) || input.dailyRate <= 0) throw new Error('Employee daily rate must be greater than zero');
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
+// SAFETY: Parsed JSON from tauri.conf.json has the expected app configuration shape
 const config = JSON.parse(readFileSync('../src-tauri/tauri.conf.json', 'utf8')) as {
   app?: { withGlobalTauri?: boolean };
 };

@@ -24,7 +24,7 @@ export class AttendanceService {
   async scan(request: ScanRequest, requestId: string): Promise<ScanResponse> {
     let uid: string;
     try {
-      if (!request || typeof request.rfidUid !== 'string' || !['RFID', 'MANUAL_TEST'].includes(request.source)) throw new Error('Invalid scan request');
+      if (!isScanRequest(request)) throw new Error('Invalid scan request');
       uid = normalizeRfidUid(request.rfidUid);
     } catch {
       return new ScanError('INVALID_SCAN_INPUT', 'rfidUid and source are required.', 400).toResponse(requestId);
@@ -125,8 +125,9 @@ export class AttendanceService {
         return this.successResponse(requestId, action, saved, user);
       });
     } catch (error) {
-      void this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
-      return asScanError(error).toResponse(requestId);
+      const scanErr = asScanError(error);
+      void this.writeAudit({ eventType: auditEventFor(scanErr), rfidUid: uid, message: scanErr.message, requestId });
+      return scanErr.toResponse(requestId);
     }
   }
 
@@ -162,7 +163,13 @@ export class AttendanceService {
   }
 }
 
-function auditEventFor(error: unknown): AuditEvent['eventType'] {
+function isScanRequest(request: ScanRequest): boolean {
+  if (!request) return false;
+  if (Object.prototype.toString.call(request.rfidUid) !== '[object String]') return false;
+  return request.source === 'RFID' || request.source === 'MANUAL_TEST';
+}
+
+function auditEventFor(error: ScanError | Error): AuditEvent['eventType'] {
   if (error instanceof ScanError) {
     if (error.code === 'UNKNOWN_RFID_CARD') return 'UNKNOWN_CARD';
     if (error.code === 'INACTIVE_USER') return 'INACTIVE_USER';

@@ -29,19 +29,29 @@ export class ScanError extends Error {
   }
 
   toResponse(requestId: string): ScanErrorResponse {
+    const errorPayload: ScanErrorResponse['error'] = {
+      code: this.code,
+      message: this.message,
+    };
+    if (this.retryAfterSeconds !== undefined) {
+      errorPayload.retryAfterSeconds = this.retryAfterSeconds;
+    }
     return {
       success: false,
       requestId,
-      error: {
-        code: this.code,
-        message: this.message,
-        ...(this.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: this.retryAfterSeconds }),
-      },
+      error: errorPayload,
     };
   }
 }
 
-export function asScanError(error: unknown): ScanError {
+export interface ScanErrorLike {
+  code: ScanErrorCode;
+  message: string;
+  status: number;
+  retryAfterSeconds?: number;
+}
+
+export function asScanError<T>(error: T): ScanError {
   if (error instanceof ScanError) return error;
   if (isScanErrorLike(error)) {
     return new ScanError(error.code, error.message, error.status, error.retryAfterSeconds);
@@ -49,11 +59,14 @@ export function asScanError(error: unknown): ScanError {
   return new ScanError('INTERNAL_SERVER_ERROR', 'An unexpected server error occurred.', 500);
 }
 
-function isScanErrorLike(error: unknown): error is { code: ScanErrorCode; message: string; status: number; retryAfterSeconds?: number } {
-  if (!error || typeof error !== 'object') return false;
-  const value = error as Partial<{ code: string; message: string; status: number; retryAfterSeconds?: number }>;
-  return typeof value.code === 'string'
-    && scanErrorCodeSet.has(value.code as ScanErrorCode)
-    && typeof value.message === 'string'
-    && typeof value.status === 'number';
+function isScanErrorLike<T>(error: T): error is T & ScanErrorLike {
+  if (error === null || error === undefined || Object(error) !== error) return false;
+  // SAFETY: Checked that error is an object type
+  const value = error as { code?: unknown; message?: unknown; status?: unknown; retryAfterSeconds?: unknown };
+  if (Object.prototype.toString.call(value.code) !== '[object String]') return false;
+  // SAFETY: Checked that code is a string and present in scanErrorCodeSet
+  if (!scanErrorCodeSet.has(value.code as ScanErrorCode)) return false;
+  if (Object.prototype.toString.call(value.message) !== '[object String]') return false;
+  if (Object.prototype.toString.call(value.status) !== '[object Number]' || !Number.isFinite(value.status)) return false;
+  return true;
 }

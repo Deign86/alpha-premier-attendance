@@ -1,9 +1,8 @@
 import crypto from 'node:crypto';
-import type { AdminUser, AttendanceListItem, PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
+import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
-import { manilaTimestamp } from './time.js';
 import { PayrollService } from './payroll.js';
 import { calculateCutoffPayroll, defaultPayrollProfiles, type CutoffInput } from './cutoff-payroll.js';
 
@@ -12,12 +11,17 @@ export class AdminError extends Error {
   constructor(readonly code: 'ADMIN_DISABLED' | 'INVALID_ADMIN_PIN' | 'ADMIN_AUTH_REQUIRED' | 'ADMIN_SESSION_EXPIRED' | 'ADMIN_VALIDATION_ERROR' | 'USER_CONFLICT' | 'ATTENDANCE_CONFLICT' | 'GOOGLE_SHEETS_UNAVAILABLE', message: string, readonly status = 400) { super(message); }
 }
 
+export interface AdminUnlockResult {
+  token: string;
+  expiresAt: string;
+}
+
 export class AdminService {
   constructor(private readonly sheets: GoogleSheetsService, private readonly config: AdminConfig, private readonly payroll = new PayrollService(sheets)) {}
 
-  unlock(pin: unknown): { token: string; expiresAt: string } {
+  unlock<T>(pin: T): AdminUnlockResult {
     this.assertEnabled();
-    if (typeof pin !== 'string' || !this.equal(pin, this.config.adminPin ?? '')) throw new AdminError('INVALID_ADMIN_PIN', 'The administrator PIN is invalid.', 401);
+    if (!isString(pin) || !this.equal(pin, this.config.adminPin ?? '')) throw new AdminError('INVALID_ADMIN_PIN', 'The administrator PIN is invalid.', 401);
     const expiresAt = Date.now() + (this.config.adminSessionMinutes ?? 15) * 60_000;
     const payload = `${expiresAt}.${crypto.randomBytes(16).toString('hex')}`;
     const signature = crypto.createHmac('sha256', this.config.adminSessionSecret!).update(payload).digest('base64url');
@@ -36,11 +40,11 @@ export class AdminService {
 
   async users(): Promise<AdminUser[]> { return (await this.sheets.listUsers()).map(toAdminUser); }
 
-  async saveUser(input: unknown, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
-    const value = input as Partial<{ userId: string; rfidUid: string; fullName: string; department: string; status: 'ACTIVE' | 'INACTIVE'; employeeType: 'INTERN' | 'EMPLOYEE'; gender: 'MALE' | 'FEMALE' | null; dailyRate: number | null; payrollProfileId: string | null; photoUrl: string | null }>;
+  async saveUser<T>(input: T, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
+    const value = parseAdminUserInput(input);
+    if (value === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
     const userId = existingUserId ?? value.userId?.trim();
-    if (!userId || typeof value.rfidUid !== 'string' || !value.rfidUid.trim() || !value.fullName?.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
+    if (!userId || !value.rfidUid.trim() || !value.fullName.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
     if (existingUserId && value.userId && value.userId !== existingUserId) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
     let rfidUid: string;
     try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new AdminError('ADMIN_VALIDATION_ERROR', 'RFID UID is invalid.'); }
@@ -75,10 +79,9 @@ export class AdminService {
     return rows.filter((row) => includeBlank || row.timeIn || row.timeOut).map((row) => toAttendance(row, byId.get(row.userId)));
   }
 
-  async updateAttendance(attendanceId: string, input: unknown): Promise<AttendanceListItem> {
-    if (!input || typeof input !== 'object') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Attendance values are required.');
-    const value = input as Partial<{ timeIn: string | null; timeOut: string | null; expectedTimeIn: string | null; expectedTimeOut: string | null; attendanceDate: string }>;
-    if (typeof value.attendanceDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid attendance date is required.');
+  async updateAttendance<T>(attendanceId: string, input: T): Promise<AttendanceListItem> {
+    const value = parseAttendanceInput(input);
+    if (value === null || !/^\d{4}-\d{2}-\d{2}$/.test(value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid attendance date is required.');
     const rows = await this.sheets.listAttendance(value.attendanceDate);
     const row = rows.find((item) => item.attendanceId === attendanceId);
     if (!row) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Attendance record was not found.', 404);
@@ -114,9 +117,9 @@ export class AdminService {
     return stored.length ? stored : defaultPayrollProfiles;
   }
 
-  async savePayrollProfile(input: unknown): Promise<PayrollCalculationProfile> {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A payroll profile is required.');
-    const profile = input as PayrollCalculationProfile;
+  async savePayrollProfile<T>(input: T): Promise<PayrollCalculationProfile> {
+    const profile = parsePayrollProfile(input);
+    if (profile === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A payroll profile is required.');
     const numbers = [profile.standardWorkingDaysPerCutoff, profile.incentivesAllowance, profile.specialAllowance, profile.specialHolidayMultiplier, profile.regularHolidayMultiplier, profile.halfDayFraction, profile.overtimeRate];
     if (!profile.profileId?.trim() || !profile.label?.trim() || profile.payrollFrequency !== 'SEMI_MONTHLY' || numbers.some((value) => !Number.isFinite(value) || value < 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll profile fields are invalid.');
     return this.sheets.upsertPayrollProfile({ ...profile, profileId: profile.profileId.trim(), label: profile.label.trim() });
@@ -127,15 +130,15 @@ export class AdminService {
     // The PayrollCutoffs register does not store an employee type column; derive
     // intern vs employee classification from the live Users register so the
     // printable worksheet can apply intern-specific layout and labels.
-    const byId = new Map(users.map((user) => [user.userId, (user.employeeType ?? 'INTERN') === 'EMPLOYEE' ? ('EMPLOYEE' as const) : ('INTERN' as const)]));
+    const byId = new Map(users.map((user): [string, 'EMPLOYEE' | 'INTERN'] => [user.userId, (user.employeeType ?? 'INTERN') === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN']));
     return records
       .map((record) => ({ ...record, employeeType: byId.get(record.employeeId) ?? 'EMPLOYEE' }))
       .sort((a, b) => b.cutoffStart.localeCompare(a.cutoffStart));
   }
 
-  async saveCutoffPayroll(input: unknown, existingPayrollId?: string): Promise<SheetPayrollCutoff> {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll values are required.');
-    const value = input as Partial<CutoffInput>;
+  async saveCutoffPayroll<T>(input: T, existingPayrollId?: string): Promise<SheetPayrollCutoff> {
+    const value = parseCutoffInput(input);
+    if (value === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll values are required.');
     const employeeId = String(value.employeeId ?? '').trim();
     const employee = await this.sheets.findUserById(employeeId);
     if (!employee) throw new AdminError('ADMIN_VALIDATION_ERROR', 'The employee was not found.');
@@ -143,20 +146,20 @@ export class AdminService {
     if (!isIntern && !employee.dailyRate) throw new AdminError('ADMIN_VALIDATION_ERROR', 'An employee daily rate is required before cutoff payroll can be saved.');
     const profiles = await this.payrollProfiles();
     const profileId = isIntern ? INTERN_PAYROLL_PROFILE_ID : String(value.payrollProfileId ?? employee.payrollProfileId ?? 'BEA_STANDARD');
-    let profile: PayrollCalculationProfile | undefined;
-    if (!isIntern) {
-      profile = profiles.find((item) => item.profileId === profileId) ?? defaultPayrollProfiles.find((item) => item.profileId === profileId);
-      if (!profile) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Select a valid payroll calculation profile.');
-    }
-    const number = (field: keyof CutoffInput, fallback: number) => value[field] === undefined || value[field] === null || value[field] === '' ? fallback : Number(value[field]);
+    const number = (field: CutoffNumberField, fallback: number) => value[field] === undefined || value[field] === null || value[field] === '' ? fallback : Number(value[field]);
     const existing = existingPayrollId ? await this.sheets.findPayrollCutoff(existingPayrollId) : null;
     if (existingPayrollId && !existing) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
     if (existing?.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be edited.');
     try {
       const cutoffLabel = String(value.payrollCutoffLabel ?? '').trim() || `${value.cutoffStart ?? ''} to ${value.cutoffEnd ?? ''}`;
-      const cutoff = isIntern
-        ? internCutoffInput({ value, employee, profileId: INTERN_PAYROLL_PROFILE_ID, cutoffLabel, number })
-        : employeeCutoffInput({ value, employee, profile: profile!, profileId, cutoffLabel, number });
+      let cutoff: CutoffInput;
+      if (isIntern) {
+        cutoff = internCutoffInput({ value, employee, profileId: INTERN_PAYROLL_PROFILE_ID, cutoffLabel, number });
+      } else {
+        const profile = profiles.find((item) => item.profileId === profileId) ?? defaultPayrollProfiles.find((item) => item.profileId === profileId);
+        if (!profile) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Select a valid payroll calculation profile.');
+        cutoff = employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number });
+      }
       const calculated = calculateCutoffPayroll(cutoff);
       return this.sheets.upsertPayrollCutoff({ ...calculated, payrollId: existingPayrollId ?? crypto.randomUUID(), finalizedAt: null });
     } catch (error) { throw new AdminError('ADMIN_VALIDATION_ERROR', error instanceof Error ? error.message : 'Payroll values are invalid.'); }
@@ -195,7 +198,7 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
     lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
     halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0),
     overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
-    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null,
+    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: cutoffAdjustmentReason(value.adjustmentReason),
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
   };
 }
@@ -222,15 +225,195 @@ function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: 
     halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
     absentDays: Math.max(0, number('standardWorkingDays', 11) - number('actualWorkingDays', 11)),
     overtimeHours: 0, overtimeRate: 0,
-    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: value.adjustmentReason?.trim() || null,
+    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: cutoffAdjustmentReason(value.adjustmentReason),
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
   };
 }
 
+type AdminUserInput = {
+  userId?: string | null;
+  rfidUid: string;
+  fullName: string;
+  department?: string | null;
+  status: 'ACTIVE' | 'INACTIVE';
+  employeeType?: 'INTERN' | 'EMPLOYEE';
+  gender?: 'MALE' | 'FEMALE' | null;
+  dailyRate?: number | null;
+  payrollProfileId?: string | null;
+  photoUrl?: string | null;
+};
+type AttendanceInput = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null; attendanceDate: string };
+type PayrollProfileInput = PayrollCalculationProfile;
+type CutoffValue = string | number | null;
+type CutoffNumberField = 'dailyRate' | 'standardWorkingDays' | 'actualWorkingDays' | 'specialHolidayDays' | 'specialHolidayMultiplier' | 'regularHolidayDays' | 'regularHolidayMultiplier' | 'incentivesAllowance' | 'specialAllowance' | 'lateUnits' | 'lateDeduction' | 'halfDayCount' | 'halfDayFraction' | 'absentDays' | 'overtimeHours' | 'overtimeRate' | 'manualAdjustment';
+interface CutoffFormInput {
+  employeeId?: CutoffValue;
+  employeeName?: CutoffValue;
+  employeeType?: CutoffValue;
+  payrollProfileId?: CutoffValue;
+  payrollCutoffLabel?: CutoffValue;
+  cutoffStart?: CutoffValue;
+  cutoffEnd?: CutoffValue;
+  payrollFrequency?: CutoffValue;
+  dailyRate?: CutoffValue;
+  standardWorkingDays?: CutoffValue;
+  actualWorkingDays?: CutoffValue;
+  specialHolidayDays?: CutoffValue;
+  specialHolidayMultiplier?: CutoffValue;
+  regularHolidayDays?: CutoffValue;
+  regularHolidayMultiplier?: CutoffValue;
+  incentivesAllowance?: CutoffValue;
+  specialAllowance?: CutoffValue;
+  lateUnits?: CutoffValue;
+  lateDeduction?: CutoffValue;
+  halfDayCount?: CutoffValue;
+  halfDayFraction?: CutoffValue;
+  absentDays?: CutoffValue;
+  overtimeHours?: CutoffValue;
+  overtimeRate?: CutoffValue;
+  manualAdjustment?: CutoffValue;
+  lateDeductionRate?: CutoffValue;
+  adjustmentReason?: CutoffValue;
+  approvedWorkingDayOverage?: CutoffValue | boolean;
+  status?: CutoffValue;
+}
+
+function isString<T>(value: T): value is T & string { return Object(value) !== value && Object.prototype.toString.call(value) === '[object String]'; }
+function isNumber<T>(value: T): value is T & number { return Object(value) !== value && Object.prototype.toString.call(value) === '[object Number]' && Number.isFinite(value); }
+function isBoolean<T>(value: T): value is T & boolean { return Object(value) !== value && Object.prototype.toString.call(value) === '[object Boolean]'; }
+type AdminInputValue = string | number | boolean | bigint | symbol | null | undefined;
+interface InputObject {
+  userId?: AdminInputValue;
+  rfidUid?: AdminInputValue;
+  fullName?: AdminInputValue;
+  department?: AdminInputValue;
+  status?: AdminInputValue;
+  employeeType?: AdminInputValue;
+  gender?: AdminInputValue;
+  dailyRate?: AdminInputValue;
+  payrollProfileId?: AdminInputValue;
+  photoUrl?: AdminInputValue;
+  timeIn?: AdminInputValue;
+  timeOut?: AdminInputValue;
+  expectedTimeIn?: AdminInputValue;
+  expectedTimeOut?: AdminInputValue;
+  attendanceDate?: AdminInputValue;
+  profileId?: AdminInputValue;
+  label?: AdminInputValue;
+  payrollFrequency?: AdminInputValue;
+  standardWorkingDaysPerCutoff?: AdminInputValue;
+  incentivesAllowance?: AdminInputValue;
+  specialAllowance?: AdminInputValue;
+  specialHolidayMultiplier?: AdminInputValue;
+  regularHolidayMultiplier?: AdminInputValue;
+  halfDayFraction?: AdminInputValue;
+  overtimeRate?: AdminInputValue;
+  employeeName?: AdminInputValue;
+  employeeId?: AdminInputValue;
+  lateDeductionRate?: AdminInputValue;
+  payrollCutoffLabel?: AdminInputValue;
+  cutoffStart?: AdminInputValue;
+  cutoffEnd?: AdminInputValue;
+  standardWorkingDays?: AdminInputValue;
+  actualWorkingDays?: AdminInputValue;
+  specialHolidayDays?: AdminInputValue;
+  regularHolidayDays?: AdminInputValue;
+  lateUnits?: AdminInputValue;
+  lateDeduction?: AdminInputValue;
+  halfDayCount?: AdminInputValue;
+  absentDays?: AdminInputValue;
+  overtimeHours?: AdminInputValue;
+  manualAdjustment?: AdminInputValue;
+  adjustmentReason?: AdminInputValue;
+  approvedWorkingDayOverage?: AdminInputValue;
+}
+function isInputObject<T>(value: T): value is T & InputObject { return value !== null && Object(value) === value && !Array.isArray(value) && !(value instanceof Function); }
+function optionalString<T>(value: T): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return isString(value) ? value : undefined;
+}
+function cutoffAdjustmentReason(value: CutoffValue | undefined): string | null {
+  return isString(value) ? value.trim() || null : null;
+}
+function parseAdminUserInput<T>(input: T): AdminUserInput | null {
+  if (!isInputObject(input) || !isString(input.rfidUid) || !isString(input.fullName)) return null;
+  const status = input.status;
+  if (status !== 'ACTIVE' && status !== 'INACTIVE') return null;
+  const userId = input.userId; const department = input.department;
+  const employeeType = input.employeeType; const gender = input.gender; const dailyRate = input.dailyRate;
+  const payrollProfileId = input.payrollProfileId; const photoUrl = input.photoUrl;
+  if (userId !== undefined && userId !== null && !isString(userId)) return null;
+  if (department !== undefined && department !== null && !isString(department)) return null;
+  if (payrollProfileId !== undefined && payrollProfileId !== null && !isString(payrollProfileId)) return null;
+  if (photoUrl !== undefined && photoUrl !== null && !isString(photoUrl)) return null;
+  if (employeeType !== undefined && employeeType !== 'INTERN' && employeeType !== 'EMPLOYEE') return null;
+  if (gender !== undefined && gender !== null && gender !== 'MALE' && gender !== 'FEMALE') return null;
+  if (dailyRate !== undefined && dailyRate !== null && !isNumber(dailyRate)) return null;
+  return { userId, rfidUid: input.rfidUid, fullName: input.fullName, department, status, employeeType, gender, dailyRate, payrollProfileId, photoUrl };
+}
+function parseAttendanceInput<T>(input: T): AttendanceInput | null {
+  if (!isInputObject(input) || !isString(input.attendanceDate)) return null;
+  const timeIn = optionalString(input.timeIn); const timeOut = optionalString(input.timeOut);
+  const expectedTimeIn = optionalString(input.expectedTimeIn); const expectedTimeOut = optionalString(input.expectedTimeOut);
+  if (timeIn === undefined && input.timeIn !== undefined && input.timeIn !== null) return null;
+  if (timeOut === undefined && input.timeOut !== undefined && input.timeOut !== null) return null;
+  if (expectedTimeIn === undefined && input.expectedTimeIn !== undefined && input.expectedTimeIn !== null) return null;
+  if (expectedTimeOut === undefined && input.expectedTimeOut !== undefined && input.expectedTimeOut !== null) return null;
+  return { attendanceDate: input.attendanceDate, timeIn, timeOut, expectedTimeIn, expectedTimeOut };
+}
+type PayrollProfileNumberField = 'standardWorkingDaysPerCutoff' | 'incentivesAllowance' | 'specialAllowance' | 'specialHolidayMultiplier' | 'regularHolidayMultiplier' | 'halfDayFraction' | 'overtimeRate';
+const payrollProfileNumberFields: PayrollProfileNumberField[] = ['standardWorkingDaysPerCutoff', 'incentivesAllowance', 'specialAllowance', 'specialHolidayMultiplier', 'regularHolidayMultiplier', 'halfDayFraction', 'overtimeRate'];
+function parsePayrollProfile<T>(input: T): PayrollProfileInput | null {
+  if (!isInputObject(input) || !isString(input.profileId) || !isString(input.label) || input.payrollFrequency !== 'SEMI_MONTHLY') return null;
+  if (!payrollProfileNumberFields.every((field) => isNumber(input[field]))) return null;
+  if (!isPayrollProfileRecord(input)) return null;
+  return input;
+}
+function isPayrollProfileRecord(input: InputObject): input is PayrollProfileInput {
+  return isString(input.profileId) && isString(input.label) && input.payrollFrequency === 'SEMI_MONTHLY' &&
+    payrollProfileNumberFields.every((field) => isNumber(input[field]));
+}
+function parseCutoffInput<T>(input: T): CutoffFormInput | null {
+  return isInputObject(input) && isCutoffInputRecord(input) ? input : null;
+}
+function isCutoffValue<T>(value: T): value is T & CutoffValue {
+  return isString(value) || isNumber(value) || value === null;
+}
+function isOptionalCutoffValue<T>(value: T): boolean {
+  return value === undefined || isCutoffValue(value);
+}
+function isOptionalApprovedWorkingDayOverage<T>(value: T): boolean {
+  return value === undefined || isBoolean(value) || isCutoffValue(value);
+}
+type CutoffInputField = keyof CutoffFormInput;
+function isCutoffInputField(value: string): value is CutoffInputField { return cutoffInputFields.has(value); }
+function isCutoffInputRecord(input: InputObject): input is CutoffFormInput {
+  return Object.keys(input).every(isCutoffInputField) &&
+    isOptionalCutoffValue(input.employeeId) && isOptionalCutoffValue(input.employeeName) &&
+    isOptionalCutoffValue(input.employeeType) && isOptionalCutoffValue(input.payrollProfileId) &&
+    isOptionalCutoffValue(input.payrollCutoffLabel) && isOptionalCutoffValue(input.cutoffStart) &&
+    isOptionalCutoffValue(input.cutoffEnd) && isOptionalCutoffValue(input.payrollFrequency) &&
+    isOptionalCutoffValue(input.dailyRate) && isOptionalCutoffValue(input.standardWorkingDays) &&
+    isOptionalCutoffValue(input.actualWorkingDays) && isOptionalCutoffValue(input.specialHolidayDays) &&
+    isOptionalCutoffValue(input.specialHolidayMultiplier) && isOptionalCutoffValue(input.regularHolidayDays) &&
+    isOptionalCutoffValue(input.regularHolidayMultiplier) && isOptionalCutoffValue(input.incentivesAllowance) &&
+    isOptionalCutoffValue(input.specialAllowance) && isOptionalCutoffValue(input.lateUnits) &&
+    isOptionalCutoffValue(input.lateDeduction) && isOptionalCutoffValue(input.halfDayCount) &&
+    isOptionalCutoffValue(input.halfDayFraction) && isOptionalCutoffValue(input.absentDays) &&
+    isOptionalCutoffValue(input.overtimeHours) && isOptionalCutoffValue(input.overtimeRate) &&
+    isOptionalCutoffValue(input.manualAdjustment) && isOptionalCutoffValue(input.lateDeductionRate) && isOptionalCutoffValue(input.adjustmentReason) &&
+    isOptionalApprovedWorkingDayOverage(input.approvedWorkingDayOverage) && isOptionalCutoffValue(input.status);
+}
+const cutoffInputFields = new Set([
+  'employeeId', 'employeeName', 'employeeType', 'payrollProfileId', 'payrollCutoffLabel', 'cutoffStart', 'cutoffEnd', 'payrollFrequency', 'dailyRate', 'standardWorkingDays', 'actualWorkingDays', 'specialHolidayDays', 'specialHolidayMultiplier', 'regularHolidayDays', 'regularHolidayMultiplier', 'incentivesAllowance', 'specialAllowance', 'lateUnits', 'lateDeduction', 'lateDeductionRate', 'halfDayCount', 'halfDayFraction', 'absentDays', 'overtimeHours', 'overtimeRate', 'manualAdjustment', 'adjustmentReason', 'approvedWorkingDayOverage', 'status',
+]);
+
+
 type CutoffInputBuilder = {
-  value: Partial<CutoffInput>;
+  value: CutoffFormInput;
   employee: SheetUser;
   profileId: string;
   cutoffLabel: string;
-  number: (field: keyof CutoffInput, fallback: number) => number;
+  number: (field: CutoffNumberField, fallback: number) => number;
 };

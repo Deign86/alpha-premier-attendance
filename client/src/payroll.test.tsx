@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
@@ -7,21 +7,7 @@ import type {
   PayrollPdfRecord,
 } from "@rfid-attendance/shared";
 
-vi.mock("./api", async () => {
-  const actual = await vi.importActual<typeof import("./api")>("./api");
-  return {
-    ...actual,
-    generatePayrollCutoff: vi.fn(),
-    generatePayrollPdf: vi.fn(),
-    loadPayrollPdfs: vi.fn(),
-  };
-});
-
-import {
-  generatePayrollCutoff,
-  generatePayrollPdf,
-  loadPayrollPdfs,
-} from "./api";
+import * as api from "./api";
 import { PayrollWorkspace } from "./App";
 
 const profiles: PayrollCalculationProfile[] = [{
@@ -87,16 +73,23 @@ function renderWorkspace(records: PayrollCutoffRecord[]) {
 }
 
 describe("PayrollWorkspace", () => {
+  let generatePayrollCutoffSpy: MockInstance;
+  let generatePayrollPdfSpy: MockInstance;
+  let loadPayrollPdfsSpy: MockInstance;
+
   beforeEach(() => {
     window.print = vi.fn();
-    vi.mocked(generatePayrollCutoff).mockReset();
-    vi.mocked(generatePayrollPdf).mockReset();
-    vi.mocked(loadPayrollPdfs).mockReset();
-    vi.mocked(loadPayrollPdfs).mockResolvedValue({ success: true, payrollPdfs: [] });
+    generatePayrollCutoffSpy = vi.spyOn(api, 'generatePayrollCutoff');
+    generatePayrollPdfSpy = vi.spyOn(api, 'generatePayrollPdf');
+    loadPayrollPdfsSpy = vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("generates payroll from a selected cutoff and shows backend errors", async () => {
-    vi.mocked(generatePayrollCutoff).mockRejectedValueOnce("Unable to generate payroll.");
+    generatePayrollCutoffSpy.mockRejectedValueOnce("Unable to generate payroll.");
     const user = userEvent.setup();
     render(<PayrollWorkspace users={[{
       userId: "EMP-1", rfidUid: "ABCD1234", fullName: "Ada Lovelace", department: null, status: "ACTIVE",
@@ -108,7 +101,7 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: /confirm/i }));
     expect(await screen.findByText("Unable to generate payroll.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
-    expect(generatePayrollCutoff).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
+    expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
   });
 
   it("shows exactly the two generate payroll PDF buttons and no print/export actions", () => {
@@ -126,7 +119,7 @@ describe("PayrollWorkspace", () => {
 
   it("generates an employee payroll PDF for the selected cutoff and shows the link list", async () => {
     const pdf = pdfRecord();
-    vi.mocked(generatePayrollPdf).mockResolvedValue({
+    generatePayrollPdfSpy.mockResolvedValue({
       success: true,
       pdf,
       filePath: pdf.filePath,
@@ -140,7 +133,7 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
 
     await waitFor(() =>
-      expect(generatePayrollPdf).toHaveBeenCalledWith({
+      expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
         cutoffStart: "2026-08-01",
         cutoffEnd: "2026-08-15",
         payrollCutoffLabel: "August 1-15, 2026",
@@ -168,7 +161,7 @@ describe("PayrollWorkspace", () => {
       workerType: "intern",
       totalAmount: 770,
     });
-    vi.mocked(generatePayrollPdf).mockResolvedValue({
+    generatePayrollPdfSpy.mockResolvedValue({
       success: true,
       pdf,
       filePath: pdf.filePath,
@@ -182,7 +175,7 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
 
     await waitFor(() =>
-      expect(generatePayrollPdf).toHaveBeenCalledWith({
+      expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
         cutoffStart: "2026-08-01",
         cutoffEnd: "2026-08-15",
         payrollCutoffLabel: "August 1-15, 2026",
@@ -195,7 +188,7 @@ describe("PayrollWorkspace", () => {
   });
 
   it("shows backend errors and never opens the browser print dialog", async () => {
-    vi.mocked(generatePayrollPdf).mockResolvedValue({
+    generatePayrollPdfSpy.mockResolvedValue({
       success: false,
       error: { message: "Unable to generate the payroll PDF." },
     });
@@ -215,7 +208,7 @@ describe("PayrollWorkspace", () => {
     expect(
       screen.getByText("No payroll records to generate. Create and save a payroll first."),
     ).toBeInTheDocument();
-    expect(generatePayrollPdf).not.toHaveBeenCalled();
+    expect(generatePayrollPdfSpy).not.toHaveBeenCalled();
     expect(window.print).not.toHaveBeenCalled();
   });
 
@@ -228,7 +221,7 @@ describe("PayrollWorkspace", () => {
       workerType: "intern",
       totalAmount: 770,
     });
-    vi.mocked(loadPayrollPdfs).mockResolvedValue({
+    loadPayrollPdfsSpy.mockResolvedValue({
       success: true,
       payrollPdfs: [employeePdf, internPdf],
     });
@@ -266,7 +259,7 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(generatePayrollCutoff).not.toHaveBeenCalled();
+    expect(generatePayrollCutoffSpy).not.toHaveBeenCalled();
   });
 
   it("blocks duplicate cutoff generation", async () => {
@@ -276,6 +269,6 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     expect(screen.getByText(/Duplicate generation was blocked/)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(generatePayrollCutoff).not.toHaveBeenCalled();
+    expect(generatePayrollCutoffSpy).not.toHaveBeenCalled();
   });
 });

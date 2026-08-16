@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
-import { invoke } from '@tauri-apps/api/core';
+import { tauriApi } from './tauri-api';
 import { exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan } from './api';
 
 afterEach(() => {
@@ -10,10 +9,12 @@ afterEach(() => {
 
 describe('scan requests', () => {
   it('returns the scan response once the service responds', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+    // SAFETY: Mock Response object for fetch
+    const mockResponse = {
       ok: true,
       json: async () => ({ success: true, requestId: 'req-1', action: 'TIME_OUT' }),
-    } as Response);
+    } as Response;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse);
 
     await expect(submitScan({ rfidUid: 'RFID-001', source: 'RFID' })).resolves.toMatchObject({ success: true });
   });
@@ -30,7 +31,7 @@ describe('scan requests', () => {
 
 describe('payroll exports', () => {
   it('uses the native payroll export command and returns file metadata', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({
+    const spy = vi.spyOn(tauriApi, 'payrollExportCsv').mockResolvedValueOnce({
       success: true,
       filePath: 'C:\\Data\\exports\\payroll-2026-08-04.csv',
       directoryPath: 'C:\\Data\\exports',
@@ -45,16 +46,19 @@ describe('payroll exports', () => {
     const result = await exportPayrollCsv();
 
     expect(result.success).toBe(true);
-    expect(invoke).toHaveBeenCalledWith('payroll_export_csv', { token: '' });
+    expect(spy).toHaveBeenCalledWith('');
     expect(createObjectUrl).not.toHaveBeenCalled();
+    // SAFETY: Removing test mock property from window
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
   it('downloads the CSV through a blob in web mode without file metadata', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+    // SAFETY: Mock Response object for fetch
+    const mockResponse = {
       ok: true,
       text: async () => 'payrollId,employeeId\n',
-    } as Response);
+    } as Response;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse);
     const createObjectUrl = vi.fn(() => 'blob:payroll');
     const revokeObjectUrl = vi.fn();
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
@@ -74,19 +78,21 @@ describe('payroll exports', () => {
 describe('generated file actions', () => {
   it('opens a generated file through the native command', async () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
-    vi.mocked(invoke).mockResolvedValueOnce({ success: true, message: 'File opened.' });
+    const spy = vi.spyOn(tauriApi, 'openGeneratedFile').mockResolvedValueOnce({ success: true, message: 'File opened.' });
     const result = await openGeneratedFile('C:\\Data\\exports\\payroll-2026-08-04.csv');
     expect(result.ok).toBe(true);
-    expect(invoke).toHaveBeenCalledWith('open_generated_file', { token: '', filePath: 'C:\\Data\\exports\\payroll-2026-08-04.csv' });
+    expect(spy).toHaveBeenCalledWith('', 'C:\\Data\\exports\\payroll-2026-08-04.csv');
+    // SAFETY: Removing test mock property from window
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
   it('maps a missing file to a friendly message', async () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
-    vi.mocked(invoke).mockRejectedValueOnce('FILE_NOT_FOUND');
+    vi.spyOn(tauriApi, 'revealGeneratedFile').mockRejectedValueOnce('FILE_NOT_FOUND');
     const result = await revealGeneratedFile('C:\\Data\\exports\\gone.csv');
     expect(result.ok).toBe(false);
     expect(result.message).toBe('The file could not be found. It may have been moved or deleted.');
+    // SAFETY: Removing test mock property from window
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 

@@ -1,25 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DatabasePanel } from './App';
 import * as api from './api';
 import type { DatabaseInfoResponse } from '@rfid-attendance/shared';
-import * as dialog from '@tauri-apps/plugin-dialog';
-
-vi.mock('./api', async () => {
-  const actual = await vi.importActual<typeof import('./api')>('./api');
-  return {
-    ...actual,
-    loadDatabaseInfo: vi.fn(),
-    createDatabaseBackup: vi.fn(),
-    requestDatabaseRestore: vi.fn(),
-    openDatabaseBackupsFolder: vi.fn(),
-  };
-});
-
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: vi.fn(),
-}));
 
 const mockDbInfo: DatabaseInfoResponse = {
   success: true,
@@ -41,10 +25,28 @@ const mockDbInfo: DatabaseInfoResponse = {
 };
 
 describe('DatabasePanel', () => {
+  let loadDatabaseInfoSpy: MockInstance;
+  let createDatabaseBackupSpy: MockInstance;
+  let requestDatabaseRestoreSpy: MockInstance;
+  let openDatabaseBackupsFolderSpy: MockInstance;
+  let pickRestoreBackupFileSpy: MockInstance;
+
   beforeEach(() => {
-    vi.clearAllMocks();
-    (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
-    vi.mocked(api.loadDatabaseInfo).mockResolvedValue(mockDbInfo);
+    // SAFETY: Setting global Tauri mock interface for test environment
+    const win = window as typeof window & { __TAURI_INTERNALS__?: object };
+    win.__TAURI_INTERNALS__ = {};
+
+    loadDatabaseInfoSpy = vi.spyOn(api, 'loadDatabaseInfo').mockResolvedValue(mockDbInfo);
+    createDatabaseBackupSpy = vi.spyOn(api, 'createDatabaseBackup');
+    requestDatabaseRestoreSpy = vi.spyOn(api, 'requestDatabaseRestore');
+    openDatabaseBackupsFolderSpy = vi.spyOn(api, 'openDatabaseBackupsFolder');
+    pickRestoreBackupFileSpy = vi.spyOn(api, 'pickRestoreBackupFile');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // SAFETY: Cleaning up mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
   it('renders database path, storage mode, and existing backups', async () => {
@@ -54,10 +56,11 @@ describe('DatabasePanel', () => {
     expect(screen.getByText('Installed — app data folder')).toBeInTheDocument();
     expect(screen.getByText('attendance-backup-20260815-000000.apbackup')).toBeInTheDocument();
     expect(screen.getByText('1024 KB')).toBeInTheDocument();
+    expect(loadDatabaseInfoSpy).toHaveBeenCalled();
   });
 
   it('handles Create backup now action successfully', async () => {
-    vi.mocked(api.createDatabaseBackup).mockResolvedValueOnce({
+    createDatabaseBackupSpy.mockResolvedValueOnce({
       success: true,
       filePath: 'C:\\backups\\attendance-backup-20260815-010000.apbackup',
       directoryPath: 'C:\\backups',
@@ -73,12 +76,12 @@ describe('DatabasePanel', () => {
     const backupBtn = await screen.findByRole('button', { name: /create backup now/i });
     await user.click(backupBtn);
 
-    expect(api.createDatabaseBackup).toHaveBeenCalledTimes(1);
+    expect(createDatabaseBackupSpy).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/Backup created: attendance-backup-20260815-010000.apbackup/i)).toBeInTheDocument();
   });
 
   it('displays error when backup creation fails', async () => {
-    vi.mocked(api.createDatabaseBackup).mockResolvedValueOnce({
+    createDatabaseBackupSpy.mockResolvedValueOnce({
       success: false,
       error: { message: 'Failed to write backup snapshot' },
     });
@@ -93,7 +96,7 @@ describe('DatabasePanel', () => {
   });
 
   it('handles Open backups folder action', async () => {
-    vi.mocked(api.openDatabaseBackupsFolder).mockResolvedValueOnce({
+    openDatabaseBackupsFolderSpy.mockResolvedValueOnce({
       ok: true,
       message: 'Backup folder opened.',
     });
@@ -104,12 +107,12 @@ describe('DatabasePanel', () => {
     const openBtn = await screen.findByRole('button', { name: /open backups folder/i });
     await user.click(openBtn);
 
-    expect(api.openDatabaseBackupsFolder).toHaveBeenCalledTimes(1);
+    expect(openDatabaseBackupsFolderSpy).toHaveBeenCalledTimes(1);
   });
 
   it('handles Restore from backup file flow with confirmation', async () => {
-    vi.mocked(dialog.open).mockResolvedValueOnce('C:\\backups\\attendance-backup-20260815-000000.apbackup');
-    vi.mocked(api.requestDatabaseRestore).mockResolvedValueOnce({
+    pickRestoreBackupFileSpy.mockResolvedValueOnce('C:\\backups\\attendance-backup-20260815-000000.apbackup');
+    requestDatabaseRestoreSpy.mockResolvedValueOnce({
       success: true,
       message: 'Restore scheduled. The app will close and restore on the next launch.',
     });
@@ -126,12 +129,12 @@ describe('DatabasePanel', () => {
     const confirmBtn = screen.getByRole('button', { name: /confirm/i });
     await user.click(confirmBtn);
 
-    expect(api.requestDatabaseRestore).toHaveBeenCalledWith('C:\\backups\\attendance-backup-20260815-000000.apbackup');
+    expect(requestDatabaseRestoreSpy).toHaveBeenCalledWith('C:\\backups\\attendance-backup-20260815-000000.apbackup');
     expect(await screen.findByText(/Restore scheduled/i)).toBeInTheDocument();
   });
 
   it('allows canceling the restore dialog without scheduling', async () => {
-    vi.mocked(dialog.open).mockResolvedValueOnce('C:\\backups\\test.apbackup');
+    pickRestoreBackupFileSpy.mockResolvedValueOnce('C:\\backups\\test.apbackup');
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
@@ -147,6 +150,6 @@ describe('DatabasePanel', () => {
     await waitFor(() => {
       expect(screen.queryByText('Restore database from backup?')).not.toBeInTheDocument();
     });
-    expect(api.requestDatabaseRestore).not.toHaveBeenCalled();
+    expect(requestDatabaseRestoreSpy).not.toHaveBeenCalled();
   });
 });
