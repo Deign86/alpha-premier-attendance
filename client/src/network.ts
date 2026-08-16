@@ -13,7 +13,7 @@ let simulatedOffline = false;
 /** Controls simulated offline state for development and testing */
 export function setSimulatedOffline(offline: boolean): void {
   simulatedOffline = offline;
-  if (typeof window !== 'undefined') {
+  if ('window' in globalThis) {
     window.dispatchEvent(new Event(offline ? 'offline' : 'online'));
   }
 }
@@ -25,12 +25,12 @@ export function isSimulatedOffline(): boolean {
 /** Check if the browser or desktop shell currently has network connectivity */
 export function isOnline(): boolean {
   if (simulatedOffline) return false;
-  return typeof navigator !== 'undefined' ? navigator.onLine : true;
+  return 'navigator' in globalThis ? navigator.onLine : true;
 }
 
 /** Register a listener for network connectivity changes */
 export function onNetworkStatusChange(callback: (online: boolean) => void): () => void {
-  if (typeof window === 'undefined') return () => {};
+  if (!('window' in globalThis)) return () => {};
 
   const handleOnline = () => callback(isOnline());
   const handleOffline = () => callback(false);
@@ -47,7 +47,7 @@ export function onNetworkStatusChange(callback: (online: boolean) => void): () =
 /** Retrieve pending offline scans */
 export function getOfflineQueue(): QueuedScan[] {
   try {
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(OFFLINE_QUEUE_KEY) : null;
+    const raw = 'localStorage' in globalThis ? localStorage.getItem(OFFLINE_QUEUE_KEY) : null;
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -65,7 +65,7 @@ export function enqueueOfflineScan(request: ScanRequest): QueuedScan {
   };
   queue.push(queuedItem);
   try {
-    if (typeof localStorage !== 'undefined') {
+    if ('localStorage' in globalThis) {
       localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
     }
   } catch (err) {
@@ -78,7 +78,7 @@ export function enqueueOfflineScan(request: ScanRequest): QueuedScan {
 export function removeQueuedScan(id: string): void {
   const queue = getOfflineQueue().filter((item) => item.id !== id);
   try {
-    if (typeof localStorage !== 'undefined') {
+    if ('localStorage' in globalThis) {
       localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
     }
   } catch {
@@ -89,7 +89,7 @@ export function removeQueuedScan(id: string): void {
 /** Clear all queued offline scans */
 export function clearOfflineQueue(): void {
   try {
-    if (typeof localStorage !== 'undefined') {
+    if ('localStorage' in globalThis) {
       localStorage.removeItem(OFFLINE_QUEUE_KEY);
     }
   } catch {
@@ -104,7 +104,7 @@ export function resolveApiBaseUrl(currentOrigin: string, configured?: string): s
 }
 
 export function apiBaseUrl(): string {
-  const currentOrigin = typeof window === 'undefined' ? '' : window.location.origin;
+  const currentOrigin = 'window' in globalThis ? window.location.origin : '';
   const configured = import.meta.env.VITE_API_BASE_URL?.trim();
   return configured ? resolveApiBaseUrl(currentOrigin, configured) : '';
 }
@@ -120,7 +120,7 @@ export function sseUrl(path: string): string {
 }
 
 export function websocketUrl(path: string): string {
-  const url = new URL(apiUrl(path), typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+  const url = new URL(apiUrl(path), 'window' in globalThis ? window.location.origin : 'http://localhost');
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
 }
