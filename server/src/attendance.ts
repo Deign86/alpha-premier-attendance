@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { attendanceActions, type ScanRequest, type ScanResponse, type ScanSuccessResponse, type UserSummary } from '@rfid-attendance/shared';
+import { attendanceActions, scanSources, type ScanRequest, type ScanResponse, type ScanSuccessResponse, type UserSummary } from '@rfid-attendance/shared';
 import { asScanError, ScanError } from './errors.js';
 import { KeyedMutex } from './mutex.js';
 import { normalizeRfidUid } from './rfid.js';
@@ -21,11 +21,13 @@ export class AttendanceService {
 
   setNowProvider(now: Clock): void { this.now = now; }
 
-  async scan(request: ScanRequest, requestId: string): Promise<ScanResponse> {
+  async scan(request: unknown, requestId: string): Promise<ScanResponse> {
     let uid: string;
+    let source: ScanRequest['source'];
     try {
-      if (!request || typeof request.rfidUid !== 'string' || !['RFID', 'MANUAL_TEST'].includes(request.source)) throw new Error('Invalid scan request');
-      uid = normalizeRfidUid(request.rfidUid);
+      const parsedRequest = parseScanRequest(request);
+      uid = normalizeRfidUid(parsedRequest.rfidUid);
+      source = parsedRequest.source;
     } catch {
       return new ScanError('INVALID_SCAN_INPUT', 'rfidUid and source are required.', 400).toResponse(requestId);
     }
@@ -71,7 +73,7 @@ export class AttendanceService {
             timeIn: timestamp,
             timeOut: null,
             status: 'WORKING',
-            source: request.source,
+            source,
             notes: '',
           };
           try {
@@ -84,7 +86,7 @@ export class AttendanceService {
           action = 'TIME_IN';
         } else {
           if (!attendance.timeIn && !attendance.timeOut) {
-            const restarted: SheetAttendance = { ...attendance, rfidUid: uid, fullName: user.fullName, department: user.department, timeIn: timestamp, timeOut: null, status: 'WORKING', source: request.source };
+            const restarted: SheetAttendance = { ...attendance, rfidUid: uid, fullName: user.fullName, department: user.department, timeIn: timestamp, timeOut: null, status: 'WORKING', source };
             try { saved = await this.sheets.updateAttendance(restarted, { timeIn: null, timeOut: null }); }
             catch { throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data changed before the scan was saved.', 409); }
             action = 'TIME_IN';
@@ -125,7 +127,7 @@ export class AttendanceService {
         return this.successResponse(requestId, action, saved, user);
       });
     } catch (error) {
-      void this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: error instanceof Error ? error.message : 'Scan failed', requestId });
+      void this.writeAudit({ eventType: auditEventFor(error), rfidUid: uid, message: errorMessage(error), requestId });
       return asScanError(error).toResponse(requestId);
     }
   }
@@ -160,6 +162,32 @@ export class AttendanceService {
       user: userSummary,
     };
   }
+}
+
+function parseScanRequest(request: unknown): ScanRequest {
+  if (!isScanRequest(request)) throw new Error('Invalid scan request');
+  return request;
+}
+
+function isScanRequest(request: unknown): request is ScanRequest {
+  if (!isRecord(request) || typeof request.rfidUid !== 'string') return false;
+  return isScanSource(request.source);
+}
+
+function isScanSource(source: unknown): source is ScanRequest['source'] {
+  return typeof source === 'string' && scanSources.some((candidate) => candidate === source);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function errorMessage(error: unknown): string {
+  return isError(error) ? error.message : 'Scan failed';
+}
+
+function isError(value: unknown): value is Error {
+  return value instanceof Error;
 }
 
 function auditEventFor(error: unknown): AuditEvent['eventType'] {

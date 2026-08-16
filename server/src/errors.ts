@@ -1,6 +1,15 @@
 import type { ScanErrorCode, ScanErrorResponse } from '@rfid-attendance/shared';
 
-const scanErrorCodeSet = new Set<ScanErrorCode>([
+type ScanErrorLike = {
+  code: ScanErrorCode;
+  message: string;
+  status: number;
+  retryAfterSeconds?: number;
+};
+
+type UnknownRecord = Record<string, unknown>;
+
+const scanErrorCodeSet = new Set<string>([
   'INVALID_SCAN_INPUT',
   'UNKNOWN_RFID_CARD',
   'INACTIVE_USER',
@@ -49,11 +58,18 @@ export function asScanError(error: unknown): ScanError {
   return new ScanError('INTERNAL_SERVER_ERROR', 'An unexpected server error occurred.', 500);
 }
 
-function isScanErrorLike(error: unknown): error is { code: ScanErrorCode; message: string; status: number; retryAfterSeconds?: number } {
-  if (!error || typeof error !== 'object') return false;
-  const value = error as Partial<{ code: string; message: string; status: number; retryAfterSeconds?: number }>;
-  return typeof value.code === 'string'
-    && scanErrorCodeSet.has(value.code as ScanErrorCode)
-    && typeof value.message === 'string'
-    && typeof value.status === 'number';
+function isScanErrorLike(error: unknown): error is ScanErrorLike {
+  if (!isUnknownRecord(error) || !isScanErrorCode(error.code)) return false;
+  if (typeof error.message !== 'string' || typeof error.status !== 'number') return false;
+  return !('retryAfterSeconds' in error)
+    || error.retryAfterSeconds === undefined
+    || typeof error.retryAfterSeconds === 'number';
+}
+
+function isScanErrorCode(value: unknown): value is ScanErrorCode {
+  return typeof value === 'string' && scanErrorCodeSet.has(value);
+}
+
+function isUnknownRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null;
 }
