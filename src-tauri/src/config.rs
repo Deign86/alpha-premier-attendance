@@ -182,6 +182,49 @@ pub struct DatabaseConfig {
     pub path: Option<String>,
 }
 
+/// Voice announcement configuration (`[tts]` in config.toml).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TtsConfig {
+    #[serde(default = "default_tts_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_tts_engine")]
+    pub engine: String,
+    #[serde(default)]
+    pub voice_model: Option<String>,
+    #[serde(default)]
+    pub piper_path: Option<String>,
+    #[serde(default = "default_tts_rate")]
+    pub rate: f32,
+    #[serde(default = "default_tts_volume")]
+    pub volume: f32,
+}
+
+fn default_tts_enabled() -> bool {
+    true
+}
+fn default_tts_engine() -> String {
+    "auto".into()
+}
+fn default_tts_rate() -> f32 {
+    1.0
+}
+fn default_tts_volume() -> f32 {
+    1.0
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_tts_enabled(),
+            engine: default_tts_engine(),
+            voice_model: None,
+            piper_path: None,
+            rate: default_tts_rate(),
+            volume: default_tts_volume(),
+        }
+    }
+}
+
 impl Default for ScannerConfig {
     fn default() -> Self {
         Self {
@@ -332,7 +375,7 @@ fn join_address_parts(parts: Vec<String>) -> String {
 
 impl OfficeConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, office, _, _)| office)
+        load_config(config_dir).map(|(_, office, _, _, _)| office)
     }
 
     fn compose_short(&self) -> String {
@@ -397,11 +440,11 @@ impl OfficeConfig {
     }
 }
 
-/// Load the LAN, office, scanner, and database sections from `config.toml`
+/// Load the LAN, office, scanner, database, and TTS sections from `config.toml`
 /// (defaults when absent).
 pub fn load_config(
     config_dir: &Path,
-) -> Result<(LanConfig, OfficeConfig, ScannerConfig, DatabaseConfig), String> {
+) -> Result<(LanConfig, OfficeConfig, ScannerConfig, DatabaseConfig, TtsConfig), String> {
     let path = config_dir.join("config.toml");
     if !path.exists() {
         return Ok((
@@ -409,6 +452,7 @@ pub fn load_config(
             OfficeConfig::default(),
             ScannerConfig::default(),
             DatabaseConfig::default(),
+            TtsConfig::default(),
         ));
     }
     let contents =
@@ -423,6 +467,8 @@ pub fn load_config(
         scanner: ScannerConfig,
         #[serde(default)]
         database: DatabaseConfig,
+        #[serde(default)]
+        tts: TtsConfig,
     }
     let root: Root =
         toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
@@ -489,7 +535,7 @@ pub fn load_config(
     if database.path.as_deref().is_some_and(str::is_empty) {
         database.path = None;
     }
-    Ok((lan, root.office, root.scanner, database))
+    Ok((lan, root.office, root.scanner, database, root.tts))
 }
 
 fn is_private(address: IpAddr) -> bool {
@@ -552,7 +598,7 @@ mod tests {
             "[lan]\ngoogle_drive_folder_id = \"\"\ngoogle_spreadsheet_id = \"\"\n",
         )
         .unwrap();
-        let (lan, _, _, _) = load_config(&temp).expect("load config");
+        let (lan, _, _, _, _) = load_config(&temp).expect("load config");
         assert_eq!(lan.google_drive_folder_id, None);
         assert_eq!(lan.google_spreadsheet_id, None);
         assert_eq!(lan.google_drive_folder_name, "Alpha Premier Attendance");
@@ -734,8 +780,30 @@ mod tests {
             "[database]\npath = \"data/attendance.db\"\n",
         )
         .unwrap();
-        let (_, _, _, database) = load_config(&temp).expect("load config");
+        let (_, _, _, database, _) = load_config(&temp).expect("load config");
         assert_eq!(database.path.as_deref(), Some("data/attendance.db"));
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn tts_config_parses_section_and_defaults() {
+        let tts = TtsConfig::default();
+        assert!(tts.enabled);
+        assert_eq!(tts.engine, "auto");
+        assert_eq!(tts.rate, 1.0);
+        assert_eq!(tts.volume, 1.0);
+
+        #[derive(Deserialize)]
+        struct Root {
+            #[serde(default)]
+            tts: TtsConfig,
+        }
+        let root: Root = toml::from_str("[tts]\nenabled = false\nengine = \"piper\"\nrate = 1.2\nvolume = 0.8\nvoice_model = \"en_US-amy-medium\"\n")
+            .expect("tts toml");
+        assert!(!root.tts.enabled);
+        assert_eq!(root.tts.engine, "piper");
+        assert_eq!(root.tts.rate, 1.2);
+        assert_eq!(root.tts.volume, 0.8);
+        assert_eq!(root.tts.voice_model.as_deref(), Some("en_US-amy-medium"));
     }
 }

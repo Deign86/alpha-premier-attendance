@@ -1,8 +1,9 @@
 use crate::{
-    config::{LanConfig, OfficeConfig, ScannerConfig},
+    config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig},
     error::AppError,
     lan_server::{self, LanIssue},
     services::sheets_sync::GoogleSheetsTarget,
+    tts::TtsManager,
 };
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use std::{
@@ -166,6 +167,7 @@ pub struct AppState {
     /// of re-provisioning on every pass; the authoritative IDs are persisted
     /// in `data_dir/google-sheets-state.json`.
     pub google_sheets_target: Arc<tokio::sync::RwLock<Option<GoogleSheetsTarget>>>,
+    pub tts: Arc<TtsManager>,
 }
 
 #[derive(Clone)]
@@ -183,6 +185,7 @@ impl AppState {
         lan: LanConfig,
         office: OfficeConfig,
         scanner: ScannerConfig,
+        tts: TtsConfig,
     ) -> Result<Self, AppError> {
         std::fs::create_dir_all(&data_dir).map_err(|e| AppError::Configuration(e.to_string()))?;
         std::fs::create_dir_all(&exports_dir)
@@ -226,6 +229,7 @@ impl AppState {
             lan_runtime: Arc::new(LanRuntime::new()),
             scanner: Arc::new(crate::services::scanner::ScannerHandle::new(scanner)),
             google_sheets_target: Arc::new(tokio::sync::RwLock::new(None)),
+            tts: Arc::new(TtsManager::new(tts)),
         })
     }
 
@@ -251,6 +255,7 @@ mod tests {
             LanConfig::default(),
             OfficeConfig::default(),
             ScannerConfig::default(),
+            TtsConfig::default(),
         )
         .await
         .unwrap();
@@ -298,6 +303,7 @@ mod tests {
             LanConfig::default(),
             OfficeConfig::default(),
             ScannerConfig::default(),
+            TtsConfig::default(),
         )
         .await
         .unwrap();

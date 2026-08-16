@@ -1,0 +1,5 @@
+# Bundled Piper TTS Resources
+
+Place the Piper executable and dependencies in `resources/piper/`:
+- Windows: `piper.exe`, `onnxruntime.dll`, `piper_phonemize.dll`, `espeak-ng.dll`, `espeak-ng-data/`
+- Models: place `.onnx` and `.onnx.json` model files in `resources/piper/models/` (e.g. `en_US-lessac-medium.onnx` and `en_US-lessac-medium.onnx.json`).

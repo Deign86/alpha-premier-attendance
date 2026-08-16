@@ -96,7 +96,8 @@ type ScannerStatus = {
 };
 
 import { GeneratedFileActions, type GeneratedFileResult } from "./file-actions";
-import { announceTimeIn, announceTimeOut } from "./speech";
+import { announceAttendance } from "./services/ttsService";
+import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 
@@ -500,16 +501,13 @@ export default function App() {
       setResult(response);
       const nextState = response.success ? "success" : "error";
       setState(nextState);
-      // Voice announcement: greet the employee by name on time-in, say goodbye on time-out.
+      // Voice announcement: greet the employee on time-in, say goodbye on time-out.
       if (response.success) {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
-        if (response.action === "TIME_IN")
-          announceTimeIn(
-            greetingForDate(new Date(), config.timezone),
-            response.user.fullName,
-            response.user.gender,
-          );
-        else announceTimeOut(response.user.fullName);
+        void announceAttendance({
+          employeeName: response.user.fullName,
+          attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
+        });
       }
       if (resetTimer.current) clearTimeout(resetTimer.current);
       resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
@@ -1968,7 +1966,7 @@ function AdminPanel() {
   const [sessionExpiresAt, setSessionExpiresAt] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"users" | "attendance" | "payroll" | "data">(
+  const [tab, setTab] = useState<"users" | "attendance" | "payroll" | "data" | "voice">(
     "users",
   );
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -2140,6 +2138,12 @@ function AdminPanel() {
         >
           Data and backup
         </button>
+        <button
+          className={tab === "voice" ? "is-active" : ""}
+          onClick={() => setTab("voice")}
+        >
+          Voice announcements
+        </button>
       </div>
       <ScannerDiagnostics />
       {error && <p className="dashboard-alert">{error}</p>}
@@ -2165,6 +2169,8 @@ function AdminPanel() {
           records={cutoffs}
           onSaved={load}
         />
+      ) : tab === "voice" ? (
+        <VoiceSettingsPanel />
       ) : (
         <DatabasePanel />
       )}

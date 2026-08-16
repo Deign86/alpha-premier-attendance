@@ -8,6 +8,7 @@ mod paths;
 pub mod reporting;
 mod services;
 mod state;
+mod tts;
 
 use crate::services::intern_payroll::{
     INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID,
@@ -48,6 +49,30 @@ fn notify_scan_success(app: tauri::AppHandle, full_name: String) -> Result<(), S
         .body(format!("Time in/out recorded for {name}"))
         .show()
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn tts_speak(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+    options: Option<crate::tts::TtsSpeakOptions>,
+) -> Result<crate::tts::TtsSpeakResult, String> {
+    state.tts.speak(&text, options, &app).await
+}
+
+#[tauri::command]
+async fn tts_stop(state: State<'_, AppState>) -> Result<(), String> {
+    state.tts.stop().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn tts_status(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::tts::TtsStatusResponse, String> {
+    Ok(state.tts.status(&app).await)
 }
 
 #[tauri::command]
@@ -2867,7 +2892,7 @@ pub fn run() {
             let paths = crate::paths::resolve(app.handle()).expect("resolve application paths");
             std::fs::create_dir_all(&paths.config_dir)
                 .expect("create application config directory");
-            let (lan, office, scanner_config, database_config) =
+            let (lan, office, scanner_config, database_config, tts_config) =
                 config::load_config(&paths.config_dir).expect("valid config.toml");
             let db_path =
                 crate::paths::resolve_db_path(&paths.config_dir, &paths.data_dir, &database_config);
@@ -2907,6 +2932,7 @@ pub fn run() {
                 lan,
                 office,
                 scanner_config,
+                tts_config,
             ))
             .expect("SQLite initialization");
             if state.lan.enabled {
@@ -3036,7 +3062,10 @@ pub fn run() {
             lan_status,
             lan_start,
             lan_stop,
-            open_viewer_url
+            open_viewer_url,
+            tts_speak,
+            tts_stop,
+            tts_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alpha Premier Attendance");
@@ -3235,6 +3264,7 @@ mod tests {
             LanConfig::default(),
             OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         ))
         .unwrap();
         let file_path = exports_dir.join("payroll-2026-08-04.csv");
@@ -3276,6 +3306,7 @@ mod tests {
             LanConfig::default(),
             OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .unwrap();

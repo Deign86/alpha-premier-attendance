@@ -549,3 +549,39 @@ export const adminErrorCodes = [
 ] as const;
 export type AdminErrorCode = (typeof adminErrorCodes)[number];
 export type AdminErrorResponse = { success: false; error: { code: AdminErrorCode; message: string } };
+
+export const ttsEngines = ['auto', 'piper', 'system', 'disabled'] as const;
+export type TtsEngine = (typeof ttsEngines)[number];
+
+export type TtsSettings = {
+  enabled: boolean;
+  engine: TtsEngine;
+  voiceModel: string;
+  rate: number;
+  volume: number;
+};
+
+export type TtsSpeakOptions = {
+  engine?: TtsEngine;
+  voiceModel?: string;
+  rate?: number;
+  volume?: number;
+};
+
+export type TtsSpeakResult = {
+  success: boolean;
+  engineUsed: 'piper' | 'system' | 'none';
+  message?: string;
+};
+
+export type TtsStatusResponse = {
+  enabled: boolean;
+  engine: TtsEngine;
+  piperAvailable: boolean;
+  piperPath: string | null;
+  voiceModelAvailable: boolean;
+  voiceModelPath: string | null;
+  systemSapiAvailable: boolean;
+  isSpeaking: boolean;
+};
+

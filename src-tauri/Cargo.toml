@@ -48,6 +48,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 urlencoding = "2"
 zip = "8"
 tauri-plugin-mcp-bridge = "0.12.0"
+rodio = { version = "0.19", default-features = false, features = ["wav"] }
 
 [dev-dependencies]
 # Used only by tests to read back generated XLSX metadata.

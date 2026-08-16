@@ -599,6 +599,7 @@ mod tests {
             crate::config::LanConfig::default(),
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .expect("database");
@@ -771,6 +772,7 @@ mod tests {
             crate::config::LanConfig::default(),
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .unwrap();
@@ -832,6 +834,7 @@ mod tests {
             crate::config::LanConfig::default(),
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .expect("database initialization");
@@ -1091,6 +1094,7 @@ mod tests {
             crate::config::LanConfig::default(),
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .expect("open restored database");
@@ -1314,6 +1318,7 @@ mod tests {
             crate::config::LanConfig::default(),
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .unwrap();

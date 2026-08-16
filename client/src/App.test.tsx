@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
-import * as speech from './speech';
+import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
 import type { ScannerStatus } from '@rfid-attendance/shared';
 
@@ -69,8 +69,7 @@ beforeEach(() => {
   vi.spyOn(tauriApi, 'setScannerPaused').mockResolvedValue();
   vi.spyOn(tauriApi, 'notifyScanSuccess').mockResolvedValue();
   vi.spyOn(tauriApi, 'getScannerStatus').mockRejectedValue(new Error('web mode'));
-  vi.spyOn(speech, 'announceTimeIn').mockImplementation(() => {});
-  vi.spyOn(speech, 'announceTimeOut').mockImplementation(() => {});
+  vi.spyOn(ttsService, 'announceAttendance').mockResolvedValue(null);
   mockFetch();
 });
 
@@ -244,15 +243,17 @@ describe('RFID kiosk', () => {
     expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
   });
 
-  it('announces a time-in with the time-appropriate greeting and employee name in speech', async () => {
+  it('announces a time-in with employee name in TTS announcement', async () => {
     render(<App />);
     act(() => emitRfidScan('04A1B2C3'));
     await screen.findByText('Ada Lovelace');
-    expect(speech.announceTimeIn).toHaveBeenCalledWith(expect.stringMatching(/^Good (morning|afternoon|evening)$/), 'Ada Lovelace', 'FEMALE');
-    expect(speech.announceTimeOut).not.toHaveBeenCalled();
+    expect(ttsService.announceAttendance).toHaveBeenCalledWith({
+      employeeName: 'Ada Lovelace',
+      attendanceType: 'time_in',
+    });
   });
 
-  it('announces a time-out with a goodbye in speech', async () => {
+  it('announces a time-out with goodbye in TTS announcement', async () => {
     mockFetch({
       ...successResponse,
       action: 'TIME_OUT',
@@ -262,8 +263,10 @@ describe('RFID kiosk', () => {
     render(<App />);
     act(() => emitRfidScan('04A1B2C3'));
     await screen.findByText('Ada Lovelace');
-    expect(speech.announceTimeOut).toHaveBeenCalledWith('Ada Lovelace');
-    expect(speech.announceTimeIn).not.toHaveBeenCalled();
+    expect(ttsService.announceAttendance).toHaveBeenCalledWith({
+      employeeName: 'Ada Lovelace',
+      attendanceType: 'time_out',
+    });
   });
 
   it('shows the four native scanner states truthfully', async () => {

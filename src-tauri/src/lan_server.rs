@@ -928,6 +928,7 @@ mod tests {
             LanConfig::default(),
             crate::config::OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .unwrap();
@@ -986,6 +987,7 @@ mod tests {
             LanConfig::default(),
             crate::config::OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .unwrap();
@@ -1015,6 +1017,7 @@ mod tests {
             lan,
             crate::config::OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
         )
         .await
         .unwrap();

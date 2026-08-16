@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
 
 export interface HealthStatusResponse {
   status: string;
@@ -60,6 +60,9 @@ export const tauriApi = {
   dbBackup: (token: string) => invoke<DatabaseBackupResponse>('db_backup', { token }),
   dbRestoreRequest: (token: string, sourcePath: string) => invoke<{ success: true; message: string }>('db_restore_request', { token, sourcePath }),
   dbOpenBackupsDir: (token: string) => invoke<{ success: true; message: string }>('db_open_backups_dir', { token }),
+  ttsSpeak: (text: string, options?: TtsSpeakOptions) => invoke<TtsSpeakResult>('tts_speak', { text, options }),
+  ttsStop: () => invoke<void>('tts_stop'),
+  ttsStatus: () => invoke<TtsStatusResponse>('tts_status'),
 };
 
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));
