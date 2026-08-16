@@ -43,11 +43,11 @@ let cachedVoices: SpeechSynthesisVoice[] = [];
 
 /** Snapshot the OS voice list; browsers populate it asynchronously. */
 function refreshVoices() {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  if (!('window' in globalThis) || !('speechSynthesis' in window)) return;
   cachedVoices = window.speechSynthesis.getVoices();
 }
 
-if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+if ('window' in globalThis && 'speechSynthesis' in window) {
   refreshVoices();
   window.speechSynthesis.addEventListener?.('voiceschanged', refreshVoices);
 }
@@ -77,7 +77,7 @@ export type SpeakOptions = {
  * first so rapid card taps never queue overlapping announcements.
  */
 export function speak(phrase: string, { rate = 1, pitch = 1 }: SpeakOptions = {}) {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  if (!('window' in globalThis) || !('speechSynthesis' in window)) return;
   const synthesis = window.speechSynthesis;
   const utterance = new SpeechSynthesisUtterance(phrase);
   // Query the live voice list: browsers may load voices after module init.
@@ -114,7 +114,7 @@ export function announceTimeOut(employeeName: string) {
  * announce without the operator having to click first.
  */
 function keepAudioUnlocked() {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  if (!('window' in globalThis) || !('speechSynthesis' in window)) return;
   const resume = () => window.speechSynthesis.resume();
   window.addEventListener('pointerdown', resume);
   window.addEventListener('keydown', resume);
