@@ -26,7 +26,7 @@ pub struct LanConfig {
     /// Title for a newly created Google Sheets spreadsheet.
     #[serde(default = "default_google_spreadsheet_title")]
     pub google_spreadsheet_title: String,
-    #[serde(default)]
+    #[serde(default = "default_admin_pin")]
     pub admin_pin: Option<String>,
     #[serde(default = "default_admin_session_minutes")]
     pub admin_session_minutes: u64,
@@ -94,6 +94,9 @@ fn default_session_minutes() -> u64 {
 }
 fn default_keep_alive_seconds() -> u64 {
     15
+}
+fn default_admin_pin() -> Option<String> {
+    Some("293906".into())
 }
 fn default_admin_session_minutes() -> u64 {
     15

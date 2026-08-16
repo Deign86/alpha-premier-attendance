@@ -7,7 +7,7 @@ use tauri::Manager;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-pub const DEFAULT_VOICE_MODEL: &str = "en_US-lessac-medium";
+pub const DEFAULT_VOICE_MODEL: &str = "en_US-amy-medium";
 
 /// Locates the Piper executable on disk.
 pub fn find_piper_binary(app_handle: &tauri::AppHandle, custom_path: Option<&str>) -> Option<PathBuf> {
@@ -226,4 +226,43 @@ pub async fn synthesize_to_wav(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn companion_json_finds_onnx_json() {
+        let temp = std::env::temp_dir().join(format!("piper-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let onnx_path = temp.join("model.onnx");
+        let json_path = temp.join("model.onnx.json");
+
+        std::fs::write(&onnx_path, b"dummy onnx").unwrap();
+        std::fs::write(&json_path, b"{}").unwrap();
+
+        let found = find_companion_json(&onnx_path);
+        assert_eq!(found, Some(json_path));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn companion_json_finds_standard_json_fallback() {
+        let temp = std::env::temp_dir().join(format!("piper-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let onnx_path = temp.join("model.onnx");
+        let json_path = temp.join("model.json");
+
+        std::fs::write(&onnx_path, b"dummy onnx").unwrap();
+        std::fs::write(&json_path, b"{}").unwrap();
+
+        let found = find_companion_json(&onnx_path);
+        assert_eq!(found, Some(json_path));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }

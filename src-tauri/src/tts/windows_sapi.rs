@@ -75,3 +75,26 @@ pub async fn spawn_sapi_speech(
 
     Ok(child)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sapi_availability_reflects_os() {
+        assert_eq!(is_sapi_available(), cfg!(target_os = "windows"));
+    }
+
+    #[tokio::test]
+    async fn sapi_spawns_and_exits_cleanly() {
+        if !is_sapi_available() {
+            return;
+        }
+        let child = spawn_sapi_speech("Test speech", Some(1.0), Some(1.0), None).await;
+        assert!(child.is_ok());
+        if let Ok(mut c) = child {
+            let status = c.wait().await;
+            assert!(status.is_ok());
+        }
+    }
+}

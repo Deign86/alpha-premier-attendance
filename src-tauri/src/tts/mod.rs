@@ -48,14 +48,14 @@ pub struct TtsManager {
 }
 
 struct TtsManagerInner {
-    active_process: Option<tokio::process::Child>,
+    active_cancel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl TtsManager {
     pub fn new(config: TtsConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TtsManagerInner {
-                active_process: None,
+                active_cancel: None,
             })),
             audio_player: AudioPlayer::new(),
             config,
@@ -66,8 +66,8 @@ impl TtsManager {
     pub async fn stop(&self) {
         self.audio_player.stop().await;
         let mut inner = self.inner.lock().await;
-        if let Some(mut child) = inner.active_process.take() {
-            let _ = child.kill().await;
+        if let Some(cancel) = inner.active_cancel.take() {
+            let _ = cancel.send(());
         }
     }
 
@@ -86,7 +86,7 @@ impl TtsManager {
         let is_playing = self.audio_player.is_playing().await;
         let is_process_running = {
             let inner = self.inner.lock().await;
-            inner.active_process.is_some()
+            inner.active_cancel.as_ref().map(|tx| !tx.is_closed()).unwrap_or(false)
         };
 
         TtsStatusResponse {
@@ -222,16 +222,22 @@ impl TtsManager {
             )
             .await
             {
-                Ok(child) => {
-                    let mut inner = self.inner.lock().await;
-                    inner.active_process = Some(child);
-                    let inner_clone = self.inner.clone();
+                Ok(mut child) => {
+                    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+                    {
+                        let mut inner = self.inner.lock().await;
+                        if let Some(prev) = inner.active_cancel.take() {
+                            let _ = prev.send(());
+                        }
+                        inner.active_cancel = Some(cancel_tx);
+                    }
 
                     tokio::spawn(async move {
-                        let mut guard = inner_clone.lock().await;
-                        if let Some(mut child_proc) = guard.active_process.take() {
-                            drop(guard);
-                            let _ = child_proc.wait().await;
+                        tokio::select! {
+                            _ = child.wait() => {},
+                            _ = &mut cancel_rx => {
+                                let _ = child.kill().await;
+                            }
                         }
                     });
 
