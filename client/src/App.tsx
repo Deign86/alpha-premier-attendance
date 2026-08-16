@@ -4,19 +4,15 @@ import {
   Check,
   CircleAlert,
   CreditCard,
-  Database,
   Download,
   ImagePlus,
   Keyboard,
   LoaderCircle,
   LockKeyhole,
   Nfc,
-  RefreshCw,
   ShieldCheck,
   Upload,
   UserRound,
-  Wifi,
-  WifiOff,
   X,
 } from "lucide-react";
 import type {
@@ -101,8 +97,17 @@ type ScannerStatus = {
 
 import { GeneratedFileActions, type GeneratedFileResult } from "./file-actions";
 import { announceTimeIn, announceTimeOut } from "./speech";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { pickRestoreBackupFile } from "./api";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
+
+function toErrorMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof Error) return cause.message;
+  if (cause && Object.prototype.toString.call(cause) === "[object String]") {
+    // SAFETY: Verified cause is string primitive
+    return cause as string;
+  }
+  return fallback;
+}
 
 type KioskState = "ready" | "processing" | "success" | "error";
 type Result = ScanSuccessResponse | ScanErrorResponse;
@@ -547,8 +552,8 @@ export default function App() {
     const flush = () => {
       const candidate = buffer;
       resetBuffer();
-      const expectedLength = Number((config as typeof config & { scanner?: { expectedLength?: number; characterSet?: string } }).scanner?.expectedLength ?? 10);
-      const characterSet = (config as typeof config & { scanner?: { expectedLength?: number; characterSet?: string } }).scanner?.characterSet ?? "decimal";
+      const expectedLength = Number(config.scanner?.expectedLength ?? 10);
+      const characterSet = config.scanner?.characterSet ?? "decimal";
       const allowedRegex = characterSet === "hex" ? /^[0-9a-fA-F]+$/ : /^[0-9]+$/;
 
       if (!allowedRegex.test(candidate)) return;
@@ -572,7 +577,7 @@ export default function App() {
         resetBuffer();
         return;
       }
-      const target = event.target as HTMLElement | null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
       const isTextEntry = Boolean(
         target &&
           (target.matches("textarea, select, [contenteditable='true']") ||
@@ -596,7 +601,7 @@ export default function App() {
         return;
       }
 
-      const characterSet = (config as typeof config & { scanner?: { characterSet?: string } }).scanner?.characterSet ?? "decimal";
+      const characterSet = config.scanner?.characterSet ?? "decimal";
       const allowedCharRegex = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
       if (allowedCharRegex.test(event.key)) {
         buffer += event.key;
@@ -632,7 +637,7 @@ export default function App() {
       .catch(() => {
         /* web mode */
       });
-    void listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus as unknown as ScannerStatus))
+    void listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus))
       .then((cleanup) => {
         unlistenStatus = cleanup;
       })
@@ -640,7 +645,7 @@ export default function App() {
         /* web mode */
       });
     void getScannerStatus()
-      .then((nextStatus) => setScannerStatus(nextStatus as unknown as ScannerStatus))
+      .then((nextStatus) => setScannerStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
@@ -1589,13 +1594,13 @@ function LanViewerPanel({
       </section>
     );
   const running = status.state === "running";
-  const stateLabel: Record<LanStatusResponse["state"], string> = {
+  const stateLabel = {
     starting: "Starting",
     running: "Running",
     stopped: "Stopped",
     disabled: "Disabled",
     error: "Needs attention",
-  };
+  } satisfies Record<LanStatusResponse["state"], string>;
   const copyUrl = async () => {
     if (!status.viewerUrl) return;
     setCopied(await copyText(status.viewerUrl));
@@ -1824,7 +1829,7 @@ export function ScannerDiagnostics() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenForScannerStatus((nextStatus) => {
-        setStatus(nextStatus as unknown as ScannerStatus);
+        setStatus(nextStatus);
         setLastActivity(new Date().toISOString());
       })
       .then((cleanup) => {
@@ -1835,7 +1840,7 @@ export function ScannerDiagnostics() {
       });
     void getScannerStatus()
       .then((nextStatus) => {
-        setStatus(nextStatus as unknown as ScannerStatus);
+        setStatus(nextStatus);
         setLastActivity(new Date().toISOString());
       })
       .catch(() => {
@@ -1851,12 +1856,12 @@ export function ScannerDiagnostics() {
       </div>
     );
 
-  const stateLabel: Record<ScannerStatus["state"], string> = {
+  const stateLabel = {
     connected: "Waiting for card",
     scanning: "Scan received",
     offline: "Scanner unavailable",
     error: "Scan error",
-  };
+  } satisfies Record<ScannerStatus["state"], string>;
 
   return (
     <div className="scanner-diag" role="status">
@@ -1994,13 +1999,11 @@ function AdminPanel() {
     setError("");
     const response = await nukeSheetsResync(true);
     setNuking(false);
-    if ((response as { success?: boolean }).success)
+    if (response.success) {
       setError("Google Sheets wiped; re-export queued from SQLite.");
-    else
-      setError(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Unable to reset Google Sheets.",
-      );
+    } else {
+      setError(response.error?.message ?? "Unable to reset Google Sheets.");
+    }
   };
   const load = useCallback(async () => {
     try {
@@ -2239,12 +2242,8 @@ export function DatabasePanel() {
       return;
     }
     try {
-      const selected = await openFileDialog({
-        multiple: false,
-        directory: false,
-        filters: [{ name: "Alpha Premier portable backup", extensions: ["apbackup", "db"] }],
-      });
-      if (!selected || typeof selected !== "string") return;
+      const selected = await pickRestoreBackupFile();
+      if (!selected) return;
       setRestoreFile(selected);
     } catch {
       setError("Unable to open the file picker.");
@@ -2447,18 +2446,15 @@ function UserEditor({
           form.employeeType === "EMPLOYEE" ? form.payrollProfileId : null,
       };
       const response = await saveAdminUser(payload, editing?.userId);
-      if ((response as { success?: boolean })?.success) {
+      if (response.success) {
         setMessage("Saved.");
         setEditing(null);
         onSaved();
       } else {
-        setMessage(
-          (response as { error?: { message?: string } })?.error?.message ??
-            "Unable to save user.",
-        );
+        setMessage(response.error?.message ?? "Unable to save user.");
       }
     } catch (err) {
-      const errMsg = typeof err === "string" ? err : (err as Error)?.message || "Unable to save user.";
+      const errMsg = toErrorMessage(err, "Unable to save user.");
       if (errMsg.includes("USER_CONFLICT")) {
         setMessage("This RFID card or User ID is already assigned to another user.");
       } else {
@@ -2473,18 +2469,15 @@ function UserEditor({
     setDeletingUserId(user.userId);
     try {
       const response = await deleteAdminUser(user.userId);
-      if ((response as { success?: boolean })?.success) {
+      if (response.success) {
         setMessage(`Deleted ${user.fullName}.`);
         if (editing?.userId === user.userId) setEditing(null);
         onSaved();
       } else {
-        setMessage(
-          (response as { error?: { message?: string } })?.error?.message ??
-            "Unable to delete user.",
-        );
+        setMessage(response.error?.message ?? "Unable to delete user.");
       }
     } catch (err) {
-      setMessage(typeof err === "string" ? err : (err as Error)?.message || "Unable to delete user.");
+      setMessage(toErrorMessage(err, "Unable to delete user."));
     } finally {
       setDeletingUserId("");
     }
@@ -2563,7 +2556,7 @@ function UserEditor({
               onChange={(e) =>
                 setForm({
                   ...form,
-                  employeeType: e.target.value as AdminUser["employeeType"],
+                  employeeType: e.target.value === "EMPLOYEE" ? "EMPLOYEE" : "INTERN",
                   dailyRate:
                     e.target.value === "INTERN" ? null : form.dailyRate,
                   payrollProfileId:
@@ -2584,7 +2577,7 @@ function UserEditor({
               onChange={(e) =>
                 setForm({
                   ...form,
-                  gender: e.target.value as UserGender | null,
+                  gender: e.target.value === "MALE" ? "MALE" : e.target.value === "FEMALE" ? "FEMALE" : null,
                 })
               }
             >
@@ -2635,7 +2628,7 @@ function UserEditor({
               onChange={(e) =>
                 setForm({
                   ...form,
-                  status: e.target.value as AdminUser["status"],
+                  status: e.target.value === "INACTIVE" ? "INACTIVE" : "ACTIVE",
                 })
               }
             >
@@ -2793,10 +2786,16 @@ const monthNames = [
   "December",
 ];
 
+interface SemiMonthlyCutoffRange {
+  cutoffStart: string;
+  cutoffEnd: string;
+  payrollCutoffLabel: string;
+}
+
 function computeSemiMonthlyCutoff(
   month: string,
   half: "first" | "second",
-): { cutoffStart: string; cutoffEnd: string; payrollCutoffLabel: string } {
+): SemiMonthlyCutoffRange {
   const [yearText, monthText] = month.split("-");
   const year = Number(yearText);
   const monthNumber = Number(monthText);
@@ -2893,24 +2892,15 @@ export function PayrollWorkspace({
         form.cutoffEnd,
         form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
       );
-      if ((response as { success?: boolean }).success) {
+      if (response.success) {
         setMessage("Payroll drafts were generated from completed attendance.");
         onSaved();
         setConfirmOpen(false);
       } else {
-        setMessage(
-          (response as { error?: { message?: string } }).error?.message ??
-            "Unable to save payroll.",
-        );
+        setMessage(response.error?.message ?? "Unable to save payroll.");
       }
     } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "Unable to save payroll.",
-      );
+      setMessage(toErrorMessage(error, "Unable to save payroll."));
     } finally {
       setSaving(false);
     }
@@ -3155,28 +3145,23 @@ function PayrollTable({
     setFinalizing(true);
     const response = await finalizePayrollCutoff(target.payrollId);
     setFinalizing(false);
-    if ((response as { success?: boolean }).success) {
+    if (response.success) {
       setMessage("Payroll finalized.");
       onFinalized();
-    } else
-      setMessage(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Unable to finalize payroll.",
-      );
+    } else {
+      setMessage(response.error?.message ?? "Unable to finalize payroll.");
+    }
   };
   const remove = async () => {
     if (!deleteTarget) return;
     const target = deleteTarget;
     setDeleteTarget(null);
     const response = await deletePayrollCutoff(target.payrollId);
-    if ((response as { success?: boolean }).success) {
+    if (response.success) {
       setMessage("Payroll deleted.");
       onFinalized();
     } else {
-      setMessage(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Unable to delete payroll.",
-      );
+      setMessage(response.error?.message ?? "Unable to delete payroll.");
     }
   };
   if (!records.length)
@@ -3509,7 +3494,7 @@ function AdminAttendance({
     (!departmentFilter || row.department === departmentFilter) &&
     (!statusFilter || row.status === statusFilter),
   );
-  const departments = [...new Set(rows.map((row) => row.department).filter(Boolean))] as string[];
+  const departments = [...new Set(rows.map((row) => row.department).filter((d): d is string => Boolean(d)))];
   const exportWorkbook = async () => {
     setExporting(true);
     const result = exportAttendanceCsv(filteredRows, date);
@@ -3657,18 +3642,16 @@ function AttendanceEditRow({
       expectedTimeIn: row.timeIn || null,
       expectedTimeOut: row.timeOut || null,
     });
-    if ((response as { success?: boolean }).success) {
+    if (response.success) {
       setMessage(
         timeOutIso && isLateTimeout(timeOutIso)
           ? "Saved — time-out is still after office hours, correction remains required."
           : "Saved",
       );
       onSaved();
-    } else
-      setMessage(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Conflict",
-      );
+    } else {
+      setMessage(response.error?.message ?? "Conflict");
+    }
   };
   const remove = async () => {
     setDeleteAttendanceConfirm(false);
@@ -3678,14 +3661,12 @@ function AttendanceEditRow({
       row.attendanceDate,
     );
     setDeleting(false);
-    if ((response as { success?: boolean }).success) {
+    if (response.success) {
       setMessage("Record deleted");
       onSaved();
-    } else
-      setMessage(
-        (response as { error?: { message?: string } }).error?.message ??
-          "Unable to delete record.",
-      );
+    } else {
+      setMessage(response.error?.message ?? "Unable to delete record.");
+    }
   };
   return (
     <>

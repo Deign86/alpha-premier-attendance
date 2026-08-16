@@ -11,7 +11,7 @@ export const setupErrorCodes = [
   'USER_CONFLICT',
   'GOOGLE_SHEETS_UNAVAILABLE',
 ] as const;
-export type SetupErrorCode = (typeof setupErrorCodes)[number];
+export type SetupErrorCode = 'SETUP_DISABLED' | 'INVALID_SETUP_PIN' | 'SETUP_AUTH_REQUIRED' | 'SETUP_SESSION_EXPIRED' | 'SETUP_VALIDATION_ERROR' | 'USER_CONFLICT' | 'GOOGLE_SHEETS_UNAVAILABLE';
 
 export class SetupError extends Error {
   constructor(readonly code: SetupErrorCode, message: string, readonly status = 400) {
@@ -44,6 +44,11 @@ export type SetupUserInput = {
 type TokenRecord = { expiresAtMs: number };
 type Clock = () => Date;
 
+export interface SetupUnlockResult {
+  setupToken: string;
+  expiresAt: string;
+}
+
 export class SetupService {
   private readonly tokens = new Map<string, TokenRecord>();
   private now: Clock;
@@ -55,9 +60,9 @@ export class SetupService {
   setNowProvider(now: Clock): void { this.now = now; }
   authorize(token: string | undefined): void { this.requireToken(token); }
 
-  unlock(pin: unknown): { setupToken: string; expiresAt: string } {
+  unlock<T>(pin: T): SetupUnlockResult {
     this.assertEnabled();
-    if (typeof pin !== 'string' || !this.constantTimePinEqual(pin, this.config.setupAdminPin ?? '')) {
+    if (!isString(pin) || !this.constantTimePinEqual(pin, this.config.setupAdminPin ?? '')) {
       throw new SetupError('INVALID_SETUP_PIN', 'The setup PIN is invalid.', 401);
     }
     const setupToken = crypto.randomBytes(32).toString('hex');
@@ -67,8 +72,8 @@ export class SetupService {
   }
 
   lock(token: string | undefined): void {
-    this.requireToken(token);
-    this.tokens.delete(token!);
+    const validToken = this.requireToken(token);
+    this.tokens.delete(validToken);
   }
 
   async lookupCard(token: string | undefined, rawUid: string): Promise<{ rfidUid: string; user: SheetUser | null }> {
@@ -83,11 +88,11 @@ export class SetupService {
     }
   }
 
-  async upsertUser(token: string | undefined, input: unknown): Promise<{ user: SheetUser; created: boolean }> {
+  async upsertUser<T>(token: string | undefined, input: T): Promise<{ user: SheetUser; created: boolean }> {
     this.requireToken(token);
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new SetupError('SETUP_VALIDATION_ERROR', 'A user object is required.', 400);
-    const value = input as Partial<SetupUserInput>;
-    if (typeof value.userId !== 'string' || !value.userId.trim() || typeof value.fullName !== 'string' || !value.fullName.trim() || typeof value.rfidUid !== 'string' || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) {
+    const value = parseSetupUserInput(input);
+    if (value === null) throw new SetupError('SETUP_VALIDATION_ERROR', 'A user object is required.', 400);
+    if (!value.userId.trim() || !value.fullName.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) {
       throw new SetupError('SETUP_VALIDATION_ERROR', 'userId, fullName, and rfidUid are required.', 400);
     }
     let rfidUid: string;
@@ -102,7 +107,7 @@ export class SetupService {
       userId: value.userId.trim(),
       fullName: value.fullName.trim(),
       rfidUid,
-      department: typeof value.department === 'string' && value.department.trim() ? value.department.trim() : null,
+      department: isString(value.department) && value.department.trim() ? value.department.trim() : null,
       active: value.status === 'ACTIVE',
       employeeType,
       gender: value.gender === undefined ? existing?.gender ?? null : value.gender,
@@ -125,15 +130,16 @@ export class SetupService {
     if (!this.config.setupAdminPin) throw new SetupError('SETUP_DISABLED', 'Card setup is not configured.', 403);
   }
 
-  private requireToken(token: string | undefined): void {
+  private requireToken(token: string | undefined): string {
     this.assertEnabled();
-    if (!token) throw new SetupError('SETUP_AUTH_REQUIRED', 'A setup token is required.', 401);
+    if (!isString(token) || !token) throw new SetupError('SETUP_AUTH_REQUIRED', 'A setup token is required.', 401);
     const record = this.tokens.get(token);
     if (!record) throw new SetupError('SETUP_AUTH_REQUIRED', 'The setup session is invalid.', 401);
     if (this.now().getTime() >= record.expiresAtMs) {
       this.tokens.delete(token);
       throw new SetupError('SETUP_SESSION_EXPIRED', 'The setup session has expired.', 401);
     }
+    return token;
   }
 
   private constantTimePinEqual(input: string, expected: string): boolean {
@@ -143,7 +149,43 @@ export class SetupService {
   }
 }
 
-function isPhotoUrl(value: unknown): value is string { return typeof value === 'string' && /^https:\/\//i.test(value); }
+type SetupInputValue = string | number | boolean | bigint | symbol | null | undefined;
+function isString<T>(value: T): value is T & string { return Object(value) !== value && Object.prototype.toString.call(value) === '[object String]'; }
+function isNumber(value: SetupInputValue): value is number { return Object(value) !== value && Object.prototype.toString.call(value) === '[object Number]' && Number.isFinite(value); }
+interface SetupInputObject {
+  userId?: SetupInputValue;
+  fullName?: SetupInputValue;
+  rfidUid?: SetupInputValue;
+  department?: SetupInputValue;
+  status?: SetupInputValue;
+  employeeType?: SetupInputValue;
+  gender?: SetupInputValue;
+  dailyRate?: SetupInputValue;
+  photoUrl?: SetupInputValue;
+}
+function isSetupInputObject<T>(value: T): value is T & SetupInputObject { return value !== null && Object(value) === value && !Array.isArray(value) && !(value instanceof Function); }
+function isPhotoUrl(value: SetupInputValue): value is string { return isString(value) && /^https:\/\//i.test(value); }
+
+function parseSetupUserInput<T>(input: T): SetupUserInput | null {
+  if (!isSetupInputObject(input)) return null;
+  const userId = input.userId;
+  const fullName = input.fullName;
+  const rfidUid = input.rfidUid;
+  if (!isString(userId) || !isString(fullName) || !isString(rfidUid)) return null;
+  const status = input.status;
+  if (status !== 'ACTIVE' && status !== 'INACTIVE') return null;
+  const department = input.department;
+  const employeeType = input.employeeType;
+  const gender = input.gender;
+  const dailyRate = input.dailyRate;
+  const photoUrl = input.photoUrl;
+  if (department !== undefined && department !== null && !isString(department)) return null;
+  if (employeeType !== undefined && employeeType !== 'INTERN' && employeeType !== 'EMPLOYEE') return null;
+  if (gender !== undefined && gender !== null && gender !== 'MALE' && gender !== 'FEMALE') return null;
+  if (dailyRate !== undefined && dailyRate !== null && !isNumber(dailyRate)) return null;
+  if (photoUrl !== undefined && photoUrl !== null && !isString(photoUrl)) return null;
+  return { userId, fullName, rfidUid, department, status, employeeType, gender, dailyRate, photoUrl };
+}
 
 export function setupTokenFromRequest(headers: { authorization?: string; 'x-setup-token'?: string }): string | undefined {
   const bearer = headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];

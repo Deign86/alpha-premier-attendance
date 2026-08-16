@@ -61,6 +61,7 @@ describe('announceTimeIn', () => {
   it('composes the greeting with the employee name and male honorific', () => {
     const { synthesis } = stubSpeechSynthesis([voice('Microsoft Zira - English (United States)')]);
     announceTimeIn('Good afternoon', 'Deign Lazaro', 'MALE');
+    // SAFETY: Mock call argument is SpeechSynthesisUtterance
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.text).toBe('Good afternoon Sir Deign Lazaro');
   });
@@ -68,6 +69,7 @@ describe('announceTimeIn', () => {
   it('uses Ma\'am for female employees', () => {
     const { synthesis } = stubSpeechSynthesis([]);
     announceTimeIn('Good morning', 'Maria Santos', 'FEMALE');
+    // SAFETY: Mock call argument is SpeechSynthesisUtterance
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.text).toBe('Good morning Ma\'am Maria Santos');
   });
@@ -75,6 +77,7 @@ describe('announceTimeIn', () => {
   it('falls back to Sir when gender is unset', () => {
     const { synthesis } = stubSpeechSynthesis([]);
     announceTimeIn('Good morning', 'Deign Lazaro', null);
+    // SAFETY: Mock call argument is SpeechSynthesisUtterance
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.text).toBe('Good morning Sir Deign Lazaro');
   });
@@ -84,6 +87,7 @@ describe('speak', () => {
   it('says goodbye with the employee name', () => {
     const { synthesis } = stubSpeechSynthesis([]);
     announceTimeOut('Deign Lazaro');
+    // SAFETY: Mock call argument is SpeechSynthesisUtterance
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.text).toBe('Good bye Deign Lazaro');
   });
@@ -93,6 +97,7 @@ describe('speak', () => {
     speak('Good morning');
     expect(synthesis.cancel).toHaveBeenCalledOnce();
     expect(synthesis.speak).toHaveBeenCalledOnce();
+    // SAFETY: Mock call argument is SpeechSynthesisUtterance
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.text).toBe('Good morning');
     expect(utterance.voice?.name).toContain('Zira');
@@ -101,6 +106,7 @@ describe('speak', () => {
   it('falls back to the default voice when no female voice exists', () => {
     const { synthesis } = stubSpeechSynthesis([voice('Microsoft David - English (United States)')]);
     speak('Good bye');
+    // SAFETY: Mock call argument is SpeechSynthesisUtterance
     const utterance = synthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
     expect(utterance.voice).toBeNull();
   });

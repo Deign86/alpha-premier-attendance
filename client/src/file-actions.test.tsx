@@ -1,18 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-
-vi.mock('./api', async () => {
-  const actual = await vi.importActual<typeof import('./api')>('./api');
-  return {
-    ...actual,
-    openGeneratedFile: vi.fn(async () => ({ ok: true, message: 'File opened.' })),
-    revealGeneratedFile: vi.fn(async () => ({ ok: true, message: 'File revealed in folder.' })),
-    openGeneratedDirectory: vi.fn(async () => ({ ok: true, message: 'Folder opened.' })),
-  };
-});
-
-import { openGeneratedFile, openGeneratedDirectory, revealGeneratedFile } from './api';
+import { tauriApi } from './tauri-api';
 import { GeneratedFileActions, type GeneratedFileResult } from './file-actions';
 
 const fileResult: GeneratedFileResult = {
@@ -24,6 +13,16 @@ const fileResult: GeneratedFileResult = {
 };
 
 describe('GeneratedFileActions', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // SAFETY: Clean up mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
   it('renders Open file and Show in folder when a file path exists', () => {
     render(<GeneratedFileActions result={fileResult} label="Payroll export" />);
     expect(screen.getByText('Payroll export')).toBeInTheDocument();
@@ -35,18 +34,20 @@ describe('GeneratedFileActions', () => {
   });
 
   it('opens the file when Open file is clicked', async () => {
+    const spy = vi.spyOn(tauriApi, 'openGeneratedFile').mockResolvedValueOnce({ success: true, message: 'File opened.' });
     const user = userEvent.setup();
     render(<GeneratedFileActions result={fileResult} />);
     await user.click(screen.getByRole('button', { name: /open file/i }));
-    expect(openGeneratedFile).toHaveBeenCalledWith(fileResult.filePath);
+    expect(spy).toHaveBeenCalledWith('', fileResult.filePath);
     expect(await screen.findByText('File opened.')).toBeInTheDocument();
   });
 
   it('reveals the exact file when Show in folder is clicked', async () => {
+    const spy = vi.spyOn(tauriApi, 'revealGeneratedFile').mockResolvedValueOnce({ success: true, message: 'File revealed in folder.' });
     const user = userEvent.setup();
     render(<GeneratedFileActions result={fileResult} />);
     await user.click(screen.getByRole('button', { name: /show in folder/i }));
-    expect(revealGeneratedFile).toHaveBeenCalledWith(fileResult.filePath);
+    expect(spy).toHaveBeenCalledWith('', fileResult.filePath);
     expect(await screen.findByText('File revealed in folder.')).toBeInTheDocument();
   });
 
@@ -58,10 +59,11 @@ describe('GeneratedFileActions', () => {
   });
 
   it('opens the directory when Open folder is clicked', async () => {
+    const spy = vi.spyOn(tauriApi, 'openGeneratedDirectory').mockResolvedValueOnce({ success: true, message: 'Folder opened.' });
     const user = userEvent.setup();
     render(<GeneratedFileActions result={{ filePath: null, directoryPath: 'C:\\Data\\exports', fileName: null, fileKind: 'csv', isPortableMode: true }} />);
     await user.click(screen.getByRole('button', { name: /open folder/i }));
-    expect(openGeneratedDirectory).toHaveBeenCalledWith('C:\\Data\\exports');
+    expect(spy).toHaveBeenCalledWith('', 'C:\\Data\\exports');
     expect(await screen.findByText('Folder opened.')).toBeInTheDocument();
   });
 
@@ -71,7 +73,7 @@ describe('GeneratedFileActions', () => {
   });
 
   it('surfaces a friendly message when the file action fails', async () => {
-    vi.mocked(openGeneratedFile).mockResolvedValueOnce({ ok: false, message: 'The file could not be found. It may have been moved or deleted.' });
+    vi.spyOn(tauriApi, 'openGeneratedFile').mockRejectedValueOnce('FILE_NOT_FOUND');
     const user = userEvent.setup();
     render(<GeneratedFileActions result={fileResult} />);
     await user.click(screen.getByRole('button', { name: /open file/i }));

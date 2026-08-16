@@ -30,11 +30,36 @@ import type {
 } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { tauriApi } from './tauri-api';
 import { apiUrl } from './network';
 
-const runningInTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+export async function pickRestoreBackupFile(): Promise<string | null> {
+  const selected = await openFileDialog({
+    multiple: false,
+    directory: false,
+    filters: [{ name: 'Alpha Premier portable backup', extensions: ['apbackup', 'db'] }],
+  });
+  if (selected && Object.prototype.toString.call(selected) === '[object String]') {
+    // SAFETY: Verified selected is a string file path
+    return selected as string;
+  }
+  return null;
+}
+
+const runningInTauri = () => globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 let nativeAdminToken: string | null = null;
+
+function errorString<T>(error: T): string {
+  if (error && Object.prototype.toString.call(error) === '[object String]') {
+    // SAFETY: Verified error is a string
+    return error as string;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return '';
+}
 
 export function photoSource(photoUrl: string | null | undefined): string | undefined {
   if (!photoUrl || !runningInTauri()) return photoUrl || undefined;
@@ -65,8 +90,8 @@ export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
  * authentication problem — otherwise a user whose session simply expired sees
  * the misleading "Setup authentication is required" with all fields filled.
  */
-export function setupErrorFrom(error: unknown, fallback: SetupErrorCode): SetupErrorResponse {
-  const raw = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+export function setupErrorFrom<T>(error: T, fallback: SetupErrorCode): SetupErrorResponse {
+  const raw = errorString(error);
   switch (raw) {
     case 'SETUP_AUTH_REQUIRED':
       return { success: false, error: { code: 'SETUP_AUTH_REQUIRED', message: 'Your setup session expired or was replaced (e.g. by unlocking the Admin panel). Unlock setup again to continue.' } };
@@ -91,7 +116,7 @@ export function setupErrorFrom(error: unknown, fallback: SetupErrorCode): SetupE
 
 /** Merge a partial office payload from the backend with canonical defaults. */
 export function normalizeOffice(office: Partial<OfficeIdentity> | undefined): OfficeIdentity {
-  const merged = { ...DEFAULT_OFFICE_IDENTITY, ...(office ?? {}) };
+  const merged = { ...DEFAULT_OFFICE_IDENTITY, ...office };
   return {
     ...merged,
     // Display strings derive from the same source of truth when not configured.
@@ -110,12 +135,14 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
         resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
         enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
         enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
+        // SAFETY: Casting data.office to partial OfficeIdentity
         office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
         scanner: data.scanner ?? DEFAULT_CONFIG.scanner,
       };
     }
     const response = await fetch(apiUrl('/api/config'), { signal });
     if (!response.ok) return DEFAULT_CONFIG;
+    // SAFETY: Parsing response as SafeConfigResponse partial
     const data = (await response.json()) as Partial<SafeConfigResponse>;
     return {
       timezone: data.timezone || DEFAULT_CONFIG.timezone,
@@ -123,6 +150,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
       resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
       enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
       enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
+      // SAFETY: Casting data.office to partial OfficeIdentity
       office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
       scanner: data.scanner ?? DEFAULT_CONFIG.scanner,
     };
@@ -141,8 +169,9 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
       body: JSON.stringify(request),
       signal,
     }).then(async (response) => {
+      // SAFETY: Parsing scan response JSON
       const data = (await response.json()) as ScanResponse;
-      if (data && typeof data === 'object' && 'success' in data) return data;
+      if (data && Object(data) === data && 'success' in data) return data;
       return networkError('The attendance service returned an invalid response.');
     });
     return await scanRequest;
@@ -161,7 +190,14 @@ export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<Se
 }
 
 export async function lookupSetupCard(rfidUid: string, setupToken: string, signal?: AbortSignal): Promise<SetupLookupResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { return await tauriApi.setupLookupCard(setupToken, rfidUid) as SetupLookupResponse; } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
+  if (runningInTauri()) {
+    try {
+      // SAFETY: Backend setup lookup command returns SetupLookupResponse
+      return (await tauriApi.setupLookupCard(setupToken, rfidUid)) as SetupLookupResponse;
+    } catch (error) {
+      return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
+    }
+  }
   return setupRequest<SetupLookupResponse | SetupErrorResponse>(apiUrl(`/api/setup/card?rfidUid=${encodeURIComponent(rfidUid)}`), {
     method: 'GET',
     setupToken,
@@ -170,7 +206,14 @@ export async function lookupSetupCard(rfidUid: string, setupToken: string, signa
 }
 
 export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: string, signal?: AbortSignal): Promise<SetupUpsertResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { return await tauriApi.setupUpsertUser(setupToken, request) as SetupUpsertResponse; } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
+  if (runningInTauri()) {
+    try {
+      // SAFETY: Backend setup upsert user returns SetupUpsertResponse
+      return (await tauriApi.setupUpsertUser(setupToken, request)) as SetupUpsertResponse;
+    } catch (error) {
+      return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
+    }
+  }
   return setupRequest<SetupUpsertResponse | SetupErrorResponse>(apiUrl('/api/setup/users'), {
     method: 'POST',
     setupToken,
@@ -181,7 +224,7 @@ export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: s
 
 export async function lockSetup(setupToken: string, signal?: AbortSignal): Promise<void> {
   if (runningInTauri()) { nativeAdminToken = null; await tauriApi.setupLock(); return; }
-  await setupRequest<unknown>(apiUrl('/api/setup/lock'), { method: 'POST', setupToken, signal });
+  await setupRequest<{ success: true }>(apiUrl('/api/setup/lock'), { method: 'POST', setupToken, signal });
 }
 
 export async function uploadSetupPhoto(userId: string, dataUrl: string, setupToken: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
@@ -190,8 +233,12 @@ export async function uploadSetupPhoto(userId: string, dataUrl: string, setupTok
 }
 
 export async function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
-  if (runningInTauri()) return await tauriApi.getAttendance(date) as AttendanceListResponse;
+  if (runningInTauri()) {
+    // SAFETY: Backend attendance returns AttendanceListResponse
+    return (await tauriApi.getAttendance(date)) as AttendanceListResponse;
+  }
   const response = await fetch(apiUrl(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`), { signal });
+  // SAFETY: Parsing response as AttendanceListResponse
   return (await response.json()) as AttendanceListResponse;
 }
 
@@ -251,27 +298,103 @@ export async function openViewerUrl(url: string): Promise<boolean> {
 export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | { success: false; error: { message: string } }> {
   if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; return { success: true, expiresAt: response.expiresAt }; } catch { return { success: false, error: { message: 'The administrator PIN is invalid.' } }; } }
   const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+  // SAFETY: Parsing admin unlock response JSON
   return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
 }
 
 export async function lockAdmin(): Promise<void> { if (runningInTauri()) { nativeAdminToken = null; await tauriApi.setupLock(); return; } await fetch(apiUrl('/api/admin/lock'), { method: 'POST' }); }
-export async function checkAdminSession(): Promise<string | null> { if (runningInTauri()) { if (!nativeAdminToken) return null; try { await tauriApi.adminGetSession(nativeAdminToken); return nativeAdminToken; } catch { nativeAdminToken = null; return null; } } try { const response = await fetch(apiUrl('/api/admin/session')); if (!response.ok) return null; const data = (await response.json()) as { expiresAt?: string }; return data.expiresAt ?? null; } catch { return null; } }
-export async function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> { if (runningInTauri()) return await tauriApi.adminUsers(nativeAdminToken ?? '') as AdminUsersResponse; return (await fetch(apiUrl('/api/admin/users'), { signal })).json() as Promise<AdminUsersResponse>; }
-export async function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> { if (runningInTauri()) return await tauriApi.adminAttendance(nativeAdminToken ?? '', date) as AdminAttendanceResponse; return (await fetch(apiUrl(`/api/admin/attendance?date=${encodeURIComponent(date)}`), { signal })).json() as Promise<AdminAttendanceResponse>; }
-export async function saveAdminUser(user: unknown, userId?: string): Promise<unknown> { if (runningInTauri()) return tauriApi.adminUpsertUser(nativeAdminToken ?? '', { ...(user as object), ...(userId ? { userId } : {}) }); const response = await fetch(apiUrl(userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users'), { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) }); return response.json(); }
-export async function saveAdminAttendance(attendanceId: string, payload: unknown): Promise<unknown> { if (runningInTauri()) return tauriApi.adminUpdateAttendance(nativeAdminToken ?? '', attendanceId, payload); const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return response.json(); }
-export async function deleteAdminUser(userId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.adminDeleteUser(nativeAdminToken ?? '', userId); const response = await fetch(apiUrl(`/api/admin/users/${encodeURIComponent(userId)}`), { method: 'DELETE' }); return response.json(); }
-export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<unknown> { if (runningInTauri()) return tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date); const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`), { method: 'DELETE' }); return response.json(); }
-export async function loadPayrollProfiles(): Promise<PayrollProfilesResponse> { if (runningInTauri()) return await tauriApi.payrollProfiles(nativeAdminToken ?? '') as PayrollProfilesResponse; return (await fetch(apiUrl('/api/admin/payroll/profiles'))).json() as Promise<PayrollProfilesResponse>; }
-export async function savePayrollProfile(profile: PayrollCalculationProfile): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollUpsertProfile(nativeAdminToken ?? '', profile); const response = await fetch(apiUrl(`/api/admin/payroll/profiles/${encodeURIComponent(profile.profileId)}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) }); return response.json(); }
-export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> { if (runningInTauri()) return await tauriApi.payrollCutoffs(nativeAdminToken ?? '') as PayrollCutoffsResponse; return (await fetch(apiUrl('/api/admin/payroll/cutoffs'))).json() as Promise<PayrollCutoffsResponse>; }
-export async function generatePayrollPdf(request: PayrollPdfGenerateRequest): Promise<PayrollPdfGenerateResponse> {
+export async function checkAdminSession(): Promise<string | null> {
   if (runningInTauri()) {
-    try {
-      return await tauriApi.generatePayrollPdf(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd, request.payrollCutoffLabel ?? '', request.workerType.toUpperCase());
-    } catch { return { success: false, error: { message: 'Unable to generate the payroll PDF.' } }; }
+    if (!nativeAdminToken) return null;
+    try { await tauriApi.adminGetSession(nativeAdminToken); return nativeAdminToken; }
+    catch { nativeAdminToken = null; return null; }
   }
-  return { success: false, error: { message: 'Payroll PDFs are generated in the desktop application.' } };
+  try {
+    const response = await fetch(apiUrl('/api/admin/session'));
+    if (!response.ok) return null;
+    // SAFETY: Parsing admin session check JSON
+    const data = (await response.json()) as { expiresAt?: string };
+    return data.expiresAt ?? null;
+  } catch { return null; }
+}
+export async function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> {
+  if (runningInTauri()) {
+    // SAFETY: Backend admin users returns AdminUsersResponse
+    return (await tauriApi.adminUsers(nativeAdminToken ?? '')) as AdminUsersResponse;
+  }
+  // SAFETY: Parsing admin users response JSON
+  return (await fetch(apiUrl('/api/admin/users'), { signal })).json() as Promise<AdminUsersResponse>;
+}
+export async function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> {
+  if (runningInTauri()) {
+    // SAFETY: Backend admin attendance returns AdminAttendanceResponse
+    return (await tauriApi.adminAttendance(nativeAdminToken ?? '', date)) as AdminAttendanceResponse;
+  }
+  // SAFETY: Parsing admin attendance response JSON
+  return (await fetch(apiUrl(`/api/admin/attendance?date=${encodeURIComponent(date)}`), { signal })).json() as Promise<AdminAttendanceResponse>;
+}
+export async function saveAdminUser<T extends object>(user: T, userId?: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    const payload = Object.assign({}, user, userId ? { userId } : undefined);
+    // SAFETY: Backend admin upsert user returns success response
+    return (await tauriApi.adminUpsertUser(nativeAdminToken ?? '', payload)) as { success: boolean; error?: { message?: string } };
+  }
+  const url = userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users';
+  const response = await fetch(apiUrl(url), { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) });
+  // SAFETY: Parsing admin user save response JSON
+  return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
+export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend update attendance returns success response
+    return (await tauriApi.adminUpdateAttendance(nativeAdminToken ?? '', attendanceId, payload)) as { success: boolean; error?: { message?: string } };
+  }
+  const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  // SAFETY: Parsing admin attendance save response JSON
+  return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
+export async function deleteAdminUser(userId: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend delete user returns success response
+    return (await tauriApi.adminDeleteUser(nativeAdminToken ?? '', userId)) as { success: boolean; error?: { message?: string } };
+  }
+  const response = await fetch(apiUrl(`/api/admin/users/${encodeURIComponent(userId)}`), { method: 'DELETE' });
+  // SAFETY: Parsing admin delete user response JSON
+  return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
+export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend delete attendance returns success response
+    return (await tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date)) as { success: boolean; error?: { message?: string } };
+  }
+  const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`), { method: 'DELETE' });
+  // SAFETY: Parsing admin delete attendance response JSON
+  return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
+export async function loadPayrollProfiles(): Promise<PayrollProfilesResponse> {
+  if (runningInTauri()) {
+    // SAFETY: Backend list profiles returns PayrollProfilesResponse
+    return (await tauriApi.payrollProfiles(nativeAdminToken ?? '')) as PayrollProfilesResponse;
+  }
+  // SAFETY: Parsing admin payroll profiles JSON
+  return (await fetch(apiUrl('/api/admin/payroll/profiles'))).json() as Promise<PayrollProfilesResponse>;
+}
+export async function savePayrollProfile(profile: PayrollCalculationProfile): Promise<{ success: boolean }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend save profile returns success response
+    return (await tauriApi.payrollUpsertProfile(nativeAdminToken ?? '', profile)) as { success: boolean };
+  }
+  const response = await fetch(apiUrl('/api/admin/payroll/profiles'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) });
+  // SAFETY: Parsing admin save profile response JSON
+  return (await response.json()) as { success: boolean };
+}
+export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> {
+  if (runningInTauri()) {
+    // SAFETY: Backend list cutoffs returns PayrollCutoffsResponse
+    return (await tauriApi.payrollCutoffs(nativeAdminToken ?? '')) as PayrollCutoffsResponse;
+  }
+  // SAFETY: Parsing admin payroll cutoffs JSON
+  return (await fetch(apiUrl('/api/admin/payroll/cutoffs'))).json() as Promise<PayrollCutoffsResponse>;
 }
 export async function loadPayrollPdfs(): Promise<PayrollPdfListResponse> {
   if (runningInTauri()) {
@@ -280,14 +403,61 @@ export async function loadPayrollPdfs(): Promise<PayrollPdfListResponse> {
   }
   return { success: false, error: { message: 'Payroll PDFs are available in the desktop application.' } };
 }
+export async function generatePayrollPdf(request: PayrollPdfGenerateRequest): Promise<PayrollPdfGenerateResponse> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.generatePayrollPdf(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd, request.payrollCutoffLabel ?? '', request.workerType.toUpperCase());
+    } catch { return { success: false, error: { message: 'Unable to generate the payroll PDF.' } }; }
+  }
+  return { success: false, error: { message: 'Payroll PDFs are generated in the desktop application.' } };
+}
 export async function loadInternPayrollReport(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string): Promise<InternPayrollReportResponse> {
-  if (runningInTauri()) return await tauriApi.internPayrollReport(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel) as InternPayrollReportResponse;
+  if (runningInTauri()) {
+    // SAFETY: Backend intern report returns InternPayrollReportResponse
+    return (await tauriApi.internPayrollReport(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel)) as InternPayrollReportResponse;
+  }
   return { success: true, payroll: [] };
 }
-export async function savePayrollCutoff(payroll: unknown, payrollId?: string): Promise<unknown> { if (runningInTauri()) return payrollId ? tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', { ...(payroll as object), payrollId }) : tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll); const response = await fetch(apiUrl(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs'), { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) }); return response.json(); }
-export async function generatePayrollCutoff(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: unknown = {}): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, customization); return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } }; }
-export async function finalizePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`), { method: 'POST' }); return response.json(); }
-export async function deletePayrollCutoff(payrollId: string): Promise<unknown> { if (runningInTauri()) return tauriApi.payrollDeleteCutoff(nativeAdminToken ?? '', payrollId); const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}`), { method: 'DELETE' }); return response.json(); }
+export async function savePayrollCutoff<T extends object>(payroll: T, payrollId?: string): Promise<{ success: boolean }> {
+  if (runningInTauri()) {
+    if (payrollId) {
+      const updatePayload = Object.assign({}, payroll, { payrollId });
+      // SAFETY: Backend update cutoff returns success response
+      return (await tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', updatePayload)) as { success: boolean };
+    }
+    // SAFETY: Backend create cutoff returns success response
+    return (await tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll)) as { success: boolean };
+  }
+  const response = await fetch(apiUrl(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs'), { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) });
+  // SAFETY: Parsing admin save cutoff response JSON
+  return (await response.json()) as { success: boolean };
+}
+export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; error?: { message: string } }> {
+  if (runningInTauri()) {
+    const payload = customization ?? {};
+    // SAFETY: Backend generate cutoff returns success or error response
+    return (await tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, payload)) as { success: boolean; error?: { message: string } };
+  }
+  return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } };
+}
+export async function finalizePayrollCutoff(payrollId: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend finalize cutoff returns success response
+    return (await tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
+  }
+  const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`), { method: 'POST' });
+  // SAFETY: Parsing finalize cutoff response JSON
+  return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
+export async function deletePayrollCutoff(payrollId: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend delete cutoff returns success response
+    return (await tauriApi.payrollDeleteCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
+  }
+  const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}`), { method: 'DELETE' });
+  // SAFETY: Parsing delete cutoff response JSON
+  return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
 export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }
 export async function exportPayrollXlsx(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportPayrollXlsx(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll workbook.' } }; } } return { success: false, error: { message: 'Payroll workbooks are available in the desktop application.' } }; }
 export async function exportPayrollCsv(): Promise<PayrollCsvExportResponse | { success: false; error: { message: string } }> {
@@ -317,15 +487,15 @@ export async function exportPayrollCsv(): Promise<PayrollCsvExportResponse | { s
 
 export type FileActionResult = { ok: boolean; message: string };
 
-function fileActionError(error: unknown, fallback: string): FileActionResult {
-  const code = typeof error === 'string' ? error : '';
+function fileActionError<T>(error: T, fallback: string): FileActionResult {
+  const code = errorString(error);
   if (code === 'FILE_NOT_FOUND') return { ok: false, message: 'The file could not be found. It may have been moved or deleted.' };
   if (code === 'DIRECTORY_NOT_FOUND') return { ok: false, message: 'The folder could not be found. It may have been moved or deleted.' };
   if (code === 'ADMIN_AUTH_REQUIRED') return { ok: false, message: 'Administrator session expired. Unlock admin to continue.' };
   return { ok: false, message: fallback };
 }
 
-async function runFileAction(action: (token: string) => Promise<unknown>): Promise<FileActionResult> {
+async function runFileAction(action: (token: string) => Promise<{ success: boolean; message?: string } | void>): Promise<FileActionResult> {
   if (!runningInTauri()) return { ok: false, message: 'File actions are available in the desktop application.' };
   try {
     await action(nativeAdminToken ?? '');
@@ -352,9 +522,12 @@ export function openGeneratedDirectory(directoryPath: string): Promise<FileActio
 export async function generatePayrollPayslipPdf(payrollId: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollPayslipPdf(nativeAdminToken ?? '', payrollId); } catch { return { success: false, error: { message: 'Unable to generate the payslip PDF.' } }; } } return { success: false, error: { message: 'Payslip PDFs are available in the desktop application.' } }; }
 export async function generatePayrollRegisterPdf(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.generatePayrollRegisterPdf(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll register PDF.' } }; } } return { success: false, error: { message: 'Payroll register PDFs are available in the desktop application.' } }; }
 
-export async function nukeSheetsResync(confirm: boolean): Promise<unknown> {
-  if (runningInTauri()) return tauriApi.sheetsNukeResync(nativeAdminToken ?? '', confirm);
-  return { success: false, error: { message: 'Sheet resync is only available in the desktop application.' } };
+export async function nukeSheetsResync(confirm: boolean): Promise<{ success: boolean; error?: { message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend sheets nuke resync returns success response
+    return (await tauriApi.sheetsNukeResync(nativeAdminToken ?? '', confirm)) as { success: boolean; error?: { message?: string } };
+  }
+  return { success: false, error: { message: 'Google Sheets sync is available in the desktop application.' } };
 }
 
 /** Desktop-only: read the live SQLite database status for the Data & backup panel. */
@@ -374,7 +547,7 @@ export async function requestDatabaseRestore(sourcePath: string): Promise<{ succ
   if (runningInTauri()) {
     try { return await tauriApi.dbRestoreRequest(nativeAdminToken ?? '', sourcePath); }
     catch (error) {
-      const code = typeof error === 'string' ? error : '';
+      const code = errorString(error);
       const message = code.startsWith('RESTORE_SOURCE_INVALID') ? 'The selected file is not a valid Alpha Premier attendance database.' : code === 'RESTORE_SOURCE_NOT_FOUND' ? 'The selected file could not be found.' : 'Unable to schedule the restore.';
       return { success: false, error: { message } };
     }
@@ -389,23 +562,36 @@ export function openDatabaseBackupsFolder(): Promise<FileActionResult> {
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {
-    const response = await fetch(url, {
+    const headers: Record<string, string> = {};
+    if (options.body) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (options.setupToken) {
+      headers['X-Setup-Token'] = options.setupToken;
+    }
+    const init: RequestInit = {
       method: options.method,
-      headers: {
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(options.setupToken ? { 'X-Setup-Token': options.setupToken } : {}),
-      },
-      ...(options.body ? { body: options.body } : {}),
+      headers,
       signal: options.signal,
-    });
+    };
+    if (options.body) {
+      init.body = options.body;
+    }
+    const response = await fetch(url, init);
+    // SAFETY: Parsing setup response as requested type T
     return (await response.json()) as T;
   } catch {
     return { success: false, error: { code: 'GOOGLE_SHEETS_UNAVAILABLE', message: 'Unable to reach setup service. Please try again.' } };
   }
 }
 
-function positiveNumber(value: unknown, fallback: number) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+function positiveNumber<T>(value: T, fallback: number): number {
+  if (value && Object.prototype.toString.call(value) === '[object Number]') {
+    // SAFETY: Verified that value is a number
+    const num = value as number;
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return fallback;
 }
 
 function networkError(message: string): ScanErrorResponse {

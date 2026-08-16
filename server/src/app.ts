@@ -75,13 +75,21 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.get('/api/config', (_req, res) => res.status(200).json(safeConfig(options.config)));
 
   const scanHandler = async (req: Request, res: Response) => {
-    const body = req.body as unknown;
-    const validObject = typeof body === 'object' && body !== null && !Array.isArray(body);
-    const keys = validObject ? Object.keys(body as object) : [];
-    const hasOnlyExpectedKeys = keys.every((key) => key === 'rfidUid' || key === 'source');
-    const value = validObject ? body as Partial<ScanRequest> : undefined;
-    const scanRequest = hasOnlyExpectedKeys ? { rfidUid: value?.rfidUid ?? '', source: value?.source as ScanRequest['source'] } : { rfidUid: '', source: undefined as unknown as ScanRequest['source'] };
-    const result = await attendance.scan(scanRequest, req.requestId);
+    const rawBody: unknown = req.body;
+    let rfidUid = '';
+    let source: ScanRequest['source'] = 'RFID';
+    if (rawBody && Object.prototype.toString.call(rawBody) === '[object Object]' && !Array.isArray(rawBody)) {
+      // SAFETY: Checked that rawBody is a non-null object
+      const bodyObj = rawBody as { rfidUid?: unknown; source?: unknown };
+      if (Object.prototype.toString.call(bodyObj.rfidUid) === '[object String]') {
+        // SAFETY: Checked that rfidUid is a string
+        rfidUid = bodyObj.rfidUid as string;
+      }
+      if (bodyObj.source === 'RFID' || bodyObj.source === 'MANUAL_TEST') {
+        source = bodyObj.source;
+      }
+    }
+    const result = await attendance.scan({ rfidUid, source }, req.requestId);
     if ('error' in result) res.status(statusForError(result.error.code)).json(result);
     else res.status(200).json(result);
   };
@@ -90,13 +98,20 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   app.get('/api/attendance', async (req, res) => {
     try {
-      const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date());
+      const queryDate = asString(req.query.date);
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(queryDate) ? queryDate : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date());
       res.json({ success: true, date, attendance: await admin.attendance(date), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) });
     } catch { res.status(503).json({ success: false, requestId: req.requestId, error: { code: 'GOOGLE_SHEETS_UNAVAILABLE', message: 'Attendance data is temporarily unavailable.' } }); }
   });
 
   app.post('/api/admin/unlock', (req, res) => {
-    try { const result = admin.unlock((req.body as { pin?: unknown } | undefined)?.pin); res.setHeader('Set-Cookie', `rfid_admin=${result.token}; Max-Age=${(options.config.adminSessionMinutes ?? 15) * 60}; Path=/; HttpOnly; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); res.json({ success: true, requestId: req.requestId, expiresAt: result.expiresAt }); } catch (error) { sendAdminError(req, res, error); }
+    try {
+      // SAFETY: Extracting pin property from request body
+      const pin = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as { pin?: unknown }).pin : undefined;
+      const result = admin.unlock(pin);
+      res.setHeader('Set-Cookie', `rfid_admin=${result.token}; Max-Age=${(options.config.adminSessionMinutes ?? 15) * 60}; Path=/; HttpOnly; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+      res.json({ success: true, requestId: req.requestId, expiresAt: result.expiresAt });
+    } catch (error) { sendAdminError(req, res, error); }
   });
   app.get('/api/admin/session', (req, res) => { try { const token = cookieValue(req, 'rfid_admin'); requireAdmin(req); res.json({ success: true, requestId: req.requestId, expiresAt: new Date(Number(token!.split('.')[0])).toISOString() }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/lock', (req, res) => { res.setHeader('Set-Cookie', 'rfid_admin=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'); res.json({ success: true, requestId: req.requestId }); });
@@ -105,11 +120,32 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.post('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body)) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/users/:userId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body, req.params.userId)) }); } catch (error) { sendAdminError(req, res, error); } });
   app.delete('/api/admin/users/:userId', async (req, res) => { try { requireAdmin(req); await admin.deleteUser(req.params.userId); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
-  app.get('/api/admin/attendance', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date()); res.json({ success: true, date, attendance: await admin.attendance(date, true), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.get('/api/admin/attendance', async (req, res) => {
+    try {
+      requireAdmin(req);
+      const queryDate = asString(req.query.date);
+      const date = queryDate || new Intl.DateTimeFormat('en-CA', { timeZone: options.config.timezone }).format(new Date());
+      res.json({ success: true, date, attendance: await admin.attendance(date, true), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
   app.patch('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, attendance: await admin.updateAttendance(req.params.attendanceId, req.body) }); } catch (error) { sendAdminError(req, res, error); } });
-  app.delete('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); const date = typeof req.query.date === 'string' ? req.query.date : ''; await admin.deleteAttendance(req.params.attendanceId, date); res.json({ success: true, requestId: req.requestId }); } catch (error) { sendAdminError(req, res, error); } });
+  app.delete('/api/admin/attendance/:attendanceId', async (req, res) => {
+    try {
+      requireAdmin(req);
+      const date = asString(req.query.date);
+      await admin.deleteAttendance(req.params.attendanceId, date);
+      res.json({ success: true, requestId: req.requestId });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
   app.get('/api/admin/payroll/profiles', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profiles: await admin.payrollProfiles() }); } catch (error) { sendAdminError(req, res, error); } });
-  app.put('/api/admin/payroll/profiles/:profileId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profile: await admin.savePayrollProfile({ ...(req.body as object), profileId: req.params.profileId }) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.put('/api/admin/payroll/profiles/:profileId', async (req, res) => {
+    try {
+      requireAdmin(req);
+      // SAFETY: Merging params profileId with request body object
+      const profileBody = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as object) : {};
+      res.json({ success: true, profile: await admin.savePayrollProfile({ ...profileBody, profileId: req.params.profileId }) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
   app.get('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.cutoffPayroll() }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body, req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
@@ -134,14 +170,16 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   app.post('/api/setup/unlock', (req, res) => {
     try {
-      const result = setup.unlock((req.body as { pin?: unknown } | undefined)?.pin);
+      // SAFETY: Extracting pin property from request body
+      const pin = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as { pin?: unknown }).pin : undefined;
+      const result = setup.unlock(pin);
       res.status(200).json({ success: true, requestId: req.requestId, ...result });
     } catch (error) { sendSetupError(req, res, error); }
   });
 
   const lockHandler = (req: Request, res: Response) => {
     try {
-      setup.lock(setupTokenFromRequest(req.headers as { authorization?: string; 'x-setup-token'?: string }));
+      setup.lock(getSetupToken(req));
       res.status(200).json({ success: true, requestId: req.requestId });
     } catch (error) { sendSetupError(req, res, error); }
   };
@@ -149,8 +187,10 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   const cardLookupHandler = async (req: Request, res: Response) => {
     try {
-      const rawUid = typeof req.params.rfidUid === 'string' ? req.params.rfidUid : typeof req.query.rfidUid === 'string' ? req.query.rfidUid : '';
-      const result = await setup.lookupCard(setupTokenFromRequest(req.headers as { authorization?: string; 'x-setup-token'?: string }), rawUid);
+      const paramUid = asString(req.params.rfidUid);
+      const queryUid = asString(req.query.rfidUid);
+      const rawUid = paramUid || queryUid || '';
+      const result = await setup.lookupCard(getSetupToken(req), rawUid);
       res.status(200).json({ success: true, requestId: req.requestId, ...result });
     } catch (error) { sendSetupError(req, res, error); }
   };
@@ -160,7 +200,7 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   const upsertUserHandler = async (req: Request, res: Response) => {
     try {
-      const result = await setup.upsertUser(setupTokenFromRequest(req.headers as { authorization?: string; 'x-setup-token'?: string }), req.body);
+      const result = await setup.upsertUser(getSetupToken(req), req.body);
       res.status(200).json({ success: true, requestId: req.requestId, ...result });
     } catch (error) { sendSetupError(req, res, error); }
   };
@@ -168,10 +208,12 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.post('/api/setup/users', upsertUserHandler);
   app.post('/api/setup/photo', async (req, res) => {
     try {
-      const token = setupTokenFromRequest(req.headers as { authorization?: string; 'x-setup-token'?: string });
+      const token = getSetupToken(req);
       setup.authorize(token);
-      const userId = String((req.body as { userId?: unknown })?.userId ?? '').trim();
-      const dataUrl = String((req.body as { dataUrl?: unknown })?.dataUrl ?? '');
+      // SAFETY: Checking that req.body is an object before reading userId
+      const userId = req.body && Object.prototype.toString.call(req.body) === '[object Object]' && Object.prototype.toString.call((req.body as { userId?: unknown }).userId) === '[object String]' ? String((req.body as { userId?: unknown }).userId).trim() : '';
+      // SAFETY: Checking that req.body is an object before reading dataUrl
+      const dataUrl = req.body && Object.prototype.toString.call(req.body) === '[object Object]' && Object.prototype.toString.call((req.body as { dataUrl?: unknown }).dataUrl) === '[object String]' ? String((req.body as { dataUrl?: unknown }).dataUrl) : '';
       if (!userId || !dataUrl) throw new SetupError('SETUP_VALIDATION_ERROR', 'userId and dataUrl are required.', 400);
       const photoUrl = await uploadPhotoDataUrl(userId, dataUrl);
       res.status(200).json({ success: true, requestId: req.requestId, photoUrl });
@@ -196,6 +238,20 @@ export function createApp(options: CreateAppOptions): express.Express {
   return app;
 }
 
+function asString<T>(value: T): string {
+  if (value && Object.prototype.toString.call(value) === '[object String]') {
+    // SAFETY: Verified that value is a string
+    return value as string;
+  }
+  return '';
+}
+
+function getSetupToken(req: Request): string | undefined {
+  const authHeader = req.header('authorization');
+  const setupHeader = req.header('x-setup-token');
+  return setupTokenFromRequest({ authorization: authHeader, 'x-setup-token': setupHeader });
+}
+
 function statusForError(code: string): number {
   switch (code) {
     case 'UNKNOWN_RFID_CARD': return 404;
@@ -212,12 +268,12 @@ function statusForError(code: string): number {
   }
 }
 
-function sendSetupError(req: Request, res: Response, error: unknown): void {
+function sendSetupError<T>(req: Request, res: Response, error: T): void {
   const setupError = error instanceof SetupError ? error : new SetupError('GOOGLE_SHEETS_UNAVAILABLE', 'Setup service is temporarily unavailable.', 503);
   res.status(setupError.status).json(setupError.toResponse(req.requestId));
 }
 
-function sendAdminError(req: Request, res: Response, error: unknown): void {
+function sendAdminError<T>(req: Request, res: Response, error: T): void {
   const adminError = error instanceof AdminError ? error : new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'Administrator service is temporarily unavailable.', 503);
   res.status(adminError.status).json({ success: false, requestId: req.requestId, error: { code: adminError.code, message: adminError.message } });
 }

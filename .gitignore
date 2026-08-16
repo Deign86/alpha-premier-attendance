@@ -23,3 +23,6 @@ Thumbs.db
 # Generated Tauri build artifacts and editor schemas
 src-tauri/target/
 src-tauri/gen/
+
+# Local agent scratch
+.pi/

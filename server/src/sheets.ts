@@ -267,7 +267,7 @@ const optionalHeaders = { Users: ['payrollprofileid'] } as const;
  * when read back, so existing snake_case and legacy flat header styles both
  * validate.
  */
-const sheetHeaderLabels: Record<keyof typeof requiredHeaders, string[]> = {
+const sheetHeaderLabels = {
   Users: ['user_id', 'rfid_uid', 'full_name', 'department', 'status', 'created_at', 'employee_type', 'daily_rate', 'photo_url', 'payroll_profile_id'],
   Attendance: ['attendance_id', 'attendance_date', 'user_id', 'rfid_uid', 'full_name', 'department', 'time_in', 'time_out', 'status', 'source', 'notes'],
   AuditLogs: ['log_id', 'timestamp', 'event_type', 'rfid_uid', 'user_id', 'message', 'request_id'],
@@ -275,7 +275,7 @@ const sheetHeaderLabels: Record<keyof typeof requiredHeaders, string[]> = {
   InternGrace: ['grace_id', 'user_id', 'week_start', 'attendance_id', 'used_at'],
   PayrollProfiles: ['profile_id', 'label', 'payroll_frequency', 'standard_working_days_per_cutoff', 'incentives_allowance', 'special_allowance', 'special_holiday_multiplier', 'regular_holiday_multiplier', 'half_day_fraction', 'overtime_rate'],
   PayrollCutoffs: ['payroll_id', 'employee_id', 'employee_name', 'payroll_profile_id', 'payroll_cutoff_label', 'cutoff_start', 'cutoff_end', 'payroll_frequency', 'daily_rate', 'standard_working_days', 'actual_working_days', 'basic_pay', 'special_holiday_days', 'special_holiday_multiplier', 'special_holiday_pay', 'regular_holiday_days', 'regular_holiday_multiplier', 'regular_holiday_pay', 'incentives_allowance', 'special_allowance', 'total_compensation', 'total_allowance', 'late_units', 'late_deduction', 'half_day_count', 'half_day_deduction', 'absent_days', 'absence_deduction', 'overtime_hours', 'overtime_rate', 'overtime_pay', 'manual_adjustment', 'adjustment_reason', 'gross_compensation', 'net_pay', 'calculation_breakdown', 'approved_working_day_overage', 'status', 'finalized_at'],
-};
+} as const satisfies Record<keyof typeof requiredHeaders, readonly string[]>;
 
 export class GoogleSheetsAdapter implements GoogleSheetsService {
   private readonly api: sheets_v4.Sheets;
@@ -327,6 +327,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
 
   private async values(range: string): Promise<string[][]> {
     const result = await this.api.spreadsheets.values.get({ spreadsheetId: this.options.spreadsheetId, range });
+    // SAFETY: Google Sheets values.get returns a 2D array of string values or undefined
     return (result.data.values ?? []) as string[][];
   }
 
@@ -342,7 +343,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     }
   }
 
-  private tabSpecs(): Array<{ sheet: keyof typeof requiredHeaders; title: string; headers: string[] }> {
+  private tabSpecs(): Array<{ sheet: keyof typeof requiredHeaders; title: string; headers: readonly string[] }> {
     return [
       { sheet: 'Users', title: this.options.usersRange, headers: sheetHeaderLabels.Users },
       { sheet: 'Attendance', title: this.options.attendanceRange, headers: sheetHeaderLabels.Attendance },
@@ -366,7 +367,8 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     try {
       raw = await fs.promises.readFile(file, 'utf8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1 };
+      // SAFETY: Error from fs.readFile has code property when file does not exist
+      if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1 };
       throw new Error(`Google Sheets state file is not readable: ${file}`);
     }
     let parsed: unknown;
@@ -375,12 +377,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     } catch {
       throw new Error(`Google Sheets state file is not valid JSON: ${file}`);
     }
-    const value = parsed as Partial<GoogleSheetsState> | null;
-    return {
-      version: typeof value?.version === 'number' ? value.version : 1,
-      driveFolderId: typeof value?.driveFolderId === 'string' && value.driveFolderId ? value.driveFolderId : undefined,
-      spreadsheetId: typeof value?.spreadsheetId === 'string' && value.spreadsheetId ? value.spreadsheetId : undefined,
-    };
+    return parseGoogleSheetsState(parsed);
   }
 
   private async writeState(patch: Partial<GoogleSheetsState>): Promise<void> {
@@ -532,12 +529,12 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return spreadsheetId;
   }
 
-  private async writeHeaderRow(title: string, headers: string[]): Promise<void> {
+  private async writeHeaderRow(title: string, headers: readonly string[]): Promise<void> {
     await this.api.spreadsheets.values.update({
       spreadsheetId: this.options.spreadsheetId,
       range: `${quoteA1SheetTitle(title)}!A1:${columnName(headers.length - 1)}1`,
       valueInputOption: 'RAW',
-      requestBody: { values: [headers] },
+      requestBody: { values: [Array.from(headers)] },
     });
   }
 
@@ -584,7 +581,10 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     for (const sheet of metadata.data.sheets ?? []) {
       const title = sheet.properties?.title;
       const sheetId = sheet.properties?.sheetId;
-      if (title && typeof sheetId === 'number') existing.set(title, sheetId);
+      if (title && Object.prototype.toString.call(sheetId) === '[object Number]' && Number.isFinite(sheetId)) {
+        // SAFETY: Verified sheetId is a finite number
+        existing.set(title, sheetId as number);
+      }
     }
 
     const specs = this.tabSpecs();
@@ -600,7 +600,10 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       result.data.replies?.forEach((reply, index) => {
         const spec = missing[index];
         const sheetId = reply.addSheet?.properties?.sheetId;
-        if (spec && typeof sheetId === 'number') toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
+        if (spec && Object.prototype.toString.call(sheetId) === '[object Number]' && Number.isFinite(sheetId)) {
+          // SAFETY: Verified sheetId is a finite number
+          toFormat.set(spec.title, { sheetId: sheetId as number, columnCount: spec.headers.length });
+        }
       });
     }
 
@@ -612,10 +615,13 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       if (existing.has(spec.title)) {
         const rows = await this.values(`${quoteA1SheetTitle(spec.title)}!1:1`);
         const headerRow = rows[0] ?? [];
-        if (headerRow.length === 0 || headerRow.every((cell) => String(cell ?? '').trim() === '')) {
+        if (headerRow.every((cell) => String(cell ?? '').trim() === '')) {
           await this.writeHeaderRow(spec.title, spec.headers);
           const sheetId = existing.get(spec.title);
-          if (typeof sheetId === 'number') toFormat.set(spec.title, { sheetId, columnCount: spec.headers.length });
+          if (Object.prototype.toString.call(sheetId) === '[object Number]' && Number.isFinite(sheetId)) {
+            // SAFETY: Verified sheetId is a finite number
+            toFormat.set(spec.title, { sheetId: sheetId as number, columnCount: spec.headers.length });
+          }
         } else {
           try {
             validateHeaders(spec.sheet, headerRow.map(canonicalHeader));
@@ -950,16 +956,48 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   }
 }
 
+function parseGoogleSheetsState<T>(parsed: T): GoogleSheetsState {
+  if (!parsed || Object.prototype.toString.call(parsed) !== '[object Object]') return { version: 1 };
+  // SAFETY: Checked that parsed is a non-null object
+  const value = parsed as { version?: unknown; driveFolderId?: unknown; spreadsheetId?: unknown };
+  let version = 1;
+  if (Object.prototype.toString.call(value.version) === '[object Number]' && Number.isFinite(value.version)) {
+    // SAFETY: Verified version is a finite number
+    version = value.version as number;
+  }
+  let driveFolderId: string | undefined;
+  if (Object.prototype.toString.call(value.driveFolderId) === '[object String]' && value.driveFolderId) {
+    // SAFETY: Verified driveFolderId is a non-empty string
+    driveFolderId = value.driveFolderId as string;
+  }
+  let spreadsheetId: string | undefined;
+  if (Object.prototype.toString.call(value.spreadsheetId) === '[object String]' && value.spreadsheetId) {
+    // SAFETY: Verified spreadsheetId is a non-empty string
+    spreadsheetId = value.spreadsheetId as string;
+  }
+  return { version, driveFolderId, spreadsheetId };
+}
+
 function quoteA1SheetTitle(title: string): string {
   const unquoted = title.replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
   return `'${unquoted.replace(/'/g, "''")}'`;
 }
-function googleApiStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object') return undefined;
+function googleApiStatus<T>(error: T): number | undefined {
+  if (error === null || error === undefined || Object(error) !== error) return undefined;
+  // SAFETY: Checked that error is a non-null object/Error
   const value = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
   for (const candidate of [value.code, value.status, value.response?.status]) {
-    if (typeof candidate === 'number') return candidate;
-    if (typeof candidate === 'string' && /^\d+$/.test(candidate)) return Number(candidate);
+    if (Object.prototype.toString.call(candidate) === '[object Number]' && Number.isFinite(candidate)) {
+      // SAFETY: Verified candidate is a finite number
+      return candidate as number;
+    }
+    if (Object.prototype.toString.call(candidate) === '[object String]') {
+      // SAFETY: Verified candidate is a string
+      const str = candidate as string;
+      if (/^\d+$/.test(str)) {
+        return Number(str);
+      }
+    }
   }
   return undefined;
 }
@@ -980,12 +1018,23 @@ function indexMap(headers: string[]): Record<string, number> { return Object.fro
 function valuesForAttendance(headers: string[], attendance: SheetAttendance, existing: string[] = []): string[] {
   const row = [...existing];
   while (row.length < headers.length) row.push('');
-  const values: Record<string, string> = {
-    attendanceid: attendance.attendanceId, attendancedate: attendance.attendanceDate, userid: attendance.userId,
-    rfiduid: attendance.rfidUid, fullname: attendance.fullName, department: attendance.department ?? '',
-    timein: attendance.timeIn, timeout: attendance.timeOut ?? '', status: attendance.status, source: attendance.source, notes: attendance.notes,
-  };
-  headers.forEach((header, index) => { if (values[header] !== undefined) row[index] = values[header]; });
+  const values = new Map<string, string>([
+    ['attendanceid', attendance.attendanceId],
+    ['attendancedate', attendance.attendanceDate],
+    ['userid', attendance.userId],
+    ['rfiduid', attendance.rfidUid],
+    ['fullname', attendance.fullName],
+    ['department', attendance.department ?? ''],
+    ['timein', attendance.timeIn],
+    ['timeout', attendance.timeOut ?? ''],
+    ['status', attendance.status],
+    ['source', attendance.source],
+    ['notes', attendance.notes],
+  ]);
+  headers.forEach((header, index) => {
+    const val = values.get(header);
+    if (val !== undefined) row[index] = val;
+  });
   return row.slice(0, headers.length);
 }
 function userFromRow(row: string[], index: Record<string, number>): SheetUser {
@@ -1017,19 +1066,22 @@ function attendanceFromRow(row: string[], index: Record<string, number>, rowNumb
 function valuesForUser(headers: string[], user: SheetUser, existing: string[] = []): string[] {
   const row = [...existing];
   while (row.length < headers.length) row.push('');
-  const values: Record<string, string> = {
-    userid: user.userId,
-    rfiduid: normalizeRfidUid(user.rfidUid),
-    fullname: user.fullName,
-    department: user.department ?? '',
-    status: user.active ? 'ACTIVE' : 'INACTIVE',
-    createdat: row[headers.indexOf('createdat')] || manilaTimestamp(new Date()),
-    employeetype: user.employeeType ?? 'INTERN',
-    dailyrate: user.dailyRate == null ? '' : String(user.dailyRate),
-    payrollprofileid: user.payrollProfileId ?? '',
-    photourl: user.photoUrl ?? '',
-  };
-  headers.forEach((header, offset) => { if (values[header] !== undefined) row[offset] = values[header]; });
+  const values = new Map<string, string>([
+    ['userid', user.userId],
+    ['rfiduid', normalizeRfidUid(user.rfidUid)],
+    ['fullname', user.fullName],
+    ['department', user.department ?? ''],
+    ['status', user.active ? 'ACTIVE' : 'INACTIVE'],
+    ['createdat', row[headers.indexOf('createdat')] || manilaTimestamp(new Date())],
+    ['employeetype', user.employeeType ?? 'INTERN'],
+    ['dailyrate', user.dailyRate == null ? '' : String(user.dailyRate)],
+    ['payrollprofileid', user.payrollProfileId ?? ''],
+    ['photourl', user.photoUrl ?? ''],
+  ]);
+  headers.forEach((header, offset) => {
+    const val = values.get(header);
+    if (val !== undefined) row[offset] = val;
+  });
   return row.slice(0, headers.length);
 }
 function parseRate(value: string | undefined): number | null {
@@ -1046,12 +1098,25 @@ function payrollFromRow(row: string[], index: Record<string, number>, rowNumber:
   };
 }
 function valuesForPayroll(headers: string[], payroll: SheetPayroll): string[] {
-  const values: Record<string, string> = {
-    payrollid: payroll.payrollId, attendanceid: payroll.attendanceId, userid: payroll.userId, fullname: payroll.fullName, employeetype: payroll.employeeType,
-    attendancedate: payroll.attendanceDate, actualtimein: payroll.actualTimeIn, actualtimeout: payroll.actualTimeOut, computedtimein: payroll.computedTimeIn, computedtimeout: payroll.computedTimeOut,
-    graceused: payroll.graceUsed === null ? '' : payroll.graceUsed ? 'TRUE' : 'FALSE', latehours: String(payroll.lateHours), latededuction: String(payroll.lateDeduction), basepay: String(payroll.basePay), dailypay: String(payroll.dailyPay), notes: payroll.notes,
-  };
-  return headers.map((header) => values[header] ?? '');
+  const values = new Map<string, string>([
+    ['payrollid', payroll.payrollId],
+    ['attendanceid', payroll.attendanceId],
+    ['userid', payroll.userId],
+    ['fullname', payroll.fullName],
+    ['employeetype', payroll.employeeType],
+    ['attendancedate', payroll.attendanceDate],
+    ['actualtimein', payroll.actualTimeIn],
+    ['actualtimeout', payroll.actualTimeOut],
+    ['computedtimein', payroll.computedTimeIn],
+    ['computedtimeout', payroll.computedTimeOut],
+    ['graceused', payroll.graceUsed === null ? '' : payroll.graceUsed ? 'TRUE' : 'FALSE'],
+    ['latehours', String(payroll.lateHours)],
+    ['latededuction', String(payroll.lateDeduction)],
+    ['basepay', String(payroll.basePay)],
+    ['dailypay', String(payroll.dailyPay)],
+    ['notes', payroll.notes],
+  ]);
+  return headers.map((header) => values.get(header) ?? '');
 }
 function payrollProfileFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetPayrollProfile {
   return {
@@ -1061,10 +1126,19 @@ function payrollProfileFromRow(row: string[], index: Record<string, number>, row
   };
 }
 function valuesForPayrollProfile(headers: string[], profile: SheetPayrollProfile): string[] {
-  const values: Record<string, string> = {
-    profileid: profile.profileId, label: profile.label, payrollfrequency: profile.payrollFrequency, standardworkingdayspercutoff: String(profile.standardWorkingDaysPerCutoff), incentivesallowance: String(profile.incentivesAllowance), specialallowance: String(profile.specialAllowance), specialholidaymultiplier: String(profile.specialHolidayMultiplier), regularholidaymultiplier: String(profile.regularHolidayMultiplier), halfdayfraction: String(profile.halfDayFraction), overtimerate: String(profile.overtimeRate),
-  };
-  return headers.map((header) => values[header] ?? '');
+  const values = new Map<string, string>([
+    ['profileid', profile.profileId],
+    ['label', profile.label],
+    ['payrollfrequency', profile.payrollFrequency],
+    ['standardworkingdayspercutoff', String(profile.standardWorkingDaysPerCutoff)],
+    ['incentivesallowance', String(profile.incentivesAllowance)],
+    ['specialallowance', String(profile.specialAllowance)],
+    ['specialholidaymultiplier', String(profile.specialHolidayMultiplier)],
+    ['regularholidaymultiplier', String(profile.regularHolidayMultiplier)],
+    ['halfdayfraction', String(profile.halfDayFraction)],
+    ['overtimerate', String(profile.overtimeRate)],
+  ]);
+  return headers.map((header) => values.get(header) ?? '');
 }
 function payrollCutoffFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetPayrollCutoff {
   const number = (key: string) => Number(row[index[key]] ?? 0);
@@ -1076,15 +1150,61 @@ function payrollCutoffFromRow(row: string[], index: Record<string, number>, rowN
   };
 }
 function valuesForPayrollCutoff(headers: string[], payroll: SheetPayrollCutoff): string[] {
-  const values: Record<string, string> = { payrollid: payroll.payrollId, employeeid: payroll.employeeId, employeename: payroll.employeeName, payrollprofileid: payroll.payrollProfileId, payrollcutofflabel: payroll.payrollCutoffLabel, cutoffstart: payroll.cutoffStart, cutoffend: payroll.cutoffEnd, payrollfrequency: payroll.payrollFrequency, dailyrate: String(payroll.dailyRate), standardworkingdays: String(payroll.standardWorkingDays), actualworkingdays: String(payroll.actualWorkingDays), basicpay: String(payroll.basicPay), specialholidaydays: String(payroll.specialHolidayDays), specialholidaymultiplier: String(payroll.specialHolidayMultiplier), specialholidaypay: String(payroll.specialHolidayPay), regularholidaydays: String(payroll.regularHolidayDays), regularholidaymultiplier: String(payroll.regularHolidayMultiplier), regularholidaypay: String(payroll.regularHolidayPay), incentivesallowance: String(payroll.incentivesAllowance), specialallowance: String(payroll.specialAllowance), totalcompensation: String(payroll.totalCompensation), totalallowance: String(payroll.totalAllowance), lateunits: String(payroll.lateUnits), latededuction: String(payroll.lateDeduction), halfdaycount: String(payroll.halfDayCount), halfdaydeduction: String(payroll.halfDayDeduction), absentdays: String(payroll.absentDays), absencededuction: String(payroll.absenceDeduction), overtimehours: String(payroll.overtimeHours), overtimerate: String(payroll.overtimeRate), overtimepay: String(payroll.overtimePay), manualadjustment: String(payroll.manualAdjustment), adjustmentreason: payroll.adjustmentReason ?? '', grosscompensation: String(payroll.grossCompensation), netpay: String(payroll.netPay), calculationbreakdown: payroll.calculationBreakdown, approvedworkingdayoverage: payroll.approvedWorkingDayOverage ? 'TRUE' : 'FALSE', status: payroll.status, finalizedat: payroll.finalizedAt ?? '' };
-  return headers.map((header) => values[header] ?? '');
+  const values = new Map<string, string>([
+    ['payrollid', payroll.payrollId],
+    ['employeeid', payroll.employeeId],
+    ['employeename', payroll.employeeName],
+    ['payrollprofileid', payroll.payrollProfileId],
+    ['payrollcutofflabel', payroll.payrollCutoffLabel],
+    ['cutoffstart', payroll.cutoffStart],
+    ['cutoffend', payroll.cutoffEnd],
+    ['payrollfrequency', payroll.payrollFrequency],
+    ['dailyrate', String(payroll.dailyRate)],
+    ['standardworkingdays', String(payroll.standardWorkingDays)],
+    ['actualworkingdays', String(payroll.actualWorkingDays)],
+    ['basicpay', String(payroll.basicPay)],
+    ['specialholidaydays', String(payroll.specialHolidayDays)],
+    ['specialholidaymultiplier', String(payroll.specialHolidayMultiplier)],
+    ['specialholidaypay', String(payroll.specialHolidayPay)],
+    ['regularholidaydays', String(payroll.regularHolidayDays)],
+    ['regularholidaymultiplier', String(payroll.regularHolidayMultiplier)],
+    ['regularholidaypay', String(payroll.regularHolidayPay)],
+    ['incentivesallowance', String(payroll.incentivesAllowance)],
+    ['specialallowance', String(payroll.specialAllowance)],
+    ['totalcompensation', String(payroll.totalCompensation)],
+    ['totalallowance', String(payroll.totalAllowance)],
+    ['lateunits', String(payroll.lateUnits)],
+    ['latededuction', String(payroll.lateDeduction)],
+    ['halfdaycount', String(payroll.halfDayCount)],
+    ['halfdaydeduction', String(payroll.halfDayDeduction)],
+    ['absentdays', String(payroll.absentDays)],
+    ['absencededuction', String(payroll.absenceDeduction)],
+    ['overtimehours', String(payroll.overtimeHours)],
+    ['overtimerate', String(payroll.overtimeRate)],
+    ['overtimepay', String(payroll.overtimePay)],
+    ['manualadjustment', String(payroll.manualAdjustment)],
+    ['adjustmentreason', payroll.adjustmentReason ?? ''],
+    ['grosscompensation', String(payroll.grossCompensation)],
+    ['netpay', String(payroll.netPay)],
+    ['calculationbreakdown', payroll.calculationBreakdown],
+    ['approvedworkingdayoverage', payroll.approvedWorkingDayOverage ? 'TRUE' : 'FALSE'],
+    ['status', payroll.status],
+    ['finalizedat', payroll.finalizedAt ?? ''],
+  ]);
+  return headers.map((header) => values.get(header) ?? '');
 }
 function graceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetInternGrace {
   return { graceId: row[index.graceid] ?? '', userId: row[index.userid] ?? '', weekStart: row[index.weekstart] ?? '', attendanceId: row[index.attendanceid] ?? '', usedAt: row[index.usedat] ?? '', rowNumber };
 }
 function valuesForGrace(headers: string[], grace: SheetInternGrace): string[] {
-  const values: Record<string, string> = { graceid: grace.graceId, userid: grace.userId, weekstart: grace.weekStart, attendanceid: grace.attendanceId, usedat: grace.usedAt };
-  return headers.map((header) => values[header] ?? '');
+  const values = new Map<string, string>([
+    ['graceid', grace.graceId],
+    ['userid', grace.userId],
+    ['weekstart', grace.weekStart],
+    ['attendanceid', grace.attendanceId],
+    ['usedat', grace.usedAt],
+  ]);
+  return headers.map((header) => values.get(header) ?? '');
 }
 function columnName(index: number): string {
   let value = index + 1; let result = '';
