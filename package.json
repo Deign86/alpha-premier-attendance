@@ -20,7 +20,8 @@
     "tauri:build": "npm run build -w shared && npm run build -w client && tauri build",
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "migrate:from-sheets": "cargo run --manifest-path src-tauri/Cargo.toml --bin migrate_from_sheets --"
+    "migrate:from-sheets": "cargo run --manifest-path src-tauri/Cargo.toml --bin migrate_from_sheets --",
+    "doctor:mcp": "node scripts/doctor-tauri-mcp.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
