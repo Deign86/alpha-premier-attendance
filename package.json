@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "npm run build -w shared && node scripts/start-dev.mjs",
     "build": "npm run build -w shared && npm run build -w client && npm run build -w server",
-    "lint": "npm run lint -w shared && npm run lint -w client && npm run lint -w server",
+    "lint": "npm run lint -w shared && npm run lint -w client && npm run lint -w server && npm run lint:oxlint",
     "lint:oxlint": "oxlint --config oxlint.config.ts shared/src client/src server/src",
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
     "test": "npm run test -w shared && npm run test -w client && npm run test -w server",

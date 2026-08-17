@@ -1,0 +1,20 @@
+name: PR Quality
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  anti-slop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check pull request quality
+        uses: peakoss/anti-slop@v0
+        with:
+          max-failures: 4
