@@ -610,8 +610,40 @@ async fn restore_portable_backup(
         let mut out = std::fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
     }
-    validate_database_file(&staging.join("database/attendance.db")).await?;
-    snapshot_database(&staging.join("database/attendance.db"), db_path).await?;
+    let staging_db = staging.join("database/attendance.db");
+    validate_database_file(&staging_db).await?;
+
+    let temp_restore = db_path.with_extension("tmp-restore");
+    if temp_restore.is_file() {
+        let _ = std::fs::remove_file(&temp_restore);
+    }
+    std::fs::copy(&staging_db, &temp_restore)
+        .map_err(|e| format!("cannot copy staging database: {e}"))?;
+
+    // Re-align photo URLs in the restored database to the local machine data_dir
+    if let Ok(pool) = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", temp_restore.to_string_lossy()))
+        .await
+    {
+        let photos_dir_str = data_dir.join("photos").to_string_lossy().replace('\\', "/");
+        let _ = sqlx::query(
+            "UPDATE users 
+             SET photo_url = 'asset://localhost/' || ? || '/' || substr(photo_url, instr(photo_url, '/photos/') + 8)
+             WHERE photo_url IS NOT NULL AND instr(photo_url, '/photos/') > 0"
+        )
+        .bind(&photos_dir_str)
+        .execute(&pool)
+        .await;
+        pool.close().await;
+    }
+
+    if db_path.is_file() {
+        let _ = std::fs::remove_file(db_path);
+    }
+    std::fs::rename(&temp_restore, db_path)
+        .map_err(|e| format!("cannot finalize restored database: {e}"))?;
+
     if staging.join("data").is_dir() {
         clear_restorable_data(data_dir)?;
         copy_directory_contents(&staging.join("data"), data_dir)?;

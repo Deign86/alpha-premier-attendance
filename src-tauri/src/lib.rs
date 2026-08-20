@@ -106,6 +106,20 @@ async fn get_attendance(
     )
 }
 
+fn resolve_user_photo_url(
+    data_dir: &std::path::Path,
+    user_id: &str,
+    stored_url: Option<String>,
+) -> Option<String> {
+    let local_photo = data_dir.join("photos").join(format!("{user_id}.webp"));
+    if local_photo.is_file() {
+        let normalized = local_photo.to_string_lossy().replace('\\', "/");
+        Some(format!("asset://localhost/{normalized}"))
+    } else {
+        stored_url
+    }
+}
+
 #[tauri::command]
 async fn admin_users(
     state: State<'_, AppState>,
@@ -116,7 +130,22 @@ async fn admin_users(
     }
     let rows = sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, gender, daily_rate_centavos, payroll_profile_id, photo_url FROM users ORDER BY full_name")
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let users = rows.into_iter().map(|row| serde_json::json!({"userId":row.get::<String,_>("user_id"),"rfidUid":row.get::<String,_>("rfid_uid"),"fullName":row.get::<String,_>("full_name"),"department":row.get::<Option<String>,_>("department"),"status":row.get::<String,_>("status"),"employeeType":row.get::<String,_>("employee_type"),"gender":row.get::<Option<String>,_>("gender"),"dailyRate":row.get::<Option<i64>,_>("daily_rate_centavos").map(|v| v as f64 / 100.0),"payrollProfileId":row.get::<Option<String>,_>("payroll_profile_id"),"photoUrl":row.get::<Option<String>,_>("photo_url")})).collect::<Vec<_>>();
+    let users = rows.into_iter().map(|row| {
+        let user_id = row.get::<String,_>("user_id");
+        let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, row.get::<Option<String>,_>("photo_url"));
+        serde_json::json!({
+            "userId": user_id,
+            "rfidUid": row.get::<String,_>("rfid_uid"),
+            "fullName": row.get::<String,_>("full_name"),
+            "department": row.get::<Option<String>,_>("department"),
+            "status": row.get::<String,_>("status"),
+            "employeeType": row.get::<String,_>("employee_type"),
+            "gender": row.get::<Option<String>,_>("gender"),
+            "dailyRate": row.get::<Option<i64>,_>("daily_rate_centavos").map(|v| v as f64 / 100.0),
+            "payrollProfileId": row.get::<Option<String>,_>("payroll_profile_id"),
+            "photoUrl": photo_url
+        })
+    }).collect::<Vec<_>>();
     Ok(serde_json::json!({"success":true,"users":users}))
 }
 
@@ -1790,15 +1819,14 @@ async fn db_restore_request(
         .map_err(|error| format!("cannot write restore request: {error}"))?;
     // Drop any stale failure marker from a previous attempt.
     let _ = std::fs::remove_file(crate::database::restore_failed_path(&state.data_dir));
-    // Exit cleanly; the response is delivered before the delayed exit. The
-    // next launch restores before opening the database.
+    // Restart cleanly so the next launch restores before opening the database.
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        app.exit(0);
+        app.restart();
     });
     Ok(serde_json::json!({
         "success": true,
-        "message": "Restore scheduled. The app will close and restore on the next launch."
+        "message": "Restore scheduled. The application is restarting to apply the backup."
     }))
 }
 
@@ -1913,9 +1941,23 @@ async fn setup_lookup_card(
     }
     let uid = rfid_uid.trim().to_ascii_uppercase();
     let row = sqlx::query("SELECT user_id,rfid_uid,full_name,department,status,employee_type,gender,daily_rate_centavos,payroll_profile_id,photo_url FROM users WHERE rfid_uid=?").bind(&uid).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({"success":true,"rfidUid":uid,"user":row.map(|r| serde_json::json!({"userId":r.get::<String,_>("user_id"),"rfidUid":r.get::<String,_>("rfid_uid"),"fullName":r.get::<String,_>("full_name"),"department":r.get::<Option<String>,_>("department"),"status":r.get::<String,_>("status"),"employeeType":r.get::<String,_>("employee_type"),"gender":r.get::<Option<String>,_>("gender"),"dailyRate":r.get::<Option<i64>,_>("daily_rate_centavos").map(|v|v as f64/100.0),"payrollProfileId":r.get::<Option<String>,_>("payroll_profile_id"),"photoUrl":r.get::<Option<String>,_>("photo_url")}))}),
-    )
+    let user_val = row.map(|r| {
+        let user_id = r.get::<String,_>("user_id");
+        let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, r.get::<Option<String>,_>("photo_url"));
+        serde_json::json!({
+            "userId": user_id,
+            "rfidUid": r.get::<String,_>("rfid_uid"),
+            "fullName": r.get::<String,_>("full_name"),
+            "department": r.get::<Option<String>,_>("department"),
+            "status": r.get::<String,_>("status"),
+            "employeeType": r.get::<String,_>("employee_type"),
+            "gender": r.get::<Option<String>,_>("gender"),
+            "dailyRate": r.get::<Option<i64>,_>("daily_rate_centavos").map(|v| v as f64 / 100.0),
+            "payrollProfileId": r.get::<Option<String>,_>("payroll_profile_id"),
+            "photoUrl": photo_url
+        })
+    });
+    Ok(serde_json::json!({"success":true,"rfidUid":uid,"user":user_val}))
 }
 
 #[tauri::command]
@@ -2727,8 +2769,9 @@ async fn scan_rfid(
         &payload,
     )
     .await;
+    let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, user.get::<Option<String>,_>("photo_url"));
     Ok(
-        serde_json::json!({"success":true,"requestId":request_id,"action":action,"message":if action == "TIME_IN" { "Time In recorded successfully." } else { "Time Out recorded successfully." },"attendance":{"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":attendance_status},"user":{"userId":user_id,"fullName":user.get::<String,_>("full_name"),"department":user.get::<Option<String>,_>("department"),"employeeType":user.get::<String,_>("employee_type"),"gender":user.get::<Option<String>,_>("gender"),"photoUrl":user.get::<Option<String>,_>("photo_url")}}),
+        serde_json::json!({"success":true,"requestId":request_id,"action":action,"message":if action == "TIME_IN" { "Time In recorded successfully." } else { "Time Out recorded successfully." },"attendance":{"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":attendance_status},"user":{"userId":user_id,"fullName":user.get::<String,_>("full_name"),"department":user.get::<Option<String>,_>("department"),"employeeType":user.get::<String,_>("employee_type"),"gender":user.get::<Option<String>,_>("gender"),"photoUrl":photo_url}}),
     )
 }
 
