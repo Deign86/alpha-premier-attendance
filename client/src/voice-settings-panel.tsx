@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { TtsSettings, TtsStatusResponse } from '@rfid-attendance/shared';
 import {
   AVAILABLE_VOICE_MODELS,

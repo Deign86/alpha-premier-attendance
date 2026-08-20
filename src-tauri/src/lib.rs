@@ -912,7 +912,7 @@ async fn payroll_generate_cutoff(
     }
 
     let rows = sqlx::query(
-        "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, MAX(p.base_pay_centavos) AS daily_rate_centavos, COUNT(*) AS actual_days, SUM(p.late_hours) AS late_units, SUM(p.late_deduction_centavos) AS late_deduction_centavos, u.payroll_profile_id FROM payroll p JOIN users u ON u.user_id=p.user_id WHERE p.attendance_date >= ? AND p.attendance_date <= ? GROUP BY p.user_id, u.payroll_profile_id ORDER BY full_name"
+        "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, COALESCE(MAX(u.daily_rate_centavos), MAX(p.base_pay_centavos), 0) AS daily_rate_centavos, COUNT(*) AS actual_days, SUM(p.late_hours) AS late_units, SUM(p.late_deduction_centavos) AS late_deduction_centavos, u.payroll_profile_id FROM payroll p JOIN users u ON u.user_id=p.user_id WHERE p.attendance_date >= ? AND p.attendance_date <= ? GROUP BY p.user_id, u.payroll_profile_id ORDER BY full_name"
     ).bind(&cutoff_start).bind(&cutoff_end).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -927,11 +927,6 @@ async fn payroll_generate_cutoff(
         let employee_name: String = row.get("full_name");
         let employee_type: String = row.get("employee_type");
         let is_intern = employee_type != "EMPLOYEE";
-        // Interns are reported directly from attendance; they never create
-        // cutoff draft records.
-        if is_intern {
-            continue;
-        }
         let finalized_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='FINALIZED'")
             .bind(&employee_id).bind(&cutoff_start).bind(&cutoff_end).fetch_one(&state.db).await.map_err(|e| e.to_string())? > 0;
         if finalized_exists {
@@ -1075,7 +1070,7 @@ async fn payroll_generate_cutoff(
             late_deduction,
             half_day_count,
             half_day_fraction,
-            absent_days: (standard_days - actual_days).max(0.0),
+            absent_days: 0.0,
             overtime_hours,
             overtime_rate: overtime_rate_centavos as f64 / 100.0,
             manual_adjustment,
@@ -1454,16 +1449,6 @@ async fn apply_intern_rules(
         .and_then(|value| value.as_f64())
         .unwrap_or(0.0)
         .max(0.0);
-    let standard_working_days = input
-        .get("standardWorkingDays")
-        .and_then(|value| value.as_f64())
-        .unwrap_or(11.0)
-        .max(0.0);
-    let actual_working_days = input
-        .get("actualWorkingDays")
-        .and_then(|value| value.as_f64())
-        .unwrap_or(11.0)
-        .max(0.0);
     let Some(object) = input.as_object_mut() else {
         return Err("ADMIN_VALIDATION_ERROR".into());
     };
@@ -1495,7 +1480,7 @@ async fn apply_intern_rules(
     object.insert("halfDayFraction".into(), serde_json::json!(0.5));
     object.insert(
         "absentDays".into(),
-        serde_json::json!((standard_working_days - actual_working_days).max(0.0)),
+        serde_json::json!(0.0),
     );
     Ok(())
 }
@@ -3235,6 +3220,7 @@ mod tests {
         assert_eq!(input["payrollProfileId"], "INTERN_STANDARD");
         assert_eq!(input["incentivesAllowance"], 0.0);
         assert_eq!(input["specialHolidayDays"], 0.0);
+        assert_eq!(input["absentDays"], 0.0);
 
         // Employees keep their own values untouched.
         sqlx::query("INSERT INTO users (user_id, full_name, daily_rate_centavos, employee_type) VALUES (?, ?, ?, ?)")
@@ -3252,6 +3238,65 @@ mod tests {
             .expect("employee rules pass through");
         assert_eq!(employee_input["dailyRate"], 500.0);
         assert_eq!(employee_input.get("lateDeduction"), None);
+    }
+
+    #[test]
+    fn calculates_single_day_attendance_cutoff_for_employee_and_intern() {
+        let employee_input = crate::services::cutoff_payroll::CutoffInput {
+            employee_id: "EMP-1".into(),
+            employee_name: "John Doe".into(),
+            cutoff_start: "2026-08-18".into(),
+            cutoff_end: "2026-08-18".into(),
+            daily_rate: 500.0,
+            standard_working_days: 11.0,
+            actual_working_days: 1.0,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.3,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 1.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 0.0,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: true,
+        };
+        let emp_calc = crate::services::cutoff_payroll::calculate(&employee_input).unwrap();
+        assert_eq!(emp_calc.basic_pay, 50_000);
+        assert_eq!(emp_calc.net_pay, 50_000);
+
+        let intern_input = crate::services::cutoff_payroll::CutoffInput {
+            employee_id: "INT-1".into(),
+            employee_name: "Deign Grey O. Lazaro".into(),
+            cutoff_start: "2026-08-18".into(),
+            cutoff_end: "2026-08-18".into(),
+            daily_rate: 80.0,
+            standard_working_days: 11.0,
+            actual_working_days: 1.0,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 0.0,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: true,
+        };
+        let intern_calc = crate::services::cutoff_payroll::calculate(&intern_input).unwrap();
+        assert_eq!(intern_calc.basic_pay, 8_000);
+        assert_eq!(intern_calc.net_pay, 8_000);
     }
 
     #[test]
