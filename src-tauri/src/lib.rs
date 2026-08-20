@@ -2883,6 +2883,14 @@ pub fn run() {
 
     log::info!("Starting Alpha Premier Attendance application...");
 
+    let single_instance_listener = match lifecycle::check_single_instance() {
+        lifecycle::SingleInstanceStatus::Primary(listener) => listener,
+        lifecycle::SingleInstanceStatus::SecondaryExited => {
+            log::info!("Secondary instance detected and signaled; exiting gracefully.");
+            return;
+        }
+    };
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
@@ -2896,6 +2904,7 @@ pub fn run() {
     builder
         .setup(|app| {
             log::info!("Tauri app setup starting...");
+            lifecycle::start_single_instance_listener(app.handle().clone(), single_instance_listener);
             lifecycle::install_tray(app).expect("install system tray");
             log::info!("System tray installed successfully");
             let paths = crate::paths::resolve(app.handle()).expect("resolve application paths");
