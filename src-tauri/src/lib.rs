@@ -2876,6 +2876,13 @@ fn photo_is_within_limits(width: u32, height: u32, bytes: usize) -> bool {
 }
 
 pub fn run() {
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("CRITICAL PANIC: {:?}", info);
+        eprintln!("CRITICAL PANIC: {:?}", info);
+    }));
+
+    log::info!("Starting Alpha Premier Attendance application...");
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
@@ -2888,8 +2895,11 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            log::info!("Tauri app setup starting...");
             lifecycle::install_tray(app).expect("install system tray");
+            log::info!("System tray installed successfully");
             let paths = crate::paths::resolve(app.handle()).expect("resolve application paths");
+            log::info!("Application paths resolved: config={:?}, data={:?}", paths.config_dir, paths.data_dir);
             std::fs::create_dir_all(&paths.config_dir)
                 .expect("create application config directory");
             let (lan, office, scanner_config, database_config, tts_config) =
@@ -2924,7 +2934,7 @@ pub fn run() {
                     );
                 }
             }
-            let state = tauri::async_runtime::block_on(AppState::new(
+            let state = match tauri::async_runtime::block_on(AppState::new(
                 paths.data_dir.clone(),
                 db_path,
                 paths.exports_dir.clone(),
@@ -2933,8 +2943,14 @@ pub fn run() {
                 office,
                 scanner_config,
                 tts_config,
-            ))
-            .expect("SQLite initialization");
+            )) {
+                Ok(s) => s,
+                Err(err) => {
+                    log::error!("SQLite/AppState initialization failed: {err:?}");
+                    panic!("SQLite/AppState initialization failed: {err:?}");
+                }
+            };
+            log::info!("AppState initialized successfully");
             if state.lan.enabled {
                 let runtime = state.lan_runtime.clone();
                 let server_state = state.clone();
@@ -2959,6 +2975,8 @@ pub fn run() {
             // uses SQLite's online engine, so it is consistent even while the
             // app has been recording scans, and a failed backup never blocks
             // closing the app.
+            let webview_windows = app.webview_windows();
+            log::info!("Registered webview windows at setup: {:?}", webview_windows.keys().collect::<Vec<_>>());
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 let config_dir = paths.config_dir.clone();
@@ -3002,6 +3020,7 @@ pub fn run() {
                 });
             }
             crate::services::scanner::start(app.handle().clone(), scanner_handle);
+            log::info!("Tauri app setup completed successfully");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
