@@ -595,7 +595,7 @@ let lastEventAt = 0;
 
 function tick() {
   const now = new Date();
-  document.getElementById('clock').textContent = now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
   document.getElementById('clockDate').textContent = now.toLocaleDateString('en-PH', { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 }
 function today() { return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date()); }
@@ -613,7 +613,7 @@ function card(row) {
   const isLate = row.status === 'LATE_TIMEOUT';
   const isOut = Boolean(row.timeOut);
   const time = isOut ? row.timeOut : row.timeIn;
-  const when = time ? new Date(time).toLocaleString('en-PH', { timeZone: tz, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+  const when = time ? new Date(time).toLocaleString('en-PH', { timeZone: tz, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }) : '—';
   const dept = row.department ? ' · ' + escapeHtml(row.department) : '';
   return '<div class="card ' + (isLate ? 'late' : (isOut ? 'out' : 'in')) + '">' +
     '<div class="who"><div class="name">' + escapeHtml(row.fullName) + '</div><div class="meta">' + escapeHtml(row.userId || '') + dept + '</div></div>' +
@@ -639,7 +639,7 @@ async function refresh() {
     render(data.attendance || []);
     everLoaded = true;
     const now = new Date();
-    lastEl.textContent = 'Updated ' + now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    lastEl.textContent = 'Updated ' + now.toLocaleTimeString('en-PH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
     // Silent SSE stall detection: if the stream claims to be live but has
     // produced nothing for longer than the keep-alive window, reconnect it.
     if (connMode === 'live' && Date.now() - lastEventAt > 20000) {
