@@ -292,14 +292,14 @@ mod tests {
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 8_800_00,
                 daily_rate_centavos: 80_00,
-                actual_working_days: 11.0,
+                actual_working_days: 1.0,
                 standard_working_days: 11.0,
-                basic_pay_centavos: 88_000,
-                total_compensation_centavos: 88_000,
-                late_deduction_centavos: 3_000,
+                basic_pay_centavos: 8_800_00,
+                total_compensation_centavos: 8_800_00,
+                late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                absence_deduction_centavos: 0,
-                gross_compensation_centavos: 85_000,
+                absence_deduction_centavos: 8_000_00,
+                gross_compensation_centavos: 800_00,
             },
         ];
         let base = std::env::temp_dir().join(format!("payroll-sheet-{}", uuid::Uuid::new_v4()));
@@ -2150,7 +2150,7 @@ pub async fn load_payroll_sheet_rows(
         "SELECT pc.employee_id, pc.employee_name, pc.daily_rate_centavos, \
          pc.standard_working_days, pc.actual_working_days, pc.basic_pay_centavos, \
          pc.total_compensation_centavos, pc.late_deduction_centavos, \
-         pc.half_day_deduction_centavos, pc.absence_deduction_centavos, \
+         pc.half_day_deduction_centavos, pc.absent_days, pc.absence_deduction_centavos, \
          pc.gross_compensation_centavos, COALESCE(u.employee_type, 'INTERN') AS employee_type \
          FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
          WHERE pc.cutoff_start = ? AND pc.cutoff_end = ? \
@@ -2174,21 +2174,43 @@ pub async fn load_payroll_sheet_rows(
         .map(|row| {
             let daily_rate_centavos = row.get::<i64, _>("daily_rate_centavos");
             let standard_working_days = row.get::<f64, _>("standard_working_days");
+            let actual_working_days = row.get::<f64, _>("actual_working_days");
+            let cutoff_rate_centavos = (daily_rate_centavos as f64 * standard_working_days).round()
+                as i64;
+            let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
+            let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
+            let db_absent_days = row.get::<f64, _>("absent_days");
+            let db_absence_deduction = row.get::<i64, _>("absence_deduction_centavos");
+            let absent_days = if db_absent_days > 0.0 {
+                db_absent_days
+            } else {
+                (standard_working_days - actual_working_days).max(0.0)
+            };
+            let absence_deduction_centavos = if db_absence_deduction > 0 {
+                db_absence_deduction
+            } else if absent_days > 0.0 {
+                (daily_rate_centavos as f64 * absent_days).round() as i64
+            } else {
+                0
+            };
+            // For the sheet presentation, Total Compensation represents the full cutoff rate
+            // and absent days are deducted in the Absent column.
+            let total_compensation_centavos = cutoff_rate_centavos;
+            let gross_compensation_centavos = row.get::<i64, _>("gross_compensation_centavos");
             PayrollSheetRow {
                 employee_id: row.get("employee_id"),
                 employee_name: row.get("employee_name"),
                 employee_type: row.get("employee_type"),
-                cutoff_rate_centavos: (daily_rate_centavos as f64 * standard_working_days).round()
-                    as i64,
+                cutoff_rate_centavos,
                 daily_rate_centavos,
-                actual_working_days: row.get("actual_working_days"),
+                actual_working_days,
                 standard_working_days,
                 basic_pay_centavos: row.get("basic_pay_centavos"),
-                total_compensation_centavos: row.get("total_compensation_centavos"),
-                late_deduction_centavos: row.get("late_deduction_centavos"),
-                half_day_deduction_centavos: row.get("half_day_deduction_centavos"),
-                absence_deduction_centavos: row.get("absence_deduction_centavos"),
-                gross_compensation_centavos: row.get("gross_compensation_centavos"),
+                total_compensation_centavos,
+                late_deduction_centavos,
+                half_day_deduction_centavos,
+                absence_deduction_centavos,
+                gross_compensation_centavos,
             }
         })
         .collect())
@@ -2321,8 +2343,8 @@ fn sheet_cell(
 
 /// Column widths of the reference payroll sheet in millimeters (usable width
 /// is 297 - 2 * 12 = 273 mm).
-const SHEET_COL_WIDTHS_MM: [f32; 13] = [
-    24.0, 36.0, 20.0, 17.0, 16.0, 16.0, 20.0, 20.0, 15.0, 15.0, 15.0, 25.0, 34.0,
+const SHEET_COL_WIDTHS_MM: [f32; 12] = [
+    24.0, 42.0, 22.0, 20.0, 18.0, 18.0, 23.0, 16.0, 16.0, 16.0, 26.0, 32.0,
 ];
 const SHEET_LEFT_MM: f32 = 12.0;
 const SHEET_ROW_H_MM: f32 = 7.0;
@@ -2422,14 +2444,13 @@ pub fn generate_payroll_sheet_pdf(
         ops.push(Op::RestoreGraphicsState);
 
         // --- table header row ---
-        const HEADERS: [&str; 13] = [
+        const HEADERS: [&str; 12] = [
             "Employee #",
             "Employee Name",
             "Cut Off\nRate",
             "Daily\nRate",
             "Actual\nDays",
             "Standard\nDays",
-            "Basic\nRate",
             "Total\nCompensation",
             "Late 10\n/hr",
             "Halfday",
@@ -2460,14 +2481,13 @@ pub fn generate_payroll_sheet_pdf(
         // --- data rows ---
         let mut row_y = table_top_y - header_h - SHEET_ROW_H_MM;
         for row in chunk.iter() {
-            let cells: [String; 13] = [
+            let cells: [String; 12] = [
                 row.employee_id.clone(),
                 row.employee_name.clone(),
                 format_php(row.cutoff_rate_centavos),
                 format_php(row.daily_rate_centavos),
                 format_days(row.actual_working_days),
                 format_days(row.standard_working_days),
-                format_php(row.basic_pay_centavos),
                 format_php(row.total_compensation_centavos),
                 format_php(row.late_deduction_centavos),
                 format_php(row.half_day_deduction_centavos),
@@ -2498,7 +2518,7 @@ pub fn generate_payroll_sheet_pdf(
         // --- grand total row (last page only), yellow-highlighted gross ---
         if chunk_index == chunks.len() - 1 {
             let total_gross: i64 = rows.iter().map(|row| row.gross_compensation_centavos).sum();
-            let total_w: f32 = SHEET_COL_WIDTHS_MM[..11].iter().sum();
+            let total_w: f32 = SHEET_COL_WIDTHS_MM[..10].iter().sum();
             sheet_cell(
                 &mut ops,
                 SHEET_LEFT_MM,
@@ -2516,7 +2536,7 @@ pub fn generate_payroll_sheet_pdf(
                 &mut ops,
                 last_x,
                 row_y,
-                SHEET_COL_WIDTHS_MM[11],
+                SHEET_COL_WIDTHS_MM[10],
                 SHEET_ROW_H_MM,
                 &format_php(total_gross),
                 7.0,
@@ -2524,12 +2544,12 @@ pub fn generate_payroll_sheet_pdf(
                 false,
                 true,
             );
-            let sig_x = last_x + SHEET_COL_WIDTHS_MM[11];
+            let sig_x = last_x + SHEET_COL_WIDTHS_MM[10];
             sheet_cell(
                 &mut ops,
                 sig_x,
                 row_y,
-                SHEET_COL_WIDTHS_MM[12],
+                SHEET_COL_WIDTHS_MM[11],
                 SHEET_ROW_H_MM,
                 "",
                 7.0,

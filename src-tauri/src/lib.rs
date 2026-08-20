@@ -1081,6 +1081,7 @@ async fn payroll_generate_cutoff(
         } else {
             late_units * late_rate
         };
+        let absent_days = (standard_days - (actual_days + half_day_count)).max(0.0);
         let manual_adjustment = custom_number("manualAdjustment").unwrap_or(0.0);
         let input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: employee_id.clone(),
@@ -1099,7 +1100,7 @@ async fn payroll_generate_cutoff(
             late_deduction,
             half_day_count,
             half_day_fraction,
-            absent_days: 0.0,
+            absent_days,
             overtime_hours,
             overtime_rate: overtime_rate_centavos as f64 / 100.0,
             manual_adjustment,
@@ -1116,7 +1117,7 @@ async fn payroll_generate_cutoff(
             .bind(&payroll_id).bind(&employee_id).bind(&employee_name).bind(&profile_id).bind(&payroll_cutoff_label).bind(&cutoff_start).bind(&cutoff_end).bind("SEMI_MONTHLY")
             .bind(daily_rate_centavos).bind(standard_days).bind(actual_days).bind(calculated.basic_pay).bind(0.0).bind(special_multiplier).bind(0_i64).bind(0.0).bind(regular_multiplier).bind(0_i64)
             .bind(incentives_centavos).bind(special_allowance_centavos).bind(calculated.total_compensation).bind(calculated.total_allowance).bind(late_units).bind(calculated.late_deduction)
-            .bind(0.0).bind(calculated.half_day_deduction).bind(0.0).bind(calculated.absence_deduction).bind(0.0).bind(overtime_rate_centavos).bind(calculated.overtime_pay)
+            .bind(half_day_count).bind(calculated.half_day_deduction).bind(absent_days).bind(calculated.absence_deduction).bind(0.0).bind(overtime_rate_centavos).bind(calculated.overtime_pay)
             .bind(0_i64).bind(Option::<String>::None).bind(calculated.gross_compensation).bind(calculated.net_pay).bind("")
             .bind(serde_json::json!({"source":"attendance","actualWorkingDays":actual_days,"lateUnits":late_units}).to_string()).bind(1_i64).bind("DRAFT").bind(&now).bind(&now)
             .execute(&state.db).await.map_err(|e| e.to_string())?;

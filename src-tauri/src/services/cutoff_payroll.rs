@@ -85,7 +85,12 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
         return Err("A manual adjustment reason is required.".into());
     }
     let daily = cents(input.daily_rate);
-    let basic = (daily as f64 * input.actual_working_days).round() as i64;
+    let base_days = if input.absent_days > 0.0 {
+        input.actual_working_days + input.absent_days
+    } else {
+        input.actual_working_days
+    };
+    let basic = (daily as f64 * base_days).round() as i64;
     let special = multiply(
         (daily as f64 * input.special_holiday_days).round() as i64,
         input.special_holiday_multiplier,
@@ -150,5 +155,39 @@ mod tests {
         })
         .unwrap();
         assert_eq!(result.net_pay, 1000000 + 10000 - 5000);
+    }
+
+    #[test]
+    fn computes_partial_intern_cutoff_with_absent_days() {
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-102".into(),
+            employee_name: "Deign Grey O. Lazaro".into(),
+            cutoff_start: "2026-08-16".into(),
+            cutoff_end: "2026-08-31".into(),
+            daily_rate: 80.0,
+            standard_working_days: 11.0,
+            actual_working_days: 1.0,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 10.0,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+        assert_eq!(result.basic_pay, 88_000);
+        assert_eq!(result.total_compensation, 88_000);
+        assert_eq!(result.absence_deduction, 80_000);
+        assert_eq!(result.gross_compensation, 8_000);
+        assert_eq!(result.net_pay, 8_000);
     }
 }

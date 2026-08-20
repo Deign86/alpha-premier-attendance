@@ -53,4 +53,25 @@ describe('cutoff payroll calculator', () => {
     expect(zeroed.grossCompensation).toBe(0);
     expect(zeroed.netPay).toBe(0);
   });
+
+  it('computes partial intern cutoff with 1 day actual attendance and 10 absent days correctly', () => {
+    const partialInternInput = {
+      ...jeanInput,
+      employeeId: 'APG-2026-102', employeeName: 'Deign Grey O. Lazaro', employeeType: 'INTERN' as const, payrollProfileId: 'INTERN_STANDARD',
+      dailyRate: 80, standardWorkingDays: 11, actualWorkingDays: 1,
+      specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
+      incentivesAllowance: 0, specialAllowance: 0, lateUnits: 0, lateDeduction: 0,
+      halfDayCount: 0, halfDayFraction: 0, absentDays: 10, overtimeHours: 0, overtimeRate: 0,
+    };
+    const result = calculateCutoffPayroll(partialInternInput);
+    expect(result).toMatchObject({
+      dailyRate: 80,
+      basicPay: 880,
+      totalCompensation: 880,
+      absenceDeduction: 800,
+      grossCompensation: 80,
+      netPay: 80,
+      employeeType: 'INTERN',
+    });
+  });
 });

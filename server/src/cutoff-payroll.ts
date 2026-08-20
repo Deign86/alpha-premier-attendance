@@ -21,7 +21,8 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   validate(input);
   const { halfDayFraction, ...recordInput } = input;
   const dailyRate = cents(input.dailyRate);
-  const basicPay = dailyRate * input.actualWorkingDays;
+  const baseDays = input.absentDays > 0 ? input.actualWorkingDays + input.absentDays : input.actualWorkingDays;
+  const basicPay = dailyRate * baseDays;
   const specialHolidayPay = multiply(dailyRate * input.specialHolidayDays, input.specialHolidayMultiplier);
   const regularHolidayPay = multiply(dailyRate * input.regularHolidayDays, input.regularHolidayMultiplier);
   const totalCompensation = basicPay + specialHolidayPay + regularHolidayPay;
