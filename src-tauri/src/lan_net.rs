@@ -117,6 +117,9 @@ pub fn is_address_on_active_adapter(ip: IpAddr) -> bool {
     detect_lan_interfaces().iter().any(|item| item.ip == ip)
 }
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Best-effort check for an inbound Windows Firewall allow rule covering the
 /// LAN viewer port. Returns `Some(true)` when at least one matching rule
 /// exists, `Some(false)` when none does, and `None` when the check could not
@@ -137,13 +140,14 @@ try {
 } catch { 'x' }
 "#
     .replace("__PORT__", &port.to_string());
-    let Ok(child) = tokio::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+    let mut cmd = tokio::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .spawn()
-    else {
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let Ok(child) = cmd.spawn() else {
         return None;
     };
     let output = tokio::time::timeout(std::time::Duration::from_secs(6), child.wait_with_output())
@@ -223,18 +227,19 @@ fn parse_network_category(text: &str) -> NetworkProfile {
 /// 2=DomainAuthenticated) via `Get-NetConnectionProfile`. Non-Windows or
 /// missing PowerShell degrades to `Unknown` without error.
 pub async fn detect_network_profile() -> NetworkProfile {
-    let Ok(child) = tokio::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Get-NetConnectionProfile | Where-Object { $_.IPv4Connectivity -ne 'Disconnected' } | Select-Object -First 1 -ExpandProperty NetworkCategory",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .spawn()
-    else {
+    let mut cmd = tokio::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-NetConnectionProfile | Where-Object { $_.IPv4Connectivity -ne 'Disconnected' } | Select-Object -First 1 -ExpandProperty NetworkCategory",
+    ])
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null())
+    .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let Ok(child) = cmd.spawn() else {
         return NetworkProfile::Unknown;
     };
     let output = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait_with_output())

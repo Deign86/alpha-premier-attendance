@@ -57,6 +57,9 @@ pub async fn spawn_sapi_speech(
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::piped());
 
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn PowerShell SAPI speech process: {e}"))?;

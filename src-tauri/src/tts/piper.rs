@@ -184,6 +184,9 @@ pub async fn synthesize_to_wav(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+
     // Spawn child
     let mut child = cmd
         .spawn()
