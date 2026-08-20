@@ -1774,13 +1774,15 @@ async fn db_restore_request(
     if !source.is_file() {
         return Err("RESTORE_SOURCE_NOT_FOUND".into());
     }
-    let validation = if source
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup"))
-    {
-        crate::database::validate_portable_backup(&source)
-    } else {
-        crate::database::validate_database_file(&source).await
+    let format = crate::database::detect_backup_format(&source)
+        .map_err(|error| format!("RESTORE_SOURCE_INVALID: {error}"))?;
+    let validation = match format {
+        crate::database::BackupFormat::PortableArchive => {
+            crate::database::validate_portable_backup(&source)
+        }
+        crate::database::BackupFormat::SqliteDatabase => {
+            crate::database::validate_database_file(&source).await
+        }
     };
     validation.map_err(|error| format!("RESTORE_SOURCE_INVALID: {error}"))?;
     let marker = crate::database::restore_request_path(&state.data_dir);
@@ -2905,29 +2907,44 @@ pub fn run() {
             // the live file is never touched by two processes. A failed
             // restore never blocks startup: the app keeps its current DB and
             // records the problem in `restore.failed`.
-            match tauri::async_runtime::block_on(crate::database::process_restore_request(
+            let restore_outcome = tauri::async_runtime::block_on(crate::database::process_restore_request(
                 &paths.data_dir,
                 &paths.config_dir,
                 &db_path,
-            )) {
-                crate::database::RestoreOutcome::None => {}
-                crate::database::RestoreOutcome::Restored { source } => {
-                    log::info!("startup restore applied from {}", source.display());
-                }
-                crate::database::RestoreOutcome::SkippedMissingSource { source } => {
-                    log::warn!(
-                        "startup restore skipped: source {} was missing",
-                        source.display()
-                    );
-                }
-                crate::database::RestoreOutcome::Failed { source, error } => {
-                    log::error!(
-                        "startup restore failed (source {}): {}; keeping current database",
-                        source.display(),
-                        error
-                    );
-                }
-            }
+            ));
+            let (lan, office, scanner_config, _database_config, tts_config, db_path) =
+                match restore_outcome {
+                    crate::database::RestoreOutcome::Restored { source } => {
+                        log::info!("startup restore applied from {}", source.display());
+                        let (lan, office, scanner_config, database_config, tts_config) =
+                            config::load_config(&paths.config_dir)
+                                .expect("valid config.toml after restore");
+                        let db_path = crate::paths::resolve_db_path(
+                            &paths.config_dir,
+                            &paths.data_dir,
+                            &database_config,
+                        );
+                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                    }
+                    crate::database::RestoreOutcome::None => {
+                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                    }
+                    crate::database::RestoreOutcome::SkippedMissingSource { source } => {
+                        log::warn!(
+                            "startup restore skipped: source {} was missing",
+                            source.display()
+                        );
+                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                    }
+                    crate::database::RestoreOutcome::Failed { source, error } => {
+                        log::error!(
+                            "startup restore failed (source {}): {}; keeping current database",
+                            source.display(),
+                            error
+                        );
+                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                    }
+                };
             let state = match tauri::async_runtime::block_on(AppState::new(
                 paths.data_dir.clone(),
                 db_path,

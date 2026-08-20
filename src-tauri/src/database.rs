@@ -155,6 +155,67 @@ pub fn validate_portable_backup(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackupFormat {
+    PortableArchive,
+    SqliteDatabase,
+}
+
+/// Detect whether a backup file is a portable zip archive or a raw SQLite database
+/// by inspecting its magic bytes.
+pub fn detect_backup_format(path: &Path) -> Result<BackupFormat, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let mut header = [0u8; 16];
+    let n = file
+        .read(&mut header)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if n >= 4
+        && (header[0..4] == [0x50, 0x4B, 0x03, 0x04]
+            || header[0..4] == [0x50, 0x4B, 0x05, 0x06]
+            || header[0..4] == [0x50, 0x4B, 0x07, 0x08])
+    {
+        return Ok(BackupFormat::PortableArchive);
+    }
+    if n >= 16 && &header[0..16] == b"SQLite format 3\0" {
+        return Ok(BackupFormat::SqliteDatabase);
+    }
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup"))
+    {
+        return Ok(BackupFormat::PortableArchive);
+    }
+    if path.extension().is_some_and(|ext| {
+        ext.eq_ignore_ascii_case("db") || ext.eq_ignore_ascii_case("sqlite")
+    }) {
+        return Ok(BackupFormat::SqliteDatabase);
+    }
+    Err(format!(
+        "unrecognized backup file format for {}",
+        path.display()
+    ))
+}
+
+pub fn is_excluded_data_entry(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "backups"
+        || lower == "ebwebview"
+        || lower == "logs"
+        || lower == RESTORE_REQUEST_FILE
+        || lower == RESTORE_FAILED_FILE
+        || lower == "attendance.db"
+        || lower == "attendance.db-wal"
+        || lower == "attendance.db-shm"
+        || lower.starts_with(".restore-")
+        || lower.starts_with('.')
+        || lower.ends_with(".tmp")
+        || lower.ends_with(".db.tmp")
+        || lower.ends_with(".tmp-backup")
+        || lower.ends_with(".tmp-apbackup")
+        || lower.ends_with(".lock")
+}
+
 /// Create a self-contained application backup. It includes the database,
 /// photos, generated files, sync state, and config so it can be moved between PCs.
 pub async fn create_portable_backup(
@@ -168,39 +229,54 @@ pub async fn create_portable_backup(
     let file_name = backup_file_name(&chrono::Utc::now());
     let dest = dir.join(&file_name);
     let temp_db = dir.join(format!("{}.db.tmp", uuid::Uuid::new_v4()));
-    snapshot_database_from_pool(db, &temp_db).await?;
+    if let Err(e) = snapshot_database_from_pool(db, &temp_db).await {
+        let _ = std::fs::remove_file(&temp_db);
+        return Err(e);
+    }
     let temp_archive = dest.with_extension("tmp-apbackup");
-    let archive_file =
-        std::fs::File::create(&temp_archive).map_err(|e| format!("cannot create backup: {e}"))?;
-    let mut writer = ZipWriter::new(archive_file);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let manifest = serde_json::json!({"format":"alpha-premier-application-backup","version":PORTABLE_BACKUP_VERSION,"database":"database/attendance.db"});
-    writer
-        .start_file("manifest.json", options)
-        .map_err(|e| e.to_string())?;
-    writer
-        .write_all(manifest.to_string().as_bytes())
-        .map_err(|e| e.to_string())?;
-    add_file_to_archive(&mut writer, &temp_db, "database/attendance.db", options)?;
-    add_directory_to_archive(
-        &mut writer,
-        data_dir,
-        data_dir,
-        options,
-        &["backups", "ebwebview", "restore.request", "restore.failed"],
-    )?;
-    let config = config_dir.join("config.toml");
-    if config.is_file() {
-        add_file_to_archive(&mut writer, &config, "config/config.toml", options)?;
+    let create_result = (|| -> Result<(), String> {
+        let archive_file = std::fs::File::create(&temp_archive)
+            .map_err(|e| format!("cannot create backup: {e}"))?;
+        let mut writer = ZipWriter::new(archive_file);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let manifest = serde_json::json!({
+            "format": "alpha-premier-application-backup",
+            "version": PORTABLE_BACKUP_VERSION,
+            "database": "database/attendance.db"
+        });
+        writer
+            .start_file("manifest.json", options)
+            .map_err(|e| e.to_string())?;
+        writer
+            .write_all(manifest.to_string().as_bytes())
+            .map_err(|e| e.to_string())?;
+        add_file_to_archive(&mut writer, &temp_db, "database/attendance.db", options)?;
+        add_directory_to_archive(&mut writer, data_dir, data_dir, options)?;
+        let config = config_dir.join("config.toml");
+        if config.is_file() {
+            add_file_to_archive(&mut writer, &config, "config/config.toml", options)?;
+        }
+        writer
+            .finish()
+            .map_err(|e| format!("cannot finalize backup: {e}"))?;
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_file(&temp_db);
+
+    if let Err(err) = create_result {
+        let _ = std::fs::remove_file(&temp_archive);
+        return Err(err);
     }
-    writer
-        .finish()
-        .map_err(|e| format!("cannot finalize backup: {e}"))?;
-    std::fs::remove_file(&temp_db).ok();
+
     if dest.exists() {
-        std::fs::remove_file(&dest).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&dest);
     }
-    std::fs::rename(&temp_archive, &dest).map_err(|e| format!("cannot finalize backup: {e}"))?;
+    if let Err(e) = std::fs::rename(&temp_archive, &dest) {
+        let _ = std::fs::remove_file(&temp_archive);
+        return Err(format!("cannot finalize backup: {e}"));
+    }
     let _ = prune_backups(&dir, BACKUP_KEEP_COUNT).await;
     Ok(dest)
 }
@@ -252,7 +328,6 @@ fn add_directory_to_archive(
     root: &Path,
     current: &Path,
     options: SimpleFileOptions,
-    excluded: &[&str],
 ) -> Result<(), String> {
     for entry in
         std::fs::read_dir(current).map_err(|e| format!("cannot read {}: {e}", current.display()))?
@@ -260,23 +335,17 @@ fn add_directory_to_archive(
         let path = entry.map_err(|e| e.to_string())?.path();
         let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if file_name.starts_with("attendance.db")
-            || file_name.ends_with(".db.tmp")
-            || file_name.ends_with(".tmp-backup")
-            || file_name.ends_with(".tmp-apbackup")
-        {
+        if is_excluded_data_entry(file_name) {
             continue;
         }
-        if relative.components().next().is_some_and(|component| {
+        if relative.components().any(|component| {
             let comp_str = component.as_os_str().to_string_lossy();
-            excluded
-                .iter()
-                .any(|item| comp_str.eq_ignore_ascii_case(item))
+            is_excluded_data_entry(&comp_str)
         }) {
             continue;
         }
         if path.is_dir() {
-            add_directory_to_archive(writer, root, &path, options, excluded)?;
+            add_directory_to_archive(writer, root, &path, options)?;
         } else if path.is_file() {
             add_file_to_archive(
                 writer,
@@ -290,22 +359,35 @@ fn add_directory_to_archive(
 }
 
 /// Delete backups beyond `keep` newest (names are timestamped and sort
-/// lexicographically). Returns the deleted file paths.
+/// lexicographically). Also cleans up stale temporary backup files.
+/// Returns the deleted backup file paths.
 pub async fn prune_backups(dir: &Path, keep: usize) -> Result<Vec<PathBuf>, String> {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|e| format!("cannot read backup folder: {e}"))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        ext.eq_ignore_ascii_case("apbackup") || ext.eq_ignore_ascii_case("db")
-                    })
-        })
-        .collect();
+    let mut entries: Vec<PathBuf> = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if name.ends_with(".db.tmp")
+                || name.ends_with(".tmp-backup")
+                || name.ends_with(".tmp-apbackup")
+            {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("apbackup") || ext.eq_ignore_ascii_case("db")
+                })
+            {
+                entries.push(path);
+            }
+        }
+    }
     entries.sort();
     let mut removed = Vec::new();
     while entries.len() > keep {
@@ -416,13 +498,23 @@ pub async fn process_restore_request(
         );
         return outcome;
     }
-    let validation = if source
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup"))
-    {
-        validate_portable_backup(&source)
-    } else {
-        validate_database_file(&source).await
+    let format = match detect_backup_format(&source) {
+        Ok(f) => f,
+        Err(error) => {
+            let outcome = RestoreOutcome::Failed {
+                source: source.clone(),
+                error: error.clone(),
+            };
+            if marker.is_file() {
+                let _ = std::fs::rename(&marker, restore_failed_path(data_dir));
+            }
+            log::error!("restore from {} rejected: {error}", source.display());
+            return outcome;
+        }
+    };
+    let validation = match format {
+        BackupFormat::PortableArchive => validate_portable_backup(&source),
+        BackupFormat::SqliteDatabase => validate_database_file(&source).await,
     };
     if let Err(error) = validation {
         let outcome = RestoreOutcome::Failed {
@@ -459,13 +551,11 @@ pub async fn process_restore_request(
             );
         }
     }
-    let restore_result = if source
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("apbackup"))
-    {
-        restore_portable_backup(&source, data_dir, config_dir, db_path).await
-    } else {
-        snapshot_database(&source, db_path).await
+    let restore_result = match format {
+        BackupFormat::PortableArchive => {
+            restore_portable_backup(&source, data_dir, config_dir, db_path).await
+        }
+        BackupFormat::SqliteDatabase => snapshot_database(&source, db_path).await,
     };
     if let Err(error) = restore_result {
         let outcome = RestoreOutcome::Failed {
@@ -543,22 +633,21 @@ fn clear_restorable_data(data_dir: &Path) -> Result<(), String> {
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or_default();
-        if name == "backups"
-            || name == "ebwebview"
-            || name == RESTORE_REQUEST_FILE
-            || name == RESTORE_FAILED_FILE
-            || name == "attendance.db"
-            || name == "attendance.db-wal"
-            || name == "attendance.db-shm"
-            || name.starts_with(".restore-")
-            || name.ends_with(".tmp")
-        {
+        if is_excluded_data_entry(name) {
             continue;
         }
         if path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-        } else {
-            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log::warn!(
+                    "could not remove directory {} during restore: {e}",
+                    path.display()
+                );
+            }
+        } else if let Err(e) = std::fs::remove_file(&path) {
+            log::warn!(
+                "could not remove file {} during restore: {e}",
+                path.display()
+            );
         }
     }
     Ok(())
@@ -568,6 +657,13 @@ fn copy_directory_contents(source: &Path, target: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
         let relative = path.strip_prefix(source).map_err(|e| e.to_string())?;
+        let name = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default();
+        if is_excluded_data_entry(name) {
+            continue;
+        }
         let destination = target.join(relative);
         if path.is_dir() {
             std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
@@ -576,7 +672,9 @@ fn copy_directory_contents(source: &Path, target: &Path) -> Result<(), String> {
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            std::fs::copy(&path, &destination).map_err(|e| e.to_string())?;
+            if let Err(e) = std::fs::copy(&path, &destination) {
+                log::warn!("could not restore file to {}: {e}", destination.display());
+            }
         }
     }
     Ok(())
@@ -1346,5 +1444,126 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir1);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[tokio::test]
+    async fn multi_generation_backup_restore_parity_roundtrip() {
+        // App 1: Source directory with database, photos, exports, config, and runtime folders (logs, EBWebView)
+        let dir1 = std::env::temp_dir().join(format!("alpha-gen1-{}", uuid::Uuid::new_v4()));
+        let dir2 = std::env::temp_dir().join(format!("alpha-gen2-{}", uuid::Uuid::new_v4()));
+        let dir3 = std::env::temp_dir().join(format!("alpha-gen3-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir1).unwrap();
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::create_dir_all(&dir3).unwrap();
+
+        // 1. Seed App 1
+        let state1 = seed_full_test_database(&dir1).await;
+        // Create photos and dummy export files in dir1
+        let photos_dir1 = dir1.join("photos");
+        std::fs::create_dir_all(&photos_dir1).unwrap();
+        std::fs::write(photos_dir1.join("user1.webp"), b"photo-bytes-1").unwrap();
+        let logs_dir1 = dir1.join("logs");
+        std::fs::create_dir_all(&logs_dir1).unwrap();
+        std::fs::write(logs_dir1.join("app.log"), b"runtime log content").unwrap();
+
+        // Create Backup 1 from App 1
+        let backup1 = create_portable_backup(&state1.db, &dir1, &dir1, &state1.db_path)
+            .await
+            .expect("create backup 1");
+        assert!(backup1.is_file());
+        assert_eq!(
+            detect_backup_format(&backup1).unwrap(),
+            BackupFormat::PortableArchive
+        );
+        state1.db.close().await;
+
+        // 2. Set up App 2 with existing runtime logs and EBWebView directories (which would be locked)
+        let logs_dir2 = dir2.join("logs");
+        std::fs::create_dir_all(&logs_dir2).unwrap();
+        std::fs::write(logs_dir2.join("Alpha Premier Attendance.log"), b"active log").unwrap();
+        let ebwebview_dir2 = dir2.join("EBWebView");
+        std::fs::create_dir_all(&ebwebview_dir2).unwrap();
+        std::fs::write(ebwebview_dir2.join("cache.dat"), b"webview cache").unwrap();
+
+        // Restore Backup 1 into App 2
+        let marker2 = restore_request_path(&dir2);
+        std::fs::write(&marker2, backup1.to_string_lossy().into_owned()).unwrap();
+        let db2_path = dir2.join("attendance.db");
+        let outcome2 = process_restore_request(&dir2, &dir2, &db2_path).await;
+        assert_eq!(outcome2, RestoreOutcome::Restored { source: backup1 });
+        assert!(!marker2.exists());
+
+        // Open App 2
+        let state2 = AppState::new(
+            dir2.clone(),
+            db2_path.clone(),
+            dir2.join("exports"),
+            false,
+            crate::config::LanConfig::default(),
+            crate::config::OfficeConfig::default(),
+            ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+        )
+        .await
+        .expect("open app 2");
+
+        let users2_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&state2.db)
+            .await
+            .unwrap();
+        assert_eq!(users2_count, 2);
+        assert!(dir2.join("photos/user1.webp").is_file());
+
+        // 3. Create Backup 2 from App 2 (the restored system!)
+        let backup2 = create_portable_backup(&state2.db, &dir2, &dir2, &state2.db_path)
+            .await
+            .expect("create backup 2 from restored app");
+        assert!(backup2.is_file());
+        state2.db.close().await;
+
+        // 4. Restore Backup 2 into a fresh App 3
+        let marker3 = restore_request_path(&dir3);
+        std::fs::write(&marker3, backup2.to_string_lossy().into_owned()).unwrap();
+        let db3_path = dir3.join("attendance.db");
+        let outcome3 = process_restore_request(&dir3, &dir3, &db3_path).await;
+        assert_eq!(outcome3, RestoreOutcome::Restored { source: backup2 });
+
+        // Open App 3 and verify 100% parity with original data
+        let state3 = AppState::new(
+            dir3.clone(),
+            db3_path.clone(),
+            dir3.join("exports"),
+            false,
+            crate::config::LanConfig::default(),
+            crate::config::OfficeConfig::default(),
+            ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+        )
+        .await
+        .expect("open app 3");
+
+        let users3_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&state3.db)
+            .await
+            .unwrap();
+        assert_eq!(users3_count, 2);
+
+        let att3_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attendance")
+            .fetch_one(&state3.db)
+            .await
+            .unwrap();
+        assert_eq!(att3_count, 2);
+
+        assert!(dir3.join("photos/user1.webp").is_file());
+        assert_eq!(
+            std::fs::read(dir3.join("photos/user1.webp")).unwrap(),
+            b"photo-bytes-1"
+        );
+
+        state3.db.close().await;
+
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = std::fs::remove_dir_all(&dir3);
     }
 }
