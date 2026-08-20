@@ -9,6 +9,7 @@
     "opener:default",
     "dialog:default",
     "notification:default",
+    "autostart:default",
     "mcp-bridge:default"
   ]
 }

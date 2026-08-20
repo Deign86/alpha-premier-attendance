@@ -94,17 +94,29 @@ pub fn request_exit(app: &tauri::AppHandle) {
 
 pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
-        menu::{Menu, MenuItem},
+        menu::{CheckMenuItem, Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
+    use tauri_plugin_autostart::ManagerExt;
 
     let show = MenuItem::with_id(app, "show", "Show attendance app", true, None::<&str>)?;
+    let is_autostart = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart_item = CheckMenuItem::with_id(
+        app,
+        "toggle_autostart",
+        "Start on system startup",
+        true,
+        is_autostart,
+        None::<&str>,
+    )?;
     let exit = MenuItem::with_id(app, "exit", "Exit application", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &exit])?;
+    let menu = Menu::with_items(app, &[&show, &autostart_item, &exit])?;
     let icon = app
         .default_window_icon()
         .cloned()
         .ok_or("default tray icon is unavailable")?;
+
+    let autostart_item_clone = autostart_item.clone();
 
     TrayIconBuilder::new()
         .icon(icon)
@@ -125,12 +137,38 @@ pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
                 }
             }
         })
-        .on_menu_event(|app, event| match event.id().as_ref() {
+        .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();
                     let _ = window.set_focus();
+                }
+            }
+            "toggle_autostart" => {
+                let autolaunch = app.autolaunch();
+                match autolaunch.is_enabled() {
+                    Ok(true) => {
+                        if let Err(e) = autolaunch.disable() {
+                            log::error!("Failed to disable autostart: {e}");
+                            let _ = autostart_item_clone.set_checked(true);
+                        } else {
+                            log::info!("Disabled start on system startup");
+                            let _ = autostart_item_clone.set_checked(false);
+                        }
+                    }
+                    Ok(false) => {
+                        if let Err(e) = autolaunch.enable() {
+                            log::error!("Failed to enable autostart: {e}");
+                            let _ = autostart_item_clone.set_checked(false);
+                        } else {
+                            log::info!("Enabled start on system startup");
+                            let _ = autostart_item_clone.set_checked(true);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to query autostart status: {e}");
+                    }
                 }
             }
             "exit" => request_exit(app),
