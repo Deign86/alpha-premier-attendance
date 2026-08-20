@@ -83,84 +83,109 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     <section className="lan-panel" aria-label="Voice Announcements">
       <div className="lan-panel-head">
         <div>
-          <p className="section-kicker">Audio & Feedback</p>
+          <p className="section-kicker">Audio &amp; Feedback</p>
           <h2>Voice Announcements</h2>
         </div>
-        <div className="lan-badge-group">
-          {status && (
-            <span
-              className={`pill ${
-                status.piperAvailable
-                  ? 'pill-success'
-                  : status.systemSapiAvailable
-                    ? 'pill-working'
-                    : 'pill-muted'
-              }`}
-              title={
-                status.piperAvailable
-                  ? `Piper TTS active (${status.piperPath ?? 'bundled'})`
-                  : status.systemSapiAvailable
-                    ? 'Windows SAPI available (fallback)'
-                    : 'No local TTS engine detected'
-              }
-            >
-              {status.piperAvailable
-                ? 'Piper TTS Ready'
+        {status && (
+          <span
+            className={`lan-state ${
+              status.piperAvailable
+                ? 'lan-state-running'
                 : status.systemSapiAvailable
-                  ? 'SAPI Ready'
-                  : 'Offline TTS Unavailable'}
-            </span>
-          )}
-        </div>
+                  ? 'lan-state-starting'
+                  : 'lan-state-disabled'
+            }`}
+            title={
+              status.piperAvailable
+                ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
+                : status.systemSapiAvailable
+                  ? 'Windows SAPI system voice active'
+                  : 'No offline TTS engine detected'
+            }
+          >
+            <i />
+            {status.piperAvailable
+              ? 'Piper TTS Ready'
+              : status.systemSapiAvailable
+                ? 'SAPI Ready'
+                : 'Offline TTS Unavailable'}
+          </span>
+        )}
       </div>
 
-      <p className="form-help" style={{ marginBottom: '1.25rem' }}>
-        Configure offline, local text-to-speech announcements spoken when attendance scans succeed.
-        Runs 100% locally with Piper neural TTS and Windows SAPI fallback without internet or external APIs.
-      </p>
+      <div className="lan-facts db-facts">
+        <span>
+          TTS Engine{' '}
+          <strong>
+            {!settings.enabled
+              ? 'Disabled'
+              : settings.engine === 'auto'
+                ? 'Auto (Neural / SAPI)'
+                : settings.engine === 'piper'
+                  ? 'Piper (Neural)'
+                  : 'Windows SAPI'}
+          </strong>
+        </span>
+        <span>
+          Engine Status{' '}
+          <strong>
+            {status?.piperAvailable
+              ? 'Piper Active (Local)'
+              : status?.systemSapiAvailable
+                ? 'Windows SAPI Fallback'
+                : 'Unavailable'}
+          </strong>
+        </span>
+        <span>
+          Voice Model{' '}
+          <strong>
+            {AVAILABLE_VOICE_MODELS.find((m) => m.id === settings.voiceModel)?.label.split(' ')[0] ?? 'Amy'}
+          </strong>
+        </span>
+        <span>
+          Speed / Volume{' '}
+          <strong>
+            {settings.rate.toFixed(1)}x / {Math.round(settings.volume * 100)}%
+          </strong>
+        </span>
+      </div>
 
       {feedback && (
-        <div
-          role="status"
-          className={`dashboard-alert ${feedbackType === 'error' ? 'dashboard-alert-error' : ''}`}
-          style={{
-            marginBottom: '1rem',
-            padding: '8px 12px',
-            borderRadius: '4px',
-            fontSize: '0.9rem',
-            background: feedbackType === 'error' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-            border: `1px solid ${feedbackType === 'error' ? '#ef4444' : '#3b82f6'}`,
-          }}
+        <p
+          className={`dashboard-alert ${feedbackType === 'error' ? '' : 'db-notice'}`}
+          role={feedbackType === 'error' ? 'alert' : 'status'}
         >
           {feedback}
-        </div>
+        </p>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem' }}>
-        {/* Enable / Disable */}
-        <div className="form-group">
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+      <div className="voice-settings-grid">
+        {/* Enable / Disable Toggle Card */}
+        <div className="voice-control-card">
+          <label className="voice-toggle-label" htmlFor="tts-enabled-toggle">
             <input
               type="checkbox"
               id="tts-enabled-toggle"
               checked={settings.enabled}
               onChange={(e) => updateSetting('enabled', e.target.checked)}
             />
-            Enable Voice Announcements
+            <span>Enable Voice Announcements</span>
           </label>
           <p className="form-help">
             When enabled, attendance scans greet employees on time-in and say goodbye on time-out.
           </p>
         </div>
 
-        {/* TTS Engine */}
-        <div className="form-group">
-          <label htmlFor="tts-engine-select" style={{ display: 'block', fontWeight: 600, marginBottom: '4px' }}>
-            TTS Engine
-          </label>
+        {/* TTS Engine Selector Card */}
+        <div className={`voice-control-card ${!settings.enabled ? 'is-disabled' : ''}`}>
+          <div className="voice-control-header">
+            <label htmlFor="tts-engine-select" className="voice-control-label">
+              TTS Engine
+            </label>
+          </div>
           <select
             id="tts-engine-select"
-            className="input-select"
+            className="voice-select"
             value={settings.engine}
             disabled={!settings.enabled}
             onChange={(e) => {
@@ -169,7 +194,6 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
                 updateSetting('engine', val);
               }
             }}
-            style={{ width: '100%', padding: '6px 10px', borderRadius: '4px' }}
           >
             <option value="auto">Auto (Piper, then system fallback)</option>
             <option value="piper">Piper (Bundled Neural Voice)</option>
@@ -181,18 +205,19 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           </p>
         </div>
 
-        {/* Voice Model */}
-        <div className="form-group">
-          <label htmlFor="tts-model-select" style={{ display: 'block', fontWeight: 600, marginBottom: '4px' }}>
-            Piper Voice Model
-          </label>
+        {/* Piper Voice Model Selector Card */}
+        <div className={`voice-control-card ${isTtsDisabled || !isPiperSelected ? 'is-disabled' : ''}`}>
+          <div className="voice-control-header">
+            <label htmlFor="tts-model-select" className="voice-control-label">
+              Piper Voice Model
+            </label>
+          </div>
           <select
             id="tts-model-select"
-            className="input-select"
+            className="voice-select"
             value={settings.voiceModel}
             disabled={isTtsDisabled || !isPiperSelected}
             onChange={(e) => updateSetting('voiceModel', e.target.value)}
-            style={{ width: '100%', padding: '6px 10px', borderRadius: '4px' }}
           >
             {AVAILABLE_VOICE_MODELS.map((model) => (
               <option key={model.id} value={model.id}>
@@ -205,13 +230,13 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           </p>
         </div>
 
-        {/* Speech Rate */}
-        <div className="form-group">
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <label htmlFor="tts-rate-slider" style={{ fontWeight: 600 }}>
+        {/* Speech Rate Slider Card */}
+        <div className={`voice-control-card ${isTtsDisabled ? 'is-disabled' : ''}`}>
+          <div className="voice-control-header">
+            <label htmlFor="tts-rate-slider" className="voice-control-label">
               Speech Rate
             </label>
-            <span style={{ fontSize: '0.85rem', color: 'var(--ink-muted)' }}>{settings.rate.toFixed(1)}x</span>
+            <span className="slider-badge">{settings.rate.toFixed(1)}x</span>
           </div>
           <input
             type="range"
@@ -222,20 +247,17 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
             value={settings.rate}
             disabled={isTtsDisabled}
             onChange={(e) => updateSetting('rate', parseFloat(e.target.value))}
-            style={{ width: '100%' }}
           />
           <p className="form-help">Adjust the speed of spoken announcements (1.0x is default).</p>
         </div>
 
-        {/* Volume */}
-        <div className="form-group">
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-            <label htmlFor="tts-volume-slider" style={{ fontWeight: 600 }}>
+        {/* Volume Slider Card */}
+        <div className={`voice-control-card ${isTtsDisabled ? 'is-disabled' : ''}`}>
+          <div className="voice-control-header">
+            <label htmlFor="tts-volume-slider" className="voice-control-label">
               Volume
             </label>
-            <span style={{ fontSize: '0.85rem', color: 'var(--ink-muted)' }}>
-              {Math.round(settings.volume * 100)}%
-            </span>
+            <span className="slider-badge">{Math.round(settings.volume * 100)}%</span>
           </div>
           <input
             type="range"
@@ -246,20 +268,18 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
             value={settings.volume}
             disabled={isTtsDisabled}
             onChange={(e) => updateSetting('volume', parseFloat(e.target.value))}
-            style={{ width: '100%' }}
           />
           <p className="form-help">Adjust audio playback volume for announcements.</p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '10px', marginTop: '1.25rem', alignItems: 'center' }}>
+      <div className="lan-actions">
         <button
           type="button"
           id="tts-test-button"
-          className="btn btn-primary"
+          className="admin-button file-action-primary"
           disabled={isTtsDisabled || testing}
           onClick={() => void handleTestVoice()}
-          style={{ padding: '8px 16px', fontWeight: 600 }}
         >
           {testing ? 'Speaking…' : 'Test Voice'}
         </button>
@@ -267,17 +287,16 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         <button
           type="button"
           id="tts-stop-button"
-          className="btn btn-outline"
+          className="admin-button"
           disabled={isTtsDisabled}
           onClick={() => void handleStopVoice()}
-          style={{ padding: '8px 16px' }}
         >
           Stop
         </button>
 
         <button
           type="button"
-          className="btn btn-ghost"
+          className="text-button"
           onClick={() => {
             setSettings(DEFAULT_TTS_SETTINGS);
             saveTtsSettings(DEFAULT_TTS_SETTINGS);
@@ -285,10 +304,19 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
             setFeedback('Reset to default settings.');
             setFeedbackType('info');
           }}
-          style={{ padding: '8px 12px', fontSize: '0.85rem' }}
         >
           Reset Defaults
         </button>
+      </div>
+
+      <div className="lan-guidance" style={{ marginTop: '18px' }}>
+        <p>
+          <strong>Zero-cloud, offline speech synthesis:</strong>
+        </p>
+        <p>
+          Runs 100% locally with high-quality Piper neural voices (ONNX) and Windows SAPI fallback.
+          Spoken greetings are triggered immediately on successful RFID card scans with zero internet latency.
+        </p>
       </div>
     </section>
   );
