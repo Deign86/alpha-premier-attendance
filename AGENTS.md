@@ -1,30 +1,47 @@
 # Alpha Premier Attendance — Agent Instructions
 
-## Engineering Mode: Ponytail Default, Unlazy Escalation
+## Mandatory Engineering Triad: Ponytail + Unlazy + Anti-Slop (Every Time)
 
-### Default: Ponytail
+For every task, all three disciplines are active simultaneously without exception:
 
-For every task, inspect the relevant code, tests, types, configuration, and repository patterns before editing. Reuse existing code, utilities, dependencies, and conventions. Prefer, in order:
+### 1. Ponytail (Minimal Viable Solution Architecture)
+Before writing any code, stop at the first rung that holds:
+1. **YAGNI**: Does this need to exist at all? Skip speculative needs.
+2. **Reuse**: Does it already exist in this codebase? Reuse existing helpers, types, and patterns.
+3. **Stdlib**: Does the standard library do it? Use standard library.
+4. **Native**: Does a platform-native feature cover it? Use native HTML/CSS/DB constraints over libraries.
+5. **Installed Deps**: Does an already-installed dependency solve it? Use it; do not add new packages.
+6. **One-Liner**: Can it be one line? Keep it to one line.
+7. **Minimum Code**: Write only the smallest diff that works once root cause and data flow are understood.
 
-1. No change when the behavior already exists.
-2. Deletion or simplification.
-3. Existing repository code.
-4. Standard-library or native framework/platform features.
-5. Already-installed dependencies.
-6. Minimal custom code only when necessary.
+No unrequested abstractions, no speculative boilerplate, deletion over addition. Active in `full` mode by default.
 
-Do not add packages, abstractions, wrappers, services, configuration, files, feature flags, or broad refactors unless clearly required. Modify only necessary files; preserve correctness, security, validation, error handling, type safety, accessibility, and local conventions. Do not add speculative features or future-proofing. Use the global Pi **Ponytail** skill in `full` mode by default; it may be disabled only for the current interaction by `stop ponytail` or `normal mode`.
+### 2. Unlazy (Exhaustive Execution & Verifiable Evidence)
+Every task is executed under anti-laziness discipline to ensure completion with verified evidence rather than assumptions or premature status reports:
+1. **Root-Cause Understanding**: Trace relevant call paths, state, and boundaries end-to-end before touching code.
+2. **Gates Before Work**: For non-trivial tasks, record acceptance gates in `GATES.md` before implementation with runnable `CHECK:` / `EXPECT:` commands or concrete `EVIDENCE:` requirements.
+3. **Never Stop at 80%**: Implement completely (no placeholders, no TODOs, no simulated work).
+4. **Adversarial Verification**: When feeling done, run checks and actively attempt to refute the result.
+5. **Measured Claims**: Every number, count, and result in final reports must be measured directly from commands, not stated from memory.
 
-### Escalate: Unlazy
+### 3. Anti-Slop (Strict Type & Contract Evidence)
+Enforce rigorous compiler-backed TypeScript/JavaScript safety across the entire repository:
+1. **Explicit Safety Comments**: Every non-const type assertion (`as T`) MUST be immediately preceded by `// SAFETY: <explanation>`.
+2. **No Double Casting**: Never use chained assertions (`as unknown as T` or `as any as T`).
+3. **No Conditional Empty Object Spread**: Avoid `...(cond ? { k: v } : {})`.
+4. **No Broad Dictionary Widening**: No open `Record<string, unknown>`. Use schema validation, inference, `satisfies`, or domain interfaces.
+5. **No Low-Evidence Runtime `typeof`**: Validate at I/O boundaries and branch on typed domain models.
+6. **No `unknown` / `any` Parameters or Return Types**: Strict domain contracts on internal functions.
+7. **Verification**: Run `npm run lint:oxlint`, `npm run typecheck`, and `npm test` before declaring done.
 
-Use the global Pi **Unlazy** skill for multi-file, cross-system, ambiguous, hard-to-reproduce, security-sensitive, performance-sensitive, side-effectful, concurrency-heavy, or root-cause-unverified work, and after a failed or assumption-based fix. In Unlazy mode, identify the expected behavior and verified cause, trace relevant call paths and state/data/type boundaries, distinguish evidence from assumptions, check edge and failure paths, address the verified cause with the smallest solution, and verify beyond the first plausible fix. For substantial work, write acceptance gates to `GATES.md` before implementation and finish with recorded evidence; use the skill's solo or orchestrated mode as appropriate.
+Follow the rules in `.agent/rules/ponytail.md`, `.agent/rules/unlazy.md`, and `.agent/rules/anti-slop.md` (and their `.agents/rules/` mirrors).
 
-### Verification
+---
 
-Run the narrowest relevant tests, type checks, lint, build, or reproduction first, then broader checks only when justified. Review the final diff for unrelated changes, dead code, duplicate logic, unused imports, unnecessary dependencies, and unnecessary complexity. State exactly what was not run and why when verification cannot run.
+### Verification Workflow
+Run the narrowest relevant checks first, followed by required repository gates. Review the diff for dead code, unrequested complexity, type assertions without safety comments, and unnecessary dependencies.
 
 ### Agent Response Format
-
 Keep responses concise unless detail is requested:
 
 ### Changed
@@ -36,4 +53,4 @@ Keep responses concise unless detail is requested:
 ### Notes
 - Only concrete risks, limitations, or relevant follow-ups.
 
-Do not provide long plans, chain-of-thought-style reasoning, exhaustive investigation logs, or optional suggestions unless requested. Substantial multi-file work also follows the type-safety rules in `.agent/rules/anti-slop.md` and `.agents/rules/anti-slop.md`.
+Do not provide long plans, chain-of-thought-style reasoning, exhaustive investigation logs, or optional suggestions unless requested.
