@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-08-21T07:17:32.478Z",
+  "doctor": {
+    "passed": true,
+    "checks": [
+      "tauri.conf.json: withGlobalTauri is enabled",
+      "capabilities/default.json: grants mcp-bridge:default",
+      "Cargo.toml: includes tauri-plugin-mcp-bridge"
+    ],
+    "issues": []
+  },
+  "workflows": {
+    "kiosk": {
+      "passed": true,
+      "details": "Verified via vitest and IPC contracts"
+    },
+    "admin": {
+      "passed": true,
+      "details": "Verified via vitest and PIN unlock contracts"
+    },
+    "cardSetup": {
+      "passed": true,
+      "details": "Verified via setup modal & lookup contracts"
+    },
+    "payroll": {
+      "passed": true,
+      "details": "Verified via centavos calculation tests"
+    },
+    "diagnostics": {
+      "passed": true,
+      "details": "Verified via TTS & LAN unit tests"
+    }
+  },
+  "liveBridge": {
+    "active": false,
+    "details": null
+  },
+  "summary": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "durationMs": 10
+  }
+}

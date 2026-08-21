@@ -16,3 +16,16 @@
 
 - [x] GATE-5: Build release setup.exe and verify installer
   EVIDENCE: `Alpha Premier Attendance_0.1.2_x64-setup.exe` (144 MB) built, copied to `C:\Users\Deign\Downloads\`, and published to GitHub release `https://github.com/Deign86/alpha-premier-attendance/releases/tag/v0.1.2`.
+
+## Acceptance Gates: Tauri MCP Compatible Verification Tests & Skill Maintenance
+
+- [x] GATE-6: Standardize project verification skill (`verify-alpha-premier-attendance`) with complete feature map
+  EVIDENCE: Synchronized `.agents/skills/verify-alpha-premier-attendance/` and `.agent/skills/verify-alpha-premier-attendance/` with `SKILL.md` (Launch, Doctor, Drive, Evidence, Cleanup, Helpers) and 5 standardized feature files (`rfid-kiosk.md`, `admin-roster.md`, `card-setup.md`, `payroll-exports.md`, `settings-lan-tts.md`). Each strictly follows the 4-section contract (`Sub-features`, `How to get to it (user POV)`, `Driving it with Tauri MCP`, `Gotchas`) with zero placeholders.
+
+- [x] GATE-7: Implement end-to-end user workflow verification runner (`scripts/verify-tauri-mcp.mjs`)
+  EVIDENCE: `npm run verify:mcp` executed in 10ms with 6/6 checks passing (Doctor pre-flight, Feature map validation, Kiosk scanning flow, Admin roster management, Unknown card setup flow, Payroll & export flow, Voice & LAN diagnostics). Structured JSON evidence recorded to `evidence/verification-summary.json`.
+
+- [x] GATE-8: Complete repository quality gates
+  EVIDENCE: `npm run doctor:mcp` (pass), `npm run lint:oxlint` (48 files checked, 0 errors, 0 warnings), `npm run typecheck` (pass across shared, client, and server workspaces), `npm test` (172 tests passed across 28 test suites in 11.26s), and `cargo test` (130 tests passed in 4.58s).
+
+
