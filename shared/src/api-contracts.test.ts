@@ -36,22 +36,28 @@ describe('scanner status contract', () => {
 });
 
 describe('office-hours late timeout policy', () => {
-  it('flags time-outs strictly after 17:00 Manila', () => {
+  it('flags time-outs strictly after 18:00 Manila (true overtime hours from 6 PM onwards)', () => {
     expect(isLateTimeout('2026-08-04T18:55:12+08:00')).toBe(true);
-    expect(isLateTimeout('2026-08-04T17:01:00+08:00')).toBe(true);
+    expect(isLateTimeout('2026-08-04T18:01:00+08:00')).toBe(true);
     expect(isLateTimeout('2026-08-04T23:59:00+08:00')).toBe(true);
   });
 
-  it('keeps time-outs at or before 17:00 Manila as normal', () => {
+  it('keeps time-outs at or before 18:00 Manila as normal (including 5:05 PM)', () => {
+    expect(isLateTimeout('2026-08-04T18:00:00+08:00')).toBe(false);
+    expect(isLateTimeout('2026-08-04T17:05:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T17:00:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T16:59:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T07:30:00+08:00')).toBe(false);
   });
 
   it('compares in Manila time regardless of the timestamp offset', () => {
-    // 18:55 Manila == 10:55 UTC on the same day.
+    // 18:55 Manila == 10:55 UTC on the same day (late).
     expect(isLateTimeout('2026-08-04T10:55:00Z')).toBe(true);
-    // 16:00 Manila == 08:00 UTC.
+    // 17:05 Manila == 09:05 UTC on the same day (normal).
+    expect(isLateTimeout('2026-08-04T09:05:00Z')).toBe(false);
+    // 18:00 Manila == 10:00 UTC on the same day (normal).
+    expect(isLateTimeout('2026-08-04T10:00:00Z')).toBe(false);
+    // 16:00 Manila == 08:00 UTC (normal).
     expect(isLateTimeout('2026-08-04T08:00:00Z')).toBe(false);
   });
 

@@ -8,12 +8,12 @@ use chrono_tz::Asia::Manila;
 /// correction) instead of a normal `COMPLETED` shift. This mirrors the shared
 /// TS policy in `shared/src/api-contracts.ts` (`isLateTimeout` /
 /// `OFFICE_HOURS_END`) so the desktop app and the web-compatible server agree.
-pub const OFFICE_HOURS_END_HOUR: u32 = 17;
+pub const OFFICE_HOURS_END_HOUR: u32 = 18;
 pub const OFFICE_HOURS_END_MINUTE: u32 = 0;
 
 /// True when the Manila-local clock time of an RFC3339 timestamp is strictly
-/// after the end of office hours (17:00). A time-out at exactly 17:00 is a
-/// normal end-of-day COMPLETED shift; anything later must be corrected.
+/// after the end of office hours (18:00 / 6 PM onwards). A time-out up to 18:00
+/// is a normal end-of-day COMPLETED shift; anything later must be corrected.
 pub fn is_late_timeout(timestamp: &str) -> bool {
     let Ok(parsed) = DateTime::parse_from_rfc3339(timestamp) else {
         return false;
@@ -28,14 +28,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flags_time_outs_strictly_after_17_00_manila() {
+    fn flags_time_outs_strictly_after_18_00_manila() {
         assert!(is_late_timeout("2026-08-04T18:55:12+08:00"));
-        assert!(is_late_timeout("2026-08-04T17:01:00+08:00"));
+        assert!(is_late_timeout("2026-08-04T18:01:00+08:00"));
         assert!(is_late_timeout("2026-08-04T23:59:00+08:00"));
     }
 
     #[test]
-    fn keeps_time_outs_at_or_before_17_00_manila_normal() {
+    fn keeps_time_outs_at_or_before_18_00_manila_normal() {
+        assert!(!is_late_timeout("2026-08-04T18:00:00+08:00"));
+        assert!(!is_late_timeout("2026-08-04T17:05:00+08:00"));
         assert!(!is_late_timeout("2026-08-04T17:00:00+08:00"));
         assert!(!is_late_timeout("2026-08-04T16:59:00+08:00"));
         assert!(!is_late_timeout("2026-08-04T07:30:00+08:00"));
@@ -43,9 +45,13 @@ mod tests {
 
     #[test]
     fn compares_in_manila_time_regardless_of_offset() {
-        // 18:55 Manila == 10:55 UTC on the same day.
+        // 18:55 Manila == 10:55 UTC on the same day (late).
         assert!(is_late_timeout("2026-08-04T10:55:00Z"));
-        // 16:00 Manila == 08:00 UTC.
+        // 17:05 Manila == 09:05 UTC on the same day (normal).
+        assert!(!is_late_timeout("2026-08-04T09:05:00Z"));
+        // 18:00 Manila == 10:00 UTC on the same day (normal).
+        assert!(!is_late_timeout("2026-08-04T10:00:00Z"));
+        // 16:00 Manila == 08:00 UTC (normal).
         assert!(!is_late_timeout("2026-08-04T08:00:00Z"));
     }
 

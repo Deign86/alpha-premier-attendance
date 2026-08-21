@@ -30,14 +30,14 @@ export type AttendanceStatus = (typeof attendanceStatuses)[number];
 export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
 /** Official start of the workday, used by intern lateness rules. */
 export const OFFICE_HOURS_START = '08:00';
-/** Official end of office hours. Time-outs strictly after this are flagged `LATE_TIMEOUT`. */
-export const OFFICE_HOURS_END = '17:00';
+/** Official end of office hours. Time-outs strictly after this (6 PM onwards) are flagged `LATE_TIMEOUT`. */
+export const OFFICE_HOURS_END = '18:00';
 
 /**
  * True when the Manila-local clock time of a time-out timestamp is strictly
- * after the end of office hours (17:00). A time-out at exactly 17:00 is a
- * normal end-of-day COMPLETED shift; anything later must be corrected because
- * the office does not allow overtime.
+ * after the end of office hours (18:00 / 6 PM onwards). A time-out up to
+ * 18:00 is a normal end-of-day COMPLETED shift; anything later must be corrected
+ * because the office does not allow overtime.
  */
 export function isLateTimeout(timeOutIso: string): boolean {
   const date = new Date(timeOutIso);
