@@ -299,4 +299,39 @@ describe("PayrollWorkspace", () => {
       );
     });
   });
+
+  it("shows only manual adjustment as editable and hides allowances and statutory deductions when editing an intern record", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([internRecord({ status: "DRAFT" })]);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: /Edit Payroll — Maria Santos \(Intern\)/i })).toBeInTheDocument();
+
+    // Auto-computed attendance stats ARE displayed:
+    expect(screen.getByText("Attendance Basic")).toBeInTheDocument();
+    expect(screen.getByText("Late Deduction")).toBeInTheDocument();
+
+    // Intern editable field:
+    expect(screen.getByLabelText(/Manual Adjustment/i)).toBeInTheDocument();
+
+    // Auto-computed attendance values do NOT have editable inputs:
+    expect(screen.queryByLabelText("Basic Stipend")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Basic Pay")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Absent Deduction")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Late Deduction")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Half-Day Deduction")).not.toBeInTheDocument();
+
+    // Non-intern fields are NOT visible:
+    expect(screen.queryByLabelText("HRA")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Incentives Allowance")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Special Allowance")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Regular Holiday Pay")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Special Holiday Pay")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Overtime Pay")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("SSS Employee Share")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Phic (PhilHealth) Employee Share")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("HDMF (Pag-IBIG) Employee Share")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Salary Advance")).not.toBeInTheDocument();
+    expect(screen.queryByText("Total Allowance")).not.toBeInTheDocument();
+  });
 });

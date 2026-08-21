@@ -709,6 +709,11 @@ td small { font-size: .7rem; }
 .edit-payroll-summary .summary-label { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .edit-payroll-summary .summary-value { font-weight: 700; font-size: .95rem; }
 .edit-payroll-summary .net-pay-box { background: #fef08a; color: #854d0e; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 1.1rem; font-weight: 800; }
+.edit-payroll-attendance-box { margin-bottom: 16px; padding: 12px 16px; background: rgba(212, 160, 23, .08); border: 1px solid var(--gold-soft); border-radius: var(--radius-sm); display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
+.edit-payroll-attendance-box .attendance-stat { display: flex; flex-direction: column; gap: 2px; }
+.edit-payroll-attendance-box .attendance-label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.edit-payroll-attendance-box .attendance-value { font-size: .88rem; font-weight: 600; color: var(--ink); }
+.edit-payroll-notice { padding: 10px 14px; margin-bottom: 14px; background: rgba(59, 130, 246, .1); border: 1px solid rgba(59, 130, 246, .3); border-radius: var(--radius-sm); font-size: .82rem; color: var(--ink); line-height: 1.5; }
 .date-filter { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
 .date-filter label { min-width: 150px; margin: 0; }
 .date-filter label:nth-of-type(3) { min-width: 176px; }

@@ -3157,12 +3157,10 @@ function EditPayrollDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [basicPay, setBasicPay] = useState("0");
+  const isIntern = record?.employeeType === "INTERN";
   const [hra, setHra] = useState("0");
   const [incentivesAllowance, setIncentivesAllowance] = useState("0");
   const [specialAllowance, setSpecialAllowance] = useState("0");
-  const [regularHolidayPay, setRegularHolidayPay] = useState("0");
-  const [specialHolidayPay, setSpecialHolidayPay] = useState("0");
   const [overtimePay, setOvertimePay] = useState("0");
   const [manualAdjustment, setManualAdjustment] = useState("0");
   const [adjustmentReason, setAdjustmentReason] = useState("");
@@ -3171,21 +3169,15 @@ function EditPayrollDialog({
   const [phic, setPhic] = useState("0");
   const [hdmf, setHdmf] = useState("0");
   const [salaryAdvance, setSalaryAdvance] = useState("0");
-  const [absenceDeduction, setAbsenceDeduction] = useState("0");
-  const [lateDeduction, setLateDeduction] = useState("0");
-  const [halfDayDeduction, setHalfDayDeduction] = useState("0");
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (record) {
-      setBasicPay(String(record.basicPay ?? 0));
       setHra(String(record.hra ?? 0));
       setIncentivesAllowance(String(record.incentivesAllowance ?? 0));
       setSpecialAllowance(String(record.specialAllowance ?? 0));
-      setRegularHolidayPay(String(record.regularHolidayPay ?? 0));
-      setSpecialHolidayPay(String(record.specialHolidayPay ?? 0));
       setOvertimePay(String(record.overtimePay ?? 0));
       setManualAdjustment(String(record.manualAdjustment ?? 0));
       setAdjustmentReason(record.adjustmentReason ?? "");
@@ -3194,36 +3186,35 @@ function EditPayrollDialog({
       setPhic(String(record.phic ?? 0));
       setHdmf(String(record.hdmf ?? 0));
       setSalaryAdvance(String(record.salaryAdvance ?? 0));
-      setAbsenceDeduction(String(record.absenceDeduction ?? 0));
-      setLateDeduction(String(record.lateDeduction ?? 0));
-      setHalfDayDeduction(String(record.halfDayDeduction ?? 0));
       setError("");
     }
   }, [record]);
 
   if (!open || !record) return null;
 
-  const nBasic = Number(basicPay) || 0;
-  const nHra = Number(hra) || 0;
-  const nInc = Number(incentivesAllowance) || 0;
-  const nSpecAllow = Number(specialAllowance) || 0;
-  const nRegHol = Number(regularHolidayPay) || 0;
-  const nSpecHol = Number(specialHolidayPay) || 0;
-  const nOt = Number(overtimePay) || 0;
+  const nHra = isIntern ? 0 : Number(hra) || 0;
+  const nInc = isIntern ? 0 : Number(incentivesAllowance) || 0;
+  const nSpecAllow = isIntern ? 0 : Number(specialAllowance) || 0;
+  const nOt = isIntern ? 0 : Number(overtimePay) || 0;
   const nAdj = Number(manualAdjustment) || 0;
 
-  const nSss = Number(sss) || 0;
-  const nPhic = Number(phic) || 0;
-  const nHdmf = Number(hdmf) || 0;
-  const nAdvance = Number(salaryAdvance) || 0;
-  const nAbsence = Number(absenceDeduction) || 0;
-  const nLate = Number(lateDeduction) || 0;
-  const nHalfDay = Number(halfDayDeduction) || 0;
+  const nSss = isIntern ? 0 : Number(sss) || 0;
+  const nPhic = isIntern ? 0 : Number(phic) || 0;
+  const nHdmf = isIntern ? 0 : Number(hdmf) || 0;
+  const nAdvance = isIntern ? 0 : Number(salaryAdvance) || 0;
 
-  const totalAllowance = nInc + nSpecAllow + nHra;
-  const totalEarnings = nBasic + nHra + nInc + nSpecAllow + nRegHol + nSpecHol + nOt + nAdj;
-  const totalDeductions = nSss + nPhic + nHdmf + nAdvance + nAbsence + nLate + nHalfDay;
-  const netPay = totalEarnings - totalDeductions;
+  const autoEarnings = record.basicPay + (isIntern ? 0 : record.regularHolidayPay + record.specialHolidayPay);
+  const autoDeductions = record.lateDeduction + record.absenceDeduction + record.halfDayDeduction;
+
+  const totalAllowance = isIntern ? 0 : nInc + nSpecAllow + nHra;
+  const totalEarnings = isIntern
+    ? Math.max(0, record.basicPay + nAdj)
+    : autoEarnings + totalAllowance + nOt + nAdj;
+  const manualDeductions = isIntern ? 0 : nSss + nPhic + nHdmf + nAdvance;
+  const totalDeductions = autoDeductions + manualDeductions;
+  const netPay = isIntern
+    ? Math.max(0, totalEarnings - totalDeductions)
+    : totalEarnings - totalDeductions;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3245,20 +3236,20 @@ function EditPayrollDialog({
         dailyRate: record.dailyRate,
         standardWorkingDays: record.standardWorkingDays,
         actualWorkingDays: record.actualWorkingDays,
-        basicPay: nBasic,
+        basicPay: record.basicPay,
         hra: nHra,
         incentivesAllowance: nInc,
         specialAllowance: nSpecAllow,
-        regularHolidayPay: nRegHol,
-        specialHolidayPay: nSpecHol,
+        regularHolidayPay: isIntern ? 0 : record.regularHolidayPay,
+        specialHolidayPay: isIntern ? 0 : record.specialHolidayPay,
         overtimePay: nOt,
         sss: nSss,
         phic: nPhic,
         hdmf: nHdmf,
         salaryAdvance: nAdvance,
-        absenceDeduction: nAbsence,
-        lateDeduction: nLate,
-        halfDayDeduction: nHalfDay,
+        absenceDeduction: record.absenceDeduction,
+        lateDeduction: record.lateDeduction,
+        halfDayDeduction: record.halfDayDeduction,
         manualAdjustment: nAdj,
         adjustmentReason: adjustmentReason.trim() || undefined,
         approvedWorkingDayOverage: record.approvedWorkingDayOverage,
@@ -3285,86 +3276,49 @@ function EditPayrollDialog({
         aria-modal="true"
         aria-labelledby="edit-payroll-heading"
       >
-        <h2 id="edit-payroll-heading">Edit Payroll — {record.employeeName}</h2>
+        <h2 id="edit-payroll-heading">
+          Edit Payroll — {record.employeeName}
+          {isIntern ? " (Intern)" : ""}
+        </h2>
         <p className="modal-subtitle">
           {record.payrollCutoffLabel} ({record.cutoffStart} to {record.cutoffEnd}) • {record.employeeId}
         </p>
-        <form onSubmit={handleSubmit}>
-          <div className="edit-payroll-grid">
-            <div className="edit-payroll-section">
-              <h3>Earnings (PHP)</h3>
+
+        <div className="edit-payroll-attendance-box">
+          <div className="attendance-stat">
+            <span className="attendance-label">Attendance Basic</span>
+            <span className="attendance-value">{php(record.basicPay)} ({record.actualWorkingDays} days)</span>
+          </div>
+          {!isIntern && (record.regularHolidayPay > 0 || record.specialHolidayPay > 0) && (
+            <div className="attendance-stat">
+              <span className="attendance-label">Holiday Pay</span>
+              <span className="attendance-value">{php(record.regularHolidayPay + record.specialHolidayPay)}</span>
+            </div>
+          )}
+          <div className="attendance-stat">
+            <span className="attendance-label">Late Deduction</span>
+            <span className="attendance-value" style={{ color: record.lateDeduction > 0 ? "#dc2626" : undefined }}>
+              {php(record.lateDeduction)} ({record.lateUnits} hrs)
+            </span>
+          </div>
+          <div className="attendance-stat">
+            <span className="attendance-label">Absent / Halfday</span>
+            <span className="attendance-value" style={{ color: (record.absenceDeduction + record.halfDayDeduction) > 0 ? "#dc2626" : undefined }}>
+              {php(record.absenceDeduction + record.halfDayDeduction)}
+            </span>
+          </div>
+        </div>
+
+        {isIntern ? (
+          <form onSubmit={handleSubmit}>
+            <div className="edit-payroll-notice">
+              Intern stipend (PHP 80.00/day) and late deductions (PHP 10.00/hr) are automatically calculated from RFID attendance scans. Statutory deductions and allowances do not apply.
+            </div>
+
+            <div className="edit-payroll-section" style={{ marginTop: "12px" }}>
+              <h3>Manual Adjustment</h3>
               <label>
-                Basic Pay
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={basicPay}
-                  onChange={(e) => setBasicPay(e.target.value)}
-                />
-              </label>
-              <label>
-                HRA
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={hra}
-                  onChange={(e) => setHra(e.target.value)}
-                />
-              </label>
-              <label>
-                Incentives Allowance
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={incentivesAllowance}
-                  onChange={(e) => setIncentivesAllowance(e.target.value)}
-                />
-              </label>
-              <label>
-                Special Allowance
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={specialAllowance}
-                  onChange={(e) => setSpecialAllowance(e.target.value)}
-                />
-              </label>
-              <label>
-                Regular Holiday Pay
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={regularHolidayPay}
-                  onChange={(e) => setRegularHolidayPay(e.target.value)}
-                />
-              </label>
-              <label>
-                Special Holiday Pay
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={specialHolidayPay}
-                  onChange={(e) => setSpecialHolidayPay(e.target.value)}
-                />
-              </label>
-              <label>
-                Overtime Pay
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={overtimePay}
-                  onChange={(e) => setOvertimePay(e.target.value)}
-                />
-              </label>
-              <label>
-                Manual Adjustment
+                Manual Adjustment (PHP)
                 <input
                   type="number"
                   step="0.01"
@@ -3386,122 +3340,198 @@ function EditPayrollDialog({
               )}
             </div>
 
-            <div className="edit-payroll-section">
-              <h3>Deductions (PHP)</h3>
-              <label>
-                SSS Employee Share
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={sss}
-                  onChange={(e) => setSss(e.target.value)}
-                />
-              </label>
-              <label>
-                Phic (PhilHealth) Employee Share
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={phic}
-                  onChange={(e) => setPhic(e.target.value)}
-                />
-              </label>
-              <label>
-                HDMF (Pag-IBIG) Employee Share
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={hdmf}
-                  onChange={(e) => setHdmf(e.target.value)}
-                />
-              </label>
-              <label>
-                Salary Advance
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={salaryAdvance}
-                  onChange={(e) => setSalaryAdvance(e.target.value)}
-                />
-              </label>
-              <label>
-                Absent Deduction
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={absenceDeduction}
-                  onChange={(e) => setAbsenceDeduction(e.target.value)}
-                />
-              </label>
-              <label>
-                Late Deduction
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={lateDeduction}
-                  onChange={(e) => setLateDeduction(e.target.value)}
-                />
-              </label>
-              <label>
-                Half-Day Deduction
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={halfDayDeduction}
-                  onChange={(e) => setHalfDayDeduction(e.target.value)}
-                />
-              </label>
+            <div className="edit-payroll-summary">
+              <div className="summary-item">
+                <span className="summary-label">Total Earnings</span>
+                <span className="summary-value">{php(totalEarnings)}</span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">Total Deductions</span>
+                <span className="summary-value" style={{ color: "#dc2626" }}>
+                  {php(totalDeductions)}
+                </span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">Net Pay</span>
+                <span className="net-pay-box">{php(netPay)}</span>
+              </div>
             </div>
-          </div>
 
-          <div className="edit-payroll-summary">
-            <div className="summary-item">
-              <span className="summary-label">Total Allowance</span>
-              <span className="summary-value">{php(totalAllowance)}</span>
-            </div>
-            <div className="summary-item">
-              <span className="summary-label">Total Earnings</span>
-              <span className="summary-value">{php(totalEarnings)}</span>
-            </div>
-            <div className="summary-item">
-              <span className="summary-label">Total Deductions</span>
-              <span className="summary-value" style={{ color: "#dc2626" }}>
-                {php(totalDeductions)}
-              </span>
-            </div>
-            <div className="summary-item">
-              <span className="summary-label">Net Pay</span>
-              <span className="net-pay-box">{php(netPay)}</span>
-            </div>
-          </div>
+            {error && <p className="dashboard-alert" style={{ marginTop: "12px" }}>{error}</p>}
 
-          {error && <p className="dashboard-alert" style={{ marginTop: "12px" }}>{error}</p>}
+            <div className="confirm-actions">
+              <button
+                className="text-button"
+                type="button"
+                disabled={saving}
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+              <button
+                className="submit-button"
+                type="submit"
+                disabled={saving}
+              >
+                {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Save Changes
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <div className="edit-payroll-grid">
+              <div className="edit-payroll-section">
+                <h3>Allowances & Overtime (PHP)</h3>
+                <label>
+                  HRA
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={hra}
+                    onChange={(e) => setHra(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Incentives Allowance
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={incentivesAllowance}
+                    onChange={(e) => setIncentivesAllowance(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Special Allowance
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={specialAllowance}
+                    onChange={(e) => setSpecialAllowance(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Overtime Pay
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={overtimePay}
+                    onChange={(e) => setOvertimePay(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Manual Adjustment
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={manualAdjustment}
+                    onChange={(e) => setManualAdjustment(e.target.value)}
+                  />
+                </label>
+                {nAdj !== 0 && (
+                  <label>
+                    Adjustment Reason
+                    <input
+                      type="text"
+                      required
+                      value={adjustmentReason}
+                      onChange={(e) => setAdjustmentReason(e.target.value)}
+                      placeholder="Reason for adjustment"
+                    />
+                  </label>
+                )}
+              </div>
 
-          <div className="confirm-actions">
-            <button
-              className="text-button"
-              type="button"
-              disabled={saving}
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <button
-              className="submit-button"
-              type="submit"
-              disabled={saving}
-            >
-              {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Save Changes
-            </button>
-          </div>
-        </form>
+              <div className="edit-payroll-section">
+                <h3>Statutory & Other Deductions (PHP)</h3>
+                <label>
+                  SSS Employee Share
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={sss}
+                    onChange={(e) => setSss(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Phic (PhilHealth) Employee Share
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={phic}
+                    onChange={(e) => setPhic(e.target.value)}
+                  />
+                </label>
+                <label>
+                  HDMF (Pag-IBIG) Employee Share
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={hdmf}
+                    onChange={(e) => setHdmf(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Salary Advance
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={salaryAdvance}
+                    onChange={(e) => setSalaryAdvance(e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="edit-payroll-summary">
+              <div className="summary-item">
+                <span className="summary-label">Total Allowance</span>
+                <span className="summary-value">{php(totalAllowance)}</span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">Total Earnings</span>
+                <span className="summary-value">{php(totalEarnings)}</span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">Total Deductions</span>
+                <span className="summary-value" style={{ color: "#dc2626" }}>
+                  {php(totalDeductions)}
+                </span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">Net Pay</span>
+                <span className="net-pay-box">{php(netPay)}</span>
+              </div>
+            </div>
+
+            {error && <p className="dashboard-alert" style={{ marginTop: "12px" }}>{error}</p>}
+
+            <div className="confirm-actions">
+              <button
+                className="text-button"
+                type="button"
+                disabled={saving}
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+              <button
+                className="submit-button"
+                type="submit"
+                disabled={saving}
+              >
+                {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Save Changes
+              </button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   );
