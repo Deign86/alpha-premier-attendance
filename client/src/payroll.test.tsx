@@ -334,4 +334,23 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByLabelText("Salary Advance")).not.toBeInTheDocument();
     expect(screen.queryByText("Total Allowance")).not.toBeInTheDocument();
   });
+
+  it("allows deleting a finalized payroll record with confirmation", async () => {
+    const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([record({ status: "FINALIZED" })]);
+
+    expect(screen.getByText("Finalized")).toBeInTheDocument();
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    expect(deleteBtn).toBeInTheDocument();
+
+    await user.click(deleteBtn);
+    expect(screen.getByRole("dialog", { name: "Delete finalized payroll?" })).toBeInTheDocument();
+    expect(screen.getByText(/This will delete the finalized payroll for Ada Lovelace/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await waitFor(() => {
+      expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
+    });
+  });
 });

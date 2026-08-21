@@ -283,6 +283,177 @@ async fn admin_update_user(
     admin_upsert_user(state, token, user).await
 }
 
+async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), String> {
+    let user_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+        > 0;
+    if !user_exists {
+        return Err("USER_NOT_FOUND".into());
+    }
+
+    // 1. Capture cutoff payroll records to delete & sync
+    let cutoff_rows = sqlx::query(
+        "SELECT payroll_id, employee_id, employee_name, payroll_cutoff_label, cutoff_start, cutoff_end FROM payroll_cutoffs WHERE employee_id = ?"
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 2. Capture daily attendance payroll IDs to delete & sync
+    let daily_payroll_ids: Vec<String> = sqlx::query(
+        "SELECT payroll_id FROM payroll WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .map(|r| r.get::<String, _>("payroll_id"))
+    .collect();
+
+    // 3. Capture attendance records to delete & sync
+    let attendance_rows: Vec<(String, String)> = sqlx::query(
+        "SELECT attendance_id, attendance_date FROM attendance WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .map(|r| (r.get::<String, _>("attendance_id"), r.get::<String, _>("attendance_date")))
+    .collect();
+
+    // 4. Capture intern grace IDs to delete & sync
+    let grace_ids: Vec<String> = sqlx::query(
+        "SELECT grace_id FROM intern_grace WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .map(|r| r.get::<String, _>("grace_id"))
+    .collect();
+
+    // Execute deletions in database
+    let _ = sqlx::query(
+        "DELETE FROM payroll_snapshots WHERE payroll_id IN (SELECT payroll_id FROM payroll_cutoffs WHERE employee_id = ?)"
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await;
+
+    let _ = sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
+    let _ = sqlx::query("DELETE FROM payroll WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
+    let _ = sqlx::query("DELETE FROM intern_grace WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
+    let _ = sqlx::query("DELETE FROM attendance WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
+    let result = sqlx::query("DELETE FROM users WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if result.rows_affected() != 1 {
+        return Err("USER_NOT_FOUND".into());
+    }
+
+    // Enqueue sync deletions
+    enqueue_sync(
+        state,
+        "Users",
+        user_id,
+        "DELETE",
+        &serde_json::json!({"userId": user_id}),
+    )
+    .await;
+
+    for row in cutoff_rows {
+        let pid: String = row.get("payroll_id");
+        enqueue_sync(
+            state,
+            "PayrollCutoffs",
+            &pid,
+            "DELETE",
+            &serde_json::json!({
+                "payrollId": pid,
+                "employeeId": row.get::<String, _>("employee_id"),
+                "employeeName": row.get::<String, _>("employee_name"),
+                "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
+                "cutoffStart": row.get::<String, _>("cutoff_start"),
+                "cutoffEnd": row.get::<String, _>("cutoff_end")
+            }),
+        )
+        .await;
+    }
+
+    for pid in daily_payroll_ids {
+        enqueue_sync(
+            state,
+            "Payroll",
+            &pid,
+            "DELETE",
+            &serde_json::json!({"payrollId": pid, "userId": user_id}),
+        )
+        .await;
+    }
+
+    for (aid, adate) in attendance_rows {
+        enqueue_sync(
+            state,
+            "Attendance",
+            &aid,
+            "DELETE",
+            &serde_json::json!({"attendanceId": aid, "attendanceDate": adate}),
+        )
+        .await;
+    }
+
+    for gid in grace_ids {
+        enqueue_sync(
+            state,
+            "InternGrace",
+            user_id,
+            "DELETE",
+            &serde_json::json!({"userId": user_id, "graceId": gid}),
+        )
+        .await;
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_DELETED', ?, ?, ?)"
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&now)
+    .bind(user_id)
+    .bind(format!("User {user_id} and associated attendance/payroll deleted by administrator"))
+    .bind(format!("admin-{}", uuid::Uuid::new_v4()))
+    .execute(&state.db)
+    .await;
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn admin_delete_user(
     state: State<'_, AppState>,
@@ -292,23 +463,8 @@ async fn admin_delete_user(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let result = sqlx::query("DELETE FROM users WHERE user_id = ?")
-        .bind(&user_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    if result.rows_affected() != 1 {
-        return Err("USER_NOT_FOUND".into());
-    }
-    enqueue_sync(
-        &state,
-        "Users",
-        &user_id,
-        "DELETE",
-        &serde_json::json!({"userId":user_id}),
-    )
-    .await;
-    Ok(serde_json::json!({"success":true,"userId":user_id}))
+    delete_user_and_cascade(state.inner(), &user_id).await?;
+    Ok(serde_json::json!({"success": true, "userId": user_id}))
 }
 
 #[tauri::command]
@@ -1374,14 +1530,15 @@ async fn payroll_delete_cutoff(
     let row = sqlx::query("SELECT status,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?
         .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
-    if row.get::<String, _>("status") == "FINALIZED" {
-        return Err("FINALIZED_PAYROLL_CANNOT_BE_DELETED".into());
-    }
-    sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=? AND status='DRAFT'")
+    sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = sqlx::query("DELETE FROM payroll_snapshots WHERE payroll_id=?")
+        .bind(&payroll_id)
+        .execute(&state.db)
+        .await;
     enqueue_sync(
         &state,
         "PayrollCutoffs",
@@ -3583,6 +3740,78 @@ mod tests {
         std::fs::write(&outside, "secret").unwrap();
         assert!(canonical_exports_path(&state, &outside).is_err());
         assert!(canonical_exports_path(&state, &exports_dir.join("missing.csv")).is_err());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn user_deletion_cascades_to_payroll_and_attendance() {
+        let temp = std::env::temp_dir().join(format!("alpha-user-del-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let data_dir = temp.clone();
+        let exports_dir = temp.join("exports");
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            exports_dir.clone(),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        // Create user
+        super::upsert_user_record(
+            &state.db,
+            "EMP-DEL-TEST",
+            "AABB1122",
+            "Test Delete Employee",
+            Some("Engineering"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        // Create cutoff payroll row
+        sqlx::query(
+            "INSERT INTO payroll_cutoffs (payroll_id, employee_id, employee_name, payroll_profile_id, payroll_cutoff_label, cutoff_start, cutoff_end, payroll_frequency, daily_rate_centavos, standard_working_days, actual_working_days, basic_pay_centavos, special_holiday_days, special_holiday_multiplier, special_holiday_pay_centavos, regular_holiday_days, regular_holiday_multiplier, regular_holiday_pay_centavos, incentives_allowance_centavos, special_allowance_centavos, total_compensation_centavos, total_allowance_centavos, late_units, late_deduction_centavos, half_day_count, half_day_deduction_centavos, absent_days, absence_deduction_centavos, overtime_hours, overtime_rate_centavos, overtime_pay_centavos, manual_adjustment_centavos, adjustment_reason, gross_compensation_centavos, net_pay_centavos, signature_placeholder, calculation_breakdown, approved_working_day_overage, status, hra_centavos, sss_centavos, phic_centavos, hdmf_centavos, salary_advance_centavos, created_at, updated_at) VALUES ('P-DEL-1', 'EMP-DEL-TEST', 'Test Delete Employee', 'BEA_STANDARD', '2026-08-01 to 2026-08-15', '2026-08-01', '2026-08-15', 'SEMI_MONTHLY', 50000, 11, 11, 550000, 0, 0.3, 0, 0, 1.0, 0, 0, 0, 550000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, 550000, 550000, '', '{}', 1, 'FINALIZED', 0, 0, 0, 0, 0, '2026-08-15T00:00:00Z', '2026-08-15T00:00:00Z')"
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        // Verify cutoff exists
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_cutoffs WHERE payroll_id = 'P-DEL-1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Delete user and cascade
+        super::delete_user_and_cascade(&state, "EMP-DEL-TEST").await.unwrap();
+
+        // Verify user and cutoffs are gone
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE user_id = 'EMP-DEL-TEST'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(user_count, 0);
+
+        let cutoff_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id = 'EMP-DEL-TEST'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(cutoff_count, 0);
+
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

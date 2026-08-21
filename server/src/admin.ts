@@ -68,6 +68,12 @@ export class AdminService {
     if (!await this.sheets.findUserById(userId)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User was not found.', 404);
     try {
       await this.sheets.deleteUser(userId);
+      const cutoffs = await this.sheets.listPayrollCutoffs();
+      for (const cutoff of cutoffs) {
+        if (cutoff.employeeId === userId) {
+          await this.sheets.deletePayrollCutoff(cutoff.payrollId).catch(() => undefined);
+        }
+      }
       await this.sheets.writeAudit({ eventType: 'ADMIN_USER_DELETED', userId, message: `User ${userId} deleted by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
     } catch { throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'User data is temporarily unavailable.', 503); }
   }
@@ -175,7 +181,6 @@ export class AdminService {
   async deleteCutoffPayroll(payrollId: string): Promise<void> {
     const record = await this.sheets.findPayrollCutoff(payrollId);
     if (!record) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
-    if (record.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be deleted.');
     await this.sheets.deletePayrollCutoff(payrollId);
   }
 

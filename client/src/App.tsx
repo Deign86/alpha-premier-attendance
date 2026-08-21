@@ -3706,7 +3706,16 @@ function PayrollTable({
                           </button>
                         </span>
                       ) : (
-                        <span className="payroll-finalized-label">Finalized</span>
+                        <span className="payroll-row-actions">
+                          <span className="payroll-finalized-label">Finalized</span>
+                          <button
+                            className="text-button danger-button"
+                            type="button"
+                            onClick={() => setDeleteTarget(row)}
+                          >
+                            Delete
+                          </button>
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -3774,8 +3783,14 @@ function PayrollTable({
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         busy={false}
-        title="Delete saved payroll?"
-        message={deleteTarget ? `This will permanently delete the draft payroll for ${deleteTarget.employeeName} (${deleteTarget.payrollCutoffLabel}). Finalized payrolls cannot be deleted.` : ""}
+        title={deleteTarget?.status === "FINALIZED" ? "Delete finalized payroll?" : "Delete saved payroll?"}
+        message={
+          deleteTarget
+            ? deleteTarget.status === "FINALIZED"
+              ? `This will delete the finalized payroll for ${deleteTarget.employeeName} (${deleteTarget.payrollCutoffLabel}). Use this if the employee left, was promoted, or needs their cutoff regenerated. Continue?`
+              : `This will permanently delete the draft payroll for ${deleteTarget.employeeName} (${deleteTarget.payrollCutoffLabel}). Continue?`
+            : ""
+        }
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => void remove()}
       />
@@ -3783,7 +3798,11 @@ function PayrollTable({
         open={Boolean(finalizeTarget)}
         busy={finalizing}
         title="Finalize payroll?"
-        message={finalizeTarget ? `This will finalize the payroll for ${finalizeTarget.employeeName} (${finalizeTarget.payrollCutoffLabel}). Finalized payrolls cannot be edited or deleted.` : ""}
+        message={
+          finalizeTarget
+            ? `This will finalize the payroll for ${finalizeTarget.employeeName} (${finalizeTarget.payrollCutoffLabel}). Values will be locked from further edits.`
+            : ""
+        }
         onCancel={() => setFinalizeTarget(null)}
         onConfirm={() => void finalize()}
       />

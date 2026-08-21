@@ -50,6 +50,21 @@ describe('admin and live attendance API', () => {
     expect((await agent.get('/api/admin/users')).body.users).toHaveLength(0);
   });
 
+  it('deletes subsequent payroll cutoffs when an employee is deleted', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'EMP-DELETE-1', fullName: 'John Doe', rfidUid: 'EEFF', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 500, payrollProfileId: 'BEA_STANDARD' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'EMP-DELETE-1', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15', actualWorkingDays: 11 }).expect(200);
+    const payrollId = created.body.payroll.payrollId as string;
+    expect(await sheets.findPayrollCutoff(payrollId)).not.toBeNull();
+
+    await agent.delete('/api/admin/users/EMP-DELETE-1').expect(200);
+    expect(await sheets.findUserById('EMP-DELETE-1')).toBeNull();
+    expect(await sheets.findPayrollCutoff(payrollId)).toBeNull();
+    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(0);
+  });
+
   it('creates intern cutoff payroll with the fixed PHP 80/day and PHP 10/hour late rules', async () => {
     const sheets = new InMemorySheetsService([{ userId: 'INT-001', fullName: 'Maria Santos', rfidUid: 'CCDD', department: null, active: true, employeeType: 'INTERN' }]);
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
