@@ -7,18 +7,28 @@ pub struct CutoffInput {
     pub daily_rate: f64,
     pub standard_working_days: f64,
     pub actual_working_days: f64,
+    pub basic_pay: Option<f64>,
     pub special_holiday_days: f64,
     pub special_holiday_multiplier: f64,
+    pub special_holiday_pay: Option<f64>,
     pub regular_holiday_days: f64,
     pub regular_holiday_multiplier: f64,
+    pub regular_holiday_pay: Option<f64>,
+    pub hra: f64,
     pub incentives_allowance: f64,
     pub special_allowance: f64,
     pub late_deduction: f64,
     pub half_day_count: f64,
     pub half_day_fraction: f64,
     pub absent_days: f64,
+    pub absence_deduction: Option<f64>,
     pub overtime_hours: f64,
     pub overtime_rate: f64,
+    pub overtime_pay: Option<f64>,
+    pub sss_employee_share: f64,
+    pub phic_employee_share: f64,
+    pub hdmf_employee_share: f64,
+    pub salary_advance: f64,
     pub manual_adjustment: f64,
     pub adjustment_reason: Option<String>,
     pub approved_working_day_overage: bool,
@@ -27,12 +37,22 @@ pub struct CutoffInput {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CutoffResult {
     pub basic_pay: i64,
+    pub hra: i64,
+    pub incentives_allowance: i64,
+    pub special_allowance: i64,
+    pub special_holiday_pay: i64,
+    pub regular_holiday_pay: i64,
     pub total_compensation: i64,
     pub total_allowance: i64,
     pub late_deduction: i64,
     pub half_day_deduction: i64,
     pub absence_deduction: i64,
     pub overtime_pay: i64,
+    pub sss_employee_share: i64,
+    pub phic_employee_share: i64,
+    pub hdmf_employee_share: i64,
+    pub salary_advance: i64,
+    pub total_deductions: i64,
     pub gross_compensation: i64,
     pub net_pay: i64,
 }
@@ -53,12 +73,13 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     {
         return Err("Employee and valid cutoff dates are required.".into());
     }
-    let values = [
+    let mut values = vec![
         input.daily_rate,
         input.standard_working_days,
         input.actual_working_days,
         input.special_holiday_days,
         input.regular_holiday_days,
+        input.hra,
         input.incentives_allowance,
         input.special_allowance,
         input.late_deduction,
@@ -67,7 +88,26 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
         input.absent_days,
         input.overtime_hours,
         input.overtime_rate,
+        input.sss_employee_share,
+        input.phic_employee_share,
+        input.hdmf_employee_share,
+        input.salary_advance,
     ];
+    if let Some(bp) = input.basic_pay {
+        values.push(bp);
+    }
+    if let Some(shp) = input.special_holiday_pay {
+        values.push(shp);
+    }
+    if let Some(rhp) = input.regular_holiday_pay {
+        values.push(rhp);
+    }
+    if let Some(ad) = input.absence_deduction {
+        values.push(ad);
+    }
+    if let Some(op) = input.overtime_pay {
+        values.push(op);
+    }
     if values.iter().any(|v| !v.is_finite() || *v < 0.0)
         || (!input.approved_working_day_overage
             && input.actual_working_days > input.standard_working_days)
@@ -90,37 +130,73 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     } else {
         input.actual_working_days
     };
-    let basic = (daily as f64 * base_days).round() as i64;
-    let special = multiply(
-        (daily as f64 * input.special_holiday_days).round() as i64,
-        input.special_holiday_multiplier,
-    );
-    let regular = multiply(
-        (daily as f64 * input.regular_holiday_days).round() as i64,
-        input.regular_holiday_multiplier,
-    );
-    let allowance = cents(input.incentives_allowance) + cents(input.special_allowance);
+    let basic = input
+        .basic_pay
+        .map(cents)
+        .unwrap_or_else(|| (daily as f64 * base_days).round() as i64);
+    let special = input.special_holiday_pay.map(cents).unwrap_or_else(|| {
+        multiply(
+            (daily as f64 * input.special_holiday_days).round() as i64,
+            input.special_holiday_multiplier,
+        )
+    });
+    let regular = input.regular_holiday_pay.map(cents).unwrap_or_else(|| {
+        multiply(
+            (daily as f64 * input.regular_holiday_days).round() as i64,
+            input.regular_holiday_multiplier,
+        )
+    });
+    let hra = cents(input.hra);
+    let incentives = cents(input.incentives_allowance);
+    let special_allowance = cents(input.special_allowance);
+    let allowance = incentives + special_allowance + hra;
     let half = multiply(
         (daily as f64 * input.half_day_count).round() as i64,
         input.half_day_fraction,
     );
-    let absence = (daily as f64 * input.absent_days).round() as i64;
-    let overtime = multiply(cents(input.overtime_rate), input.overtime_hours);
+    let absence = input
+        .absence_deduction
+        .map(cents)
+        .unwrap_or_else(|| (daily as f64 * input.absent_days).round() as i64);
+    let overtime = input
+        .overtime_pay
+        .map(cents)
+        .unwrap_or_else(|| multiply(cents(input.overtime_rate), input.overtime_hours));
     let late = cents(input.late_deduction);
-    let gross = basic + special + regular + allowance + overtime + cents(input.manual_adjustment)
-        - late
-        - half
-        - absence;
+    let sss = cents(input.sss_employee_share);
+    let phic = cents(input.phic_employee_share);
+    let hdmf = cents(input.hdmf_employee_share);
+    let salary_advance = cents(input.salary_advance);
+
+    let gross = basic
+        + special
+        + regular
+        + allowance
+        + overtime
+        + cents(input.manual_adjustment);
+    let total_deductions = late + half + absence + sss + phic + hdmf + salary_advance;
+    let net = gross - total_deductions;
+
     Ok(CutoffResult {
         basic_pay: basic,
+        hra,
+        incentives_allowance: incentives,
+        special_allowance,
+        special_holiday_pay: special,
+        regular_holiday_pay: regular,
         total_compensation: basic + special + regular,
         total_allowance: allowance,
         late_deduction: late,
         half_day_deduction: half,
         absence_deduction: absence,
         overtime_pay: overtime,
+        sss_employee_share: sss,
+        phic_employee_share: phic,
+        hdmf_employee_share: hdmf,
+        salary_advance,
+        total_deductions,
         gross_compensation: gross,
-        net_pay: gross,
+        net_pay: net,
     })
 }
 
@@ -137,24 +213,91 @@ mod tests {
             daily_rate: 1000.0,
             standard_working_days: 11.0,
             actual_working_days: 10.0,
+            basic_pay: None,
             special_holiday_days: 0.0,
             special_holiday_multiplier: 0.3,
+            special_holiday_pay: None,
             regular_holiday_days: 0.0,
             regular_holiday_multiplier: 1.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
             incentives_allowance: 100.0,
             special_allowance: 0.0,
             late_deduction: 50.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
             absent_days: 0.0,
+            absence_deduction: None,
             overtime_hours: 0.0,
             overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
             manual_adjustment: 0.0,
             adjustment_reason: None,
             approved_working_day_overage: false,
         })
         .unwrap();
+        assert_eq!(result.gross_compensation, 1000000 + 10000);
+        assert_eq!(result.total_deductions, 5000);
         assert_eq!(result.net_pay, 1000000 + 10000 - 5000);
+    }
+
+    #[test]
+    fn computes_cutoff_with_all_editable_earnings_and_deductions() {
+        let result = calculate(&CutoffInput {
+            employee_id: "APGCO-25-013".into(),
+            employee_name: "CHICO, JEAN ASHLEY".into(),
+            cutoff_start: "2026-06-01".into(),
+            cutoff_end: "2026-06-15".into(),
+            daily_rate: 705.0,
+            standard_working_days: 11.0,
+            actual_working_days: 11.0,
+            basic_pay: Some(7755.0),
+            special_holiday_days: 1.0,
+            special_holiday_multiplier: 0.3,
+            special_holiday_pay: Some(211.50),
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 1.0,
+            regular_holiday_pay: None,
+            hra: 500.0,
+            incentives_allowance: 6600.0,
+            special_allowance: 150.0,
+            late_deduction: 100.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 0.0,
+            absence_deduction: None,
+            overtime_hours: 2.0,
+            overtime_rate: 100.0,
+            overtime_pay: Some(200.0),
+            sss_employee_share: 450.0,
+            phic_employee_share: 200.0,
+            hdmf_employee_share: 100.0,
+            salary_advance: 1000.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: true,
+        })
+        .unwrap();
+
+        // Basic (7755) + HRA (500) + Inc (6600) + Spec Allow (150) + Spec Hol (211.50) + OT (200) = 15416.50
+        assert_eq!(result.basic_pay, 775_500);
+        assert_eq!(result.hra, 50_000);
+        assert_eq!(result.incentives_allowance, 660_000);
+        assert_eq!(result.special_allowance, 15_000);
+        assert_eq!(result.total_allowance, 725_000);
+        assert_eq!(result.special_holiday_pay, 21_150);
+        assert_eq!(result.overtime_pay, 20_000);
+        assert_eq!(result.gross_compensation, 1_541_650);
+
+        // Deductions: Late (100) + SSS (450) + PHIC (200) + HDMF (100) + Advance (1000) = 1850.00
+        assert_eq!(result.total_deductions, 185_000);
+
+        // Net: 15416.50 - 1850.00 = 13566.50
+        assert_eq!(result.net_pay, 1_356_650);
     }
 
     #[test]
@@ -167,18 +310,28 @@ mod tests {
             daily_rate: 80.0,
             standard_working_days: 11.0,
             actual_working_days: 1.0,
+            basic_pay: None,
             special_holiday_days: 0.0,
             special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
             regular_holiday_days: 0.0,
             regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
             incentives_allowance: 0.0,
             special_allowance: 0.0,
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
             absent_days: 10.0,
+            absence_deduction: None,
             overtime_hours: 0.0,
             overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
             manual_adjustment: 0.0,
             adjustment_reason: None,
             approved_working_day_overage: false,
@@ -187,7 +340,8 @@ mod tests {
         assert_eq!(result.basic_pay, 88_000);
         assert_eq!(result.total_compensation, 88_000);
         assert_eq!(result.absence_deduction, 80_000);
-        assert_eq!(result.gross_compensation, 8_000);
+        assert_eq!(result.gross_compensation, 88_000);
+        assert_eq!(result.total_deductions, 80_000);
         assert_eq!(result.net_pay, 8_000);
     }
 }

@@ -186,18 +186,24 @@ function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId,
 function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department }; }
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }
 
-/** Builds the shared cutoff input for a standard employee record (existing rules unchanged). */
 function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number }: CutoffInputBuilder & { profile: PayrollCalculationProfile }): CutoffInput {
   return {
     employeeId: employee.userId, employeeName: employee.fullName, employeeType: 'EMPLOYEE', payrollProfileId: profileId, payrollCutoffLabel: cutoffLabel,
     cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate ?? 0),
     standardWorkingDays: number('standardWorkingDays', profile.standardWorkingDaysPerCutoff), actualWorkingDays: number('actualWorkingDays', profile.standardWorkingDaysPerCutoff),
+    basicPay: value.basicPay != null ? number('basicPay', 0) : undefined,
     specialHolidayDays: number('specialHolidayDays', 0), specialHolidayMultiplier: number('specialHolidayMultiplier', profile.specialHolidayMultiplier),
+    specialHolidayPay: value.specialHolidayPay != null ? number('specialHolidayPay', 0) : undefined,
     regularHolidayDays: number('regularHolidayDays', 0), regularHolidayMultiplier: number('regularHolidayMultiplier', profile.regularHolidayMultiplier),
+    regularHolidayPay: value.regularHolidayPay != null ? number('regularHolidayPay', 0) : undefined,
+    hra: number('hra', 0),
     incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance),
     lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
     halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0),
+    absenceDeduction: value.absenceDeduction != null ? number('absenceDeduction', 0) : undefined,
     overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
+    overtimePay: value.overtimePay != null ? number('overtimePay', 0) : undefined,
+    sss: number('sss', 0), phic: number('phic', 0), hdmf: number('hdmf', 0), salaryAdvance: number('salaryAdvance', 0),
     manualAdjustment: number('manualAdjustment', 0), adjustmentReason: cutoffAdjustmentReason(value.adjustmentReason),
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
   };
@@ -245,7 +251,7 @@ type AdminUserInput = {
 type AttendanceInput = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null; attendanceDate: string };
 type PayrollProfileInput = PayrollCalculationProfile;
 type CutoffValue = string | number | null;
-type CutoffNumberField = 'dailyRate' | 'standardWorkingDays' | 'actualWorkingDays' | 'specialHolidayDays' | 'specialHolidayMultiplier' | 'regularHolidayDays' | 'regularHolidayMultiplier' | 'incentivesAllowance' | 'specialAllowance' | 'lateUnits' | 'lateDeduction' | 'halfDayCount' | 'halfDayFraction' | 'absentDays' | 'overtimeHours' | 'overtimeRate' | 'manualAdjustment';
+type CutoffNumberField = 'dailyRate' | 'standardWorkingDays' | 'actualWorkingDays' | 'basicPay' | 'specialHolidayDays' | 'specialHolidayMultiplier' | 'specialHolidayPay' | 'regularHolidayDays' | 'regularHolidayMultiplier' | 'regularHolidayPay' | 'hra' | 'incentivesAllowance' | 'specialAllowance' | 'lateUnits' | 'lateDeduction' | 'halfDayCount' | 'halfDayFraction' | 'absentDays' | 'absenceDeduction' | 'overtimeHours' | 'overtimeRate' | 'overtimePay' | 'sss' | 'phic' | 'hdmf' | 'salaryAdvance' | 'manualAdjustment';
 interface CutoffFormInput {
   employeeId?: CutoffValue;
   employeeName?: CutoffValue;
@@ -258,10 +264,14 @@ interface CutoffFormInput {
   dailyRate?: CutoffValue;
   standardWorkingDays?: CutoffValue;
   actualWorkingDays?: CutoffValue;
+  basicPay?: CutoffValue;
   specialHolidayDays?: CutoffValue;
   specialHolidayMultiplier?: CutoffValue;
+  specialHolidayPay?: CutoffValue;
   regularHolidayDays?: CutoffValue;
   regularHolidayMultiplier?: CutoffValue;
+  regularHolidayPay?: CutoffValue;
+  hra?: CutoffValue;
   incentivesAllowance?: CutoffValue;
   specialAllowance?: CutoffValue;
   lateUnits?: CutoffValue;
@@ -269,8 +279,14 @@ interface CutoffFormInput {
   halfDayCount?: CutoffValue;
   halfDayFraction?: CutoffValue;
   absentDays?: CutoffValue;
+  absenceDeduction?: CutoffValue;
   overtimeHours?: CutoffValue;
   overtimeRate?: CutoffValue;
+  overtimePay?: CutoffValue;
+  sss?: CutoffValue;
+  phic?: CutoffValue;
+  hdmf?: CutoffValue;
+  salaryAdvance?: CutoffValue;
   manualAdjustment?: CutoffValue;
   lateDeductionRate?: CutoffValue;
   adjustmentReason?: CutoffValue;

@@ -59,7 +59,7 @@ describe('admin and live attendance API', () => {
     expect(created.body.payroll).toMatchObject({
       employeeId: 'INT-001', employeeName: 'Maria Santos', employeeType: 'INTERN', dailyRate: 80,
       actualWorkingDays: 10, basicPay: 880, totalCompensation: 880, totalAllowance: 0,
-      lateUnits: 3, lateDeduction: 30, absenceDeduction: 80, grossCompensation: 770, netPay: 770, status: 'DRAFT',
+      lateUnits: 3, lateDeduction: 30, absenceDeduction: 80, totalDeductions: 110, grossCompensation: 880, netPay: 770, status: 'DRAFT',
     });
     // The payroll list derives intern classification from the Users register.
     const payroll = await agent.get('/api/admin/payroll/cutoffs').expect(200);
@@ -77,7 +77,7 @@ describe('admin and live attendance API', () => {
       actualWorkingDays: 11, specialHolidayDays: 1, lateUnits: 5, lateDeductionRate: 50, lateDeduction: 250,
     }).expect(200);
     expect(created.body.payroll).toMatchObject({
-      lateUnits: 5, lateDeduction: 250, grossCompensation: 14466.5, netPay: 14466.5, status: 'DRAFT',
+      lateUnits: 5, lateDeduction: 250, grossCompensation: 14716.5, totalDeductions: 250, netPay: 14466.5, status: 'DRAFT',
     });
   });
 

@@ -2063,13 +2063,18 @@ pub async fn load_employee_payslip_rows(
     cutoff_end: &str,
 ) -> Result<Vec<EmployeePayslipData>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, COALESCE(u.department, '') AS department, \
-         COALESCE(u.employee_type, 'EMPLOYEE') AS designation, \
+        "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, \
+         COALESCE(NULLIF(pc.department, ''), u.department, '') AS department, \
+         COALESCE(NULLIF(pc.designation, ''), u.designation, u.employee_type, 'EMPLOYEE') AS designation, \
+         COALESCE(NULLIF(pc.tin, ''), u.tin, '') AS tin, \
+         COALESCE(NULLIF(pc.bank_name, ''), u.bank_name, 'CASH') AS bank_name, \
+         COALESCE(NULLIF(pc.account_number, ''), u.account_number, '0000') AS account_number, \
          pc.payroll_cutoff_label, pc.daily_rate_centavos, pc.standard_working_days, pc.actual_working_days, \
-         pc.basic_pay_centavos, pc.incentives_allowance_centavos, pc.special_allowance_centavos, \
+         pc.basic_pay_centavos, pc.hra_centavos, pc.incentives_allowance_centavos, pc.special_allowance_centavos, \
          pc.total_allowance_centavos, pc.special_holiday_pay_centavos, pc.regular_holiday_pay_centavos, \
          pc.overtime_pay_centavos, pc.late_deduction_centavos, pc.half_day_deduction_centavos, \
          pc.absent_days, pc.absence_deduction_centavos, pc.gross_compensation_centavos, pc.net_pay_centavos, \
+         pc.sss_centavos, pc.phic_centavos, pc.hdmf_centavos, pc.salary_advance_centavos, \
          pc.status \
          FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
          WHERE pc.cutoff_start = ? AND pc.cutoff_end = ? AND COALESCE(u.employee_type, 'EMPLOYEE') = 'EMPLOYEE' \
@@ -2085,6 +2090,7 @@ pub async fn load_employee_payslip_rows(
         .map(|row| {
             let daily_rate_centavos = row.get::<i64, _>("daily_rate_centavos");
             let basic_pay_centavos = row.get::<i64, _>("basic_pay_centavos");
+            let hra_centavos = row.get::<i64, _>("hra_centavos");
             let incentives_allowance_centavos = row.get::<i64, _>("incentives_allowance_centavos");
             let special_allowance_centavos = row.get::<i64, _>("special_allowance_centavos");
             let total_allowance_centavos = row.get::<i64, _>("total_allowance_centavos");
@@ -2095,8 +2101,17 @@ pub async fn load_employee_payslip_rows(
             let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
             let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
             let absence_deduction_centavos = row.get::<i64, _>("absence_deduction_centavos");
-            let total_deductions_centavos =
-                late_deduction_centavos + half_day_deduction_centavos + absence_deduction_centavos;
+            let sss_centavos = row.get::<i64, _>("sss_centavos");
+            let phic_centavos = row.get::<i64, _>("phic_centavos");
+            let hdmf_centavos = row.get::<i64, _>("hdmf_centavos");
+            let salary_advance_centavos = row.get::<i64, _>("salary_advance_centavos");
+            let total_deductions_centavos = late_deduction_centavos
+                + half_day_deduction_centavos
+                + absence_deduction_centavos
+                + sss_centavos
+                + phic_centavos
+                + hdmf_centavos
+                + salary_advance_centavos;
             let net_pay_centavos = row.get::<i64, _>("net_pay_centavos");
 
             EmployeePayslipData {
@@ -2105,15 +2120,15 @@ pub async fn load_employee_payslip_rows(
                 employee_name: row.get("employee_name"),
                 department: row.get("department"),
                 designation: row.get("designation"),
-                tin: String::new(),
-                bank_name: "CASH".into(),
-                account_number: "0000".into(),
+                tin: row.get("tin"),
+                bank_name: row.get("bank_name"),
+                account_number: row.get("account_number"),
                 standard_working_days: row.get("standard_working_days"),
                 paid_days: row.get("actual_working_days"),
                 lwop_days: row.get("absent_days"),
                 daily_rate_centavos,
                 basic_pay_centavos,
-                hra_centavos: 0,
+                hra_centavos,
                 incentives_allowance_centavos,
                 special_allowance_centavos,
                 total_allowance_centavos,
@@ -2121,10 +2136,10 @@ pub async fn load_employee_payslip_rows(
                 special_holiday_pay_centavos,
                 overtime_pay_centavos,
                 gross_compensation_centavos,
-                sss_centavos: 0,
-                phic_centavos: 0,
-                hdmf_centavos: 0,
-                salary_advance_centavos: 0,
+                sss_centavos,
+                phic_centavos,
+                hdmf_centavos,
+                salary_advance_centavos,
                 absence_deduction_centavos,
                 late_deduction_centavos: late_deduction_centavos + half_day_deduction_centavos,
                 total_deductions_centavos,

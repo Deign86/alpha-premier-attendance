@@ -34,7 +34,7 @@ describe('cutoff payroll calculator', () => {
   it('subtracts a fillable employee late deduction from gross and net pay', () => {
     const result = calculateCutoffPayroll({ ...jeanInput, lateUnits: 5, lateDeduction: 250 });
     // Total compensation 7966.5 + allowances 6750 = 14716.5, minus 250 late deduction.
-    expect(result).toMatchObject({ lateUnits: 5, lateDeduction: 250, grossCompensation: 14466.5, netPay: 14466.5 });
+    expect(result).toMatchObject({ lateUnits: 5, lateDeduction: 250, grossCompensation: 14716.5, totalDeductions: 250, netPay: 14466.5 });
   });
 
   it('computes intern cutoffs at PHP 80/day with PHP 10/hour late deduction and floors at zero', () => {
@@ -47,7 +47,7 @@ describe('cutoff payroll calculator', () => {
       halfDayCount: 0, halfDayFraction: 0, absentDays: 0, overtimeHours: 0, overtimeRate: 0,
     };
     const result = calculateCutoffPayroll(internInput);
-    expect(result).toMatchObject({ dailyRate: 80, basicPay: 800, totalCompensation: 800, totalAllowance: 0, lateUnits: 3, lateDeduction: 30, grossCompensation: 770, netPay: 770, employeeType: 'INTERN' });
+    expect(result).toMatchObject({ dailyRate: 80, basicPay: 800, totalCompensation: 800, totalAllowance: 0, lateUnits: 3, lateDeduction: 30, grossCompensation: 800, totalDeductions: 30, netPay: 770, employeeType: 'INTERN' });
     // An intern can never owe money for a cutoff (floor at zero).
     const zeroed = calculateCutoffPayroll({ ...internInput, actualWorkingDays: 0, lateUnits: 9, lateDeduction: 90 });
     expect(zeroed.grossCompensation).toBe(0);
@@ -69,9 +69,36 @@ describe('cutoff payroll calculator', () => {
       basicPay: 880,
       totalCompensation: 880,
       absenceDeduction: 800,
-      grossCompensation: 80,
+      totalDeductions: 800,
+      grossCompensation: 880,
       netPay: 80,
       employeeType: 'INTERN',
     });
+  });
+
+  it('computes employee cutoff with all editable earnings and statutory deductions', () => {
+    const editableInput = {
+      ...jeanInput,
+      basicPay: 7755,
+      hra: 500,
+      incentivesAllowance: 6600,
+      specialAllowance: 150,
+      specialHolidayPay: 211.5,
+      overtimePay: 200,
+      lateDeduction: 100,
+      sss: 450,
+      phic: 200,
+      hdmf: 100,
+      salaryAdvance: 1000,
+    };
+    const result = calculateCutoffPayroll(editableInput);
+    expect(result.basicPay).toBe(7755);
+    expect(result.hra).toBe(500);
+    expect(result.totalAllowance).toBe(7250);
+    expect(result.specialHolidayPay).toBe(211.5);
+    expect(result.overtimePay).toBe(200);
+    expect(result.grossCompensation).toBe(15416.5);
+    expect(result.totalDeductions).toBe(1850);
+    expect(result.netPay).toBe(13566.5);
   });
 });

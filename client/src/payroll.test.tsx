@@ -271,4 +271,32 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(generatePayrollCutoffSpy).not.toHaveBeenCalled();
   });
+
+  it("opens the edit dialog on a draft record and saves updated earnings and deductions", async () => {
+    const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([record({ status: "DRAFT" })]);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: /Edit Payroll — Ada Lovelace/i })).toBeInTheDocument();
+
+    const hraInput = screen.getByLabelText("HRA");
+    const sssInput = screen.getByLabelText("SSS Employee Share");
+    await user.clear(hraInput);
+    await user.type(hraInput, "500");
+    await user.clear(sssInput);
+    await user.type(sssInput, "450");
+
+    await user.click(screen.getByRole("button", { name: /Save Changes/i }));
+    await waitFor(() => {
+      expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payrollId: "P-001",
+          hra: 500,
+          sss: 450,
+        }),
+        "P-001",
+      );
+    });
+  });
 });
