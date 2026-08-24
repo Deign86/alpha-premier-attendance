@@ -435,12 +435,19 @@ export default function App() {
     }
     if (setupSessionExpired()) return;
     const isImage =
-      ["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
-      /\.(jpe?g|png|webp)$/i.test(file.name);
-    if (!isImage || file.size > PHOTO_UPLOAD_MAX_BYTES) {
-      setSetupError("Choose a JPEG, PNG, or WebP photo up to 500 KB.");
+      ["image/jpeg", "image/png", "image/webp", "image/jpg"].includes(
+        file.type.toLowerCase(),
+      ) || /\.(jpe?g|png|webp)$/i.test(file.name);
+    if (!isImage) {
+      setSetupError("Choose a JPEG, PNG, or WebP photo.");
       return;
     }
+    if (file.size > 25 * 1024 * 1024) {
+      setSetupError("Photo file must be under 25 MB.");
+      return;
+    }
+    setSetupBusy(true);
+    setSetupError("Preparing photo…");
     let dataUrl: string;
     try {
       dataUrl = await preparePhotoDataUrl(file);
@@ -453,10 +460,9 @@ export default function App() {
       );
       return;
     }
-    setSetupBusy(true);
     setSetupError("Uploading photo…");
     const response = await uploadSetupPhoto(
-      setupForm.userId.trim(),
+      setupForm.userId.trim().toUpperCase(),
       dataUrl,
       setupToken,
     );
@@ -1031,8 +1037,23 @@ function SetupDialog(props: SetupDialogProps) {
         props.onClose();
       }
     };
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "copy";
+      }
+    };
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+    };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("drop", handleDrop);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("drop", handleDrop);
+    };
   }, [props.onClose]);
 
   return (
@@ -1284,6 +1305,9 @@ function SetupDialog(props: SetupDialogProps) {
                   onDragOver={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (event.dataTransfer) {
+                      event.dataTransfer.dropEffect = "copy";
+                    }
                   }}
                   onDragEnter={(event) => {
                     event.preventDefault();
@@ -1305,7 +1329,12 @@ function SetupDialog(props: SetupDialogProps) {
                     event.preventDefault();
                     event.stopPropagation();
                     setIsDraggingPhoto(false);
-                    const file = event.dataTransfer.files?.[0];
+                    const file =
+                      event.dataTransfer.files?.[0] ??
+                      (event.dataTransfer.items &&
+                      event.dataTransfer.items.length > 0
+                        ? event.dataTransfer.items[0].getAsFile()
+                        : null);
                     if (file) props.onPhotoFile(file);
                   }}
                 >
@@ -1329,6 +1358,12 @@ function SetupDialog(props: SetupDialogProps) {
                       <span className="photo-overlay">
                         <Check size={17} /> Photo ready
                       </span>
+                    </>
+                  ) : isDraggingPhoto ? (
+                    <>
+                      <ImagePlus size={28} />
+                      <strong>Drop ID photo here</strong>
+                      <small>Release mouse to upload photo</small>
                     </>
                   ) : (
                     <>
