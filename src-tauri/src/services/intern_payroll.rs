@@ -41,19 +41,26 @@ pub fn calculate(
         .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
         .single()
         .ok_or("Invalid Manila start time")?;
+    let grace_end = Manila
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 15, 0)
+        .single()
+        .ok_or("Invalid Manila grace end time")?;
+
     let late_seconds = time_in.signed_duration_since(start).num_seconds();
-    let late_hours = if late_seconds > 0 {
+    let raw_late_hours = if late_seconds > 0 {
         (late_seconds + 3599) / 3600
     } else {
         0
     };
-    let grace_used = late_hours > 0 && grace_available;
-    let deduction = if late_hours > 0 && !grace_used {
+    let in_grace_window = time_in > start && time_in <= grace_end;
+    let grace_used = in_grace_window && grace_available;
+    let late_hours = if grace_used { 0 } else { raw_late_hours };
+    let deduction = if late_hours > 0 {
         late_hours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP * 100
     } else {
         0
     };
-    let computed_in = if late_hours > 0 && !grace_used {
+    let computed_in = if late_hours > 0 {
         ceil_hour(time_in)
     } else {
         time_in
@@ -114,5 +121,35 @@ mod tests {
         assert_eq!(result.late_hours, 2);
         assert_eq!(result.late_deduction_centavos, 2000);
         assert_eq!(result.worked_hours, 7);
+    }
+    #[test]
+    fn grace_period_applies_within_08_00_to_08_15() {
+        // 08:12 is in 8:00 - 8:15 grace period
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T08:12:00+08:00",
+            "2026-08-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(result.grace_used);
+        assert_eq!(result.late_hours, 0);
+        assert_eq!(result.late_deduction_centavos, 0);
+        assert_eq!(result.daily_pay_centavos, 8000);
+    }
+    #[test]
+    fn arrival_beyond_08_15_is_late() {
+        // 08:16 is beyond grace period
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T08:16:00+08:00",
+            "2026-08-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(!result.grace_used);
+        assert_eq!(result.late_hours, 1);
+        assert_eq!(result.late_deduction_centavos, 1000);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
 }

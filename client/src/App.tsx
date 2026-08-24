@@ -27,6 +27,7 @@ import type {
   LanStatusResponse,
   DatabaseInfoResponse,
   PayrollPdfRecord,
+  ArrivalStatus,
 } from "@rfid-attendance/shared";
 import {
   DEFAULT_OFFICE_IDENTITY,
@@ -36,6 +37,7 @@ import {
   OFFICE_HOURS_END,
   isLateTimeout,
   normalizeName,
+  evaluateAttendanceArrivals,
 } from "@rfid-attendance/shared";
 import {
   DEFAULT_CONFIG,
@@ -4139,25 +4141,50 @@ function AdminAttendance({
     }
   };
 
+  const arrivalMap = useMemo(
+    () => evaluateAttendanceArrivals(activeRows),
+    [activeRows],
+  );
+
   const counts = useMemo(() => {
+    let gpCount = 0;
+    let lateCount = 0;
+    for (const info of arrivalMap.values()) {
+      if (info.arrivalStatus === "GRACE_PERIOD") gpCount++;
+      else if (info.arrivalStatus === "LATE") lateCount++;
+    }
     return {
       all: activeRows.length,
-      late: activeRows.filter((r) => r.status === "LATE_TIMEOUT").length,
+      gracePeriod: gpCount,
+      late: lateCount,
+      lateTimeout: activeRows.filter((r) => r.status === "LATE_TIMEOUT").length,
       working: activeRows.filter((r) => r.status === "WORKING").length,
       completed: activeRows.filter((r) => r.status === "COMPLETED").length,
       missed: activeRows.filter((r) => r.status === "MISSED").length,
     };
-  }, [activeRows]);
+  }, [activeRows, arrivalMap]);
 
-  const filteredRows = activeRows.filter(
-    (row) =>
-      (!employeeFilter ||
-        `${row.fullName} ${row.userId}`
-          .toLowerCase()
-          .includes(employeeFilter.toLowerCase())) &&
-      (!departmentFilter || row.department === departmentFilter) &&
-      (!statusFilter || row.status === statusFilter),
-  );
+  const filteredRows = activeRows.filter((row) => {
+    if (
+      employeeFilter &&
+      !`${row.fullName} ${row.userId}`
+        .toLowerCase()
+        .includes(employeeFilter.toLowerCase())
+    ) {
+      return false;
+    }
+    if (departmentFilter && row.department !== departmentFilter) {
+      return false;
+    }
+    if (!statusFilter) return true;
+    if (statusFilter === "GRACE_PERIOD") {
+      return arrivalMap.get(row.attendanceId)?.arrivalStatus === "GRACE_PERIOD";
+    }
+    if (statusFilter === "LATE") {
+      return arrivalMap.get(row.attendanceId)?.arrivalStatus === "LATE";
+    }
+    return row.status === statusFilter;
+  });
 
   const departments = [
     ...new Set(
@@ -4171,6 +4198,7 @@ function AdminAttendance({
     setExporting(true);
     const result = exportAttendanceCsv(
       filteredRows,
+      arrivalMap,
       startDate,
       endDate !== startDate ? endDate : undefined,
     );
@@ -4228,6 +4256,27 @@ function AdminAttendance({
               All <span className="filter-pill-count">{counts.all}</span>
             </button>
             <button
+              className={`filter-pill ${statusFilter === "GRACE_PERIOD" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setStatusFilter(
+                  statusFilter === "GRACE_PERIOD" ? "" : "GRACE_PERIOD",
+                )
+              }
+            >
+              Grace Period (GP){" "}
+              <span className="filter-pill-count">{counts.gracePeriod}</span>
+            </button>
+            <button
+              className={`filter-pill ${statusFilter === "LATE" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setStatusFilter(statusFilter === "LATE" ? "" : "LATE")
+              }
+            >
+              Late <span className="filter-pill-count">{counts.late}</span>
+            </button>
+            <button
               className={`filter-pill ${statusFilter === "LATE_TIMEOUT" ? "is-active" : ""}`}
               type="button"
               onClick={() =>
@@ -4236,7 +4285,8 @@ function AdminAttendance({
                 )
               }
             >
-              Late / GP <span className="filter-pill-count">{counts.late}</span>
+              Late Time-out{" "}
+              <span className="filter-pill-count">{counts.lateTimeout}</span>
             </button>
             <button
               className={`filter-pill ${statusFilter === "WORKING" ? "is-active" : ""}`}
@@ -4339,6 +4389,7 @@ function AdminAttendance({
               <th>Date</th>
               <th>Employee</th>
               <th>Time in</th>
+              <th>Arrival</th>
               <th>Time out</th>
               <th>Status</th>
               <th />
@@ -4347,7 +4398,7 @@ function AdminAttendance({
           <tbody>
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="table-empty-cell">
+                <td colSpan={7} className="table-empty-cell">
                   <div className="empty-state">
                     No attendance records found for{" "}
                     {startDate === endDate
@@ -4365,6 +4416,7 @@ function AdminAttendance({
                 <AttendanceEditRow
                   key={row.attendanceId}
                   row={row}
+                  arrivalInfo={arrivalMap.get(row.attendanceId)}
                   onSaved={() => {
                     onSaved();
                     if (startDate !== endDate) {
@@ -4383,6 +4435,7 @@ function AdminAttendance({
 
 function exportAttendanceCsv(
   rows: AttendanceListItem[],
+  arrivalMap: Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }>,
   startDate: string,
   endDate?: string,
 ):
@@ -4404,6 +4457,7 @@ function exportAttendanceCsv(
     "Department",
     "Date",
     "Time in",
+    "Arrival",
     "Time out",
     "Status",
     "Total hours",
@@ -4417,6 +4471,13 @@ function exportAttendanceCsv(
       3_600_000;
     return Number.isFinite(hours) && hours >= 0 ? hours.toFixed(2) : "";
   };
+  const getArrivalText = (row: AttendanceListItem) => {
+    const info = arrivalMap.get(row.attendanceId);
+    if (!info || info.arrivalStatus === "NONE") return "";
+    if (info.arrivalStatus === "ON_TIME") return "On time";
+    if (info.arrivalStatus === "GRACE_PERIOD") return "Grace Period (GP)";
+    return `Late (${info.minutesLate}m)`;
+  };
   const content = [
     headers,
     ...rows.map((row) => [
@@ -4425,6 +4486,7 @@ function exportAttendanceCsv(
       row.department,
       row.attendanceDate,
       row.timeIn,
+      getArrivalText(row),
       row.timeOut,
       row.status,
       totalHours(row),
@@ -4458,9 +4520,11 @@ function exportAttendanceCsv(
 
 function AttendanceEditRow({
   row,
+  arrivalInfo,
   onSaved,
 }: {
   row: AttendanceListItem;
+  arrivalInfo?: { arrivalStatus: ArrivalStatus; minutesLate: number };
   onSaved: () => void;
 }) {
   const [timeIn, setTimeIn] = useState(
@@ -4510,11 +4574,39 @@ function AttendanceEditRow({
       setMessage(response.error?.message ?? "Unable to delete record.");
     }
   };
+
+  const renderArrival = () => {
+    if (!arrivalInfo || arrivalInfo.arrivalStatus === "NONE") {
+      return <span className="arrival-badge badge-none">—</span>;
+    }
+    if (arrivalInfo.arrivalStatus === "ON_TIME") {
+      return <span className="arrival-badge badge-ontime">On time</span>;
+    }
+    if (arrivalInfo.arrivalStatus === "GRACE_PERIOD") {
+      return (
+        <span
+          className="arrival-badge badge-gp"
+          title="8:00 - 8:15 AM (1 weekly grace period applied)"
+        >
+          Grace Period (GP)
+        </span>
+      );
+    }
+    return (
+      <span
+        className="arrival-badge badge-late"
+        title={`Late arrival (${arrivalInfo.minutesLate} minutes)`}
+      >
+        Late ({arrivalInfo.minutesLate}m)
+      </span>
+    );
+  };
+
   return (
     <>
       {late && (
         <tr className="admin-attention-row">
-          <td colSpan={6} className="admin-attention">
+          <td colSpan={7} className="admin-attention">
             <strong>Late time-out — manual correction required.</strong> This
             time-out was recorded after office hours ({OFFICE_HOURS_END}); the
             office does not allow overtime. Re-enter the official time-out below
@@ -4540,6 +4632,7 @@ function AttendanceEditRow({
             onChange={(e) => setTimeIn(e.target.value)}
           />
         </td>
+        <td>{renderArrival()}</td>
         <td>
           <input
             aria-label={`Time out for ${row.fullName}`}
@@ -4569,7 +4662,7 @@ function AttendanceEditRow({
       </tr>
       {deleteAttendanceConfirm && (
         <tr>
-          <td colSpan={6} style={{ padding: 0 }}>
+          <td colSpan={7} style={{ padding: 0 }}>
             <ConfirmDialog
               open={true}
               busy={deleting}

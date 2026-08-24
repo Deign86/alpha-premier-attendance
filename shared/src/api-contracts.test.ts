@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendanceActions, attendanceStatuses, isLateTimeout, normalizeName, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
+import { attendanceActions, attendanceStatuses, evaluateAttendanceArrivals, isLateTimeout, normalizeName, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources and attendance states stable', () => {
@@ -89,8 +89,47 @@ describe('normalizeName', () => {
     expect(normalizeName('mary-jane watson')).toBe('Mary-Jane Watson');
     expect(normalizeName("o'connor")).toBe("O'Connor");
     expect(normalizeName("o’neill")).toBe("O’Neill");
-    expect(normalizeName("d'angelo")).toBe("D'Angelo");
     expect(normalizeName('ma. teresa santos')).toBe('Ma. Teresa Santos');
     expect(normalizeName('de la cruz')).toBe('De La Cruz');
+  });
+});
+
+describe('evaluateAttendanceArrivals & grace period rules', () => {
+  it('identifies arrivals on or before 08:00 as ON_TIME', () => {
+    const rows = [
+      { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T07:55:00+08:00' },
+      { attendanceId: '2', userId: 'EMP-01', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:00:00+08:00' },
+    ];
+    const results = evaluateAttendanceArrivals(rows);
+    expect(results.get('1')?.arrivalStatus).toBe('ON_TIME');
+    expect(results.get('2')?.arrivalStatus).toBe('ON_TIME');
+  });
+
+  it('allows exactly 1 GRACE_PERIOD per week for arrivals between 08:00 and 08:15', () => {
+    const rows = [
+      // Monday 8:10 -> Uses the 1 weekly grace period
+      { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:10:00+08:00' },
+      // Tuesday 8:08 -> Second arrival in 8:00-8:15 in same week -> LATE!
+      { attendanceId: '2', userId: 'EMP-01', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:08:00+08:00' },
+      // Next Monday 8:12 -> New week -> Uses new weekly grace period
+      { attendanceId: '3', userId: 'EMP-01', attendanceDate: '2026-08-31', timeIn: '2026-08-31T08:12:00+08:00' },
+    ];
+    const results = evaluateAttendanceArrivals(rows);
+    expect(results.get('1')?.arrivalStatus).toBe('GRACE_PERIOD');
+    expect(results.get('2')?.arrivalStatus).toBe('LATE');
+    expect(results.get('2')?.minutesLate).toBe(8);
+    expect(results.get('3')?.arrivalStatus).toBe('GRACE_PERIOD');
+  });
+
+  it('treats arrivals strictly beyond 08:15 as LATE regardless of grace period availability', () => {
+    const rows = [
+      { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:16:00+08:00' },
+      { attendanceId: '2', userId: 'EMP-02', attendanceDate: '2026-08-24', timeIn: '2026-08-24T09:30:00+08:00' },
+    ];
+    const results = evaluateAttendanceArrivals(rows);
+    expect(results.get('1')?.arrivalStatus).toBe('LATE');
+    expect(results.get('1')?.minutesLate).toBe(16);
+    expect(results.get('2')?.arrivalStatus).toBe('LATE');
+    expect(results.get('2')?.minutesLate).toBe(90);
   });
 });

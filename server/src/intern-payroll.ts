@@ -32,13 +32,17 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   const actualTimeOut = manilaTimestamp(input.actualTimeOut);
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
-  if (!start.isValid) throw new Error('Payroll timestamps must be valid ISO values');
+  const graceEnd = DateTime.fromISO(`${input.attendanceDate}T08:15:00`, { zone: timezone });
+  if (!start.isValid || !graceEnd.isValid) throw new Error('Payroll timestamps must be valid ISO values');
 
   const lateMilliseconds = actualTimeIn.toMillis() - start.toMillis();
-  const lateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
-  const graceUsed = lateHours > 0 && input.graceAvailable;
-  const lateDeduction = lateHours > 0 && !graceUsed ? lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP : 0;
-  const computedTimeIn = lateHours > 0 && !graceUsed ? ceilHour(actualTimeIn) : actualTimeIn;
+  const rawLateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
+  const inGraceWindow = actualTimeIn > start && actualTimeIn <= graceEnd;
+
+  const graceUsed = inGraceWindow && input.graceAvailable;
+  const lateHours = graceUsed ? 0 : rawLateHours;
+  const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
+  const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
 
   return {

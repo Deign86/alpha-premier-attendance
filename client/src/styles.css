@@ -204,6 +204,11 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .status-pill { display: inline-block; padding: 5px 8px; border: 1px solid var(--line-bright); font-size: .63rem; }
 .status-completed { color: var(--success); } .status-working { color: var(--gold-bright); } .status-missed { color: var(--danger); } .status-late_timeout { color: var(--danger); border-color: var(--danger); background: rgba(239, 170, 146, .08); }
 .status-hint { color: var(--danger); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.arrival-badge { display: inline-flex; align-items: center; padding: 3px 8px; font-size: .66rem; font-weight: 700; border-radius: var(--radius-sm); letter-spacing: .02em; white-space: nowrap; }
+.badge-ontime { color: var(--success); background: rgba(82, 196, 126, .1); border: 1px solid rgba(82, 196, 126, .25); }
+.badge-gp { color: var(--gold-bright); background: rgba(198, 162, 84, .12); border: 1px solid var(--gold-soft); }
+.badge-late { color: var(--danger); background: rgba(239, 170, 146, .1); border: 1px solid rgba(239, 170, 146, .3); }
+.badge-none { color: var(--quiet); }
 .admin-attention-row td { padding: 0; }
 .admin-attention { margin: 8px 0; padding: 10px 13px; border: 1px solid var(--danger); border-left: 3px solid var(--danger); background: rgba(239, 170, 146, .08); color: var(--danger); font-size: .75rem; }
 .admin-attention strong { display: inline; color: inherit; }

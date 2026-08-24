@@ -2,7 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { calculateInternPayroll, manilaWeekStart } from '../src/intern-payroll.js';
 
 describe('intern payroll policy', () => {
-  it('keeps the first late exact and free', () => {
+  it('applies weekly grace period for arrival between 08:00 and 08:15', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:12:00+08:00',
+      actualTimeOut: '2026-07-28T17:10:00+08:00',
+      graceAvailable: true,
+    });
+
+    expect(result).toMatchObject({
+      computedTimeIn: '2026-07-28T08:12:00+08:00',
+      computedTimeOut: '2026-07-28T17:10:00+08:00',
+      lateHours: 0,
+      lateDeduction: 0,
+      graceUsed: true,
+      basePay: 80,
+      dailyPay: 80,
+      workedHours: 8,
+    });
+  });
+
+  it('treats arrival beyond 08:15 as late even if graceAvailable is true', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:17:00+08:00',
@@ -10,14 +30,21 @@ describe('intern payroll policy', () => {
       graceAvailable: true,
     });
 
-    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T08:17:00+08:00', computedTimeOut: '2026-07-28T17:10:00+08:00', lateHours: 1, lateDeduction: 0, graceUsed: true, basePay: 80, dailyPay: 80, workedHours: 8 });
+    expect(result).toMatchObject({
+      computedTimeIn: '2026-07-28T09:00:00+08:00',
+      lateHours: 1,
+      lateDeduction: 10,
+      graceUsed: false,
+      basePay: 80,
+      dailyPay: 70,
+    });
   });
 
   it('never counts the 12:00–13:00 lunch hour as payable time', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
-      actualTimeIn: '2026-07-28T09:00:00+08:00',
-      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T16:00:00+08:00',
       graceAvailable: true,
     });
     expect(result.workedHours).toBe(7);

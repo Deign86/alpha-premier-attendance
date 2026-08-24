@@ -28,10 +28,106 @@ export type AttendanceStatus = (typeof attendanceStatuses)[number];
  * (flagged for manual correction) instead of a normal `COMPLETED` shift.
  */
 export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
-/** Official start of the workday, used by intern lateness rules. */
+/** Official start of the workday. Arrivals at or before 08:00 are on time. */
 export const OFFICE_HOURS_START = '08:00';
+/** Official end of grace period window (8:00 AM - 8:15 AM). */
+export const GRACE_PERIOD_END = '08:15';
 /** Official end of office hours. Time-outs strictly after this (6 PM onwards) are flagged `LATE_TIMEOUT`. */
 export const OFFICE_HOURS_END = '18:00';
+
+export type ArrivalStatus = 'ON_TIME' | 'GRACE_PERIOD' | 'LATE' | 'NONE';
+
+/**
+ * Returns Monday (YYYY-MM-DD) of the work week for a given Manila date string.
+ */
+export function getManilaWeekStart(dateStr: string): string {
+  const [yearStr, monthStr, dayStr] = dateStr.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return dateStr;
+  }
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  const dayOfWeek = utcDate.getUTCDay(); // 0 is Sunday, 1 is Monday...
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const mondayUtc = new Date(Date.UTC(year, month - 1, day + diffToMonday));
+  return mondayUtc.toISOString().slice(0, 10);
+}
+
+/**
+ * Determines arrival evaluation (ON_TIME, GRACE_PERIOD, LATE) across a collection of rows,
+ * enforcing that each user receives at most 1 Grace Period (08:00:01 - 08:15:00) per work week.
+ */
+export function evaluateAttendanceArrivals(
+  rows: Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn?: string | null }>,
+): Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }> {
+  const result = new Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }>();
+
+  // Group by userId and weekStart
+  const groups = new Map<string, Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn: string }>>();
+  for (const row of rows) {
+    if (!row.timeIn) {
+      result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
+      continue;
+    }
+    const weekStart = getManilaWeekStart(row.attendanceDate);
+    const key = `${row.userId}:${weekStart}`;
+    const list = groups.get(key) ?? [];
+    list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn });
+    groups.set(key, list);
+  }
+
+  for (const list of groups.values()) {
+    list.sort((a, b) => {
+      const d = a.attendanceDate.localeCompare(b.attendanceDate);
+      if (d !== 0) return d;
+      return a.timeIn.localeCompare(b.timeIn);
+    });
+
+    let graceUsedThisWeek = false;
+
+    for (const item of list) {
+      const date = new Date(item.timeIn);
+      if (!Number.isFinite(date.getTime())) {
+        result.set(item.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
+        continue;
+      }
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: ATTENDANCE_TIMEZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      }).formatToParts(date);
+      const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+      const seconds = read('hour') * 3600 + read('minute') * 60 + read('second');
+      const startSeconds = 8 * 3600; // 08:00:00
+      const graceEndSeconds = 8 * 3600 + 15 * 60; // 08:15:00
+
+      if (seconds <= startSeconds) {
+        // <= 08:00:00
+        result.set(item.attendanceId, { arrivalStatus: 'ON_TIME', minutesLate: 0 });
+      } else if (seconds <= graceEndSeconds) {
+        // 08:00:01 - 08:15:00
+        if (!graceUsedThisWeek) {
+          graceUsedThisWeek = true;
+          result.set(item.attendanceId, { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 });
+        } else {
+          // Already used 1 weekly GP -> Late!
+          const mins = Math.ceil((seconds - startSeconds) / 60);
+          result.set(item.attendanceId, { arrivalStatus: 'LATE', minutesLate: mins });
+        }
+      } else {
+        // > 08:15:00 -> Strictly Late
+        const mins = Math.ceil((seconds - startSeconds) / 60);
+        result.set(item.attendanceId, { arrivalStatus: 'LATE', minutesLate: mins });
+      }
+    }
+  }
+
+  return result;
+}
 
 /**
  * True when the Manila-local clock time of a time-out timestamp is strictly
