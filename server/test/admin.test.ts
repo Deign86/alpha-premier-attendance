@@ -122,4 +122,33 @@ describe('admin and live attendance API', () => {
     expect((await request(app).get('/api/attendance?date=2026-07-29')).body.attendance[0].status).toBe('COMPLETED');
     expect(await sheets.findPayrollByAttendanceId('att-1')).not.toBeNull();
   });
+
+  it('allows removing time-out and time-in values in attendance corrections', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 500 },
+    ], [{ attendanceId: 'att-1', attendanceDate: '2026-07-29', userId: 'u1', rfidUid: 'AABB', fullName: 'Ada', department: null, timeIn: '2026-07-29T08:00:00+08:00', timeOut: '2026-07-29T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    // 1. Removing time-out returns the attendance to WORKING status and clears payroll
+    const res1 = await agent.patch('/api/admin/attendance/att-1').send({
+      attendanceDate: '2026-07-29',
+      timeIn: '2026-07-29T08:00:00+08:00',
+      timeOut: null,
+      expectedTimeIn: '2026-07-29T08:00:00+08:00',
+      expectedTimeOut: '2026-07-29T17:00:00+08:00',
+    }).expect(200);
+    expect(res1.body.attendance).toMatchObject({ timeIn: '2026-07-29T08:00:00+08:00', timeOut: null, status: 'WORKING' });
+    expect(await sheets.findPayrollByAttendanceId('att-1')).toBeNull();
+
+    // 2. Removing time-in as well sets status to MISSED
+    const res2 = await agent.patch('/api/admin/attendance/att-1').send({
+      attendanceDate: '2026-07-29',
+      timeIn: null,
+      timeOut: null,
+      expectedTimeIn: '2026-07-29T08:00:00+08:00',
+      expectedTimeOut: null,
+    }).expect(200);
+    expect(res2.body.attendance).toMatchObject({ timeIn: '', timeOut: null, status: 'MISSED' });
+  });
 });

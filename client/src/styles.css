@@ -216,6 +216,10 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .admin-login { display: grid; place-items: center; } .admin-login form { width: min(460px, 100%); padding: 32px; border: 1px solid var(--line); background: var(--surface); }
 .admin-login label, .admin-form label, .date-filter { display: grid; gap: 7px; margin: 16px 0; color: var(--ink); font-size: .76rem; }
 .admin-login input, .admin-form input, .admin-form select, .date-filter input, td input { height: 42px; padding: 0 10px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); }
+.time-input-group { position: relative; display: inline-flex; align-items: center; }
+.time-input-group input { padding-right: 26px; }
+.time-clear-btn { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: var(--quiet); padding: 4px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
+.time-clear-btn:hover { color: var(--danger); background: rgba(239, 170, 146, .12); }
 .admin-tabs { display: flex; gap: 8px; margin: 24px 0; border-bottom: 1px solid var(--line); }
 .admin-tabs button { padding: 13px 14px; color: var(--muted); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: .75rem; }
 .admin-tabs button.is-active { color: var(--gold-bright); border-color: var(--gold); }

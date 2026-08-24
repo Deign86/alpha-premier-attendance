@@ -4571,6 +4571,12 @@ function AttendanceEditRow({
   const [message, setMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteAttendanceConfirm, setDeleteAttendanceConfirm] = useState(false);
+
+  useEffect(() => {
+    setTimeIn(row.timeIn ? row.timeIn.slice(11, 16) : "");
+    setTimeOut(row.timeOut ? row.timeOut.slice(11, 16) : "");
+  }, [row.timeIn, row.timeOut]);
+
   const late = row.status === "LATE_TIMEOUT";
   const save = async () => {
     const toIso = (value: string) =>
@@ -4660,21 +4666,47 @@ function AttendanceEditRow({
           <small>{row.userId}</small>
         </td>
         <td>
-          <input
-            aria-label={`Time in for ${row.fullName}`}
-            type="time"
-            value={timeIn}
-            onChange={(e) => setTimeIn(e.target.value)}
-          />
+          <div className="time-input-group">
+            <input
+              aria-label={`Time in for ${row.fullName}`}
+              type="time"
+              value={timeIn}
+              onChange={(e) => setTimeIn(e.target.value)}
+            />
+            {timeIn ? (
+              <button
+                type="button"
+                className="time-clear-btn"
+                title="Clear time in"
+                aria-label={`Clear time in for ${row.fullName}`}
+                onClick={() => setTimeIn("")}
+              >
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
         </td>
         <td>{renderArrival()}</td>
         <td>
-          <input
-            aria-label={`Time out for ${row.fullName}`}
-            type="time"
-            value={timeOut}
-            onChange={(e) => setTimeOut(e.target.value)}
-          />
+          <div className="time-input-group">
+            <input
+              aria-label={`Time out for ${row.fullName}`}
+              type="time"
+              value={timeOut}
+              onChange={(e) => setTimeOut(e.target.value)}
+            />
+            {timeOut ? (
+              <button
+                type="button"
+                className="time-clear-btn"
+                title="Clear time out"
+                aria-label={`Clear time out for ${row.fullName}`}
+                onClick={() => setTimeOut("")}
+              >
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
         </td>
         <td>
           <span className={`status-pill status-${row.status.toLowerCase()}`}>

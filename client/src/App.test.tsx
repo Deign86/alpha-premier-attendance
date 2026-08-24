@@ -635,3 +635,88 @@ describe('hidden-window scan notification', () => {
     hasFocus.mockRestore();
   });
 });
+
+describe('Admin Attendance Corrections', () => {
+  it('allows clearing time-in and time-out with clear buttons and saving', async () => {
+    window.history.pushState({}, '', '/admin');
+    let patchedBody: {
+      attendanceDate?: string;
+      timeIn?: string | null;
+      timeOut?: string | null;
+      expectedTimeIn?: string | null;
+      expectedTimeOut?: string | null;
+    } | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch mock users
+        return { ok: true, json: async () => ({ success: true, users: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance/a1')) {
+        // SAFETY: Parsing mocked patch request body
+        patchedBody = JSON.parse(String(init?.body)) as { attendanceDate?: string; timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null };
+        // SAFETY: Fetch mock patch response
+        return { ok: true, json: async () => ({ success: true, attendance: { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '', timeOut: null, status: 'MISSED' } }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance list
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+            ],
+            fetchedAt: '2026-07-28T10:00:00+08:00',
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      expect(await screen.findByDisplayValue('08:00')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('17:00')).toBeInTheDocument();
+
+      const clearInBtn = screen.getByRole('button', { name: /clear time in for ada lovelace/i });
+      const clearOutBtn = screen.getByRole('button', { name: /clear time out for ada lovelace/i });
+
+      await user.click(clearInBtn);
+      await user.click(clearOutBtn);
+
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(patchedBody).toEqual({
+        attendanceDate: '2026-07-28',
+        timeIn: null,
+        timeOut: null,
+        expectedTimeIn: '2026-07-28T08:00:00+08:00',
+        expectedTimeOut: '2026-07-28T17:00:00+08:00',
+      }));
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
