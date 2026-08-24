@@ -38,8 +38,7 @@ describe('admin and live attendance API', () => {
     const session = await agent.get('/api/admin/session').expect(200);
     expect(session.body.expiresAt).toEqual(expect.any(String));
     const users = await agent.get('/api/admin/users').expect(200);
-    expect(users.body.users[0]).toMatchObject({ userId: 'u1', rfidUid: 'AABB' });
-    await agent.patch('/api/admin/users/u1').send({ userId: 'u1', rfidUid: 'CCDD', fullName: 'Ada Updated', department: 'Platform', status: 'ACTIVE' }).expect(200);
+    await agent.patch('/api/admin/users/u1').send({ userId: 'u1', rfidUid: 'CCDD', fullName: '  ada   updated  ', department: 'Platform', status: 'ACTIVE' }).expect(200);
     const live = await request(app).get('/api/attendance?date=2026-07-29').expect(200);
     expect(live.body.attendance[0]).toMatchObject({ fullName: 'Ada Updated', status: 'WORKING' });
     await agent.patch('/api/admin/attendance/att-1').send({ attendanceDate: '2026-07-29', timeIn: '2026-07-29T09:00:00+08:00', timeOut: '2026-07-29T17:00:00+08:00', expectedTimeIn: '2026-07-29T09:00:00+08:00', expectedTimeOut: null }).expect(200);

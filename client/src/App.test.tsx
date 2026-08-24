@@ -492,10 +492,101 @@ describe('RFID kiosk', () => {
     await screen.findByText('ABCD1234');
     expect(screen.getByLabelText(/^user id/i)).toHaveFocus();
     await user.type(screen.getByLabelText(/^user id/i), 'EMP-002');
-    await user.type(screen.getByLabelText(/full name/i), 'Grace Hopper');
+    await user.type(screen.getByLabelText(/full name/i), '  grace   hopper  ');
+    fireEvent.blur(screen.getByLabelText(/full name/i));
+    expect(screen.getByLabelText(/full name/i)).toHaveValue('Grace Hopper');
     await user.click(screen.getByRole('button', { name: /save user/i }));
     expect(await screen.findByText('Card enrolled successfully.')).toBeInTheDocument();
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/setup/users', expect.objectContaining({ method: 'POST' }));
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/setup/users',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"fullName":"Grace Hopper"'),
+      }),
+    );
+  });
+
+  it('supports drag and drop photo upload in setup dialog', async () => {
+    let capturedPhotoBody: unknown;
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      }
+      if (url.includes('/api/setup/unlock')) {
+        // SAFETY: Fetch returns unlock Response mock
+        return { ok: true, json: async () => ({ success: true, setupToken: 'setup-token', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/setup/card')) {
+        // SAFETY: Fetch returns card lookup Response mock
+        return { ok: true, json: async () => ({ success: true, rfidUid: 'ABCD1234', user: null }) } as Response;
+      }
+      if (url.includes('/api/setup/photo')) {
+        capturedPhotoBody = JSON.parse(String(init?.body));
+        // SAFETY: Fetch returns photo upload mock
+        return { ok: true, json: async () => ({ success: true, photoUrl: 'asset://localhost/photos/photo.webp' }) } as Response;
+      }
+      // SAFETY: Fallback response mock
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    const mockBitmap: Partial<ImageBitmap> = {
+      width: 200,
+      height: 200,
+      close: vi.fn(),
+    };
+    // SAFETY: Partial mock for ImageBitmap in node environment
+    globalThis.createImageBitmap = vi.fn().mockResolvedValue(mockBitmap as ImageBitmap);
+
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    const mockContext: Partial<CanvasRenderingContext2D> = {
+      drawImage: vi.fn(),
+    };
+    // SAFETY: Partial mock for 2D canvas context in node environment
+    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(mockContext as CanvasRenderingContext2D);
+    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = vi.fn().mockReturnValue('data:image/jpeg;base64,mockdata');
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+      await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+      await user.click(screen.getByRole('button', { name: /unlock setup/i }));
+      const setupInput = await screen.findByLabelText(/setup card id/i);
+      await user.type(setupInput, 'ABCD1234');
+      await user.keyboard('{Enter}');
+      await screen.findByText('ABCD1234');
+      await user.type(screen.getByLabelText(/^user id/i), 'EMP-003');
+
+      const dropzone = screen.getByText(/choose an id photo/i).closest('label');
+      expect(dropzone).not.toBeNull();
+
+      fireEvent.dragEnter(dropzone!);
+      expect(dropzone).toHaveClass('is-dragging');
+      fireEvent.dragLeave(dropzone!);
+      expect(dropzone).not.toHaveClass('is-dragging');
+
+      const file = new File(['mock content'], 'avatar.png', { type: 'image/png' });
+      fireEvent.drop(dropzone!, {
+        dataTransfer: {
+          files: [file],
+        },
+      });
+
+      expect(await screen.findByText('Photo ready')).toBeInTheDocument();
+      expect(capturedPhotoBody).toEqual({
+        userId: 'EMP-003',
+        dataUrl: 'data:image/jpeg;base64,mockdata',
+      });
+    } finally {
+      globalThis.createImageBitmap = originalCreateImageBitmap;
+      HTMLCanvasElement.prototype.getContext = originalGetContext;
+      HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
+    }
   });
 });
 

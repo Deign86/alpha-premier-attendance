@@ -228,7 +228,8 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .field-label { color: var(--ink); font-size: .75rem; font-weight: 600; }
 .photo-input { position: absolute; width: 1px !important; height: 1px !important; opacity: 0; pointer-events: none; }
 .photo-dropzone { position: relative; display: grid; place-items: center; gap: 7px; min-height: 150px; padding: 18px; color: var(--muted); background: repeating-linear-gradient(135deg, rgba(198, 162, 84, .035) 0 2px, transparent 2px 8px), var(--surface-input); border: 1px dashed var(--gold-soft); border-radius: var(--radius-sm); text-align: center; cursor: pointer; overflow: hidden; }
-.photo-dropzone:hover, .photo-dropzone:focus-within { color: var(--gold-bright); border-color: var(--gold-bright); background-color: #17150f; }
+.photo-dropzone:hover, .photo-dropzone:focus-within, .photo-dropzone.is-dragging { color: var(--gold-bright); border-color: var(--gold-bright); background-color: #17150f; }
+.photo-dropzone.is-dragging { border-style: solid; box-shadow: 0 0 0 2px rgba(225, 196, 119, 0.2); }
 .photo-dropzone strong { color: var(--ink); font-size: .8rem; }
 .photo-dropzone small { color: var(--quiet); font-size: .66rem; font-weight: 400; }
 .photo-upload-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 3px; color: var(--gold-bright); font-size: .7rem; font-weight: 700; }
@@ -714,8 +715,20 @@ td small { font-size: .7rem; }
 .edit-payroll-attendance-box .attendance-label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .edit-payroll-attendance-box .attendance-value { font-size: .88rem; font-weight: 600; color: var(--ink); }
 .edit-payroll-notice { padding: 10px 14px; margin-bottom: 14px; background: rgba(59, 130, 246, .1); border: 1px solid rgba(59, 130, 246, .3); border-radius: var(--radius-sm); font-size: .82rem; color: var(--ink); line-height: 1.5; }
+.attendance-filter-bar { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+.attendance-filter-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.filter-presets { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filter-preset-btn { padding: 6px 12px; font-size: .74rem; font-weight: 600; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s ease; }
+.filter-preset-btn:hover { color: var(--gold-bright); border-color: var(--gold-soft); }
+.filter-preset-btn.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); font-weight: 700; }
+.attendance-pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: .74rem; font-weight: 600; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line); border-radius: 999px; cursor: pointer; transition: all .15s ease; }
+.filter-pill:hover { color: var(--gold-bright); border-color: var(--gold-soft); }
+.filter-pill.is-active { color: var(--gold-bright); border-color: var(--gold); background: rgba(198, 162, 84, .14); }
+.filter-pill-count { padding: 1px 6px; border-radius: 999px; font-size: .66rem; background: var(--surface); color: var(--ink); }
+.filter-pill.is-active .filter-pill-count { background: var(--gold); color: #11100c; font-weight: 700; }
 .date-filter { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
-.date-filter label { min-width: 150px; margin: 0; }
+.date-filter label { min-width: 140px; margin: 0; }
 .date-filter label:nth-of-type(3) { min-width: 176px; }
 .date-filter label:nth-of-type(4) { min-width: 164px; }
 .date-filter small { align-self: center; color: var(--muted); }

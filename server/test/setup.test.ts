@@ -27,9 +27,9 @@ describe('card setup service', () => {
     const service = new SetupService(sheets, setupConfig);
     const token = service.unlock('2468').setupToken;
     await expect(service.lookupCard(token, 'AABB')).resolves.toMatchObject({ rfidUid: 'AABB', user: null });
-    await expect(service.upsertUser(token, { userId: 'u1', fullName: 'Ada', rfidUid: 'AA-BB', department: 'Engineering', status: 'ACTIVE' })).resolves.toMatchObject({ created: true, user: { userId: 'u1', rfidUid: 'AABB' } });
-    await expect(service.lookupCard(token, 'AABB')).resolves.toMatchObject({ rfidUid: 'AABB', user: { userId: 'u1' } });
-    expect(await sheets.findAttendance('u1', '2026-07-29')).toBeNull();
+    await expect(service.upsertUser(token, { userId: 'u1', fullName: 'Ada', rfidUid: 'AA-BB', department: 'Engineering', status: 'ACTIVE' })).resolves.toMatchObject({ created: true, user: { userId: 'U1', rfidUid: 'AABB' } });
+    await expect(service.lookupCard(token, 'AABB')).resolves.toMatchObject({ rfidUid: 'AABB', user: { userId: 'U1' } });
+    expect(await sheets.findAttendance('U1', '2026-07-29')).toBeNull();
   });
 
   it('rejects duplicate card assignment', async () => {
@@ -37,6 +37,20 @@ describe('card setup service', () => {
     const service = new SetupService(sheets, setupConfig);
     const token = service.unlock('2468').setupToken;
     await expect(service.upsertUser(token, { userId: 'u2', fullName: 'Bob', rfidUid: 'AABB', status: 'ACTIVE' })).rejects.toMatchObject({ code: 'USER_CONFLICT' });
+  });
+
+  it('normalizes and capitalizes user full name during setup upsert', async () => {
+    const sheets = new InMemorySheetsService();
+    const service = new SetupService(sheets, setupConfig);
+    const token = service.unlock('2468').setupToken;
+    const result = await service.upsertUser(token, {
+      userId: 'u-norm-1',
+      fullName: '  john   doe  ',
+      rfidUid: 'CCDD',
+      status: 'ACTIVE',
+    });
+    expect(result.user.fullName).toBe('John Doe');
+    expect(result.user.userId).toBe('U-NORM-1');
   });
 });
 
@@ -52,6 +66,6 @@ describe('card setup HTTP API', () => {
     await request(app).post('/api/setup/users').set('x-setup-token', token).send({ userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', status: 'ACTIVE' }).expect(200);
     await request(app).post('/api/attendance/scan').send({ rfidUid: 'AABB', source: 'RFID' }).expect(200);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
-    expect((await sheets.findAttendance('u1', today))?.userId).toBe('u1');
+    expect((await sheets.findAttendance('U1', today))?.userId).toBe('U1');
   });
 });

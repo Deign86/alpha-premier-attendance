@@ -54,6 +54,20 @@ export function isLateTimeout(timeOutIso: string): boolean {
   return minutesSinceMidnight > endHour * 60 + endMinute;
 }
 
+/**
+ * Normalizes and capitalizes a full name:
+ * - Trims leading and trailing whitespace
+ * - Collapses consecutive whitespace into a single space
+ * - Title-cases each word / name component (handling hyphens, apostrophes, periods, slashes)
+ */
+export function normalizeName(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, ' ');
+  if (!trimmed) return '';
+  return trimmed
+    .toLowerCase()
+    .replace(/(?:^|[\s\-'’/.])\p{L}/gu, (char) => char.toUpperCase());
+}
+
 export type ScanRequest = {
   rfidUid: string;
   source: ScanSource;

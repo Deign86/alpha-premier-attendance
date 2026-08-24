@@ -188,6 +188,44 @@ async fn upsert_user_record(
     Ok(result.rows_affected())
 }
 
+fn normalize_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut result = String::with_capacity(trimmed.len());
+    let mut prev_char: Option<char> = None;
+    let mut prev_is_space = false;
+    for c in trimmed.chars() {
+        if c.is_whitespace() {
+            if !prev_is_space {
+                result.push(' ');
+                prev_is_space = true;
+                prev_char = Some(' ');
+            }
+            continue;
+        }
+        prev_is_space = false;
+        let should_capitalize = match prev_char {
+            None => true,
+            Some(p) => {
+                p.is_whitespace() || p == '-' || p == '\'' || p == '’' || p == '.' || p == '/'
+            }
+        };
+        if should_capitalize {
+            for upper in c.to_uppercase() {
+                result.push(upper);
+            }
+        } else {
+            for lower in c.to_lowercase() {
+                result.push(lower);
+            }
+        }
+        prev_char = Some(c);
+    }
+    result
+}
+
 #[tauri::command]
 async fn admin_upsert_user(
     state: State<'_, AppState>,
@@ -201,18 +239,19 @@ async fn admin_upsert_user(
         .get("userId")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim();
+        .trim()
+        .to_ascii_uppercase();
     let rfid_uid = user
         .get("rfidUid")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_ascii_uppercase();
-    let full_name = user
-        .get("fullName")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
+    let full_name = normalize_name(
+        user.get("fullName")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
     let status = user
         .get("status")
         .and_then(|v| v.as_str())
@@ -238,9 +277,9 @@ async fn admin_upsert_user(
     let now = chrono::Utc::now().to_rfc3339();
     let result = upsert_user_record(
         &state.db,
-        user_id,
+        &user_id,
         &rfid_uid,
-        full_name,
+        &full_name,
         user.get("department").and_then(|v| v.as_str()),
         status,
         employee_type,
@@ -260,9 +299,9 @@ async fn admin_upsert_user(
             e.to_string()
         }
     })?;
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
-    enqueue_sync(&state, "Users", user_id, "UPSERT", &user).await;
-    Ok(serde_json::json!({"success":true,"created":result == 1,"userId":user_id}))
+    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(&user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
+    enqueue_sync(&state, "Users", &user_id, "UPSERT", &user).await;
+    Ok(serde_json::json!({"success":true,"created":result == 1,"userId":&user_id}))
 }
 
 #[tauri::command]
@@ -3814,5 +3853,15 @@ mod tests {
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_normalize_name() {
+        assert_eq!(super::normalize_name("   john   doe   "), "John Doe");
+        assert_eq!(super::normalize_name("MARY-ANNE"), "Mary-Anne");
+        assert_eq!(super::normalize_name("o'connor"), "O'Connor");
+        assert_eq!(super::normalize_name("o’neill"), "O’Neill");
+        assert_eq!(super::normalize_name("ma. teresa"), "Ma. Teresa");
+        assert_eq!(super::normalize_name(""), "");
     }
 }

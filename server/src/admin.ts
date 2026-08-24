@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
-import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout } from '@rfid-attendance/shared';
+import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { PayrollService } from './payroll.js';
@@ -43,9 +43,9 @@ export class AdminService {
   async saveUser<T>(input: T, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
     const value = parseAdminUserInput(input);
     if (value === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
-    const userId = existingUserId ?? value.userId?.trim();
+    const userId = existingUserId ?? value.userId?.trim().toUpperCase();
     if (!userId || !value.rfidUid.trim() || !value.fullName.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
-    if (existingUserId && value.userId && value.userId !== existingUserId) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
+    if (existingUserId && value.userId && value.userId.trim() !== existingUserId && value.userId.trim().toUpperCase() !== existingUserId.toUpperCase()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
     let rfidUid: string;
     try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new AdminError('ADMIN_VALIDATION_ERROR', 'RFID UID is invalid.'); }
     const current = await this.sheets.findUserById(userId);
@@ -55,7 +55,7 @@ export class AdminService {
     const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
     if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Employees require a positive daily rate.');
     if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.');
-    const user: SheetUser = { userId, rfidUid, fullName: value.fullName.trim(), department: value.department?.trim() || null, active: value.status === 'ACTIVE', employeeType, gender: value.gender === undefined ? current?.gender ?? null : value.gender, dailyRate, payrollProfileId: value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
+    const user: SheetUser = { userId, rfidUid, fullName: normalizeName(value.fullName), department: value.department?.trim().replace(/\s+/g, ' ') || null, active: value.status === 'ACTIVE', employeeType, gender: value.gender === undefined ? current?.gender ?? null : value.gender, dailyRate, payrollProfileId: value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
     try {
       const saved = await this.sheets.upsertUser(user);
       await this.sheets.writeAudit({ eventType: current ? 'ADMIN_USER_UPDATED' : 'ADMIN_USER_CREATED', userId: user.userId, rfidUid: user.rfidUid, message: current ? 'User profile updated by administrator' : 'User profile created by administrator', requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { normalizeName } from '@rfid-attendance/shared';
 import type { GoogleSheetsService, SheetUser } from './sheets.js';
 import { normalizeRfidUid } from './rfid.js';
 
@@ -97,17 +98,18 @@ export class SetupService {
     }
     let rfidUid: string;
     try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new SetupError('SETUP_VALIDATION_ERROR', 'rfidUid must be a valid hexadecimal UID.', 400); }
-    const existing = await this.sheets.findUserById(value.userId.trim());
+    const userId = value.userId.trim().toUpperCase();
+    const existing = await this.sheets.findUserById(userId);
     const employeeType = value.employeeType ?? existing?.employeeType ?? 'INTERN';
     const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
     if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Employees require a positive daily rate.', 400);
     if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new SetupError('SETUP_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.', 400);
     if (value.photoUrl !== undefined && value.photoUrl !== null && !isPhotoUrl(value.photoUrl)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Photo URL must be HTTPS.', 400);
     const user: SheetUser = {
-      userId: value.userId.trim(),
-      fullName: value.fullName.trim(),
+      userId,
+      fullName: normalizeName(value.fullName),
       rfidUid,
-      department: isString(value.department) && value.department.trim() ? value.department.trim() : null,
+      department: isString(value.department) && value.department.trim() ? value.department.trim().replace(/\s+/g, ' ') : null,
       active: value.status === 'ACTIVE',
       employeeType,
       gender: value.gender === undefined ? existing?.gender ?? null : value.gender,

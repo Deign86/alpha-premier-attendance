@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendanceActions, attendanceStatuses, isLateTimeout, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
+import { attendanceActions, attendanceStatuses, isLateTimeout, normalizeName, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources and attendance states stable', () => {
@@ -64,5 +64,33 @@ describe('office-hours late timeout policy', () => {
   it('never treats an unparseable timestamp as late', () => {
     expect(isLateTimeout('not-a-timestamp')).toBe(false);
     expect(isLateTimeout('')).toBe(false);
+  });
+});
+
+describe('normalizeName', () => {
+  it('trims leading and trailing whitespace and collapses multiple spaces', () => {
+    expect(normalizeName('   john    doe   ')).toBe('John Doe');
+    expect(normalizeName('  jane  ')).toBe('Jane');
+    expect(normalizeName('')).toBe('');
+    expect(normalizeName('   ')).toBe('');
+  });
+
+  it('capitalizes lowercase names', () => {
+    expect(normalizeName('john doe')).toBe('John Doe');
+    expect(normalizeName('ada lovelace')).toBe('Ada Lovelace');
+  });
+
+  it('normalizes uppercase names to title case', () => {
+    expect(normalizeName('JOHN DOE')).toBe('John Doe');
+    expect(normalizeName('GRACE HOPPER')).toBe('Grace Hopper');
+  });
+
+  it('handles mixed case and special separators (hyphens, apostrophes, periods)', () => {
+    expect(normalizeName('mary-jane watson')).toBe('Mary-Jane Watson');
+    expect(normalizeName("o'connor")).toBe("O'Connor");
+    expect(normalizeName("o’neill")).toBe("O’Neill");
+    expect(normalizeName("d'angelo")).toBe("D'Angelo");
+    expect(normalizeName('ma. teresa santos')).toBe('Ma. Teresa Santos');
+    expect(normalizeName('de la cruz')).toBe('De La Cruz');
   });
 });

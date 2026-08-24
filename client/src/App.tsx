@@ -35,6 +35,7 @@ import {
   INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
   OFFICE_HOURS_END,
   isLateTimeout,
+  normalizeName,
 } from "@rfid-attendance/shared";
 import {
   DEFAULT_CONFIG,
@@ -391,10 +392,11 @@ export default function App() {
     setSetupError("");
     const response = await upsertSetupUser(
       {
-        rfidUid: setupUid.trim(),
-        userId: setupForm.userId.trim(),
-        fullName: setupForm.fullName.trim(),
-        department: setupForm.department.trim() || undefined,
+        rfidUid: setupUid.trim().toUpperCase(),
+        userId: setupForm.userId.trim().toUpperCase(),
+        fullName: normalizeName(setupForm.fullName),
+        department:
+          setupForm.department.trim().replace(/\s+/g, " ") || undefined,
         status: setupForm.status,
         employeeType: setupForm.employeeType,
         gender: setupForm.gender || null,
@@ -430,10 +432,10 @@ export default function App() {
       return;
     }
     if (setupSessionExpired()) return;
-    if (
-      !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
-      file.size > PHOTO_UPLOAD_MAX_BYTES
-    ) {
+    const isImage =
+      ["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
+      /\.(jpe?g|png|webp)$/i.test(file.name);
+    if (!isImage || file.size > PHOTO_UPLOAD_MAX_BYTES) {
       setSetupError("Choose a JPEG, PNG, or WebP photo up to 500 KB.");
       return;
     }
@@ -1020,6 +1022,7 @@ type SetupDialogProps = {
 };
 
 function SetupDialog(props: SetupDialogProps) {
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -1171,7 +1174,10 @@ function SetupDialog(props: SetupDialogProps) {
                 <input
                   value={props.form.userId}
                   onChange={(event) =>
-                    props.onFormChange("userId", event.target.value)
+                    props.onFormChange("userId", event.target.value.toUpperCase())
+                  }
+                  onBlur={() =>
+                    props.onFormChange("userId", props.form.userId.trim().toUpperCase())
                   }
                   autoComplete="off"
                   required
@@ -1184,6 +1190,12 @@ function SetupDialog(props: SetupDialogProps) {
                   value={props.form.fullName}
                   onChange={(event) =>
                     props.onFormChange("fullName", event.target.value)
+                  }
+                  onBlur={() =>
+                    props.onFormChange(
+                      "fullName",
+                      normalizeName(props.form.fullName),
+                    )
                   }
                   autoComplete="name"
                   required
@@ -1198,6 +1210,12 @@ function SetupDialog(props: SetupDialogProps) {
                   value={props.form.department}
                   onChange={(event) =>
                     props.onFormChange("department", event.target.value)
+                  }
+                  onBlur={() =>
+                    props.onFormChange(
+                      "department",
+                      props.form.department.trim().replace(/\s+/g, " "),
+                    )
                   }
                   autoComplete="organization"
                 />
@@ -1259,8 +1277,35 @@ function SetupDialog(props: SetupDialogProps) {
                   ID photo <span className="optional">optional</span>
                 </span>
                 <label
-                  className={`photo-dropzone${props.form.photoUrl ? " has-photo" : ""}`}
+                  className={`photo-dropzone${props.form.photoUrl ? " has-photo" : ""}${isDraggingPhoto ? " is-dragging" : ""}`}
                   htmlFor="setup-photo"
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setIsDraggingPhoto(true);
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (
+                      event.relatedTarget instanceof Node &&
+                      event.currentTarget.contains(event.relatedTarget)
+                    ) {
+                      return;
+                    }
+                    setIsDraggingPhoto(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setIsDraggingPhoto(false);
+                    const file = event.dataTransfer.files?.[0];
+                    if (file) props.onPhotoFile(file);
+                  }}
                 >
                   <input
                     id="setup-photo"
@@ -2457,6 +2502,12 @@ function UserEditor({
     try {
       const payload = {
         ...form,
+        userId: form.userId.trim().toUpperCase(),
+        rfidUid: form.rfidUid.trim().toUpperCase(),
+        fullName: normalizeName(form.fullName),
+        department: form.department
+          ? form.department.trim().replace(/\s+/g, " ")
+          : null,
         // "Not set" renders as "" in the select; send null so the backend
         // clears the field instead of writing an empty string.
         gender: form.gender || null,
@@ -2542,7 +2593,15 @@ function UserEditor({
               required
               disabled={Boolean(editing)}
               value={form.userId}
-              onChange={(e) => setForm({ ...form, userId: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, userId: e.target.value.toUpperCase() })
+              }
+              onBlur={() =>
+                setForm((f) => ({
+                  ...f,
+                  userId: f.userId.trim().toUpperCase(),
+                }))
+              }
             />
           </label>
           <label>
@@ -2550,7 +2609,15 @@ function UserEditor({
             <input
               required
               value={form.rfidUid}
-              onChange={(e) => setForm({ ...form, rfidUid: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, rfidUid: e.target.value.toUpperCase() })
+              }
+              onBlur={() =>
+                setForm((f) => ({
+                  ...f,
+                  rfidUid: f.rfidUid.trim().toUpperCase(),
+                }))
+              }
             />
           </label>
           <label>
@@ -2559,6 +2626,9 @@ function UserEditor({
               required
               value={form.fullName}
               onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+              onBlur={() =>
+                setForm((f) => ({ ...f, fullName: normalizeName(f.fullName) }))
+              }
             />
           </label>
           <label>
@@ -2566,6 +2636,14 @@ function UserEditor({
             <input
               value={form.department ?? ""}
               onChange={(e) => setForm({ ...form, department: e.target.value })}
+              onBlur={() =>
+                setForm((f) => ({
+                  ...f,
+                  department: f.department
+                    ? f.department.trim().replace(/\s+/g, " ")
+                    : "",
+                }))
+              }
             />
           </label>
           <label>
@@ -3917,8 +3995,69 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   );
 }
 
+function getDatesInRange(startDate: string, endDate: string): string[] {
+  let start = startDate;
+  let end = endDate;
+  if (start > end) {
+    [start, end] = [end, start];
+  }
+  const dates: string[] = [];
+  const current = new Date(`${start}T00:00:00Z`);
+  const stop = new Date(`${end}T00:00:00Z`);
+  let count = 0;
+  while (current <= stop && count < 62) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+    count++;
+  }
+  return dates;
+}
+
+interface DateRangePreset {
+  start: string;
+  end: string;
+}
+
+function getPresetRange(
+  preset: "today" | "week" | "month",
+  baseDate: string,
+): DateRangePreset {
+  const d = new Date(`${baseDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) {
+    const today = new Date().toISOString().slice(0, 10);
+    return { start: today, end: today };
+  }
+  const dateStr = d.toISOString().slice(0, 10);
+  if (preset === "today") {
+    return { start: dateStr, end: dateStr };
+  }
+  if (preset === "week") {
+    const day = d.getUTCDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    const monday = new Date(d);
+    monday.setUTCDate(d.getUTCDate() + diffToMonday);
+    const sunday = new Date(monday);
+    sunday.setUTCDate(monday.getUTCDate() + 6);
+    return {
+      start: monday.toISOString().slice(0, 10),
+      end: sunday.toISOString().slice(0, 10),
+    };
+  }
+  if (preset === "month") {
+    const year = d.getUTCFullYear();
+    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const start = `${year}-${month}-01`;
+    const lastDay = new Date(
+      Date.UTC(year, d.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const end = `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
+    return { start, end };
+  }
+  return { start: dateStr, end: dateStr };
+}
+
 function AdminAttendance({
-  rows,
+  rows: initialRows,
   date,
   setDate,
   onSaved,
@@ -3928,6 +4067,13 @@ function AdminAttendance({
   setDate: (value: string) => void;
   onSaved: () => void;
 }) {
+  const [startDate, setStartDate] = useState(date);
+  const [endDate, setEndDate] = useState(date);
+  const [preset, setPreset] = useState<"today" | "week" | "month" | "custom">(
+    "today",
+  );
+  const [rangeRows, setRangeRows] = useState<AttendanceListItem[] | null>(null);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [exporting, setExporting] = useState(false);
   const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(
@@ -3936,18 +4082,103 @@ function AdminAttendance({
   const [employeeFilter, setEmployeeFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const filteredRows = rows.filter((row) =>
-    (!employeeFilter || `${row.fullName} ${row.userId}`.toLowerCase().includes(employeeFilter.toLowerCase())) &&
-    (!departmentFilter || row.department === departmentFilter) &&
-    (!statusFilter || row.status === statusFilter),
+
+  const activeRows = rangeRows ?? initialRows;
+
+  const loadRange = useCallback(
+    async (start: string, end: string) => {
+      if (start === end) {
+        setDate(start);
+        setRangeRows(null);
+        return;
+      }
+      const dates = getDatesInRange(start, end);
+      try {
+        setLoading(true);
+        const responses = await Promise.all(
+          dates.map((d) => loadAdminAttendance(d)),
+        );
+        const combined = responses.flatMap((r) =>
+          r.success ? r.attendance : [],
+        );
+        const map = new Map<string, AttendanceListItem>();
+        for (const row of combined) {
+          map.set(row.attendanceId, row);
+        }
+        const unique = Array.from(map.values()).sort((a, b) => {
+          const dateComp = b.attendanceDate.localeCompare(a.attendanceDate);
+          if (dateComp !== 0) return dateComp;
+          return (b.timeIn ?? "").localeCompare(a.timeIn ?? "");
+        });
+        setRangeRows(unique);
+      } catch {
+        setMessage("Unable to load attendance for selected date range.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [setDate],
   );
-  const departments = [...new Set(rows.map((row) => row.department).filter((d): d is string => Boolean(d)))];
+
+  const applyPreset = (p: "today" | "week" | "month") => {
+    setPreset(p);
+    const range = getPresetRange(p, date);
+    setStartDate(range.start);
+    setEndDate(range.end);
+    void loadRange(range.start, range.end);
+  };
+
+  const handleCustomDateChange = (type: "start" | "end", val: string) => {
+    setPreset("custom");
+    const newStart = type === "start" ? val : startDate;
+    const newEnd = type === "end" ? val : endDate;
+    if (type === "start") setStartDate(val);
+    if (type === "end") setEndDate(val);
+    if (newStart && newEnd) {
+      void loadRange(newStart, newEnd);
+    }
+  };
+
+  const counts = useMemo(() => {
+    return {
+      all: activeRows.length,
+      late: activeRows.filter((r) => r.status === "LATE_TIMEOUT").length,
+      working: activeRows.filter((r) => r.status === "WORKING").length,
+      completed: activeRows.filter((r) => r.status === "COMPLETED").length,
+      missed: activeRows.filter((r) => r.status === "MISSED").length,
+    };
+  }, [activeRows]);
+
+  const filteredRows = activeRows.filter(
+    (row) =>
+      (!employeeFilter ||
+        `${row.fullName} ${row.userId}`
+          .toLowerCase()
+          .includes(employeeFilter.toLowerCase())) &&
+      (!departmentFilter || row.department === departmentFilter) &&
+      (!statusFilter || row.status === statusFilter),
+  );
+
+  const departments = [
+    ...new Set(
+      activeRows
+        .map((row) => row.department)
+        .filter((d): d is string => Boolean(d)),
+    ),
+  ];
+
   const exportWorkbook = async () => {
     setExporting(true);
-    const result = exportAttendanceCsv(filteredRows, date);
+    const result = exportAttendanceCsv(
+      filteredRows,
+      startDate,
+      endDate !== startDate ? endDate : undefined,
+    );
     setExporting(false);
     if (result.success) {
-      setMessage(`Generated ${result.fileName} (${filteredRows.length} rows).`);
+      setMessage(
+        `Generated ${result.fileName} (${filteredRows.length} rows).`,
+      );
       setFileResult({
         filePath: result.filePath,
         directoryPath: result.directoryPath,
@@ -3957,50 +4188,155 @@ function AdminAttendance({
       });
     } else setMessage(result.message);
   };
+
   return (
     <section>
-      <div className="date-filter">
-        <label>
-          Attendance date
-          <input
-            type="date"
-            value={date}
-            onChange={(event) => setDate(event.target.value)}
-          />
-        </label>
-        <label>
-          Employee
-          <input placeholder="Name or ID" value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} />
-        </label>
-        <label>
-          Department
-          <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
-            <option value="">All departments</option>
-            {departments.map((department) => <option key={department} value={department}>{department}</option>)}
-          </select>
-        </label>
-        <label>
-          Status
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            <option value="">All statuses</option>
-            {['WORKING', 'COMPLETED', 'MISSED', 'LATE_TIMEOUT'].map((status) => <option key={status} value={status}>{status}</option>)}
-          </select>
-        </label>
-        <button
-          className="admin-button"
-          type="button"
-          disabled={exporting}
-          onClick={() => void exportWorkbook()}
-        >
-          {exporting ? "Preparing..." : <><Download size={15} /> Export CSV</>}
-        </button>
-        {message && <small role="status">{message}</small>}
+      <div className="attendance-filter-bar">
+        <div className="attendance-filter-top">
+          <div className="filter-presets">
+            <span className="field-label" style={{ marginRight: 4 }}>
+              Period:
+            </span>
+            <button
+              className={`filter-preset-btn ${preset === "today" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => applyPreset("today")}
+            >
+              Today
+            </button>
+            <button
+              className={`filter-preset-btn ${preset === "week" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => applyPreset("week")}
+            >
+              This Week
+            </button>
+            <button
+              className={`filter-preset-btn ${preset === "month" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => applyPreset("month")}
+            >
+              This Month
+            </button>
+          </div>
+          <div className="attendance-pills">
+            <button
+              className={`filter-pill ${!statusFilter ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setStatusFilter("")}
+            >
+              All <span className="filter-pill-count">{counts.all}</span>
+            </button>
+            <button
+              className={`filter-pill ${statusFilter === "LATE_TIMEOUT" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setStatusFilter(
+                  statusFilter === "LATE_TIMEOUT" ? "" : "LATE_TIMEOUT",
+                )
+              }
+            >
+              Late / GP <span className="filter-pill-count">{counts.late}</span>
+            </button>
+            <button
+              className={`filter-pill ${statusFilter === "WORKING" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setStatusFilter(statusFilter === "WORKING" ? "" : "WORKING")
+              }
+            >
+              Working <span className="filter-pill-count">{counts.working}</span>
+            </button>
+            <button
+              className={`filter-pill ${statusFilter === "COMPLETED" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setStatusFilter(
+                  statusFilter === "COMPLETED" ? "" : "COMPLETED",
+                )
+              }
+            >
+              Completed{" "}
+              <span className="filter-pill-count">{counts.completed}</span>
+            </button>
+            <button
+              className={`filter-pill ${statusFilter === "MISSED" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setStatusFilter(statusFilter === "MISSED" ? "" : "MISSED")
+              }
+            >
+              Missed <span className="filter-pill-count">{counts.missed}</span>
+            </button>
+          </div>
+        </div>
+        <div className="date-filter">
+          <label>
+            From date
+            <input
+              type="date"
+              value={startDate}
+              onChange={(event) =>
+                handleCustomDateChange("start", event.target.value)
+              }
+            />
+          </label>
+          <label>
+            To date
+            <input
+              type="date"
+              value={endDate}
+              onChange={(event) =>
+                handleCustomDateChange("end", event.target.value)
+              }
+            />
+          </label>
+          <label>
+            Employee
+            <input
+              placeholder="Name or ID"
+              value={employeeFilter}
+              onChange={(event) => setEmployeeFilter(event.target.value)}
+            />
+          </label>
+          <label>
+            Department
+            <select
+              value={departmentFilter}
+              onChange={(event) => setDepartmentFilter(event.target.value)}
+            >
+              <option value="">All departments</option>
+              {departments.map((department) => (
+                <option key={department} value={department}>
+                  {department}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="admin-button"
+            type="button"
+            disabled={exporting || loading}
+            onClick={() => void exportWorkbook()}
+          >
+            {exporting ? (
+              "Preparing..."
+            ) : (
+              <>
+                <Download size={15} /> Export CSV
+              </>
+            )}
+          </button>
+          {loading && <small role="status">Loading records…</small>}
+          {message && <small role="status">{message}</small>}
+        </div>
       </div>
       <GeneratedFileActions result={fileResult} label="Attendance export" />
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              <th>Date</th>
               <th>Employee</th>
               <th>Time in</th>
               <th>Time out</th>
@@ -4011,9 +4347,12 @@ function AdminAttendance({
           <tbody>
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="table-empty-cell">
+                <td colSpan={6} className="table-empty-cell">
                   <div className="empty-state">
-                    No attendance records found for {date}
+                    No attendance records found for{" "}
+                    {startDate === endDate
+                      ? startDate
+                      : `${startDate} to ${endDate}`}
                     {employeeFilter || departmentFilter || statusFilter
                       ? " matching the selected filters"
                       : ""}
@@ -4026,7 +4365,12 @@ function AdminAttendance({
                 <AttendanceEditRow
                   key={row.attendanceId}
                   row={row}
-                  onSaved={onSaved}
+                  onSaved={() => {
+                    onSaved();
+                    if (startDate !== endDate) {
+                      void loadRange(startDate, endDate);
+                    }
+                  }}
                 />
               ))
             )}
@@ -4037,20 +4381,65 @@ function AdminAttendance({
   );
 }
 
-function exportAttendanceCsv(rows: AttendanceListItem[], date: string): { success: true; fileName: string; content: string; filePath: null; directoryPath: null } | { success: false; message: string } {
-  const fileName = `attendance-export-${date}-to-${date}.csv`;
-  const headers = ["Employee name", "Employee ID", "Department", "Date", "Time in", "Time out", "Status", "Total hours"];
-  const csvCell = (value: string | number | null) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+function exportAttendanceCsv(
+  rows: AttendanceListItem[],
+  startDate: string,
+  endDate?: string,
+):
+  | {
+      success: true;
+      fileName: string;
+      content: string;
+      filePath: null;
+      directoryPath: null;
+    }
+  | { success: false; message: string } {
+  const fileName =
+    endDate && endDate !== startDate
+      ? `attendance-export-${startDate}-to-${endDate}.csv`
+      : `attendance-export-${startDate}.csv`;
+  const headers = [
+    "Employee name",
+    "Employee ID",
+    "Department",
+    "Date",
+    "Time in",
+    "Time out",
+    "Status",
+    "Total hours",
+  ];
+  const csvCell = (value: string | number | null) =>
+    `"${String(value ?? "").replace(/"/g, '""')}"`;
   const totalHours = (row: AttendanceListItem) => {
     if (!row.timeIn || !row.timeOut) return "";
-    const hours = (new Date(row.timeOut).getTime() - new Date(row.timeIn).getTime()) / 3_600_000;
+    const hours =
+      (new Date(row.timeOut).getTime() - new Date(row.timeIn).getTime()) /
+      3_600_000;
     return Number.isFinite(hours) && hours >= 0 ? hours.toFixed(2) : "";
   };
-  const content = [headers, ...rows.map((row) => [row.fullName, row.userId, row.department, row.attendanceDate, row.timeIn, row.timeOut, row.status, totalHours(row)])]
+  const content = [
+    headers,
+    ...rows.map((row) => [
+      row.fullName,
+      row.userId,
+      row.department,
+      row.attendanceDate,
+      row.timeIn,
+      row.timeOut,
+      row.status,
+      totalHours(row),
+    ]),
+  ]
     .map((line) => line.map(csvCell).join(","))
     .join("\r\n");
-  if (!rows.length) return { success: false, message: "No attendance matches the active filters; nothing was exported." };
-  const url = URL.createObjectURL(new Blob([`\ufeff${content}\r\n`], { type: "text/csv;charset=utf-8" }));
+  if (!rows.length)
+    return {
+      success: false,
+      message: "No attendance matches the active filters; nothing was exported.",
+    };
+  const url = URL.createObjectURL(
+    new Blob([`\ufeff${content}\r\n`], { type: "text/csv;charset=utf-8" }),
+  );
   const link = document.createElement("a");
   link.href = url;
   link.download = fileName;
@@ -4058,7 +4447,13 @@ function exportAttendanceCsv(rows: AttendanceListItem[], date: string): { succes
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  return { success: true, fileName, content, filePath: null, directoryPath: null };
+  return {
+    success: true,
+    fileName,
+    content,
+    filePath: null,
+    directoryPath: null,
+  };
 }
 
 function AttendanceEditRow({
@@ -4119,7 +4514,7 @@ function AttendanceEditRow({
     <>
       {late && (
         <tr className="admin-attention-row">
-          <td colSpan={5} className="admin-attention">
+          <td colSpan={6} className="admin-attention">
             <strong>Late time-out — manual correction required.</strong> This
             time-out was recorded after office hours ({OFFICE_HOURS_END}); the
             office does not allow overtime. Re-enter the official time-out below
@@ -4128,6 +4523,11 @@ function AttendanceEditRow({
         </tr>
       )}
       <tr>
+        <td>
+          <span style={{ fontSize: ".82rem", color: "var(--muted)" }}>
+            {row.attendanceDate}
+          </span>
+        </td>
         <td>
           <strong>{row.fullName}</strong>
           <small>{row.userId}</small>
@@ -4169,7 +4569,7 @@ function AttendanceEditRow({
       </tr>
       {deleteAttendanceConfirm && (
         <tr>
-          <td colSpan={5} style={{ padding: 0 }}>
+          <td colSpan={6} style={{ padding: 0 }}>
             <ConfirmDialog
               open={true}
               busy={deleting}
