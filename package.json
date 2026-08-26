@@ -16,6 +16,7 @@
     "typecheck": "npm run build -w shared && npm run typecheck -w client && npm run typecheck -w server",
     "test": "npm run build -w shared && npm run test -w shared && npm run test -w client && npm run test -w server",
     "validate:sheets": "npm run validate:sheets -w server",
+    "tauri": "tauri",
     "tauri:dev": "npm run build -w shared && npm run build -w client && tauri dev",
     "tauri:build": "npm run build -w shared && npm run build -w client && tauri build",
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
