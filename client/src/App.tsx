@@ -2997,6 +2997,18 @@ export function PayrollWorkspace({
     }));
   };
 
+  const [clearCutoffOpen, setClearCutoffOpen] = useState(false);
+  const [clearingCutoff, setClearingCutoff] = useState(false);
+
+  const existingCutoffRecords = useMemo(() => {
+    if (!form.cutoffStart || !form.cutoffEnd) return [];
+    return records.filter(
+      (record) =>
+        record.cutoffStart === form.cutoffStart &&
+        record.cutoffEnd === form.cutoffEnd,
+    );
+  }, [records, form.cutoffStart, form.cutoffEnd]);
+
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!form.cutoffStart || !form.cutoffEnd) {
@@ -3007,19 +3019,6 @@ export function PayrollWorkspace({
       setMessage("Cutoff start must be on or before cutoff end.");
       return;
     }
-    if (
-      records.some(
-        (record) =>
-          record.status === "DRAFT" &&
-          record.cutoffStart === form.cutoffStart &&
-          record.cutoffEnd === form.cutoffEnd,
-      )
-    ) {
-      setMessage(
-        "Payroll already exists for this cutoff. Duplicate generation was blocked.",
-      );
-      return;
-    }
     setMessage("");
     setConfirmOpen(true);
   };
@@ -3028,13 +3027,22 @@ export function PayrollWorkspace({
     if (saving) return;
     setSaving(true);
     try {
+      if (existingCutoffRecords.length > 0) {
+        for (const r of existingCutoffRecords) {
+          await deletePayrollCutoff(r.payrollId);
+        }
+      }
       const response = await generatePayrollCutoff(
         form.cutoffStart,
         form.cutoffEnd,
         form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
       );
       if (response.success) {
-        setMessage("Payroll drafts were generated from completed attendance.");
+        setMessage(
+          existingCutoffRecords.length > 0
+            ? "Existing cutoff was replaced and regenerated from attendance."
+            : "Payroll drafts were generated from completed attendance.",
+        );
         onSaved();
         setConfirmOpen(false);
       } else {
@@ -3045,6 +3053,20 @@ export function PayrollWorkspace({
     } finally {
       setSaving(false);
     }
+  };
+
+  const clearCutoffRecords = async () => {
+    if (clearingCutoff || existingCutoffRecords.length === 0) return;
+    setClearingCutoff(true);
+    let count = 0;
+    for (const r of existingCutoffRecords) {
+      const res = await deletePayrollCutoff(r.payrollId);
+      if (res.success) count++;
+    }
+    setClearingCutoff(false);
+    setClearCutoffOpen(false);
+    setMessage(`Deleted ${count} payroll record(s) for cutoff ${form.cutoffStart} to ${form.cutoffEnd}.`);
+    onSaved();
   };
 
   // The selected payroll cutoff drives both generated payroll PDFs: the
@@ -3211,6 +3233,24 @@ export function PayrollWorkspace({
         </div>
       </div>
 
+      {existingCutoffRecords.length > 0 && (
+        <div className="cutoff-existing-banner" role="status">
+          <span>
+            Payroll already exists for this cutoff ({existingCutoffRecords.length} record(s)). Generating from attendance will replace existing records.
+          </span>
+          <div className="cutoff-existing-actions">
+            <button
+              className="admin-button danger-button"
+              type="button"
+              disabled={clearingCutoff || saving}
+              onClick={() => setClearCutoffOpen(true)}
+            >
+              Delete all records for this cutoff ({existingCutoffRecords.length})
+            </button>
+          </div>
+        </div>
+      )}
+
       {message && <p className="dashboard-alert">{message}</p>}
       {pdfMessage && <p className="dashboard-alert">{pdfMessage}</p>}
 
@@ -3226,10 +3266,22 @@ export function PayrollWorkspace({
       <ConfirmDialog
         open={confirmOpen}
         busy={saving}
-        title="Generate payroll drafts?"
-        message={`This will generate payroll records for ${form.cutoffStart} through ${form.cutoffEnd} from completed attendance. Incomplete or late-timeout attendance will not be paid. Continue?`}
+        title={existingCutoffRecords.length > 0 ? "Regenerate cutoff payroll?" : "Generate payroll drafts?"}
+        message={
+          existingCutoffRecords.length > 0
+            ? `Payroll already exists for ${form.cutoffStart} through ${form.cutoffEnd} (${existingCutoffRecords.length} record(s)). Generating new payroll will replace these existing records with fresh calculations from latest attendance. Continue?`
+            : `This will generate payroll records for ${form.cutoffStart} through ${form.cutoffEnd} from completed attendance. Incomplete or late-timeout attendance will not be paid. Continue?`
+        }
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => void confirmGenerate()}
+      />
+      <ConfirmDialog
+        open={clearCutoffOpen}
+        busy={clearingCutoff}
+        title="Delete cutoff records?"
+        message={`This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for cutoff ${form.cutoffStart} through ${form.cutoffEnd}. Continue?`}
+        onCancel={() => setClearCutoffOpen(false)}
+        onConfirm={() => void clearCutoffRecords()}
       />
     </section>
   );
@@ -3670,10 +3722,62 @@ function PayrollTable({
   onFinalized: () => void;
 }) {
   const [message, setMessage] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editTarget, setEditTarget] = useState<PayrollCutoffRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [finalizeTarget, setFinalizeTarget] = useState<PayrollCutoffRecord | null>(null);
+  const [batchFinalizeOpen, setBatchFinalizeOpen] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  const [deletingBatch, setDeletingBatch] = useState(false);
+  const masterCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const allSelected = records.length > 0 && selectedIds.size === records.length;
+  const someSelected = selectedIds.size > 0 && selectedIds.size < records.length;
+
+  useEffect(() => {
+    if (masterCheckboxRef.current) {
+      masterCheckboxRef.current.indeterminate = someSelected;
+    }
+  }, [someSelected]);
+
+  // Clean up selectedIds when records change
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const validIds = new Set(records.map((r) => r.payrollId));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (validIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [records]);
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(records.map((r) => r.payrollId)));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   const finalize = async () => {
     if (!finalizeTarget) return;
     const target = finalizeTarget;
@@ -3688,6 +3792,7 @@ function PayrollTable({
       setMessage(response.error?.message ?? "Unable to finalize payroll.");
     }
   };
+
   const remove = async () => {
     if (!deleteTarget) return;
     const target = deleteTarget;
@@ -3695,21 +3800,133 @@ function PayrollTable({
     const response = await deletePayrollCutoff(target.payrollId);
     if (response.success) {
       setMessage("Payroll deleted.");
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(target.payrollId);
+        return next;
+      });
       onFinalized();
     } else {
       setMessage(response.error?.message ?? "Unable to delete payroll.");
     }
   };
+
+  const selectedDraftsCount = records.filter(
+    (r) => selectedIds.has(r.payrollId) && r.status === "DRAFT",
+  ).length;
+
+  const removeBatch = async () => {
+    if (selectedIds.size === 0) return;
+    setBatchDeleteOpen(false);
+    setDeletingBatch(true);
+    const ids = Array.from(selectedIds);
+    let successCount = 0;
+    for (const id of ids) {
+      const response = await deletePayrollCutoff(id);
+      if (response.success) successCount++;
+    }
+    setDeletingBatch(false);
+    setSelectedIds(new Set());
+    setMessage(`Deleted ${successCount} payroll record(s).`);
+    onFinalized();
+  };
+
+  const finalizeBatch = async () => {
+    const draftIds = records
+      .filter((r) => selectedIds.has(r.payrollId) && r.status === "DRAFT")
+      .map((r) => r.payrollId);
+    if (draftIds.length === 0) return;
+    setBatchFinalizeOpen(false);
+    setFinalizing(true);
+    let successCount = 0;
+    for (const id of draftIds) {
+      const response = await finalizePayrollCutoff(id);
+      if (response.success) successCount++;
+    }
+    setFinalizing(false);
+    setSelectedIds(new Set());
+    setMessage(`Finalized ${successCount} payroll record(s).`);
+    onFinalized();
+  };
+
   if (!records.length)
     return (
       <div className="empty-state">No cutoff payroll has been created.</div>
     );
+
   return (
-    <>
+    <div className="payroll-table-with-bar">
+      <div className="payroll-table-header-bar">
+        <div className="payroll-selection-count">
+          {selectedIds.size > 0 ? (
+            <span>{selectedIds.size} of {records.length} payroll record(s) selected</span>
+          ) : (
+            <span>Total records: {records.length}</span>
+          )}
+        </div>
+        <div className="payroll-batch-actions">
+          {selectedIds.size > 0 ? (
+            <>
+              {selectedIds.size < records.length && (
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => setSelectedIds(new Set(records.map((r) => r.payrollId)))}
+                >
+                  Select all ({records.length})
+                </button>
+              )}
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+              >
+                Clear selection
+              </button>
+              {selectedDraftsCount > 0 && (
+                <button
+                  className="admin-button"
+                  type="button"
+                  disabled={finalizing}
+                  onClick={() => setBatchFinalizeOpen(true)}
+                >
+                  Finalize selected ({selectedDraftsCount})
+                </button>
+              )}
+              <button
+                className="admin-button danger-button"
+                type="button"
+                disabled={deletingBatch}
+                onClick={() => setBatchDeleteOpen(true)}
+              >
+                Delete selected ({selectedIds.size})
+              </button>
+            </>
+          ) : (
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => setSelectedIds(new Set(records.map((r) => r.payrollId)))}
+            >
+              Select all
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              <th className="payroll-select-col">
+                <input
+                  type="checkbox"
+                  ref={masterCheckboxRef}
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  aria-label="Select all payroll records"
+                />
+              </th>
               <th>Employee #</th>
               <th>Employee Name</th>
               <th>Dept / Role</th>
@@ -3757,7 +3974,15 @@ function PayrollTable({
 
               return (
                 <Fragment key={row.payrollId}>
-                  <tr key={row.payrollId}>
+                  <tr key={row.payrollId} className={selectedIds.has(row.payrollId) ? "selected-row" : ""}>
+                    <td className="payroll-select-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(row.payrollId)}
+                        onChange={() => toggleSelectRow(row.payrollId)}
+                        aria-label={`Select payroll for ${row.employeeName}`}
+                      />
+                    </td>
                     <td>{row.employeeId}</td>
                     <td>
                       <strong>
@@ -3845,7 +4070,7 @@ function PayrollTable({
                     </td>
                   </tr>
                   <tr key={`${row.payrollId}-details`} className="payroll-detail">
-                    <td colSpan={27}>
+                    <td colSpan={28}>
                       <details>
                         <summary>Calculation breakdown & payslip detail</summary>
                         {row.employeeType === "INTERN" ? (
@@ -3922,6 +4147,14 @@ function PayrollTable({
         onConfirm={() => void remove()}
       />
       <ConfirmDialog
+        open={batchDeleteOpen}
+        busy={deletingBatch}
+        title="Delete selected payrolls?"
+        message={`Are you sure you want to delete ${selectedIds.size} selected payroll record(s)? This will permanently remove them from the cutoff.`}
+        onCancel={() => setBatchDeleteOpen(false)}
+        onConfirm={() => void removeBatch()}
+      />
+      <ConfirmDialog
         open={Boolean(finalizeTarget)}
         busy={finalizing}
         title="Finalize payroll?"
@@ -3933,7 +4166,15 @@ function PayrollTable({
         onCancel={() => setFinalizeTarget(null)}
         onConfirm={() => void finalize()}
       />
-    </>
+      <ConfirmDialog
+        open={batchFinalizeOpen}
+        busy={finalizing}
+        title="Finalize selected payrolls?"
+        message={`This will finalize ${selectedDraftsCount} selected draft payroll record(s). Values will be locked from further edits.`}
+        onCancel={() => setBatchFinalizeOpen(false)}
+        onConfirm={() => void finalizeBatch()}
+      />
+    </div>
   );
 }
 

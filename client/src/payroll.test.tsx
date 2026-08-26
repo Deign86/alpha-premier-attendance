@@ -262,14 +262,21 @@ describe("PayrollWorkspace", () => {
     expect(generatePayrollCutoffSpy).not.toHaveBeenCalled();
   });
 
-  it("blocks duplicate cutoff generation", async () => {
+  it("prompts for replacement confirmation when generating for an existing cutoff", async () => {
+    const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    generatePayrollCutoffSpy.mockResolvedValueOnce({ success: true });
     const user = userEvent.setup();
-    renderWorkspace([record({ status: "DRAFT" })]);
+    renderWorkspace([record({ payrollId: "P-001", status: "DRAFT" })]);
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
-    expect(screen.getByText(/Duplicate generation was blocked/)).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(generatePayrollCutoffSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Regenerate cutoff payroll?" })).toBeInTheDocument();
+    expect(screen.getByText(/Generating new payroll will replace these existing records with fresh calculations/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await waitFor(() => {
+      expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
+      expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
+    });
   });
 
   it("opens the edit dialog on a draft record and saves updated earnings and deductions", async () => {
@@ -347,6 +354,82 @@ describe("PayrollWorkspace", () => {
     await user.click(deleteBtn);
     expect(screen.getByRole("dialog", { name: "Delete finalized payroll?" })).toBeInTheDocument();
     expect(screen.getByText(/This will delete the finalized payroll for Ada Lovelace/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await waitFor(() => {
+      expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
+    });
+  });
+
+  it("supports master select-all checkbox to select and batch delete multiple payroll records", async () => {
+    const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([
+      record({ payrollId: "P-001", employeeName: "Ada Lovelace", status: "DRAFT" }),
+      internRecord({ payrollId: "P-INT-001", employeeName: "Maria Santos", status: "DRAFT" }),
+    ]);
+
+    expect(screen.getByText(/Total records: 2/i)).toBeInTheDocument();
+    const masterCheckbox = screen.getByRole("checkbox", { name: /Select all payroll records/i });
+    expect(masterCheckbox).not.toBeChecked();
+
+    // Select all via master checkbox
+    await user.click(masterCheckbox);
+    expect(masterCheckbox).toBeChecked();
+    expect(await screen.findByText(/2 of 2 payroll record\(s\) selected/i)).toBeInTheDocument();
+
+    // Trigger batch delete
+    const batchDeleteBtn = screen.getByRole("button", { name: /Delete selected \(2\)/i });
+    await user.click(batchDeleteBtn);
+
+    expect(screen.getByRole("dialog", { name: "Delete selected payrolls?" })).toBeInTheDocument();
+    expect(screen.getByText(/Are you sure you want to delete 2 selected payroll record\(s\)\?/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await waitFor(() => {
+      expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
+      expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-INT-001");
+    });
+  });
+
+  it("supports batch finalizing selected draft payroll records", async () => {
+    const finalizePayrollCutoffSpy = vi.spyOn(api, "finalizePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([
+      record({ payrollId: "P-001", employeeName: "Ada Lovelace", status: "DRAFT" }),
+      internRecord({ payrollId: "P-INT-001", employeeName: "Maria Santos", status: "DRAFT" }),
+    ]);
+
+    const selectAdaCheckbox = screen.getByRole("checkbox", { name: /Select payroll for Ada Lovelace/i });
+    await user.click(selectAdaCheckbox);
+    expect(selectAdaCheckbox).toBeChecked();
+    expect(await screen.findByText(/1 of 2 payroll record\(s\) selected/i)).toBeInTheDocument();
+
+    const finalizeSelectedBtn = screen.getByRole("button", { name: /Finalize selected \(1\)/i });
+    await user.click(finalizeSelectedBtn);
+
+    expect(screen.getByRole("dialog", { name: "Finalize selected payrolls?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await waitFor(() => {
+      expect(finalizePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
+    });
+  });
+
+  it("shows cutoff duplicate banner and allows clearing all records for that cutoff", async () => {
+    const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([
+      record({ payrollId: "P-001", cutoffStart: "2026-08-01", cutoffEnd: "2026-08-15" }),
+    ]);
+
+    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
+
+    const clearCutoffBtn = await screen.findByRole("button", { name: /Delete all records for this cutoff \(1\)/i });
+    expect(clearCutoffBtn).toBeInTheDocument();
+
+    await user.click(clearCutoffBtn);
+    expect(screen.getByRole("dialog", { name: "Delete cutoff records?" })).toBeInTheDocument();
+    expect(screen.getByText(/This will permanently delete all 1 payroll record\(s\) for cutoff 2026-08-01 through 2026-08-15/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Confirm/i }));
     await waitFor(() => {
