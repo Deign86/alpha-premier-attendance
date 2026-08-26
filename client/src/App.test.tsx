@@ -720,4 +720,160 @@ describe('Admin Attendance Corrections', () => {
       window.history.pushState({}, '', '/');
     }
   });
+
+  it('supports multi-select and batch actions in Admin Users table', async () => {
+    vi.restoreAllMocks();
+    const deletedUserIds: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users') && init?.method === 'DELETE') {
+        const id = url.split('/').pop();
+        if (id) deletedUserIds.push(id);
+        // SAFETY: Fetch delete user mock
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance list
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+
+      expect(await screen.findByText('Total users: 2')).toBeInTheDocument();
+      const masterCheckbox = screen.getByRole('checkbox', { name: /select all users/i });
+      expect(masterCheckbox).not.toBeChecked();
+
+      await user.click(masterCheckbox);
+      expect(masterCheckbox).toBeChecked();
+      expect(await screen.findByText('2 of 2 user(s) selected')).toBeInTheDocument();
+
+      const batchDeleteBtn = screen.getByRole('button', { name: /delete selected \(2\)/i });
+      await user.click(batchDeleteBtn);
+
+      expect(screen.getByRole('dialog', { name: /delete selected users\?/i })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /confirm/i }));
+
+      await waitFor(() => {
+        expect(deletedUserIds).toContain('u1');
+        expect(deletedUserIds).toContain('u2');
+      });
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('supports multi-select and batch actions in Attendance Workspace', async () => {
+    vi.restoreAllMocks();
+    const deletedAttendanceIds: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance') && init?.method === 'DELETE') {
+        const pathPart = url.split('/')[4];
+        const id = pathPart ? pathPart.split('?')[0] : '';
+        if (id) deletedAttendanceIds.push(id);
+        // SAFETY: Fetch delete attendance mock
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance list
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'att1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              { attendanceId: 'att2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users mock
+        return { ok: true, json: async () => ({ success: true, users: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      expect(await screen.findByText('Total records: 2')).toBeInTheDocument();
+      const masterCheckbox = screen.getByRole('checkbox', { name: /select all attendance records/i });
+      expect(masterCheckbox).not.toBeChecked();
+
+      await user.click(masterCheckbox);
+      expect(masterCheckbox).toBeChecked();
+      expect(await screen.findByText('2 of 2 attendance record(s) selected')).toBeInTheDocument();
+
+      const batchDeleteBtn = screen.getByRole('button', { name: /delete selected \(2\)/i });
+      await user.click(batchDeleteBtn);
+
+      expect(screen.getByRole('dialog', { name: /delete selected attendance records\?/i })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /confirm/i }));
+
+      await waitFor(() => {
+        expect(deletedAttendanceIds).toContain('att1');
+        expect(deletedAttendanceIds).toContain('att2');
+      });
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
 });

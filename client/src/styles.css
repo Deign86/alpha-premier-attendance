@@ -655,10 +655,42 @@ td small { font-size: .7rem; }
   white-space: nowrap;
 }
 
+.payroll-table th.payroll-select-col,
+th.table-select-col {
+  width: 38px;
+  min-width: 38px;
+  max-width: 38px;
+  text-align: center;
+  padding: 6px 4px;
+}
+
+td.table-select-cell,
+.payroll-table td.payroll-select-cell {
+  width: 38px;
+  min-width: 38px;
+  max-width: 38px;
+  text-align: center;
+  padding: 6px 4px;
+}
+
+td.table-select-cell input[type="checkbox"],
+th.table-select-col input[type="checkbox"],
+.payroll-table td.payroll-select-cell input[type="checkbox"],
+.payroll-table th.payroll-select-col input[type="checkbox"] {
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--gold);
+  vertical-align: middle;
+}
+
+tr.selected-row td:not(.payroll-detail td),
 .payroll-table tr.selected-row td:not(.payroll-detail td) {
   background: rgba(198, 162, 84, 0.12);
 }
 
+.table-header-bar,
 .payroll-table-header-bar {
   display: flex;
   align-items: center;
@@ -672,11 +704,13 @@ td small { font-size: .7rem; }
   border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
+.table-with-bar .table-wrap,
 .payroll-table-with-bar .table-wrap {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
 
+.table-batch-actions,
 .payroll-batch-actions {
   display: inline-flex;
   align-items: center;
@@ -684,6 +718,7 @@ td small { font-size: .7rem; }
   flex-wrap: wrap;
 }
 
+.table-selection-count,
 .payroll-selection-count {
   font-size: 0.75rem;
   color: var(--gold-bright);

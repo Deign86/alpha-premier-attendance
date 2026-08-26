@@ -2537,6 +2537,84 @@ function UserEditor({
   const [message, setMessage] = useState("");
   const [deletingUserId, setDeletingUserId] = useState("");
   const [deleteUserTarget, setDeleteUserTarget] = useState<AdminUser | null>(null);
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
+  const [batchDeleteUsersOpen, setBatchDeleteUsersOpen] = useState(false);
+  const [batchUpdatingUsers, setBatchUpdatingUsers] = useState(false);
+  const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const allUsersSelected = users.length > 0 && selectedUserIds.size === users.length;
+  const someUsersSelected = selectedUserIds.size > 0 && selectedUserIds.size < users.length;
+
+  useEffect(() => {
+    if (masterUserCheckboxRef.current) {
+      masterUserCheckboxRef.current.indeterminate = someUsersSelected;
+    }
+  }, [someUsersSelected]);
+
+  useEffect(() => {
+    setSelectedUserIds((prev) => {
+      const valid = new Set(users.map((u) => u.userId));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [users]);
+
+  const toggleSelectAllUsers = () => {
+    if (allUsersSelected) {
+      setSelectedUserIds(new Set());
+    } else {
+      setSelectedUserIds(new Set(users.map((u) => u.userId)));
+    }
+  };
+
+  const toggleSelectUser = (id: string) => {
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const removeBatchUsers = async () => {
+    if (selectedUserIds.size === 0) return;
+    setBatchDeleteUsersOpen(false);
+    setBatchUpdatingUsers(true);
+    const ids = Array.from(selectedUserIds);
+    let count = 0;
+    for (const id of ids) {
+      const res = await deleteAdminUser(id);
+      if (res.success) {
+        count++;
+        if (editing?.userId === id) setEditing(null);
+      }
+    }
+    setBatchUpdatingUsers(false);
+    setSelectedUserIds(new Set());
+    setMessage(`Deleted ${count} user(s).`);
+    onSaved();
+  };
+
+  const setStatusBatchUsers = async (status: "ACTIVE" | "INACTIVE") => {
+    if (selectedUserIds.size === 0) return;
+    setBatchUpdatingUsers(true);
+    const targetUsers = users.filter((u) => selectedUserIds.has(u.userId));
+    let count = 0;
+    for (const u of targetUsers) {
+      const res = await saveAdminUser({ ...u, status }, u.userId);
+      if (res.success) count++;
+    }
+    setBatchUpdatingUsers(false);
+    setSelectedUserIds(new Set());
+    setMessage(`Updated ${count} user(s) to ${status.toLowerCase()}.`);
+    onSaved();
+  };
+
   useEffect(() => {
     setForm(editing ?? blankUser);
     setMessage("");
@@ -2783,11 +2861,83 @@ function UserEditor({
           </button>
         </form>
       </section>
-      <section>
+      <section className="table-with-bar">
+        <div className="table-header-bar">
+          <div className="table-selection-count">
+            {selectedUserIds.size > 0 ? (
+              <span>{selectedUserIds.size} of {users.length} user(s) selected</span>
+            ) : (
+              <span>Total users: {users.length}</span>
+            )}
+          </div>
+          <div className="table-batch-actions">
+            {selectedUserIds.size > 0 ? (
+              <>
+                {selectedUserIds.size < users.length && (
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() => setSelectedUserIds(new Set(users.map((u) => u.userId)))}
+                  >
+                    Select all ({users.length})
+                  </button>
+                )}
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => setSelectedUserIds(new Set())}
+                >
+                  Clear selection
+                </button>
+                <button
+                  className="admin-button"
+                  type="button"
+                  disabled={batchUpdatingUsers}
+                  onClick={() => void setStatusBatchUsers("ACTIVE")}
+                >
+                  Set Active ({selectedUserIds.size})
+                </button>
+                <button
+                  className="admin-button"
+                  type="button"
+                  disabled={batchUpdatingUsers}
+                  onClick={() => void setStatusBatchUsers("INACTIVE")}
+                >
+                  Set Inactive ({selectedUserIds.size})
+                </button>
+                <button
+                  className="admin-button danger-button"
+                  type="button"
+                  disabled={batchUpdatingUsers}
+                  onClick={() => setBatchDeleteUsersOpen(true)}
+                >
+                  Delete selected ({selectedUserIds.size})
+                </button>
+              </>
+            ) : (
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setSelectedUserIds(new Set(users.map((u) => u.userId)))}
+              >
+                Select all
+              </button>
+            )}
+          </div>
+        </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
+                <th className="table-select-col">
+                  <input
+                    type="checkbox"
+                    ref={masterUserCheckboxRef}
+                    checked={allUsersSelected}
+                    onChange={toggleSelectAllUsers}
+                    aria-label="Select all users"
+                  />
+                </th>
                 <th>User</th>
                 <th>RFID</th>
                 <th>Payroll profile</th>
@@ -2797,7 +2947,18 @@ function UserEditor({
             </thead>
             <tbody>
               {users.map((user) => (
-                <tr key={user.userId} className={editing?.userId === user.userId ? "is-editing" : ""}>
+                <tr
+                  key={user.userId}
+                  className={`${editing?.userId === user.userId ? "is-editing" : ""} ${selectedUserIds.has(user.userId) ? "selected-row" : ""}`}
+                >
+                  <td className="table-select-cell">
+                    <input
+                      type="checkbox"
+                      checked={selectedUserIds.has(user.userId)}
+                      onChange={() => toggleSelectUser(user.userId)}
+                      aria-label={`Select user ${user.fullName}`}
+                    />
+                  </td>
                   <td>
                     <UserPhoto photoUrl={user.photoUrl} name={user.fullName} />
                     <strong>{user.fullName}</strong>
@@ -2845,6 +3006,14 @@ function UserEditor({
         message={deleteUserTarget ? `Are you sure you want to delete ${deleteUserTarget.fullName} (${deleteUserTarget.userId})? This cannot be undone.` : ""}
         onCancel={() => setDeleteUserTarget(null)}
         onConfirm={() => void remove()}
+      />
+      <ConfirmDialog
+        open={batchDeleteUsersOpen}
+        busy={batchUpdatingUsers}
+        title="Delete selected users?"
+        message={`Are you sure you want to delete ${selectedUserIds.size} selected user(s)? This will remove them from the roster.`}
+        onCancel={() => setBatchDeleteUsersOpen(false)}
+        onConfirm={() => void removeBatchUsers()}
       />
     </div>
   );
@@ -4482,6 +4651,85 @@ function AdminAttendance({
     ),
   ];
 
+  const [selectedAttendanceIds, setSelectedAttendanceIds] = useState<Set<string>>(new Set());
+  const [batchDeleteAttendanceOpen, setBatchDeleteAttendanceOpen] = useState(false);
+  const [batchDeletingAttendance, setBatchDeletingAttendance] = useState(false);
+  const masterAttendanceCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const allAttendanceSelected = filteredRows.length > 0 && selectedAttendanceIds.size === filteredRows.length;
+  const someAttendanceSelected = selectedAttendanceIds.size > 0 && selectedAttendanceIds.size < filteredRows.length;
+
+  useEffect(() => {
+    if (masterAttendanceCheckboxRef.current) {
+      masterAttendanceCheckboxRef.current.indeterminate = someAttendanceSelected;
+    }
+  }, [someAttendanceSelected]);
+
+  useEffect(() => {
+    setSelectedAttendanceIds((prev) => {
+      const valid = new Set(filteredRows.map((r) => r.attendanceId));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [filteredRows]);
+
+  const toggleSelectAllAttendance = () => {
+    if (allAttendanceSelected) {
+      setSelectedAttendanceIds(new Set());
+    } else {
+      setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)));
+    }
+  };
+
+  const toggleSelectAttendance = (id: string) => {
+    setSelectedAttendanceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const exportSelectedAttendance = () => {
+    const selectedRows = filteredRows.filter((r) => selectedAttendanceIds.has(r.attendanceId));
+    if (selectedRows.length === 0) return;
+    const result = exportAttendanceCsv(selectedRows, arrivalMap, startDate, endDate !== startDate ? endDate : undefined);
+    if (result.success) {
+      setMessage(`Generated ${result.fileName} (${selectedRows.length} rows).`);
+      setFileResult({
+        filePath: result.filePath,
+        directoryPath: result.directoryPath,
+        fileName: result.fileName,
+        fileKind: "csv",
+        isPortableMode: false,
+      });
+    } else setMessage(result.message);
+  };
+
+  const removeBatchAttendance = async () => {
+    if (selectedAttendanceIds.size === 0) return;
+    setBatchDeleteAttendanceOpen(false);
+    setBatchDeletingAttendance(true);
+    const targetRows = filteredRows.filter((r) => selectedAttendanceIds.has(r.attendanceId));
+    let count = 0;
+    for (const r of targetRows) {
+      const res = await deleteAdminAttendance(r.attendanceId, r.attendanceDate);
+      if (res.success) count++;
+    }
+    setBatchDeletingAttendance(false);
+    setSelectedAttendanceIds(new Set());
+    setMessage(`Deleted ${count} attendance record(s).`);
+    onSaved();
+    if (startDate !== endDate) {
+      void loadRange(startDate, endDate);
+    }
+  };
+
   const exportWorkbook = async () => {
     setExporting(true);
     const result = exportAttendanceCsv(
@@ -4492,9 +4740,7 @@ function AdminAttendance({
     );
     setExporting(false);
     if (result.success) {
-      setMessage(
-        `Generated ${result.fileName} (${filteredRows.length} rows).`,
-      );
+      setMessage(`Generated ${result.fileName} (${filteredRows.length} rows).`);
       setFileResult({
         filePath: result.filePath,
         directoryPath: result.directoryPath,
@@ -4506,7 +4752,7 @@ function AdminAttendance({
   };
 
   return (
-    <section>
+    <section className="table-with-bar">
       <div className="attendance-filter-bar">
         <div className="attendance-filter-top">
           <div className="filter-presets">
@@ -4670,10 +4916,75 @@ function AdminAttendance({
         </div>
       </div>
       <GeneratedFileActions result={fileResult} label="Attendance export" />
+
+      <div className="table-header-bar">
+        <div className="table-selection-count">
+          {selectedAttendanceIds.size > 0 ? (
+            <span>{selectedAttendanceIds.size} of {filteredRows.length} attendance record(s) selected</span>
+          ) : (
+            <span>Total records: {filteredRows.length}</span>
+          )}
+        </div>
+        <div className="table-batch-actions">
+          {selectedAttendanceIds.size > 0 ? (
+            <>
+              {selectedAttendanceIds.size < filteredRows.length && (
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)))}
+                >
+                  Select all ({filteredRows.length})
+                </button>
+              )}
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setSelectedAttendanceIds(new Set())}
+              >
+                Clear selection
+              </button>
+              <button
+                className="admin-button"
+                type="button"
+                onClick={exportSelectedAttendance}
+              >
+                <Download size={14} /> Export selected CSV ({selectedAttendanceIds.size})
+              </button>
+              <button
+                className="admin-button danger-button"
+                type="button"
+                disabled={batchDeletingAttendance}
+                onClick={() => setBatchDeleteAttendanceOpen(true)}
+              >
+                Delete selected ({selectedAttendanceIds.size})
+              </button>
+            </>
+          ) : (
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)))}
+            >
+              Select all
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              <th className="table-select-col">
+                <input
+                  type="checkbox"
+                  ref={masterAttendanceCheckboxRef}
+                  checked={allAttendanceSelected}
+                  onChange={toggleSelectAllAttendance}
+                  aria-label="Select all attendance records"
+                />
+              </th>
               <th>Date</th>
               <th>Employee</th>
               <th>Time in</th>
@@ -4686,7 +4997,7 @@ function AdminAttendance({
           <tbody>
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="table-empty-cell">
+                <td colSpan={8} className="table-empty-cell">
                   <div className="empty-state">
                     No attendance records found for{" "}
                     {startDate === endDate
@@ -4704,6 +5015,8 @@ function AdminAttendance({
                 <AttendanceEditRow
                   key={row.attendanceId}
                   row={row}
+                  selected={selectedAttendanceIds.has(row.attendanceId)}
+                  onToggleSelect={() => toggleSelectAttendance(row.attendanceId)}
                   arrivalInfo={arrivalMap.get(row.attendanceId)}
                   onSaved={() => {
                     onSaved();
@@ -4717,6 +5030,14 @@ function AdminAttendance({
           </tbody>
         </table>
       </div>
+      <ConfirmDialog
+        open={batchDeleteAttendanceOpen}
+        busy={batchDeletingAttendance}
+        title="Delete selected attendance records?"
+        message={`Are you sure you want to delete ${selectedAttendanceIds.size} selected attendance record(s)? This will remove them from the logs.`}
+        onCancel={() => setBatchDeleteAttendanceOpen(false)}
+        onConfirm={() => void removeBatchAttendance()}
+      />
     </section>
   );
 }
@@ -4808,10 +5129,14 @@ function exportAttendanceCsv(
 
 function AttendanceEditRow({
   row,
+  selected,
+  onToggleSelect,
   arrivalInfo,
   onSaved,
 }: {
   row: AttendanceListItem;
+  selected?: boolean;
+  onToggleSelect?: () => void;
   arrivalInfo?: { arrivalStatus: ArrivalStatus; minutesLate: number };
   onSaved: () => void;
 }) {
@@ -4900,7 +5225,7 @@ function AttendanceEditRow({
     <>
       {late && (
         <tr className="admin-attention-row">
-          <td colSpan={7} className="admin-attention">
+          <td colSpan={8} className="admin-attention">
             <strong>Late time-out — manual correction required.</strong> This
             time-out was recorded after office hours ({OFFICE_HOURS_END}); the
             office does not allow overtime. Re-enter the official time-out below
@@ -4908,7 +5233,17 @@ function AttendanceEditRow({
           </td>
         </tr>
       )}
-      <tr>
+      <tr className={selected ? "selected-row" : ""}>
+        <td className="table-select-cell">
+          {onToggleSelect && (
+            <input
+              type="checkbox"
+              checked={Boolean(selected)}
+              onChange={onToggleSelect}
+              aria-label={`Select attendance for ${row.fullName}`}
+            />
+          )}
+        </td>
         <td>
           <span style={{ fontSize: ".82rem", color: "var(--muted)" }}>
             {row.attendanceDate}
