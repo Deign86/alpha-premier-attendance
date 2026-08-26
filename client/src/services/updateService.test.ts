@@ -139,15 +139,27 @@ describe('updateService', () => {
       expect(result.error).toBeNull();
     });
 
-    it('returns error message on network failure during manual check', async () => {
+    it('treats missing release JSON or 404 on remote as up to date during manual check', async () => {
       const mockClient: UpdaterClient = {
-        check: vi.fn().mockRejectedValue(new Error('GitHub endpoint unreachable')),
+        check: vi.fn().mockRejectedValue(new Error('Could not fetch a valid release JSON from the remote')),
         relaunch: vi.fn().mockResolvedValue(undefined),
       };
 
       const result = await checkForUpdates(true, mockClient);
       expect(result.available).toBe(false);
-      expect(result.error).toContain('GitHub endpoint unreachable');
+      expect(result.error).toBeNull();
+      expect(result.update).toBeNull();
+    });
+
+    it('returns error message on true network failure during manual check', async () => {
+      const mockClient: UpdaterClient = {
+        check: vi.fn().mockRejectedValue(new Error('Connection timed out')),
+        relaunch: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const result = await checkForUpdates(true, mockClient);
+      expect(result.available).toBe(false);
+      expect(result.error).toContain('Connection timed out');
     });
 
     it('handles non-Tauri browser environments gracefully', async () => {

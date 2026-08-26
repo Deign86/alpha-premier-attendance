@@ -127,6 +127,25 @@ export async function checkForUpdates(
         error: null,
       };
     }
+
+    const normalized = message.toLowerCase();
+    // When the release endpoint returns 404 or no latest.json exists on the latest release,
+    // there are no published updates available. Treat as up-to-date rather than an error.
+    if (
+      normalized.includes('could not fetch a valid release json') ||
+      normalized.includes('release json') ||
+      normalized.includes('releasenotfound') ||
+      normalized.includes('404') ||
+      normalized.includes('no release found')
+    ) {
+      return {
+        available: false,
+        update: null,
+        info: null,
+        error: null,
+      };
+    }
+
     return {
       available: false,
       update: null,

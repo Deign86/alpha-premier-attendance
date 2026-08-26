@@ -1174,6 +1174,11 @@ input[type="checkbox"] {
   animation: slideInDown 200ms ease;
 }
 
+.update-toast.error {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
 @keyframes slideInDown {
   from {
     transform: translateY(-10px);

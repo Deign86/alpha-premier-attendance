@@ -96,6 +96,34 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
 
       expect(installSpy).toHaveBeenCalled();
     });
+
+    it('displays up-to-date toast on manual check when no update is available', async () => {
+      vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
+        available: false,
+        update: null,
+        info: null,
+        error: null,
+      });
+
+      render(<UpdateBanner manualCheckTrigger={1} />);
+
+      expect(await screen.findByText(/Alpha Premier Attendance is up to date/i)).toBeInTheDocument();
+    });
+
+    it('displays error toast with error icon on manual check when check returns error', async () => {
+      vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
+        available: false,
+        update: null,
+        info: null,
+        error: 'Unable to connect to update server.',
+      });
+
+      render(<UpdateBanner manualCheckTrigger={1} />);
+
+      const errorToast = await screen.findByText(/Unable to connect to update server/i);
+      expect(errorToast).toBeInTheDocument();
+      expect(errorToast.closest('.update-toast')).toHaveClass('error');
+    });
   });
 
   describe('AdminUpdatesCard', () => {

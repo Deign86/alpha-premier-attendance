@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback, useId } from 'react';
-import { ArrowUpCircle, CheckCircle, Download, LoaderCircle, RefreshCw, X } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowUpCircle,
+  CheckCircle,
+  Download,
+  LoaderCircle,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import type { Update } from '@tauri-apps/plugin-updater';
 import {
   checkForUpdates,
@@ -14,6 +22,11 @@ interface UpdateBannerProps {
   manualCheckTrigger?: number;
 }
 
+interface ToastState {
+  status: 'checking' | 'success' | 'error';
+  message: string;
+}
+
 export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateObj, setUpdateObj] = useState<Update | null>(null);
@@ -21,7 +34,7 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
-  const [checkMessage, setCheckMessage] = useState<string | null>(null);
+  const [toastState, setToastState] = useState<ToastState | null>(null);
 
   // Install progress state
   const [isInstalling, setIsInstalling] = useState(false);
@@ -33,7 +46,7 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
     if (isChecking || isInstalling) return;
     setIsChecking(true);
     if (manual) {
-      setCheckMessage('Checking for updates…');
+      setToastState({ status: 'checking', message: 'Checking for updates…' });
     }
 
     try {
@@ -45,23 +58,26 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
         setBannerDismissed(false);
         if (manual) {
           setModalOpen(true);
-          setCheckMessage(null);
+          setToastState(null);
         }
       } else {
         if (manual) {
           if (result.error) {
-            setCheckMessage(result.error);
+            setToastState({ status: 'error', message: result.error });
+            setTimeout(() => setToastState(null), 5000);
           } else {
-            setCheckMessage('Alpha Premier Attendance is up to date.');
+            setToastState({
+              status: 'success',
+              message: 'Alpha Premier Attendance is up to date.',
+            });
+            setTimeout(() => setToastState(null), 4000);
           }
-          // Clear notification after 4 seconds
-          setTimeout(() => setCheckMessage(null), 4000);
         }
       }
     } catch {
       if (manual) {
-        setCheckMessage('Unable to check for updates.');
-        setTimeout(() => setCheckMessage(null), 4000);
+        setToastState({ status: 'error', message: 'Unable to check for updates.' });
+        setTimeout(() => setToastState(null), 5000);
       }
     } finally {
       setIsChecking(false);
@@ -128,14 +144,16 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   return (
     <>
       {/* Toast message for manual up-to-date checks */}
-      {checkMessage && (
-        <div className="update-toast" role="status" aria-live="polite">
-          {isChecking ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : (
-            <CheckCircle size={16} />
-          )}
-          <span>{checkMessage}</span>
+      {toastState && (
+        <div
+          className={`update-toast${toastState.status === 'error' ? ' error' : ''}`}
+          role="status"
+          aria-live="polite"
+        >
+          {toastState.status === 'checking' && <LoaderCircle className="spin" size={16} />}
+          {toastState.status === 'success' && <CheckCircle size={16} />}
+          {toastState.status === 'error' && <AlertCircle size={16} />}
+          <span>{toastState.message}</span>
         </div>
       )}
 
