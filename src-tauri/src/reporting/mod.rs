@@ -301,10 +301,25 @@ mod tests {
                 absence_deduction_centavos: 8_000_00,
                 gross_compensation_centavos: 800_00,
             },
+            PayrollSheetRow {
+                employee_id: "INT-2".into(),
+                employee_name: "Alex Cruz".into(),
+                employee_type: "INTERN".into(),
+                cutoff_rate_centavos: 8_800_00,
+                daily_rate_centavos: 80_00,
+                actual_working_days: 3.0,
+                standard_working_days: 11.0,
+                basic_pay_centavos: 8_800_00,
+                total_compensation_centavos: 8_800_00,
+                late_deduction_centavos: 0,
+                half_day_deduction_centavos: 40_00,
+                absence_deduction_centavos: 64_00_00,
+                gross_compensation_centavos: 200_00,
+            },
         ];
         let base = std::env::temp_dir().join(format!("payroll-sheet-{}", uuid::Uuid::new_v4()));
         let pdf = base.with_extension("pdf");
-        generate_payroll_sheet_pdf(&rows, "August 1-15, 2026", "EMPLOYEE", &office(), &pdf)
+        generate_payroll_sheet_pdf(&rows, "August 16-31, 2026", "INTERN", &office(), &pdf)
             .unwrap();
         let bytes = std::fs::read(&pdf).unwrap();
         assert!(bytes.starts_with(b"%PDF"));
@@ -2209,9 +2224,17 @@ pub async fn load_payroll_sheet_rows(
                 0
             };
             // For the sheet presentation, Total Compensation represents the full cutoff rate
-            // and absent days are deducted in the Absent column.
+            // and late, half-day, and absent days are deducted to arrive at Gross Compensation.
             let total_compensation_centavos = cutoff_rate_centavos;
-            let gross_compensation_centavos = row.get::<i64, _>("gross_compensation_centavos");
+            let manual_adjustment_centavos = row
+                .try_get::<i64, _>("manual_adjustment_centavos")
+                .unwrap_or(0);
+            let gross_compensation_centavos = (total_compensation_centavos
+                + manual_adjustment_centavos
+                - late_deduction_centavos
+                - half_day_deduction_centavos
+                - absence_deduction_centavos)
+                .max(0);
             PayrollSheetRow {
                 employee_id: row.get("employee_id"),
                 employee_name: row.get("employee_name"),

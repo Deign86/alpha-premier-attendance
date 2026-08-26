@@ -344,4 +344,49 @@ mod tests {
         assert_eq!(result.total_deductions, 80_000);
         assert_eq!(result.net_pay, 8_000);
     }
+
+    #[test]
+    fn computes_intern_cutoff_with_half_day_and_absent_days() {
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-103".into(),
+            employee_name: "Alex Cruz".into(),
+            cutoff_start: "2026-08-16".into(),
+            cutoff_end: "2026-08-31".into(),
+            daily_rate: 80.0,
+            standard_working_days: 11.0,
+            actual_working_days: 3.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 1.0,
+            half_day_fraction: 0.5,
+            absent_days: 8.0,
+            absence_deduction: None,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+        assert_eq!(result.basic_pay, 88_000);
+        assert_eq!(result.total_compensation, 88_000);
+        assert_eq!(result.half_day_deduction, 4_000);
+        assert_eq!(result.absence_deduction, 64_000);
+        assert_eq!(result.total_deductions, 68_000);
+        assert_eq!(result.net_pay, 20_000);
+    }
 }

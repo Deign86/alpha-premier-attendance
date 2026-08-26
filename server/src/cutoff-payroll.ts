@@ -48,7 +48,7 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   // Intern payroll floors at zero for the cutoff: an intern can never owe
   // money for a period (mirrors the floor-at-zero daily intern rule).
   const grossEarnings = totalCompensation + totalAllowance + overtimePay + manualAdjustment;
-  const grossCompensation = input.employeeType === 'INTERN' ? Math.max(0, grossEarnings) : grossEarnings;
+  const grossCompensation = input.employeeType === 'INTERN' ? Math.max(0, grossEarnings - totalDeductions) : grossEarnings;
   const netBeforeFloor = grossEarnings - totalDeductions;
   const netPay = input.employeeType === 'INTERN' ? Math.max(0, netBeforeFloor) : netBeforeFloor;
   const record = {

@@ -47,7 +47,7 @@ describe('cutoff payroll calculator', () => {
       halfDayCount: 0, halfDayFraction: 0, absentDays: 0, overtimeHours: 0, overtimeRate: 0,
     };
     const result = calculateCutoffPayroll(internInput);
-    expect(result).toMatchObject({ dailyRate: 80, basicPay: 800, totalCompensation: 800, totalAllowance: 0, lateUnits: 3, lateDeduction: 30, grossCompensation: 800, totalDeductions: 30, netPay: 770, employeeType: 'INTERN' });
+    expect(result).toMatchObject({ dailyRate: 80, basicPay: 800, totalCompensation: 800, totalAllowance: 0, lateUnits: 3, lateDeduction: 30, grossCompensation: 770, totalDeductions: 30, netPay: 770, employeeType: 'INTERN' });
     // An intern can never owe money for a cutoff (floor at zero).
     const zeroed = calculateCutoffPayroll({ ...internInput, actualWorkingDays: 0, lateUnits: 9, lateDeduction: 90 });
     expect(zeroed.grossCompensation).toBe(0);
@@ -70,8 +70,33 @@ describe('cutoff payroll calculator', () => {
       totalCompensation: 880,
       absenceDeduction: 800,
       totalDeductions: 800,
-      grossCompensation: 880,
+      grossCompensation: 80,
       netPay: 80,
+      employeeType: 'INTERN',
+    });
+  });
+
+  it('computes intern cutoff with half-day deduction correctly', () => {
+    const halfDayInternInput = {
+      ...jeanInput,
+      employeeId: 'INT-003', employeeName: 'Alex Cruz', employeeType: 'INTERN' as const, payrollProfileId: 'INTERN_STANDARD',
+      dailyRate: 80, standardWorkingDays: 11, actualWorkingDays: 3,
+      specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
+      incentivesAllowance: 0, specialAllowance: 0, lateUnits: 0, lateDeduction: 0,
+      halfDayCount: 1, halfDayFraction: 0.5, absentDays: 8, overtimeHours: 0, overtimeRate: 0,
+    };
+    const result = calculateCutoffPayroll(halfDayInternInput);
+    expect(result).toMatchObject({
+      dailyRate: 80,
+      basicPay: 880,
+      totalCompensation: 880,
+      halfDayCount: 1,
+      halfDayDeduction: 40,
+      absentDays: 8,
+      absenceDeduction: 640,
+      totalDeductions: 680,
+      grossCompensation: 200,
+      netPay: 200,
       employeeType: 'INTERN',
     });
   });

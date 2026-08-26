@@ -3369,9 +3369,12 @@ function EditPayrollDialog({
         phic: nPhic,
         hdmf: nHdmf,
         salaryAdvance: nAdvance,
+        absentDays: record.absentDays,
         absenceDeduction: record.absenceDeduction,
-        lateDeduction: record.lateDeduction,
+        halfDayCount: record.halfDayCount,
         halfDayDeduction: record.halfDayDeduction,
+        lateUnits: record.lateUnits,
+        lateDeduction: record.lateDeduction,
         manualAdjustment: nAdj,
         adjustmentReason: adjustmentReason.trim() || undefined,
         approvedWorkingDayOverage: record.approvedWorkingDayOverage,
@@ -3847,16 +3850,18 @@ function PayrollTable({
                         <summary>Calculation breakdown & payslip detail</summary>
                         {row.employeeType === "INTERN" ? (
                           <p>
-                            {php(row.basicPay)} basic ({row.actualWorkingDays}{" "}
-                            day(s) at {php(INTERN_DAILY_RATE_PHP)} per day)
+                            {php(row.totalCompensation || row.basicPay)} cutoff rate ({row.standardWorkingDays} std days at {php(INTERN_DAILY_RATE_PHP)}/day)
+                            {row.absenceDeduction > 0
+                              ? ` - ${php(row.absenceDeduction)} absent deduction (${row.absentDays} day(s))`
+                              : ""}
                             {row.manualAdjustment !== 0
                               ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
                               : ""}{" "}
                             - {php(row.lateDeduction)} late deduction (
-                            {row.lateUnits} hour(s) at{" "}
-                            {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)} per hour)
+                            {row.lateUnits} hr(s) at{" "}
+                            {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)
                             {row.halfDayDeduction > 0
-                              ? ` - ${php(row.halfDayDeduction)} half-day deduction`
+                              ? ` - ${php(row.halfDayDeduction)} half-day deduction (${row.halfDayCount} half-day(s))`
                               : ""} ={" "}
                             <strong>{php(row.grossCompensation)}</strong>.
                           </p>

@@ -14,6 +14,8 @@ describe('employee payroll policy', () => {
       computedTimeOut: '2026-07-28T17:00:00+08:00',
       lateHours: 0,
       lateDeduction: 0,
+      isHalfDay: false,
+      halfDayDeduction: 0,
       basePay: 650,
       dailyPay: 650,
       // 9h20m clocked minus the 12:00–13:00 lunch hour = 8h20m → ceiled to 9.
@@ -36,5 +38,8 @@ describe('employee payroll policy', () => {
       dailyRate: 650,
     });
     expect(partial.workedHours).toBe(1);
+    expect(partial.isHalfDay).toBe(true);
+    expect(partial.halfDayDeduction).toBe(325);
+    expect(partial.dailyPay).toBe(325);
   });
 });

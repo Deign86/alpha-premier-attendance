@@ -8,6 +8,8 @@ pub struct EmployeePayrollResult {
     pub computed_time_out: String,
     pub late_hours: i64,
     pub late_deduction_centavos: i64,
+    pub is_half_day: bool,
+    pub half_day_deduction_centavos: i64,
     pub base_pay_centavos: i64,
     pub daily_pay_centavos: i64,
     pub worked_hours: i64,
@@ -40,14 +42,23 @@ pub fn calculate(
         )
         .single()
         .unwrap();
+    let worked_hours = paid_work_hours_ceiled(time_in, time_out);
+    let is_half_day = worked_hours > 0 && worked_hours <= 4;
+    let half_day_deduction = if is_half_day {
+        daily_rate_centavos / 2
+    } else {
+        0
+    };
     Ok(EmployeePayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         computed_time_out: computed_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         late_hours: 0,
         late_deduction_centavos: 0,
+        is_half_day,
+        half_day_deduction_centavos: half_day_deduction,
         base_pay_centavos: daily_rate_centavos,
-        daily_pay_centavos: daily_rate_centavos,
-        worked_hours: paid_work_hours_ceiled(time_in, time_out),
+        daily_pay_centavos: daily_rate_centavos - half_day_deduction,
+        worked_hours,
     })
 }
 
@@ -77,5 +88,18 @@ mod tests {
         assert_eq!(result.worked_hours, 7);
         // Daily pay remains the flat daily rate (employee late rules still TBD).
         assert_eq!(result.daily_pay_centavos, 100_000);
+    }
+    #[test]
+    fn calculate_half_day_deducts_half_daily_rate() {
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T12:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 4);
+        assert!(result.is_half_day);
+        assert_eq!(result.half_day_deduction_centavos, 50_000);
+        assert_eq!(result.daily_pay_centavos, 50_000);
     }
 }

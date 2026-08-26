@@ -14,6 +14,8 @@ export type InternPayrollResult = {
   computedTimeOut: string;
   lateHours: number;
   lateDeduction: number;
+  isHalfDay: boolean;
+  halfDayDeduction: number;
   graceUsed: boolean;
   basePay: number;
   dailyPay: number;
@@ -44,17 +46,22 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
+  const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
+  const isHalfDay = workedHours > 0 && workedHours <= 4;
+  const halfDayDeduction = isHalfDay ? basePay / 2 : 0;
 
   return {
     computedTimeIn: computedTimeIn.toISO({ suppressMilliseconds: true })!,
     computedTimeOut: actualTimeOut.toISO({ suppressMilliseconds: true })!,
     lateHours,
     lateDeduction,
+    isHalfDay,
+    halfDayDeduction,
     graceUsed,
     basePay,
-    dailyPay: Math.max(0, basePay - lateDeduction),
+    dailyPay: Math.max(0, basePay - lateDeduction - halfDayDeduction),
     // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
-    workedHours: paidWorkHoursCeiled(actualTimeIn, actualTimeOut),
+    workedHours,
   };
 }
 

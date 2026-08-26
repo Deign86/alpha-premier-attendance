@@ -66,4 +66,20 @@ describe('intern payroll policy', () => {
     expect(manilaWeekStart('2026-08-02')).toBe('2026-07-27');
     expect(manilaWeekStart('2026-08-03')).toBe('2026-08-03');
   });
+
+  it('deducts half day pay when worked hours are 4 or fewer', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T12:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result).toMatchObject({
+      workedHours: 4,
+      isHalfDay: true,
+      halfDayDeduction: 40,
+      basePay: 80,
+      dailyPay: 40,
+    });
+  });
 });

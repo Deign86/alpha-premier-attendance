@@ -17,6 +17,8 @@ pub struct InternPayrollResult {
     pub computed_time_out: String,
     pub late_hours: i64,
     pub late_deduction_centavos: i64,
+    pub is_half_day: bool,
+    pub half_day_deduction_centavos: i64,
     pub grace_used: bool,
     pub base_pay_centavos: i64,
     pub daily_pay_centavos: i64,
@@ -66,15 +68,20 @@ pub fn calculate(
         time_in
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
+    let worked_hours = paid_work_hours_ceiled(time_in, time_out);
+    let is_half_day = worked_hours > 0 && worked_hours <= 4;
+    let half_day_deduction = if is_half_day { base / 2 } else { 0 };
     Ok(InternPayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         computed_time_out: time_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         late_hours,
         late_deduction_centavos: deduction,
+        is_half_day,
+        half_day_deduction_centavos: half_day_deduction,
         grace_used,
         base_pay_centavos: base,
-        daily_pay_centavos: floor_zero(base - deduction),
-        worked_hours: paid_work_hours_ceiled(time_in, time_out),
+        daily_pay_centavos: floor_zero(base - deduction - half_day_deduction),
+        worked_hours,
     })
 }
 
@@ -151,5 +158,20 @@ mod tests {
         assert_eq!(result.late_hours, 1);
         assert_eq!(result.late_deduction_centavos, 1000);
         assert_eq!(result.daily_pay_centavos, 7000);
+    }
+    #[test]
+    fn half_day_shift_deducts_half_daily_pay() {
+        // 08:00–12:00 → 4 paid hours → half day
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T12:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 4);
+        assert!(result.is_half_day);
+        assert_eq!(result.half_day_deduction_centavos, 4000);
+        assert_eq!(result.daily_pay_centavos, 4000);
     }
 }

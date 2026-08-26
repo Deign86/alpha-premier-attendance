@@ -1100,18 +1100,85 @@ async fn payroll_intern_report(
     if cutoff_end < cutoff_start {
         return Err("INVALID_CUTOFF_DATES".into());
     }
-    let rows = sqlx::query("SELECT u.user_id, u.full_name, COALESCE(COUNT(p.payroll_id),0) AS actual_days, COALESCE(SUM(p.base_pay_centavos),0) AS basic_pay, COALESCE(SUM(p.late_hours),0) AS late_units, COALESCE(SUM(p.late_deduction_centavos),0) AS late_deduction, COALESCE(SUM(p.daily_pay_centavos),0) AS gross_pay FROM users u LEFT JOIN payroll p ON p.user_id=u.user_id AND p.attendance_date >= ? AND p.attendance_date <= ? WHERE u.employee_type='INTERN' GROUP BY u.user_id, u.full_name ORDER BY u.full_name")
-        .bind(&cutoff_start).bind(&cutoff_end).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let payroll = rows.into_iter().map(|row| {
-        let actual_days = row.get::<i64,_>("actual_days") as f64;
-        let basic = row.get::<i64,_>("basic_pay");
-        let late = row.get::<i64,_>("late_deduction");
-        let gross = row.get::<i64,_>("gross_pay");
-        let user_id = row.get::<String,_>("user_id");
-        serde_json::json!({
-            "payrollId": format!("INTERN-{}-{}-{}", user_id, cutoff_start, cutoff_end), "employeeId": user_id, "employeeName": row.get::<String,_>("full_name"), "employeeType":"INTERN", "payrollProfileId":"INTERN_STANDARD", "payrollCutoffLabel": payroll_cutoff_label, "cutoffStart": cutoff_start, "cutoffEnd": cutoff_end, "payrollFrequency":"SEMI_MONTHLY", "dailyRate":80, "standardWorkingDays":11, "actualWorkingDays":actual_days, "basicPay":basic as f64 / 100.0, "specialHolidayDays":0, "specialHolidayMultiplier":0, "specialHolidayPay":0, "regularHolidayDays":0, "regularHolidayMultiplier":0, "regularHolidayPay":0, "incentivesAllowance":0, "specialAllowance":0, "totalCompensation":basic as f64 / 100.0, "totalAllowance":0, "lateUnits":row.get::<i64,_>("late_units") as f64, "lateDeduction":late as f64 / 100.0, "halfDayCount":0, "halfDayDeduction":0, "absentDays":0, "absenceDeduction":0, "overtimeHours":0, "overtimeRate":0, "overtimePay":0, "manualAdjustment":0, "adjustmentReason":null, "grossCompensation":gross as f64 / 100.0, "netPay":gross as f64 / 100.0, "calculationBreakdown":"attendance report", "approvedWorkingDayOverage":true, "status":"REPORT", "finalizedAt":null, "revision":1
+    let rows = sqlx::query(
+        "SELECT u.user_id, u.full_name, \
+         COALESCE(COUNT(p.payroll_id), 0) AS actual_days, \
+         COALESCE(SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND (strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) <= 18000) THEN 1 ELSE 0 END), 0) AS half_day_count, \
+         COALESCE(SUM(p.base_pay_centavos), 0) AS basic_pay, \
+         COALESCE(SUM(p.late_hours), 0) AS late_units, \
+         COALESCE(SUM(p.late_deduction_centavos), 0) AS late_deduction \
+         FROM users u \
+         LEFT JOIN payroll p ON p.user_id = u.user_id AND p.attendance_date >= ? AND p.attendance_date <= ? \
+         WHERE u.employee_type = 'INTERN' \
+         GROUP BY u.user_id, u.full_name \
+         ORDER BY u.full_name",
+    )
+    .bind(&cutoff_start)
+    .bind(&cutoff_end)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let payroll = rows
+        .into_iter()
+        .map(|row| {
+            let actual_days = row.get::<i64, _>("actual_days") as f64;
+            let half_day_count = row.get::<i64, _>("half_day_count") as f64;
+            let standard_days = 11.0;
+            let absent_days = (standard_days - actual_days).max(0.0);
+            let daily_rate = 80.0;
+            let total_comp = standard_days * daily_rate;
+            let absence_deduction = absent_days * daily_rate;
+            let half_day_deduction = half_day_count * (daily_rate * 0.5);
+            let late_units = row.get::<i64, _>("late_units") as f64;
+            let late_deduction = row.get::<i64, _>("late_deduction") as f64 / 100.0;
+            let total_deductions = late_deduction + half_day_deduction + absence_deduction;
+            let gross = (total_comp - total_deductions).max(0.0);
+            let user_id = row.get::<String, _>("user_id");
+            serde_json::json!({
+                "payrollId": format!("INTERN-{}-{}-{}", user_id, cutoff_start, cutoff_end),
+                "employeeId": user_id,
+                "employeeName": row.get::<String, _>("full_name"),
+                "employeeType": "INTERN",
+                "payrollProfileId": "INTERN_STANDARD",
+                "payrollCutoffLabel": payroll_cutoff_label,
+                "cutoffStart": cutoff_start,
+                "cutoffEnd": cutoff_end,
+                "payrollFrequency": "SEMI_MONTHLY",
+                "dailyRate": daily_rate,
+                "standardWorkingDays": standard_days,
+                "actualWorkingDays": actual_days,
+                "basicPay": total_comp,
+                "specialHolidayDays": 0,
+                "specialHolidayMultiplier": 0,
+                "specialHolidayPay": 0,
+                "regularHolidayDays": 0,
+                "regularHolidayMultiplier": 0,
+                "regularHolidayPay": 0,
+                "incentivesAllowance": 0,
+                "specialAllowance": 0,
+                "totalCompensation": total_comp,
+                "totalAllowance": 0,
+                "lateUnits": late_units,
+                "lateDeduction": late_deduction,
+                "halfDayCount": half_day_count,
+                "halfDayDeduction": half_day_deduction,
+                "absentDays": absent_days,
+                "absenceDeduction": absence_deduction,
+                "overtimeHours": 0,
+                "overtimeRate": 0,
+                "overtimePay": 0,
+                "manualAdjustment": 0,
+                "adjustmentReason": null,
+                "grossCompensation": gross,
+                "netPay": gross,
+                "calculationBreakdown": "attendance report",
+                "approvedWorkingDayOverage": true,
+                "status": "REPORT",
+                "finalizedAt": null,
+                "revision": 1
+            })
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     Ok(serde_json::json!({"success":true,"payroll":payroll}))
 }
 
@@ -1155,7 +1222,17 @@ async fn payroll_generate_cutoff(
     }
 
     let rows = sqlx::query(
-        "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, COALESCE(MAX(u.daily_rate_centavos), MAX(p.base_pay_centavos), 0) AS daily_rate_centavos, COUNT(*) AS actual_days, SUM(p.late_hours) AS late_units, SUM(p.late_deduction_centavos) AS late_deduction_centavos, u.payroll_profile_id FROM payroll p JOIN users u ON u.user_id=p.user_id WHERE p.attendance_date >= ? AND p.attendance_date <= ? GROUP BY p.user_id, u.payroll_profile_id ORDER BY full_name"
+        "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, \
+         COALESCE(MAX(u.daily_rate_centavos), MAX(p.base_pay_centavos), 0) AS daily_rate_centavos, \
+         COUNT(*) AS actual_days, \
+         SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND (strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) <= 18000) THEN 1 ELSE 0 END) AS half_day_count, \
+         SUM(p.late_hours) AS late_units, \
+         SUM(p.late_deduction_centavos) AS late_deduction_centavos, \
+         u.payroll_profile_id \
+         FROM payroll p JOIN users u ON u.user_id=p.user_id \
+         WHERE p.attendance_date >= ? AND p.attendance_date <= ? \
+         GROUP BY p.user_id, u.payroll_profile_id \
+         ORDER BY full_name"
     ).bind(&cutoff_start).bind(&cutoff_end).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -1279,11 +1356,8 @@ async fn payroll_generate_cutoff(
         } else {
             custom_number("regularHolidayDays").unwrap_or(0.0)
         };
-        let half_day_count = if is_intern {
-            0.0
-        } else {
-            custom_number("halfDayCount").unwrap_or(0.0)
-        };
+        let half_day_count = custom_number("halfDayCount")
+            .unwrap_or(row.get::<i64, _>("half_day_count") as f64);
         let overtime_hours = if is_intern {
             0.0
         } else {
@@ -1295,7 +1369,7 @@ async fn payroll_generate_cutoff(
         } else {
             late_units * late_rate
         };
-        let absent_days = (standard_days - (actual_days + half_day_count)).max(0.0);
+        let absent_days = custom_number("absentDays").unwrap_or_else(|| (standard_days - actual_days).max(0.0));
         let manual_adjustment = custom_number("manualAdjustment").unwrap_or(0.0);
         let input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: employee_id.clone(),
@@ -1335,6 +1409,16 @@ async fn payroll_generate_cutoff(
             approved_working_day_overage: true,
         };
         let calculated = crate::services::cutoff_payroll::calculate(&input)?;
+        let gross_amount = if is_intern {
+            calculated.net_pay.max(0)
+        } else {
+            calculated.gross_compensation
+        };
+        let net_amount = if is_intern {
+            calculated.net_pay.max(0)
+        } else {
+            calculated.net_pay
+        };
         let payroll_id = uuid::Uuid::new_v4().to_string();
         let query = format!("INSERT INTO payroll_cutoffs (payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,payroll_frequency,daily_rate_centavos,standard_working_days,actual_working_days,basic_pay_centavos,special_holiday_days,special_holiday_multiplier,special_holiday_pay_centavos,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay_centavos,incentives_allowance_centavos,special_allowance_centavos,total_compensation_centavos,total_allowance_centavos,late_units,late_deduction_centavos,half_day_count,half_day_deduction_centavos,absent_days,absence_deduction_centavos,overtime_hours,overtime_rate_centavos,overtime_pay_centavos,manual_adjustment_centavos,adjustment_reason,gross_compensation_centavos,net_pay_centavos,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,hra_centavos,sss_centavos,phic_centavos,hdmf_centavos,salary_advance_centavos,created_at,updated_at) VALUES ({})", std::iter::repeat("?").take(46).collect::<Vec<_>>().join(","));
         sqlx::query(&query)
@@ -1342,12 +1426,12 @@ async fn payroll_generate_cutoff(
             .bind(daily_rate_centavos).bind(standard_days).bind(actual_days).bind(calculated.basic_pay).bind(special_holiday_days).bind(special_multiplier).bind(calculated.special_holiday_pay).bind(regular_holiday_days).bind(regular_multiplier).bind(calculated.regular_holiday_pay)
             .bind(calculated.incentives_allowance).bind(calculated.special_allowance).bind(calculated.total_compensation).bind(calculated.total_allowance).bind(late_units).bind(calculated.late_deduction)
             .bind(half_day_count).bind(calculated.half_day_deduction).bind(absent_days).bind(calculated.absence_deduction).bind(overtime_hours).bind(overtime_rate_centavos).bind(calculated.overtime_pay)
-            .bind(php_to_centavos(manual_adjustment)).bind(input.adjustment_reason.clone()).bind(calculated.gross_compensation).bind(calculated.net_pay).bind("")
+            .bind(php_to_centavos(manual_adjustment)).bind(input.adjustment_reason.clone()).bind(gross_amount).bind(net_amount).bind("")
             .bind(serde_json::json!({"source":"attendance","actualWorkingDays":actual_days,"lateUnits":late_units}).to_string()).bind(1_i64).bind("DRAFT")
             .bind(calculated.hra).bind(calculated.sss_employee_share).bind(calculated.phic_employee_share).bind(calculated.hdmf_employee_share).bind(calculated.salary_advance)
             .bind(&now).bind(&now)
             .execute(&state.db).await.map_err(|e| e.to_string())?;
-        enqueue_sync(&state, "PayrollCutoffs", &payroll_id, "UPSERT", &serde_json::json!({"payrollId":payroll_id,"employeeId":employee_id,"payrollCutoffLabel":payroll_cutoff_label,"cutoffStart":cutoff_start,"cutoffEnd":cutoff_end,"basicPay":calculated.basic_pay as f64 / 100.0,"lateDeduction":calculated.late_deduction as f64 / 100.0,"grossCompensation":calculated.gross_compensation as f64 / 100.0,"netPay":calculated.net_pay as f64 / 100.0})).await;
+        enqueue_sync(&state, "PayrollCutoffs", &payroll_id, "UPSERT", &serde_json::json!({"payrollId":payroll_id,"employeeId":employee_id,"payrollCutoffLabel":payroll_cutoff_label,"cutoffStart":cutoff_start,"cutoffEnd":cutoff_end,"basicPay":calculated.basic_pay as f64 / 100.0,"lateDeduction":calculated.late_deduction as f64 / 100.0,"grossCompensation":gross_amount as f64 / 100.0,"netPay":net_amount as f64 / 100.0})).await;
         generated += 1;
     }
     Ok(serde_json::json!({"success":true,"generated":generated}))
@@ -1372,7 +1456,7 @@ async fn payroll_create_cutoff(
         input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
     // Intern payroll floors at zero for a cutoff (mirrors the daily rule).
     let gross = if is_intern {
-        result.gross_compensation.max(0)
+        result.net_pay.max(0)
     } else {
         result.gross_compensation
     };
@@ -1396,7 +1480,7 @@ async fn payroll_create_cutoff(
         .get("payrollCutoffLabel")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let breakdown = serde_json::json!({"basicPayCentavos":result.basic_pay,"totalCompensationCentavos":result.total_compensation,"totalAllowanceCentavos":result.total_allowance,"lateDeductionCentavos":result.late_deduction,"halfDayDeductionCentavos":result.half_day_deduction,"absenceDeductionCentavos":result.absence_deduction,"overtimePayCentavos":result.overtime_pay,"grossCompensationCentavos":result.gross_compensation});
+    let breakdown = serde_json::json!({"basicPayCentavos":result.basic_pay,"totalCompensationCentavos":result.total_compensation,"totalAllowanceCentavos":result.total_allowance,"lateDeductionCentavos":result.late_deduction,"halfDayDeductionCentavos":result.half_day_deduction,"absenceDeductionCentavos":result.absence_deduction,"overtimePayCentavos":result.overtime_pay,"grossCompensationCentavos":gross});
     let insert_query = format!("INSERT INTO payroll_cutoffs (payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,payroll_frequency,daily_rate_centavos,standard_working_days,actual_working_days,basic_pay_centavos,special_holiday_days,special_holiday_multiplier,special_holiday_pay_centavos,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay_centavos,incentives_allowance_centavos,special_allowance_centavos,total_compensation_centavos,total_allowance_centavos,late_units,late_deduction_centavos,half_day_count,half_day_deduction_centavos,absent_days,absence_deduction_centavos,overtime_hours,overtime_rate_centavos,overtime_pay_centavos,manual_adjustment_centavos,adjustment_reason,gross_compensation_centavos,net_pay_centavos,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,hra_centavos,sss_centavos,phic_centavos,hdmf_centavos,salary_advance_centavos,created_at,updated_at) VALUES ({})", std::iter::repeat("?").take(46).collect::<Vec<_>>().join(","));
     sqlx::query(&insert_query)
         .bind(&id)
@@ -1477,7 +1561,7 @@ async fn payroll_update_cutoff(
     let is_intern =
         input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
     let gross = if is_intern {
-        result.gross_compensation.max(0)
+        result.net_pay.max(0)
     } else {
         result.gross_compensation
     };
@@ -1800,11 +1884,25 @@ async fn apply_intern_rules(
     object.remove("regularHolidayPay");
     object.remove("overtimePay");
     object.remove("absenceDeduction");
+    let standard_working_days = object
+        .get("standardWorkingDays")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(11.0);
+    let actual_working_days = object
+        .get("actualWorkingDays")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let absent_days = object
+        .get("absentDays")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(|| (standard_working_days - actual_working_days).max(0.0));
+    let half_day_count = object
+        .get("halfDayCount")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    object.insert("absentDays".into(), serde_json::json!(absent_days));
+    object.insert("halfDayCount".into(), serde_json::json!(half_day_count));
     object.insert("halfDayFraction".into(), serde_json::json!(0.5));
-    object.insert(
-        "absentDays".into(),
-        serde_json::json!(0.0),
-    );
     Ok(())
 }
 
@@ -3100,7 +3198,7 @@ async fn ensure_payroll(
     {
         return Ok(());
     }
-    let (computed_in, computed_out, grace_used, late_hours, deduction, base_pay, daily_pay) =
+    let (computed_in, computed_out, grace_used, late_hours, deduction, is_half_day, half_day_deduction, base_pay, daily_pay) =
         if employee_type == "EMPLOYEE" {
             let result = crate::services::employee_payroll::calculate(
                 actual_in,
@@ -3113,6 +3211,8 @@ async fn ensure_payroll(
                 None,
                 result.late_hours,
                 result.late_deduction_centavos,
+                result.is_half_day,
+                result.half_day_deduction_centavos,
                 result.base_pay_centavos,
                 result.daily_pay_centavos,
             )
@@ -3148,15 +3248,17 @@ async fn ensure_payroll(
                 Some(result.grace_used),
                 result.late_hours,
                 result.late_deduction_centavos,
+                result.is_half_day,
+                result.half_day_deduction_centavos,
                 result.base_pay_centavos,
                 result.daily_pay_centavos,
             )
         };
     let now = chrono::Utc::now().to_rfc3339();
     let payroll_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT OR IGNORE INTO payroll (payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_time_in,actual_time_out,computed_time_in,computed_time_out,grace_used,late_hours,late_deduction_centavos,base_pay_centavos,daily_pay_centavos,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-        .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind(employee_type).bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(&now).bind(&now).execute(&state.db).await.map_err(|e| e.to_string())?;
-    enqueue_sync(state, "Payroll", &payroll_id, "UPSERT", &serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id,"userId":user_id,"employeeType":employee_type,"attendanceDate":date,"actualTimeIn":actual_in,"actualTimeOut":actual_out,"computedTimeIn":computed_in,"computedTimeOut":computed_out,"lateHours":late_hours,"lateDeductionCentavos":deduction,"dailyPayCentavos":daily_pay})).await;
+    sqlx::query("INSERT OR IGNORE INTO payroll (payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_time_in,actual_time_out,computed_time_in,computed_time_out,grace_used,late_hours,late_deduction_centavos,base_pay_centavos,daily_pay_centavos,is_half_day,half_day_deduction_centavos,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind(employee_type).bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(if is_half_day { 1 } else { 0 }).bind(half_day_deduction).bind(&now).bind(&now).execute(&state.db).await.map_err(|e| e.to_string())?;
+    enqueue_sync(state, "Payroll", &payroll_id, "UPSERT", &serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id,"userId":user_id,"employeeType":employee_type,"attendanceDate":date,"actualTimeIn":actual_in,"actualTimeOut":actual_out,"computedTimeIn":computed_in,"computedTimeOut":computed_out,"lateHours":late_hours,"lateDeductionCentavos":deduction,"isHalfDay":is_half_day,"halfDayDeductionCentavos":half_day_deduction,"dailyPayCentavos":daily_pay})).await;
     Ok(())
 }
 
@@ -3592,7 +3694,8 @@ mod tests {
         assert_eq!(input["payrollProfileId"], "INTERN_STANDARD");
         assert_eq!(input["incentivesAllowance"], 0.0);
         assert_eq!(input["specialHolidayDays"], 0.0);
-        assert_eq!(input["absentDays"], 0.0);
+        assert_eq!(input["absentDays"], 11.0);
+        assert_eq!(input["halfDayCount"], 0.0);
 
         // Employees keep their own values untouched.
         sqlx::query("INSERT INTO users (user_id, full_name, daily_rate_centavos, employee_type) VALUES (?, ?, ?, ?)")
