@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub const SINGLE_INSTANCE_PORT: u16 = 41789;
 pub const SINGLE_INSTANCE_MAGIC: &[u8] = b"ALPHA_PREMIER_ATTENDANCE_SHOW\n";
@@ -109,8 +109,15 @@ pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
         is_autostart,
         None::<&str>,
     )?;
+    let check_updates = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for updates…",
+        true,
+        None::<&str>,
+    )?;
     let exit = MenuItem::with_id(app, "exit", "Exit application", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &autostart_item, &exit])?;
+    let menu = Menu::with_items(app, &[&show, &autostart_item, &check_updates, &exit])?;
     let icon = app
         .default_window_icon()
         .cloned()
@@ -169,6 +176,14 @@ pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
                     Err(e) => {
                         log::error!("Failed to query autostart status: {e}");
                     }
+                }
+            }
+            "check_updates" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    let _ = window.emit("check-for-updates", ());
                 }
             }
             "exit" => request_exit(app),

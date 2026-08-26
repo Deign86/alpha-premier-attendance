@@ -33,7 +33,7 @@ fn get_health(state: State<'_, AppState>) -> serde_json::Value {
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> serde_json::Value {
-    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"scanner":{"mode":"keyboard","paused":state.scanner.paused(),"expectedLength":state.scanner.config.expected_length,"characterSet":if matches!(state.scanner.config.character_set, crate::config::ScannerCharacterSet::Hex) { "hex" } else { "decimal" }},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
+    serde_json::json!({"success":true,"timezone":"Asia/Manila","rfidAutoSubmitDelayMs":150,"resultResetDelayMs":4000,"enableAdmin":true,"enableCardSetup":true,"lanEnabled":state.lan.enabled,"updater":{"enabled":state.updater.enabled,"autoCheck":state.updater.auto_check,"checkIntervalHours":state.updater.check_interval_hours},"scanner":{"mode":"keyboard","paused":state.scanner.paused(),"expectedLength":state.scanner.config.expected_length,"characterSet":if matches!(state.scanner.config.character_set, crate::config::ScannerCharacterSet::Hex) { "hex" } else { "decimal" }},"office":{"companyName":state.office.company_name,"officeLabel":state.office.office_label,"officeAddressLine1":state.office.office_address_line_1,"officeBuilding":state.office.office_building,"officeDistrict":state.office.office_district,"officeCity":state.office.office_city,"officeRegion":state.office.office_region,"officeCountry":state.office.office_country,"officePostalCode":state.office.office_postal_code,"officeDisplayShort":state.office.display_short(),"officeDisplayFull":state.office.display_full()}})
 }
 
 #[tauri::command]
@@ -3232,6 +3232,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -3250,7 +3252,7 @@ pub fn run() {
             log::info!("Application paths resolved: config={:?}, data={:?}", paths.config_dir, paths.data_dir);
             std::fs::create_dir_all(&paths.config_dir)
                 .expect("create application config directory");
-            let (lan, office, scanner_config, database_config, tts_config) =
+            let (lan, office, scanner_config, database_config, tts_config, updater_config) =
                 config::load_config(&paths.config_dir).expect("valid config.toml");
             let db_path =
                 crate::paths::resolve_db_path(&paths.config_dir, &paths.data_dir, &database_config);
@@ -3264,11 +3266,11 @@ pub fn run() {
                 &paths.config_dir,
                 &db_path,
             ));
-            let (lan, office, scanner_config, _database_config, tts_config, db_path) =
+            let (lan, office, scanner_config, _database_config, tts_config, updater_config, db_path) =
                 match restore_outcome {
                     crate::database::RestoreOutcome::Restored { source } => {
                         log::info!("startup restore applied from {}", source.display());
-                        let (lan, office, scanner_config, database_config, tts_config) =
+                        let (lan, office, scanner_config, database_config, tts_config, updater_config) =
                             config::load_config(&paths.config_dir)
                                 .expect("valid config.toml after restore");
                         let db_path = crate::paths::resolve_db_path(
@@ -3276,17 +3278,17 @@ pub fn run() {
                             &paths.data_dir,
                             &database_config,
                         );
-                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                        (lan, office, scanner_config, database_config, tts_config, updater_config, db_path)
                     }
                     crate::database::RestoreOutcome::None => {
-                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                        (lan, office, scanner_config, database_config, tts_config, updater_config, db_path)
                     }
                     crate::database::RestoreOutcome::SkippedMissingSource { source } => {
                         log::warn!(
                             "startup restore skipped: source {} was missing",
                             source.display()
                         );
-                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                        (lan, office, scanner_config, database_config, tts_config, updater_config, db_path)
                     }
                     crate::database::RestoreOutcome::Failed { source, error } => {
                         log::error!(
@@ -3294,7 +3296,7 @@ pub fn run() {
                             source.display(),
                             error
                         );
-                        (lan, office, scanner_config, database_config, tts_config, db_path)
+                        (lan, office, scanner_config, database_config, tts_config, updater_config, db_path)
                     }
                 };
             let state = match tauri::async_runtime::block_on(AppState::new(
@@ -3306,6 +3308,7 @@ pub fn run() {
                 office,
                 scanner_config,
                 tts_config,
+                updater_config,
             )) {
                 Ok(s) => s,
                 Err(err) => {
@@ -3727,6 +3730,7 @@ mod tests {
             OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         ))
         .unwrap();
         let file_path = exports_dir.join("payroll-2026-08-04.csv");
@@ -3769,6 +3773,7 @@ mod tests {
             OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();
@@ -3798,6 +3803,7 @@ mod tests {
             OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();

@@ -1,5 +1,5 @@
 use crate::{
-    config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig},
+    config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig, UpdaterConfig},
     error::AppError,
     lan_server::{self, LanIssue},
     services::sheets_sync::GoogleSheetsTarget,
@@ -186,6 +186,7 @@ pub struct AppState {
     /// in `data_dir/google-sheets-state.json`.
     pub google_sheets_target: Arc<tokio::sync::RwLock<Option<GoogleSheetsTarget>>>,
     pub tts: Arc<TtsManager>,
+    pub updater: UpdaterConfig,
 }
 
 #[derive(Clone)]
@@ -204,6 +205,7 @@ impl AppState {
         office: OfficeConfig,
         scanner: ScannerConfig,
         tts: TtsConfig,
+        updater: UpdaterConfig,
     ) -> Result<Self, AppError> {
         std::fs::create_dir_all(&data_dir).map_err(|e| AppError::Configuration(e.to_string()))?;
         std::fs::create_dir_all(&exports_dir)
@@ -248,6 +250,7 @@ impl AppState {
             scanner: Arc::new(crate::services::scanner::ScannerHandle::new(scanner)),
             google_sheets_target: Arc::new(tokio::sync::RwLock::new(None)),
             tts: Arc::new(TtsManager::new(tts)),
+            updater,
         })
     }
 
@@ -274,6 +277,7 @@ mod tests {
             OfficeConfig::default(),
             ScannerConfig::default(),
             TtsConfig::default(),
+            UpdaterConfig::default(),
         )
         .await
         .unwrap();
@@ -322,6 +326,7 @@ mod tests {
             OfficeConfig::default(),
             ScannerConfig::default(),
             TtsConfig::default(),
+            UpdaterConfig::default(),
         )
         .await
         .unwrap();

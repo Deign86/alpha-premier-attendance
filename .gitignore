@@ -7,6 +7,9 @@ server/.env
 client/.env
 .env
 *.json.key
+*.key
+*.key.pub
+tauri-keys/
 credentials/
 service-account*.json
 *.pem

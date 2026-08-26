@@ -75,6 +75,17 @@ src-tauri/target/release/bundle/nsis/Alpha Premier Attendance_0.1.0_x64-setup.ex
 
 The NSIS package includes the offline WebView2 Runtime installer and installs it machine-wide, so it works on machines that do not already have WebView2. Windows will request Administrator approval during installation. The portable executable is a single application binary and requires WebView2 to already be installed on the target machine; use the NSIS package for a self-contained deployment.
 
+## Self-Updating & GitHub Releases
+
+Alpha Premier Attendance includes native self-updating capabilities powered by Tauri v2's updater plugin. It checks `Deign86/alpha-premier-attendance` GitHub Releases for cryptographically signed (`minisign` Ed25519) updates:
+
+- **Automatic background checks**: Checked every 8 hours silently without interrupting attendance kiosk operations.
+- **Manual update trigger**: Available via system tray menu ("Check for updates…") or Admin → Data and backup.
+- **Terminal pinning**: Auto-update can be disabled per terminal in Admin settings or via `ALPHA_PREMIER_DISABLE_AUTO_UPDATE=1`.
+- **Release CI**: Pushing a tag (`v*.*.*`) triggers `.github/workflows/release.yml` to build, sign, and publish `latest.json` release manifests.
+
+For keypair generation and detailed configuration, see [docs/UPDATES.md](docs/UPDATES.md).
+
 ## Front-Desk Configuration
 
 Copy the example configuration into the Tauri application config directory as `config.toml`:

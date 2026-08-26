@@ -730,6 +730,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .expect("database");
@@ -903,6 +904,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();
@@ -965,6 +967,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .expect("database initialization");
@@ -1225,6 +1228,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .expect("open restored database");
@@ -1449,6 +1453,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();
@@ -1535,6 +1540,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .expect("open app 2");
@@ -1570,6 +1576,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .expect("open app 3");

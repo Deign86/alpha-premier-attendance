@@ -103,6 +103,8 @@ import { GeneratedFileActions, type GeneratedFileResult } from "./file-actions";
 import { announceAttendance } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
+import { UpdateBanner } from "./update-banner";
+import { AdminUpdatesCard } from "./admin-updates-card";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 
 function toErrorMessage(cause: unknown, fallback: string): string {
@@ -1000,6 +1002,8 @@ export default function App() {
           onClose={closeSetup}
         />
       )}
+
+      <UpdateBanner />
     </main>
   );
 }
@@ -2061,6 +2065,7 @@ function AdminPanel() {
   const [busy, setBusy] = useState(false);
   const [nuking, setNuking] = useState(false);
   const [nukeConfirmOpen, setNukeConfirmOpen] = useState(false);
+  const [manualUpdateCheck, setManualUpdateCheck] = useState<number>(0);
   const unlock = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
@@ -2255,7 +2260,7 @@ function AdminPanel() {
       ) : tab === "voice" ? (
         <VoiceSettingsPanel />
       ) : (
-        <DatabasePanel />
+        <DatabasePanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} />
       )}
       <ConfirmDialog
         open={nukeConfirmOpen}
@@ -2265,6 +2270,7 @@ function AdminPanel() {
         onCancel={() => setNukeConfirmOpen(false)}
         onConfirm={() => void nukeSheets()}
       />
+      <UpdateBanner manualCheckTrigger={manualUpdateCheck} />
     </main>
   );
 }
@@ -2283,7 +2289,7 @@ type AdminUser = {
 };
 
 /** Data & backup panel: configurable DB location, safe backups, and the PC-switch restore flow. */
-export function DatabasePanel() {
+export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) {
   const [info, setInfo] = useState<DatabaseInfoResponse | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -2442,6 +2448,7 @@ export function DatabasePanel() {
           {error}
         </p>
       )}
+      <AdminUpdatesCard onManualCheck={props.onManualUpdateCheck ?? (() => {})} />
       <GeneratedFileActions result={backupResult} label="Latest backup" />
       <div className="lan-guidance">
         <p>

@@ -228,6 +228,37 @@ impl Default for TtsConfig {
     }
 }
 
+/// Self-updater configuration (`[updater]` in config.toml).
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct UpdaterConfig {
+    #[serde(default = "default_updater_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_updater_auto_check")]
+    pub auto_check: bool,
+    #[serde(default = "default_updater_check_interval_hours")]
+    pub check_interval_hours: u64,
+}
+
+fn default_updater_enabled() -> bool {
+    true
+}
+fn default_updater_auto_check() -> bool {
+    true
+}
+fn default_updater_check_interval_hours() -> u64 {
+    8
+}
+
+impl Default for UpdaterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_updater_enabled(),
+            auto_check: default_updater_auto_check(),
+            check_interval_hours: default_updater_check_interval_hours(),
+        }
+    }
+}
+
 impl Default for ScannerConfig {
     fn default() -> Self {
         Self {
@@ -378,7 +409,7 @@ fn join_address_parts(parts: Vec<String>) -> String {
 
 impl OfficeConfig {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
-        load_config(config_dir).map(|(_, office, _, _, _)| office)
+        load_config(config_dir).map(|(_, office, _, _, _, _)| office)
     }
 
     fn compose_short(&self) -> String {
@@ -443,19 +474,39 @@ impl OfficeConfig {
     }
 }
 
-/// Load the LAN, office, scanner, database, and TTS sections from `config.toml`
+/// Load the LAN, office, scanner, database, TTS, and updater sections from `config.toml`
 /// (defaults when absent).
 pub fn load_config(
     config_dir: &Path,
-) -> Result<(LanConfig, OfficeConfig, ScannerConfig, DatabaseConfig, TtsConfig), String> {
+) -> Result<
+    (
+        LanConfig,
+        OfficeConfig,
+        ScannerConfig,
+        DatabaseConfig,
+        TtsConfig,
+        UpdaterConfig,
+    ),
+    String,
+> {
     let path = config_dir.join("config.toml");
     if !path.exists() {
+        let mut updater = UpdaterConfig::default();
+        if std::env::var("ALPHA_PREMIER_DISABLE_AUTO_UPDATE").is_ok()
+            || std::env::var("ALPHA_PREMIER_DISABLE_UPDATES").is_ok()
+            || std::env::var("ALPHA_PREMIER_AUTO_UPDATE")
+                .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+                .unwrap_or(false)
+        {
+            updater.auto_check = false;
+        }
         return Ok((
             LanConfig::default(),
             OfficeConfig::default(),
             ScannerConfig::default(),
             DatabaseConfig::default(),
             TtsConfig::default(),
+            updater,
         ));
     }
     let contents =
@@ -472,6 +523,8 @@ pub fn load_config(
         database: DatabaseConfig,
         #[serde(default)]
         tts: TtsConfig,
+        #[serde(default)]
+        updater: UpdaterConfig,
     }
     let root: Root =
         toml::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
@@ -538,7 +591,23 @@ pub fn load_config(
     if database.path.as_deref().is_some_and(str::is_empty) {
         database.path = None;
     }
-    Ok((lan, root.office, root.scanner, database, root.tts))
+    let mut updater = root.updater;
+    if std::env::var("ALPHA_PREMIER_DISABLE_AUTO_UPDATE").is_ok()
+        || std::env::var("ALPHA_PREMIER_DISABLE_UPDATES").is_ok()
+        || std::env::var("ALPHA_PREMIER_AUTO_UPDATE")
+            .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    {
+        updater.auto_check = false;
+    }
+    Ok((
+        lan,
+        root.office,
+        root.scanner,
+        database,
+        root.tts,
+        updater,
+    ))
 }
 
 fn is_private(address: IpAddr) -> bool {
@@ -601,7 +670,7 @@ mod tests {
             "[lan]\ngoogle_drive_folder_id = \"\"\ngoogle_spreadsheet_id = \"\"\n",
         )
         .unwrap();
-        let (lan, _, _, _, _) = load_config(&temp).expect("load config");
+        let (lan, _, _, _, _, _) = load_config(&temp).expect("load config");
         assert_eq!(lan.google_drive_folder_id, None);
         assert_eq!(lan.google_spreadsheet_id, None);
         assert_eq!(lan.google_drive_folder_name, "Alpha Premier Attendance");
@@ -783,7 +852,7 @@ mod tests {
             "[database]\npath = \"data/attendance.db\"\n",
         )
         .unwrap();
-        let (_, _, _, database, _) = load_config(&temp).expect("load config");
+        let (_, _, _, database, _, _) = load_config(&temp).expect("load config");
         assert_eq!(database.path.as_deref(), Some("data/attendance.db"));
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -808,5 +877,24 @@ mod tests {
         assert_eq!(root.tts.rate, 1.2);
         assert_eq!(root.tts.volume, 0.8);
         assert_eq!(root.tts.voice_model.as_deref(), Some("en_US-amy-medium"));
+    }
+
+    #[test]
+    fn updater_config_parses_section_and_defaults() {
+        let updater = UpdaterConfig::default();
+        assert!(updater.enabled);
+        assert!(updater.auto_check);
+        assert_eq!(updater.check_interval_hours, 8);
+
+        #[derive(Deserialize)]
+        struct Root {
+            #[serde(default)]
+            updater: UpdaterConfig,
+        }
+        let root: Root = toml::from_str("[updater]\nenabled = true\nauto_check = false\ncheck_interval_hours = 12\n")
+            .expect("updater toml");
+        assert!(root.updater.enabled);
+        assert!(!root.updater.auto_check);
+        assert_eq!(root.updater.check_interval_hours, 12);
     }
 }

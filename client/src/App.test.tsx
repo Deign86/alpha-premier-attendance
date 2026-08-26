@@ -66,6 +66,7 @@ beforeEach(() => {
     });
   });
   vi.spyOn(tauriApi, 'listenForAttendanceUpdates').mockImplementation(() => Promise.resolve(() => {}));
+  vi.spyOn(tauriApi, 'listenForCheckForUpdates').mockImplementation(() => Promise.resolve(() => {}));
   vi.spyOn(tauriApi, 'setScannerPaused').mockResolvedValue();
   vi.spyOn(tauriApi, 'notifyScanSuccess').mockResolvedValue();
   vi.spyOn(tauriApi, 'getScannerStatus').mockRejectedValue(new Error('web mode'));

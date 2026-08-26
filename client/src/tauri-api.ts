@@ -86,3 +86,11 @@ export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause
 export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
+/** Listen for tray menu "Check for updates…" trigger. */
+export const listenForCheckForUpdates = (handler: () => void): Promise<() => void> => {
+  if (globalThis.window === undefined || !('__TAURI_INTERNALS__' in globalThis.window)) {
+    return Promise.resolve(() => {});
+  }
+  return listen<void>('check-for-updates', () => handler());
+};
+

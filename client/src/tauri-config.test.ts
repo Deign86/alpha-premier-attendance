@@ -4,6 +4,12 @@ import { readFileSync } from 'node:fs';
 // SAFETY: Parsed JSON from tauri.conf.json has the expected app configuration shape
 const tauriConfig = JSON.parse(readFileSync('../src-tauri/tauri.conf.json', 'utf8')) as {
   app?: { withGlobalTauri?: boolean };
+  plugins?: {
+    updater?: {
+      pubkey?: string;
+      endpoints?: string[];
+    };
+  };
 };
 
 // SAFETY: Parsed JSON from default.json capabilities has the expected permission list shape
@@ -29,5 +35,27 @@ describe('Tauri MCP runtime configuration and verification harness', () => {
 
   it('registers the mcp-bridge plugin in lib.rs under debug assertions', () => {
     expect(libRs).toContain('tauri_plugin_mcp_bridge::init()');
+  });
+
+  it('configures native updater endpoints and public signing key in tauri.conf.json', () => {
+    expect(tauriConfig.plugins?.updater?.endpoints).toEqual([
+      'https://github.com/Deign86/alpha-premier-attendance/releases/latest/download/latest.json',
+    ]);
+    expect(tauriConfig.plugins?.updater?.pubkey).toBeTruthy();
+  });
+
+  it('grants updater:default and process:default permissions in default.json', () => {
+    expect(capabilities.permissions).toContain('updater:default');
+    expect(capabilities.permissions).toContain('process:default');
+  });
+
+  it('declares tauri-plugin-updater and tauri-plugin-process in Cargo.toml', () => {
+    expect(cargoToml).toContain('tauri-plugin-updater');
+    expect(cargoToml).toContain('tauri-plugin-process');
+  });
+
+  it('registers updater and process plugins in lib.rs', () => {
+    expect(libRs).toContain('tauri_plugin_updater::Builder::new().build()');
+    expect(libRs).toContain('tauri_plugin_process::init()');
   });
 });

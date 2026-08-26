@@ -929,6 +929,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();
@@ -988,6 +989,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();
@@ -1018,6 +1020,7 @@ mod tests {
             crate::config::OfficeConfig::default(),
             crate::config::ScannerConfig::default(),
             crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
         )
         .await
         .unwrap();

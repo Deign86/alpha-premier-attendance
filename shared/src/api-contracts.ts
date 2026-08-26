@@ -589,6 +589,7 @@ export type SafeConfigResponse = {
   /** Office identity used for production-facing place labels, exports, and reports. */
   office?: OfficeIdentity;
   scanner?: { mode?: 'keyboard'; paused: boolean; expectedLength: number; characterSet: 'decimal' | 'hex' };
+  updater?: { enabled: boolean; autoCheck: boolean; checkIntervalHours: number };
 };
 
 export type SetupUser = {

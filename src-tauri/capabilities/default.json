@@ -10,6 +10,8 @@
     "dialog:default",
     "notification:default",
     "autostart:default",
+    "updater:default",
+    "process:default",
     "mcp-bridge:default"
   ]
 }
