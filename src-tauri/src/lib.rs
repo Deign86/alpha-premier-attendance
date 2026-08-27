@@ -3727,6 +3727,26 @@ fn photo_is_within_limits(width: u32, height: u32, bytes: usize) -> bool {
     width <= 4096 && height <= 4096 && bytes <= MAX_PHOTO_BYTES
 }
 
+#[tauri::command]
+fn autostart_status(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable().map_err(|e| e.to_string())?;
+        log::info!("Enabled autostart via in-app settings");
+    } else {
+        autolaunch.disable().map_err(|e| e.to_string())?;
+        log::info!("Disabled autostart via in-app settings");
+    }
+    autolaunch.is_enabled().map_err(|e| e.to_string())
+}
+
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
         log::error!("CRITICAL PANIC: {:?}", info);
@@ -3843,6 +3863,8 @@ pub fn run() {
             }
             let sync_state = state.clone();
             tauri::async_runtime::spawn(async move {
+                // Initial 5-second grace period on cold boot prevents network contention
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 loop {
                     let endpoint = sync_state.lan.sheets_sync_endpoint.as_deref();
                     let _ = crate::services::sheets_sync::run_once(&sync_state, endpoint).await;
@@ -3968,7 +3990,9 @@ pub fn run() {
             open_viewer_url,
             tts_speak,
             tts_stop,
-            tts_status
+            tts_status,
+            autostart_status,
+            autostart_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alpha Premier Attendance");

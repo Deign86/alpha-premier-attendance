@@ -614,3 +614,25 @@ function networkError(message: string): ScanErrorResponse {
     error: { code: 'INTERNAL_SERVER_ERROR', message },
   };
 }
+
+export async function getAutostartStatus(): Promise<boolean> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.autostartStatus();
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export async function setAutostartStatus(enabled: boolean): Promise<boolean> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.autostartSet(enabled);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}

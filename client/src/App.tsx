@@ -1,17 +1,25 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  CalendarPlus,
   Check,
   CircleAlert,
+  Clock,
   CreditCard,
   Download,
+  History,
   ImagePlus,
   Keyboard,
   LoaderCircle,
   LockKeyhole,
   Nfc,
+  Plus,
+  PlusCircle,
+  Search,
+  ShieldAlert,
   ShieldCheck,
   Upload,
+  UserCheck,
   UserRound,
   X,
 } from "lucide-react";
@@ -1629,6 +1637,8 @@ function AssistedAttendanceModal({
     void onConfirm(selectedUserId, effectiveReason);
   };
 
+  const selectedEmployee = data.activeEmployees.find((e) => e.userId === selectedUserId);
+
   return (
     <div
       className="assisted-modal-backdrop"
@@ -1644,106 +1654,163 @@ function AssistedAttendanceModal({
         aria-labelledby="assisted-heading"
       >
         <div className="assisted-modal-header">
-          <div>
-            <h3 id="assisted-heading">Assisted Attendance</h3>
-            <div className="assisted-admin-card-tag" style={{ marginTop: 4 }}>
-              Admin Card: <strong>{data.adminCard.label || data.adminCard.rfidUid}</strong>
+          <div className="assisted-modal-title-wrap">
+            <div className="assisted-modal-icon" aria-hidden="true">
+              <ShieldCheck size={22} />
+            </div>
+            <div>
+              <p className="section-kicker">Kiosk assist mode</p>
+              <h3 id="assisted-heading">Assisted Attendance</h3>
+              <p className="assisted-modal-subtitle">
+                Admin Card: <span className="assisted-admin-card-tag">{data.adminCard.label || data.adminCard.rfidUid}</span>
+              </p>
             </div>
           </div>
-          <div className="assisted-timer" aria-live="polite">
-            Auto-cancels in {timeLeft}s
+          <div className="assisted-timer-pill" aria-live="polite" title="Auto-closes if no action is taken">
+            <Clock size={13} /> Auto-cancels in {timeLeft}s
           </div>
         </div>
+
         <div className="assisted-modal-body">
           {error && <p className="dashboard-alert">{error}</p>}
-          <label className="field-label" htmlFor="assisted-search">
-            Select Employee:
-          </label>
-          <input
-            id="assisted-search"
-            type="text"
-            className="input"
-            placeholder="Search employee by name or department…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            autoFocus
-          />
-          <div className="employee-picker-list" role="listbox" aria-label="Active employees">
-            {filteredEmployees.length === 0 ? (
-              <div style={{ padding: "12px", textAlign: "center", color: "var(--muted)" }}>
-                No active employees found.
-              </div>
-            ) : (
-              filteredEmployees.map((emp) => {
-                const isSelected = selectedUserId === emp.userId;
-                return (
-                  <button
-                    key={emp.userId}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    className={`employee-picker-item ${isSelected ? "is-selected" : ""}`}
-                    onClick={() => setSelectedUserId(emp.userId)}
-                  >
-                    <div>
-                      <strong>{emp.fullName}</strong>
-                      <small style={{ display: "block", color: "var(--muted)" }}>
-                        {emp.userId} {emp.department ? `· ${emp.department}` : ""}
-                      </small>
-                    </div>
-                    {isSelected && <Check size={16} color="var(--gold-bright)" />}
-                  </button>
-                );
-              })
-            )}
+
+          <div className="modal-audit-callout">
+            <ShieldAlert size={16} />
+            <span>Select the employee to record attendance for. This scan will be signed in the audit log under this admin card.</span>
           </div>
-          <div>
-            <label className="field-label" htmlFor="assisted-reason-select">
-              Reason:
+
+          <div className="modal-section-group">
+            <label className="field-label" htmlFor="assisted-search">
+              <span>Select Employee</span>
+              {selectedEmployee && (
+                <span style={{ color: "var(--gold-bright)", fontWeight: 400, fontSize: "0.72rem" }}>
+                  Selected: {selectedEmployee.fullName}
+                </span>
+              )}
             </label>
-            <select
-              id="assisted-reason-select"
-              className="select"
-              value={reasonType}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val === "Forgot RFID card" || val === "Defective RFID card" || val === "Other") {
-                  setReasonType(val);
-                }
-              }}
-            >
-              <option value="Forgot RFID card">Forgot RFID card</option>
-              <option value="Defective RFID card">Defective RFID card</option>
-              <option value="Other">Other reason</option>
-            </select>
+            <div className="search-input-wrap">
+              <Search size={16} />
+              <input
+                id="assisted-search"
+                type="text"
+                className="input"
+                placeholder="Search employee by name, ID, or department…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="employee-picker-list" role="listbox" aria-label="Active employees">
+              {filteredEmployees.length === 0 ? (
+                <div style={{ padding: "20px 12px", textAlign: "center", color: "var(--muted)", fontSize: "0.82rem" }}>
+                  No active employees found matching &ldquo;{search}&rdquo;.
+                </div>
+              ) : (
+                filteredEmployees.map((emp) => {
+                  const isSelected = selectedUserId === emp.userId;
+                  const initials = emp.fullName
+                    .split(" ")
+                    .map((n) => n[0])
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join("")
+                    .toUpperCase();
+                  return (
+                    <button
+                      key={emp.userId}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      className={`employee-picker-item ${isSelected ? "is-selected" : ""}`}
+                      onClick={() => setSelectedUserId(emp.userId)}
+                    >
+                      <div style={{ display: "flex", alignItems: "center" }}>
+                        <div className="employee-picker-avatar" aria-hidden="true">
+                          {initials}
+                        </div>
+                        <div className="employee-picker-meta">
+                          <strong>{emp.fullName}</strong>
+                          <small>
+                            {emp.userId} {emp.department ? `· ${emp.department}` : ""}
+                          </small>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <div style={{ display: "grid", placeItems: "center", width: 24, height: 24, borderRadius: "50%", background: "var(--gold)", color: "#11100c" }}>
+                          <Check size={14} strokeWidth={3} />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
+
+          <div className="modal-section-group">
+            <span className="field-label">Reason for assisted scan:</span>
+            <div className="reason-pill-group" role="radiogroup" aria-label="Reason for assisted scan">
+              <button
+                type="button"
+                className={`reason-pill-btn ${reasonType === "Forgot RFID card" ? "is-active" : ""}`}
+                onClick={() => setReasonType("Forgot RFID card")}
+              >
+                Forgot RFID card
+              </button>
+              <button
+                type="button"
+                className={`reason-pill-btn ${reasonType === "Defective RFID card" ? "is-active" : ""}`}
+                onClick={() => setReasonType("Defective RFID card")}
+              >
+                Defective RFID card
+              </button>
+              <button
+                type="button"
+                className={`reason-pill-btn ${reasonType === "Other" ? "is-active" : ""}`}
+                onClick={() => setReasonType("Other")}
+              >
+                Other reason…
+              </button>
+            </div>
+          </div>
+
           {reasonType === "Other" && (
-            <div>
+            <div className="modal-section-group">
               <label className="field-label" htmlFor="assisted-custom-reason">
-                Custom reason (mandatory):
+                Custom reason (mandatory for audit trail):
               </label>
               <input
                 id="assisted-custom-reason"
                 type="text"
                 className="input"
-                placeholder="Enter reason…"
+                placeholder="Explain why assisted attendance was required…"
                 value={customReason}
                 onChange={(e) => setCustomReason(e.target.value)}
+                autoFocus
               />
             </div>
           )}
         </div>
+
         <div className="assisted-modal-footer">
-          <button className="panel-button" type="button" onClick={onClose} disabled={busy}>
+          <button className="modal-btn-cancel" type="button" onClick={onClose} disabled={busy}>
             Cancel
           </button>
           <button
-            className="panel-button is-primary"
+            className="modal-btn-primary"
             type="button"
             onClick={handleConfirm}
             disabled={!canConfirm}
           >
-            {busy ? "Recording…" : "Confirm attendance"}
+            {busy ? (
+              <>
+                <LoaderCircle className="spin" size={16} /> Recording…
+              </>
+            ) : (
+              <>
+                <UserCheck size={16} /> Confirm attendance
+              </>
+            )}
           </button>
         </div>
       </section>
@@ -3035,135 +3102,221 @@ function UserEditor({
           </p>
         )}
         <form onSubmit={save}>
-          <label>
-            User ID
-            <input
-              required
-              disabled={Boolean(editing)}
-              value={form.userId}
-              onChange={(e) =>
-                setForm({ ...form, userId: e.target.value.toUpperCase() })
-              }
-              onBlur={() =>
-                setForm((f) => ({
-                  ...f,
-                  userId: f.userId.trim().toUpperCase(),
-                }))
-              }
-            />
-          </label>
-          <label>
-            RFID UID
-            <input
-              required
-              value={form.rfidUid}
-              onChange={(e) =>
-                setForm({ ...form, rfidUid: e.target.value.toUpperCase() })
-              }
-              onBlur={() =>
-                setForm((f) => ({
-                  ...f,
-                  rfidUid: f.rfidUid.trim().toUpperCase(),
-                }))
-              }
-            />
-          </label>
-          <label>
-            Full name
-            <input
-              required
-              value={form.fullName}
-              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-              onBlur={() =>
-                setForm((f) => ({ ...f, fullName: normalizeName(f.fullName) }))
-              }
-            />
-          </label>
-          <label>
-            Department
-            <input
-              value={form.department ?? ""}
-              onChange={(e) => setForm({ ...form, department: e.target.value })}
-              onBlur={() =>
-                setForm((f) => ({
-                  ...f,
-                  department: f.department
-                    ? f.department.trim().replace(/\s+/g, " ")
-                    : "",
-                }))
-              }
-            />
-          </label>
-          <label>
-            Employee type
-            <select
-              value={form.employeeType}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  employeeType: e.target.value === "EMPLOYEE" ? "EMPLOYEE" : "INTERN",
-                  dailyRate:
-                    e.target.value === "INTERN" ? null : form.dailyRate,
-                  payrollProfileId:
-                    e.target.value === "INTERN"
-                      ? (form.payrollProfileId ?? "BEA_STANDARD")
-                      : null,
-                })
-              }
-            >
-              <option value="INTERN">Intern</option>
-              <option value="EMPLOYEE">Employee</option>
-            </select>
-          </label>
-          <label>
-            Gender
-            <select
-              value={form.gender ?? ""}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  gender: e.target.value === "MALE" ? "MALE" : e.target.value === "FEMALE" ? "FEMALE" : null,
-                })
-              }
-            >
-              <option value="">Not set</option>
-              <option value="MALE">Male</option>
-              <option value="FEMALE">Female</option>
-            </select>
-          </label>
-          {form.employeeType === "EMPLOYEE" && (
-            <>
-              <label>
-                Daily rate (PHP)
+          <div className="card-type-toggle" role="radiogroup" aria-label="Register user as:">
+            <span className="field-label">Card assignment type:</span>
+            <div className="segmented-control">
+              <label className={`segment-option ${form.cardType !== "ADMIN_ASSIST" ? "is-selected" : ""}`}>
                 <input
-                  required
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={form.dailyRate ?? ""}
-                  onChange={(e) =>
+                  type="radio"
+                  name="userCardType"
+                  value="EMPLOYEE"
+                  checked={form.cardType !== "ADMIN_ASSIST"}
+                  onChange={() => setForm({ ...form, cardType: "EMPLOYEE" })}
+                />
+                Employee card
+              </label>
+              <label className={`segment-option is-admin-card ${form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="userCardType"
+                  value="ADMIN_ASSIST"
+                  checked={form.cardType === "ADMIN_ASSIST"}
+                  onChange={() =>
                     setForm({
                       ...form,
-                      dailyRate: Number(e.target.value) || null,
+                      cardType: "ADMIN_ASSIST",
+                      userId: form.userId || (form.rfidUid ? `ADMIN_CARD_${form.rfidUid}` : ""),
                     })
+                  }
+                />
+                <ShieldCheck size={14} /> Admin RFID card
+              </label>
+            </div>
+          </div>
+
+          {form.cardType === "ADMIN_ASSIST" ? (
+            <>
+              <div className="modal-audit-callout" style={{ marginBottom: 12 }}>
+                <ShieldAlert size={16} />
+                <span>Admin RFID cards allow supervisors to perform assisted clock-ins at the kiosk. They do not record attendance for themselves.</span>
+              </div>
+              <label>
+                Card label
+                <input
+                  required
+                  placeholder="e.g. Front desk master card #1"
+                  value={form.fullName}
+                  onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                />
+              </label>
+              <label>
+                RFID UID
+                <input
+                  required
+                  value={form.rfidUid}
+                  onChange={(e) =>
+                    setForm({ ...form, rfidUid: e.target.value.toUpperCase() })
+                  }
+                  onBlur={() =>
+                    setForm((f) => ({
+                      ...f,
+                      rfidUid: f.rfidUid.trim().toUpperCase(),
+                      userId: f.userId || `ADMIN_CARD_${f.rfidUid.trim().toUpperCase()}`,
+                    }))
                   }
                 />
               </label>
               <label>
-                Payroll calculation
-                <select
-                  value={form.payrollProfileId ?? "BEA_STANDARD"}
+                Identifier / User ID
+                <input
+                  required
+                  disabled={Boolean(editing)}
+                  value={form.userId}
                   onChange={(e) =>
-                    setForm({ ...form, payrollProfileId: e.target.value })
+                    setForm({ ...form, userId: e.target.value.toUpperCase() })
+                  }
+                  onBlur={() =>
+                    setForm((f) => ({
+                      ...f,
+                      userId: f.userId.trim().toUpperCase(),
+                    }))
+                  }
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <label>
+                User ID
+                <input
+                  required
+                  disabled={Boolean(editing)}
+                  value={form.userId}
+                  onChange={(e) =>
+                    setForm({ ...form, userId: e.target.value.toUpperCase() })
+                  }
+                  onBlur={() =>
+                    setForm((f) => ({
+                      ...f,
+                      userId: f.userId.trim().toUpperCase(),
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                RFID UID
+                <input
+                  required
+                  value={form.rfidUid}
+                  onChange={(e) =>
+                    setForm({ ...form, rfidUid: e.target.value.toUpperCase() })
+                  }
+                  onBlur={() =>
+                    setForm((f) => ({
+                      ...f,
+                      rfidUid: f.rfidUid.trim().toUpperCase(),
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                Full name
+                <input
+                  required
+                  value={form.fullName}
+                  onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                  onBlur={() =>
+                    setForm((f) => ({ ...f, fullName: normalizeName(f.fullName) }))
+                  }
+                />
+              </label>
+              <label>
+                Department
+                <input
+                  value={form.department ?? ""}
+                  onChange={(e) => setForm({ ...form, department: e.target.value })}
+                  onBlur={() =>
+                    setForm((f) => ({
+                      ...f,
+                      department: f.department
+                        ? f.department.trim().replace(/\s+/g, " ")
+                        : "",
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                Employee type
+                <select
+                  value={form.employeeType}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      employeeType: e.target.value === "EMPLOYEE" ? "EMPLOYEE" : "INTERN",
+                      dailyRate:
+                        e.target.value === "INTERN" ? null : form.dailyRate,
+                      payrollProfileId:
+                        e.target.value === "INTERN"
+                          ? (form.payrollProfileId ?? "BEA_STANDARD")
+                          : null,
+                    })
                   }
                 >
-                  {profiles.map((profile) => (
-                    <option key={profile.profileId} value={profile.profileId}>
-                      {profile.label}
-                    </option>
-                  ))}
+                  <option value="INTERN">Intern</option>
+                  <option value="EMPLOYEE">Employee</option>
                 </select>
               </label>
+              <label>
+                Gender
+                <select
+                  value={form.gender ?? ""}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      gender: e.target.value === "MALE" ? "MALE" : e.target.value === "FEMALE" ? "FEMALE" : null,
+                    })
+                  }
+                >
+                  <option value="">Not set</option>
+                  <option value="MALE">Male</option>
+                  <option value="FEMALE">Female</option>
+                </select>
+              </label>
+              {form.employeeType === "EMPLOYEE" && (
+                <>
+                  <label>
+                    Daily rate (PHP)
+                    <input
+                      required
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={form.dailyRate ?? ""}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          dailyRate: Number(e.target.value) || null,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Payroll calculation
+                    <select
+                      value={form.payrollProfileId ?? "BEA_STANDARD"}
+                      onChange={(e) =>
+                        setForm({ ...form, payrollProfileId: e.target.value })
+                      }
+                    >
+                      {profiles.map((profile) => (
+                        <option key={profile.profileId} value={profile.profileId}>
+                          {profile.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
             </>
           )}
           <label>
@@ -3191,7 +3344,7 @@ function UserEditor({
         <div className="table-header-bar">
           <div className="table-selection-count">
             {selectedUserIds.size > 0 ? (
-              <span>{selectedUserIds.size} of {users.length} user(s) selected</span>
+              <span className="table-selection-badge">{selectedUserIds.size} of {users.length} user(s) selected</span>
             ) : (
               <span>Total users: {users.length}</span>
             )}
@@ -3287,10 +3440,15 @@ function UserEditor({
                   </td>
                   <td>
                     {user.cardType === "ADMIN_ASSIST" ? (
-                      <div className="user-info-admin-card">
-                        <span className="badge badge-admin-card">Admin RFID Card</span>
-                        <strong>{user.fullName}</strong>
-                        <small>{user.userId}</small>
+                      <div style={{ display: "flex", alignItems: "center" }}>
+                        <div className="user-photo user-photo-admin-card" aria-label="Admin RFID Card" title="Admin RFID Card">
+                          <ShieldCheck size={18} />
+                        </div>
+                        <div className="user-info-admin-card">
+                          <span className="badge badge-admin-card">Admin RFID Card</span>
+                          <strong>{user.fullName}</strong>
+                          <small>{user.userId}</small>
+                        </div>
                       </div>
                     ) : (
                       <>
@@ -4366,7 +4524,7 @@ function PayrollTable({
       <div className="payroll-table-header-bar">
         <div className="payroll-selection-count">
           {selectedIds.size > 0 ? (
-            <span>{selectedIds.size} of {records.length} payroll record(s) selected</span>
+            <span className="table-selection-badge">{selectedIds.size} of {records.length} payroll record(s) selected</span>
           ) : (
             <span>Total records: {records.length}</span>
           )}
@@ -5199,26 +5357,31 @@ function AdminAttendance({
             >
               Missed <span className="filter-pill-count">{counts.missed}</span>
             </button>
+            <div className="filter-pills-divider" role="separator" />
             <button
-              className={`filter-pill ${sourceFilter === "ADMIN_ASSISTED_SCAN" ? "is-active" : ""}`}
+              className={`filter-pill is-assisted ${sourceFilter === "ADMIN_ASSISTED_SCAN" ? "is-active" : ""}`}
               type="button"
+              title="Show only kiosk scans assisted by an administrator"
               onClick={() =>
                 setSourceFilter(
                   sourceFilter === "ADMIN_ASSISTED_SCAN" ? "" : "ADMIN_ASSISTED_SCAN",
                 )
               }
             >
+              <UserCheck size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
               Assisted <span className="filter-pill-count">{counts.assisted}</span>
             </button>
             <button
-              className={`filter-pill ${sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "is-active" : ""}`}
+              className={`filter-pill is-backdated ${sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "is-active" : ""}`}
               type="button"
+              title="Show only backdated attendance manually entered by an administrator"
               onClick={() =>
                 setSourceFilter(
                   sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "" : "ADMIN_BACKDATED_ENTRY",
                 )
               }
             >
+              <History size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
               Backdated <span className="filter-pill-count">{counts.backdated}</span>
             </button>
           </div>
@@ -5267,11 +5430,12 @@ function AdminAttendance({
             </select>
           </label>
           <button
-            className="admin-button is-primary"
+            className="admin-button-primary"
             type="button"
+            aria-label="+ Add missed attendance"
             onClick={() => setBackdatedModalOpen(true)}
           >
-            + Add missed attendance
+            <Plus size={15} /> Add missed attendance
           </button>
           <button
             className="admin-button"
@@ -5296,7 +5460,7 @@ function AdminAttendance({
       <div className="table-header-bar">
         <div className="table-selection-count">
           {selectedAttendanceIds.size > 0 ? (
-            <span>{selectedAttendanceIds.size} of {filteredRows.length} attendance record(s) selected</span>
+            <span className="table-selection-badge">{selectedAttendanceIds.size} of {filteredRows.length} attendance record(s) selected</span>
           ) : (
             <span>Total records: {filteredRows.length}</span>
           )}
@@ -5511,105 +5675,132 @@ function BackdatedAttendanceModal({
         aria-labelledby="backdated-heading"
       >
         <div className="assisted-modal-header">
-          <div>
-            <h3 id="backdated-heading">Add Missed Attendance</h3>
-            <small style={{ color: "var(--muted)" }}>Backdated manual entry for past dates</small>
+          <div className="assisted-modal-title-wrap">
+            <div className="assisted-modal-icon icon-purple" aria-hidden="true">
+              <CalendarPlus size={22} />
+            </div>
+            <div>
+              <p className="section-kicker">Attendance override</p>
+              <h3 id="backdated-heading">Add Missed Attendance</h3>
+              <p className="assisted-modal-subtitle">
+                Create a past-date entry with verified time-in and audit record
+              </p>
+            </div>
           </div>
           <button
             className="icon-button"
             type="button"
             onClick={onClose}
-            aria-label="Close"
-            style={{ background: "transparent", border: "none", color: "var(--foreground)", cursor: "pointer" }}
+            aria-label="Close dialog"
           >
             <X size={18} />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="assisted-modal-body">
-          {error && <p className="dashboard-alert">{error}</p>}
-          <div>
-            <label className="field-label" htmlFor="backdated-employee">
-              Employee:
-            </label>
-            <select
-              id="backdated-employee"
-              className="select"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              required
-            >
-              {activeEmployees.map((emp) => (
-                <option key={emp.userId} value={emp.userId}>
-                  {emp.fullName} ({emp.userId}){emp.department ? ` — ${emp.department}` : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="field-label" htmlFor="backdated-date">
-              Attendance Date (past date only):
-            </label>
-            <input
-              id="backdated-date"
-              type="date"
-              className="input"
-              max={yesterday}
-              value={attendanceDate}
-              onChange={(e) => setAttendanceDate(e.target.value)}
-              required
-            />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <div>
-              <label className="field-label" htmlFor="backdated-time-in">
-                Time In:
+
+        <form onSubmit={handleSubmit}>
+          <div className="assisted-modal-body">
+            {error && <p className="dashboard-alert">{error}</p>}
+
+            <div className="modal-audit-callout purple-callout">
+              <History size={16} />
+              <span>Backdated attendance entries are permanently tagged with an audit badge and linked to your administrator session in reports and sync logs.</span>
+            </div>
+
+            <div className="modal-section-group">
+              <label className="field-label" htmlFor="backdated-employee">
+                Employee:
+              </label>
+              <select
+                id="backdated-employee"
+                className="select"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                required
+              >
+                {activeEmployees.map((emp) => (
+                  <option key={emp.userId} value={emp.userId}>
+                    {emp.fullName} ({emp.userId}){emp.department ? ` — ${emp.department}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="modal-section-group">
+              <label className="field-label" htmlFor="backdated-date">
+                Attendance Date (past date only):
               </label>
               <input
-                id="backdated-time-in"
-                type="time"
+                id="backdated-date"
+                type="date"
                 className="input"
-                value={timeIn}
-                onChange={(e) => setTimeIn(e.target.value)}
+                max={yesterday}
+                value={attendanceDate}
+                onChange={(e) => setAttendanceDate(e.target.value)}
                 required
               />
             </div>
-            <div>
-              <label className="field-label" htmlFor="backdated-time-out">
-                Time Out (optional):
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              <div className="modal-section-group">
+                <label className="field-label" htmlFor="backdated-time-in">
+                  Time In
+                </label>
+                <input
+                  id="backdated-time-in"
+                  type="time"
+                  className="input"
+                  value={timeIn}
+                  onChange={(e) => setTimeIn(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="modal-section-group">
+                <label className="field-label" htmlFor="backdated-time-out">
+                  Time Out <span style={{ color: "var(--quiet)", fontWeight: 400 }}>(optional)</span>
+                </label>
+                <input
+                  id="backdated-time-out"
+                  type="time"
+                  className="input"
+                  value={timeOut}
+                  onChange={(e) => setTimeOut(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="modal-section-group">
+              <label className="field-label" htmlFor="backdated-reason">
+                Reason (mandatory audit trail):
               </label>
-              <input
-                id="backdated-time-out"
-                type="time"
+              <textarea
+                id="backdated-reason"
                 className="input"
-                value={timeOut}
-                onChange={(e) => setTimeOut(e.target.value)}
+                placeholder="e.g. Employee forgot RFID card at home and reported in person to supervisor at 8:00 AM…"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                required
               />
             </div>
           </div>
-          <div>
-            <label className="field-label" htmlFor="backdated-reason">
-              Reason (mandatory audit trail):
-            </label>
-            <textarea
-              id="backdated-reason"
-              className="input"
-              style={{ minHeight: 70, resize: "vertical" }}
-              placeholder="State reason for missed attendance..."
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              required
-            />
-          </div>
-          <div className="assisted-modal-footer" style={{ padding: "12px 0 0 0" }}>
-            <button className="panel-button" type="button" onClick={onClose} disabled={busy}>
+
+          <div className="assisted-modal-footer">
+            <button className="modal-btn-cancel" type="button" onClick={onClose} disabled={busy}>
               Cancel
             </button>
             <button
-              className="panel-button is-primary"
+              className="modal-btn-primary"
               type="submit"
               disabled={busy || !userId || !attendanceDate || !timeIn || !reason.trim()}
             >
-              {busy ? "Saving…" : "Add missed attendance"}
+              {busy ? (
+                <>
+                  <LoaderCircle className="spin" size={16} /> Saving…
+                </>
+              ) : (
+                <>
+                  <PlusCircle size={16} /> Add missed attendance
+                </>
+              )}
             </button>
           </div>
         </form>
@@ -5837,18 +6028,21 @@ function AttendanceEditRow({
           <strong>{row.fullName}</strong>
           <small>{row.userId}</small>
           {row.source === "ADMIN_ASSISTED_SCAN" && (
-            <span className="badge badge-assisted" style={{ display: "inline-block", marginTop: 4 }}>
-              Assisted by {row.recordedBy || "Admin"}
+            <span
+              className="badge badge-assisted"
+              title={`Kiosk scan assisted by: ${row.recordedBy || "Admin"}${row.recordedReason ? ` (${row.recordedReason})` : ""}`}
+              style={{ display: "inline-flex", marginTop: 4 }}
+            >
+              <UserCheck size={11} /> Assisted by {row.recordedBy || "Admin"}
             </span>
           )}
           {row.source === "ADMIN_BACKDATED_ENTRY" && (
             <span
               className="badge badge-backdated"
-              title={row.recordedReason || undefined}
-              style={{ display: "inline-block", marginTop: 4 }}
+              title={`Backdated manual entry by: ${row.recordedBy || "Admin"}${row.recordedReason ? ` — Reason: ${row.recordedReason}` : ""}`}
+              style={{ display: "inline-flex", marginTop: 4 }}
             >
-              Backdated entry by {row.recordedBy || "Admin"}
-              {row.recordedReason ? ` — ${row.recordedReason}` : ""}
+              <History size={11} /> Backdated entry by {row.recordedBy || "Admin"}{row.recordedReason ? ` — ${row.recordedReason}` : ""}
             </span>
           )}
         </td>

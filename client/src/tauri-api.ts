@@ -64,6 +64,8 @@ export const tauriApi = {
   ttsSpeak: (text: string, options?: TtsSpeakOptions) => invoke<TtsSpeakResult>('tts_speak', { text, options }),
   ttsStop: () => invoke<void>('tts_stop'),
   ttsStatus: () => invoke<TtsStatusResponse>('tts_status'),
+  autostartStatus: () => invoke<boolean>('autostart_status'),
+  autostartSet: (enabled: boolean) => invoke<boolean>('autostart_set', { enabled }),
 };
 
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));

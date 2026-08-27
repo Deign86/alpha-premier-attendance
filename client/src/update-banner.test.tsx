@@ -161,5 +161,18 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
         screen.getByText(/Automatic background checks are disabled for this kiosk terminal/i),
       ).toBeInTheDocument();
     });
+
+    it('renders and toggles system autostart checkbox', async () => {
+      render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
+
+      const autostartCheckbox = screen.getByRole('checkbox', {
+        name: /Start Alpha Premier Attendance automatically on Windows startup/i,
+      });
+      expect(autostartCheckbox).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(autostartCheckbox);
+      });
+    });
   });
 });
