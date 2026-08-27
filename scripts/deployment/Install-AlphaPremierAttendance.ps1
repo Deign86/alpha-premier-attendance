@@ -30,7 +30,7 @@ param(
     [string]$InstallDir
 )
 
-Set-StrictMode -Version 2.0
+# Set-StrictMode is omitted to prevent PropertyNotFoundException on heterogeneous Windows registry objects
 $ErrorActionPreference = "Stop"
 
 # --- Constants & Configuration ---
@@ -110,7 +110,7 @@ $installerVersion = $null
 try {
     if ($installer.Extension -ieq ".exe") {
         $fileVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installer.FullName)
-        if ($fileVersionInfo.ProductVersion) {
+        if ($fileVersionInfo -and $fileVersionInfo.ProductVersion) {
             $rawVer = ($fileVersionInfo.ProductVersion -split '-')[0].Trim()
             $installerVersion = [version]$rawVer
         }
@@ -122,22 +122,28 @@ try {
 function Get-InstalledAppInfo {
     $registryPaths = @(
         "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+        "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
     
-    $installed = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
-        Where-Object {
-            ($_.DisplayName -and $_.DisplayName -like "*Alpha Premier Attendance*") -or
-            ($_.PSChildName -and $_.PSChildName -eq "com.alphapremier.attendance")
-        } | Select-Object -First 1
+    $items = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue
+    if (-not $items) { return $null }
 
-    return $installed
+    foreach ($item in $items) {
+        $displayName = if ($item.PSObject.Properties['DisplayName']) { [string]$item.DisplayName } else { "" }
+        $childName = if ($item.PSObject.Properties['PSChildName']) { [string]$item.PSChildName } else { "" }
+        if (($displayName -and $displayName -like "*Alpha Premier Attendance*") -or ($childName -eq "com.alphapremier.attendance")) {
+            return $item
+        }
+    }
+    return $null
 }
 
 $currentInstall = Get-InstalledAppInfo
 if ($currentInstall) {
-    $installedVerStr = $currentInstall.DisplayVersion
-    Write-Log "Detected existing installation: '$($currentInstall.DisplayName)' Version: '$installedVerStr'"
+    $currentName = if ($currentInstall.PSObject.Properties['DisplayName']) { [string]$currentInstall.DisplayName } else { $AppName }
+    $installedVerStr = if ($currentInstall.PSObject.Properties['DisplayVersion']) { [string]$currentInstall.DisplayVersion } else { "" }
+    Write-Log "Detected existing installation: '$currentName' Version: '$installedVerStr'"
     
     if (-not $Force -and $installerVersion -and $installedVerStr) {
         try {
@@ -167,10 +173,13 @@ $wv2Paths = @(
 )
 foreach ($regPath in $wv2Paths) {
     $wv2Key = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-    if ($wv2Key -and $wv2Key.pv -and $wv2Key.pv -ne "0.0.0.0") {
-        Write-Log "Microsoft Edge WebView2 Runtime detected (Version: $($wv2Key.pv))."
-        $webView2Installed = $true
-        break
+    if ($wv2Key -and $wv2Key.PSObject.Properties['pv']) {
+        $pvVal = [string]$wv2Key.pv
+        if ($pvVal -and $pvVal -ne "0.0.0.0") {
+            Write-Log "Microsoft Edge WebView2 Runtime detected (Version: $pvVal)."
+            $webView2Installed = $true
+            break
+        }
     }
 }
 if (-not $webView2Installed) {

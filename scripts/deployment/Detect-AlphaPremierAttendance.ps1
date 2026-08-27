@@ -34,20 +34,28 @@ $registryPaths = @(
 )
 
 try {
-    $installed = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
-        Where-Object {
-            ($_.DisplayName -and $_.DisplayName -like "*Alpha Premier Attendance*") -or
-            ($_.PSChildName -and $_.PSChildName -eq "com.alphapremier.attendance")
-        } | Select-Object -First 1
+    $items = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue
+    $installed = $null
+    if ($items) {
+        foreach ($item in $items) {
+            $disp = if ($item.PSObject.Properties['DisplayName']) { [string]$item.DisplayName } else { "" }
+            $child = if ($item.PSObject.Properties['PSChildName']) { [string]$item.PSChildName } else { "" }
+            if (($disp -and $disp -like "*Alpha Premier Attendance*") -or ($child -eq "com.alphapremier.attendance")) {
+                $installed = $item
+                break
+            }
+        }
+    }
 
     if (-not $installed) {
         Write-Output "DETECTION: 'Alpha Premier Attendance' not found in registry. Exit 1."
         exit 1
     }
 
-    $installedVerStr = $installed.DisplayVersion
+    $dispName = if ($installed.PSObject.Properties['DisplayName']) { [string]$installed.DisplayName } else { "Alpha Premier Attendance" }
+    $installedVerStr = if ($installed.PSObject.Properties['DisplayVersion']) { [string]$installed.DisplayVersion } else { "" }
     if (-not $installedVerStr) {
-        Write-Output "DETECTION: 'Alpha Premier Attendance' is installed, but DisplayVersion is empty. Exit 1."
+        Write-Output "DETECTION: '$dispName' is installed, but DisplayVersion is empty. Exit 1."
         exit 1
     }
 
@@ -59,10 +67,10 @@ try {
     $vExpected = [version]$cleanExpected
 
     if ($vInstalled -ge $vExpected) {
-        Write-Output "DETECTION SUCCESS: Found '$($installed.DisplayName)' Version $installedVerStr (meets or exceeds target $ExpectedVersion). Exit 0."
+        Write-Output "DETECTION SUCCESS: Found '$dispName' Version $installedVerStr (meets or exceeds target $ExpectedVersion). Exit 0."
         exit 0
     } else {
-        Write-Output "DETECTION OUTDATED: Found '$($installed.DisplayName)' Version $installedVerStr (target is $ExpectedVersion). Exit 1."
+        Write-Output "DETECTION OUTDATED: Found '$dispName' Version $installedVerStr (target is $ExpectedVersion). Exit 1."
         exit 1
     }
 } catch {

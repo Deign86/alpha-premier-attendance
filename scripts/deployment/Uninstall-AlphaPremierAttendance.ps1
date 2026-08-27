@@ -23,7 +23,7 @@ param(
     [switch]$KeepData
 )
 
-Set-StrictMode -Version 2.0
+# Set-StrictMode is omitted to prevent PropertyNotFoundException on heterogeneous Windows registry objects
 $ErrorActionPreference = "Stop"
 
 # --- Constants & Configuration ---
@@ -58,17 +58,27 @@ Write-Log "Starting uninstallation of $AppName via Action1 RMM script"
 Write-Log "Running as User: $env:USERNAME on Machine: $env:COMPUTERNAME"
 
 # --- Step 1: Locate Installed Application in Registry ---
-$registryPaths = @(
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-    "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
-)
-
-$installedEntries = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
-    Where-Object {
-        ($_.DisplayName -and $_.DisplayName -like "*Alpha Premier Attendance*") -or
-        ($_.PSChildName -and $_.PSChildName -eq "com.alphapremier.attendance")
+function Get-InstalledEntries {
+    $registryPaths = @(
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    $items = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue
+    $matched = @()
+    if ($items) {
+        foreach ($item in $items) {
+            $displayName = if ($item.PSObject.Properties['DisplayName']) { [string]$item.DisplayName } else { "" }
+            $childName = if ($item.PSObject.Properties['PSChildName']) { [string]$item.PSChildName } else { "" }
+            if (($displayName -and $displayName -like "*Alpha Premier Attendance*") -or ($childName -eq "com.alphapremier.attendance")) {
+                $matched += $item
+            }
+        }
     }
+    return $matched
+}
+
+$installedEntries = Get-InstalledEntries
 
 if (-not $installedEntries -or $installedEntries.Count -eq 0) {
     Write-Log "No installation of $AppName found in registry. Nothing to uninstall (Idempotent success)." "SUCCESS"
@@ -78,11 +88,12 @@ if (-not $installedEntries -or $installedEntries.Count -eq 0) {
 $exitCode = 0
 
 foreach ($entry in $installedEntries) {
-    $displayName = $entry.DisplayName
-    $displayVersion = $entry.DisplayVersion
-    $uninstallString = $entry.UninstallString
-    $quietUninstallString = $entry.QuietUninstallString
-    $installLocation = $entry.InstallLocation
+    $displayName = if ($entry.PSObject.Properties['DisplayName']) { [string]$entry.DisplayName } else { $AppName }
+    $displayVersion = if ($entry.PSObject.Properties['DisplayVersion']) { [string]$entry.DisplayVersion } else { "" }
+    $uninstallString = if ($entry.PSObject.Properties['UninstallString']) { [string]$entry.UninstallString } else { "" }
+    $quietUninstallString = if ($entry.PSObject.Properties['QuietUninstallString']) { [string]$entry.QuietUninstallString } else { "" }
+    $installLocation = if ($entry.PSObject.Properties['InstallLocation']) { [string]$entry.InstallLocation } else { "" }
+    $childName = if ($entry.PSObject.Properties['PSChildName']) { [string]$entry.PSChildName } else { "" }
 
     Write-Log "Found registered application: '$displayName' (Version: $displayVersion)"
 
@@ -100,9 +111,9 @@ foreach ($entry in $installedEntries) {
         }
         $proc = Start-Process -FilePath $cmd -ArgumentList $args -Wait -PassThru -NoNewWindow
         $exitCode = $proc.ExitCode
-    } elseif ($uninstallString -match 'msiexec(\.exe)?\s*(/I|/X)\s*({[0-9A-Fa-f-]+}|\S+)' -or $entry.PSChildName -match '^{[0-9A-Fa-f-]+}$') {
+    } elseif ($uninstallString -match 'msiexec(\.exe)?\s*(/I|/X)\s*({[0-9A-Fa-f-]+}|\S+)' -or $childName -match '^{[0-9A-Fa-f-]+}$') {
         # MSI uninstallation
-        $productCode = if ($entry.PSChildName -match '^{[0-9A-Fa-f-]+}$') { $entry.PSChildName } else { $matches[3] }
+        $productCode = if ($childName -match '^{[0-9A-Fa-f-]+}$') { $childName } else { $matches[3] }
         $msiLog = Join-Path -Path $LogDir -ChildPath "msi_uninstall.log"
         $msiArgs = @(
             "/x",
@@ -152,7 +163,7 @@ foreach ($sc in $shortcutPaths) {
             Remove-Item -Path $sc -Force -Recurse -ErrorAction SilentlyContinue
             Write-Log "Removed residual shortcut: $sc"
         } catch {
-            Write-Log "Could not remove shortcut $sc: $($_.Exception.Message)" "WARN"
+            Write-Log "Could not remove shortcut ${sc}: $($_.Exception.Message)" "WARN"
         }
     }
 }
@@ -169,7 +180,7 @@ foreach ($pfDir in $programFilesDirs) {
             Remove-Item -Path $pfDir -Force -Recurse -ErrorAction SilentlyContinue
             Write-Log "Removed residual directory: $pfDir"
         } catch {
-            Write-Log "Could not remove residual directory $pfDir: $($_.Exception.Message)" "WARN"
+            Write-Log "Could not remove residual directory ${pfDir}: $($_.Exception.Message)" "WARN"
         }
     }
 }
