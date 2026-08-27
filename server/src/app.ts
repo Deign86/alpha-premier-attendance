@@ -104,11 +104,11 @@ export function createApp(options: CreateAppOptions): express.Express {
     } catch { res.status(503).json({ success: false, requestId: req.requestId, error: { code: 'GOOGLE_SHEETS_UNAVAILABLE', message: 'Attendance data is temporarily unavailable.' } }); }
   });
 
-  app.post('/api/admin/unlock', (req, res) => {
+  app.post('/api/admin/unlock', async (req, res) => {
     try {
-      // SAFETY: Extracting pin property from request body
-      const pin = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as { pin?: unknown }).pin : undefined;
-      const result = admin.unlock(pin);
+      // SAFETY: Extracting pin or rfidUid property from request body
+      const pin = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as { pin?: unknown; rfidUid?: unknown }).pin ?? (req.body as { pin?: unknown; rfidUid?: unknown }).rfidUid : undefined;
+      const result = await admin.unlock(pin);
       res.setHeader('Set-Cookie', `rfid_admin=${result.token}; Max-Age=${(options.config.adminSessionMinutes ?? 15) * 60}; Path=/; HttpOnly; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
       res.json({ success: true, requestId: req.requestId, expiresAt: result.expiresAt });
     } catch (error) { sendAdminError(req, res, error); }
@@ -176,11 +176,11 @@ export function createApp(options: CreateAppOptions): express.Express {
     } catch (error) { sendAdminError(req, res, error); }
   });
 
-  app.post('/api/setup/unlock', (req, res) => {
+  app.post('/api/setup/unlock', async (req, res) => {
     try {
-      // SAFETY: Extracting pin property from request body
-      const pin = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as { pin?: unknown }).pin : undefined;
-      const result = setup.unlock(pin);
+      // SAFETY: Extracting pin or rfidUid property from request body
+      const pin = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as { pin?: unknown; rfidUid?: unknown }).pin ?? (req.body as { pin?: unknown; rfidUid?: unknown }).rfidUid : undefined;
+      const result = await setup.unlock(pin);
       res.status(200).json({ success: true, requestId: req.requestId, ...result });
     } catch (error) { sendSetupError(req, res, error); }
   });

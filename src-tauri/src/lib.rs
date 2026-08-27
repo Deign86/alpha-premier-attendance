@@ -2599,9 +2599,8 @@ async fn open_viewer_url(app: tauri::AppHandle, url: String) -> Result<(), Strin
     })
 }
 
-#[tauri::command]
-async fn setup_unlock(
-    state: State<'_, AppState>,
+async fn setup_unlock_impl(
+    state: &AppState,
     pin: String,
 ) -> Result<serde_json::Value, String> {
     let configured = state
@@ -2609,7 +2608,22 @@ async fn setup_unlock(
         .admin_pin
         .as_deref()
         .ok_or_else(|| "ADMIN_DISABLED".to_string())?;
-    if configured != pin {
+    let pin_trimmed = pin.trim();
+    let is_pin_match = configured == pin_trimmed;
+    let mut is_admin_card_match = false;
+    if !is_pin_match {
+        let uid = pin_trimmed.to_ascii_uppercase();
+        let row = sqlx::query(
+            "SELECT user_id FROM users WHERE (rfid_uid = ? OR user_id = ?) AND status = 'ACTIVE' AND card_type = 'ADMIN_ASSIST'",
+        )
+        .bind(&uid)
+        .bind(pin_trimmed)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+        is_admin_card_match = row.is_some();
+    }
+    if !is_pin_match && !is_admin_card_match {
         return Err("INVALID_ADMIN_PIN".into());
     }
     let token = uuid::Uuid::new_v4().to_string();
@@ -2622,6 +2636,14 @@ async fn setup_unlock(
     Ok(
         serde_json::json!({"success":true,"token":token,"expiresAt":chrono::Utc::now() + chrono::Duration::minutes(state.lan.admin_session_minutes as i64)}),
     )
+}
+
+#[tauri::command]
+async fn setup_unlock(
+    state: State<'_, AppState>,
+    pin: String,
+) -> Result<serde_json::Value, String> {
+    setup_unlock_impl(&state, pin).await
 }
 
 #[tauri::command]
@@ -4414,5 +4436,85 @@ mod tests {
         assert_eq!(super::normalize_name("o’neill"), "O’Neill");
         assert_eq!(super::normalize_name("ma. teresa"), "Ma. Teresa");
         assert_eq!(super::normalize_name(""), "");
+    }
+
+    #[tokio::test]
+    async fn test_admin_unlock_by_pin_or_admin_rfid() {
+        let temp = std::env::temp_dir().join(format!("alpha-admin-unlock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let data_dir = temp.clone();
+        let exports_dir = temp.join("exports");
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("2468".to_string());
+        lan.admin_session_minutes = 15;
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            exports_dir.clone(),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        // Insert an admin assist card and a regular employee card
+        super::upsert_user_record(
+            &state.db,
+            "ADMIN_CARD_ADDE23",
+            "ADDE23",
+            "Front Desk Admin",
+            Some("Admin"),
+            "ACTIVE",
+            "EMPLOYEE",
+            None,
+            None,
+            None,
+            None,
+            "ADMIN_ASSIST",
+            "2026-08-27T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        super::upsert_user_record(
+            &state.db,
+            "EMP_REGULAR",
+            "EEFF00",
+            "Regular Employee",
+            Some("Engineering"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-27T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        // 1. PIN unlock works
+        let res_pin = super::setup_unlock_impl(&state, "2468".to_string()).await;
+        assert!(res_pin.is_ok(), "Configured PIN should unlock admin session");
+
+        // 2. Admin RFID unlock works
+        let res_rfid = super::setup_unlock_impl(&state, "ADDE23".to_string()).await;
+        assert!(res_rfid.is_ok(), "Admin RFID card should unlock admin session");
+
+        // 3. Regular employee RFID is rejected
+        let res_emp = super::setup_unlock_impl(&state, "EEFF00".to_string()).await;
+        assert_eq!(res_emp.unwrap_err(), "INVALID_ADMIN_PIN");
+
+        // 4. Unknown string is rejected
+        let res_wrong = super::setup_unlock_impl(&state, "WRONG_PASS".to_string()).await;
+        assert_eq!(res_wrong.unwrap_err(), "INVALID_ADMIN_PIN");
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

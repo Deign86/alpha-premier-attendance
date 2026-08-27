@@ -36,3 +36,8 @@
   CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
   EXPECT: all suites pass with 0 errors
   EVIDENCE: `npm run lint:oxlint` passes with 0 warnings/errors; `npm run typecheck` passes across shared, client, server; `npm test` passes across all workspaces (200 tests); `cargo test` passes (138 tests, 0 failed).
+
+- [x] GATE-8: Admin RFID alternative login for Admin Panel and Setup Dialog (Password or Admin RFID scan)
+  CHECK: npm test -w server && npm test -w client && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all tests pass
+  EVIDENCE: Registered active `ADMIN_ASSIST` RFID card or admin PIN unlocks setup dialog and admin panel; invalid/regular cards rejected. 67 server tests, 138 client tests, 25 shared tests (230 total JS/TS tests) and 139 Rust tests passing with 0 failures.

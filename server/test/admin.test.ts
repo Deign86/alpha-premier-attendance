@@ -194,4 +194,24 @@ describe('admin and live attendance API', () => {
     }).expect(409);
     expect(dup.body.error.code).toBe('ATTENDANCE_ALREADY_EXISTS_FOR_DATE');
   });
+
+  it('allows unlocking Admin panel alternatively using a registered Admin RFID card', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'ADMIN_CARD_ADDE23', fullName: 'Front Desk Admin Card #1', rfidUid: 'ADDE23', department: 'Admin', active: true, cardType: 'ADMIN_ASSIST' },
+      { userId: 'EMP1', fullName: 'Regular Employee', rfidUid: 'EEFF00', department: 'Engineering', active: true, cardType: 'EMPLOYEE' },
+    ]);
+    const app = createApp({ sheets, config, logger: false });
+    const agent = request.agent(app);
+
+    // Reject non-admin RFID card for admin unlock
+    await agent.post('/api/admin/unlock').send({ pin: 'EEFF00' }).expect(401);
+
+    // Accept registered Admin RFID card
+    const res = await agent.post('/api/admin/unlock').send({ pin: 'ADDE23' }).expect(200);
+    expect(res.body.expiresAt).toEqual(expect.any(String));
+
+    // Access protected admin endpoint with the cookie
+    const users = await agent.get('/api/admin/users').expect(200);
+    expect(users.body.users).toHaveLength(2);
+  });
 });

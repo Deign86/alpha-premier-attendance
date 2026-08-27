@@ -65,9 +65,26 @@ export class SetupService {
   setNowProvider(now: Clock): void { this.now = now; }
   authorize(token: string | undefined): void { this.requireToken(token); }
 
-  unlock<T>(pin: T): SetupUnlockResult {
+  async unlock<T>(pin: T): Promise<SetupUnlockResult> {
     this.assertEnabled();
-    if (!isString(pin) || !this.constantTimePinEqual(pin, this.config.setupAdminPin ?? '')) {
+    let authenticated = false;
+    if (isString(pin)) {
+      const trimmed = pin.trim();
+      if (this.constantTimePinEqual(trimmed, this.config.setupAdminPin ?? '')) {
+        authenticated = true;
+      } else {
+        try {
+          const normalized = normalizeRfidUid(trimmed);
+          const user = await this.sheets.findUserByUid(normalized);
+          if (user && user.active && user.cardType === 'ADMIN_ASSIST') {
+            authenticated = true;
+          }
+        } catch {
+          // Not a valid RFID UID or user not found
+        }
+      }
+    }
+    if (!authenticated) {
       throw new SetupError('INVALID_SETUP_PIN', 'The setup PIN is invalid.', 401);
     }
     const setupToken = crypto.randomBytes(32).toString('hex');

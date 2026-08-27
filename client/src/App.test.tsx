@@ -387,7 +387,7 @@ describe('RFID kiosk', () => {
     expect(await screen.findByText('Tektite East Tower, Ortigas Center, Pasig')).toBeInTheDocument();
   });
 
-  it('keeps the scanner live only for the setup scan step and pauses for typing steps', async () => {
+  it('keeps the scanner live for setup unlock and scan steps and pauses for form typing steps', async () => {
     vi.restoreAllMocks();
     const pauseSpy = vi.spyOn(tauriApi, 'setScannerPaused').mockResolvedValue();
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -409,12 +409,12 @@ describe('RFID kiosk', () => {
     await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(false));
     pauseSpy.mockClear();
 
-    // Setup dialog (PIN screen): typing step, scanner paused.
+    // Setup dialog (Unlock screen): scanner stays live for Admin RFID card taps.
     await user.click(await screen.findByRole('button', { name: /admin setup/i }));
-    await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(false));
     pauseSpy.mockClear();
 
-    // Unlocked scan step: scanner live again for the card being enrolled.
+    // Unlocked scan step: scanner live for the card being enrolled.
     await user.type(screen.getByLabelText(/administrator pin/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     await screen.findByLabelText(/setup card id/i);
@@ -1260,5 +1260,100 @@ describe('Admin Attendance Corrections', () => {
         reason: 'Employee verified on site',
       });
     });
+  });
+
+  it('allows unlocking setup dialog alternatively using Admin RFID card tap without typing password', async () => {
+    let capturedUnlockBody: { pin?: string; rfidUid?: string } | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Return config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      }
+      if (url.includes('/api/setup/unlock')) {
+        // SAFETY: Test JSON parse
+        capturedUnlockBody = JSON.parse(String(init?.body)) as { pin?: string; rfidUid?: string };
+        // SAFETY: Return unlock token
+        return { ok: true, json: async () => ({ success: true, setupToken: 'token-by-admin-rfid', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/');
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Open Admin Setup modal
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+
+    // Modal is at step 01 Unlock
+    expect(screen.getByText(/01 unlock/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/enter pin or scan admin card/i)).toBeInTheDocument();
+
+    // Tap registered Admin RFID card
+    await act(async () => {
+      for (const h of rfidHandlers) h('ADDE23');
+    });
+
+    // Automatically transitions to Step 02 Scan card
+    await screen.findByLabelText(/setup card id/i);
+    expect(capturedUnlockBody).toEqual({ pin: 'ADDE23' });
+    expect(screen.getByText(/new card enrollment/i)).toBeInTheDocument();
+  });
+
+  it('allows unlocking Admin panel alternatively using Admin RFID card tap without typing password', async () => {
+    let capturedAdminUnlockBody: { pin?: string; rfidUid?: string } | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Return config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/unlock')) {
+        // SAFETY: Test JSON parse
+        capturedAdminUnlockBody = JSON.parse(String(init?.body)) as { pin?: string; rfidUid?: string };
+        // SAFETY: Return admin unlock session
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: false, status: 401, json: async () => ({ success: false }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Mock attendance list
+        return { ok: true, json: async () => ({ success: true, attendance: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/admin');
+    render(<App />);
+
+    // Login screen is visible
+    expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/enter pin or scan admin card/i)).toBeInTheDocument();
+
+    // Tap registered Admin RFID card
+    await act(async () => {
+      for (const h of rfidHandlers) h('ADDE23');
+    });
+
+    // Unlocks Admin panel directly
+    expect(capturedAdminUnlockBody).toEqual({ pin: 'ADDE23' });
+    expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
   });
 });

@@ -302,23 +302,31 @@ export default function App() {
     [focusSetupInput, setupToken],
   );
 
+  const unlockSetupWithPinOrCard = useCallback(
+    async (pinOrUid: string) => {
+      const candidate = pinOrUid.trim();
+      if (!candidate || setupBusy) return;
+      setSetupBusy(true);
+      setSetupError("");
+      const response = await unlockSetup(candidate);
+      setSetupBusy(false);
+      if (!response.success) {
+        setSetupError(response.error.message);
+        return;
+      }
+      setSetupToken(response.setupToken);
+      setSetupExpiresAt(response.expiresAt);
+      setAdminPin("");
+      setSetupStep("scan");
+      setSetupDialogOpen(true);
+      window.setTimeout(focusSetupInput, 0);
+    },
+    [focusSetupInput, setupBusy],
+  );
+
   const handleUnlock = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!adminPin.trim() || setupBusy) return;
-    setSetupBusy(true);
-    setSetupError("");
-    const response = await unlockSetup(adminPin.trim());
-    setSetupBusy(false);
-    if (!response.success) {
-      setSetupError(response.error.message);
-      return;
-    }
-    setSetupToken(response.setupToken);
-    setSetupExpiresAt(response.expiresAt);
-    setAdminPin("");
-    setSetupStep("scan");
-    setSetupDialogOpen(true);
-    window.setTimeout(focusSetupInput, 0);
+    await unlockSetupWithPinOrCard(adminPin);
   };
 
   const closeSetup = async () => {
@@ -606,7 +614,9 @@ export default function App() {
   const scanHandlerRef = useRef<(value: string) => void>(() => {});
   scanHandlerRef.current = (value) => {
     if (adminAssistData) return;
-    if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
+    if (setupDialogOpen && !setupToken) {
+      void unlockSetupWithPinOrCard(value);
+    } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
       handleSetupInput(value);
     } else if (!setupDialogOpen || !setupToken) {
       void submit(value, "RFID");
@@ -637,7 +647,9 @@ export default function App() {
       if (expectedLength > 0 && candidate.length !== expectedLength) return;
 
       const normalized = candidate.toUpperCase();
-      if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
+      if (setupDialogOpen && !setupToken) {
+        void unlockSetupWithPinOrCard(normalized);
+      } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
         handleSetupInput(normalized);
       } else if (!manualMode && !setupDialogOpen && !adminAssistData) {
         void submit(normalized, "RFID");
@@ -657,9 +669,9 @@ export default function App() {
       const isTextEntry = Boolean(
         target &&
           (target.matches("textarea, select, [contenteditable='true']") ||
-            (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid")),
+            (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid" && target.id !== "admin-pin")),
       );
-      if (isTextEntry || manualMode || adminAssistData || (setupDialogOpen && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
+      if (isTextEntry || manualMode || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
         resetBuffer();
         return;
       }
@@ -698,7 +710,7 @@ export default function App() {
       window.removeEventListener("blur", onBlur);
       resetBuffer();
     };
-  }, [config, handleSetupInput, manualMode, setupDialogOpen, setupStep, setupToken, submit]);
+  }, [config, handleSetupInput, manualMode, setupDialogOpen, setupStep, setupToken, submit, unlockSetupWithPinOrCard]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -738,8 +750,7 @@ export default function App() {
   useEffect(() => {
     const paused =
       manualMode ||
-      (setupDialogOpen &&
-        !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep));
+      (setupDialogOpen && Boolean(setupToken) && setupStep !== "scan");
     void setScannerPaused(paused).catch(() => {
       /* web mode */
     });
@@ -1183,14 +1194,14 @@ function SetupDialog(props: SetupDialogProps) {
               <span>03 Save user</span>
             </div>
             <p className="setup-copy">
-              Enter the administrator PIN to associate a card with an employee.
+              Scan registered admin RFID card or enter administrator PIN to associate a card with an employee.
               Example: Deign Lazaro, IT / Admin.
             </p>
-            <label htmlFor="admin-pin">Administrator PIN</label>
+            <label htmlFor="admin-pin">Administrator PIN or Admin RFID card</label>
             <input
               id="admin-pin"
               type="password"
-              inputMode="numeric"
+              placeholder="Enter PIN or scan admin card…"
               autoComplete="off"
               value={props.pin}
               onChange={(event) => props.onPinChange(event.target.value)}
@@ -2437,9 +2448,9 @@ function AttendanceTable({
 }
 
 function AdminPanel() {
-  useScannerPause(true);
-  const office = useOfficeIdentity();
   const [unlocked, setUnlocked] = useState(false);
+  useScannerPause(unlocked);
+  const office = useOfficeIdentity();
   const [sessionExpiresAt, setSessionExpiresAt] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
@@ -2456,19 +2467,47 @@ function AdminPanel() {
   const [nuking, setNuking] = useState(false);
   const [nukeConfirmOpen, setNukeConfirmOpen] = useState(false);
   const [manualUpdateCheck, setManualUpdateCheck] = useState<number>(0);
+
+  const unlockWithPinOrRfid = useCallback(
+    async (candidate: string) => {
+      const trimmed = candidate.trim();
+      if (!trimmed || busy) return;
+      setBusy(true);
+      setError("");
+      const response = await unlockAdmin(trimmed);
+      setBusy(false);
+      if (!response.success) {
+        setError(response.error.message);
+        return;
+      }
+      setUnlocked(true);
+      setSessionExpiresAt(response.expiresAt);
+      setPin("");
+      setError("");
+    },
+    [busy],
+  );
+
   const unlock = async (event: React.FormEvent) => {
     event.preventDefault();
-    setBusy(true);
-    const response = await unlockAdmin(pin);
-    setBusy(false);
-    if (!response.success) {
-      setError(response.error.message);
-      return;
-    }
-    setUnlocked(true);
-    setSessionExpiresAt(response.expiresAt);
-    setError("");
+    await unlockWithPinOrRfid(pin);
   };
+
+  useEffect(() => {
+    if (unlocked) return;
+    let unlisten: (() => void) | undefined;
+    void listenForGlobalRfid((scannedUid) => {
+      void unlockWithPinOrRfid(scannedUid);
+    })
+      .then((cleanup) => {
+        unlisten = cleanup;
+      })
+      .catch(() => {});
+    return () => {
+      unlisten?.();
+    };
+  }, [unlocked, unlockWithPinOrRfid]);
+
   const nukeSheets = async () => {
     setNukeConfirmOpen(false);
     setNuking(true);
@@ -2536,17 +2575,21 @@ function AdminPanel() {
         <form onSubmit={unlock}>
           <p className="section-kicker">Administrator access</p>
           <h1>Manage attendance</h1>
+          <p className="setup-copy" style={{ marginBottom: "1rem" }}>
+            Scan registered admin RFID card or enter administrator PIN.
+          </p>
           <label>
-            Administrator PIN
+            Administrator PIN or Admin RFID card
             <input
               autoFocus
               type="password"
+              placeholder="Enter PIN or scan admin card…"
               value={pin}
               onChange={(event) => setPin(event.target.value)}
             />
           </label>
           {error && <p className="dashboard-alert">{error}</p>}
-          <button className="submit-button" disabled={busy || !pin}>
+          <button className="submit-button" disabled={busy || !pin.trim()}>
             Unlock admin
           </button>
         </form>

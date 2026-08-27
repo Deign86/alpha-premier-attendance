@@ -20,9 +20,26 @@ export interface AdminUnlockResult {
 export class AdminService {
   constructor(private readonly sheets: GoogleSheetsService, private readonly config: AdminConfig, private readonly payroll = new PayrollService(sheets)) {}
 
-  unlock<T>(pin: T): AdminUnlockResult {
+  async unlock<T>(pin: T): Promise<AdminUnlockResult> {
     this.assertEnabled();
-    if (!isString(pin) || !this.equal(pin, this.config.adminPin ?? '')) throw new AdminError('INVALID_ADMIN_PIN', 'The administrator PIN is invalid.', 401);
+    let authenticated = false;
+    if (isString(pin)) {
+      const trimmed = pin.trim();
+      if (this.equal(trimmed, this.config.adminPin ?? '')) {
+        authenticated = true;
+      } else {
+        try {
+          const normalized = normalizeRfidUid(trimmed);
+          const user = await this.sheets.findUserByUid(normalized);
+          if (user && user.active && user.cardType === 'ADMIN_ASSIST') {
+            authenticated = true;
+          }
+        } catch {
+          // Not a valid RFID UID or user not found
+        }
+      }
+    }
+    if (!authenticated) throw new AdminError('INVALID_ADMIN_PIN', 'The administrator PIN is invalid.', 401);
     const expiresAt = Date.now() + (this.config.adminSessionMinutes ?? 15) * 60_000;
     const payload = `${expiresAt}.${crypto.randomBytes(16).toString('hex')}`;
     const signature = crypto.createHmac('sha256', this.config.adminSessionSecret!).update(payload).digest('base64url');
