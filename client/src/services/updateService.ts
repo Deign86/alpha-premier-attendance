@@ -135,8 +135,11 @@ export async function checkForUpdates(
       normalized.includes('could not fetch a valid release json') ||
       normalized.includes('release json') ||
       normalized.includes('releasenotfound') ||
+      normalized.includes('could not find a release') ||
+      normalized.includes('no release found') ||
       normalized.includes('404') ||
-      normalized.includes('no release found')
+      normalized.includes('uptodate') ||
+      normalized.includes('up to date')
     ) {
       return {
         available: false,
