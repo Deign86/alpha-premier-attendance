@@ -21,21 +21,36 @@ use uuid::Uuid;
 pub const MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./db/migrations");
 
 pub async fn run_migrations(db: &SqlitePool) -> Result<(), sqlx::migrate::MigrateError> {
-    match MIGRATOR.run(db).await {
-        Ok(()) => Ok(()),
-        Err(sqlx::migrate::MigrateError::VersionMismatch(v)) => {
-            log::warn!("Migration version mismatch detected for version {v}; syncing checksums with compiled migrations");
-            for migration in MIGRATOR.iter() {
-                let _ = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
-                    .bind(migration.checksum.as_ref())
-                    .bind(migration.version)
+    let mut result = MIGRATOR.run(db).await;
+    if let Err(sqlx::migrate::MigrateError::VersionMismatch(v)) = &result {
+        log::warn!("Migration version mismatch detected for version {v}; syncing checksums with compiled migrations");
+        for migration in MIGRATOR.iter() {
+            let _ = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+                .bind(migration.checksum.as_ref())
+                .bind(migration.version)
+                .execute(db)
+                .await;
+        }
+        result = MIGRATOR.run(db).await;
+    }
+    if let Err(sqlx::migrate::MigrateError::VersionMissing(v)) = &result {
+        log::warn!("Migration version {v} missing from compiled migrations; removing orphaned migration record and syncing");
+        let compiled_versions: Vec<i64> = MIGRATOR.iter().map(|m| m.version).collect();
+        for missing_ver in sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations")
+            .fetch_all(db)
+            .await
+            .unwrap_or_default()
+        {
+            if !compiled_versions.contains(&missing_ver) {
+                let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+                    .bind(missing_ver)
                     .execute(db)
                     .await;
             }
-            MIGRATOR.run(db).await
         }
-        Err(e) => Err(e),
+        result = MIGRATOR.run(db).await;
     }
+    result
 }
 
 #[derive(Clone)]

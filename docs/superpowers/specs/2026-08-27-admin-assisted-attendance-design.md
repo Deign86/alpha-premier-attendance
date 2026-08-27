@@ -38,7 +38,7 @@ Consistent error handling across Express and Tauri:
 
 ---
 
-## Database Migration (`src-tauri/db/migrations/0010_admin_assist_and_audit.sql`)
+## Database Migration (`src-tauri/db/migrations/0011_admin_assist_and_audit.sql`)
 
 1. **Users Schema Extension**:
    ```sql

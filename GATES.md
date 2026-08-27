@@ -7,10 +7,10 @@
   EXPECT: all tests pass
   EVIDENCE: `shared/src/api-contracts.ts` and `shared/src/api-contracts.test.ts` updated with `cardTypes`, `scanSources` (`ADMIN_ASSISTED_SCAN`, `ADMIN_BACKDATED_ENTRY`), error codes (`ADMIN_CARD_REQUIRES_SELECTION`, `ATTENDANCE_ALREADY_EXISTS_FOR_DATE`, `BACKDATE_LIMIT_EXCEEDED`), and audit fields (`recordedBy`, `recordedReason`, `recordedAt`).
 
-- [x] GATE-2: SQLite migration 0010 with schema-level triggers forbidding attendance writes for admin cards
+- [x] GATE-2: SQLite migration 0011 with schema-level triggers forbidding attendance writes for admin cards
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml state::tests::migrations_create_required_indexes_and_queue
   EXPECT: test passed
-  EVIDENCE: `src-tauri/db/migrations/0010_admin_assist_and_audit.sql` applies cleanly; `card_type` on `users`, audit columns on `attendance`, and `trg_prevent_admin_card_attendance` triggers verified.
+  EVIDENCE: `src-tauri/db/migrations/0011_admin_assist_and_audit.sql` applies cleanly; `card_type` on `users`, audit columns on `attendance`, and `trg_prevent_admin_card_attendance` triggers verified.
 
 - [x] GATE-3: Support Employee card vs. Admin RFID card in `SetupDialog`, `UserEditor`, and backend endpoints
   CHECK: npm test -w server -- test/setup.test.ts && npm test -w client -- App.test.tsx

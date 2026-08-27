@@ -10,7 +10,7 @@
 
 **Architecture:**
 - **Shared Contracts (`@rfid-attendance/shared`)**: Expand `ScanSource` to include `'ADMIN_ASSISTED_SCAN'` and `'ADMIN_BACKDATED_ENTRY'`. Introduce `CardType` (`'EMPLOYEE' | 'ADMIN_ASSIST'`). Add error codes `ADMIN_CARD_REQUIRES_SELECTION`, `ATTENDANCE_ALREADY_EXISTS_FOR_DATE`, `BACKDATE_LIMIT_EXCEEDED`. Add audit fields `recordedBy`, `recordedReason`, `recordedAt` on attendance models.
-- **Database (`src-tauri/db/migrations/0010_admin_assist_and_audit.sql`)**: Add `card_type` to `users`, add `recorded_by`, `recorded_reason`, `recorded_at` to `attendance`, and add SQLite database triggers forbidding admin cards from recording attendance for themselves.
+- **Database (`src-tauri/db/migrations/0011_admin_assist_and_audit.sql`)**: Add `card_type` to `users`, add `recorded_by`, `recorded_reason`, `recorded_at` to `attendance`, and add SQLite database triggers forbidding admin cards from recording attendance for themselves.
 - **Backend Services (`server/src` & `src-tauri/src`)**: Detect admin card tap and return assist mode; process assisted scans on behalf of selected active employees; create backdated past attendance with duplicate & locked cutoff validation.
 - **Frontend Kiosk & Admin Panel (`client/src`)**: Kiosk Assisted Attendance modal with searchable active employee list, reason selection, and 25s cancel timeout. Admin panel "Add missed attendance" dialog, audit badging, override filter pills, and updated exports.
 
@@ -25,7 +25,7 @@
 - Modify: `shared/src/api-contracts.test.ts`
 - Modify: `server/src/errors.ts`
 - Modify: `server/src/sheets.ts`
-- Create: `src-tauri/db/migrations/0010_admin_assist_and_audit.sql`
+- Create: `src-tauri/db/migrations/0011_admin_assist_and_audit.sql`
 - Modify: `src-tauri/src/state.rs` (if test assertions need migration version check)
 
 - [x] **Step 1: Write failing shared contract tests**
@@ -44,7 +44,7 @@
   1. Update `shared/src/api-contracts.ts` with `cardTypes`, new `scanSources`, error codes, and audit properties.
   2. Update `server/src/errors.ts` with the new error codes in `scanErrorCodeSet`.
   3. Update `server/src/sheets.ts` with `cardType` on `SheetUser`, audit fields on `SheetAttendance`, and values mapping.
-  4. Create `src-tauri/db/migrations/0010_admin_assist_and_audit.sql` adding `card_type` to `users`, audit columns to `attendance`, and SQLite triggers preventing admin card attendance writes.
+  4. Create `src-tauri/db/migrations/0011_admin_assist_and_audit.sql` adding `card_type` to `users`, audit columns to `attendance`, and SQLite triggers preventing admin card attendance writes.
 
 - [x] **Step 4: Run shared tests and Rust migration tests and confirm GREEN**
   CHECK: `npm test -w shared && cargo test --manifest-path src-tauri/Cargo.toml state::tests::migrations_create_required_indexes_and_queue`
