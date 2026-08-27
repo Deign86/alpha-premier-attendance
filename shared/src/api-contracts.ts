@@ -2,8 +2,11 @@ import type { OfficeIdentity } from './office.js';
 export type { OfficeIdentity, OfficeDisplayVariant } from './office.js';
 export { DEFAULT_OFFICE_IDENTITY, OFFICE_FALLBACK_DISPLAY, composeOfficeAddress, officeCompanyName, officeMetadataLines, resolveOfficeDisplay } from './office.js';
 
-export const scanSources = ['RFID', 'MANUAL_TEST'] as const;
+export const scanSources = ['RFID', 'MANUAL_TEST', 'ADMIN_ASSISTED_SCAN', 'ADMIN_BACKDATED_ENTRY'] as const;
 export type ScanSource = (typeof scanSources)[number];
+
+export const cardTypes = ['EMPLOYEE', 'ADMIN_ASSIST'] as const;
+export type CardType = (typeof cardTypes)[number];
 
 export type ScannerStatus = {
   state: 'connected' | 'scanning' | 'offline' | 'error';
@@ -167,6 +170,8 @@ export function normalizeName(name: string): string {
 export type ScanRequest = {
   rfidUid: string;
   source: ScanSource;
+  targetUserId?: string;
+  reason?: string;
 };
 
 export type UserSummary = {
@@ -185,6 +190,10 @@ export type AttendanceSummary = {
   timeIn: string;
   timeOut: string | null;
   status: AttendanceStatus;
+  source?: ScanSource;
+  recordedBy?: string | null;
+  recordedReason?: string | null;
+  recordedAt?: string | null;
 };
 
 export type AttendanceListItem = AttendanceSummary & {
@@ -556,9 +565,31 @@ export const scanErrorCodes = [
   'PAYROLL_GENERATION_FAILED',
   'RATE_LIMITED',
   'INTERNAL_SERVER_ERROR',
-  'CONFIGURATION_ERROR'
+  'CONFIGURATION_ERROR',
+  'ADMIN_CARD_REQUIRES_SELECTION',
+  'ATTENDANCE_ALREADY_EXISTS_FOR_DATE',
+  'BACKDATE_LIMIT_EXCEEDED',
 ] as const;
 export type ScanErrorCode = (typeof scanErrorCodes)[number];
+
+export type ActiveEmployeeSummary = {
+  userId: string;
+  fullName: string;
+  department: string | null;
+  photoUrl: string | null;
+};
+
+export type ScanAdminAssistResponse = {
+  success: true;
+  requestId: string;
+  action: 'ADMIN_ASSIST';
+  message: string;
+  adminCard: {
+    rfidUid: string;
+    label: string;
+  };
+  activeEmployees: ActiveEmployeeSummary[];
+};
 
 export type ScanErrorResponse = {
   success: false;
@@ -570,7 +601,7 @@ export type ScanErrorResponse = {
   };
 };
 
-export type ScanResponse = ScanSuccessResponse | ScanErrorResponse;
+export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse;
 
 export type HealthResponse = {
   success: true;
@@ -603,6 +634,7 @@ export type SetupUser = {
   dailyRate: number | null;
   payrollProfileId?: PayrollProfileId | null;
   photoUrl: string | null;
+  cardType?: CardType;
 };
 
 export type SetupUnlockRequest = { pin: string };
@@ -621,8 +653,8 @@ export type SetupLookupResponse = {
 
 export type SetupUpsertRequest = {
   rfidUid: string;
-  userId: string;
-  fullName: string;
+  userId?: string;
+  fullName?: string;
   department?: string;
   status: 'ACTIVE' | 'INACTIVE';
   employeeType?: 'INTERN' | 'EMPLOYEE';
@@ -630,6 +662,8 @@ export type SetupUpsertRequest = {
   dailyRate?: number | null;
   payrollProfileId?: PayrollProfileId | null;
   photoUrl?: string | null;
+  cardType?: CardType;
+  label?: string;
 };
 
 export type SetupUpsertResponse = {
@@ -657,9 +691,23 @@ export type SetupErrorResponse = {
 export const adminErrorCodes = [
   'ADMIN_DISABLED', 'INVALID_ADMIN_PIN', 'ADMIN_AUTH_REQUIRED', 'ADMIN_SESSION_EXPIRED',
   'ADMIN_VALIDATION_ERROR', 'USER_CONFLICT', 'ATTENDANCE_CONFLICT', 'GOOGLE_SHEETS_UNAVAILABLE',
+  'ATTENDANCE_ALREADY_EXISTS_FOR_DATE', 'BACKDATE_LIMIT_EXCEEDED',
 ] as const;
 export type AdminErrorCode = (typeof adminErrorCodes)[number];
 export type AdminErrorResponse = { success: false; error: { code: AdminErrorCode; message: string } };
+
+export type AdminBackdatedAttendanceRequest = {
+  userId: string;
+  attendanceDate: string;
+  timeIn: string;
+  timeOut?: string | null;
+  reason: string;
+};
+
+export type AdminBackdatedAttendanceResponse = {
+  success: true;
+  attendance: AttendanceListItem;
+};
 
 export const ttsEngines = ['auto', 'piper', 'system', 'disabled'] as const;
 export type TtsEngine = (typeof ttsEngines)[number];

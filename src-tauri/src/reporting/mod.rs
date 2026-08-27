@@ -97,6 +97,9 @@ mod tests {
             status: "COMPLETED".into(),
             source: "RFID".into(),
             notes: String::new(),
+            recorded_by: None,
+            recorded_reason: None,
+            recorded_at: None,
         }];
         generate_attendance_workbook(&rows, "2026-08-01", &office(), &path).unwrap();
         let bytes = std::fs::read(&path).unwrap();
@@ -120,6 +123,9 @@ mod tests {
             status: "WORKING".into(),
             source: "RFID".into(),
             notes: String::new(),
+            recorded_by: None,
+            recorded_reason: None,
+            recorded_at: None,
         }];
         generate_attendance_workbook(&rows, "2026-08-01", &office(), &path).unwrap();
         let shared = read_xlsx_shared_strings(&path);
@@ -725,6 +731,9 @@ pub struct AttendanceExportRow {
     pub status: String,
     pub source: String,
     pub notes: String,
+    pub recorded_by: Option<String>,
+    pub recorded_reason: Option<String>,
+    pub recorded_at: Option<String>,
 }
 
 pub fn attendance_artifact_filename(report_date: &str, job_id: &str) -> String {
@@ -740,7 +749,7 @@ pub async fn load_attendance_rows(
     db: &sqlx::SqlitePool,
     report_date: &str,
 ) -> Result<Vec<AttendanceExportRow>, sqlx::Error> {
-    let rows = sqlx::query("SELECT user_id, full_name, department, attendance_date, time_in, time_out, status, source, notes FROM attendance WHERE attendance_date = ? ORDER BY time_in, full_name, user_id")
+    let rows = sqlx::query("SELECT user_id, full_name, department, attendance_date, time_in, time_out, status, source, notes, recorded_by, recorded_reason, recorded_at FROM attendance WHERE attendance_date = ? ORDER BY time_in, full_name, user_id")
         .bind(report_date)
         .fetch_all(db)
         .await?;
@@ -763,6 +772,9 @@ pub async fn load_attendance_rows(
                 status: row.get("status"),
                 source: row.get("source"),
                 notes: row.get("notes"),
+                recorded_by: row.get("recorded_by"),
+                recorded_reason: row.get("recorded_reason"),
+                recorded_at: row.get("recorded_at"),
             }
         })
         .collect())
@@ -834,7 +846,7 @@ pub fn generate_attendance_workbook(
         .set_num_format("0.00");
     let worksheet = workbook.add_worksheet().set_name("Attendance")?;
     let title = format!("Attendance Register - {report_date}");
-    worksheet.merge_range(0, 0, 0, 9, &title, &title_format)?;
+    worksheet.merge_range(0, 0, 0, 12, &title, &title_format)?;
     worksheet.write_string_with_format(
         1,
         0,
@@ -858,6 +870,9 @@ pub fn generate_attendance_workbook(
         "TOTAL_HOURS",
         "STATUS",
         "SOURCE",
+        "RECORDED_BY",
+        "RECORDED_REASON",
+        "RECORDED_AT",
         "NOTES",
     ];
     for (column, header) in headers.iter().enumerate() {
@@ -865,15 +880,20 @@ pub fn generate_attendance_workbook(
     }
     for (index, row) in rows.iter().enumerate() {
         let excel_row = (index + 6) as u32;
-        let values = [
+        let strings_before = [
             row.employee_id.as_str(),
             row.employee_name.as_str(),
             row.department.as_deref().unwrap_or(""),
             row.date.as_str(),
             row.time_in.as_deref().unwrap_or(""),
             row.time_out.as_deref().unwrap_or(""),
+        ];
+        let strings_after = [
             row.status.as_str(),
             row.source.as_str(),
+            row.recorded_by.as_deref().unwrap_or(""),
+            row.recorded_reason.as_deref().unwrap_or(""),
+            row.recorded_at.as_deref().unwrap_or(""),
             row.notes.as_str(),
         ];
         let fill = if index % 2 == 1 {
@@ -881,7 +901,7 @@ pub fn generate_attendance_workbook(
         } else {
             &body_format
         };
-        for (column, value) in values.iter().enumerate() {
+        for (column, value) in strings_before.iter().enumerate() {
             worksheet.write_string_with_format(excel_row, column as u16, *value, fill)?;
         }
         let number_fill = if index % 2 == 1 {
@@ -890,13 +910,16 @@ pub fn generate_attendance_workbook(
             &number_format
         };
         worksheet.write_number_with_format(excel_row, 6, row.total_hours, number_fill)?;
+        for (offset, value) in strings_after.iter().enumerate() {
+            worksheet.write_string_with_format(excel_row, (offset + 7) as u16, *value, fill)?;
+        }
     }
     let last_row = (rows.len() + 5) as u32;
     if !rows.is_empty() {
         let table = Table::new().set_style(TableStyle::Medium2);
-        worksheet.add_table(5, 0, last_row, 9, &table)?;
+        worksheet.add_table(5, 0, last_row, 12, &table)?;
     }
-    let mut widths = [0usize; 10];
+    let mut widths = [0usize; 13];
     for (column, header) in headers.iter().enumerate() {
         widths[column] = header.len();
     }
@@ -911,6 +934,9 @@ pub fn generate_attendance_workbook(
             format!("{:.2}", row.total_hours).len(),
             row.status.len(),
             row.source.len(),
+            row.recorded_by.as_deref().unwrap_or("").len(),
+            row.recorded_reason.as_deref().unwrap_or("").len(),
+            row.recorded_at.as_deref().unwrap_or("").len(),
             row.notes.len(),
         ];
         for (column, length) in values.iter().enumerate() {
@@ -925,7 +951,7 @@ pub fn generate_attendance_workbook(
     worksheet.set_landscape();
     worksheet.set_paper_size(9);
     worksheet.set_margins(0.35, 0.35, 0.5, 0.5, 0.3, 0.3);
-    worksheet.set_print_area(0, 0, last_row.max(5), 9)?;
+    worksheet.set_print_area(0, 0, last_row.max(5), 12)?;
     workbook.save(path)
 }
 

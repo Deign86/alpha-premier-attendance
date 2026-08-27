@@ -10,13 +10,13 @@ import type {
   ScanErrorResponse,
   ScanRequest,
   ScanResponse,
-  ScanSuccessResponse,
   SetupErrorCode,
   SetupErrorResponse,
   SetupLookupResponse,
   SetupUnlockResponse,
   SetupUpsertRequest,
   SetupUpsertResponse,
+  AttendanceListItem,
   AttendanceListResponse,
   AdminAttendanceResponse,
   AdminUsersResponse,
@@ -159,7 +159,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
   }
 }
 
-export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanSuccessResponse | ScanErrorResponse> {
+export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanResponse> {
   try {
     const scanRequest = runningInTauri()
       ? tauriApi.scanRfid(request)
@@ -352,6 +352,19 @@ export async function saveAdminAttendance<T extends object>(attendanceId: string
   const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   // SAFETY: Parsing admin attendance save response JSON
   return (await response.json()) as { success: boolean; error?: { message?: string } };
+}
+export async function createAdminBackdatedAttendance<T extends object>(payload: T): Promise<{ success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } }> {
+  if (runningInTauri()) {
+    // SAFETY: Backend create backdated attendance returns success and record
+    return (await tauriApi.adminCreateBackdatedAttendance(nativeAdminToken ?? '', payload)) as { success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } };
+  }
+  const response = await fetch(apiUrl('/api/admin/attendance/backdate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  // SAFETY: Parsing admin backdate attendance response JSON
+  return (await response.json()) as { success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } };
 }
 export async function deleteAdminUser(userId: string): Promise<{ success: boolean; error?: { message?: string } }> {
   if (runningInTauri()) {

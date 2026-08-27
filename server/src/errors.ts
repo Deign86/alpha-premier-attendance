@@ -12,6 +12,9 @@ const scanErrorCodeSet = new Set<ScanErrorCode>([
   'RATE_LIMITED',
   'INTERNAL_SERVER_ERROR',
   'CONFIGURATION_ERROR',
+  'ADMIN_CARD_REQUIRES_SELECTION',
+  'ATTENDANCE_ALREADY_EXISTS_FOR_DATE',
+  'BACKDATE_LIMIT_EXCEEDED',
 ]);
 
 export class ScanError extends Error {

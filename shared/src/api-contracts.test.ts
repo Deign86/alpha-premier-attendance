@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { attendanceActions, attendanceStatuses, evaluateAttendanceArrivals, isLateTimeout, normalizeName, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateAttendanceArrivals, isLateTimeout, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
-  it('keeps scan sources and attendance states stable', () => {
-    expect(scanSources).toEqual(['RFID', 'MANUAL_TEST']);
+  it('keeps scan sources, card types, and attendance states stable', () => {
+    expect(scanSources).toEqual(['RFID', 'MANUAL_TEST', 'ADMIN_ASSISTED_SCAN', 'ADMIN_BACKDATED_ENTRY']);
+    expect(cardTypes).toEqual(['EMPLOYEE', 'ADMIN_ASSIST']);
     expect(attendanceActions).toEqual(['TIME_IN', 'TIME_OUT']);
     expect(attendanceStatuses).toEqual(['WORKING', 'COMPLETED', 'MISSED', 'LATE_TIMEOUT']);
+  });
+
+  it('exposes admin assist and backdated error codes', () => {
+    expect(scanErrorCodes).toContain('ADMIN_CARD_REQUIRES_SELECTION');
+    expect(scanErrorCodes).toContain('ATTENDANCE_ALREADY_EXISTS_FOR_DATE');
+    expect(scanErrorCodes).toContain('BACKDATE_LIMIT_EXCEEDED');
+    expect(adminErrorCodes).toContain('ATTENDANCE_ALREADY_EXISTS_FOR_DATE');
+    expect(adminErrorCodes).toContain('BACKDATE_LIMIT_EXCEEDED');
   });
 
   it('exposes protected setup error codes for both workspaces', () => {

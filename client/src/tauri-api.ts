@@ -32,6 +32,7 @@ export const tauriApi = {
   adminAttendance: (token: string, date: string) => invoke('admin_attendance', { token, date }),
   adminListAttendance: (token: string, date: string) => invoke('admin_list_attendance', { token, date }),
   adminUpdateAttendance: <T extends object>(token: string, attendanceId: string, payload: T) => invoke('admin_update_attendance', { token, attendanceId, payload }),
+  adminCreateBackdatedAttendance: <T extends object>(token: string, payload: T) => invoke('admin_create_backdated_attendance', { token, payload }),
   adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke('admin_delete_attendance', { token, attendanceId, date }),
   payrollProfiles: (token: string) => invoke('payroll_list_profiles', { token }),
   payrollUpsertProfile: <T extends object>(token: string, profile: T) => invoke('payroll_upsert_profile', { token, profile }),

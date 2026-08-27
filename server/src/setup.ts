@@ -30,9 +30,11 @@ export type SetupConfig = {
   setupSessionMinutes?: number;
 };
 
+import type { CardType } from '@rfid-attendance/shared';
+
 export type SetupUserInput = {
-  userId: string;
-  fullName: string;
+  userId?: string;
+  fullName?: string;
   rfidUid: string;
   department?: string | null;
   status?: 'ACTIVE' | 'INACTIVE';
@@ -40,6 +42,8 @@ export type SetupUserInput = {
   gender?: 'MALE' | 'FEMALE' | null;
   dailyRate?: number | null;
   photoUrl?: string | null;
+  cardType?: CardType;
+  label?: string | null;
 };
 
 type TokenRecord = { expiresAtMs: number };
@@ -93,28 +97,42 @@ export class SetupService {
     this.requireToken(token);
     const value = parseSetupUserInput(input);
     if (value === null) throw new SetupError('SETUP_VALIDATION_ERROR', 'A user object is required.', 400);
-    if (!value.userId.trim() || !value.fullName.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) {
-      throw new SetupError('SETUP_VALIDATION_ERROR', 'userId, fullName, and rfidUid are required.', 400);
-    }
+    const isAssist = value.cardType === 'ADMIN_ASSIST';
     let rfidUid: string;
     try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new SetupError('SETUP_VALIDATION_ERROR', 'rfidUid must be a valid hexadecimal UID.', 400); }
-    const userId = value.userId.trim().toUpperCase();
+    const userId = (value.userId?.trim() || (isAssist ? `ADMIN_CARD_${rfidUid}` : '')).toUpperCase();
+    const fullName = value.fullName?.trim() || (isAssist ? (value.label?.trim() || 'Admin Assist Card') : '');
+    const status = value.status ?? 'ACTIVE';
+    if (!userId || !fullName || (status !== 'ACTIVE' && status !== 'INACTIVE')) {
+      throw new SetupError('SETUP_VALIDATION_ERROR', 'userId, fullName, and rfidUid are required.', 400);
+    }
+    const byUid = await this.sheets.findUserByUid(rfidUid);
+    if (byUid && byUid.userId !== userId) {
+      throw new SetupError('USER_CONFLICT', 'That RFID card is already assigned to another user.', 409);
+    }
     const existing = await this.sheets.findUserById(userId);
-    const employeeType = value.employeeType ?? existing?.employeeType ?? 'INTERN';
-    const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
-    if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Employees require a positive daily rate.', 400);
-    if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new SetupError('SETUP_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.', 400);
-    if (value.photoUrl !== undefined && value.photoUrl !== null && !isPhotoUrl(value.photoUrl)) throw new SetupError('SETUP_VALIDATION_ERROR', 'Photo URL must be HTTPS.', 400);
+    const employeeType = isAssist ? 'EMPLOYEE' : (value.employeeType ?? existing?.employeeType ?? 'INTERN');
+    const dailyRate = !isAssist && employeeType === 'EMPLOYEE' ? value.dailyRate : null;
+    if (!isAssist && employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) {
+      throw new SetupError('SETUP_VALIDATION_ERROR', 'Employees require a positive daily rate.', 400);
+    }
+    if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') {
+      throw new SetupError('SETUP_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.', 400);
+    }
+    if (value.photoUrl !== undefined && value.photoUrl !== null && !isPhotoUrl(value.photoUrl)) {
+      throw new SetupError('SETUP_VALIDATION_ERROR', 'Photo URL must be HTTPS.', 400);
+    }
     const user: SheetUser = {
       userId,
-      fullName: normalizeName(value.fullName),
+      fullName: normalizeName(fullName),
       rfidUid,
-      department: isString(value.department) && value.department.trim() ? value.department.trim().replace(/\s+/g, ' ') : null,
-      active: value.status === 'ACTIVE',
+      department: isAssist ? (value.department?.trim() || 'Admin') : (isString(value.department) && value.department.trim() ? value.department.trim().replace(/\s+/g, ' ') : null),
+      active: status === 'ACTIVE',
       employeeType,
-      gender: value.gender === undefined ? existing?.gender ?? null : value.gender,
+      gender: isAssist ? null : (value.gender === undefined ? existing?.gender ?? null : value.gender),
       dailyRate,
-      photoUrl: value.photoUrl === undefined ? existing?.photoUrl ?? null : isPhotoUrl(value.photoUrl) ? value.photoUrl : null,
+      photoUrl: isAssist ? null : (value.photoUrl === undefined ? existing?.photoUrl ?? null : isPhotoUrl(value.photoUrl) ? value.photoUrl : null),
+      cardType: value.cardType ?? 'EMPLOYEE',
     };
     try {
       const saved = await this.sheets.upsertUser(user);
@@ -164,18 +182,29 @@ interface SetupInputObject {
   gender?: SetupInputValue;
   dailyRate?: SetupInputValue;
   photoUrl?: SetupInputValue;
+  cardType?: SetupInputValue;
+  label?: SetupInputValue;
 }
 function isSetupInputObject<T>(value: T): value is T & SetupInputObject { return value !== null && Object(value) === value && !Array.isArray(value) && !(value instanceof Function); }
 function isPhotoUrl(value: SetupInputValue): value is string { return isString(value) && /^https:\/\//i.test(value); }
 
 function parseSetupUserInput<T>(input: T): SetupUserInput | null {
   if (!isSetupInputObject(input)) return null;
-  const userId = input.userId;
-  const fullName = input.fullName;
   const rfidUid = input.rfidUid;
-  if (!isString(userId) || !isString(fullName) || !isString(rfidUid)) return null;
-  const status = input.status;
+  if (!isString(rfidUid)) return null;
+
+  const cardType = input.cardType === 'ADMIN_ASSIST' ? 'ADMIN_ASSIST' : 'EMPLOYEE';
+  const label = isString(input.label) ? input.label : undefined;
+  const status = input.status === undefined && cardType === 'ADMIN_ASSIST' ? 'ACTIVE' : input.status;
   if (status !== 'ACTIVE' && status !== 'INACTIVE') return null;
+
+  const userId = isString(input.userId) ? input.userId : undefined;
+  const fullName = isString(input.fullName) ? input.fullName : undefined;
+
+  if (cardType === 'EMPLOYEE' && (!userId || !fullName)) {
+    return null;
+  }
+
   const department = input.department;
   const employeeType = input.employeeType;
   const gender = input.gender;
@@ -186,7 +215,7 @@ function parseSetupUserInput<T>(input: T): SetupUserInput | null {
   if (gender !== undefined && gender !== null && gender !== 'MALE' && gender !== 'FEMALE') return null;
   if (dailyRate !== undefined && dailyRate !== null && !isNumber(dailyRate)) return null;
   if (photoUrl !== undefined && photoUrl !== null && !isString(photoUrl)) return null;
-  return { userId, fullName, rfidUid, department, status, employeeType, gender, dailyRate, photoUrl };
+  return { userId, fullName, rfidUid, department, status, employeeType, gender, dailyRate, photoUrl, cardType, label };
 }
 
 export function setupTokenFromRequest(headers: { authorization?: string; 'x-setup-token'?: string }): string | undefined {

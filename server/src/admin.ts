@@ -2,13 +2,14 @@ import crypto from 'node:crypto';
 import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
+import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { PayrollService } from './payroll.js';
 import { calculateCutoffPayroll, defaultPayrollProfiles, type CutoffInput } from './cutoff-payroll.js';
 
 export type AdminConfig = { enableAdmin?: boolean; adminPin?: string; adminSessionSecret?: string; adminSessionMinutes?: number; timezone: string };
 export class AdminError extends Error {
-  constructor(readonly code: 'ADMIN_DISABLED' | 'INVALID_ADMIN_PIN' | 'ADMIN_AUTH_REQUIRED' | 'ADMIN_SESSION_EXPIRED' | 'ADMIN_VALIDATION_ERROR' | 'USER_CONFLICT' | 'ATTENDANCE_CONFLICT' | 'GOOGLE_SHEETS_UNAVAILABLE', message: string, readonly status = 400) { super(message); }
+  constructor(readonly code: 'ADMIN_DISABLED' | 'INVALID_ADMIN_PIN' | 'ADMIN_AUTH_REQUIRED' | 'ADMIN_SESSION_EXPIRED' | 'ADMIN_VALIDATION_ERROR' | 'USER_CONFLICT' | 'ATTENDANCE_CONFLICT' | 'GOOGLE_SHEETS_UNAVAILABLE' | 'ATTENDANCE_ALREADY_EXISTS_FOR_DATE' | 'BACKDATE_LIMIT_EXCEEDED', message: string, readonly status = 400) { super(message); }
 }
 
 export interface AdminUnlockResult {
@@ -43,19 +44,33 @@ export class AdminService {
   async saveUser<T>(input: T, existingUserId?: string): Promise<{ user: AdminUser; created: boolean }> {
     const value = parseAdminUserInput(input);
     if (value === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A user object is required.');
-    const userId = existingUserId ?? value.userId?.trim().toUpperCase();
-    if (!userId || !value.rfidUid.trim() || !value.fullName.trim() || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
-    if (existingUserId && value.userId && value.userId.trim() !== existingUserId && value.userId.trim().toUpperCase() !== existingUserId.toUpperCase()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
+    const isAssist = value.cardType === 'ADMIN_ASSIST';
     let rfidUid: string;
     try { rfidUid = normalizeRfidUid(value.rfidUid); } catch { throw new AdminError('ADMIN_VALIDATION_ERROR', 'RFID UID is invalid.'); }
+    const userId = existingUserId ?? (isAssist ? `ADMIN_CARD_${rfidUid}` : (value.userId?.trim().toUpperCase() ?? ''));
+    const fullName = value.fullName?.trim() || (isAssist ? (value.label?.trim() || 'Admin Assist Card') : '');
+    if (!userId || !rfidUid || !fullName || (value.status !== 'ACTIVE' && value.status !== 'INACTIVE')) throw new AdminError('ADMIN_VALIDATION_ERROR', 'userId, RFID UID, full name, and status are required.');
+    if (existingUserId && value.userId && value.userId.trim() !== existingUserId && value.userId.trim().toUpperCase() !== existingUserId.toUpperCase()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User ID cannot be changed.');
     const current = await this.sheets.findUserById(userId);
     const byUid = await this.sheets.findUserByUid(rfidUid);
     if (byUid && byUid.userId !== userId) throw new AdminError('USER_CONFLICT', 'That RFID card is assigned to another user.', 409);
-    const employeeType = value.employeeType ?? current?.employeeType ?? 'INTERN';
-    const dailyRate = employeeType === 'EMPLOYEE' ? value.dailyRate : null;
-    if (employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Employees require a positive daily rate.');
+    const employeeType = isAssist ? 'EMPLOYEE' : (value.employeeType ?? current?.employeeType ?? 'INTERN');
+    const dailyRate = !isAssist && employeeType === 'EMPLOYEE' ? value.dailyRate : null;
+    if (!isAssist && employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Employees require a positive daily rate.');
     if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.');
-    const user: SheetUser = { userId, rfidUid, fullName: normalizeName(value.fullName), department: value.department?.trim().replace(/\s+/g, ' ') || null, active: value.status === 'ACTIVE', employeeType, gender: value.gender === undefined ? current?.gender ?? null : value.gender, dailyRate, payrollProfileId: value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId, photoUrl: value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl };
+    const user: SheetUser = {
+      userId,
+      rfidUid,
+      fullName: normalizeName(fullName),
+      department: isAssist ? (value.department?.trim() || 'Admin') : (value.department?.trim().replace(/\s+/g, ' ') || null),
+      active: value.status === 'ACTIVE',
+      employeeType,
+      gender: isAssist ? null : (value.gender === undefined ? current?.gender ?? null : value.gender),
+      dailyRate,
+      payrollProfileId: isAssist ? null : (value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId),
+      photoUrl: isAssist ? null : (value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl),
+      cardType: value.cardType ?? current?.cardType ?? 'EMPLOYEE',
+    };
     try {
       const saved = await this.sheets.upsertUser(user);
       await this.sheets.writeAudit({ eventType: current ? 'ADMIN_USER_UPDATED' : 'ADMIN_USER_CREATED', userId: user.userId, rfidUid: user.rfidUid, message: current ? 'User profile updated by administrator' : 'User profile created by administrator', requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
@@ -104,6 +119,74 @@ export class AdminService {
       await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_UPDATED', userId: row.userId, message: `Attendance ${attendanceId} corrected by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
       return toAttendance(saved);
     } catch { throw new AdminError('ATTENDANCE_CONFLICT', 'Attendance changed before it could be saved.', 409); }
+  }
+
+  async createBackdatedAttendance<T>(input: T): Promise<AttendanceListItem> {
+    const value = parseBackdatedAttendanceInput(input);
+    if (value === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid backdated attendance record with mandatory reason is required.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid attendance date is required.');
+
+    const today = manilaDate(new Date(), this.config.timezone);
+    if (value.attendanceDate >= today) {
+      throw new AdminError('ADMIN_VALIDATION_ERROR', 'Backdated attendance date must be strictly in the past.');
+    }
+
+    const user = await this.sheets.findUserById(value.userId);
+    if (!user) throw new AdminError('ADMIN_VALIDATION_ERROR', 'User was not found.', 404);
+    if (user.cardType === 'ADMIN_ASSIST') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Cannot create attendance for an Admin RFID card.', 400);
+    if (!user.active) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Cannot create attendance for an inactive user.', 400);
+
+    const existing = await this.sheets.findAttendance(user.userId, value.attendanceDate);
+    if (existing) {
+      throw new AdminError('ATTENDANCE_ALREADY_EXISTS_FOR_DATE', 'An attendance record already exists for this employee on this date. Use attendance correction instead.', 409);
+    }
+
+    const cutoffs = await this.sheets.listPayrollCutoffs();
+    const finalizedCutoff = cutoffs.find(
+      (c) => c.status === 'FINALIZED' && c.employeeId === user.userId && value.attendanceDate >= c.cutoffStart && value.attendanceDate <= c.cutoffEnd
+    );
+    if (finalizedCutoff) {
+      throw new AdminError('BACKDATE_LIMIT_EXCEEDED', `Cannot add backdated attendance: date falls within finalized payroll cutoff ${finalizedCutoff.cutoffStart} to ${finalizedCutoff.cutoffEnd}.`, 409);
+    }
+
+    const timeIn = value.timeIn;
+    const timeOut = value.timeOut || null;
+    if (!validTimestamp(timeIn, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-in must be a valid timestamp on the attendance date.');
+    if (timeOut && !validTimestamp(timeOut, value.attendanceDate)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out must be a valid timestamp on the attendance date.');
+    if (timeOut && new Date(timeOut).getTime() < new Date(timeIn).getTime()) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out cannot precede time-in.');
+
+    const newAttendance: SheetAttendance = {
+      attendanceId: crypto.randomUUID(),
+      attendanceDate: value.attendanceDate,
+      userId: user.userId,
+      rfidUid: user.rfidUid,
+      fullName: user.fullName,
+      department: user.department,
+      timeIn,
+      timeOut,
+      status: timeIn && timeOut ? (isLateTimeout(timeOut) ? 'LATE_TIMEOUT' : 'COMPLETED') : 'WORKING',
+      source: 'ADMIN_BACKDATED_ENTRY',
+      notes: '',
+      recordedBy: 'Admin',
+      recordedReason: value.reason.trim(),
+      recordedAt: manilaTimestamp(new Date(), this.config.timezone),
+    };
+
+    try {
+      const saved = await this.sheets.createAttendance(newAttendance);
+      if (saved.status === 'COMPLETED' && saved.timeOut) {
+        await this.payroll.ensureForCompletedAttendance(saved, user);
+      }
+      await this.sheets.writeAudit({
+        eventType: 'ADMIN_BACKDATED_ATTENDANCE',
+        userId: user.userId,
+        message: `Backdated attendance created for ${value.attendanceDate}: ${value.reason.trim()}`,
+        requestId: `admin-${crypto.randomUUID()}`,
+      }).catch(() => undefined);
+      return toAttendance(saved, user);
+    } catch {
+      throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
+    }
   }
 
   async deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void> {
@@ -187,8 +270,8 @@ export class AdminService {
   private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
   private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
 }
-function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', gender: user.gender ?? null, dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null }; }
-function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department }; }
+function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', gender: user.gender ?? null, dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null, cardType: user.cardType ?? 'EMPLOYEE' }; }
+function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department, source: row.source, recordedBy: row.recordedBy ?? null, recordedReason: row.recordedReason ?? null, recordedAt: row.recordedAt ?? null }; }
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }
 
 function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number }: CutoffInputBuilder & { profile: PayrollCalculationProfile }): CutoffInput {
@@ -252,6 +335,8 @@ type AdminUserInput = {
   dailyRate?: number | null;
   payrollProfileId?: string | null;
   photoUrl?: string | null;
+  cardType?: 'EMPLOYEE' | 'ADMIN_ASSIST';
+  label?: string | null;
 };
 type AttendanceInput = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null; attendanceDate: string };
 type PayrollProfileInput = PayrollCalculationProfile;
@@ -304,6 +389,7 @@ function isNumber<T>(value: T): value is T & number { return Object(value) !== v
 function isBoolean<T>(value: T): value is T & boolean { return Object(value) !== value && Object.prototype.toString.call(value) === '[object Boolean]'; }
 type AdminInputValue = string | number | boolean | bigint | symbol | null | undefined;
 interface InputObject {
+  cardType?: AdminInputValue;
   userId?: AdminInputValue;
   rfidUid?: AdminInputValue;
   fullName?: AdminInputValue;
@@ -347,6 +433,7 @@ interface InputObject {
   manualAdjustment?: AdminInputValue;
   adjustmentReason?: AdminInputValue;
   approvedWorkingDayOverage?: AdminInputValue;
+  reason?: AdminInputValue;
 }
 function isInputObject<T>(value: T): value is T & InputObject { return value !== null && Object(value) === value && !Array.isArray(value) && !(value instanceof Function); }
 function optionalString<T>(value: T): string | null | undefined {
@@ -358,20 +445,26 @@ function cutoffAdjustmentReason(value: CutoffValue | undefined): string | null {
   return isString(value) ? value.trim() || null : null;
 }
 function parseAdminUserInput<T>(input: T): AdminUserInput | null {
-  if (!isInputObject(input) || !isString(input.rfidUid) || !isString(input.fullName)) return null;
-  const status = input.status;
+  if (!isInputObject(input) || !isString(input.rfidUid)) return null;
+  const cardType = input.cardType === 'ADMIN_ASSIST' ? 'ADMIN_ASSIST' : 'EMPLOYEE';
+  const label = isString(input.label) ? input.label : undefined;
+  const status = input.status === undefined && cardType === 'ADMIN_ASSIST' ? 'ACTIVE' : input.status;
   if (status !== 'ACTIVE' && status !== 'INACTIVE') return null;
-  const userId = input.userId; const department = input.department;
+
+  const userId = isString(input.userId) ? input.userId : undefined;
+  const fullName = isString(input.fullName) ? input.fullName : (cardType === 'ADMIN_ASSIST' ? (label ?? 'Admin Assist Card') : '');
+  if (cardType === 'EMPLOYEE' && (!userId || !fullName)) return null;
+
+  const department = input.department;
   const employeeType = input.employeeType; const gender = input.gender; const dailyRate = input.dailyRate;
   const payrollProfileId = input.payrollProfileId; const photoUrl = input.photoUrl;
-  if (userId !== undefined && userId !== null && !isString(userId)) return null;
   if (department !== undefined && department !== null && !isString(department)) return null;
   if (payrollProfileId !== undefined && payrollProfileId !== null && !isString(payrollProfileId)) return null;
   if (photoUrl !== undefined && photoUrl !== null && !isString(photoUrl)) return null;
   if (employeeType !== undefined && employeeType !== 'INTERN' && employeeType !== 'EMPLOYEE') return null;
   if (gender !== undefined && gender !== null && gender !== 'MALE' && gender !== 'FEMALE') return null;
   if (dailyRate !== undefined && dailyRate !== null && !isNumber(dailyRate)) return null;
-  return { userId, rfidUid: input.rfidUid, fullName: input.fullName, department, status, employeeType, gender, dailyRate, payrollProfileId, photoUrl };
+  return { userId, rfidUid: input.rfidUid, fullName, department, status, employeeType, gender, dailyRate, payrollProfileId, photoUrl, cardType, label };
 }
 function parseAttendanceInput<T>(input: T): AttendanceInput | null {
   if (!isInputObject(input) || !isString(input.attendanceDate)) return null;
@@ -438,3 +531,22 @@ type CutoffInputBuilder = {
   cutoffLabel: string;
   number: (field: CutoffNumberField, fallback: number) => number;
 };
+
+type BackdatedAttendanceInput = {
+  userId: string;
+  attendanceDate: string;
+  timeIn: string;
+  timeOut?: string | null;
+  reason: string;
+};
+
+function parseBackdatedAttendanceInput<T>(input: T): BackdatedAttendanceInput | null {
+  if (!isInputObject(input)) return null;
+  const userId = isString(input.userId) ? input.userId.trim() : '';
+  const attendanceDate = isString(input.attendanceDate) ? input.attendanceDate.trim() : '';
+  const timeIn = isString(input.timeIn) ? input.timeIn.trim() : '';
+  const timeOut = isString(input.timeOut) ? input.timeOut.trim() : null;
+  const reason = isString(input.reason) ? input.reason.trim() : '';
+  if (!userId || !attendanceDate || !timeIn || !reason) return null;
+  return { userId, attendanceDate, timeIn, timeOut, reason };
+}

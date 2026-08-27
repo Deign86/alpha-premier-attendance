@@ -4,7 +4,7 @@ import path from 'node:path';
 import { google, type sheets_v4, type drive_v3 } from 'googleapis';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaTimestamp } from './time.js';
-import type { PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
+import type { CardType, PayrollCalculationProfile, PayrollCutoffRecord, ScanSource } from '@rfid-attendance/shared';
 import { isLateTimeout } from '@rfid-attendance/shared';
 import { defaultPayrollProfiles } from './cutoff-payroll.js';
 
@@ -19,6 +19,7 @@ export type SheetUser = {
   dailyRate?: number | null;
   payrollProfileId?: string | null;
   photoUrl?: string | null;
+  cardType?: CardType;
 };
 
 export type SheetPayroll = {
@@ -41,13 +42,16 @@ export type SheetAttendance = {
   timeIn: string;
   timeOut: string | null;
   status: 'WORKING' | 'COMPLETED' | 'MISSED' | 'LATE_TIMEOUT';
-  source: 'RFID' | 'MANUAL_TEST';
+  source: ScanSource;
   notes: string;
+  recordedBy?: string | null;
+  recordedReason?: string | null;
+  recordedAt?: string | null;
   rowNumber?: number;
 };
 
 export type AuditEvent = {
-  eventType: 'SCAN_SUCCESS' | 'UNKNOWN_CARD' | 'INACTIVE_USER' | 'DUPLICATE_SCAN' | 'ATTENDANCE_COMPLETED' | 'API_ERROR' | 'VALIDATION_ERROR' | 'ADMIN_USER_CREATED' | 'ADMIN_USER_UPDATED' | 'ADMIN_USER_DELETED' | 'ADMIN_ATTENDANCE_UPDATED' | 'ADMIN_ATTENDANCE_DELETED';
+  eventType: 'SCAN_SUCCESS' | 'UNKNOWN_CARD' | 'INACTIVE_USER' | 'DUPLICATE_SCAN' | 'ATTENDANCE_COMPLETED' | 'API_ERROR' | 'VALIDATION_ERROR' | 'ADMIN_USER_CREATED' | 'ADMIN_USER_UPDATED' | 'ADMIN_USER_DELETED' | 'ADMIN_ATTENDANCE_UPDATED' | 'ADMIN_ATTENDANCE_DELETED' | 'ADMIN_BACKDATED_ATTENDANCE' | 'ADMIN_ASSISTED_SCAN';
   rfidUid?: string;
   userId?: string;
   message: string;
@@ -1030,6 +1034,9 @@ function valuesForAttendance(headers: string[], attendance: SheetAttendance, exi
     ['status', attendance.status],
     ['source', attendance.source],
     ['notes', attendance.notes],
+    ['recordedby', attendance.recordedBy ?? ''],
+    ['recordedreason', attendance.recordedReason ?? ''],
+    ['recordedat', attendance.recordedAt ?? ''],
   ]);
   headers.forEach((header, index) => {
     const val = values.get(header);
@@ -1047,6 +1054,7 @@ function userFromRow(row: string[], index: Record<string, number>): SheetUser {
     employeeType: String(row[index.employeetype] ?? '').trim().toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN',
     dailyRate: parseRate(row[index.dailyrate]),
     photoUrl: row[index.photourl] || null,
+    cardType: String(row[index.cardtype] ?? '').trim().toUpperCase() === 'ADMIN_ASSIST' ? 'ADMIN_ASSIST' : 'EMPLOYEE',
   };
 }
 function normalizeAttendanceStatus(value: string | undefined): SheetAttendance['status'] {
@@ -1055,12 +1063,23 @@ function normalizeAttendanceStatus(value: string | undefined): SheetAttendance['
   if (status === 'LATE_TIMEOUT') return 'LATE_TIMEOUT';
   return status === 'MISSED' || status === 'INCOMPLETE' ? 'MISSED' : 'WORKING';
 }
+function parseScanSource(raw: string | undefined): ScanSource {
+  const normalized = String(raw ?? '').trim().toUpperCase();
+  if (normalized === 'MANUAL_TEST') return 'MANUAL_TEST';
+  if (normalized === 'ADMIN_ASSISTED_SCAN') return 'ADMIN_ASSISTED_SCAN';
+  if (normalized === 'ADMIN_BACKDATED_ENTRY') return 'ADMIN_BACKDATED_ENTRY';
+  return 'RFID';
+}
 function attendanceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetAttendance {
   return {
     attendanceId: row[index.attendanceid] ?? '', attendanceDate: row[index.attendancedate] ?? '', userId: row[index.userid] ?? '',
     rfidUid: row[index.rfiduid] ?? '', fullName: row[index.fullname] ?? '', department: row[index.department] || null,
     timeIn: row[index.timein] ?? '', timeOut: row[index.timeout] || null, status: normalizeAttendanceStatus(row[index.status]),
-    source: String(row[index.source] ?? '').trim().toUpperCase() === 'MANUAL_TEST' ? 'MANUAL_TEST' : 'RFID', notes: row[index.notes] ?? '', rowNumber,
+    source: parseScanSource(row[index.source]), notes: row[index.notes] ?? '',
+    recordedBy: row[index.recordedby] || null,
+    recordedReason: row[index.recordedreason] || null,
+    recordedAt: row[index.recordedat] || null,
+    rowNumber,
   };
 }
 function valuesForUser(headers: string[], user: SheetUser, existing: string[] = []): string[] {
@@ -1077,6 +1096,7 @@ function valuesForUser(headers: string[], user: SheetUser, existing: string[] = 
     ['dailyrate', user.dailyRate == null ? '' : String(user.dailyRate)],
     ['payrollprofileid', user.payrollProfileId ?? ''],
     ['photourl', user.photoUrl ?? ''],
+    ['cardtype', user.cardType ?? 'EMPLOYEE'],
   ]);
   headers.forEach((header, offset) => {
     const val = values.get(header);

@@ -51,6 +51,77 @@ describe('AttendanceService', () => {
     if (!rescan.success) expect(rescan.error.code).toBe('ATTENDANCE_ALREADY_COMPLETED');
   });
 
+  it('detects admin assist RFID card and executes assisted scan for active employee', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABBCC11', department: 'Engineering', active: true },
+      { userId: 'ADMIN_CARD_AD01', fullName: 'Front Desk Admin', rfidUid: 'AD01', department: 'Admin', active: true, cardType: 'ADMIN_ASSIST' },
+    ]);
+    const service = new AttendanceService(sheets, config, () => new Date('2026-07-28T01:00:00.000Z'));
+
+    // Step 1: Admin card scanned on kiosk without target employee
+    const assistPrompt = await service.scan({ rfidUid: 'AD01', source: 'RFID' }, 'req-adm-1');
+    expect(assistPrompt.success).toBe(true);
+    if (assistPrompt.success && assistPrompt.action === 'ADMIN_ASSIST') {
+      expect(assistPrompt.adminCard).toEqual({ rfidUid: 'AD01', label: 'Front Desk Admin' });
+      expect(assistPrompt.activeEmployees).toHaveLength(1);
+      expect(assistPrompt.activeEmployees[0].userId).toBe('u1');
+    } else {
+      expect.fail('Expected action to be ADMIN_ASSIST');
+    }
+
+    // Step 2: Confirming assisted scan on behalf of Ada
+    const assistedScan = await service.scan({
+      rfidUid: 'AD01',
+      source: 'ADMIN_ASSISTED_SCAN',
+      targetUserId: 'u1',
+      reason: 'Forgot RFID card',
+    }, 'req-adm-2');
+    expect(assistedScan.success).toBe(true);
+    if (assistedScan.success && assistedScan.action !== 'ADMIN_ASSIST') {
+      expect(assistedScan.action).toBe('TIME_IN');
+      expect(assistedScan.user.userId).toBe('u1');
+      expect(assistedScan.attendance.source).toBe('ADMIN_ASSISTED_SCAN');
+      expect(assistedScan.attendance.recordedBy).toBe('Front Desk Admin');
+      expect(assistedScan.attendance.recordedReason).toBe('Forgot RFID card');
+    }
+
+    // Verify row was written for Ada, NOT for the admin card
+    expect(await sheets.findAttendance('ADMIN_CARD_AD01', '2026-07-28')).toBeNull();
+    const adaAtt = await sheets.findAttendance('u1', '2026-07-28');
+    expect(adaAtt).not.toBeNull();
+    expect(adaAtt?.source).toBe('ADMIN_ASSISTED_SCAN');
+  });
+
+  it('rejects recording attendance directly for an admin card or targeting an inactive user', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u-inactive', fullName: 'Inactive User', rfidUid: 'BA01', department: 'Engineering', active: false },
+      { userId: 'ADMIN_CARD_AD01', fullName: 'Front Desk Admin', rfidUid: 'AD01', department: 'Admin', active: true, cardType: 'ADMIN_ASSIST' },
+    ]);
+    const service = new AttendanceService(sheets, config, () => new Date('2026-07-28T01:00:00.000Z'));
+
+    // Trying to target the admin card itself
+    const selfTarget = await service.scan({
+      rfidUid: 'AD01',
+      source: 'ADMIN_ASSISTED_SCAN',
+      targetUserId: 'ADMIN_CARD_AD01',
+    }, 'req-self');
+    expect(selfTarget.success).toBe(false);
+    if (!selfTarget.success) {
+      expect(selfTarget.error.code).toBe('ADMIN_CARD_REQUIRES_SELECTION');
+    }
+
+    // Trying to target an inactive user
+    const inactTarget = await service.scan({
+      rfidUid: 'AD01',
+      source: 'ADMIN_ASSISTED_SCAN',
+      targetUserId: 'u-inactive',
+    }, 'req-inact');
+    expect(inactTarget.success).toBe(false);
+    if (!inactTarget.success) {
+      expect(inactTarget.error.code).toBe('INACTIVE_USER');
+    }
+  });
+
   it('keeps 5:05 PM (17:05) and 6:00 PM (18:00) time-outs as normal COMPLETED shifts without manual correction', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABBCC11', department: 'Engineering', active: true, employeeType: 'EMPLOYEE', dailyRate: 500 },

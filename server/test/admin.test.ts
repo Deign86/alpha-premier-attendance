@@ -151,4 +151,47 @@ describe('admin and live attendance API', () => {
     }).expect(200);
     expect(res2.body.attendance).toMatchObject({ timeIn: '', timeOut: null, status: 'MISSED' });
   });
+
+  it('creates backdated missed attendance for a past date with validation gates', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABB', department: 'Engineering', active: true, employeeType: 'EMPLOYEE', dailyRate: 600 },
+    ]);
+    const app = createApp({ sheets, config, logger: false });
+    const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    // Rejects empty reason
+    await agent.post('/api/admin/attendance/backdate').send({
+      userId: 'u1',
+      attendanceDate: '2026-07-20',
+      timeIn: '2026-07-20T08:00:00+08:00',
+      timeOut: '2026-07-20T17:00:00+08:00',
+      reason: '',
+    }).expect(400);
+
+    // Successfully creates backdated record
+    const created = await agent.post('/api/admin/attendance/backdate').send({
+      userId: 'u1',
+      attendanceDate: '2026-07-20',
+      timeIn: '2026-07-20T08:00:00+08:00',
+      timeOut: '2026-07-20T17:00:00+08:00',
+      reason: 'Confirmed present on CCTV; forgot RFID card',
+    }).expect(200);
+    expect(created.body.attendance).toMatchObject({
+      userId: 'u1',
+      attendanceDate: '2026-07-20',
+      status: 'COMPLETED',
+      source: 'ADMIN_BACKDATED_ENTRY',
+      recordedReason: 'Confirmed present on CCTV; forgot RFID card',
+    });
+
+    // Rejects duplicate backdate for same date
+    const dup = await agent.post('/api/admin/attendance/backdate').send({
+      userId: 'u1',
+      attendanceDate: '2026-07-20',
+      timeIn: '2026-07-20T08:00:00+08:00',
+      reason: 'Trying duplicate',
+    }).expect(409);
+    expect(dup.body.error.code).toBe('ATTENDANCE_ALREADY_EXISTS_FOR_DATE');
+  });
 });

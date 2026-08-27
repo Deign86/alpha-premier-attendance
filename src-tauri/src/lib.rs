@@ -100,9 +100,22 @@ async fn get_attendance(
             .date_naive()
             .to_string()
     });
-    let rows = sqlx::query("SELECT attendance_id,attendance_date,user_id,full_name,department,time_in,time_out,status FROM attendance WHERE attendance_date=? ORDER BY time_in,full_name").bind(&selected).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    let rows = sqlx::query("SELECT attendance_id,attendance_date,user_id,full_name,department,time_in,time_out,status,source,recorded_by,recorded_reason,recorded_at FROM attendance WHERE attendance_date=? ORDER BY time_in,full_name").bind(&selected).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(
-        serde_json::json!({"success":true,"date":selected,"attendance":rows.into_iter().map(|r| serde_json::json!({"attendanceId":r.get::<String,_>("attendance_id"),"attendanceDate":r.get::<String,_>("attendance_date"),"userId":r.get::<String,_>("user_id"),"fullName":r.get::<String,_>("full_name"),"department":r.get::<Option<String>,_>("department"),"timeIn":r.get::<Option<String>,_>("time_in"),"timeOut":r.get::<Option<String>,_>("time_out"),"status":r.get::<String,_>("status")})).collect::<Vec<_>>(),"fetchedAt":chrono::Utc::now()}),
+        serde_json::json!({"success":true,"date":selected,"attendance":rows.into_iter().map(|r| serde_json::json!({
+            "attendanceId": r.get::<String,_>("attendance_id"),
+            "attendanceDate": r.get::<String,_>("attendance_date"),
+            "userId": r.get::<String,_>("user_id"),
+            "fullName": r.get::<String,_>("full_name"),
+            "department": r.get::<Option<String>,_>("department"),
+            "timeIn": r.get::<Option<String>,_>("time_in"),
+            "timeOut": r.get::<Option<String>,_>("time_out"),
+            "status": r.get::<String,_>("status"),
+            "source": r.get::<Option<String>,_>("source"),
+            "recordedBy": r.get::<Option<String>,_>("recorded_by"),
+            "recordedReason": r.get::<Option<String>,_>("recorded_reason"),
+            "recordedAt": r.get::<Option<String>,_>("recorded_at"),
+        })).collect::<Vec<_>>(),"fetchedAt":chrono::Utc::now()}),
     )
 }
 
@@ -128,7 +141,7 @@ async fn admin_users(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let rows = sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, gender, daily_rate_centavos, payroll_profile_id, photo_url FROM users ORDER BY full_name")
+    let rows = sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, gender, daily_rate_centavos, payroll_profile_id, photo_url, card_type FROM users ORDER BY full_name")
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     let users = rows.into_iter().map(|row| {
         let user_id = row.get::<String,_>("user_id");
@@ -143,7 +156,8 @@ async fn admin_users(
             "gender": row.get::<Option<String>,_>("gender"),
             "dailyRate": row.get::<Option<i64>,_>("daily_rate_centavos").map(|v| v as f64 / 100.0),
             "payrollProfileId": row.get::<Option<String>,_>("payroll_profile_id"),
-            "photoUrl": photo_url
+            "photoUrl": photo_url,
+            "cardType": row.get::<Option<String>,_>("card_type").unwrap_or_else(|| "EMPLOYEE".into())
         })
     }).collect::<Vec<_>>();
     Ok(serde_json::json!({"success":true,"users":users}))
@@ -179,11 +193,12 @@ async fn upsert_user_record(
     daily_rate_centavos: Option<i64>,
     payroll_profile_id: Option<&str>,
     photo_url: Option<&str>,
+    card_type: &str,
     now: &str,
 ) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query("INSERT INTO users (user_id, rfid_uid, full_name, department, status, created_at, employee_type, daily_rate_centavos, payroll_profile_id, photo_url, gender, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET rfid_uid=excluded.rfid_uid, full_name=excluded.full_name, department=excluded.department, status=excluded.status, employee_type=excluded.employee_type, gender=COALESCE(excluded.gender, users.gender), daily_rate_centavos=excluded.daily_rate_centavos, payroll_profile_id=excluded.payroll_profile_id, photo_url=excluded.photo_url, revision=users.revision+1, updated_at=excluded.updated_at")
+    let result = sqlx::query("INSERT INTO users (user_id, rfid_uid, full_name, department, status, created_at, employee_type, daily_rate_centavos, payroll_profile_id, photo_url, gender, card_type, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET rfid_uid=excluded.rfid_uid, full_name=excluded.full_name, department=excluded.department, status=excluded.status, employee_type=excluded.employee_type, gender=COALESCE(excluded.gender, users.gender), daily_rate_centavos=excluded.daily_rate_centavos, payroll_profile_id=excluded.payroll_profile_id, photo_url=excluded.photo_url, card_type=excluded.card_type, revision=users.revision+1, updated_at=excluded.updated_at")
         .bind(user_id).bind(rfid_uid).bind(full_name).bind(department).bind(status).bind(now).bind(employee_type)
-        .bind(daily_rate_centavos).bind(payroll_profile_id).bind(photo_url).bind(gender).bind(now)
+        .bind(daily_rate_centavos).bind(payroll_profile_id).bind(photo_url).bind(gender).bind(card_type).bind(now)
         .execute(db).await?;
     Ok(result.rows_affected())
 }
@@ -235,60 +250,122 @@ async fn admin_upsert_user(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let user_id = user
-        .get("userId")
+    let card_type = user
+        .get("cardType")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_uppercase();
+        .unwrap_or("EMPLOYEE");
+    let is_assist = card_type == "ADMIN_ASSIST";
+
     let rfid_uid = user
         .get("rfidUid")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_ascii_uppercase();
-    let full_name = normalize_name(
-        user.get("fullName")
+
+    let user_id = {
+        let raw = user
+            .get("userId")
             .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
+            .unwrap_or("")
+            .trim()
+            .to_ascii_uppercase();
+        if raw.is_empty() && is_assist && !rfid_uid.is_empty() {
+            format!("ADMIN_CARD_{rfid_uid}")
+        } else {
+            raw
+        }
+    };
+
+    let full_name = {
+        let raw = normalize_name(
+            user.get("fullName")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        if raw.is_empty() && is_assist {
+            let label = user.get("label").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if label.is_empty() {
+                "Admin Assist Card".to_string()
+            } else {
+                normalize_name(label)
+            }
+        } else {
+            raw
+        }
+    };
+
     let status = user
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("ACTIVE");
-    let employee_type = user
-        .get("employeeType")
-        .and_then(|v| v.as_str())
-        .unwrap_or("INTERN");
-    // Normalize so no value can violate the `gender IN ('MALE','FEMALE')`
-    // CHECK constraint (see `normalize_gender`).
-    let gender = normalize_gender(user.get("gender").and_then(|v| v.as_str()));
+
+    let employee_type = if is_assist {
+        "EMPLOYEE"
+    } else {
+        user.get("employeeType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("INTERN")
+    };
+
+    let department = if is_assist {
+        Some(user.get("department").and_then(|v| v.as_str()).unwrap_or("Admin"))
+    } else {
+        user.get("department").and_then(|v| v.as_str())
+    };
+
+    let gender = if is_assist {
+        None
+    } else {
+        normalize_gender(user.get("gender").and_then(|v| v.as_str()))
+    };
+
     if user_id.is_empty()
         || rfid_uid.is_empty()
         || full_name.is_empty()
         || !matches!(status, "ACTIVE" | "INACTIVE")
         || !matches!(employee_type, "INTERN" | "EMPLOYEE")
+        || !matches!(card_type, "EMPLOYEE" | "ADMIN_ASSIST")
         || gender
             .as_deref()
             .is_some_and(|g| !matches!(g, "MALE" | "FEMALE"))
     {
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
+
+    let existing_uid_owner: Option<String> = sqlx::query_scalar("SELECT user_id FROM users WHERE rfid_uid = ?")
+        .bind(&rfid_uid)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(owner) = existing_uid_owner {
+        if owner != user_id {
+            return Err("USER_CONFLICT".into());
+        }
+    }
+
+    let daily_rate = if is_assist {
+        None
+    } else {
+        user.get("dailyRate")
+            .and_then(|v| v.as_i64())
+            .map(|v| v * 100)
+    };
+
     let now = chrono::Utc::now().to_rfc3339();
     let result = upsert_user_record(
         &state.db,
         &user_id,
         &rfid_uid,
         &full_name,
-        user.get("department").and_then(|v| v.as_str()),
+        department,
         status,
         employee_type,
         gender.as_deref(),
-        user.get("dailyRate")
-            .and_then(|v| v.as_i64())
-            .map(|v| v * 100),
-        user.get("payrollProfileId").and_then(|v| v.as_str()),
-        user.get("photoUrl").and_then(|v| v.as_str()),
+        daily_rate,
+        if is_assist { None } else { user.get("payrollProfileId").and_then(|v| v.as_str()) },
+        if is_assist { None } else { user.get("photoUrl").and_then(|v| v.as_str()) },
+        card_type,
         &now,
     )
     .await
@@ -525,8 +602,21 @@ async fn admin_attendance(
     {
         return Err("INVALID_DATE".into());
     }
-    let rows = sqlx::query("SELECT attendance_id, attendance_date, user_id, full_name, department, time_in, time_out, status FROM attendance WHERE attendance_date = ? ORDER BY time_in, full_name").bind(&date).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let attendance = rows.into_iter().map(|row| serde_json::json!({"attendanceId":row.get::<String,_>("attendance_id"),"attendanceDate":row.get::<String,_>("attendance_date"),"userId":row.get::<String,_>("user_id"),"fullName":row.get::<String,_>("full_name"),"department":row.get::<Option<String>,_>("department"),"timeIn":row.get::<Option<String>,_>("time_in"),"timeOut":row.get::<Option<String>,_>("time_out"),"status":row.get::<String,_>("status")})).collect::<Vec<_>>();
+    let rows = sqlx::query("SELECT attendance_id, attendance_date, user_id, full_name, department, time_in, time_out, status, source, recorded_by, recorded_reason, recorded_at FROM attendance WHERE attendance_date = ? ORDER BY time_in, full_name").bind(&date).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    let attendance = rows.into_iter().map(|row| serde_json::json!({
+        "attendanceId": row.get::<String,_>("attendance_id"),
+        "attendanceDate": row.get::<String,_>("attendance_date"),
+        "userId": row.get::<String,_>("user_id"),
+        "fullName": row.get::<String,_>("full_name"),
+        "department": row.get::<Option<String>,_>("department"),
+        "timeIn": row.get::<Option<String>,_>("time_in"),
+        "timeOut": row.get::<Option<String>,_>("time_out"),
+        "status": row.get::<String,_>("status"),
+        "source": row.get::<Option<String>,_>("source"),
+        "recordedBy": row.get::<Option<String>,_>("recorded_by"),
+        "recordedReason": row.get::<Option<String>,_>("recorded_reason"),
+        "recordedAt": row.get::<Option<String>,_>("recorded_at"),
+    })).collect::<Vec<_>>();
     Ok(
         serde_json::json!({"success":true,"date":date,"attendance":attendance,"fetchedAt":chrono::Utc::now()}),
     )
@@ -666,6 +756,213 @@ async fn admin_update_attendance(
     Ok(
         serde_json::json!({"success":true,"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status}),
     )
+}
+
+#[tauri::command]
+async fn admin_create_backdated_attendance(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let user_id = payload
+        .get("userId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "ADMIN_VALIDATION_ERROR".to_string())?;
+    let attendance_date = payload
+        .get("attendanceDate")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "ADMIN_VALIDATION_ERROR".to_string())?;
+    let time_in = payload
+        .get("timeIn")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "ADMIN_VALIDATION_ERROR".to_string())?;
+    let time_out = payload
+        .get("timeOut")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let reason = payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "ADMIN_VALIDATION_ERROR".to_string())?;
+
+    let parsed_date = chrono::NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
+        .map_err(|_| "ADMIN_VALIDATION_ERROR".to_string())?;
+    let now_manila = chrono::Utc::now().with_timezone(&Manila);
+    if parsed_date >= now_manila.date_naive() {
+        return Err("ADMIN_VALIDATION_ERROR".into());
+    }
+
+    if chrono::DateTime::parse_from_rfc3339(time_in).is_err()
+        || time_out.is_some_and(|to| chrono::DateTime::parse_from_rfc3339(to).is_err())
+    {
+        return Err("ADMIN_VALIDATION_ERROR".into());
+    }
+    if let Some(to) = time_out {
+        let t_in = chrono::DateTime::parse_from_rfc3339(time_in).unwrap();
+        let t_out = chrono::DateTime::parse_from_rfc3339(to).unwrap();
+        if t_out < t_in {
+            return Err("ADMIN_VALIDATION_ERROR".into());
+        }
+    }
+
+    let user = match sqlx::query(
+        "SELECT user_id, full_name, department, employee_type, daily_rate_centavos, photo_url, status, gender, card_type, rfid_uid FROM users WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())? {
+        Some(u) => u,
+        None => return Err("USER_NOT_FOUND".into()),
+    };
+    if user.get::<String, _>("status") != "ACTIVE" {
+        return Err("INACTIVE_USER".into());
+    }
+    if user.try_get::<String, _>("card_type").unwrap_or_default() == "ADMIN_ASSIST" {
+        return Err("ADMIN_CARD_REQUIRES_SELECTION".into());
+    }
+
+    let existing = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM attendance WHERE user_id = ? AND attendance_date = ?"
+    )
+    .bind(user_id)
+    .bind(attendance_date)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    if existing > 0 {
+        return Err("ATTENDANCE_ALREADY_EXISTS_FOR_DATE".into());
+    }
+
+    let finalized_cutoff = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id = ? AND status = 'FINALIZED' AND ? >= cutoff_start AND ? <= cutoff_end"
+    )
+    .bind(user_id)
+    .bind(attendance_date)
+    .bind(attendance_date)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    if finalized_cutoff > 0 {
+        return Err("BACKDATE_LIMIT_EXCEEDED".into());
+    }
+
+    let late = time_out.is_some_and(|to| crate::services::office_hours::is_late_timeout(to));
+    let status = if time_out.is_some() {
+        if late { "LATE_TIMEOUT" } else { "COMPLETED" }
+    } else {
+        "WORKING"
+    };
+
+    let attendance_id = uuid::Uuid::new_v4().to_string();
+    let now_ts = now_manila.to_rfc3339();
+    let rfid_uid: String = user.get("rfid_uid");
+    let full_name: String = user.get("full_name");
+    let department: Option<String> = user.get("department");
+
+    sqlx::query(
+        "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, notes, recorded_by, recorded_reason, recorded_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ADMIN_BACKDATED_ENTRY', '', 'Admin', ?, ?, ?, ?)"
+    )
+    .bind(&attendance_id)
+    .bind(attendance_date)
+    .bind(user_id)
+    .bind(&rfid_uid)
+    .bind(&full_name)
+    .bind(&department)
+    .bind(time_in)
+    .bind(time_out)
+    .bind(status)
+    .bind(reason)
+    .bind(&now_ts)
+    .bind(&now_ts)
+    .bind(&now_ts)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if status == "COMPLETED" {
+        if let Some(actual_out) = time_out {
+            let employee_type: String = user.get("employee_type");
+            let daily_rate: Option<i64> = user.get("daily_rate_centavos");
+            let _ = ensure_payroll(
+                &state,
+                &attendance_id,
+                user_id,
+                full_name.clone(),
+                &employee_type,
+                daily_rate,
+                attendance_date,
+                time_in,
+                actual_out,
+            ).await;
+        }
+    }
+
+    let seq = state.next_sequence();
+    let event_payload = serde_json::json!({
+        "attendanceId": attendance_id.clone(),
+        "attendanceDate": attendance_date,
+        "userId": user_id,
+        "action": "BACKDATED_ATTENDANCE",
+        "timeIn": time_in,
+        "timeOut": time_out,
+        "status": status,
+        "sequence": seq
+    });
+    let _ = app.emit("attendance-updated", &event_payload);
+    let _ = app.emit("attendance-changed", &event_payload);
+    let _ = sqlx::query(
+        "INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_ATTENDANCE_CREATED', ?, ?, ?)"
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&now_ts)
+    .bind(user_id)
+    .bind(format!("Backdated attendance created for {}: {}", attendance_date, reason))
+    .bind(format!("admin-{}", uuid::Uuid::new_v4()))
+    .execute(&state.db)
+    .await;
+
+    let sync_payload = serde_json::json!({
+        "attendanceId": attendance_id,
+        "attendanceDate": attendance_date,
+        "userId": user_id,
+        "timeIn": time_in,
+        "timeOut": time_out,
+        "status": status,
+        "source": "ADMIN_BACKDATED_ENTRY",
+        "recordedBy": "Admin",
+        "recordedReason": reason,
+        "recordedAt": now_ts,
+    });
+    enqueue_sync(&state, "Attendance", &attendance_id, "UPSERT", &sync_payload).await;
+
+    Ok(serde_json::json!({
+        "attendanceId": attendance_id,
+        "attendanceDate": attendance_date,
+        "userId": user_id,
+        "fullName": full_name,
+        "department": department,
+        "timeIn": time_in,
+        "timeOut": time_out,
+        "status": status,
+        "source": "ADMIN_BACKDATED_ENTRY",
+        "recordedBy": "Admin",
+        "recordedReason": reason,
+        "recordedAt": now_ts,
+    }))
 }
 
 #[tauri::command]
@@ -2997,40 +3294,29 @@ async fn scan_rfid(
         .get("source")
         .and_then(|v| v.as_str())
         .unwrap_or("RFID");
+    let target_user_id = request
+        .get("targetUserId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let assist_reason = request
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Forgot RFID card".to_string());
     let received_at = chrono::Utc::now().to_rfc3339();
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,rfid_uid,message,request_id) VALUES (?,?, 'SCAN_RECEIVED', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&received_at).bind(if uid.is_empty() { None } else { Some(uid.as_str()) }).bind(format!("Scan request received from {source}")).bind(&request_id).execute(&state.db).await;
     let valid_uid = source == "MANUAL_TEST"
         || (uid.len() >= 4 && uid.len() <= 64 && uid.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    if uid.is_empty() || !valid_uid || !matches!(source, "RFID" | "MANUAL_TEST") {
+    let valid_source = matches!(source, "RFID" | "MANUAL_TEST" | "ADMIN_ASSISTED_SCAN");
+    if uid.is_empty() || !valid_uid || !valid_source {
         return Ok(
             serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INVALID_SCAN_INPUT","message":"rfidUid and source are required."}}),
         );
     }
     let now = chrono::Utc::now();
-    {
-        let mut guard = state.scan_guard.lock().await;
-        if guard
-            .get(&uid)
-            .is_some_and(|last| last.elapsed().as_millis() < 500)
-        {
-            return Ok(
-                serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently."}}),
-            );
-        }
-        guard.insert(uid.clone(), Instant::now());
-    }
-    {
-        let cooldown = state.physical_cooldown.lock().await;
-        if cooldown
-            .get(&uid)
-            .is_some_and(|last| last.elapsed().as_secs() < 10)
-        {
-            return Ok(
-                serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently.","retryAfterSeconds":10}}),
-            );
-        }
-    }
-    let user = match sqlx::query("SELECT user_id, full_name, department, employee_type, daily_rate_centavos, photo_url, status, gender FROM users WHERE rfid_uid = ?")
+    let user = match sqlx::query("SELECT user_id, full_name, department, employee_type, daily_rate_centavos, photo_url, status, gender, card_type, rfid_uid FROM users WHERE rfid_uid = ?")
         .bind(&uid).fetch_optional(&state.db).await {
         Ok(Some(row)) => row,
         Ok(None) => return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"UNKNOWN_RFID_CARD","message":"This RFID card is not registered."}})),
@@ -3042,7 +3328,96 @@ async fn scan_rfid(
             serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INACTIVE_USER","message":"This user is inactive."}}),
         );
     }
-    let user_id: String = user.get("user_id");
+    let card_type: String = user.try_get("card_type").unwrap_or_else(|_| "EMPLOYEE".to_string());
+    let is_admin_card = card_type == "ADMIN_ASSIST";
+
+    if is_admin_card && target_user_id.is_none() {
+        let employees = sqlx::query("SELECT user_id, full_name, department, photo_url FROM users WHERE status = 'ACTIVE' AND card_type != 'ADMIN_ASSIST' ORDER BY full_name ASC")
+            .fetch_all(&state.db).await.unwrap_or_default();
+        let active_employees: Vec<serde_json::Value> = employees.into_iter().map(|e| {
+            let uid_val: String = e.get("user_id");
+            let photo_url = resolve_user_photo_url(&state.data_dir, &uid_val, e.get::<Option<String>,_>("photo_url"));
+            serde_json::json!({
+                "userId": uid_val,
+                "fullName": e.get::<String, _>("full_name"),
+                "department": e.get::<Option<String>, _>("department"),
+                "photoUrl": photo_url,
+            })
+        }).collect();
+        let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, 'ADMIN_ASSIST card presented', ?)")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&received_at).bind(&uid).bind(user.get::<String,_>("user_id")).bind(&request_id).execute(&state.db).await;
+        return Ok(serde_json::json!({
+            "success": true,
+            "requestId": request_id,
+            "action": "ADMIN_ASSIST",
+            "message": "Admin assist card accepted. Select an employee to record attendance.",
+            "adminCard": {
+                "rfidUid": uid,
+                "label": user.get::<String, _>("full_name"),
+            },
+            "activeEmployees": active_employees,
+        }));
+    }
+
+    let (effective_user, effective_source, recorded_by, recorded_reason, recorded_at) = if is_admin_card {
+        let target_id = target_user_id.as_ref().unwrap();
+        if target_id == &user.get::<String, _>("user_id") {
+            return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ADMIN_CARD_REQUIRES_SELECTION","message":"Admin RFID cards cannot record attendance for themselves."}}));
+        }
+        let target = match sqlx::query("SELECT user_id, full_name, department, employee_type, daily_rate_centavos, photo_url, status, gender, card_type, rfid_uid FROM users WHERE user_id = ?")
+            .bind(target_id).fetch_optional(&state.db).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"UNKNOWN_RFID_CARD","message":"Selected employee not found."}})),
+            Err(_) => return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Attendance data is unavailable."}})),
+        };
+        if target.try_get::<String, _>("card_type").unwrap_or_default() == "ADMIN_ASSIST" {
+            return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ADMIN_CARD_REQUIRES_SELECTION","message":"Cannot record attendance for another admin card."}}));
+        }
+        if target.get::<String, _>("status") != "ACTIVE" {
+            return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INACTIVE_USER","message":"This employee is inactive."}}));
+        }
+        let rec_by = user.get::<String, _>("full_name");
+        let rec_reason = assist_reason.clone();
+        let now_ts = now.with_timezone(&Manila).to_rfc3339();
+        (target, "ADMIN_ASSISTED_SCAN", Some(rec_by), Some(rec_reason), Some(now_ts))
+    } else {
+        if target_user_id.is_some() && target_user_id.as_deref() != Some(user.get::<&str, _>("user_id")) {
+            return Ok(serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INVALID_SCAN_INPUT","message":"Only Admin RFID cards can record attendance for other employees."}}));
+        }
+        (user, source, None, None, None)
+    };
+
+    let cooldown_key = if is_admin_card {
+        effective_user.get::<String, _>("rfid_uid")
+    } else {
+        uid.clone()
+    };
+    {
+        let mut guard = state.scan_guard.lock().await;
+        if guard
+            .get(&cooldown_key)
+            .is_some_and(|last| last.elapsed().as_millis() < 500)
+        {
+            return Ok(
+                serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently."}}),
+            );
+        }
+        guard.insert(cooldown_key.clone(), Instant::now());
+    }
+    {
+        let cooldown = state.physical_cooldown.lock().await;
+        if cooldown
+            .get(&cooldown_key)
+            .is_some_and(|last| last.elapsed().as_secs() < 10)
+        {
+            return Ok(
+                serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently.","retryAfterSeconds":10}}),
+            );
+        }
+    }
+
+    let user_id: String = effective_user.get("user_id");
+    let effective_uid: String = effective_user.get("rfid_uid");
     let date = now.with_timezone(&Manila).date_naive().to_string();
     let timestamp = now.with_timezone(&Manila).to_rfc3339();
     let existing = sqlx::query("SELECT attendance_id, time_in, time_out, status, revision FROM attendance WHERE user_id = ? AND attendance_date = ?")
@@ -3050,8 +3425,8 @@ async fn scan_rfid(
     let (attendance_id, action, time_in, time_out, attendance_status) = match existing {
         None => {
             let id = uuid::Uuid::new_v4().to_string();
-            let result = sqlx::query("INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'WORKING', ?, ?, ?)")
-                .bind(&id).bind(&date).bind(&user_id).bind(&uid).bind(user.get::<String,_>("full_name")).bind(user.get::<Option<String>,_>("department")).bind(&timestamp).bind(source).bind(&timestamp).bind(&timestamp).execute(&state.db).await;
+            let result = sqlx::query("INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, notes, recorded_by, recorded_reason, recorded_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'WORKING', ?, '', ?, ?, ?, ?, ?)")
+                .bind(&id).bind(&date).bind(&user_id).bind(&effective_uid).bind(effective_user.get::<String,_>("full_name")).bind(effective_user.get::<Option<String>,_>("department")).bind(&timestamp).bind(effective_source).bind(&recorded_by).bind(&recorded_reason).bind(&recorded_at).bind(&timestamp).bind(&timestamp).execute(&state.db).await;
             if result.is_err() {
                 return Ok(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
@@ -3084,8 +3459,8 @@ async fn scan_rfid(
             // never as a normal COMPLETED shift.
             let late = crate::services::office_hours::is_late_timeout(&timestamp);
             let new_status = if late { "LATE_TIMEOUT" } else { "COMPLETED" };
-            let result = sqlx::query("UPDATE attendance SET time_out = ?, status = ?, revision = revision + 1, updated_at = ? WHERE attendance_id = ? AND revision = ? AND time_out IS NULL")
-                .bind(&timestamp).bind(new_status).bind(&timestamp).bind(&id).bind(row.get::<i64,_>("revision")).execute(&state.db).await;
+            let result = sqlx::query("UPDATE attendance SET time_out = ?, status = ?, source = ?, recorded_by = COALESCE(?, recorded_by), recorded_reason = COALESCE(?, recorded_reason), recorded_at = COALESCE(?, recorded_at), revision = revision + 1, updated_at = ? WHERE attendance_id = ? AND revision = ? AND time_out IS NULL")
+                .bind(&timestamp).bind(new_status).bind(effective_source).bind(&recorded_by).bind(&recorded_reason).bind(&recorded_at).bind(&timestamp).bind(&id).bind(row.get::<i64,_>("revision")).execute(&state.db).await;
             if result.map(|r| r.rows_affected()).unwrap_or(0) != 1 {
                 return Ok(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_DATA_CONFLICT","message":"Attendance changed before the scan was saved."}}),
@@ -3099,16 +3474,16 @@ async fn scan_rfid(
         .physical_cooldown
         .lock()
         .await
-        .insert(uid.clone(), Instant::now());
+        .insert(cooldown_key, Instant::now());
     if action == "TIME_OUT" && attendance_status == "COMPLETED" {
         if let (Some(actual_in), Some(actual_out)) = (time_in.as_deref(), time_out.as_deref()) {
-            let employee_type: String = user.get("employee_type");
-            let daily_rate: Option<i64> = user.get("daily_rate_centavos");
+            let employee_type: String = effective_user.get("employee_type");
+            let daily_rate: Option<i64> = effective_user.get("daily_rate_centavos");
             if let Err(error) = ensure_payroll(
                 &state,
                 &attendance_id,
                 &user_id,
-                user.get::<String, _>("full_name"),
+                effective_user.get::<String, _>("full_name"),
                 &employee_type,
                 daily_rate,
                 &date,
@@ -3140,8 +3515,8 @@ async fn scan_rfid(
                 attendance_id: attendance_id.clone(),
                 attendance_date: date.clone(),
                 user_id: user_id.clone(),
-                full_name: user.get::<String, _>("full_name"),
-                department: user.get::<Option<String>, _>("department"),
+                full_name: effective_user.get::<String, _>("full_name"),
+                department: effective_user.get::<Option<String>, _>("department"),
                 time_in: time_in.clone(),
                 time_out: time_out.clone(),
                 status: attendance_status.to_string(),
@@ -3159,8 +3534,24 @@ async fn scan_rfid(
     });
     let _ = app.emit("attendance-updated", &event_payload);
     let _ = app.emit("attendance-changed", &event_payload);
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&timestamp).bind(&uid).bind(&user_id).bind(format!("{} recorded", action)).bind(&request_id).execute(&state.db).await;
-    let payload = serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"userId":user_id,"action":action,"timeIn":time_in,"timeOut":time_out});
+    let audit_msg = if is_admin_card {
+        format!("{} recorded (Assisted by {})", action, recorded_by.as_deref().unwrap_or("Admin"))
+    } else {
+        format!("{} recorded", action)
+    };
+    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&timestamp).bind(&uid).bind(&user_id).bind(audit_msg).bind(&request_id).execute(&state.db).await;
+    let payload = serde_json::json!({
+        "attendanceId": attendance_id,
+        "attendanceDate": date,
+        "userId": user_id,
+        "action": action,
+        "timeIn": time_in,
+        "timeOut": time_out,
+        "source": effective_source,
+        "recordedBy": recorded_by,
+        "recordedReason": recorded_reason,
+        "recordedAt": recorded_at,
+    });
     enqueue_sync(
         &state,
         "Attendance",
@@ -3172,9 +3563,33 @@ async fn scan_rfid(
         &payload,
     )
     .await;
-    let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, user.get::<Option<String>,_>("photo_url"));
+    let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, effective_user.get::<Option<String>,_>("photo_url"));
     Ok(
-        serde_json::json!({"success":true,"requestId":request_id,"action":action,"message":if action == "TIME_IN" { "Time In recorded successfully." } else { "Time Out recorded successfully." },"attendance":{"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":attendance_status},"user":{"userId":user_id,"fullName":user.get::<String,_>("full_name"),"department":user.get::<Option<String>,_>("department"),"employeeType":user.get::<String,_>("employee_type"),"gender":user.get::<Option<String>,_>("gender"),"photoUrl":photo_url}}),
+        serde_json::json!({
+            "success": true,
+            "requestId": request_id,
+            "action": action,
+            "message": if action == "TIME_IN" { "Time In recorded successfully." } else { "Time Out recorded successfully." },
+            "attendance": {
+                "attendanceId": attendance_id,
+                "attendanceDate": date,
+                "timeIn": time_in,
+                "timeOut": time_out,
+                "status": attendance_status,
+                "source": effective_source,
+                "recordedBy": recorded_by,
+                "recordedReason": recorded_reason,
+                "recordedAt": recorded_at,
+            },
+            "user": {
+                "userId": user_id,
+                "fullName": effective_user.get::<String,_>("full_name"),
+                "department": effective_user.get::<Option<String>,_>("department"),
+                "employeeType": effective_user.get::<String,_>("employee_type"),
+                "gender": effective_user.get::<Option<String>,_>("gender"),
+                "photoUrl": photo_url
+            }
+        }),
     )
 }
 
@@ -3509,6 +3924,7 @@ pub fn run() {
             admin_attendance,
             admin_list_attendance,
             admin_update_attendance,
+            admin_create_backdated_attendance,
             admin_delete_attendance,
             payroll_calculate_cutoff,
             payroll_list_profiles,
@@ -3593,7 +4009,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("in-memory database");
-        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, rfid_uid TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, department TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, employee_type TEXT NOT NULL, daily_rate_centavos INTEGER, payroll_profile_id TEXT, photo_url TEXT, gender TEXT CHECK (gender IN ('MALE', 'FEMALE')), revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
+        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, rfid_uid TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, department TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, employee_type TEXT NOT NULL, daily_rate_centavos INTEGER, payroll_profile_id TEXT, photo_url TEXT, gender TEXT CHECK (gender IN ('MALE', 'FEMALE')), card_type TEXT NOT NULL DEFAULT 'EMPLOYEE' CHECK (card_type IN ('EMPLOYEE', 'ADMIN_ASSIST')), revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
             .execute(&db).await.expect("users table");
         upsert_user_record(
             &db,
@@ -3607,6 +4023,7 @@ mod tests {
             Some(50_000),
             Some("BEA_STANDARD"),
             Some("https://example.com/ada.webp"),
+            "EMPLOYEE",
             "2026-08-05T00:00:00Z",
         )
         .await
@@ -3924,6 +4341,7 @@ mod tests {
             Some(50_000),
             Some("BEA_STANDARD"),
             None,
+            "EMPLOYEE",
             "2026-08-01T00:00:00Z",
         )
         .await

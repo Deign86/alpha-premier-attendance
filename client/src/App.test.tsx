@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
 import * as ttsService from './services/ttsService';
@@ -875,5 +875,390 @@ describe('Admin Attendance Corrections', () => {
     } finally {
       window.history.pushState({}, '', '/');
     }
+  });
+
+  it('allows registering an Admin RFID card with segmented control', async () => {
+    interface CapturedSetupUserPayload {
+      rfidUid?: string;
+      cardType?: string;
+      label?: string;
+      userId?: string;
+    }
+    let capturedUpsertBody: CapturedSetupUserPayload | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Mock config response
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            timezone: 'Asia/Manila',
+            rfidAutoSubmitDelayMs: 30,
+            resultResetDelayMs: 500,
+            enableCardSetup: true,
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/setup/unlock')) {
+        // SAFETY: Mock unlock response
+        return {
+          ok: true,
+          json: async () => ({ success: true, setupToken: 'tok-123', expiresAt: '2026-08-27T10:00:00Z' }),
+        } as Response;
+      }
+      if (url.includes('/api/setup/card')) {
+        // SAFETY: Mock lookup response
+        return {
+          ok: true,
+          json: async () => ({ success: true, rfidUid: 'ADDE23', user: null }),
+        } as Response;
+      }
+      if (url.includes('/api/setup/users')) {
+        if (init?.body) {
+          // SAFETY: Parse mock upsert body
+          capturedUpsertBody = JSON.parse(String(init.body)) as CapturedSetupUserPayload;
+        }
+        // SAFETY: Mock upsert response
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            created: true,
+            user: {
+              userId: 'ADMIN_CARD_ADDE23',
+              rfidUid: 'ADDE23',
+              fullName: 'Front Desk Admin',
+              status: 'ACTIVE',
+              cardType: 'ADMIN_ASSIST',
+            },
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Open setup dialog
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+    expect(await screen.findByRole('dialog', { name: /associate rfid card/i })).toBeInTheDocument();
+
+    // Enter PIN
+    await user.type(screen.getByLabelText(/administrator pin/i), '1234');
+    await user.click(screen.getByRole('button', { name: /unlock setup/i }));
+
+    // Scan card
+    const cardInput = await screen.findByLabelText(/setup card id/i);
+    await user.type(cardInput, 'ADDE23{enter}');
+
+    // Now in edit step: segmented control is visible
+    expect(await screen.findByRole('radiogroup', { name: /register card as:/i })).toBeInTheDocument();
+    const adminCardOption = screen.getByRole('radio', { name: /admin rfid card/i });
+    expect(adminCardOption).not.toBeChecked();
+
+    // Select Admin RFID card
+    await user.click(adminCardOption);
+    expect(adminCardOption).toBeChecked();
+
+    // Employee fields should be hidden, label field should be visible
+    expect(screen.queryByLabelText(/^user id$/i)).not.toBeInTheDocument();
+    const labelInput = screen.getByLabelText(/card label/i);
+    expect(labelInput).toBeInTheDocument();
+    await user.type(labelInput, 'Front Desk Admin');
+
+    // Save admin card
+    const saveButton = screen.getByRole('button', { name: /save admin card/i });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(capturedUpsertBody).toMatchObject({
+        rfidUid: 'ADDE23',
+        cardType: 'ADMIN_ASSIST',
+        label: 'Front Desk Admin',
+      });
+    });
+  });
+
+  it('handles Admin RFID card tap by opening Assisted Attendance modal and confirming assisted scan', async () => {
+    interface CapturedScanPayload {
+      rfidUid?: string;
+      source?: string;
+      targetUserId?: string;
+      reason?: string;
+    }
+    let capturedScanBody: CapturedScanPayload | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns mock Response for config
+        return {
+          ok: true,
+          json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }),
+        } as Response;
+      }
+      if (url.includes('/api/attendance/scan')) {
+        // SAFETY: Parse mock scan body
+        const body = JSON.parse(String(init?.body ?? '{}')) as CapturedScanPayload;
+        capturedScanBody = body;
+        if (body.source === 'ADMIN_ASSISTED_SCAN') {
+          // SAFETY: Return successful assisted scan response
+          return {
+            ok: true,
+            json: async () => ({
+              success: true,
+              requestId: 'req-assisted',
+              action: 'TIME_IN',
+              message: 'Time in recorded (assisted)',
+              attendance: {
+                attendanceId: 'att-assisted',
+                attendanceDate: '2026-08-27',
+                timeIn: '2026-08-27T09:00:00+08:00',
+                timeOut: null,
+                status: 'WORKING',
+                source: 'ADMIN_ASSISTED_SCAN',
+                recordedBy: 'Duty Manager',
+                recordedReason: 'Forgot RFID card',
+                recordedAt: '2026-08-27T09:00:00+08:00',
+              },
+              user: {
+                userId: 'EMP-01',
+                fullName: 'Bob Smith',
+                department: 'Operations',
+                employeeType: 'EMPLOYEE',
+              },
+            }),
+          } as Response;
+        }
+        // Initial Admin card scan returns ADMIN_ASSIST prompt
+        // SAFETY: Return admin assist prompt
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            action: 'ADMIN_ASSIST',
+            adminCard: {
+              rfidUid: 'ADMIN_CARD_UID',
+              label: 'Duty Manager',
+            },
+            activeEmployees: [
+              {
+                userId: 'EMP-01',
+                fullName: 'Bob Smith',
+                department: 'Operations',
+              },
+              {
+                userId: 'EMP-02',
+                fullName: 'Carol Danvers',
+                department: 'Engineering',
+              },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Emit Admin RFID scan
+    act(() => {
+      emitRfidScan('ADMIN_CARD_UID');
+    });
+
+    // Assisted Attendance modal should appear
+    expect(await screen.findByRole('dialog', { name: /assisted attendance/i })).toBeInTheDocument();
+    expect(screen.getByText(/Duty Manager/i)).toBeInTheDocument();
+    expect(screen.getByText(/Auto-cancels in 25s/i)).toBeInTheDocument();
+
+    // Search and select Bob Smith
+    const searchInput = screen.getByPlaceholderText(/search employee/i);
+    await user.type(searchInput, 'Bob');
+    expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+    expect(screen.queryByText('Carol Danvers')).not.toBeInTheDocument();
+
+    const employeeOption = screen.getByRole('option', { name: /bob smith/i });
+    await user.click(employeeOption);
+
+    // Confirm assisted attendance
+    const confirmButton = screen.getByRole('button', { name: /confirm attendance/i });
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    // Modal closes and Kiosk shows success with assisted badge
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /assisted attendance/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/assisted by duty manager/i)).toBeInTheDocument();
+    });
+
+    expect(capturedScanBody).toMatchObject({
+      rfidUid: 'ADMIN_CARD_UID',
+      source: 'ADMIN_ASSISTED_SCAN',
+      targetUserId: 'EMP-01',
+      reason: 'Forgot RFID card',
+    });
+  });
+
+  it('renders assisted/backdated badges, filter pills, and supports backdated attendance creation in Admin panel', async () => {
+    interface CapturedBackdatePayload {
+      userId?: string;
+      attendanceDate?: string;
+      timeIn?: string;
+      timeOut?: string | null;
+      reason?: string;
+    }
+    let capturedBackdateBody: CapturedBackdatePayload | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Return active session
+        return { ok: true, json: async () => ({ success: true, authenticated: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Return active users list
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Alice Cooper', department: 'QA', status: 'ACTIVE', cardType: 'EMPLOYEE', rfidUid: 'AC1' },
+              { userId: 'ADMIN_CARD_1', fullName: 'Front Desk Admin', department: '', status: 'ACTIVE', cardType: 'ADMIN_ASSIST', rfidUid: 'ADMIN1' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance/backdate')) {
+        // SAFETY: Parse mock backdate body
+        capturedBackdateBody = JSON.parse(String(init?.body ?? '{}')) as CapturedBackdatePayload;
+        // SAFETY: Return backdate success
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            attendance: {
+              attendanceId: 'backdate-1',
+              userId: 'u1',
+              attendanceDate: '2026-08-20',
+              timeIn: '2026-08-20T08:00:00+08:00',
+              timeOut: '2026-08-20T17:00:00+08:00',
+              status: 'COMPLETED',
+              source: 'ADMIN_BACKDATED_ENTRY',
+              recordedBy: 'Admin',
+              recordedReason: 'Forgot card last week',
+              recordedAt: '2026-08-27T09:00:00+08:00',
+            },
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Return attendance with assisted and backdated rows
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            attendance: [
+              {
+                attendanceId: 'att-norm',
+                userId: 'u1',
+                fullName: 'Alice Cooper',
+                department: 'QA',
+                attendanceDate: '2026-08-27',
+                timeIn: '2026-08-27T08:00:00+08:00',
+                timeOut: null,
+                status: 'WORKING',
+                source: 'RFID',
+              },
+              {
+                attendanceId: 'att-asst',
+                userId: 'u1',
+                fullName: 'Alice Cooper',
+                department: 'QA',
+                attendanceDate: '2026-08-27',
+                timeIn: '2026-08-27T09:00:00+08:00',
+                timeOut: null,
+                status: 'WORKING',
+                source: 'ADMIN_ASSISTED_SCAN',
+                recordedBy: 'Duty Manager',
+                recordedReason: 'Forgot RFID card',
+                recordedAt: '2026-08-27T09:00:00+08:00',
+              },
+              {
+                attendanceId: 'att-bdt',
+                userId: 'u1',
+                fullName: 'Alice Cooper',
+                department: 'QA',
+                attendanceDate: '2026-08-20',
+                timeIn: '2026-08-20T08:00:00+08:00',
+                timeOut: '2026-08-20T17:00:00+08:00',
+                status: 'COMPLETED',
+                source: 'ADMIN_BACKDATED_ENTRY',
+                recordedBy: 'Admin',
+                recordedReason: 'Physical attendance verified',
+                recordedAt: '2026-08-27T09:00:00+08:00',
+              },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Return empty profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Return empty cutoffs
+        return { ok: true, json: async () => ({ success: true, records: [] }) } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Switch to Attendance tab
+    await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+    // Badges should be visible in the table
+    expect(await screen.findByText(/assisted by duty manager/i)).toBeInTheDocument();
+    expect(screen.getByText(/backdated entry by admin — physical attendance verified/i)).toBeInTheDocument();
+
+    // Filter pills should show counts
+    const assistedPill = screen.getByRole('button', { name: /assisted 1/i });
+    const backdatedPill = screen.getByRole('button', { name: /backdated 1/i });
+    expect(assistedPill).toBeInTheDocument();
+    expect(backdatedPill).toBeInTheDocument();
+
+    // Click "+ Add missed attendance"
+    const addMissedButton = screen.getByRole('button', { name: /\+ add missed attendance/i });
+    await user.click(addMissedButton);
+
+    // Modal opens
+    const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
+    expect(dialog).toBeInTheDocument();
+
+    // Employee select should contain active employee (Alice Cooper), but not admin card
+    const employeeSelect = within(dialog).getByLabelText(/^employee:$/i);
+    expect(employeeSelect).toHaveTextContent('Alice Cooper');
+    expect(employeeSelect).not.toHaveTextContent('Front Desk Admin');
+
+    // Fill in reason
+    const reasonInput = within(dialog).getByLabelText(/reason \(mandatory audit trail\):/i);
+    await user.type(reasonInput, 'Employee verified on site');
+
+    // Submit backdated entry
+    const submitButton = within(dialog).getByRole('button', { name: /add missed attendance/i });
+    await user.click(submitButton);
+
+    await waitFor(() => {
+      expect(capturedBackdateBody).toMatchObject({
+        userId: 'u1',
+        reason: 'Employee verified on site',
+      });
+    });
   });
 });

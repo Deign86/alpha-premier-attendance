@@ -128,6 +128,14 @@ export function createApp(options: CreateAppOptions): express.Express {
       res.json({ success: true, date, attendance: await admin.attendance(date, true), fetchedAt: manilaTimestamp(new Date(), options.config.timezone) });
     } catch (error) { sendAdminError(req, res, error); }
   });
+  app.post('/api/admin/attendance/backdate', async (req, res) => {
+    try {
+      requireAdmin(req);
+      res.json({ success: true, attendance: await admin.createBackdatedAttendance(req.body) });
+    } catch (error) {
+      sendAdminError(req, res, error);
+    }
+  });
   app.patch('/api/admin/attendance/:attendanceId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, attendance: await admin.updateAttendance(req.params.attendanceId, req.body) }); } catch (error) { sendAdminError(req, res, error); } });
   app.delete('/api/admin/attendance/:attendanceId', async (req, res) => {
     try {

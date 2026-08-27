@@ -18,6 +18,8 @@ import {
 import type {
   ScanErrorResponse,
   ScanSuccessResponse,
+  ScanAdminAssistResponse,
+  CardType,
   SetupUser,
   UserGender,
   AttendanceListItem,
@@ -78,6 +80,7 @@ import {
   unlockSetup,
   uploadSetupPhoto,
   upsertSetupUser,
+  createAdminBackdatedAttendance,
 } from "./api";
 import { sseUrl } from "./network";
 import type { FileActionResult } from "./api";
@@ -120,6 +123,8 @@ type KioskState = "ready" | "processing" | "success" | "error";
 type Result = ScanSuccessResponse | ScanErrorResponse;
 type SetupStep = "scan" | "edit";
 type SetupForm = {
+  cardType: CardType;
+  label: string;
   userId: string;
   fullName: string;
   department: string;
@@ -130,6 +135,8 @@ type SetupForm = {
   photoUrl: string;
 };
 const emptySetupForm: SetupForm = {
+  cardType: "EMPLOYEE",
+  label: "",
   userId: "",
   fullName: "",
   department: "",
@@ -205,6 +212,9 @@ export default function App() {
   const [setupUid, setSetupUid] = useState("");
   const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
   const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
+  const [adminAssistData, setAdminAssistData] = useState<ScanAdminAssistResponse | null>(null);
+  const [assistedBusy, setAssistedBusy] = useState(false);
+  const [assistedError, setAssistedError] = useState("");
   const setupInputRef = useRef<HTMLInputElement>(null);
   const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setupSessionTimer = useRef<number | null>(null);
@@ -350,6 +360,8 @@ export default function App() {
       setSetupForm(
         response.user
           ? {
+              cardType: response.user.cardType ?? "EMPLOYEE",
+              label: response.user.cardType === "ADMIN_ASSIST" ? response.user.fullName : "",
               userId: response.user.userId,
               fullName: response.user.fullName,
               department: response.user.department ?? "",
@@ -384,31 +396,37 @@ export default function App() {
 
   const submitSetupUser = async (event: React.FormEvent) => {
     event.preventDefault();
+    const isAssist = setupForm.cardType === "ADMIN_ASSIST";
     if (
       !setupToken ||
-      !setupUid.trim() ||
-      !setupForm.userId.trim() ||
-      !setupForm.fullName.trim() ||
+      !(setupUid ?? "").trim() ||
+      (!isAssist && (!setupForm.userId.trim() || !setupForm.fullName.trim())) ||
       setupBusy
     )
       return;
     setSetupBusy(true);
     setSetupError("");
+    const cleanUid = (setupUid ?? "").trim().toUpperCase();
     const response = await upsertSetupUser(
       {
-        rfidUid: setupUid.trim().toUpperCase(),
-        userId: setupForm.userId.trim().toUpperCase(),
-        fullName: normalizeName(setupForm.fullName),
-        department:
-          setupForm.department.trim().replace(/\s+/g, " ") || undefined,
+        rfidUid: cleanUid,
+        userId: isAssist ? `ADMIN_CARD_${cleanUid}` : setupForm.userId.trim().toUpperCase(),
+        fullName: isAssist
+          ? (setupForm.label.trim() ? normalizeName(setupForm.label) : "Admin Assist Card")
+          : normalizeName(setupForm.fullName),
+        department: isAssist
+          ? "Admin"
+          : (setupForm.department.trim().replace(/\s+/g, " ") || undefined),
         status: setupForm.status,
-        employeeType: setupForm.employeeType,
-        gender: setupForm.gender || null,
+        employeeType: isAssist ? "EMPLOYEE" : setupForm.employeeType,
+        gender: isAssist ? null : (setupForm.gender || null),
         dailyRate:
-          setupForm.employeeType === "EMPLOYEE"
+          !isAssist && setupForm.employeeType === "EMPLOYEE"
             ? Number(setupForm.dailyRate)
             : null,
-        photoUrl: setupForm.photoUrl || null,
+        photoUrl: isAssist ? null : (setupForm.photoUrl || null),
+        cardType: setupForm.cardType,
+        label: setupForm.label.trim() || undefined,
       },
       setupToken,
     );
@@ -511,6 +529,12 @@ export default function App() {
       if (controller.signal.aborted) return;
       requestController.current = null;
       processingRef.current = false;
+      if (response.success && response.action === "ADMIN_ASSIST") {
+        setAdminAssistData(response);
+        setAssistedError("");
+        setState("ready");
+        return;
+      }
       setResult(response);
       const nextState = response.success ? "success" : "error";
       setState(nextState);
@@ -528,6 +552,38 @@ export default function App() {
     [config.resultResetDelayMs, config.timezone, resetToReady],
   );
 
+  const handleAssistedConfirm = async (targetUserId: string, reason: string) => {
+    if (!adminAssistData) return;
+    setAssistedBusy(true);
+    setAssistedError("");
+    try {
+      const response = await submitScan({
+        rfidUid: adminAssistData.adminCard.rfidUid,
+        source: "ADMIN_ASSISTED_SCAN",
+        targetUserId,
+        reason,
+      });
+      setAssistedBusy(false);
+      if (response.success && response.action !== "ADMIN_ASSIST") {
+        setAdminAssistData(null);
+        setResult(response);
+        setState("success");
+        if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
+        void announceAttendance({
+          employeeName: response.user.fullName,
+          attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
+        });
+        if (resetTimer.current) clearTimeout(resetTimer.current);
+        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
+      } else if (!response.success) {
+        setAssistedError(response.error.message);
+      }
+    } catch {
+      setAssistedBusy(false);
+      setAssistedError("Failed to record assisted attendance. Please try again.");
+    }
+  };
+
   const handleManualKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement>,
   ) => {
@@ -541,6 +597,7 @@ export default function App() {
   // duplicate listeners while config/setup state settles).
   const scanHandlerRef = useRef<(value: string) => void>(() => {});
   scanHandlerRef.current = (value) => {
+    if (adminAssistData) return;
     if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
       handleSetupInput(value);
     } else if (!setupDialogOpen || !setupToken) {
@@ -574,7 +631,7 @@ export default function App() {
       const normalized = candidate.toUpperCase();
       if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
         handleSetupInput(normalized);
-      } else if (!manualMode && !setupDialogOpen) {
+      } else if (!manualMode && !setupDialogOpen && !adminAssistData) {
         void submit(normalized, "RFID");
       }
     };
@@ -594,7 +651,7 @@ export default function App() {
           (target.matches("textarea, select, [contenteditable='true']") ||
             (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid")),
       );
-      if (isTextEntry || manualMode || (setupDialogOpen && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
+      if (isTextEntry || manualMode || adminAssistData || (setupDialogOpen && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
         resetBuffer();
         return;
       }
@@ -817,6 +874,11 @@ export default function App() {
               >
                 {success.user.employeeType}
               </span>
+              {success.attendance.source === "ADMIN_ASSISTED_SCAN" && (
+                <span className="badge badge-assisted">
+                  Assisted by {success.attendance.recordedBy || "Admin"}
+                </span>
+              )}
               <span>{formatAction(success.action)}</span>
               <span>
                 {formatTime(
@@ -1000,6 +1062,16 @@ export default function App() {
           onPhotoFile={(file) => void uploadSetupPhotoFile(file)}
           onUpsert={submitSetupUser}
           onClose={closeSetup}
+        />
+      )}
+
+      {adminAssistData && (
+        <AssistedAttendanceModal
+          data={adminAssistData}
+          onClose={() => setAdminAssistData(null)}
+          onConfirm={handleAssistedConfirm}
+          busy={assistedBusy}
+          error={assistedError}
         />
       )}
 
@@ -1195,193 +1267,259 @@ function SetupDialog(props: SetupDialogProps) {
               Review the profile before saving. Saving here changes the Users
               register only; it does not create attendance.
             </p>
-            <div className="setup-fields">
-              <label>
-                <span className="field-label">User ID</span>
-                <input
-                  value={props.form.userId}
-                  onChange={(event) =>
-                    props.onFormChange("userId", event.target.value.toUpperCase())
-                  }
-                  onBlur={() =>
-                    props.onFormChange("userId", props.form.userId.trim().toUpperCase())
-                  }
-                  autoComplete="off"
-                  required
-                  autoFocus
-                />
-              </label>
-              <label>
-                <span className="field-label">Full name</span>
-                <input
-                  value={props.form.fullName}
-                  onChange={(event) =>
-                    props.onFormChange("fullName", event.target.value)
-                  }
-                  onBlur={() =>
-                    props.onFormChange(
-                      "fullName",
-                      normalizeName(props.form.fullName),
-                    )
-                  }
-                  autoComplete="name"
-                  required
-                />
-              </label>
-              <label>
-                <span className="field-label">
-                  Department / role <span className="optional">optional</span>
-                </span>
-                <input
-                  placeholder="IT / Admin"
-                  value={props.form.department}
-                  onChange={(event) =>
-                    props.onFormChange("department", event.target.value)
-                  }
-                  onBlur={() =>
-                    props.onFormChange(
-                      "department",
-                      props.form.department.trim().replace(/\s+/g, " "),
-                    )
-                  }
-                  autoComplete="organization"
-                />
-              </label>
-              <label>
-                <span className="field-label">Status</span>
-                <select
-                  value={props.form.status}
-                  onChange={(event) =>
-                    props.onFormChange("status", event.target.value)
-                  }
-                >
-                  <option value="ACTIVE">Active</option>
-                  <option value="INACTIVE">Inactive</option>
-                </select>
-              </label>
-              <label>
-                <span className="field-label">Employee type</span>
-                <select
-                  value={props.form.employeeType}
-                  onChange={(event) =>
-                    props.onFormChange("employeeType", event.target.value)
-                  }
-                >
-                  <option value="INTERN">Intern</option>
-                  <option value="EMPLOYEE">Employee</option>
-                </select>
-              </label>
-              <label>
-                <span className="field-label">Gender</span>
-                <select
-                  value={props.form.gender}
-                  onChange={(event) =>
-                    props.onFormChange("gender", event.target.value)
-                  }
-                >
-                  <option value="">Not set</option>
-                  <option value="MALE">Male</option>
-                  <option value="FEMALE">Female</option>
-                </select>
-              </label>
-              {props.form.employeeType === "EMPLOYEE" && (
-                <label>
-                  <span className="field-label">Daily rate (PHP)</span>
+            <div className="card-type-toggle" role="radiogroup" aria-label="Register card as:">
+              <span className="field-label">Register card as:</span>
+              <div className="segmented-control">
+                <label className={`segment-option ${props.form.cardType === "EMPLOYEE" ? "is-selected" : ""}`}>
                   <input
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    required
-                    value={props.form.dailyRate}
-                    onChange={(event) =>
-                      props.onFormChange("dailyRate", event.target.value)
-                    }
+                    type="radio"
+                    name="cardType"
+                    value="EMPLOYEE"
+                    checked={props.form.cardType === "EMPLOYEE"}
+                    onChange={() => props.onFormChange("cardType", "EMPLOYEE")}
                   />
+                  Employee card
                 </label>
-              )}
-              <div className="photo-field">
-                <span className="field-label">
-                  ID photo <span className="optional">optional</span>
-                </span>
-                <label
-                  className={`photo-dropzone${props.form.photoUrl ? " has-photo" : ""}${isDraggingPhoto ? " is-dragging" : ""}`}
-                  htmlFor="setup-photo"
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (event.dataTransfer) {
-                      event.dataTransfer.dropEffect = "copy";
-                    }
-                  }}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setIsDraggingPhoto(true);
-                  }}
-                  onDragLeave={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (
-                      event.relatedTarget instanceof Node &&
-                      event.currentTarget.contains(event.relatedTarget)
-                    ) {
-                      return;
-                    }
-                    setIsDraggingPhoto(false);
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setIsDraggingPhoto(false);
-                    const file =
-                      event.dataTransfer.files?.[0] ??
-                      (event.dataTransfer.items &&
-                      event.dataTransfer.items.length > 0
-                        ? event.dataTransfer.items[0].getAsFile()
-                        : null);
-                    if (file) props.onPhotoFile(file);
-                  }}
-                >
+                <label className={`segment-option ${props.form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
                   <input
-                    id="setup-photo"
-                    className="photo-input"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) props.onPhotoFile(file);
-                      event.currentTarget.value = "";
-                    }}
+                    type="radio"
+                    name="cardType"
+                    value="ADMIN_ASSIST"
+                    checked={props.form.cardType === "ADMIN_ASSIST"}
+                    onChange={() => props.onFormChange("cardType", "ADMIN_ASSIST")}
                   />
-                  {props.form.photoUrl ? (
-                    <>
-                      <img
-                        src={photoSource(props.form.photoUrl)}
-                        alt="Uploaded ID preview"
-                      />
-                      <span className="photo-overlay">
-                        <Check size={17} /> Photo ready
-                      </span>
-                    </>
-                  ) : isDraggingPhoto ? (
-                    <>
-                      <ImagePlus size={28} />
-                      <strong>Drop ID photo here</strong>
-                      <small>Release mouse to upload photo</small>
-                    </>
-                  ) : (
-                    <>
-                      <ImagePlus size={25} />
-                      <strong>Choose an ID photo</strong>
-                      <small>JPG, PNG, or WebP - resized automatically</small>
-                      <span className="photo-upload-link">
-                        <Upload size={14} /> Browse files
-                      </span>
-                    </>
-                  )}
+                  Admin RFID card
                 </label>
               </div>
             </div>
+            {props.form.cardType === "ADMIN_ASSIST" ? (
+              <div className="setup-fields">
+                <label>
+                  <span className="field-label">
+                    Card label <span className="optional">optional</span>
+                  </span>
+                  <input
+                    placeholder="e.g. Front desk admin card #1"
+                    value={props.form.label}
+                    onChange={(event) =>
+                      props.onFormChange("label", event.target.value)
+                    }
+                    autoComplete="off"
+                    autoFocus
+                  />
+                </label>
+                <p className="field-hint">
+                  Admin RFID cards are used to time-in or time-out employees who physically showed up but forgot their card. Admin cards cannot record attendance for themselves.
+                </p>
+              </div>
+            ) : (
+              <div className="setup-fields">
+                <label>
+                  <span className="field-label">User ID</span>
+                  <input
+                    value={props.form.userId}
+                    onChange={(event) =>
+                      props.onFormChange("userId", event.target.value.toUpperCase())
+                    }
+                    onBlur={() =>
+                      props.onFormChange("userId", props.form.userId.trim().toUpperCase())
+                    }
+                    autoComplete="off"
+                    required
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  <span className="field-label">Full name</span>
+                  <input
+                    value={props.form.fullName}
+                    onChange={(event) =>
+                      props.onFormChange("fullName", event.target.value)
+                    }
+                    onBlur={() =>
+                      props.onFormChange(
+                        "fullName",
+                        normalizeName(props.form.fullName),
+                      )
+                    }
+                    autoComplete="name"
+                    required
+                  />
+                </label>
+                <label>
+                  <span className="field-label">
+                    Department / role <span className="optional">optional</span>
+                  </span>
+                  <input
+                    placeholder="IT / Admin"
+                    value={props.form.department}
+                    onChange={(event) =>
+                      props.onFormChange("department", event.target.value)
+                    }
+                    onBlur={() =>
+                      props.onFormChange(
+                        "department",
+                        props.form.department.trim().replace(/\s+/g, " "),
+                      )
+                    }
+                    autoComplete="organization"
+                  />
+                </label>
+                <label>
+                  <span className="field-label">Status</span>
+                  <select
+                    value={props.form.status}
+                    onChange={(event) =>
+                      props.onFormChange(
+                        "status",
+                        event.target.value === "INACTIVE"
+                          ? "INACTIVE"
+                          : "ACTIVE",
+                      )
+                    }
+                  >
+                    <option value="ACTIVE">Active</option>
+                    <option value="INACTIVE">Inactive</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="field-label">Employee type</span>
+                  <select
+                    value={props.form.employeeType}
+                    onChange={(event) =>
+                      props.onFormChange(
+                        "employeeType",
+                        event.target.value === "EMPLOYEE"
+                          ? "EMPLOYEE"
+                          : "INTERN",
+                      )
+                    }
+                  >
+                    <option value="INTERN">Intern</option>
+                    <option value="EMPLOYEE">Regular Employee</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="field-label">
+                    Gender <span className="optional">optional</span>
+                  </span>
+                  <select
+                    value={props.form.gender}
+                    onChange={(event) =>
+                      props.onFormChange(
+                        "gender",
+                        event.target.value === "MALE" ||
+                          event.target.value === "FEMALE"
+                          ? event.target.value
+                          : "",
+                      )
+                    }
+                  >
+                    <option value="">Not set</option>
+                    <option value="MALE">Male (Sir)</option>
+                    <option value="FEMALE">Female (Ma'am)</option>
+                  </select>
+                </label>
+                {props.form.employeeType === "EMPLOYEE" && (
+                  <label>
+                    <span className="field-label">Daily rate (PHP)</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      placeholder="e.g. 610.00"
+                      value={props.form.dailyRate}
+                      onChange={(event) =>
+                        props.onFormChange("dailyRate", event.target.value)
+                      }
+                      required
+                    />
+                  </label>
+                )}
+                <div className="photo-field">
+                  <span className="field-label">
+                    ID photo <span className="optional">optional</span>
+                  </span>
+                  <label
+                    className={`photo-dropzone${props.form.photoUrl ? " has-photo" : ""}${isDraggingPhoto ? " is-dragging" : ""}`}
+                    htmlFor="setup-photo"
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (event.dataTransfer) {
+                        event.dataTransfer.dropEffect = "copy";
+                      }
+                    }}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setIsDraggingPhoto(true);
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (
+                        event.relatedTarget instanceof Node &&
+                        event.currentTarget.contains(event.relatedTarget)
+                      ) {
+                        return;
+                      }
+                      setIsDraggingPhoto(false);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setIsDraggingPhoto(false);
+                      const file =
+                        event.dataTransfer.files?.[0] ??
+                        (event.dataTransfer.items &&
+                        event.dataTransfer.items.length > 0
+                          ? event.dataTransfer.items[0].getAsFile()
+                          : null);
+                      if (file) props.onPhotoFile(file);
+                    }}
+                  >
+                    <input
+                      id="setup-photo"
+                      className="photo-input"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) props.onPhotoFile(file);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                    {props.form.photoUrl ? (
+                      <>
+                        <img
+                          src={photoSource(props.form.photoUrl)}
+                          alt="Uploaded ID preview"
+                        />
+                        <span className="photo-overlay">
+                          <Check size={17} /> Photo ready
+                        </span>
+                      </>
+                    ) : isDraggingPhoto ? (
+                      <>
+                        <ImagePlus size={28} />
+                        <strong>Drop ID photo here</strong>
+                        <small>Release mouse to upload photo</small>
+                      </>
+                    ) : (
+                      <>
+                        <ImagePlus size={25} />
+                        <strong>Choose an ID photo</strong>
+                        <small>JPG, PNG, or WebP - resized automatically</small>
+                        <span className="photo-upload-link">
+                          <Upload size={14} /> Browse files
+                        </span>
+                      </>
+                    )}
+                  </label>
+                </div>
+              </div>
+            )}
             {props.error && (
               <p
                 className={
@@ -1407,10 +1545,11 @@ function SetupDialog(props: SetupDialogProps) {
                 type="submit"
                 disabled={
                   props.busy ||
-                  !props.form.userId.trim() ||
-                  !props.form.fullName.trim() ||
-                  (props.form.employeeType === "EMPLOYEE" &&
-                    Number(props.form.dailyRate) <= 0)
+                  (props.form.cardType === "EMPLOYEE" &&
+                    (!props.form.userId.trim() ||
+                      !props.form.fullName.trim() ||
+                      (props.form.employeeType === "EMPLOYEE" &&
+                        Number(props.form.dailyRate) <= 0)))
                 }
               >
                 {props.busy ? (
@@ -1418,11 +1557,195 @@ function SetupDialog(props: SetupDialogProps) {
                 ) : (
                   <Check size={17} />
                 )}{" "}
-                Save user
+                {props.form.cardType === "ADMIN_ASSIST" ? "Save admin card" : "Save user"}
               </button>
             </div>
           </form>
         )}
+      </section>
+    </div>
+  );
+}
+
+function AssistedAttendanceModal({
+  data,
+  onClose,
+  onConfirm,
+  busy,
+  error,
+}: {
+  data: ScanAdminAssistResponse;
+  onClose: () => void;
+  onConfirm: (targetUserId: string, reason: string) => Promise<void>;
+  busy: boolean;
+  error: string;
+}) {
+  const [timeLeft, setTimeLeft] = useState(25);
+  const [search, setSearch] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [reasonType, setReasonType] = useState<"Forgot RFID card" | "Defective RFID card" | "Other">("Forgot RFID card");
+  const [customReason, setCustomReason] = useState("");
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          onClose();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [onClose]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const filteredEmployees = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return data.activeEmployees;
+    return data.activeEmployees.filter(
+      (e) =>
+        e.fullName.toLowerCase().includes(q) ||
+        (e.department && e.department.toLowerCase().includes(q)) ||
+        e.userId.toLowerCase().includes(q),
+    );
+  }, [data.activeEmployees, search]);
+
+  const effectiveReason = reasonType === "Other" ? customReason.trim() : reasonType;
+  const canConfirm = Boolean(selectedUserId) && Boolean(effectiveReason) && !busy;
+
+  const handleConfirm = () => {
+    if (!selectedUserId || !canConfirm) return;
+    void onConfirm(selectedUserId, effectiveReason);
+  };
+
+  return (
+    <div
+      className="assisted-modal-backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="assisted-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="assisted-heading"
+      >
+        <div className="assisted-modal-header">
+          <div>
+            <h3 id="assisted-heading">Assisted Attendance</h3>
+            <div className="assisted-admin-card-tag" style={{ marginTop: 4 }}>
+              Admin Card: <strong>{data.adminCard.label || data.adminCard.rfidUid}</strong>
+            </div>
+          </div>
+          <div className="assisted-timer" aria-live="polite">
+            Auto-cancels in {timeLeft}s
+          </div>
+        </div>
+        <div className="assisted-modal-body">
+          {error && <p className="dashboard-alert">{error}</p>}
+          <label className="field-label" htmlFor="assisted-search">
+            Select Employee:
+          </label>
+          <input
+            id="assisted-search"
+            type="text"
+            className="input"
+            placeholder="Search employee by name or department…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            autoFocus
+          />
+          <div className="employee-picker-list" role="listbox" aria-label="Active employees">
+            {filteredEmployees.length === 0 ? (
+              <div style={{ padding: "12px", textAlign: "center", color: "var(--muted)" }}>
+                No active employees found.
+              </div>
+            ) : (
+              filteredEmployees.map((emp) => {
+                const isSelected = selectedUserId === emp.userId;
+                return (
+                  <button
+                    key={emp.userId}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className={`employee-picker-item ${isSelected ? "is-selected" : ""}`}
+                    onClick={() => setSelectedUserId(emp.userId)}
+                  >
+                    <div>
+                      <strong>{emp.fullName}</strong>
+                      <small style={{ display: "block", color: "var(--muted)" }}>
+                        {emp.userId} {emp.department ? `· ${emp.department}` : ""}
+                      </small>
+                    </div>
+                    {isSelected && <Check size={16} color="var(--gold-bright)" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div>
+            <label className="field-label" htmlFor="assisted-reason-select">
+              Reason:
+            </label>
+            <select
+              id="assisted-reason-select"
+              className="select"
+              value={reasonType}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "Forgot RFID card" || val === "Defective RFID card" || val === "Other") {
+                  setReasonType(val);
+                }
+              }}
+            >
+              <option value="Forgot RFID card">Forgot RFID card</option>
+              <option value="Defective RFID card">Defective RFID card</option>
+              <option value="Other">Other reason</option>
+            </select>
+          </div>
+          {reasonType === "Other" && (
+            <div>
+              <label className="field-label" htmlFor="assisted-custom-reason">
+                Custom reason (mandatory):
+              </label>
+              <input
+                id="assisted-custom-reason"
+                type="text"
+                className="input"
+                placeholder="Enter reason…"
+                value={customReason}
+                onChange={(e) => setCustomReason(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+        <div className="assisted-modal-footer">
+          <button className="panel-button" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            className="panel-button is-primary"
+            type="button"
+            onClick={handleConfirm}
+            disabled={!canConfirm}
+          >
+            {busy ? "Recording…" : "Confirm attendance"}
+          </button>
+        </div>
       </section>
     </div>
   );
@@ -2248,6 +2571,7 @@ function AdminPanel() {
           rows={rows}
           date={date}
           setDate={setDate}
+          users={users}
           onSaved={load}
         />
       ) : tab === "payroll" ? (
@@ -2286,6 +2610,8 @@ type AdminUser = {
   dailyRate: number | null;
   payrollProfileId?: string | null;
   photoUrl?: string | null;
+  cardType?: CardType;
+  label?: string | null;
 };
 
 /** Data & backup panel: configurable DB location, safe backups, and the PC-switch restore flow. */
@@ -2960,20 +3286,32 @@ function UserEditor({
                     />
                   </td>
                   <td>
-                    <UserPhoto photoUrl={user.photoUrl} name={user.fullName} />
-                    <strong>{user.fullName}</strong>
-                    <small>{user.userId}</small>
+                    {user.cardType === "ADMIN_ASSIST" ? (
+                      <div className="user-info-admin-card">
+                        <span className="badge badge-admin-card">Admin RFID Card</span>
+                        <strong>{user.fullName}</strong>
+                        <small>{user.userId}</small>
+                      </div>
+                    ) : (
+                      <>
+                        <UserPhoto photoUrl={user.photoUrl} name={user.fullName} />
+                        <strong>{user.fullName}</strong>
+                        <small>{user.userId}</small>
+                      </>
+                    )}
                   </td>
                   <td>{user.rfidUid}</td>
                   <td>
-                    {user.employeeType === "EMPLOYEE"
-                      ? (profiles.find(
-                          (profile) =>
-                            profile.profileId === user.payrollProfileId,
-                        )?.label ??
-                        user.payrollProfileId ??
-                        "None")
-                      : "Not applicable"}
+                    {user.cardType === "ADMIN_ASSIST"
+                      ? "Not applicable"
+                      : user.employeeType === "EMPLOYEE"
+                        ? (profiles.find(
+                            (profile) =>
+                              profile.profileId === user.payrollProfileId,
+                          )?.label ??
+                          user.payrollProfileId ??
+                          "None")
+                        : "Not applicable"}
                   </td>
                   <td>{user.status}</td>
                   <td>
@@ -4519,11 +4857,13 @@ function AdminAttendance({
   rows: initialRows,
   date,
   setDate,
+  users = [],
   onSaved,
 }: {
   rows: AttendanceListItem[];
   date: string;
   setDate: (value: string) => void;
+  users?: AdminUser[];
   onSaved: () => void;
 }) {
   const [startDate, setStartDate] = useState(date);
@@ -4541,6 +4881,8 @@ function AdminAttendance({
   const [employeeFilter, setEmployeeFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [backdatedModalOpen, setBackdatedModalOpen] = useState(false);
 
   const activeRows = rangeRows ?? initialRows;
 
@@ -4618,6 +4960,8 @@ function AdminAttendance({
       working: activeRows.filter((r) => r.status === "WORKING").length,
       completed: activeRows.filter((r) => r.status === "COMPLETED").length,
       missed: activeRows.filter((r) => r.status === "MISSED").length,
+      assisted: activeRows.filter((r) => r.source === "ADMIN_ASSISTED_SCAN").length,
+      backdated: activeRows.filter((r) => r.source === "ADMIN_BACKDATED_ENTRY").length,
     };
   }, [activeRows, arrivalMap]);
 
@@ -4631,6 +4975,9 @@ function AdminAttendance({
       return false;
     }
     if (departmentFilter && row.department !== departmentFilter) {
+      return false;
+    }
+    if (sourceFilter && row.source !== sourceFilter) {
       return false;
     }
     if (!statusFilter) return true;
@@ -4852,6 +5199,28 @@ function AdminAttendance({
             >
               Missed <span className="filter-pill-count">{counts.missed}</span>
             </button>
+            <button
+              className={`filter-pill ${sourceFilter === "ADMIN_ASSISTED_SCAN" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setSourceFilter(
+                  sourceFilter === "ADMIN_ASSISTED_SCAN" ? "" : "ADMIN_ASSISTED_SCAN",
+                )
+              }
+            >
+              Assisted <span className="filter-pill-count">{counts.assisted}</span>
+            </button>
+            <button
+              className={`filter-pill ${sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setSourceFilter(
+                  sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "" : "ADMIN_BACKDATED_ENTRY",
+                )
+              }
+            >
+              Backdated <span className="filter-pill-count">{counts.backdated}</span>
+            </button>
           </div>
         </div>
         <div className="date-filter">
@@ -4897,6 +5266,13 @@ function AdminAttendance({
               ))}
             </select>
           </label>
+          <button
+            className="admin-button is-primary"
+            type="button"
+            onClick={() => setBackdatedModalOpen(true)}
+          >
+            + Add missed attendance
+          </button>
           <button
             className="admin-button"
             type="button"
@@ -5038,7 +5414,207 @@ function AdminAttendance({
         onCancel={() => setBatchDeleteAttendanceOpen(false)}
         onConfirm={() => void removeBatchAttendance()}
       />
+      {backdatedModalOpen && (
+        <BackdatedAttendanceModal
+          activeEmployees={users.filter(
+            (u) => u.status === "ACTIVE" && u.cardType !== "ADMIN_ASSIST",
+          )}
+          onClose={() => setBackdatedModalOpen(false)}
+          onSaved={() => {
+            onSaved();
+            if (startDate !== endDate) {
+              void loadRange(startDate, endDate);
+            }
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function BackdatedAttendanceModal({
+  activeEmployees,
+  onClose,
+  onSaved,
+}: {
+  activeEmployees: AdminUser[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const yesterday = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  }, []);
+
+  const [userId, setUserId] = useState(activeEmployees[0]?.userId ?? "");
+  const [attendanceDate, setAttendanceDate] = useState(yesterday);
+  const [timeIn, setTimeIn] = useState("08:00");
+  const [timeOut, setTimeOut] = useState("17:00");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId || !attendanceDate || !timeIn || !reason.trim()) {
+      setError("Employee, attendance date, time-in, and reason are required.");
+      return;
+    }
+    if (attendanceDate > yesterday) {
+      setError("Backdated attendance date must be strictly in the past.");
+      return;
+    }
+    if (timeOut && timeOut < timeIn) {
+      setError("Time-out cannot precede time-in.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    const timeInIso = `${attendanceDate}T${timeIn}:00+08:00`;
+    const timeOutIso = timeOut ? `${attendanceDate}T${timeOut}:00+08:00` : null;
+
+    try {
+      const response = await createAdminBackdatedAttendance({
+        userId,
+        attendanceDate,
+        timeIn: timeInIso,
+        timeOut: timeOutIso,
+        reason: reason.trim(),
+      });
+      setBusy(false);
+      if (response.success) {
+        onSaved();
+        onClose();
+      } else {
+        setError(response.error?.message ?? "Failed to add backdated attendance.");
+      }
+    } catch {
+      setBusy(false);
+      setError("Network or server error while adding backdated attendance.");
+    }
+  };
+
+  return (
+    <div
+      className="assisted-modal-backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="assisted-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backdated-heading"
+      >
+        <div className="assisted-modal-header">
+          <div>
+            <h3 id="backdated-heading">Add Missed Attendance</h3>
+            <small style={{ color: "var(--muted)" }}>Backdated manual entry for past dates</small>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ background: "transparent", border: "none", color: "var(--foreground)", cursor: "pointer" }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="assisted-modal-body">
+          {error && <p className="dashboard-alert">{error}</p>}
+          <div>
+            <label className="field-label" htmlFor="backdated-employee">
+              Employee:
+            </label>
+            <select
+              id="backdated-employee"
+              className="select"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              required
+            >
+              {activeEmployees.map((emp) => (
+                <option key={emp.userId} value={emp.userId}>
+                  {emp.fullName} ({emp.userId}){emp.department ? ` — ${emp.department}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="field-label" htmlFor="backdated-date">
+              Attendance Date (past date only):
+            </label>
+            <input
+              id="backdated-date"
+              type="date"
+              className="input"
+              max={yesterday}
+              value={attendanceDate}
+              onChange={(e) => setAttendanceDate(e.target.value)}
+              required
+            />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div>
+              <label className="field-label" htmlFor="backdated-time-in">
+                Time In:
+              </label>
+              <input
+                id="backdated-time-in"
+                type="time"
+                className="input"
+                value={timeIn}
+                onChange={(e) => setTimeIn(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label className="field-label" htmlFor="backdated-time-out">
+                Time Out (optional):
+              </label>
+              <input
+                id="backdated-time-out"
+                type="time"
+                className="input"
+                value={timeOut}
+                onChange={(e) => setTimeOut(e.target.value)}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="field-label" htmlFor="backdated-reason">
+              Reason (mandatory audit trail):
+            </label>
+            <textarea
+              id="backdated-reason"
+              className="input"
+              style={{ minHeight: 70, resize: "vertical" }}
+              placeholder="State reason for missed attendance..."
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              required
+            />
+          </div>
+          <div className="assisted-modal-footer" style={{ padding: "12px 0 0 0" }}>
+            <button className="panel-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button
+              className="panel-button is-primary"
+              type="submit"
+              disabled={busy || !userId || !attendanceDate || !timeIn || !reason.trim()}
+            >
+              {busy ? "Saving…" : "Add missed attendance"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -5070,6 +5646,10 @@ function exportAttendanceCsv(
     "Time out",
     "Status",
     "Total hours",
+    "Source",
+    "Recorded By",
+    "Recorded Reason",
+    "Recorded At",
   ];
   const csvCell = (value: string | number | null) =>
     `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -5099,6 +5679,10 @@ function exportAttendanceCsv(
       row.timeOut,
       row.status,
       totalHours(row),
+      row.source ?? "",
+      row.recordedBy ?? "",
+      row.recordedReason ?? "",
+      row.recordedAt ?? "",
     ]),
   ]
     .map((line) => line.map(csvCell).join(","))
@@ -5252,6 +5836,21 @@ function AttendanceEditRow({
         <td>
           <strong>{row.fullName}</strong>
           <small>{row.userId}</small>
+          {row.source === "ADMIN_ASSISTED_SCAN" && (
+            <span className="badge badge-assisted" style={{ display: "inline-block", marginTop: 4 }}>
+              Assisted by {row.recordedBy || "Admin"}
+            </span>
+          )}
+          {row.source === "ADMIN_BACKDATED_ENTRY" && (
+            <span
+              className="badge badge-backdated"
+              title={row.recordedReason || undefined}
+              style={{ display: "inline-block", marginTop: 4 }}
+            >
+              Backdated entry by {row.recordedBy || "Admin"}
+              {row.recordedReason ? ` — ${row.recordedReason}` : ""}
+            </span>
+          )}
         </td>
         <td>
           <div className="time-input-group">

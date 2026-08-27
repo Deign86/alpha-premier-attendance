@@ -52,6 +52,22 @@ describe('card setup service', () => {
     expect(result.user.fullName).toBe('John Doe');
     expect(result.user.userId).toBe('U-NORM-1');
   });
+
+  it('registers an Admin RFID card without requiring an employee name', async () => {
+    const sheets = new InMemorySheetsService();
+    const service = new SetupService(sheets, setupConfig);
+    const token = service.unlock('2468').setupToken;
+    const result = await service.upsertUser(token, {
+      rfidUid: 'AD-DE-23',
+      cardType: 'ADMIN_ASSIST',
+      label: 'Front desk admin card #1',
+      status: 'ACTIVE',
+    });
+    expect(result.user.cardType).toBe('ADMIN_ASSIST');
+    expect(result.user.rfidUid).toBe('ADDE23');
+    expect(result.user.fullName).toBe('Front Desk Admin Card #1');
+    expect(result.user.userId).toBe('ADMIN_CARD_ADDE23');
+  });
 });
 
 describe('card setup HTTP API', () => {

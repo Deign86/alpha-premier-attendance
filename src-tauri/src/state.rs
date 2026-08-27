@@ -306,6 +306,17 @@ mod tests {
         );
         assert!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='payroll_snapshots'").fetch_one(&state.db).await.unwrap() == 1);
         assert!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ux_sync_queue_idempotency'").fetch_one(&state.db).await.unwrap() == 1);
+        assert!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_prevent_admin_card_attendance'").fetch_one(&state.db).await.unwrap() == 1);
+
+        // Verify trigger aborts attendance insert for admin assist card
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO users (user_id, rfid_uid, full_name, status, card_type, created_at, updated_at) VALUES ('ADMIN-CARD-1', 'ADM123', 'Front Desk Admin', 'ACTIVE', 'ADMIN_ASSIST', ?, ?)")
+            .bind(&now).bind(&now).execute(&state.db).await.unwrap();
+        let att_result = sqlx::query("INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, status, source, created_at, updated_at) VALUES ('att-admin-1', '2026-08-27', 'ADMIN-CARD-1', 'ADM123', 'Front Desk Admin', 'WORKING', 'RFID', ?, ?)")
+            .bind(&now).bind(&now).execute(&state.db).await;
+        assert!(att_result.is_err());
+        assert!(att_result.unwrap_err().to_string().contains("Cannot record attendance for admin assist card"));
+
         state.db.close().await;
         let _ = std::fs::remove_dir_all(data_dir);
     }

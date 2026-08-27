@@ -17,19 +17,26 @@ npm run dev
 
 The server also needs the normal Google Sheets variables: `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, and `GOOGLE_PRIVATE_KEY`. For local memory testing, use `SHEETS_MODE=memory`; the association will not survive a server restart.
 
-## 2. Associate a card with an employee
+## 2. Associate a card with an employee or administrator
 
-1. Open the site and select `Admin` (or visit `/admin`).
-2. Enter the setup PIN.
-3. Scan the employee's RFID card. If it is unknown, the form opens blank.
-4. Enter the person's `User ID`, `Full name`, and `Department / role`.
-5. Leave the employee type toggle at `INTERN` unless the person is an employee. For `EMPLOYEE`, enter a positive `daily_rate`; attach the ID photo before saving.
-6. Set `Status` to `Active`, then select `Save user`.
-7. Lock the admin session and scan the same card on the normal attendance screen.
+1. Open the site and select `Admin setup` (or visit `/admin`).
+2. Enter the administrator PIN.
+3. Scan the RFID card. If it is unknown, the form opens blank.
+4. Choose the registration type using the segmented control:
+   - **Employee card** (default):
+     - Enter the person's `User ID`, `Full name`, and optional `Department / role`.
+     - Select `Employee type` (`Intern` or `Regular Employee`). For employees, provide a positive daily rate and optional photo.
+     - Set `Status` to `Active`, then click `Save user`.
+   - **Admin RFID card** (new):
+     - Select **Admin RFID card** on the segmented toggle.
+     - Enter an optional `Card label` (e.g. `Front desk admin card #1`).
+     - Employee-only fields (User ID, department, daily rate, photo) are automatically hidden and managed.
+     - Click `Save admin card`.
+     - *Note*: Admin RFID cards shift the kiosk into "Assisted Attendance" mode when tapped to clock in/out an active employee who forgot their card. Admin cards cannot record attendance for themselves (enforced by database triggers).
 
 Card taps are captured at the native Rust layer through a configured device-specific transport (raw HID or serial) or, for keyboard-wedge readers, the focused kiosk window's burst capture; they surface to the kiosk as `rfid-scan` events. No global keyboard hook is installed. While the kiosk window is focused, no webview field needs to be selected; operators can tap cards at any time, and the scanner pauses only while the operator types in admin, setup, or manual-entry screens. Keyboard-wedge input is foreground-only: it cannot create attendance records while the kiosk is minimized or tray-hidden, because a generic hook cannot isolate the reader from ordinary foreground typing.
 
-For Deign Lazaro, the profile should look like:
+For an employee card (e.g., Deign Lazaro), the profile should look like:
 
 ```text
 User ID:          DEIGN-001
@@ -37,6 +44,15 @@ Full name:        Deign Lazaro
 Department / role: IT / Admin
 Status:           ACTIVE
 RFID UID:         the UID read from Deign's physical card
+```
+
+For an admin assist card, the record is stored as:
+
+```text
+User ID:          ADMIN_CARD_<UID>
+Card label:       Front desk admin card #1
+Card type:        ADMIN_ASSIST
+Status:           ACTIVE
 ```
 
 ## 3. Users sheet format
