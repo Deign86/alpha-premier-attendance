@@ -389,4 +389,97 @@ mod tests {
         assert_eq!(result.total_deductions, 68_000);
         assert_eq!(result.net_pay, 20_000);
     }
+
+    #[test]
+    fn computes_intern_cutoff_with_custom_standard_days_10() {
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-104".into(),
+            employee_name: "Test Intern 10 Days".into(),
+            cutoff_start: "2026-08-01".into(),
+            cutoff_end: "2026-08-15".into(),
+            daily_rate: 80.0,
+            standard_working_days: 10.0,
+            actual_working_days: 10.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 0.0,
+            absence_deduction: None,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+        // 10 days * 80 PHP = 800 PHP (80,000 centavos)
+        assert_eq!(result.basic_pay, 80_000);
+        assert_eq!(result.total_compensation, 80_000);
+        assert_eq!(result.absence_deduction, 0);
+        assert_eq!(result.gross_compensation, 80_000);
+        assert_eq!(result.total_deductions, 0);
+        assert_eq!(result.net_pay, 80_000);
+    }
+
+    #[test]
+    fn computes_intern_cutoff_with_custom_standard_days_12() {
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-105".into(),
+            employee_name: "Test Intern 12 Days".into(),
+            cutoff_start: "2026-07-16".into(),
+            cutoff_end: "2026-07-31".into(),
+            daily_rate: 80.0,
+            standard_working_days: 12.0,
+            actual_working_days: 12.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 0.0,
+            absence_deduction: None,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+        // 12 days * 80 PHP = 960 PHP (96,000 centavos)
+        assert_eq!(result.basic_pay, 96_000);
+        assert_eq!(result.total_compensation, 96_000);
+        assert_eq!(result.absence_deduction, 0);
+        assert_eq!(result.gross_compensation, 96_000);
+        assert_eq!(result.total_deductions, 0);
+        assert_eq!(result.net_pay, 96_000);
+    }
 }
+

@@ -48,6 +48,7 @@ import {
   isLateTimeout,
   normalizeName,
   evaluateAttendanceArrivals,
+  countWorkdays,
 } from "@rfid-attendance/shared";
 import {
   DEFAULT_CONFIG,
@@ -3697,11 +3698,13 @@ export function PayrollWorkspace({
 
   const applyCutoffHalf = (half: "first" | "second") => {
     const range = computeSemiMonthlyCutoff(cutoffMonth, half);
+    const workdays = countWorkdays(range.cutoffStart, range.cutoffEnd);
     setForm((current) => ({
       ...current,
       cutoffStart: range.cutoffStart,
       cutoffEnd: range.cutoffEnd,
       payrollCutoffLabel: range.payrollCutoffLabel,
+      standardWorkingDays: String(workdays || 11),
     }));
   };
 
@@ -4040,6 +4043,7 @@ function EditPayrollDialog({
   onSaved: () => void;
 }) {
   const isIntern = record?.employeeType === "INTERN";
+  const [standardWorkingDays, setStandardWorkingDays] = useState("11");
   const [hra, setHra] = useState("0");
   const [incentivesAllowance, setIncentivesAllowance] = useState("0");
   const [specialAllowance, setSpecialAllowance] = useState("0");
@@ -4057,6 +4061,7 @@ function EditPayrollDialog({
 
   useEffect(() => {
     if (record) {
+      setStandardWorkingDays(String(record.standardWorkingDays ?? 11));
       setHra(String(record.hra ?? 0));
       setIncentivesAllowance(String(record.incentivesAllowance ?? 0));
       setSpecialAllowance(String(record.specialAllowance ?? 0));
@@ -4074,6 +4079,13 @@ function EditPayrollDialog({
 
   if (!open || !record) return null;
 
+  const nStdDays = Math.max(0, Number(standardWorkingDays) || 0);
+  const dailyRate = isIntern ? INTERN_DAILY_RATE_PHP : record.dailyRate;
+  const actualDays = record.actualWorkingDays;
+  const absentDays = Math.max(0, nStdDays - actualDays);
+  const basicPay = dailyRate * nStdDays;
+  const absenceDeduction = dailyRate * absentDays;
+
   const nHra = isIntern ? 0 : Number(hra) || 0;
   const nInc = isIntern ? 0 : Number(incentivesAllowance) || 0;
   const nSpecAllow = isIntern ? 0 : Number(specialAllowance) || 0;
@@ -4085,12 +4097,12 @@ function EditPayrollDialog({
   const nHdmf = isIntern ? 0 : Number(hdmf) || 0;
   const nAdvance = isIntern ? 0 : Number(salaryAdvance) || 0;
 
-  const autoEarnings = record.basicPay + (isIntern ? 0 : record.regularHolidayPay + record.specialHolidayPay);
-  const autoDeductions = record.lateDeduction + record.absenceDeduction + record.halfDayDeduction;
+  const autoEarnings = basicPay + (isIntern ? 0 : record.regularHolidayPay + record.specialHolidayPay);
+  const autoDeductions = record.lateDeduction + absenceDeduction + record.halfDayDeduction;
 
   const totalAllowance = isIntern ? 0 : nInc + nSpecAllow + nHra;
   const totalEarnings = isIntern
-    ? Math.max(0, record.basicPay + nAdj)
+    ? Math.max(0, basicPay + nAdj)
     : autoEarnings + totalAllowance + nOt + nAdj;
   const manualDeductions = isIntern ? 0 : nSss + nPhic + nHdmf + nAdvance;
   const totalDeductions = autoDeductions + manualDeductions;
@@ -4116,9 +4128,9 @@ function EditPayrollDialog({
         cutoffStart: record.cutoffStart,
         cutoffEnd: record.cutoffEnd,
         dailyRate: record.dailyRate,
-        standardWorkingDays: record.standardWorkingDays,
+        standardWorkingDays: nStdDays,
         actualWorkingDays: record.actualWorkingDays,
-        basicPay: record.basicPay,
+        basicPay,
         hra: nHra,
         incentivesAllowance: nInc,
         specialAllowance: nSpecAllow,
@@ -4129,15 +4141,15 @@ function EditPayrollDialog({
         phic: nPhic,
         hdmf: nHdmf,
         salaryAdvance: nAdvance,
-        absentDays: record.absentDays,
-        absenceDeduction: record.absenceDeduction,
+        absentDays,
+        absenceDeduction,
         halfDayCount: record.halfDayCount,
         halfDayDeduction: record.halfDayDeduction,
         lateUnits: record.lateUnits,
         lateDeduction: record.lateDeduction,
         manualAdjustment: nAdj,
         adjustmentReason: adjustmentReason.trim() || undefined,
-        approvedWorkingDayOverage: record.approvedWorkingDayOverage,
+        approvedWorkingDayOverage: nStdDays < record.actualWorkingDays ? true : record.approvedWorkingDayOverage,
       };
       const response = await savePayrollCutoff(payload, record.payrollId);
       setSaving(false);
@@ -4172,7 +4184,7 @@ function EditPayrollDialog({
         <div className="edit-payroll-attendance-box">
           <div className="attendance-stat">
             <span className="attendance-label">Attendance Basic</span>
-            <span className="attendance-value">{php(record.basicPay)} ({record.actualWorkingDays} days)</span>
+            <span className="attendance-value">{php(basicPay)} ({actualDays} worked / {nStdDays} std days)</span>
           </div>
           {!isIntern && (record.regularHolidayPay > 0 || record.specialHolidayPay > 0) && (
             <div className="attendance-stat">
@@ -4188,8 +4200,8 @@ function EditPayrollDialog({
           </div>
           <div className="attendance-stat">
             <span className="attendance-label">Absent / Halfday</span>
-            <span className="attendance-value" style={{ color: (record.absenceDeduction + record.halfDayDeduction) > 0 ? "#dc2626" : undefined }}>
-              {php(record.absenceDeduction + record.halfDayDeduction)}
+            <span className="attendance-value" style={{ color: (absenceDeduction + record.halfDayDeduction) > 0 ? "#dc2626" : undefined }}>
+              {php(absenceDeduction + record.halfDayDeduction)} ({absentDays} absent)
             </span>
           </div>
         </div>
@@ -4197,7 +4209,22 @@ function EditPayrollDialog({
         {isIntern ? (
           <form onSubmit={handleSubmit}>
             <div className="edit-payroll-notice">
-              Intern stipend (PHP 80.00/day) and late deductions (PHP 10.00/hr) are automatically calculated from RFID attendance scans. Statutory deductions and allowances do not apply.
+              Intern stipend (PHP 80.00/day) and late deductions (PHP 10.00/hr) are automatically calculated from RFID attendance scans. Standard working days can be adjusted to recalculate the cutoff stipend and absence deductions.
+            </div>
+
+            <div className="edit-payroll-section" style={{ marginTop: "12px" }}>
+              <h3>Standard Working Days</h3>
+              <label>
+                Standard Working Days
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  max="31"
+                  value={standardWorkingDays}
+                  onChange={(e) => setStandardWorkingDays(e.target.value)}
+                />
+              </label>
             </div>
 
             <div className="edit-payroll-section" style={{ marginTop: "12px" }}>
@@ -4266,7 +4293,18 @@ function EditPayrollDialog({
           <form onSubmit={handleSubmit}>
             <div className="edit-payroll-grid">
               <div className="edit-payroll-section">
-                <h3>Allowances & Overtime (PHP)</h3>
+                <h3>Working Days & Allowances (PHP)</h3>
+                <label>
+                  Standard Working Days
+                  <input
+                    type="number"
+                    step="1"
+                    min="0"
+                    max="31"
+                    value={standardWorkingDays}
+                    onChange={(e) => setStandardWorkingDays(e.target.value)}
+                  />
+                </label>
                 <label>
                   HRA
                   <input

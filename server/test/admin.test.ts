@@ -54,7 +54,7 @@ describe('admin and live attendance API', () => {
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
 
-    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'EMP-DELETE-1', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15', actualWorkingDays: 11 }).expect(200);
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'EMP-DELETE-1', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15', actualWorkingDays: 10 }).expect(200);
     const payrollId = created.body.payroll.payrollId as string;
     expect(await sheets.findPayrollCutoff(payrollId)).not.toBeNull();
 
@@ -69,15 +69,29 @@ describe('admin and live attendance API', () => {
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
     // Interns are accepted without a daily rate; a submitted rate must be ignored.
+    // July 16-31, 2026 has 12 standard workdays (12 x 80 = 960 basic pay, 2 absent days = 160 deduction).
     const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'INT-001', dailyRate: 500, cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 10, lateUnits: 3 }).expect(200);
     expect(created.body.payroll).toMatchObject({
       employeeId: 'INT-001', employeeName: 'Maria Santos', employeeType: 'INTERN', dailyRate: 80,
-      actualWorkingDays: 10, basicPay: 880, totalCompensation: 880, totalAllowance: 0,
-      lateUnits: 3, lateDeduction: 30, absenceDeduction: 80, totalDeductions: 110, grossCompensation: 770, netPay: 770, status: 'DRAFT',
+      standardWorkingDays: 12, actualWorkingDays: 10, basicPay: 960, totalCompensation: 960, totalAllowance: 0,
+      lateUnits: 3, lateDeduction: 30, absenceDeduction: 160, totalDeductions: 190, grossCompensation: 770, netPay: 770, status: 'DRAFT',
     });
     // The payroll list derives intern classification from the Users register.
     const payroll = await agent.get('/api/admin/payroll/cutoffs').expect(200);
     expect(payroll.body.payroll[0]).toMatchObject({ employeeId: 'INT-001', employeeType: 'INTERN', dailyRate: 80 });
+  });
+
+  it('calculates intern cutoff with custom standardWorkingDays', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'INT-002', fullName: 'John Intern', rfidUid: 'CCEE', department: null, active: true, employeeType: 'INTERN' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+    // Setting standardWorkingDays to 10 with 10 actual working days yields 10 x 80 = 800 basic pay and 0 absence deduction.
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'INT-002', cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', standardWorkingDays: 10, actualWorkingDays: 10, lateUnits: 0 }).expect(200);
+    expect(created.body.payroll).toMatchObject({
+      employeeId: 'INT-002', employeeName: 'John Intern', employeeType: 'INTERN', dailyRate: 80,
+      standardWorkingDays: 10, actualWorkingDays: 10, basicPay: 800, totalCompensation: 800,
+      absenceDeduction: 0, totalDeductions: 0, grossCompensation: 800, netPay: 800, status: 'DRAFT',
+    });
   });
 
   it('applies a fillable employee late deduction to gross and net pay', async () => {

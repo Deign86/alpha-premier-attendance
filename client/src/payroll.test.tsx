@@ -289,6 +289,9 @@ describe("PayrollWorkspace", () => {
 
     const hraInput = screen.getByLabelText("HRA");
     const sssInput = screen.getByLabelText("SSS Employee Share");
+    const stdDaysInput = screen.getByLabelText("Standard Working Days");
+    await user.clear(stdDaysInput);
+    await user.type(stdDaysInput, "10");
     await user.clear(hraInput);
     await user.type(hraInput, "500");
     await user.clear(sssInput);
@@ -299,6 +302,8 @@ describe("PayrollWorkspace", () => {
       expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           payrollId: "P-001",
+          standardWorkingDays: 10,
+          basicPay: 5000,
           hra: 500,
           sss: 450,
         }),
@@ -307,7 +312,53 @@ describe("PayrollWorkspace", () => {
     });
   });
 
-  it("shows only manual adjustment as editable and hides allowances and statutory deductions when editing an intern record", async () => {
+  it("allows editing standard working days for an intern to recalculate basic stipend and salary per cutoff", async () => {
+    const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    // Intern with 10 actual working days in a cutoff with 12 standard days (12 x 80 = 960)
+    renderWorkspace([internRecord({
+      status: "DRAFT",
+      standardWorkingDays: 12,
+      actualWorkingDays: 10,
+      basicPay: 960,
+      absentDays: 2,
+      absenceDeduction: 160,
+      lateUnits: 0,
+      lateDeduction: 0,
+      grossCompensation: 960,
+      netPay: 800,
+    })]);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: /Edit Payroll — Maria Santos \(Intern\)/i })).toBeInTheDocument();
+
+    const stdDaysInput = screen.getByLabelText(/Standard Working Days/i);
+    expect(stdDaysInput).toHaveValue(12);
+
+    // Changing standard days from 12 to 10 changes 12 x 80 (960) into 10 x 80 (800)
+    await user.clear(stdDaysInput);
+    await user.type(stdDaysInput, "10");
+
+    expect(stdDaysInput).toHaveValue(10);
+    // Basic becomes 10 * 80 = 800, absent becomes max(0, 10 - 10) = 0
+    expect(screen.getByText("PHP 800.00 (10 worked / 10 std days)")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Save Changes/i }));
+    await waitFor(() => {
+      expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payrollId: "P-INT-001",
+          standardWorkingDays: 10,
+          basicPay: 800,
+          absentDays: 0,
+          absenceDeduction: 0,
+        }),
+        "P-INT-001",
+      );
+    });
+  });
+
+  it("shows standard working days and manual adjustment as editable and hides allowances and statutory deductions when editing an intern record", async () => {
     const user = userEvent.setup();
     renderWorkspace([internRecord({ status: "DRAFT" })]);
 
@@ -318,15 +369,9 @@ describe("PayrollWorkspace", () => {
     expect(screen.getByText("Attendance Basic")).toBeInTheDocument();
     expect(screen.getByText("Late Deduction")).toBeInTheDocument();
 
-    // Intern editable field:
+    // Intern editable fields:
+    expect(screen.getByLabelText(/Standard Working Days/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Manual Adjustment/i)).toBeInTheDocument();
-
-    // Auto-computed attendance values do NOT have editable inputs:
-    expect(screen.queryByLabelText("Basic Stipend")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Basic Pay")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Absent Deduction")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Late Deduction")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Half-Day Deduction")).not.toBeInTheDocument();
 
     // Non-intern fields are NOT visible:
     expect(screen.queryByLabelText("HRA")).not.toBeInTheDocument();

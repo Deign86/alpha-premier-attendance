@@ -59,6 +59,34 @@ export function getManilaWeekStart(dateStr: string): string {
 }
 
 /**
+ * Returns the number of standard workdays (Monday through Friday) between
+ * two dates (inclusive).
+ */
+export function countWorkdays(startDateStr: string, endDateStr: string): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(endDateStr)) {
+    return 0;
+  }
+  const [startYear, startMonth, startDay] = startDateStr.split('-').map(Number);
+  const [endYear, endMonth, endDay] = endDateStr.split('-').map(Number);
+  const start = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+  const end = new Date(Date.UTC(endYear, endMonth - 1, endDay));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return 0;
+  }
+  let count = 0;
+  const current = new Date(start);
+  while (current <= end) {
+    const day = current.getUTCDay(); // 0 is Sunday, 6 is Saturday
+    if (day !== 0 && day !== 6) {
+      count++;
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return count;
+}
+
+
+/**
  * Determines arrival evaluation (ON_TIME, GRACE_PERIOD, LATE) across a collection of rows,
  * enforcing that each user receives at most 1 Grace Period (08:00:01 - 08:15:00) per work week.
  */

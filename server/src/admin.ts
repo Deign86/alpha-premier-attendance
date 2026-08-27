@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
-import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
+import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
@@ -292,10 +292,16 @@ function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListIte
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }
 
 function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number }: CutoffInputBuilder & { profile: PayrollCalculationProfile }): CutoffInput {
+  const cutoffStart = String(value.cutoffStart ?? '');
+  const cutoffEnd = String(value.cutoffEnd ?? '');
+  const defaultStandardDays = countWorkdays(cutoffStart, cutoffEnd) || profile.standardWorkingDaysPerCutoff;
+  const standardWorkingDays = number('standardWorkingDays', defaultStandardDays);
+  const actualWorkingDays = number('actualWorkingDays', standardWorkingDays);
+  const absentDays = value.absentDays != null ? number('absentDays', 0) : Math.max(0, standardWorkingDays - actualWorkingDays);
   return {
     employeeId: employee.userId, employeeName: employee.fullName, employeeType: 'EMPLOYEE', payrollProfileId: profileId, payrollCutoffLabel: cutoffLabel,
-    cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate ?? 0),
-    standardWorkingDays: number('standardWorkingDays', profile.standardWorkingDaysPerCutoff), actualWorkingDays: number('actualWorkingDays', profile.standardWorkingDaysPerCutoff),
+    cutoffStart, cutoffEnd, payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate ?? 0),
+    standardWorkingDays, actualWorkingDays,
     basicPay: value.basicPay != null ? number('basicPay', 0) : undefined,
     specialHolidayDays: number('specialHolidayDays', 0), specialHolidayMultiplier: number('specialHolidayMultiplier', profile.specialHolidayMultiplier),
     specialHolidayPay: value.specialHolidayPay != null ? number('specialHolidayPay', 0) : undefined,
@@ -304,7 +310,7 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
     hra: number('hra', 0),
     incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance),
     lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
-    halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays: number('absentDays', 0),
+    halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays,
     absenceDeduction: value.absenceDeduction != null ? number('absenceDeduction', 0) : undefined,
     overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
     overtimePay: value.overtimePay != null ? number('overtimePay', 0) : undefined,
@@ -322,19 +328,24 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
  */
 function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: CutoffInputBuilder): CutoffInput {
   const lateUnits = Math.max(0, number('lateUnits', 0));
+  const cutoffStart = String(value.cutoffStart ?? '');
+  const cutoffEnd = String(value.cutoffEnd ?? '');
+  const defaultStandardDays = countWorkdays(cutoffStart, cutoffEnd) || 11;
+  const standardWorkingDays = number('standardWorkingDays', defaultStandardDays);
+  const actualWorkingDays = number('actualWorkingDays', standardWorkingDays);
   return {
     employeeId: employee.userId, employeeName: employee.fullName, employeeType: 'INTERN', payrollProfileId: profileId, payrollCutoffLabel: cutoffLabel,
-    cutoffStart: String(value.cutoffStart ?? ''), cutoffEnd: String(value.cutoffEnd ?? ''), payrollFrequency: 'SEMI_MONTHLY',
+    cutoffStart, cutoffEnd, payrollFrequency: 'SEMI_MONTHLY',
     // Fixed intern rate — any submitted rate is ignored for interns.
     dailyRate: INTERN_DAILY_RATE_PHP,
-    standardWorkingDays: number('standardWorkingDays', 11), actualWorkingDays: number('actualWorkingDays', 11),
+    standardWorkingDays, actualWorkingDays,
     specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
     incentivesAllowance: 0, specialAllowance: 0,
     lateUnits,
     // Late deduction is PHP 10.00 per hour, computed from the total late hours.
     lateDeduction: Math.round(lateUnits * INTERN_LATE_DEDUCTION_PER_HOUR_PHP),
     halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
-    absentDays: Math.max(0, number('standardWorkingDays', 11) - number('actualWorkingDays', 11)),
+    absentDays: Math.max(0, standardWorkingDays - actualWorkingDays),
     overtimeHours: 0, overtimeRate: 0,
     manualAdjustment: number('manualAdjustment', 0), adjustmentReason: cutoffAdjustmentReason(value.adjustmentReason),
     approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',

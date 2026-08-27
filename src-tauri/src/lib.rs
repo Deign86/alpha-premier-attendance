@@ -1479,6 +1479,27 @@ async fn payroll_intern_report(
     Ok(serde_json::json!({"success":true,"payroll":payroll}))
 }
 
+fn count_workdays(start_str: &str, end_str: &str) -> f64 {
+    if let (Ok(start), Ok(end)) = (
+        chrono::NaiveDate::parse_from_str(start_str, "%Y-%m-%d"),
+        chrono::NaiveDate::parse_from_str(end_str, "%Y-%m-%d"),
+    ) {
+        if end >= start {
+            use chrono::Datelike;
+            let mut current = start;
+            let mut workdays = 0.0;
+            while current <= end {
+                if current.weekday().number_from_monday() <= 5 {
+                    workdays += 1.0;
+                }
+                current += chrono::Duration::days(1);
+            }
+            return workdays;
+        }
+    }
+    11.0
+}
+
 /// Build the printable payroll register from completed attendance payroll rows.
 /// Drafts are replaceable so a later time-out is reflected on regeneration;
 /// finalized payroll remains an immutable approved record.
@@ -1562,13 +1583,8 @@ async fn payroll_generate_cutoff(
         let profile = sqlx::query("SELECT standard_working_days_per_cutoff,incentives_allowance_centavos,special_allowance_centavos,special_holiday_multiplier,regular_holiday_multiplier,half_day_fraction,overtime_rate_centavos FROM payroll_profiles WHERE profile_id=?")
             .bind(&profile_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
         let custom_number = |name: &str| customization.get(name).and_then(|v| v.as_f64());
-        let standard_days = custom_number("standardWorkingDays")
-            .or_else(|| {
-                profile
-                    .as_ref()
-                    .map(|p| p.get::<f64, _>("standard_working_days_per_cutoff"))
-            })
-            .unwrap_or(11.0);
+        let calculated_workdays = count_workdays(&cutoff_start, &cutoff_end);
+        let standard_days = custom_number("standardWorkingDays").unwrap_or(calculated_workdays);
         let daily_rate_centavos = if is_intern {
             INTERN_DAILY_RATE_PHP * 100
         } else {
@@ -2189,14 +2205,12 @@ async fn apply_intern_rules(
         .get("actualWorkingDays")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let absent_days = object
-        .get("absentDays")
-        .and_then(|v| v.as_f64())
-        .unwrap_or_else(|| (standard_working_days - actual_working_days).max(0.0));
+    let absent_days = (standard_working_days - actual_working_days).max(0.0);
     let half_day_count = object
         .get("halfDayCount")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
+    object.insert("standardWorkingDays".into(), serde_json::json!(standard_working_days));
     object.insert("absentDays".into(), serde_json::json!(absent_days));
     object.insert("halfDayCount".into(), serde_json::json!(half_day_count));
     object.insert("halfDayFraction".into(), serde_json::json!(0.5));
