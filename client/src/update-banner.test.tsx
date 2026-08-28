@@ -124,6 +124,24 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       expect(errorToast).toBeInTheDocument();
       expect(errorToast.closest('.update-toast')).toHaveClass('error');
     });
+
+    it('does not re-trigger update check in a loop when checking returns up to date', async () => {
+      const checkSpy = vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
+        available: false,
+        update: null,
+        info: null,
+        error: null,
+      });
+
+      const { rerender } = render(<UpdateBanner manualCheckTrigger={1} />);
+
+      expect(await screen.findByText(/Alpha Premier Attendance is up to date/i)).toBeInTheDocument();
+      expect(checkSpy).toHaveBeenCalledTimes(1);
+
+      // Re-rendering with identical trigger should not re-fire
+      rerender(<UpdateBanner manualCheckTrigger={1} />);
+      expect(checkSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('AdminUpdatesCard', () => {

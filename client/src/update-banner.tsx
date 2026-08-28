@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useId } from 'react';
+import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import {
   AlertCircle,
   ArrowUpCircle,
@@ -33,7 +33,9 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
+  const isCheckingRef = useRef(false);
+  const isInstallingRef = useRef(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toastState, setToastState] = useState<ToastState | null>(null);
 
   // Install progress state
@@ -42,11 +44,25 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   const [installError, setInstallError] = useState<string | null>(null);
   const titleId = useId();
 
+  const showToast = useCallback((state: ToastState | null, autoDismissMs?: number) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToastState(state);
+    if (state && autoDismissMs) {
+      toastTimerRef.current = setTimeout(() => {
+        setToastState(null);
+        toastTimerRef.current = null;
+      }, autoDismissMs);
+    }
+  }, []);
+
   const runCheck = useCallback(async (manual = false) => {
-    if (isChecking || isInstalling) return;
-    setIsChecking(true);
+    if (isCheckingRef.current || isInstallingRef.current) return;
+    isCheckingRef.current = true;
     if (manual) {
-      setToastState({ status: 'checking', message: 'Checking for updates…' });
+      showToast({ status: 'checking', message: 'Checking for updates…' });
     }
 
     try {
@@ -58,31 +74,31 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
         setBannerDismissed(false);
         if (manual) {
           setModalOpen(true);
-          setToastState(null);
+          showToast(null);
         }
       } else {
         if (manual) {
           if (result.error) {
-            setToastState({ status: 'error', message: result.error });
-            setTimeout(() => setToastState(null), 5000);
+            showToast({ status: 'error', message: result.error }, 5000);
           } else {
-            setToastState({
-              status: 'success',
-              message: 'Alpha Premier Attendance is up to date.',
-            });
-            setTimeout(() => setToastState(null), 4000);
+            showToast(
+              {
+                status: 'success',
+                message: 'Alpha Premier Attendance is up to date.',
+              },
+              4000,
+            );
           }
         }
       }
     } catch {
       if (manual) {
-        setToastState({ status: 'error', message: 'Unable to check for updates.' });
-        setTimeout(() => setToastState(null), 5000);
+        showToast({ status: 'error', message: 'Unable to check for updates.' }, 5000);
       }
     } finally {
-      setIsChecking(false);
+      isCheckingRef.current = false;
     }
-  }, [isChecking, isInstalling]);
+  }, [showToast]);
 
   // Initial check on load (after 4-second delay so startup isn't competed for resources)
   useEffect(() => {
@@ -98,6 +114,9 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
     return () => {
       clearTimeout(startupTimer);
       clearInterval(intervalTimer);
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
     };
   }, [runCheck]);
 
@@ -120,8 +139,14 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   }, [runCheck]);
 
   // Manual trigger from props (e.g. from admin panel)
+  const prevTriggerRef = useRef<number | undefined>(0);
   useEffect(() => {
-    if (manualCheckTrigger && manualCheckTrigger > 0) {
+    if (
+      manualCheckTrigger !== undefined &&
+      manualCheckTrigger > 0 &&
+      manualCheckTrigger !== prevTriggerRef.current
+    ) {
+      prevTriggerRef.current = manualCheckTrigger;
       void runCheck(true);
     }
   }, [manualCheckTrigger, runCheck]);
