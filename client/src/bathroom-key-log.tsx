@@ -17,6 +17,12 @@ import type {
 } from "@rfid-attendance/shared";
 import { bathroomTimeIn, bathroomTimeOut, loadBathroomStatus } from "./api";
 
+export function getAvatarInitials(name: string): string {
+  const tokens = name.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return "??";
+  return tokens.slice(0, 2).map((token) => Array.from(token)[0] ?? "").join("").toUpperCase();
+}
+
 function formatTime(isoString: string): string {
   try {
     const d = new Date(isoString);
@@ -67,6 +73,7 @@ export interface BathroomKeyUser {
   department?: string | null;
   status: "ACTIVE" | "INACTIVE";
   cardType?: "EMPLOYEE" | "ADMIN_ASSIST" | null;
+  gender?: "MALE" | "FEMALE" | null;
 }
 
 export function BathroomKeyLogPanel({
@@ -116,8 +123,9 @@ export function BathroomKeyLogPanel({
 
   const filteredMaleEmployees = useMemo(() => {
     const q = maleSearch.toLowerCase().trim();
-    if (!q) return activeEmployees;
-    return activeEmployees.filter(
+    const list = activeEmployees.filter((employee) => !employee.gender || employee.gender === "MALE");
+    if (!q) return list;
+    return list.filter(
       (e) =>
         e.fullName.toLowerCase().includes(q) ||
         (e.department && e.department.toLowerCase().includes(q)) ||
@@ -127,8 +135,9 @@ export function BathroomKeyLogPanel({
 
   const filteredFemaleEmployees = useMemo(() => {
     const q = femaleSearch.toLowerCase().trim();
-    if (!q) return activeEmployees;
-    return activeEmployees.filter(
+    const list = activeEmployees.filter((employee) => !employee.gender || employee.gender === "FEMALE");
+    if (!q) return list;
+    return list.filter(
       (e) =>
         e.fullName.toLowerCase().includes(q) ||
         (e.department && e.department.toLowerCase().includes(q)) ||
@@ -154,10 +163,16 @@ export function BathroomKeyLogPanel({
         }
         await refreshStatus(date);
       } else {
-        setError(res.error?.message ?? "Failed to check out key.");
+        const message = res.error?.message ?? "Failed to check out key.";
+        setError(message.includes("BATHROOM_KEY_ALREADY_IN_USE") || message.includes('status=OUT')
+          ? "This key is currently in use. Please return it before checking out again."
+          : message);
       }
-    } catch {
-      setError("Network or server error checking out bathroom key.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      setError(message.includes("BATHROOM_KEY_ALREADY_IN_USE")
+        ? "This key is currently in use. Please return it before checking out again."
+        : "Network or server error checking out bathroom key.");
     } finally {
       setActionBusy(null);
     }
@@ -219,13 +234,7 @@ export function BathroomKeyLogPanel({
             <div className="bathroom-active-holder-box">
               <div className="bathroom-holder-meta">
                 <div className="employee-picker-avatar" style={{ width: 44, height: 44, fontSize: "1rem" }}>
-                  {activeHolder.fullName
-                    .split(" ")
-                    .map((n) => n[0])
-                    .filter(Boolean)
-                    .slice(0, 2)
-                    .join("")
-                    .toUpperCase()}
+                  {getAvatarInitials(activeHolder.fullName)}
                 </div>
                 <div className="bathroom-holder-info">
                   <span className="bathroom-holder-label">Currently with</span>
@@ -249,7 +258,7 @@ export function BathroomKeyLogPanel({
               <button
                 className="submit-button bathroom-action-button button-return"
                 type="button"
-                disabled={isBusy}
+                disabled={isBusy || !navigator.onLine}
                 onClick={() => void handleReturn(genderKey, activeHolder.logId)}
               >
                 {isBusy ? <LoaderCircle size={16} className="spin" /> : <LogIn size={16} />}
@@ -290,13 +299,7 @@ export function BathroomKeyLogPanel({
                 ) : (
                   filteredList.map((emp) => {
                     const isSelected = selectedUserId === emp.userId;
-                    const initials = emp.fullName
-                      .split(" ")
-                      .map((n) => n[0])
-                      .filter(Boolean)
-                      .slice(0, 2)
-                      .join("")
-                      .toUpperCase();
+                    const initials = getAvatarInitials(emp.fullName);
                     return (
                       <button
                         key={emp.userId}
@@ -323,7 +326,7 @@ export function BathroomKeyLogPanel({
               <button
                 className="submit-button bathroom-action-button button-checkout"
                 type="button"
-                disabled={!selectedUserId || isBusy}
+                disabled={!selectedUserId || isBusy || !navigator.onLine}
                 onClick={() => void handleCheckout(genderKey, selectedUserId)}
               >
                 {isBusy ? <LoaderCircle size={16} className="spin" /> : <LogOut size={16} />}

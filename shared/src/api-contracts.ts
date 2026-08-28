@@ -546,6 +546,7 @@ export type DatabaseInfoResponse = {
   restoreSourcePath: string | null;
   backups: DatabaseBackupInfo[];
   lastBackupAt: string | null;
+  restoreFailed?: string | null;
 };
 
 /** Result of creating a database backup; carries the same file actions as other generated files. */
@@ -660,7 +661,13 @@ export type ScanErrorResponse = {
   };
 };
 
-export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse;
+export type OfflineScanResponse = {
+  success: true;
+  offlineQueued: true;
+  message: string;
+};
+
+export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse | OfflineScanResponse;
 
 export type HealthResponse = {
   success: true;

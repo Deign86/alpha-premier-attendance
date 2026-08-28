@@ -2921,6 +2921,13 @@ textarea.input {
   gap: 20px;
 }
 
+@media (max-width: 900px) {
+  .bathroom-kiosk-keys-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+}
+
 .bathroom-kiosk-card {
   background: var(--surface);
   border: 1px solid var(--line);

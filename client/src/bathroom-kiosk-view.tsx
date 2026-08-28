@@ -7,6 +7,12 @@ import type {
   BathroomStatusResponse,
 } from "@rfid-attendance/shared";
 
+export function getAvatarInitials(name: string): string {
+  const tokens = name.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return "??";
+  return tokens.slice(0, 2).map((token) => Array.from(token)[0] ?? "").join("").toUpperCase();
+}
+
 function formatTime(isoString: string, timezone: string): string {
   try {
     const d = new Date(isoString);
@@ -79,11 +85,7 @@ export function BathroomKioskView({
               <div className="active-holder-box">
                 <div className="active-holder-header">
                   <div className="holder-avatar">
-                    {maleActive.fullName
-                      .split(" ")
-                      .map((w) => w[0])
-                      .slice(0, 2)
-                      .join("")}
+                    {getAvatarInitials(maleActive.fullName)}
                   </div>
                   <div>
                     <p className="holder-label">Currently with</p>
@@ -143,11 +145,7 @@ export function BathroomKioskView({
               <div className="active-holder-box">
                 <div className="active-holder-header">
                   <div className="holder-avatar female">
-                    {femaleActive.fullName
-                      .split(" ")
-                      .map((w) => w[0])
-                      .slice(0, 2)
-                      .join("")}
+                    {getAvatarInitials(femaleActive.fullName)}
                   </div>
                   <div>
                     <p className="holder-label">Currently with</p>

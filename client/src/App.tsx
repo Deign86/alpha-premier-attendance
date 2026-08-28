@@ -95,7 +95,7 @@ import {
   loadBathroomStatus,
   submitBathroomScan,
 } from "./api";
-import { sseUrl } from "./network";
+import { sseUrl, onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
 import type { FileActionResult } from "./api";
 import "./styles.css";
 import { BathroomKioskView } from "./bathroom-kiosk-view";
@@ -222,6 +222,7 @@ export default function App() {
   // Synchronous in-flight guard: set before the first await so two rapid native
   // scan events can never start two attendance writes for the same tap.
   const processingRef = useRef(false);
+  const scanInFlightRef = useRef(false);
 
   const [setupToken, setSetupToken] = useState("");
   const [setupExpiresAt, setSetupExpiresAt] = useState("");
@@ -313,6 +314,28 @@ export default function App() {
       }
     };
   }, [setupToken, setupExpiresAt]);
+
+  // BUG-ATT-02: Re-sync offline scans when network comes back online
+  useEffect(() => {
+    const unsubscribe = onNetworkStatusChange((online) => {
+      if (!online) return;
+      const queue = getOfflineQueue();
+      if (queue.length === 0) return;
+      void (async () => {
+        for (const item of queue) {
+          try {
+            const res = await submitScan(item.request);
+            if (res.success && !("offlineQueued" in res)) {
+              removeQueuedScan(item.id);
+            }
+          } catch (err) {
+            console.warn('Failed to re-sync offline scan:', err);
+          }
+        }
+      })();
+    });
+    return unsubscribe;
+  }, []);
 
   const resetToReady = useCallback(() => {
     requestController.current?.abort();
@@ -566,6 +589,8 @@ export default function App() {
           if (now - at >= SCAN_DEDUP_WINDOW_MS) recentScans.current.delete(key);
         }
       }
+      if (scanInFlightRef.current) return;
+      scanInFlightRef.current = true;
       processingRef.current = true;
       setUid(normalizedUid);
       setState("processing");
@@ -579,12 +604,21 @@ export default function App() {
       );
       if (controller.signal.aborted) return;
       requestController.current = null;
+      scanInFlightRef.current = false;
       processingRef.current = false;
-      if (response.success && response.action === "ADMIN_ASSIST") {
+      setTimeout(() => {
+        scanInFlightRef.current = false;
+      }, 300);
+      if (response.success && "action" in response && response.action === "ADMIN_ASSIST") {
         setAdminAssistData(response);
         setAssistedError("");
         setState("ready");
         void announceAdminAssist();
+        return;
+      }
+      if (response.success && "offlineQueued" in response) {
+        setResult(null);
+        setState("success");
         return;
       }
       setResult(response);
@@ -629,7 +663,7 @@ export default function App() {
         reason,
       });
       setAssistedBusy(false);
-      if (response.success && response.action !== "ADMIN_ASSIST") {
+      if (response.success && "attendance" in response) {
         setAdminAssistData(null);
         setResult(response);
         setState("success");
@@ -3199,6 +3233,15 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           </strong>
         </span>
       </div>
+      {info?.restoreFailed && (
+        <div className="warning-banner" role="alert">
+          <ShieldAlert size={20} />
+          <div>
+            <strong>Scheduled database restore failed</strong>
+            <p>{info.restoreFailed}</p>
+          </div>
+        </div>
+      )}
       <div className="lan-actions">
         <button
           className="admin-button file-action-primary"
@@ -4643,9 +4686,9 @@ function EditPayrollDialog({
               <button
                 className="submit-button"
                 type="submit"
-                disabled={saving}
+                disabled={saving || !isOnline()}
               >
-                {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Save Changes
+                {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} {!isOnline() ? "Offline" : "Save Changes"}
               </button>
             </div>
           </form>
@@ -4797,9 +4840,9 @@ function EditPayrollDialog({
               <button
                 className="submit-button"
                 type="submit"
-                disabled={saving}
+                disabled={saving || !isOnline()}
               >
-                {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Save Changes
+                {saving ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} {!isOnline() ? "Offline" : "Save Changes"}
               </button>
             </div>
           </form>
@@ -6362,12 +6405,23 @@ function AttendanceEditRow({
 
   const late = row.status === "LATE_TIMEOUT";
   const save = async () => {
-    const toIso = (value: string) =>
-      value ? `${row.attendanceDate}T${value}:00+08:00` : null;
-    const timeOutIso = toIso(timeOut);
+    const toIsoWithRollover = (inVal: string, outVal: string, baseDate: string) => {
+      const inIso = inVal ? `${baseDate}T${inVal}:00+08:00` : null;
+      if (!outVal) return { timeInIso: inIso, timeOutIso: null };
+      // Check if overnight rollover occurred: if timeOut < timeIn lexicographically
+      let outDate = baseDate;
+      if (inVal && outVal < inVal) {
+        const d = new Date(`${baseDate}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + 1);
+        outDate = d.toISOString().slice(0, 10);
+      }
+      const outIso = `${outDate}T${outVal}:00+08:00`;
+      return { timeInIso: inIso, timeOutIso: outIso };
+    };
+    const { timeInIso, timeOutIso } = toIsoWithRollover(timeIn, timeOut, row.attendanceDate);
     const response = await saveAdminAttendance(row.attendanceId, {
       attendanceDate: row.attendanceDate,
-      timeIn: toIso(timeIn),
+      timeIn: timeInIso,
       timeOut: timeOutIso,
       expectedTimeIn: row.timeIn || null,
       expectedTimeOut: row.timeOut || null,

@@ -29,6 +29,11 @@ pub fn calculate(
     let time_out = DateTime::parse_from_rfc3339(actual_time_out)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
+    // BUG-PAY-03: reject inverted time logs instead of silently flooring
+    // worked hours to zero and masking corrupted data.
+    if time_out < time_in {
+        return Err("time_out cannot be earlier than time_in".into());
+    }
     // TODO: Employee late rules TBD by client
     let computed_in = ceil_hour(time_in);
     let computed_out = Manila
@@ -101,5 +106,19 @@ mod tests {
         assert!(result.is_half_day);
         assert_eq!(result.half_day_deduction_centavos, 50_000);
         assert_eq!(result.daily_pay_centavos, 50_000);
+    }
+
+    #[test]
+    fn inverted_time_logs_return_validation_error() {
+        // BUG-PAY-03: time_out before time_in must surface as an error.
+        let result = calculate(
+            "2026-08-01T02:00:00+08:00",
+            "2026-08-01T01:00:00+08:00",
+            100_000,
+        );
+        assert!(matches!(
+            result,
+            Err(message) if message.contains("time_out cannot be earlier than time_in")
+        ));
     }
 }

@@ -23,8 +23,8 @@ describe('scan requests', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'));
 
     await expect(submitScan({ rfidUid: 'RFID-002', source: 'RFID' })).resolves.toMatchObject({
-      success: false,
-      error: { code: 'INTERNAL_SERVER_ERROR' },
+      success: true,
+      offlineQueued: true,
     });
   });
 });

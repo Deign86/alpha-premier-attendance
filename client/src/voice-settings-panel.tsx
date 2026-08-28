@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { TtsSettings, TtsStatusResponse } from '@rfid-attendance/shared';
 import {
   AVAILABLE_VOICE_MODELS,
@@ -21,6 +21,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
   const [testing, setTesting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [feedbackType, setFeedbackType] = useState<'info' | 'error' | 'success'>('info');
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshStatus = useCallback(async () => {
     const liveStatus = await getTtsStatus();
@@ -33,12 +34,16 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     const loaded = loadTtsSettings();
     setSettings(loaded);
     void refreshStatus();
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
   }, [refreshStatus]);
 
   const updateSetting = <K extends keyof TtsSettings>(key: K, value: TtsSettings[K]) => {
     setSettings((prev) => {
       const updated = { ...prev, [key]: value };
-      saveTtsSettings(updated);
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = setTimeout(() => saveTtsSettings(updated), 250);
       onSettingsChange?.(updated);
       return updated;
     });

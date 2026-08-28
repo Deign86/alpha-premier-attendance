@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-27T13:27:57.513Z",
+  "timestamp": "2026-08-28T12:31:19.158Z",
   "doctor": {
     "passed": true,
     "checks": [
@@ -11,38 +11,34 @@
   },
   "workflows": {
     "kiosk": {
-      "passed": true,
-      "details": "Verified via vitest and IPC contracts"
+      "passed": false,
+      "details": null
     },
     "admin": {
-      "passed": true,
-      "details": "Verified via vitest and PIN unlock contracts"
+      "passed": false,
+      "details": null
     },
     "cardSetup": {
-      "passed": true,
-      "details": "Verified via setup modal & lookup contracts"
+      "passed": false,
+      "details": null
     },
     "payroll": {
-      "passed": true,
-      "details": "Verified via centavos calculation tests"
+      "passed": false,
+      "details": null
     },
     "diagnostics": {
-      "passed": true,
-      "details": "Verified via TTS & LAN unit tests"
-    },
-    "bathroom": {
-      "passed": true,
-      "details": "Verified via vitest, rust lib tests, and IPC contracts"
+      "passed": false,
+      "details": null
     }
   },
   "liveBridge": {
-    "active": false,
+    "active": true,
     "details": null
   },
   "summary": {
-    "total": 7,
-    "passed": 7,
+    "total": 6,
+    "passed": 1,
     "failed": 0,
-    "durationMs": 12
+    "durationMs": 5099
   }
 }

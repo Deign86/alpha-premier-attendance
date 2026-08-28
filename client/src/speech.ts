@@ -86,6 +86,10 @@ export function speak(phrase: string, { rate = 1, pitch = 1 }: SpeakOptions = {}
   if (voice) utterance.voice = voice;
   utterance.rate = rate;
   utterance.pitch = pitch;
+  // BUG-VOICE-01: Attach onerror handler to report speech synthesis errors
+  utterance.onerror = (event) => {
+    console.warn('Speech synthesis utterance error:', event.error);
+  };
   synthesis.cancel();
   synthesis.speak(utterance);
 }

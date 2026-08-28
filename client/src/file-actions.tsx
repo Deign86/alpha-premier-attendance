@@ -25,6 +25,7 @@ type FileActionResultProps = {
 export function GeneratedFileActions({ result, label = 'Generated file' }: FileActionResultProps) {
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [clipboardFailed, setClipboardFailed] = useState(false);
 
   if (!result?.filePath && !result?.directoryPath) return null;
 
@@ -42,6 +43,7 @@ export function GeneratedFileActions({ result, label = 'Generated file' }: FileA
       await navigator.clipboard.writeText(value);
       setNotice({ text: 'Path copied to clipboard.', ok: true });
     } catch {
+      setClipboardFailed(true);
       setNotice({ text: 'Unable to copy the path automatically.', ok: false });
     }
   };
@@ -91,6 +93,17 @@ export function GeneratedFileActions({ result, label = 'Generated file' }: FileA
         )}
       </div>
       <p className="file-result-mode">{result.isPortableMode ? 'Portable mode' : 'Installed mode'}</p>
+      {clipboardFailed && (
+        <div className="clipboard-fallback">
+          <p className="reset-hint">Press Ctrl+C to copy:</p>
+          <input
+            readOnly
+            value={result.filePath ?? result.directoryPath ?? ''}
+            autoFocus
+            onFocus={(event) => event.currentTarget.select()}
+          />
+        </div>
+      )}
       {notice && (
         <p className={`file-result-notice${notice.ok ? ' is-success' : ' is-error'}`} role={notice.ok ? 'status' : 'alert'}>
           {notice.ok && <Check size={13} />}

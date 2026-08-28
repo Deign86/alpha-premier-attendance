@@ -1,6 +1,6 @@
 {
   "name": "@rfid-attendance/server",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -12,9 +12,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
-    "validate:sheets": "tsx src/validate-sheets.ts"
-    ,"migrate:payroll": "tsx src/migrate-payroll-sheets.ts"
-    ,"backfill:payroll": "tsx src/backfill-payroll.ts"
+    "validate:sheets": "tsx src/validate-sheets.ts",
+    "migrate:payroll": "tsx src/migrate-payroll-sheets.ts",
+    "backfill:payroll": "tsx src/backfill-payroll.ts"
   },
   "dependencies": {
     "@rfid-attendance/shared": "file:../shared",

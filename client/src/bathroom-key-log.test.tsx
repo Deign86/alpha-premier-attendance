@@ -187,11 +187,11 @@ describe("BathroomKeyLogPanel", () => {
     await screen.findByRole("heading", { name: "Bathroom Key Log" });
 
     const searchInput = screen.getAllByPlaceholderText(/search staff by name or id…/i)[0];
-    await user.type(searchInput, "Jane");
+    await user.type(searchInput, "John");
 
     const malePicker = screen.getByRole("listbox", { name: /select male employee/i });
-    expect(withinList(malePicker, "John Doe")).toBeNull();
-    expect(withinList(malePicker, "Jane Smith")).toBeInTheDocument();
+    expect(withinList(malePicker, "John Doe")).toBeInTheDocument();
+    expect(withinList(malePicker, "Jane Smith")).toBeNull();
   });
 });
 

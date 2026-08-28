@@ -179,7 +179,14 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
       return networkError('The attendance service returned an invalid response.');
     });
     return await scanRequest;
-  } catch {
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error);
+    const isNetworkError = !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
+    if (isNetworkError) {
+      const { enqueueOfflineScan } = await import('./network');
+      enqueueOfflineScan(request);
+      return { success: true, offlineQueued: true, message: 'Attendance saved offline. Will automatically sync when reconnected.' };
+    }
     return networkError('Unable to reach the attendance service. Please try again.');
   }
 }

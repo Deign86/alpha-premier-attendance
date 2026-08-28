@@ -31,7 +31,9 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateObj, setUpdateObj] = useState<Update | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(() =>
+    sessionStorage.getItem('alpha_dismissed_update') === 'true',
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const isCheckingRef = useRef(false);
   const isInstallingRef = useRef(false);
@@ -207,7 +209,10 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
               className="update-banner-button dismiss"
               type="button"
               aria-label="Dismiss update notification"
-              onClick={() => setBannerDismissed(true)}
+              onClick={() => {
+                setBannerDismissed(true);
+                sessionStorage.setItem('alpha_dismissed_update', 'true');
+              }}
             >
               <X size={16} />
             </button>

@@ -149,7 +149,15 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     let hra = cents(input.hra);
     let incentives = cents(input.incentives_allowance);
     let special_allowance = cents(input.special_allowance);
-    let allowance = incentives + special_allowance + hra;
+    // BUG-PAY-02: an employee who worked 0 days in the cutoff must not receive
+    // the full flat allowance sum (incentives + special allowance + HRA).
+    let worked_zero_days = input.actual_working_days == 0.0 && input.standard_working_days > 0.0;
+    let allowance_factor = if worked_zero_days {
+        (input.actual_working_days / input.standard_working_days).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let allowance = multiply(incentives + special_allowance + hra, allowance_factor);
     let half = multiply(
         (daily as f64 * input.half_day_count).round() as i64,
         input.half_day_fraction,
@@ -480,6 +488,59 @@ mod tests {
         assert_eq!(result.gross_compensation, 96_000);
         assert_eq!(result.total_deductions, 0);
         assert_eq!(result.net_pay, 96_000);
+    }
+
+    #[test]
+    fn zero_attendance_zeroes_out_allowances() {
+        // BUG-PAY-02: 100% absence must not receive full allowances.
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-106".into(),
+            employee_name: "Zero Attendance".into(),
+            cutoff_start: "2026-08-01".into(),
+            cutoff_end: "2026-08-15".into(),
+            daily_rate: 80.0,
+            standard_working_days: 11.0,
+            actual_working_days: 0.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 200.0,
+            incentives_allowance: 1000.0,
+            special_allowance: 100.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 11.0,
+            absence_deduction: None,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+        // The allowance payout (total_allowance) is zeroed out; the individual
+        // breakdown fields keep their configured display values per the spec.
+        assert_eq!(result.hra, 20_000);
+        assert_eq!(result.incentives_allowance, 100_000);
+        assert_eq!(result.special_allowance, 10_000);
+        assert_eq!(result.total_allowance, 0);
+        // Basic pay for absent days (11 * PHP 80) is offset by the full absence
+        // deduction, so net pay is zero rather than a positive payout.
+        assert_eq!(result.basic_pay, 88_000);
+        assert_eq!(result.absence_deduction, 88_000);
+        assert_eq!(result.gross_compensation, 88_000);
+        assert_eq!(result.total_deductions, 88_000);
+        assert_eq!(result.net_pay, 0);
     }
 }
 

@@ -39,14 +39,18 @@ pub fn calculate(
     let time_out = DateTime::parse_from_rfc3339(actual_time_out)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
+    // Evening and night interns are measured from their actual shift anchor,
+    // rather than being compared with the daytime 08:00 schedule.
+    let start_hour = if time_in.hour() >= 18 {
+        time_in.hour()
+    } else {
+        8
+    };
     let start = Manila
-        .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), start_hour, 0, 0)
         .single()
         .ok_or("Invalid Manila start time")?;
-    let grace_end = Manila
-        .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 15, 0)
-        .single()
-        .ok_or("Invalid Manila grace end time")?;
+    let grace_end = start + Duration::minutes(15);
 
     let late_seconds = time_in.signed_duration_since(start).num_seconds();
     let raw_late_hours = if late_seconds > 0 {
@@ -159,6 +163,23 @@ mod tests {
         assert_eq!(result.late_deduction_centavos, 1000);
         assert_eq!(result.daily_pay_centavos, 7000);
     }
+    #[test]
+    fn evening_shift_is_not_late_against_daytime_start() {
+        // A 22:30 evening arrival is measured against the evening anchor
+        // (22:00), not the daytime 08:00 schedule: 30 minutes late rounds up
+        // to one late hour (PHP 10) instead of 14.5 hours (PHP 150).
+        let result = calculate(
+            "2026-08-10",
+            "2026-08-10T22:30:00+08:00",
+            "2026-08-11T06:30:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.late_hours, 1);
+        assert_eq!(result.late_deduction_centavos, 1000);
+        assert_eq!(result.daily_pay_centavos, 7000);
+    }
+
     #[test]
     fn half_day_shift_deducts_half_daily_pay() {
         // 08:00–12:00 → 4 paid hours → half day

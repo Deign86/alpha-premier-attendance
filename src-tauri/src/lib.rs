@@ -570,6 +570,16 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
     Ok(())
 }
 
+/// BUG-DB-02: translate raw SQLite FK violations into a user-friendly error
+/// instead of leaking the opaque constraint message to the admin panel.
+fn friendly_delete_user_error(error: String) -> String {
+    if error.contains("FOREIGN KEY") {
+        "USER_HAS_RECORDS: Cannot delete user because historical attendance or bathroom records depend on this account. Deactivate the user instead.".to_string()
+    } else {
+        error
+    }
+}
+
 #[tauri::command]
 async fn admin_delete_user(
     state: State<'_, AppState>,
@@ -579,7 +589,9 @@ async fn admin_delete_user(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    delete_user_and_cascade(state.inner(), &user_id).await?;
+    delete_user_and_cascade(state.inner(), &user_id)
+        .await
+        .map_err(friendly_delete_user_error)?;
     Ok(serde_json::json!({"success": true, "userId": user_id}))
 }
 
@@ -2870,6 +2882,17 @@ async fn db_info(state: State<'_, AppState>) -> Result<serde_json::Value, String
     } else {
         None
     };
+    // BUG-DB-01: surface a failed scheduled restore (restore.failed marker)
+    // so the admin panel can warn the operator instead of staying silent.
+    let restore_failed_marker = crate::database::restore_failed_path(&state.data_dir);
+    let restore_failed = if restore_failed_marker.is_file() {
+        std::fs::read_to_string(&restore_failed_marker)
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+    } else {
+        None
+    };
     let last_backup_at = backups
         .first()
         .and_then(|(path, _)| std::fs::metadata(path).ok())
@@ -2904,6 +2927,7 @@ async fn db_info(state: State<'_, AppState>) -> Result<serde_json::Value, String
         "isPortableMode": state.is_portable,
         "restorePending": restore_pending,
         "restoreSourcePath": restore_source,
+        "restoreFailed": restore_failed,
         "backups": backup_items,
         "lastBackupAt": last_backup_at,
     }))
@@ -4892,6 +4916,21 @@ mod tests {
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn foreign_key_delete_error_is_translated() {
+        // BUG-DB-02: SQLite FK violations surface a friendly message.
+        let translated = super::friendly_delete_user_error(
+            "database error: FOREIGN KEY constraint failed".into(),
+        );
+        assert!(translated.starts_with("USER_HAS_RECORDS:"));
+        assert!(translated.contains("Deactivate the user instead"));
+        // Other errors pass through unchanged.
+        assert_eq!(
+            super::friendly_delete_user_error("USER_NOT_FOUND".into()),
+            "USER_NOT_FOUND"
+        );
     }
 
     #[test]
