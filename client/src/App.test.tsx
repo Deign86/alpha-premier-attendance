@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
-import type { ScannerStatus } from '@rfid-attendance/shared';
+import type { BathroomScanResponse, ScannerStatus } from '@rfid-attendance/shared';
 
 let rfidHandlers: Array<(uid: string) => void> = [];
 let scannerStatusHandlers: Array<(status: ScannerStatus) => void> = [];
@@ -71,6 +71,9 @@ beforeEach(() => {
   vi.spyOn(tauriApi, 'notifyScanSuccess').mockResolvedValue();
   vi.spyOn(tauriApi, 'getScannerStatus').mockRejectedValue(new Error('web mode'));
   vi.spyOn(ttsService, 'announceAttendance').mockResolvedValue(null);
+  vi.spyOn(ttsService, 'announceBathroom').mockResolvedValue(null);
+  vi.spyOn(ttsService, 'announceAdminAssist').mockResolvedValue(null);
+  vi.spyOn(ttsService, 'announceScanError').mockResolvedValue(null);
   mockFetch();
 });
 
@@ -245,12 +248,74 @@ describe('RFID kiosk', () => {
   });
 
   it('announces a time-in with employee name in TTS announcement', async () => {
+    mockFetch({
+      ...successResponse,
+      action: 'TIME_IN',
+      message: 'Time In recorded successfully.',
+      attendance: {
+        ...successResponse.attendance,
+        timeIn: '2026-07-28T08:00:00+08:00',
+        status: 'WORKING',
+      },
+    });
     render(<App />);
     act(() => emitRfidScan('04A1B2C3'));
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
       attendanceType: 'time_in',
+      arrivalStatus: 'ON_TIME',
+      isLateTimeout: false,
+      isAssisted: false,
+      timeInIso: '2026-07-28T08:00:00+08:00',
+    });
+  });
+
+  it('announces a grace period time-in in TTS announcement', async () => {
+    mockFetch({
+      ...successResponse,
+      action: 'TIME_IN',
+      message: 'Time In recorded successfully.',
+      attendance: {
+        ...successResponse.attendance,
+        timeIn: '2026-07-28T08:08:00+08:00',
+        status: 'WORKING',
+      },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    await screen.findByText('Ada Lovelace');
+    expect(ttsService.announceAttendance).toHaveBeenCalledWith({
+      employeeName: 'Ada Lovelace',
+      attendanceType: 'time_in',
+      arrivalStatus: 'GRACE_PERIOD',
+      isLateTimeout: false,
+      isAssisted: false,
+      timeInIso: '2026-07-28T08:08:00+08:00',
+    });
+  });
+
+  it('announces a late time-in in TTS announcement', async () => {
+    mockFetch({
+      ...successResponse,
+      action: 'TIME_IN',
+      message: 'Time In recorded successfully.',
+      attendance: {
+        ...successResponse.attendance,
+        timeIn: '2026-07-28T08:30:00+08:00',
+        status: 'WORKING',
+      },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    await screen.findByText('Ada Lovelace');
+    expect(ttsService.announceAttendance).toHaveBeenCalledWith({
+      employeeName: 'Ada Lovelace',
+      attendanceType: 'time_in',
+      arrivalStatus: 'LATE',
+      isLateTimeout: false,
+      isAssisted: false,
+      timeInIso: '2026-07-28T08:30:00+08:00',
     });
   });
 
@@ -267,6 +332,62 @@ describe('RFID kiosk', () => {
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
       attendanceType: 'time_out',
+      arrivalStatus: undefined,
+      isLateTimeout: false,
+      isAssisted: false,
+      timeInIso: '2026-07-28T09:00:00+08:00',
+    });
+  });
+
+  it('announces a late time-out in TTS announcement when overtime is detected', async () => {
+    mockFetch({
+      ...successResponse,
+      action: 'TIME_OUT',
+      message: 'Time Out recorded after office hours. Manual correction is required.',
+      attendance: { ...successResponse.attendance, timeOut: '2026-07-28T18:05:00+08:00', status: 'LATE_TIMEOUT' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    await screen.findByText('Ada Lovelace');
+    expect(ttsService.announceAttendance).toHaveBeenCalledWith({
+      employeeName: 'Ada Lovelace',
+      attendanceType: 'time_out',
+      arrivalStatus: undefined,
+      isLateTimeout: true,
+      isAssisted: false,
+      timeInIso: '2026-07-28T09:00:00+08:00',
+    });
+  });
+
+  it('announces admin assist card presentation', async () => {
+    mockFetch({
+      success: true,
+      requestId: 'req-admin',
+      action: 'ADMIN_ASSIST',
+      message: 'Admin assist card accepted. Select an employee to record attendance.',
+      adminCard: { rfidUid: 'ADMIN-01', label: 'Front Desk Admin' },
+      activeEmployees: [
+        { userId: 'EMP-001', fullName: 'Ada Lovelace', department: 'Engineering', photoUrl: null },
+      ],
+    });
+    render(<App />);
+    act(() => emitRfidScan('ADMIN-01'));
+    expect(await screen.findByText(/assisted attendance/i)).toBeInTheDocument();
+    expect(ttsService.announceAdminAssist).toHaveBeenCalled();
+  });
+
+  it('announces scan error on unregistered card', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-err',
+      error: { code: 'UNKNOWN_RFID_CARD', message: 'This RFID card is not registered.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('UNREGISTERED'));
+    expect(await screen.findByText('This RFID card is not registered.')).toBeInTheDocument();
+    expect(ttsService.announceScanError).toHaveBeenCalledWith({
+      errorCode: 'UNKNOWN_RFID_CARD',
+      message: 'This RFID card is not registered.',
     });
   });
 
@@ -1452,5 +1573,119 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByTestId('kiosk-mode-attendance'));
     expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active');
     expect(screen.queryByTestId('bathroom-kiosk-view')).not.toBeInTheDocument();
+  });
+
+  it('announces bathroom key checkout, return, and in-use errors in bathroom kiosk mode', async () => {
+    window.history.pushState({}, '', '/');
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    let bathroomScanMock: BathroomScanResponse = {
+      success: true,
+      action: 'CHECKOUT',
+      genderKey: 'MALE',
+      user: {
+        userId: 'EMP-01',
+        fullName: 'John Doe',
+        department: 'Engineering',
+        photoUrl: null,
+        gender: 'MALE',
+      },
+      timeOut: '2026-08-28T10:00:00+08:00',
+      message: 'Male floor key checked out',
+      timestamp: '2026-08-28T10:00:00+08:00',
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/bathroom/scan')) {
+        // SAFETY: Mock bathroom scan response
+        return { ok: true, json: async () => bathroomScanMock } as Response;
+      }
+      if (url.includes('/bathroom/status')) {
+        // SAFETY: Mock bathroom status
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-08-28',
+            maleActive: null,
+            femaleActive: null,
+            maleLogs: [],
+            femaleLogs: [],
+            fetchedAt: '2026-08-28T10:00:00Z',
+          }),
+        } as Response;
+      }
+      // SAFETY: Generic fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    render(<App />);
+
+    // Switch to Bathroom mode
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+
+    // 1. Scan for checkout
+    act(() => emitRfidScan('MALE-CARD-01'));
+    expect(await screen.findByText('John Doe')).toBeInTheDocument();
+    expect(ttsService.announceBathroom).toHaveBeenCalledWith({
+      action: 'CHECKOUT',
+      genderKey: 'MALE',
+      employeeName: 'John Doe',
+    });
+
+    // 2. Scan for return
+    bathroomScanMock = {
+      success: true,
+      action: 'RETURN',
+      genderKey: 'FEMALE',
+      user: {
+        userId: 'EMP-02',
+        fullName: 'Jane Smith',
+        department: 'Design',
+        photoUrl: null,
+        gender: 'FEMALE',
+      },
+      timeOut: '2026-08-28T09:50:00+08:00',
+      timeIn: '2026-08-28T10:00:00+08:00',
+      durationSeconds: 600,
+      message: 'Female floor key returned',
+      timestamp: '2026-08-28T10:00:00+08:00',
+    };
+    act(() => emitRfidScan('FEMALE-CARD-01'));
+    expect(await screen.findByText('Jane Smith')).toBeInTheDocument();
+    expect(ttsService.announceBathroom).toHaveBeenCalledWith({
+      action: 'RETURN',
+      genderKey: 'FEMALE',
+      employeeName: 'Jane Smith',
+    });
+
+    // 3. Scan with key in use error
+    bathroomScanMock = {
+      success: false,
+      error: {
+        code: 'BATHROOM_KEY_IN_USE',
+        message: 'The male bathroom key is currently in use by John Doe.',
+      },
+      genderKey: 'MALE',
+      activeHolder: {
+        logId: 'log-1',
+        userId: 'EMP-01',
+        fullName: 'John Doe',
+        department: 'Engineering',
+        genderKey: 'MALE',
+        timeOut: '2026-08-28T10:00:00+08:00',
+      },
+    };
+    act(() => emitRfidScan('MALE-CARD-02'));
+    expect(await screen.findByText(/currently in use by/i)).toBeInTheDocument();
+    expect(ttsService.announceScanError).toHaveBeenCalledWith({
+      errorCode: 'BATHROOM_KEY_IN_USE',
+      message: 'The male bathroom key is currently in use by John Doe.',
+      activeHolderName: 'John Doe',
+      genderKey: 'MALE',
+    });
   });
 });

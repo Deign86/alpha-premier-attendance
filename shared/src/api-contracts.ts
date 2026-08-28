@@ -161,6 +161,37 @@ export function evaluateAttendanceArrivals(
 }
 
 /**
+ * Evaluates a single arrival timestamp against office hours policy:
+ * - <= 08:00:00: ON_TIME
+ * - 08:00:01 - 08:15:00: GRACE_PERIOD
+ * - > 08:15:00: LATE
+ */
+export function evaluateArrivalFromTimestamp(
+  timeInIso: string,
+  timezone = ATTENDANCE_TIMEZONE,
+): ArrivalStatus {
+  const date = new Date(timeInIso);
+  if (!Number.isFinite(date.getTime())) return 'NONE';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const seconds = read('hour') * 3600 + read('minute') * 60 + read('second');
+  const [startHour, startMinute] = OFFICE_HOURS_START.split(':').map(Number);
+  const [graceHour, graceMinute] = GRACE_PERIOD_END.split(':').map(Number);
+  const startSeconds = startHour * 3600 + startMinute * 60;
+  const graceEndSeconds = graceHour * 3600 + graceMinute * 60;
+
+  if (seconds <= startSeconds) return 'ON_TIME';
+  if (seconds <= graceEndSeconds) return 'GRACE_PERIOD';
+  return 'LATE';
+}
+
+/**
  * True when the Manila-local clock time of a time-out timestamp is strictly
  * after the end of office hours (18:00 / 6 PM onwards). A time-out up to
  * 18:00 is a normal end-of-day COMPLETED shift; anything later must be corrected

@@ -48,6 +48,7 @@ import {
   OFFICE_HOURS_END,
   isLateTimeout,
   normalizeName,
+  evaluateArrivalFromTimestamp,
   evaluateAttendanceArrivals,
   countWorkdays,
 } from "@rfid-attendance/shared";
@@ -117,7 +118,12 @@ type ScannerStatus = {
 };
 
 import { GeneratedFileActions, type GeneratedFileResult } from "./file-actions";
-import { announceAttendance } from "./services/ttsService";
+import {
+  announceAdminAssist,
+  announceAttendance,
+  announceBathroom,
+  announceScanError,
+} from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
@@ -578,6 +584,7 @@ export default function App() {
         setAdminAssistData(response);
         setAssistedError("");
         setState("ready");
+        void announceAdminAssist();
         return;
       }
       setResult(response);
@@ -586,9 +593,22 @@ export default function App() {
       // Voice announcement: greet the employee on time-in, say goodbye on time-out.
       if (response.success) {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
+        const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
+        const arrival = response.action === "TIME_IN" && response.attendance.timeIn
+          ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
+          : undefined;
         void announceAttendance({
           employeeName: response.user.fullName,
           attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
+          arrivalStatus: arrival,
+          isLateTimeout: isLate,
+          isAssisted: response.attendance.source === "ADMIN_ASSISTED_SCAN",
+          timeInIso: response.attendance.timeIn,
+        });
+      } else {
+        void announceScanError({
+          errorCode: response.error.code,
+          message: response.error.message,
         });
       }
       if (resetTimer.current) clearTimeout(resetTimer.current);
@@ -614,18 +634,35 @@ export default function App() {
         setResult(response);
         setState("success");
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
+        const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
+        const arrival = response.action === "TIME_IN" && response.attendance.timeIn
+          ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
+          : undefined;
         void announceAttendance({
           employeeName: response.user.fullName,
           attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
+          arrivalStatus: arrival,
+          isLateTimeout: isLate,
+          isAssisted: true,
+          timeInIso: response.attendance.timeIn,
         });
         if (resetTimer.current) clearTimeout(resetTimer.current);
         resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
       } else if (!response.success) {
         setAssistedError(response.error.message);
+        void announceScanError({
+          errorCode: response.error.code,
+          message: response.error.message,
+        });
       }
     } catch {
       setAssistedBusy(false);
-      setAssistedError("Failed to record assisted attendance. Please try again.");
+      const msg = "Failed to record assisted attendance. Please try again.";
+      setAssistedError(msg);
+      void announceScanError({
+        errorCode: "SERVICE_ERROR",
+        message: msg,
+      });
     }
   };
 
@@ -670,9 +707,17 @@ export default function App() {
           if (document.visibilityState === "hidden" || !document.hasFocus()) {
             void notifyScanSuccess(response.user.fullName).catch(() => undefined);
           }
-          void announceAttendance({
+          void announceBathroom({
+            action: response.action,
+            genderKey: response.genderKey,
             employeeName: response.user.fullName,
-            attendanceType: response.action === "CHECKOUT" ? "time_out" : "time_in",
+          });
+        } else {
+          void announceScanError({
+            errorCode: response.error.code,
+            message: response.error.message,
+            activeHolderName: response.activeHolder?.fullName,
+            genderKey: response.genderKey,
           });
         }
 
@@ -686,6 +731,10 @@ export default function App() {
       } catch {
         processingRef.current = false;
         setState("error");
+        void announceScanError({
+          errorCode: "SERVICE_ERROR",
+          message: "Bathroom service is temporarily unavailable.",
+        });
       }
     },
     [config.resultResetDelayMs, fetchBathroomStatus],
@@ -1217,7 +1266,8 @@ export default function App() {
               <input
                 id="scanner-uid"
                 aria-label={manualMode ? "Manual card ID" : "Scanner card ID"}
-                value={manualMode ? manualUid : uid}
+                type="password"
+                value={manualMode ? manualUid : (uid ? "•".repeat(Math.max(8, uid.length)) : "")}
                 readOnly={!manualMode}
                 onChange={(event) => {
                   if (manualMode) setManualUid(event.target.value);
@@ -1924,7 +1974,7 @@ function AssistedAttendanceModal({
               <p className="section-kicker">Kiosk assist mode</p>
               <h3 id="assisted-heading">Assisted Attendance</h3>
               <p className="assisted-modal-subtitle">
-                Admin Card: <span className="assisted-admin-card-tag">{data.adminCard.label || data.adminCard.rfidUid}</span>
+                Admin Card: <span className="assisted-admin-card-tag">{data.adminCard.label || "Admin Card"}</span>
               </p>
             </div>
           </div>

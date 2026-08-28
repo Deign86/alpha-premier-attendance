@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateAttendanceArrivals, isLateTimeout, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isLateTimeout, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -140,6 +140,16 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
     expect(results.get('1')?.minutesLate).toBe(16);
     expect(results.get('2')?.arrivalStatus).toBe('LATE');
     expect(results.get('2')?.minutesLate).toBe(90);
+  });
+
+  it('evaluates single arrival timestamp correctly with evaluateArrivalFromTimestamp', () => {
+    expect(evaluateArrivalFromTimestamp('2026-08-24T07:59:59+08:00')).toBe('ON_TIME');
+    expect(evaluateArrivalFromTimestamp('2026-08-24T08:00:00+08:00')).toBe('ON_TIME');
+    expect(evaluateArrivalFromTimestamp('2026-08-24T08:00:01+08:00')).toBe('GRACE_PERIOD');
+    expect(evaluateArrivalFromTimestamp('2026-08-24T08:15:00+08:00')).toBe('GRACE_PERIOD');
+    expect(evaluateArrivalFromTimestamp('2026-08-24T08:15:01+08:00')).toBe('LATE');
+    expect(evaluateArrivalFromTimestamp('2026-08-24T09:00:00+08:00')).toBe('LATE');
+    expect(evaluateArrivalFromTimestamp('invalid-date')).toBe('NONE');
   });
 });
 
