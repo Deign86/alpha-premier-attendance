@@ -347,57 +347,28 @@ describe("PayrollWorkspace", () => {
     });
   });
 
-  it("allows globally editing standard working days to recalculate and batch update draft payroll records", async () => {
-    const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
+  it("allows setting standard working days in the generate panel to customize cutoff generation", async () => {
+    generatePayrollCutoffSpy.mockResolvedValueOnce({ success: true });
     const user = userEvent.setup();
-    renderWorkspace([
-      record({
-        payrollId: "P-001",
-        status: "DRAFT",
-        standardWorkingDays: 11,
-        actualWorkingDays: 10,
-        dailyRate: 500,
-      }),
-      internRecord({
-        payrollId: "P-INT-001",
-        status: "DRAFT",
-        standardWorkingDays: 11,
-        actualWorkingDays: 10,
-        dailyRate: 80,
-      }),
-    ]);
+    render(<PayrollWorkspace users={[{
+      userId: "EMP-1", rfidUid: "ABCD1234", fullName: "Ada Lovelace", department: null, status: "ACTIVE",
+      employeeType: "EMPLOYEE", gender: null, dailyRate: 500, payrollProfileId: "BEA_STANDARD", photoUrl: null,
+    }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
 
-    const globalStdDaysInput = screen.getByLabelText(/Cutoff standard working days/i);
-    expect(globalStdDaysInput).toHaveValue(11);
+    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
+    const stdDaysInput = screen.getByLabelText(/Standard days/i);
+    await user.clear(stdDaysInput);
+    await user.type(stdDaysInput, "12");
 
-    await user.clear(globalStdDaysInput);
-    await user.type(globalStdDaysInput, "10");
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+    await user.click(screen.getByRole("button", { name: /confirm/i }));
 
-    await user.click(screen.getByRole("button", { name: /Apply to All Drafts/i }));
-
-    await waitFor(() => {
-      expect(savePayrollCutoffSpy).toHaveBeenCalledTimes(2);
-      expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payrollId: "P-001",
-          standardWorkingDays: 10,
-          basicPay: 5000,
-          absentDays: 0,
-          absenceDeduction: 0,
-        }),
-        "P-001",
-      );
-      expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payrollId: "P-INT-001",
-          standardWorkingDays: 10,
-          basicPay: 800,
-          absentDays: 0,
-          absenceDeduction: 0,
-        }),
-        "P-INT-001",
-      );
-    });
+    expect(generatePayrollCutoffSpy).toHaveBeenCalledWith(
+      "2026-08-01",
+      "2026-08-15",
+      "August 1-15, 2026",
+      { standardWorkingDays: 12 },
+    );
   });
 
   it("shows manual adjustment as editable and hides standard working days, allowances, and statutory deductions when editing an intern record", async () => {

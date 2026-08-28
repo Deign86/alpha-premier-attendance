@@ -4818,8 +4818,6 @@ function PayrollTable({
 }) {
   const [message, setMessage] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [globalStandardDays, setGlobalStandardDays] = useState(() => String(records[0]?.standardWorkingDays ?? 11));
-  const [updatingStandardDays, setUpdatingStandardDays] = useState(false);
   const [editTarget, setEditTarget] = useState<PayrollCutoffRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
@@ -4837,12 +4835,6 @@ function PayrollTable({
       masterCheckboxRef.current.indeterminate = someSelected;
     }
   }, [someSelected]);
-
-  useEffect(() => {
-    if (records.length > 0) {
-      setGlobalStandardDays(String(records[0]?.standardWorkingDays ?? 11));
-    }
-  }, [records]);
 
   // Clean up selectedIds when records change
   useEffect(() => {
@@ -4918,76 +4910,6 @@ function PayrollTable({
     (r) => selectedIds.has(r.payrollId) && r.status === "DRAFT",
   ).length;
 
-  const updateAllStandardDays = async () => {
-    const nStdDays = Math.max(0, Number(globalStandardDays) || 0);
-    const targetRecords = selectedIds.size > 0
-      ? records.filter((r) => selectedIds.has(r.payrollId) && r.status === "DRAFT")
-      : records.filter((r) => r.status === "DRAFT");
-
-    if (targetRecords.length === 0) return;
-    setUpdatingStandardDays(true);
-    setMessage("");
-    let successCount = 0;
-    for (const record of targetRecords) {
-      const isIntern = record.employeeType === "INTERN";
-      const dailyRate = isIntern ? INTERN_DAILY_RATE_PHP : record.dailyRate;
-      const actualDays = record.actualWorkingDays;
-      const absentDays = Math.max(0, nStdDays - actualDays);
-      const basicPay = dailyRate * nStdDays;
-      const absenceDeduction = dailyRate * absentDays;
-
-      const nHra = isIntern ? 0 : record.hra ?? 0;
-      const nInc = isIntern ? 0 : record.incentivesAllowance ?? 0;
-      const nSpecAllow = isIntern ? 0 : record.specialAllowance ?? 0;
-      const nOt = isIntern ? 0 : record.overtimePay ?? 0;
-      const nAdj = record.manualAdjustment ?? 0;
-
-      const nSss = isIntern ? 0 : record.sss ?? 0;
-      const nPhic = isIntern ? 0 : record.phic ?? 0;
-      const nHdmf = isIntern ? 0 : record.hdmf ?? 0;
-      const nAdvance = isIntern ? 0 : record.salaryAdvance ?? 0;
-
-      const payload = {
-        payrollId: record.payrollId,
-        employeeId: record.employeeId,
-        employeeName: record.employeeName,
-        payrollProfileId: record.payrollProfileId,
-        payrollCutoffLabel: record.payrollCutoffLabel,
-        cutoffStart: record.cutoffStart,
-        cutoffEnd: record.cutoffEnd,
-        dailyRate: record.dailyRate,
-        standardWorkingDays: nStdDays,
-        actualWorkingDays: record.actualWorkingDays,
-        basicPay,
-        hra: nHra,
-        incentivesAllowance: nInc,
-        specialAllowance: nSpecAllow,
-        regularHolidayPay: isIntern ? 0 : record.regularHolidayPay,
-        specialHolidayPay: isIntern ? 0 : record.specialHolidayPay,
-        overtimePay: nOt,
-        sss: nSss,
-        phic: nPhic,
-        hdmf: nHdmf,
-        salaryAdvance: nAdvance,
-        absentDays,
-        absenceDeduction,
-        halfDayCount: record.halfDayCount,
-        halfDayDeduction: record.halfDayDeduction,
-        lateUnits: record.lateUnits,
-        lateDeduction: record.lateDeduction,
-        manualAdjustment: nAdj,
-        adjustmentReason: record.adjustmentReason || undefined,
-        approvedWorkingDayOverage: nStdDays < record.actualWorkingDays ? true : record.approvedWorkingDayOverage,
-      };
-
-      const res = await savePayrollCutoff(payload, record.payrollId);
-      if (res.success) successCount++;
-    }
-    setUpdatingStandardDays(false);
-    setMessage(`Updated standard working days to ${nStdDays} for ${successCount} draft record(s).`);
-    onFinalized();
-  };
-
   const removeBatch = async () => {
     if (selectedIds.size === 0) return;
     setBatchDeleteOpen(false);
@@ -5036,30 +4958,6 @@ function PayrollTable({
           ) : (
             <span>Total records: {records.length}</span>
           )}
-        </div>
-        <div className="payroll-global-controls">
-          <label className="global-std-days-label" htmlFor="global-std-days-input">
-            Standard Days:
-          </label>
-          <input
-            id="global-std-days-input"
-            className="global-std-days-input"
-            type="number"
-            min="0"
-            max="31"
-            step="0.5"
-            value={globalStandardDays}
-            onChange={(e) => setGlobalStandardDays(e.target.value)}
-            aria-label="Cutoff standard working days"
-          />
-          <button
-            className="admin-button"
-            type="button"
-            disabled={updatingStandardDays || (selectedIds.size > 0 ? selectedDraftsCount === 0 : records.filter((r) => r.status === "DRAFT").length === 0)}
-            onClick={() => void updateAllStandardDays()}
-          >
-            {updatingStandardDays ? "Applying..." : selectedIds.size > 0 ? `Apply to Selected (${selectedDraftsCount})` : "Apply to All Drafts"}
-          </button>
         </div>
         <div className="payroll-batch-actions">
           {selectedIds.size > 0 ? (
