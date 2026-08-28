@@ -904,7 +904,7 @@ describe('Admin Attendance Corrections', () => {
         // SAFETY: Mock unlock response
         return {
           ok: true,
-          json: async () => ({ success: true, setupToken: 'tok-123', expiresAt: '2026-08-27T10:00:00Z' }),
+          json: async () => ({ success: true, setupToken: 'tok-123', expiresAt: new Date(Date.now() + 600_000).toISOString() }),
         } as Response;
       }
       if (url.includes('/api/setup/card')) {
@@ -1355,5 +1355,102 @@ describe('Admin Attendance Corrections', () => {
     // Unlocks Admin panel directly
     expect(capturedAdminUnlockBody).toEqual({ pin: 'ADDE23' });
     expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
+  });
+
+  it('switches between Attendance and Bathroom Key Log mode via header buttons and 1/2 keybindings', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila' }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Mock attendance list
+        return { ok: true, json: async () => ({ success: true, attendance: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/bathroom/status')) {
+        // SAFETY: Mock bathroom status
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-08-27',
+            maleActive: null,
+            femaleActive: null,
+            maleLogs: [],
+            femaleLogs: [],
+            fetchedAt: '2026-08-27T10:00:00Z',
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true, profiles: [], payroll: [] }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Initially in Attendance mode
+    expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
+
+    const attendanceModeBtn = screen.getByRole('tab', { name: /^attendance$/i });
+    const bathroomModeBtn = screen.getByRole('tab', { name: /^bathroom key log$/i });
+    expect(attendanceModeBtn).toHaveClass('is-active');
+    expect(bathroomModeBtn).not.toHaveClass('is-active');
+
+    // 1. Click button to switch to Bathroom Key Log mode
+    await user.click(bathroomModeBtn);
+    expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /users and rfid/i })).not.toBeInTheDocument();
+
+    // 2. Press "1" key to switch back to Attendance mode
+    fireEvent.keyDown(window, { key: '1' });
+    expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /bathroom key log/i })).not.toBeInTheDocument();
+
+    // 3. Press "2" key to switch to Bathroom Key Log mode
+    fireEvent.keyDown(window, { key: '2' });
+    expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
+
+    // 4. Pressing "1" inside a focused input must NOT switch mode
+    const searchInput = screen.getAllByPlaceholderText(/search staff by name or id…/i)[0];
+    searchInput.focus();
+    fireEvent.keyDown(searchInput, { key: '1' });
+    // Still in bathroom mode
+    expect(screen.getByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
+  });
+
+  it('switches between Attendance and Bathroom Key Log mode on the Kiosk', async () => {
+    window.history.pushState({}, '', '/');
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Initially in Attendance mode
+    expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active');
+    expect(screen.getByTestId('kiosk-mode-bathroom')).not.toHaveClass('active');
+    expect(screen.getByText(/alpha premier/i)).toBeInTheDocument();
+
+    // 1. Click Bathroom Key Log mode tab on Kiosk
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(screen.getByTestId('kiosk-mode-bathroom')).toHaveClass('active');
+    expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+    expect(screen.getByTestId('bathroom-kiosk-card-male')).toBeInTheDocument();
+    expect(screen.getByTestId('bathroom-kiosk-card-female')).toBeInTheDocument();
+
+    // 2. Click Attendance mode tab to switch back
+    await user.click(screen.getByTestId('kiosk-mode-attendance'));
+    expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active');
+    expect(screen.queryByTestId('bathroom-kiosk-view')).not.toBeInTheDocument();
   });
 });

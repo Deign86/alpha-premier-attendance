@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
 
 export interface HealthStatusResponse {
   status: string;
@@ -15,6 +15,10 @@ export const tauriApi = {
   generatePayrollPdf: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, workerType: string) => invoke<PayrollPdfGenerateResponse>('generate_payroll_pdf', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, workerType }),
   listPayrollPdfs: (token: string) => invoke<PayrollPdfListResponse>('list_payroll_pdfs', { token }),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),
+  bathroomGetStatus: (token?: string, date?: string) => invoke<BathroomStatusResponse>('bathroom_get_status', { token, date }),
+  bathroomScanRfid: (rfidUid: string) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),
+  bathroomTimeOut: (token: string, userId: string, genderKey: 'MALE' | 'FEMALE', notes?: string) => invoke<BathroomActionResponse>('bathroom_time_out', { token, userId, genderKey, notes }),
+  bathroomTimeIn: (token: string, logId: string, notes?: string) => invoke<BathroomActionResponse>('bathroom_time_in', { token, logId, notes }),
   lanStatus: () => invoke<LanStatusResponse>('lan_status'),
   lanStart: () => invoke<LanStatusResponse>('lan_start'),
   lanStop: () => invoke<LanStatusResponse>('lan_stop'),

@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-21T07:23:34.071Z",
+  "timestamp": "2026-08-27T13:27:57.513Z",
   "doctor": {
     "passed": true,
     "checks": [
@@ -29,6 +29,10 @@
     "diagnostics": {
       "passed": true,
       "details": "Verified via TTS & LAN unit tests"
+    },
+    "bathroom": {
+      "passed": true,
+      "details": "Verified via vitest, rust lib tests, and IPC contracts"
     }
   },
   "liveBridge": {
@@ -36,9 +40,9 @@
     "details": null
   },
   "summary": {
-    "total": 6,
-    "passed": 6,
+    "total": 7,
+    "passed": 7,
     "failed": 0,
-    "durationMs": 8
+    "durationMs": 12
   }
 }

@@ -248,6 +248,23 @@ No public bind, router forwarding, UPnP mapping, public DNS record, or cloud tun
 - The scanner listener pauses while the operator types in admin, setup, or manual-entry screens so keystrokes are never misread as card taps.
 - Each user has one Time In and one Time Out per Manila calendar day (`Asia/Manila`).
 - **Late time-outs.** The office does not allow overtime. A time-out recorded strictly after 18:00 Manila (6:00 PM onwards) is saved as `LATE_TIMEOUT` instead of `COMPLETED`: the record is kept and shown with a distinct state on the live attendance screens (in-app dashboard and LAN viewer), no payroll row is generated, and the attendance editor flags it for manual re-input of the official time-out. Re-entering a time-out at or before 18:00 completes the shift normally. The rule lives in `shared/src/api-contracts.ts` (`isLateTimeout`, `OFFICE_HOURS_END`) and is mirrored in `src-tauri/src/services/office_hours.rs` for the desktop app.
+
+## Bathroom Key Log (Mode Switcher)
+
+Alpha Premier Attendance includes a parallel, switchable **Bathroom Key Log** mode in the Admin view that digitizes the office's physical handwritten sign-out logbook for the shared male and female restroom keys:
+
+- **Mode Switching (Admin view)**:
+  - Press number key `1` (or click `[1] Attendance`) to switch to Attendance Logging.
+  - Press number key `2` (or click `[2] Bathroom Key Log`) to switch to Bathroom Key Logging.
+  - Keypresses are ignored when focusing text inputs, textareas, selects, or editable fields to prevent accidental switching during typing.
+  - Persistent active mode badges are visible in the Admin header.
+- **Physical Key Invariant**:
+  - Exactly one key exists per gender (`MALE` and `FEMALE`).
+  - Database-enforced partial unique index (`WHERE status = 'OUT'`) and backend validation prevent checking out a key if it is currently in use.
+- **Live Elapsed Duration & Daily History**:
+  - Live timer ticks in real time (`Xm Ys`) displaying how long the key has been checked out.
+  - Searchable employee picker allows fast assignment to active staff.
+  - Complete chronological log table with date filtering, checkout timestamp, return timestamp, duration in seconds, and status (`OUT` / `RETURNED`).
 - Local writes are committed to SQLite before local events or Sheets export are published.
 - Accepted and rejected scan requests are correlated with a request ID in the audit log.
 

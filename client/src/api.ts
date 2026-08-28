@@ -1,6 +1,10 @@
 import type {
   ArtifactExportResponse,
   AttendanceXlsxExportResponse,
+  BathroomActionResponse,
+  BathroomScanRequest,
+  BathroomScanResponse,
+  BathroomStatusResponse,
   DatabaseBackupResponse,
   DatabaseInfoResponse,
   LanStatusResponse,
@@ -635,4 +639,83 @@ export async function setAutostartStatus(enabled: boolean): Promise<boolean> {
     }
   }
   return false;
+}
+
+export async function loadBathroomStatus(date?: string, signal?: AbortSignal): Promise<BathroomStatusResponse> {
+  if (runningInTauri()) {
+    // SAFETY: Backend bathroom status returns BathroomStatusResponse
+    return (await tauriApi.bathroomGetStatus(nativeAdminToken ?? undefined, date)) as BathroomStatusResponse;
+  }
+  const url = date ? `/api/bathroom/status?date=${encodeURIComponent(date)}` : '/api/bathroom/status';
+  const response = await fetch(apiUrl(url), { signal });
+  // SAFETY: Parsing bathroom status response JSON
+  return (await response.json()) as BathroomStatusResponse;
+}
+
+export async function submitBathroomScan(
+  request: BathroomScanRequest,
+  signal?: AbortSignal,
+): Promise<BathroomScanResponse> {
+  if (runningInTauri()) {
+    try {
+      // SAFETY: Backend bathroom scan returns BathroomScanResponse
+      return (await tauriApi.bathroomScanRfid(request.rfidUid)) as BathroomScanResponse;
+    } catch (error) {
+      return {
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: errorString(error) },
+      };
+    }
+  }
+  const response = await fetch(apiUrl('/api/bathroom/scan'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  });
+  // SAFETY: Parsing bathroom scan response JSON
+  return (await response.json()) as BathroomScanResponse;
+}
+
+export async function bathroomTimeOut(
+  userId: string,
+  genderKey: 'MALE' | 'FEMALE',
+  notes?: string,
+): Promise<BathroomActionResponse> {
+  if (runningInTauri()) {
+    try {
+      // SAFETY: Backend bathroom time out returns BathroomActionResponse
+      return (await tauriApi.bathroomTimeOut(nativeAdminToken ?? '', userId, genderKey, notes)) as BathroomActionResponse;
+    } catch (error) {
+      return { success: false, error: { code: 'BATHROOM_ERROR', message: errorString(error) } };
+    }
+  }
+  const response = await fetch(apiUrl('/api/admin/bathroom/time-out'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, genderKey, notes }),
+  });
+  // SAFETY: Parsing bathroom action response JSON
+  return (await response.json()) as BathroomActionResponse;
+}
+
+export async function bathroomTimeIn(
+  logId: string,
+  notes?: string,
+): Promise<BathroomActionResponse> {
+  if (runningInTauri()) {
+    try {
+      // SAFETY: Backend bathroom time in returns BathroomActionResponse
+      return (await tauriApi.bathroomTimeIn(nativeAdminToken ?? '', logId, notes)) as BathroomActionResponse;
+    } catch (error) {
+      return { success: false, error: { code: 'BATHROOM_ERROR', message: errorString(error) } };
+    }
+  }
+  const response = await fetch(apiUrl('/api/admin/bathroom/time-in'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ logId, notes }),
+  });
+  // SAFETY: Parsing bathroom action response JSON
+  return (await response.json()) as BathroomActionResponse;
 }

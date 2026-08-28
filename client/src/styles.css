@@ -2498,3 +2498,706 @@ textarea.input {
   border-color: #b388ff;
   color: #dfcbff;
 }
+
+/* ==========================================================================
+   Admin Mode Switcher (1: Attendance, 2: Bathroom Key Log)
+   ========================================================================== */
+
+.admin-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #181510;
+  border: 1px solid var(--line-bright);
+  border-radius: 6px;
+  padding: 3px;
+  margin-top: 10px;
+}
+
+.admin-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.admin-mode-btn:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.admin-mode-btn.is-active {
+  background: #2b2314;
+  border-color: var(--gold-soft);
+  color: var(--gold-bright);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.admin-mode-key-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: #110f0b;
+  border: 1px solid var(--line-bright);
+  color: var(--gold-soft);
+  font-size: 0.7rem;
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+}
+
+.admin-mode-btn.is-active .admin-mode-key-badge {
+  background: var(--gold-bright);
+  border-color: var(--gold-bright);
+  color: #110f0b;
+}
+
+/* ==========================================================================
+   Bathroom Key Log Workspace
+   ========================================================================== */
+
+.bathroom-key-log-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 8px;
+}
+
+.bathroom-header-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bathroom-date-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bathroom-date-filter .input {
+  width: auto;
+  min-width: 150px;
+}
+
+.bathroom-panels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 24px;
+}
+
+.bathroom-key-card {
+  background: var(--surface-panel);
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-md, 8px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.bathroom-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bathroom-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bathroom-card-title-group h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--ink);
+}
+
+.bathroom-card-subtitle {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.bathroom-key-avatar {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bathroom-key-avatar.is-available {
+  background: rgba(46, 125, 50, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  color: #81c784;
+}
+
+.bathroom-key-avatar.is-in-use {
+  background: rgba(198, 162, 84, 0.15);
+  border: 1px solid var(--gold-soft);
+  color: var(--gold-bright);
+}
+
+.bathroom-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bathroom-active-holder-box {
+  background: #1f1a12;
+  border: 1px solid var(--gold-soft);
+  border-radius: 6px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bathroom-holder-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.bathroom-holder-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bathroom-holder-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gold-soft);
+  font-weight: 600;
+}
+
+.bathroom-holder-name {
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+.bathroom-holder-dept {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.bathroom-elapsed-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #14110a;
+  border: 1px solid var(--line-bright);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.bathroom-elapsed-banner strong {
+  color: var(--ink);
+}
+
+.bathroom-elapsed-counter strong {
+  color: var(--gold-bright);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95rem;
+}
+
+.bathroom-checkout-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bathroom-picker-list {
+  max-height: 180px;
+}
+
+.bathroom-action-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 12px 16px;
+  margin-top: 4px;
+}
+
+.bathroom-action-button.button-return {
+  background: #2e7d32;
+  border-color: #4caf50;
+  color: #fff;
+}
+
+.bathroom-action-button.button-return:hover:not(:disabled) {
+  background: #388e3c;
+  border-color: #66bb6a;
+}
+
+.bathroom-action-button.button-checkout {
+  background: var(--gold);
+  border-color: var(--gold-bright);
+  color: #110f0b;
+}
+
+.bathroom-action-button.button-checkout:hover:not(:disabled) {
+  background: var(--gold-bright);
+}
+
+.bathroom-log-history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.bathroom-log-history-section h4 {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ==========================================================================
+   Kiosk Mode Switcher & Bathroom Kiosk Scanning View (Theme-Aligned)
+   ========================================================================== */
+
+.kiosk-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-input);
+  border: 1px solid var(--line-bright);
+  border-radius: 9999px;
+  padding: 4px 6px;
+}
+
+.kiosk-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+
+.kiosk-mode-tab:hover {
+  color: var(--ink);
+  background: rgba(198, 162, 84, 0.08);
+}
+
+.kiosk-mode-tab.active {
+  background: var(--gold);
+  color: #11100c;
+  border-color: var(--gold-bright);
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(198, 162, 84, 0.25);
+}
+
+.mode-shortcut-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.kiosk-mode-tab:not(.active) .mode-shortcut-badge {
+  background: var(--surface-raised);
+  color: var(--gold-bright);
+  border-color: var(--line-bright);
+}
+
+.bathroom-kiosk-wrapper {
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.bathroom-kiosk-keys-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+}
+
+.bathroom-kiosk-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  transition: all 0.2s ease-in-out;
+}
+
+.bathroom-kiosk-card.is-in-use {
+  border-color: var(--gold);
+  background: #1c1912;
+  box-shadow: 0 0 20px rgba(198, 162, 84, 0.12);
+}
+
+.bathroom-kiosk-card.is-available {
+  border-color: #3b503e;
+  background: #121612;
+}
+
+.bathroom-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bathroom-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bathroom-card-title {
+  margin: 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.bathroom-card-subtitle {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--quiet);
+}
+
+.gender-icon-bubble {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gender-icon-bubble.male {
+  background: #211d13;
+  color: var(--gold-bright);
+  border: 1px solid var(--gold-soft);
+}
+
+.gender-icon-bubble.female {
+  background: #26171e;
+  color: #f2a8c6;
+  border: 1px solid #734559;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.status-pill.status-available {
+  color: var(--success);
+  background: #162419;
+  border: 1px solid #34583c;
+}
+
+.status-pill.status-in-use {
+  color: var(--gold-bright);
+  background: #262013;
+  border: 1px solid var(--gold);
+}
+
+.available-prompt-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background: var(--surface-input);
+  border-radius: 6px;
+  border: 1px dashed var(--line-bright);
+  text-align: center;
+}
+
+.available-icon {
+  color: var(--success);
+  margin-bottom: 10px;
+  opacity: 0.9;
+}
+
+.available-main {
+  margin: 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.available-sub {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.active-holder-box {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #14110a;
+  border-radius: 6px;
+  padding: 16px;
+  border: 1px solid var(--line-bright);
+}
+
+.active-holder-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.holder-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #090a09;
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 800;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.holder-avatar.female {
+  background: #381f2a;
+  color: #f2a8c6;
+  border: 1px solid #734559;
+}
+
+.holder-label {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--quiet);
+}
+
+.holder-name {
+  margin: 2px 0 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.holder-dept {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--gold-bright);
+}
+
+.elapsed-timer-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #090a09;
+  border-radius: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+}
+
+.elapsed-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.elapsed-counter {
+  color: var(--gold-bright) !important;
+  font-family: 'Orbitron', sans-serif !important;
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.spin-slow {
+  animation: spin 3s linear infinite;
+}
+
+.bathroom-kiosk-history-section {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.history-header h4 {
+  margin: 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--gold-bright);
+  letter-spacing: 0.04em;
+}
+
+.history-count {
+  font-size: 0.78rem;
+  color: var(--quiet);
+}
+
+.history-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--quiet);
+  font-size: 0.88rem;
+}
+
+.bathroom-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.bathroom-history-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--quiet);
+  border-bottom: 1px solid var(--line);
+  background: #11120f;
+}
+
+.bathroom-history-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.cell-dept {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--quiet);
+  font-weight: normal;
+}
+
+.key-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.key-badge.male {
+  background: #211d13;
+  color: var(--gold-bright);
+  border: 1px solid var(--gold-soft);
+}
+
+.key-badge.female {
+  background: #26171e;
+  color: #f2a8c6;
+  border: 1px solid #734559;
+}
+
+.live-pill {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: #262013;
+  color: var(--gold-bright);
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  font-size: 0.78rem;
+  border: 1px solid var(--gold-soft);
+}
+
+.status-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.status-tag.tag-out {
+  background: #262013;
+  color: var(--gold-bright);
+  border: 1px solid var(--gold);
+}
+
+.status-tag.tag-returned {
+  background: #162419;
+  color: var(--success);
+  border: 1px solid #34583c;
+}

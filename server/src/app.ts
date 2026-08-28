@@ -145,6 +145,39 @@ export function createApp(options: CreateAppOptions): express.Express {
       res.json({ success: true, requestId: req.requestId });
     } catch (error) { sendAdminError(req, res, error); }
   });
+  app.get('/api/bathroom/status', async (req, res) => {
+    try {
+      const date = asString(req.query.date);
+      res.json(await admin.bathroomStatus(date || undefined));
+    } catch (error) { sendAdminError(req, res, error); }
+  });
+  app.post('/api/bathroom/scan', async (req, res) => {
+    try {
+      // SAFETY: Extracting rfidUid property from request body
+      const rfidUid = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? asString((req.body as { rfidUid?: unknown }).rfidUid) : '';
+      const result = await admin.bathroomScanRfid(rfidUid);
+      res.json(result);
+    } catch (error) { sendAdminError(req, res, error); }
+  });
+  app.get('/api/admin/bathroom/status', async (req, res) => {
+    try {
+      requireAdmin(req);
+      const date = asString(req.query.date);
+      res.json(await admin.bathroomStatus(date || undefined));
+    } catch (error) { sendAdminError(req, res, error); }
+  });
+  app.post('/api/admin/bathroom/time-out', async (req, res) => {
+    try {
+      requireAdmin(req);
+      res.json({ success: true, entry: await admin.bathroomTimeOut(req.body) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
+  app.post('/api/admin/bathroom/time-in', async (req, res) => {
+    try {
+      requireAdmin(req);
+      res.json({ success: true, entry: await admin.bathroomTimeIn(req.body) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
   app.get('/api/admin/payroll/profiles', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profiles: await admin.payrollProfiles() }); } catch (error) { sendAdminError(req, res, error); } });
   app.put('/api/admin/payroll/profiles/:profileId', async (req, res) => {
     try {

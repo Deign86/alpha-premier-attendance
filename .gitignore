@@ -29,3 +29,5 @@ src-tauri/gen/
 
 # Local agent scratch
 .pi/
+temp_edge_profile/
+*.tsbuildinfo

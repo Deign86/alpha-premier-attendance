@@ -10,6 +10,7 @@ import {
   History,
   ImagePlus,
   Keyboard,
+  KeyRound,
   LoaderCircle,
   LockKeyhole,
   Nfc,
@@ -90,10 +91,14 @@ import {
   uploadSetupPhoto,
   upsertSetupUser,
   createAdminBackdatedAttendance,
+  loadBathroomStatus,
+  submitBathroomScan,
 } from "./api";
 import { sseUrl } from "./network";
 import type { FileActionResult } from "./api";
 import "./styles.css";
+import { BathroomKioskView } from "./bathroom-kiosk-view";
+import type { BathroomScanResponse, BathroomStatusResponse } from "@rfid-attendance/shared";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
@@ -117,6 +122,7 @@ import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { AdminUpdatesCard } from "./admin-updates-card";
+import { BathroomKeyLogPanel } from "./bathroom-key-log";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 
 function toErrorMessage(cause: unknown, fallback: string): string {
@@ -227,6 +233,28 @@ export default function App() {
   const setupInputRef = useRef<HTMLInputElement>(null);
   const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setupSessionTimer = useRef<number | null>(null);
+
+  // Kiosk mode: 1 = Attendance, 2 = Bathroom Key Log
+  const [kioskMode, setKioskMode] = useState<"attendance" | "bathroom">("attendance");
+  const [bathroomStatus, setBathroomStatus] = useState<BathroomStatusResponse | null>(null);
+  const [bathroomScanResult, setBathroomScanResult] = useState<BathroomScanResponse | null>(null);
+  const bathroomResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchBathroomStatus = useCallback(async () => {
+    try {
+      const data = await loadBathroomStatus();
+      setBathroomStatus(data);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (kioskMode !== "bathroom") return;
+    void fetchBathroomStatus();
+    const timer = window.setInterval(fetchBathroomStatus, 5_000);
+    return () => window.clearInterval(timer);
+  }, [kioskMode, fetchBathroomStatus]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -601,12 +629,78 @@ export default function App() {
     }
   };
 
+  const submitBathroom = useCallback(
+    async (rawUid: string, source: "RFID" | "MANUAL_TEST") => {
+      const normalizedUid = rawUid.trim();
+      if (!normalizedUid || processingRef.current) return;
+
+      const nowTime = Date.now();
+      const previousScanAt = recentScans.current.get(normalizedUid);
+      if (
+        previousScanAt !== undefined &&
+        nowTime - previousScanAt < SCAN_DEDUP_WINDOW_MS
+      ) {
+        return;
+      }
+      recentScans.current.set(normalizedUid, nowTime);
+
+      processingRef.current = true;
+      setUid(normalizedUid);
+      setState("processing");
+      setBathroomScanResult(null);
+
+      requestController.current?.abort();
+      const controller = new AbortController();
+      requestController.current = controller;
+
+      try {
+        const response = await submitBathroomScan(
+          { rfidUid: normalizedUid, source },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        requestController.current = null;
+        processingRef.current = false;
+
+        setBathroomScanResult(response);
+        setState(response.success ? "success" : "error");
+
+        // Voice announcement
+        if (response.success) {
+          if (document.visibilityState === "hidden" || !document.hasFocus()) {
+            void notifyScanSuccess(response.user.fullName).catch(() => undefined);
+          }
+          void announceAttendance({
+            employeeName: response.user.fullName,
+            attendanceType: response.action === "CHECKOUT" ? "time_out" : "time_in",
+          });
+        }
+
+        void fetchBathroomStatus();
+
+        if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
+        bathroomResetTimer.current = setTimeout(() => {
+          setBathroomScanResult(null);
+          setState("ready");
+        }, config.resultResetDelayMs);
+      } catch {
+        processingRef.current = false;
+        setState("error");
+      }
+    },
+    [config.resultResetDelayMs, fetchBathroomStatus],
+  );
+
   const handleManualKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement>,
   ) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    void submit(manualUid, "MANUAL_TEST");
+    if (kioskMode === "bathroom") {
+      void submitBathroom(manualUid, "MANUAL_TEST");
+    } else {
+      void submit(manualUid, "MANUAL_TEST");
+    }
   };
 
   // Latest scan-routing closure, re-assigned every render so the single native
@@ -620,7 +714,11 @@ export default function App() {
     } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
       handleSetupInput(value);
     } else if (!setupDialogOpen || !setupToken) {
-      void submit(value, "RFID");
+      if (kioskMode === "bathroom") {
+        void submitBathroom(value, "RFID");
+      } else {
+        void submit(value, "RFID");
+      }
     }
   };
 
@@ -630,10 +728,15 @@ export default function App() {
   useEffect(() => {
     let buffer = "";
     let lastKeyAt = 0;
+    let modeSwitchTimer: ReturnType<typeof setTimeout> | null = null;
 
     const resetBuffer = () => {
       buffer = "";
       lastKeyAt = 0;
+      if (modeSwitchTimer) {
+        clearTimeout(modeSwitchTimer);
+        modeSwitchTimer = null;
+      }
     };
 
     const flush = () => {
@@ -653,7 +756,11 @@ export default function App() {
       } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
         handleSetupInput(normalized);
       } else if (!manualMode && !setupDialogOpen && !adminAssistData) {
-        void submit(normalized, "RFID");
+        if (kioskMode === "bathroom") {
+          void submitBathroom(normalized, "RFID");
+        } else {
+          void submit(normalized, "RFID");
+        }
       }
     };
 
@@ -677,6 +784,11 @@ export default function App() {
         return;
       }
 
+      if (modeSwitchTimer) {
+        clearTimeout(modeSwitchTimer);
+        modeSwitchTimer = null;
+      }
+
       const now = Date.now();
       const interKeyTimeout = 250;
       if (lastKeyAt > 0 && now - lastKeyAt > interKeyTimeout) {
@@ -694,6 +806,15 @@ export default function App() {
       const allowedCharRegex = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
       if (allowedCharRegex.test(event.key)) {
         buffer += event.key;
+        if (buffer === "1" || buffer === "2") {
+          const modeKey = buffer;
+          modeSwitchTimer = setTimeout(() => {
+            if (buffer === modeKey) {
+              setKioskMode(modeKey === "1" ? "attendance" : "bathroom");
+              resetBuffer();
+            }
+          }, 200);
+        }
       } else {
         // Any character outside the configured character set invalidates the buffer immediately.
         resetBuffer();
@@ -711,7 +832,7 @@ export default function App() {
       window.removeEventListener("blur", onBlur);
       resetBuffer();
     };
-  }, [config, handleSetupInput, manualMode, setupDialogOpen, setupStep, setupToken, submit, unlockSetupWithPinOrCard]);
+  }, [adminAssistData, config, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -818,15 +939,25 @@ export default function App() {
   })();
 
   const heroTitle =
-    state === "processing"
-      ? "Reading card…"
-      : greetingForDate(now, config.timezone);
+    kioskMode === "bathroom"
+      ? state === "processing"
+        ? "Reading card…"
+        : "Bathroom Key Log"
+      : state === "processing"
+        ? "Reading card…"
+        : greetingForDate(now, config.timezone);
   const heroSub =
-    state === "processing"
-      ? "Checking your attendance"
-      : manualMode
-        ? "Enter a card ID below"
-        : "Tap your card on the reader";
+    kioskMode === "bathroom"
+      ? state === "processing"
+        ? "Logging bathroom key"
+        : manualMode
+          ? "Enter a card ID below"
+          : "Tap your card on the reader to check out or return a key"
+      : state === "processing"
+        ? "Checking your attendance"
+        : manualMode
+          ? "Enter a card ID below"
+          : "Tap your card on the reader";
 
   return (
     <main className={`kiosk-shell state-${state}`}>
@@ -842,6 +973,30 @@ export default function App() {
             </p>
           </div>
         </div>
+
+        <div className="kiosk-mode-switcher" role="tablist" aria-label="Kiosk scanning mode">
+          <button
+            type="button"
+            role="tab"
+            data-testid="kiosk-mode-attendance"
+            aria-selected={kioskMode === "attendance"}
+            className={`kiosk-mode-tab ${kioskMode === "attendance" ? "active" : ""}`}
+            onClick={() => setKioskMode("attendance")}
+          >
+            <span className="mode-shortcut-badge">1</span> Attendance
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-testid="kiosk-mode-bathroom"
+            aria-selected={kioskMode === "bathroom"}
+            className={`kiosk-mode-tab ${kioskMode === "bathroom" ? "active" : ""}`}
+            onClick={() => setKioskMode("bathroom")}
+          >
+            <span className="mode-shortcut-badge">2</span> Bathroom Key Log
+          </button>
+        </div>
+
         <div className="topbar-cluster">
           <span
             className={`scanner-pill is-${scannerPill.state}`}
@@ -862,7 +1017,8 @@ export default function App() {
       </header>
 
       <section className="kiosk-stage" aria-labelledby="kiosk-heading">
-        {state === "success" && success ? (
+        {/* ATTENDANCE SCAN SUCCESS */}
+        {kioskMode === "attendance" && state === "success" && success && (
           <div
             className="kiosk-result is-success"
             role="status"
@@ -908,7 +1064,61 @@ export default function App() {
               </span>
             </div>
           </div>
-        ) : state === "error" && error ? (
+        )}
+
+        {/* BATHROOM SCAN SUCCESS */}
+        {kioskMode === "bathroom" && state === "success" && bathroomScanResult?.success && (
+          <div
+            className="kiosk-result is-success"
+            role="status"
+            aria-live="polite"
+          >
+            {bathroomScanResult.user.photoUrl ? (
+              <img
+                className="result-photo result-photo-full"
+                src={photoSource(bathroomScanResult.user.photoUrl)}
+                alt={`${bathroomScanResult.user.fullName} ID`}
+              />
+            ) : (
+              <div
+                className="result-photo result-photo-fallback"
+                aria-label="ID photo unavailable"
+              >
+                <UserRound size={72} />
+              </div>
+            )}
+            <h2 className="result-name">{bathroomScanResult.user.fullName}</h2>
+            <p className="result-message">
+              {bathroomScanResult.action === "CHECKOUT"
+                ? `${bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} floor key checked out`
+                : `${bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} floor key returned`}
+            </p>
+            <p className="result-user-id">
+              {bathroomScanResult.user.userId}
+              {bathroomScanResult.user.department ? ` · ${bathroomScanResult.user.department}` : ""}
+            </p>
+            <div className="result-meta">
+              <span className={`key-badge ${bathroomScanResult.genderKey.toLowerCase()}`}>
+                {bathroomScanResult.genderKey} KEY
+              </span>
+              <span>{bathroomScanResult.action}</span>
+              <span>
+                {formatTime(
+                  bathroomScanResult.timeOut ?? bathroomScanResult.timeIn ?? bathroomScanResult.timestamp,
+                  config.timezone,
+                )}
+              </span>
+              {bathroomScanResult.durationSeconds !== null && bathroomScanResult.durationSeconds !== undefined && (
+                <span className="badge badge-duration">
+                  Duration: {Math.max(1, Math.round(bathroomScanResult.durationSeconds / 60))}m
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ATTENDANCE SCAN ERROR */}
+        {kioskMode === "attendance" && state === "error" && error && (
           <div
             className="kiosk-result is-error"
             role="alert"
@@ -934,11 +1144,41 @@ export default function App() {
                 </button>
               )}
           </div>
-        ) : (
+        )}
+
+        {/* BATHROOM SCAN ERROR */}
+        {kioskMode === "bathroom" && state === "error" && bathroomScanResult && !bathroomScanResult.success && (
+          <div
+            className="kiosk-result is-error"
+            role="alert"
+            aria-live="assertive"
+          >
+            <CircleAlert
+              className="result-error-icon"
+              size={42}
+              aria-hidden="true"
+            />
+            <h2 className="result-name">{bathroomScanResult.error.message}</h2>
+            <p className="error-code">
+              {bathroomScanResult.error.code.replaceAll("_", " ")}
+            </p>
+            {bathroomScanResult.activeHolder && (
+              <p className="result-holder-detail">
+                Currently with <strong>{bathroomScanResult.activeHolder.fullName}</strong> ({bathroomScanResult.activeHolder.department}) since {formatTime(bathroomScanResult.activeHolder.timeOut, config.timezone)}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* READY / PROCESSING HERO */}
+        {((kioskMode === "attendance" && (state === "ready" || state === "processing")) ||
+          (kioskMode === "bathroom" && !bathroomScanResult)) && (
           <div className="kiosk-hero">
             <div className={`hero-icon icon-${state}`} aria-hidden="true">
               {state === "processing" ? (
                 <LoaderCircle className="spin" size={46} />
+              ) : kioskMode === "bathroom" ? (
+                <KeyRound size={48} />
               ) : (
                 <CreditCard size={48} />
               )}
@@ -948,7 +1188,17 @@ export default function App() {
           </div>
         )}
 
-        {(state === "ready" || state === "processing") && (
+        {/* DYNAMIC BATHROOM STATUS & HISTORY (ALWAYS VISIBLE IN MODE 2) */}
+        {kioskMode === "bathroom" && (
+          <BathroomKioskView
+            status={bathroomStatus}
+            timezone={config.timezone}
+            nowMs={now.getTime()}
+          />
+        )}
+
+        {((kioskMode === "attendance" && (state === "ready" || state === "processing")) ||
+          (kioskMode === "bathroom" && (manualMode || !bathroomScanResult))) && (
           <div
             className={`scan-console${manualMode ? " is-manual" : ""}`}
             aria-label={manualMode ? "Manual card entry" : "RFID scanner"}
@@ -2455,6 +2705,7 @@ function AdminPanel() {
   const [sessionExpiresAt, setSessionExpiresAt] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const [adminMode, setAdminMode] = useState<"attendance" | "bathroom">("attendance");
   const [tab, setTab] = useState<"users" | "attendance" | "payroll" | "data" | "voice">(
     "users",
   );
@@ -2493,6 +2744,26 @@ function AdminPanel() {
     event.preventDefault();
     await unlockWithPinOrRfid(pin);
   };
+
+  useEffect(() => {
+    if (!unlocked) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const isTextEntry = Boolean(
+        target &&
+          (target.matches("input, textarea, select, [contenteditable='true']") ||
+            target.isContentEditable),
+      );
+      if (isTextEntry) return;
+      if (event.key === "1") {
+        setAdminMode("attendance");
+      } else if (event.key === "2") {
+        setAdminMode("bathroom");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [unlocked]);
 
   useEffect(() => {
     if (unlocked) return;
@@ -2598,7 +2869,7 @@ function AdminPanel() {
     );
   return (
     <main
-      className={`dashboard-shell ${tab === "payroll" ? "dashboard-shell-payroll" : ""}`}
+      className={`dashboard-shell ${adminMode === "attendance" && tab === "payroll" ? "dashboard-shell-payroll" : ""}`}
     >
       <header className="dashboard-header">
         <div>
@@ -2608,6 +2879,28 @@ function AdminPanel() {
           <p className="section-description">
             {resolveOfficeDisplay(office, "short")}
           </p>
+          <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminMode === "attendance"}
+              className={`admin-mode-btn ${adminMode === "attendance" ? "is-active" : ""}`}
+              onClick={() => setAdminMode("attendance")}
+            >
+              <span className="admin-mode-key-badge" aria-hidden="true">1</span>
+              <span>Attendance</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminMode === "bathroom"}
+              className={`admin-mode-btn ${adminMode === "bathroom" ? "is-active" : ""}`}
+              onClick={() => setAdminMode("bathroom")}
+            >
+              <span className="admin-mode-key-badge" aria-hidden="true">2</span>
+              <span>Bathroom Key Log</span>
+            </button>
+          </div>
         </div>
         <nav>
           <a href="/">Scanner</a>
@@ -2635,67 +2928,73 @@ function AdminPanel() {
           </button>
         </nav>
       </header>
-      <div className="admin-tabs">
-        <button
-          className={tab === "users" ? "is-active" : ""}
-          onClick={() => setTab("users")}
-        >
-          Users and RFID
-        </button>
-        <button
-          className={tab === "attendance" ? "is-active" : ""}
-          onClick={() => setTab("attendance")}
-        >
-          Attendance corrections
-        </button>
-        <button
-          className={tab === "payroll" ? "is-active" : ""}
-          onClick={() => setTab("payroll")}
-        >
-          Payroll
-        </button>
-        <button
-          className={tab === "data" ? "is-active" : ""}
-          onClick={() => setTab("data")}
-        >
-          Data and backup
-        </button>
-        <button
-          className={tab === "voice" ? "is-active" : ""}
-          onClick={() => setTab("voice")}
-        >
-          Voice announcements
-        </button>
-      </div>
-      <ScannerDiagnostics />
-      {error && <p className="dashboard-alert">{error}</p>}
-      {tab === "users" ? (
-        <UserEditor
-          users={users}
-          profiles={profiles}
-          editing={editing}
-          setEditing={setEditing}
-          onSaved={load}
-        />
-      ) : tab === "attendance" ? (
-        <AdminAttendance
-          rows={rows}
-          date={date}
-          setDate={setDate}
-          users={users}
-          onSaved={load}
-        />
-      ) : tab === "payroll" ? (
-        <PayrollWorkspace
-          users={users}
-          profiles={profiles}
-          records={cutoffs}
-          onSaved={load}
-        />
-      ) : tab === "voice" ? (
-        <VoiceSettingsPanel />
+      {adminMode === "bathroom" ? (
+        <BathroomKeyLogPanel users={users} />
       ) : (
-        <DatabasePanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} />
+        <>
+          <div className="admin-tabs">
+            <button
+              className={tab === "users" ? "is-active" : ""}
+              onClick={() => setTab("users")}
+            >
+              Users and RFID
+            </button>
+            <button
+              className={tab === "attendance" ? "is-active" : ""}
+              onClick={() => setTab("attendance")}
+            >
+              Attendance corrections
+            </button>
+            <button
+              className={tab === "payroll" ? "is-active" : ""}
+              onClick={() => setTab("payroll")}
+            >
+              Payroll
+            </button>
+            <button
+              className={tab === "data" ? "is-active" : ""}
+              onClick={() => setTab("data")}
+            >
+              Data and backup
+            </button>
+            <button
+              className={tab === "voice" ? "is-active" : ""}
+              onClick={() => setTab("voice")}
+            >
+              Voice announcements
+            </button>
+          </div>
+          <ScannerDiagnostics />
+          {error && <p className="dashboard-alert">{error}</p>}
+          {tab === "users" ? (
+            <UserEditor
+              users={users}
+              profiles={profiles}
+              editing={editing}
+              setEditing={setEditing}
+              onSaved={load}
+            />
+          ) : tab === "attendance" ? (
+            <AdminAttendance
+              rows={rows}
+              date={date}
+              setDate={setDate}
+              users={users}
+              onSaved={load}
+            />
+          ) : tab === "payroll" ? (
+            <PayrollWorkspace
+              users={users}
+              profiles={profiles}
+              records={cutoffs}
+              onSaved={load}
+            />
+          ) : tab === "voice" ? (
+            <VoiceSettingsPanel />
+          ) : (
+            <DatabasePanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} />
+          )}
+        </>
       )}
       <ConfirmDialog
         open={nukeConfirmOpen}

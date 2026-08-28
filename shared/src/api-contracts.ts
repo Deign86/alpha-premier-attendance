@@ -772,3 +772,99 @@ export type TtsStatusResponse = {
   isSpeaking: boolean;
 };
 
+export const bathroomGenderKeys = ['MALE', 'FEMALE'] as const;
+export type BathroomGenderKey = (typeof bathroomGenderKeys)[number];
+
+export const bathroomLogStatuses = ['OUT', 'RETURNED'] as const;
+export type BathroomLogStatus = (typeof bathroomLogStatuses)[number];
+
+export type BathroomLogItem = {
+  logId: string;
+  logDate: string;
+  userId: string;
+  fullName: string;
+  department: string | null;
+  genderKey: BathroomGenderKey;
+  timeOut: string;
+  timeIn: string | null;
+  durationSeconds: number | null;
+  status: BathroomLogStatus;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BathroomActiveHolder = {
+  logId: string;
+  userId: string;
+  fullName: string;
+  department: string | null;
+  genderKey: BathroomGenderKey;
+  timeOut: string;
+};
+
+export type BathroomStatusResponse = {
+  success: true;
+  date: string;
+  maleActive: BathroomActiveHolder | null;
+  femaleActive: BathroomActiveHolder | null;
+  maleLogs: BathroomLogItem[];
+  femaleLogs: BathroomLogItem[];
+  fetchedAt: string;
+};
+
+export type BathroomTimeOutRequest = {
+  userId: string;
+  genderKey: BathroomGenderKey;
+  notes?: string;
+};
+
+export type BathroomTimeInRequest = {
+  logId: string;
+  notes?: string;
+};
+
+export type BathroomActionResponse = {
+  success: boolean;
+  entry?: BathroomLogItem;
+  error?: {
+    code: string;
+    message: string;
+  };
+};
+
+export type BathroomScanRequest = {
+  rfidUid: string;
+  source?: 'RFID' | 'MANUAL_TEST';
+};
+
+export type BathroomScanSuccessResponse = {
+  success: true;
+  action: 'CHECKOUT' | 'RETURN';
+  genderKey: BathroomGenderKey;
+  user: {
+    userId: string;
+    fullName: string;
+    department: string | null;
+    photoUrl: string | null;
+    gender: BathroomGenderKey | null;
+  };
+  timeOut: string;
+  timeIn?: string | null;
+  durationSeconds?: number | null;
+  message: string;
+  timestamp: string;
+};
+
+export type BathroomScanErrorResponse = {
+  success: false;
+  error: {
+    code: 'BATHROOM_KEY_IN_USE' | 'USER_NOT_FOUND' | 'USER_INACTIVE' | 'ADMIN_CARD_NOT_ALLOWED' | 'GENDER_NOT_SET' | 'INTERNAL_ERROR';
+    message: string;
+  };
+  genderKey?: BathroomGenderKey;
+  activeHolder?: BathroomActiveHolder | null;
+};
+
+export type BathroomScanResponse = BathroomScanSuccessResponse | BathroomScanErrorResponse;
+

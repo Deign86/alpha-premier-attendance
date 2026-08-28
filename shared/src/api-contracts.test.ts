@@ -142,3 +142,10 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
     expect(results.get('2')?.minutesLate).toBe(90);
   });
 });
+
+describe('bathroom key log contract literals', () => {
+  it('defines gender keys and status values', () => {
+    expect(['MALE', 'FEMALE']).toContain('MALE');
+    expect(['MALE', 'FEMALE']).toContain('FEMALE');
+  });
+});

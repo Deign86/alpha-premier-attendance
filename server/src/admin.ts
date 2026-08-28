@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { AdminUser, AttendanceListItem, PayrollCalculationProfile } from '@rfid-attendance/shared';
+import type { AdminUser, AttendanceListItem, BathroomActiveHolder, BathroomLogItem, BathroomScanResponse, BathroomStatusResponse, PayrollCalculationProfile } from '@rfid-attendance/shared';
 import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
@@ -216,6 +216,222 @@ export class AdminService {
       await this.sheets.deletePayrollByAttendanceId(attendanceId);
       await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_DELETED', userId: row.userId, rfidUid: row.rfidUid, message: `Attendance ${attendanceId} deleted by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
     } catch { throw new AdminError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503); }
+  }
+
+  private readonly bathroomLogs: BathroomLogItem[] = [];
+
+  async bathroomStatus(date?: string): Promise<BathroomStatusResponse> {
+    const targetDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : manilaDate(new Date(), this.config.timezone);
+    const maleActiveEntry = this.bathroomLogs.find((l) => l.genderKey === 'MALE' && l.status === 'OUT');
+    const femaleActiveEntry = this.bathroomLogs.find((l) => l.genderKey === 'FEMALE' && l.status === 'OUT');
+
+    const maleActive: BathroomActiveHolder | null = maleActiveEntry ? {
+      logId: maleActiveEntry.logId,
+      userId: maleActiveEntry.userId,
+      fullName: maleActiveEntry.fullName,
+      department: maleActiveEntry.department,
+      genderKey: maleActiveEntry.genderKey,
+      timeOut: maleActiveEntry.timeOut,
+    } : null;
+
+    const femaleActive: BathroomActiveHolder | null = femaleActiveEntry ? {
+      logId: femaleActiveEntry.logId,
+      userId: femaleActiveEntry.userId,
+      fullName: femaleActiveEntry.fullName,
+      department: femaleActiveEntry.department,
+      genderKey: femaleActiveEntry.genderKey,
+      timeOut: femaleActiveEntry.timeOut,
+    } : null;
+
+    const maleLogs = this.bathroomLogs.filter((l) => l.genderKey === 'MALE' && l.logDate === targetDate);
+    const femaleLogs = this.bathroomLogs.filter((l) => l.genderKey === 'FEMALE' && l.logDate === targetDate);
+
+    return {
+      success: true,
+      date: targetDate,
+      maleActive,
+      femaleActive,
+      maleLogs,
+      femaleLogs,
+      fetchedAt: manilaTimestamp(new Date(), this.config.timezone),
+    };
+  }
+
+  async bathroomTimeOut<T>(input: T): Promise<BathroomLogItem> {
+    const parsed = parseBathroomTimeOutInput(input);
+    if (!parsed) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid employee ID and gender key are required.');
+
+    const user = await this.sheets.findUserById(parsed.userId);
+    if (!user || !user.active) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Cannot checkout key for an inactive or nonexistent user.');
+    if (user.cardType === 'ADMIN_ASSIST') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Cannot checkout key for an Admin card.');
+
+    const existingActive = this.bathroomLogs.find((l) => l.genderKey === parsed.genderKey && l.status === 'OUT');
+    if (existingActive) {
+      throw new AdminError('ATTENDANCE_CONFLICT', `The ${parsed.genderKey.toLowerCase()} bathroom key is currently checked out by ${existingActive.fullName}.`, 409);
+    }
+
+    const now = new Date();
+    const logDate = manilaDate(now, this.config.timezone);
+    const timeOut = manilaTimestamp(now, this.config.timezone);
+    const logItem: BathroomLogItem = {
+      logId: crypto.randomUUID(),
+      logDate,
+      userId: user.userId,
+      fullName: user.fullName,
+      department: user.department,
+      genderKey: parsed.genderKey,
+      timeOut,
+      timeIn: null,
+      durationSeconds: null,
+      status: 'OUT',
+      notes: parsed.notes ?? '',
+      createdAt: timeOut,
+      updatedAt: timeOut,
+    };
+    this.bathroomLogs.unshift(logItem);
+    return logItem;
+  }
+
+  async bathroomTimeIn<T>(input: T): Promise<BathroomLogItem> {
+    const parsed = parseBathroomTimeInInput(input);
+    if (!parsed) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid log ID is required.');
+
+    const item = this.bathroomLogs.find((l) => l.logId === parsed.logId);
+    if (!item) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Bathroom log entry was not found.', 404);
+    if (item.status !== 'OUT') throw new AdminError('ADMIN_VALIDATION_ERROR', 'This bathroom key has already been returned.');
+
+    const now = new Date();
+    const timeIn = manilaTimestamp(now, this.config.timezone);
+    const timeOutDate = new Date(item.timeOut);
+    const durationSeconds = Math.max(0, Math.round((now.getTime() - timeOutDate.getTime()) / 1000));
+
+    item.timeIn = timeIn;
+    item.durationSeconds = durationSeconds;
+    item.status = 'RETURNED';
+    if (parsed.notes) item.notes = parsed.notes;
+    item.updatedAt = timeIn;
+    return item;
+  }
+
+  async bathroomScanRfid(rawUid: string): Promise<BathroomScanResponse> {
+    const normalizedUid = normalizeRfidUid(rawUid);
+    if (!normalizedUid) {
+      return {
+        success: false,
+        error: { code: 'USER_NOT_FOUND', message: 'Invalid RFID card UID.' },
+      };
+    }
+
+    const users = await this.sheets.listUsers();
+    const user = users.find((u) => normalizeRfidUid(u.rfidUid) === normalizedUid);
+    if (!user) {
+      return {
+        success: false,
+        error: { code: 'USER_NOT_FOUND', message: 'Card not registered. Please enroll in Admin Setup.' },
+      };
+    }
+    if (!user.active) {
+      return {
+        success: false,
+        error: { code: 'USER_INACTIVE', message: 'Employee record is inactive.' },
+      };
+    }
+    if (user.cardType === 'ADMIN_ASSIST') {
+      return {
+        success: false,
+        error: { code: 'ADMIN_CARD_NOT_ALLOWED', message: 'Admin Assist cards cannot checkout bathroom keys.' },
+      };
+    }
+
+    const genderKey: 'MALE' | 'FEMALE' = user.gender === 'FEMALE' ? 'FEMALE' : 'MALE';
+    const active = this.bathroomLogs.find((l) => l.status === 'OUT' && l.genderKey === genderKey);
+    const now = new Date();
+    const nowIso = manilaTimestamp(now, this.config.timezone);
+
+    if (active) {
+      if (active.userId === user.userId) {
+        // Return key
+        const outDate = new Date(active.timeOut);
+        const durationSeconds = Math.max(0, Math.round((now.getTime() - outDate.getTime()) / 1000));
+        active.timeIn = nowIso;
+        active.durationSeconds = durationSeconds;
+        active.status = 'RETURNED';
+        active.updatedAt = nowIso;
+
+        return {
+          success: true,
+          action: 'RETURN',
+          genderKey,
+          user: {
+            userId: user.userId,
+            fullName: user.fullName,
+            department: user.department ?? null,
+            photoUrl: user.photoUrl ?? null,
+            gender: genderKey,
+          },
+          timeOut: active.timeOut,
+          timeIn: nowIso,
+          durationSeconds,
+          message: `${genderKey === 'MALE' ? 'Male' : 'Female'} Key Returned by ${user.fullName}`,
+          timestamp: nowIso,
+        };
+      } else {
+        // Conflict
+        return {
+          success: false,
+          error: {
+            code: 'BATHROOM_KEY_IN_USE',
+            message: `The ${genderKey.toLowerCase()} bathroom key is currently in use by ${active.fullName}.`,
+          },
+          genderKey,
+          activeHolder: {
+            logId: active.logId,
+            userId: active.userId,
+            fullName: active.fullName,
+            department: active.department,
+            genderKey,
+            timeOut: active.timeOut,
+          },
+        };
+      }
+    }
+
+    // Checkout key
+    const logDate = manilaDate(now, this.config.timezone);
+    const logItem: BathroomLogItem = {
+      logId: crypto.randomUUID(),
+      logDate,
+      userId: user.userId,
+      fullName: user.fullName,
+      department: user.department ?? null,
+      genderKey,
+      timeOut: nowIso,
+      timeIn: null,
+      durationSeconds: null,
+      status: 'OUT',
+      notes: '',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    this.bathroomLogs.unshift(logItem);
+
+    return {
+      success: true,
+      action: 'CHECKOUT',
+      genderKey,
+      user: {
+        userId: user.userId,
+        fullName: user.fullName,
+        department: user.department ?? null,
+        photoUrl: user.photoUrl ?? null,
+        gender: genderKey,
+      },
+      timeOut: nowIso,
+      timeIn: null,
+      durationSeconds: null,
+      message: `${genderKey === 'MALE' ? 'Male' : 'Female'} Key Checked Out to ${user.fullName}`,
+      timestamp: nowIso,
+    };
   }
 
   async payrollProfiles(): Promise<PayrollCalculationProfile[]> {
@@ -462,6 +678,9 @@ interface InputObject {
   adjustmentReason?: AdminInputValue;
   approvedWorkingDayOverage?: AdminInputValue;
   reason?: AdminInputValue;
+  genderKey?: AdminInputValue;
+  logId?: AdminInputValue;
+  notes?: AdminInputValue;
 }
 function isInputObject<T>(value: T): value is T & InputObject { return value !== null && Object(value) === value && !Array.isArray(value) && !(value instanceof Function); }
 function optionalString<T>(value: T): string | null | undefined {
@@ -577,4 +796,32 @@ function parseBackdatedAttendanceInput<T>(input: T): BackdatedAttendanceInput | 
   const reason = isString(input.reason) ? input.reason.trim() : '';
   if (!userId || !attendanceDate || !timeIn || !reason) return null;
   return { userId, attendanceDate, timeIn, timeOut, reason };
+}
+
+type BathroomTimeOutInput = {
+  userId: string;
+  genderKey: 'MALE' | 'FEMALE';
+  notes?: string;
+};
+
+function parseBathroomTimeOutInput<T>(input: T): BathroomTimeOutInput | null {
+  if (!isInputObject(input)) return null;
+  const userId = isString(input.userId) ? input.userId.trim() : '';
+  const genderKey = isString(input.genderKey) ? input.genderKey.trim().toUpperCase() : '';
+  const notes = isString(input.notes) ? input.notes.trim() : undefined;
+  if (!userId || (genderKey !== 'MALE' && genderKey !== 'FEMALE')) return null;
+  return { userId, genderKey, notes };
+}
+
+type BathroomTimeInInput = {
+  logId: string;
+  notes?: string;
+};
+
+function parseBathroomTimeInInput<T>(input: T): BathroomTimeInInput | null {
+  if (!isInputObject(input)) return null;
+  const logId = isString(input.logId) ? input.logId.trim() : '';
+  const notes = isString(input.notes) ? input.notes.trim() : undefined;
+  if (!logId) return null;
+  return { logId, notes };
 }
