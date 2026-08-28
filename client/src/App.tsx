@@ -4057,6 +4057,19 @@ export function PayrollWorkspace({
     }));
   };
 
+  const handleCutoffDateChange = (field: "cutoffStart" | "cutoffEnd", value: string) => {
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      const start = field === "cutoffStart" ? value : current.cutoffStart;
+      const end = field === "cutoffEnd" ? value : current.cutoffEnd;
+      if (start && end && start <= end) {
+        const days = countWorkdays(start, end);
+        next.standardWorkingDays = String(days || 11);
+      }
+      return next;
+    });
+  };
+
   const [clearCutoffOpen, setClearCutoffOpen] = useState(false);
   const [clearingCutoff, setClearingCutoff] = useState(false);
 
@@ -4092,10 +4105,13 @@ export function PayrollWorkspace({
           await deletePayrollCutoff(r.payrollId);
         }
       }
+      const stdDays = Number(form.standardWorkingDays);
+      const customization = !Number.isNaN(stdDays) && stdDays > 0 ? { standardWorkingDays: stdDays } : undefined;
       const response = await generatePayrollCutoff(
         form.cutoffStart,
         form.cutoffEnd,
         form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
+        customization,
       );
       if (response.success) {
         setMessage(
@@ -4246,7 +4262,7 @@ export function PayrollWorkspace({
                 required
                 type="date"
                 value={form.cutoffStart}
-                onChange={(event) => update("cutoffStart", event.target.value)}
+                onChange={(event) => handleCutoffDateChange("cutoffStart", event.target.value)}
               />
             </label>
             <label>
@@ -4255,7 +4271,19 @@ export function PayrollWorkspace({
                 required
                 type="date"
                 value={form.cutoffEnd}
-                onChange={(event) => update("cutoffEnd", event.target.value)}
+                onChange={(event) => handleCutoffDateChange("cutoffEnd", event.target.value)}
+              />
+            </label>
+            <label>
+              Standard days
+              <input
+                required
+                type="number"
+                min="0"
+                max="31"
+                step="0.5"
+                value={form.standardWorkingDays}
+                onChange={(event) => update("standardWorkingDays", event.target.value)}
               />
             </label>
             <button
@@ -4392,7 +4420,6 @@ function EditPayrollDialog({
   onSaved: () => void;
 }) {
   const isIntern = record?.employeeType === "INTERN";
-  const [standardWorkingDays, setStandardWorkingDays] = useState("11");
   const [hra, setHra] = useState("0");
   const [incentivesAllowance, setIncentivesAllowance] = useState("0");
   const [specialAllowance, setSpecialAllowance] = useState("0");
@@ -4410,7 +4437,6 @@ function EditPayrollDialog({
 
   useEffect(() => {
     if (record) {
-      setStandardWorkingDays(String(record.standardWorkingDays ?? 11));
       setHra(String(record.hra ?? 0));
       setIncentivesAllowance(String(record.incentivesAllowance ?? 0));
       setSpecialAllowance(String(record.specialAllowance ?? 0));
@@ -4428,7 +4454,7 @@ function EditPayrollDialog({
 
   if (!open || !record) return null;
 
-  const nStdDays = Math.max(0, Number(standardWorkingDays) || 0);
+  const nStdDays = Math.max(0, record.standardWorkingDays ?? 11);
   const dailyRate = isIntern ? INTERN_DAILY_RATE_PHP : record.dailyRate;
   const actualDays = record.actualWorkingDays;
   const absentDays = Math.max(0, nStdDays - actualDays);
@@ -4558,22 +4584,7 @@ function EditPayrollDialog({
         {isIntern ? (
           <form onSubmit={handleSubmit}>
             <div className="edit-payroll-notice">
-              Intern stipend (PHP 80.00/day) and late deductions (PHP 10.00/hr) are automatically calculated from RFID attendance scans. Standard working days can be adjusted to recalculate the cutoff stipend and absence deductions.
-            </div>
-
-            <div className="edit-payroll-section" style={{ marginTop: "12px" }}>
-              <h3>Standard Working Days</h3>
-              <label>
-                Standard Working Days
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  max="31"
-                  value={standardWorkingDays}
-                  onChange={(e) => setStandardWorkingDays(e.target.value)}
-                />
-              </label>
+              Intern stipend (PHP 80.00/day) and late deductions (PHP 10.00/hr) are automatically calculated from RFID attendance scans. Standard working days ({nStdDays} days) are set globally for the cutoff. You can apply manual adjustments below.
             </div>
 
             <div className="edit-payroll-section" style={{ marginTop: "12px" }}>
@@ -4642,18 +4653,7 @@ function EditPayrollDialog({
           <form onSubmit={handleSubmit}>
             <div className="edit-payroll-grid">
               <div className="edit-payroll-section">
-                <h3>Working Days & Allowances (PHP)</h3>
-                <label>
-                  Standard Working Days
-                  <input
-                    type="number"
-                    step="1"
-                    min="0"
-                    max="31"
-                    value={standardWorkingDays}
-                    onChange={(e) => setStandardWorkingDays(e.target.value)}
-                  />
-                </label>
+                <h3>Allowances & Adjustments (PHP)</h3>
                 <label>
                   HRA
                   <input
@@ -4818,6 +4818,8 @@ function PayrollTable({
 }) {
   const [message, setMessage] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [globalStandardDays, setGlobalStandardDays] = useState(() => String(records[0]?.standardWorkingDays ?? 11));
+  const [updatingStandardDays, setUpdatingStandardDays] = useState(false);
   const [editTarget, setEditTarget] = useState<PayrollCutoffRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
@@ -4835,6 +4837,12 @@ function PayrollTable({
       masterCheckboxRef.current.indeterminate = someSelected;
     }
   }, [someSelected]);
+
+  useEffect(() => {
+    if (records.length > 0) {
+      setGlobalStandardDays(String(records[0]?.standardWorkingDays ?? 11));
+    }
+  }, [records]);
 
   // Clean up selectedIds when records change
   useEffect(() => {
@@ -4910,6 +4918,76 @@ function PayrollTable({
     (r) => selectedIds.has(r.payrollId) && r.status === "DRAFT",
   ).length;
 
+  const updateAllStandardDays = async () => {
+    const nStdDays = Math.max(0, Number(globalStandardDays) || 0);
+    const targetRecords = selectedIds.size > 0
+      ? records.filter((r) => selectedIds.has(r.payrollId) && r.status === "DRAFT")
+      : records.filter((r) => r.status === "DRAFT");
+
+    if (targetRecords.length === 0) return;
+    setUpdatingStandardDays(true);
+    setMessage("");
+    let successCount = 0;
+    for (const record of targetRecords) {
+      const isIntern = record.employeeType === "INTERN";
+      const dailyRate = isIntern ? INTERN_DAILY_RATE_PHP : record.dailyRate;
+      const actualDays = record.actualWorkingDays;
+      const absentDays = Math.max(0, nStdDays - actualDays);
+      const basicPay = dailyRate * nStdDays;
+      const absenceDeduction = dailyRate * absentDays;
+
+      const nHra = isIntern ? 0 : record.hra ?? 0;
+      const nInc = isIntern ? 0 : record.incentivesAllowance ?? 0;
+      const nSpecAllow = isIntern ? 0 : record.specialAllowance ?? 0;
+      const nOt = isIntern ? 0 : record.overtimePay ?? 0;
+      const nAdj = record.manualAdjustment ?? 0;
+
+      const nSss = isIntern ? 0 : record.sss ?? 0;
+      const nPhic = isIntern ? 0 : record.phic ?? 0;
+      const nHdmf = isIntern ? 0 : record.hdmf ?? 0;
+      const nAdvance = isIntern ? 0 : record.salaryAdvance ?? 0;
+
+      const payload = {
+        payrollId: record.payrollId,
+        employeeId: record.employeeId,
+        employeeName: record.employeeName,
+        payrollProfileId: record.payrollProfileId,
+        payrollCutoffLabel: record.payrollCutoffLabel,
+        cutoffStart: record.cutoffStart,
+        cutoffEnd: record.cutoffEnd,
+        dailyRate: record.dailyRate,
+        standardWorkingDays: nStdDays,
+        actualWorkingDays: record.actualWorkingDays,
+        basicPay,
+        hra: nHra,
+        incentivesAllowance: nInc,
+        specialAllowance: nSpecAllow,
+        regularHolidayPay: isIntern ? 0 : record.regularHolidayPay,
+        specialHolidayPay: isIntern ? 0 : record.specialHolidayPay,
+        overtimePay: nOt,
+        sss: nSss,
+        phic: nPhic,
+        hdmf: nHdmf,
+        salaryAdvance: nAdvance,
+        absentDays,
+        absenceDeduction,
+        halfDayCount: record.halfDayCount,
+        halfDayDeduction: record.halfDayDeduction,
+        lateUnits: record.lateUnits,
+        lateDeduction: record.lateDeduction,
+        manualAdjustment: nAdj,
+        adjustmentReason: record.adjustmentReason || undefined,
+        approvedWorkingDayOverage: nStdDays < record.actualWorkingDays ? true : record.approvedWorkingDayOverage,
+      };
+
+      const res = await savePayrollCutoff(payload, record.payrollId);
+      if (res.success) successCount++;
+    }
+    setUpdatingStandardDays(false);
+    setMessage(`Updated standard working days to ${nStdDays} for ${successCount} draft record(s).`);
+    onFinalized();
+  };
+
   const removeBatch = async () => {
     if (selectedIds.size === 0) return;
     setBatchDeleteOpen(false);
@@ -4958,6 +5036,30 @@ function PayrollTable({
           ) : (
             <span>Total records: {records.length}</span>
           )}
+        </div>
+        <div className="payroll-global-controls">
+          <label className="global-std-days-label" htmlFor="global-std-days-input">
+            Standard Days:
+          </label>
+          <input
+            id="global-std-days-input"
+            className="global-std-days-input"
+            type="number"
+            min="0"
+            max="31"
+            step="0.5"
+            value={globalStandardDays}
+            onChange={(e) => setGlobalStandardDays(e.target.value)}
+            aria-label="Cutoff standard working days"
+          />
+          <button
+            className="admin-button"
+            type="button"
+            disabled={updatingStandardDays || (selectedIds.size > 0 ? selectedDraftsCount === 0 : records.filter((r) => r.status === "DRAFT").length === 0)}
+            onClick={() => void updateAllStandardDays()}
+          >
+            {updatingStandardDays ? "Applying..." : selectedIds.size > 0 ? `Apply to Selected (${selectedDraftsCount})` : "Apply to All Drafts"}
+          </button>
         </div>
         <div className="payroll-batch-actions">
           {selectedIds.size > 0 ? (

@@ -724,6 +724,30 @@ tr.selected-row td:first-child::before,
   border-top-right-radius: 0;
 }
 
+.payroll-global-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.global-std-days-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.global-std-days-input {
+  width: 60px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 0.76rem;
+  background: var(--surface-input);
+  border: 1px solid var(--line-bright);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
 .table-batch-actions,
 .payroll-batch-actions {
   display: inline-flex;

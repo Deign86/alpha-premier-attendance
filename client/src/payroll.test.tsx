@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   PayrollCalculationProfile,
@@ -39,12 +39,21 @@ function record(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffReco
 
 /** A saved intern record in the same August 1-15, 2026 cutoff. */
 function internRecord(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {
-  return record({
+  return {
     payrollId: "P-INT-001", employeeId: "INT-001", employeeName: "Maria Santos", employeeType: "INTERN",
     payrollProfileId: "INTERN_STANDARD", dailyRate: 80, basicPay: 800, totalCompensation: 800,
-    lateUnits: 3, lateDeduction: 30, grossCompensation: 770, netPay: 770,
+    standardWorkingDays: 10, actualWorkingDays: 10, absentDays: 0, absenceDeduction: 0,
+    lateUnits: 0, lateDeduction: 0, halfDayCount: 0, halfDayDeduction: 0,
+    specialHolidayDays: 0, specialHolidayMultiplier: 0, specialHolidayPay: 0,
+    regularHolidayDays: 0, regularHolidayMultiplier: 0, regularHolidayPay: 0,
+    incentivesAllowance: 0, specialAllowance: 0, totalAllowance: 0,
+    overtimeHours: 0, overtimeRate: 0, overtimePay: 0,
+    manualAdjustment: 0, adjustmentReason: null, grossCompensation: 800, netPay: 800,
+    payrollCutoffLabel: "August 1-15, 2026", cutoffStart: "2026-08-01", cutoffEnd: "2026-08-15",
+    payrollFrequency: "SEMI_MONTHLY", calculationBreakdown: "PHP 800.00 basic",
+    approvedWorkingDayOverage: false, status: "FINALIZED", finalizedAt: null,
     ...overrides,
-  });
+  };
 }
 
 /** A generated payroll PDF as returned by the Tauri backend. */
@@ -68,7 +77,37 @@ function pdfRecord(overrides: Partial<PayrollPdfRecord> = {}): PayrollPdfRecord 
 
 function renderWorkspace(records: PayrollCutoffRecord[]) {
   return render(
-    <PayrollWorkspace users={[]} profiles={profiles} records={records} onSaved={vi.fn()} />,
+    <PayrollWorkspace
+      users={[
+        {
+          userId: "EMP-001",
+          rfidUid: "E001",
+          fullName: "Ada Lovelace",
+          department: "Engineering",
+          status: "ACTIVE",
+          employeeType: "EMPLOYEE",
+          gender: "FEMALE",
+          dailyRate: 500,
+          payrollProfileId: "BEA_STANDARD",
+          photoUrl: null,
+        },
+        {
+          userId: "INT-001",
+          rfidUid: "I001",
+          fullName: "Maria Santos",
+          department: "Marketing",
+          status: "ACTIVE",
+          employeeType: "INTERN",
+          gender: "FEMALE",
+          dailyRate: null,
+          payrollProfileId: "INTERN_STANDARD",
+          photoUrl: null,
+        },
+      ]}
+      profiles={profiles}
+      records={records}
+      onSaved={vi.fn()}
+    />,
   );
 }
 
@@ -79,9 +118,9 @@ describe("PayrollWorkspace", () => {
 
   beforeEach(() => {
     window.print = vi.fn();
-    generatePayrollCutoffSpy = vi.spyOn(api, 'generatePayrollCutoff');
-    generatePayrollPdfSpy = vi.spyOn(api, 'generatePayrollPdf');
-    loadPayrollPdfsSpy = vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
+    generatePayrollCutoffSpy = vi.spyOn(api, "generatePayrollCutoff");
+    generatePayrollPdfSpy = vi.spyOn(api, "generatePayrollPdf");
+    loadPayrollPdfsSpy = vi.spyOn(api, "loadPayrollPdfs").mockResolvedValue({ success: true, payrollPdfs: [] });
   });
 
   afterEach(() => {
@@ -101,7 +140,7 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: /confirm/i }));
     expect(await screen.findByText("Unable to generate payroll.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
-    expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
+    expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
   });
 
   it("shows exactly the two generate payroll PDF buttons and no print/export actions", () => {
@@ -275,23 +314,20 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: /Confirm/i }));
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
-      expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026");
+      expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
     });
   });
 
   it("opens the edit dialog on a draft record and saves updated earnings and deductions", async () => {
     const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();
-    renderWorkspace([record({ status: "DRAFT" })]);
+    renderWorkspace([record({ status: "DRAFT", standardWorkingDays: 11 })]);
 
     await user.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByRole("dialog", { name: /Edit Payroll — Ada Lovelace/i })).toBeInTheDocument();
 
     const hraInput = screen.getByLabelText("HRA");
     const sssInput = screen.getByLabelText("SSS Employee Share");
-    const stdDaysInput = screen.getByLabelText("Standard Working Days");
-    await user.clear(stdDaysInput);
-    await user.type(stdDaysInput, "10");
     await user.clear(hraInput);
     await user.type(hraInput, "500");
     await user.clear(sssInput);
@@ -302,8 +338,7 @@ describe("PayrollWorkspace", () => {
       expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           payrollId: "P-001",
-          standardWorkingDays: 10,
-          basicPay: 5000,
+          standardWorkingDays: 11,
           hra: 500,
           sss: 450,
         }),
@@ -312,39 +347,46 @@ describe("PayrollWorkspace", () => {
     });
   });
 
-  it("allows editing standard working days for an intern to recalculate basic stipend and salary per cutoff", async () => {
+  it("allows globally editing standard working days to recalculate and batch update draft payroll records", async () => {
     const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();
-    // Intern with 10 actual working days in a cutoff with 12 standard days (12 x 80 = 960)
-    renderWorkspace([internRecord({
-      status: "DRAFT",
-      standardWorkingDays: 12,
-      actualWorkingDays: 10,
-      basicPay: 960,
-      absentDays: 2,
-      absenceDeduction: 160,
-      lateUnits: 0,
-      lateDeduction: 0,
-      grossCompensation: 960,
-      netPay: 800,
-    })]);
+    renderWorkspace([
+      record({
+        payrollId: "P-001",
+        status: "DRAFT",
+        standardWorkingDays: 11,
+        actualWorkingDays: 10,
+        dailyRate: 500,
+      }),
+      internRecord({
+        payrollId: "P-INT-001",
+        status: "DRAFT",
+        standardWorkingDays: 11,
+        actualWorkingDays: 10,
+        dailyRate: 80,
+      }),
+    ]);
 
-    await user.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByRole("dialog", { name: /Edit Payroll — Maria Santos \(Intern\)/i })).toBeInTheDocument();
+    const globalStdDaysInput = screen.getByLabelText(/Cutoff standard working days/i);
+    expect(globalStdDaysInput).toHaveValue(11);
 
-    const stdDaysInput = screen.getByLabelText(/Standard Working Days/i);
-    expect(stdDaysInput).toHaveValue(12);
+    await user.clear(globalStdDaysInput);
+    await user.type(globalStdDaysInput, "10");
 
-    // Changing standard days from 12 to 10 changes 12 x 80 (960) into 10 x 80 (800)
-    await user.clear(stdDaysInput);
-    await user.type(stdDaysInput, "10");
+    await user.click(screen.getByRole("button", { name: /Apply to All Drafts/i }));
 
-    expect(stdDaysInput).toHaveValue(10);
-    // Basic becomes 10 * 80 = 800, absent becomes max(0, 10 - 10) = 0
-    expect(screen.getByText("PHP 800.00 (10 worked / 10 std days)")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Save Changes/i }));
     await waitFor(() => {
+      expect(savePayrollCutoffSpy).toHaveBeenCalledTimes(2);
+      expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payrollId: "P-001",
+          standardWorkingDays: 10,
+          basicPay: 5000,
+          absentDays: 0,
+          absenceDeduction: 0,
+        }),
+        "P-001",
+      );
       expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           payrollId: "P-INT-001",
@@ -358,33 +400,36 @@ describe("PayrollWorkspace", () => {
     });
   });
 
-  it("shows standard working days and manual adjustment as editable and hides allowances and statutory deductions when editing an intern record", async () => {
+  it("shows manual adjustment as editable and hides standard working days, allowances, and statutory deductions when editing an intern record", async () => {
     const user = userEvent.setup();
-    renderWorkspace([internRecord({ status: "DRAFT" })]);
+    renderWorkspace([internRecord({ status: "DRAFT", standardWorkingDays: 11 })]);
 
     await user.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByRole("dialog", { name: /Edit Payroll — Maria Santos \(Intern\)/i })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: /Edit Payroll — Maria Santos \(Intern\)/i });
+    expect(dialog).toBeInTheDocument();
 
     // Auto-computed attendance stats ARE displayed:
-    expect(screen.getByText("Attendance Basic")).toBeInTheDocument();
-    expect(screen.getByText("Late Deduction")).toBeInTheDocument();
+    expect(within(dialog).getByText("Attendance Basic")).toBeInTheDocument();
+    expect(within(dialog).getByText("Late Deduction")).toBeInTheDocument();
 
     // Intern editable fields:
-    expect(screen.getByLabelText(/Standard Working Days/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Manual Adjustment/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/Manual Adjustment/i)).toBeInTheDocument();
+
+    // Standard working days is global, not per-person editable in modal:
+    expect(within(dialog).queryByLabelText(/Standard Working Days/i)).not.toBeInTheDocument();
 
     // Non-intern fields are NOT visible:
-    expect(screen.queryByLabelText("HRA")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Incentives Allowance")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Special Allowance")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Regular Holiday Pay")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Special Holiday Pay")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Overtime Pay")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("SSS Employee Share")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Phic (PhilHealth) Employee Share")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("HDMF (Pag-IBIG) Employee Share")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Salary Advance")).not.toBeInTheDocument();
-    expect(screen.queryByText("Total Allowance")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("HRA")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Incentives Allowance")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Special Allowance")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Regular Holiday Pay")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Special Holiday Pay")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Overtime Pay")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("SSS Employee Share")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Phic (PhilHealth) Employee Share")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("HDMF (Pag-IBIG) Employee Share")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Salary Advance")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Total Allowance")).not.toBeInTheDocument();
   });
 
   it("allows deleting a finalized payroll record with confirmation", async () => {
