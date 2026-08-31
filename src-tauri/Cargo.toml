@@ -56,3 +56,24 @@ rodio = { version = "0.19", default-features = false, features = ["wav"] }
 [dev-dependencies]
 # Used only by tests to read back generated XLSX metadata.
 zip = "8"
+
+[profile.dev]
+incremental = true
+
+# Optimize external dependencies in development/test builds to keep test runtime fast
+[profile.dev.package."*"]
+opt-level = 2
+
+# Optimized production release profile: thin LTO and 16 codegen units give fast compile times with high runtime performance
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+strip = true
+panic = "abort"
+
+# Lightweight CI profile: minimizes debuginfo generation and maximizes parallel compilation for rapid PR verification
+[profile.ci]
+inherits = "dev"
+debug = 0
+codegen-units = 256
