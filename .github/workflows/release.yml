@@ -46,7 +46,7 @@ jobs:
       - name: Cache Rust dependencies and target artifacts
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: "src-tauri"
 
       - name: Install dependencies
         run: npm ci

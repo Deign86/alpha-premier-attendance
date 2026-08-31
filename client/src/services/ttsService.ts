@@ -378,7 +378,7 @@ export async function announceAttendance(
   }
 
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
-  const isClonedBea = activeSettings.engine === 'cloned-bea';
+  const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
 
   // Hybrid Splicing: When using Ma'am Bea cloned voice and a dynamic employee/intern name is present:
   // 1. Play pre-rendered cloned prefix carrier ("Good morning,", "Goodbye,", etc.)
@@ -479,7 +479,7 @@ export async function announceBathroom(
     return null;
   }
 
-  const isClonedBea = activeSettings.engine === 'cloned-bea';
+  const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
   const phrase = isClonedBea
     ? (options.action === 'CHECKOUT'
         ? 'Your bathroom key has been checked out. Please return it within fifteen minutes.'
@@ -528,7 +528,7 @@ export async function announceScanError(
     return null;
   }
 
-  const isClonedBea = activeSettings.engine === 'cloned-bea';
+  const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
   const phrase = isClonedBea
     ? (options.errorCode === 'INVALID_UID' || options.errorCode === 'UNREGISTERED_CARD'
         ? "Sorry, that card wasn't recognized. Please try scanning again."
@@ -567,7 +567,7 @@ export async function speakText(
     }
   }
 
-  if (options?.engine === 'cloned-bea') {
+  if (options?.engine === 'cloned-bea' || options?.engine === 'auto') {
     const cachedUrl = getClonedBeaAudioUrl(sanitized);
     if (cachedUrl) {
       try {

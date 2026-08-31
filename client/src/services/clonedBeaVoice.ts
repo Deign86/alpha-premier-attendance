@@ -81,7 +81,37 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
   'Voice announcements are working correctly.': '/voices/bea/general/test-voice.wav',
 });
 
-let nameManifestCache: Record<string, { audioFile: string }> | null = null;
+import { tauriApi } from '../tauri-api';
+
+const DEFAULT_NAME_PROFILES: Readonly<Record<string, { audioFile: string }>> = Object.freeze({
+  'APG-2026-019': { audioFile: '/voices/bea/names/APG-2026-019.wav' },
+  'APG-2026-113': { audioFile: '/voices/bea/names/APG-2026-113.wav' },
+  'APG-2026-110': { audioFile: '/voices/bea/names/APG-2026-110.wav' },
+  'APG-2026-102': { audioFile: '/voices/bea/names/APG-2026-102.wav' },
+  'APG-2026-109': { audioFile: '/voices/bea/names/APG-2026-109.wav' },
+  'APG-2026-095': { audioFile: '/voices/bea/names/APG-2026-095.wav' },
+  'APG-2026-099': { audioFile: '/voices/bea/names/APG-2026-099.wav' },
+  'APG-2026-112': { audioFile: '/voices/bea/names/APG-2026-112.wav' },
+  'APG-2026-092': { audioFile: '/voices/bea/names/APG-2026-092.wav' },
+  'APG-2026-101': { audioFile: '/voices/bea/names/APG-2026-101.wav' },
+  'APG-2026-104': { audioFile: '/voices/bea/names/APG-2026-104.wav' },
+  'APG-2026-098': { audioFile: '/voices/bea/names/APG-2026-098.wav' },
+  'APG-2026-100': { audioFile: '/voices/bea/names/APG-2026-100.wav' },
+  'APG-2026-103': { audioFile: '/voices/bea/names/APG-2026-103.wav' },
+  'APG-2026-111': { audioFile: '/voices/bea/names/APG-2026-111.wav' },
+  'APG-2026-107': { audioFile: '/voices/bea/names/APG-2026-107.wav' },
+  'APG-2026-097': { audioFile: '/voices/bea/names/APG-2026-097.wav' },
+  'APG-2026-106': { audioFile: '/voices/bea/names/APG-2026-106.wav' },
+  'APG-2026-105': { audioFile: '/voices/bea/names/APG-2026-105.wav' },
+  'APG-2026-114': { audioFile: '/voices/bea/names/APG-2026-114.wav' },
+  'APG-2026-108': { audioFile: '/voices/bea/names/APG-2026-108.wav' },
+  'APG-2026-094': { audioFile: '/voices/bea/names/APG-2026-094.wav' },
+  'USR_INT_001': { audioFile: '/voices/bea/names/USR_INT_001.wav' },
+  'USR_INT_002': { audioFile: '/voices/bea/names/USR_INT_002.wav' },
+  'USR_EMP_001': { audioFile: '/voices/bea/names/USR_EMP_001.wav' },
+});
+
+let nameManifestCache: Record<string, { audioFile: string }> | null = { ...DEFAULT_NAME_PROFILES };
 let nameManifestLoaded = false;
 
 /**
@@ -105,7 +135,7 @@ export async function loadNameManifest(): Promise<Record<string, { audioFile: st
   }
   if (!('fetch' in globalThis)) {
     nameManifestLoaded = true;
-    return null;
+    return nameManifestCache;
   }
   try {
     const res = await fetch('/voices/bea/bea-name-manifest.json');
@@ -114,7 +144,10 @@ export async function loadNameManifest(): Promise<Record<string, { audioFile: st
       const data = (await res.json()) as NameManifestJson | null;
       if (data && data.profiles && !Array.isArray(data.profiles)) {
         // SAFETY: Verified profiles is dictionary
-        nameManifestCache = data.profiles as Record<string, { audioFile: string }>;
+        nameManifestCache = {
+          ...DEFAULT_NAME_PROFILES,
+          ...(data.profiles as Record<string, { audioFile: string }>),
+        };
       }
     }
   } catch {
@@ -134,6 +167,9 @@ export function getClonedBeaNameAudioUrl(personId?: string | null): string | nul
   const cleanId = personId.trim();
   if (nameManifestCache && cleanId in nameManifestCache) {
     return nameManifestCache[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
+  }
+  if (cleanId in DEFAULT_NAME_PROFILES) {
+    return DEFAULT_NAME_PROFILES[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
   }
   return null;
 }
@@ -171,7 +207,7 @@ export function stopClonedBeaAudio(): void {
 }
 
 /**
- * Plays a pre-rendered cloned voice audio file through standard HTML5 Audio.
+ * Plays a pre-rendered cloned voice audio file through native Tauri audio or standard HTML5 Audio.
  * Returns true if playback succeeded, or false if an error occurred.
  */
 export async function playClonedBeaAudio(
@@ -180,6 +216,22 @@ export async function playClonedBeaAudio(
   rate = 1.0,
 ): Promise<boolean> {
   stopClonedBeaAudio();
+
+  // In Tauri desktop environment, prefer native Rodio playback for seamless hardware output
+  if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
+    try {
+      const result = await tauriApi.ttsSpeak(audioUrl, {
+        engine: 'cloned-bea',
+        volume,
+        rate,
+      });
+      if (result && result.success) {
+        return true;
+      }
+    } catch (nativeErr) {
+      console.warn('Native Rodio audio playback failed, falling back to HTML5 Audio:', nativeErr);
+    }
+  }
 
   if (!('window' in globalThis) || !('Audio' in globalThis)) {
     return false;

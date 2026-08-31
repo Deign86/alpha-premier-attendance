@@ -1,7 +1,7 @@
 [package]
 name = "alpha-premier-attendance"
 default-run = "alpha-premier-attendance"
-version = "0.1.34"
+version = "0.1.35"
 description = "Alpha Premier Attendance desktop application"
 authors = ["Alpha Premier"]
 edition = "2021"
@@ -71,9 +71,3 @@ lto = "thin"
 codegen-units = 16
 strip = true
 panic = "abort"
-
-# Lightweight CI profile: minimizes debuginfo generation and maximizes parallel compilation for rapid PR verification
-[profile.ci]
-inherits = "dev"
-debug = 0
-codegen-units = 256

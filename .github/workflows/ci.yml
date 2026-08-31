@@ -87,10 +87,7 @@ jobs:
       - name: Cache Rust dependencies and target artifacts
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
-
-      - name: Check Rust compilation (src-tauri)
-        run: cargo check --manifest-path src-tauri/Cargo.toml --profile ci
+          workspaces: "src-tauri"
 
       - name: Run Rust unit and integration tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

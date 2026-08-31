@@ -13,6 +13,7 @@ enum AudioCommand {
         wav_path: PathBuf,
         volume: f32,
         cleanup_file: Option<PathBuf>,
+        wait_for_completion: bool,
         response: oneshot::Sender<Result<(), String>>,
     },
     Stop,
@@ -72,6 +73,7 @@ impl AudioPlayer {
                             wav_path,
                             volume,
                             cleanup_file,
+                            wait_for_completion,
                             response,
                         } => {
                             // Stop existing playback first
@@ -126,19 +128,30 @@ impl AudioPlayer {
                             let sink_arc = Arc::new(sink);
                             current_sink = Some(sink_arc.clone());
 
-                            // Clean up file after playback completes only if explicitly requested
                             let file_to_clean = cleanup_file;
                             let sink_for_monitor = sink_arc.clone();
-                            std::thread::spawn(move || {
-                                while !sink_for_monitor.empty() {
-                                    std::thread::sleep(Duration::from_millis(50));
-                                }
-                                if let Some(path) = file_to_clean {
-                                    let _ = std::fs::remove_file(path);
-                                }
-                            });
 
-                            let _ = response.send(Ok(()));
+                            if wait_for_completion {
+                                std::thread::spawn(move || {
+                                    while !sink_for_monitor.empty() {
+                                        std::thread::sleep(Duration::from_millis(25));
+                                    }
+                                    if let Some(path) = file_to_clean {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                    let _ = response.send(Ok(()));
+                                });
+                            } else {
+                                std::thread::spawn(move || {
+                                    while !sink_for_monitor.empty() {
+                                        std::thread::sleep(Duration::from_millis(50));
+                                    }
+                                    if let Some(path) = file_to_clean {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                });
+                                let _ = response.send(Ok(()));
+                            }
                         }
                     }
                 }
@@ -168,6 +181,7 @@ impl AudioPlayer {
         wav_path: &Path,
         volume: f32,
         cleanup_file: Option<PathBuf>,
+        wait_for_completion: bool,
     ) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.sender
@@ -175,6 +189,7 @@ impl AudioPlayer {
                 wav_path: wav_path.to_path_buf(),
                 volume,
                 cleanup_file,
+                wait_for_completion,
                 response: tx,
             })
             .map_err(|e| format!("Audio worker channel closed: {e}"))?;

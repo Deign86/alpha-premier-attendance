@@ -3789,7 +3789,6 @@ function UserEditor({
               <option value="INACTIVE">Inactive</option>
             </select>
           </label>
-          {message && <p className="dashboard-alert">{message}</p>}
           <button className="submit-button" type="submit">
             Save user
           </button>

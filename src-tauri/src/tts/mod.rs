@@ -156,7 +156,7 @@ impl TtsManager {
         // 1. Attempt Cloned Bea audio playback
         if try_cloned {
             if let Some(cached_wav) = find_cloned_bea_wav(app_handle, &sanitized) {
-                match self.audio_player.play_wav(&cached_wav, volume, None).await {
+                match self.audio_player.play_wav(&cached_wav, volume, None, true).await {
                     Ok(()) => {
                         return Ok(TtsSpeakResult {
                             success: true,
@@ -199,7 +199,7 @@ impl TtsManager {
                     Ok(()) => {
                         match self
                             .audio_player
-                            .play_wav(&output_wav, volume, Some(output_wav.clone()))
+                            .play_wav(&output_wav, volume, Some(output_wav.clone()), true)
                             .await
                         {
                             Ok(()) => {
@@ -284,79 +284,100 @@ impl TtsManager {
     }
 }
 
-fn get_cloned_bea_rel_path(phrase: &str) -> Option<&'static str> {
-    match phrase.trim() {
+fn get_cloned_bea_rel_path(phrase: &str) -> Option<std::path::PathBuf> {
+    let trimmed = phrase.trim();
+
+    // 1. Direct audio path resolution (/voices/bea/... or voices/bea/...)
+    if let Some(rel) = trimmed.strip_prefix('/') {
+        if rel.starts_with("voices/bea/") {
+            return Some(std::path::PathBuf::from(rel));
+        }
+    }
+    if trimmed.starts_with("voices/bea/") {
+        return Some(std::path::PathBuf::from(trimmed));
+    }
+
+    // 2. Direct person ID resolution (e.g. APG-2026-102, USR_INT_001)
+    if trimmed.starts_with("APG-") || trimmed.starts_with("USR_") {
+        return Some(std::path::PathBuf::from(format!("voices/bea/names/{trimmed}.wav")));
+    }
+
+    let static_rel = match trimmed {
         // Hybrid Splicing Carrier Prefixes
-        "Good morning," => Some("voices/bea/attendance/good-morning.wav"),
-        "Good afternoon," => Some("voices/bea/attendance/good-afternoon.wav"),
-        "Good evening," => Some("voices/bea/attendance/good-evening.wav"),
-        "Goodbye," => Some("voices/bea/attendance/goodbye.wav"),
-        "Attendance recorded for" => Some("voices/bea/attendance/attendance-recorded-for.wav"),
-        "Thank you, and have a great day." => Some("voices/bea/attendance/thank-you-great-day.wav"),
+        "Good morning," | "Good morning" => "voices/bea/attendance/good-morning.wav",
+        "Good afternoon," | "Good afternoon" => "voices/bea/attendance/good-afternoon.wav",
+        "Good evening," | "Good evening" => "voices/bea/attendance/good-evening.wav",
+        "Goodbye," | "Goodbye" => "voices/bea/attendance/goodbye.wav",
+        "Attendance recorded for" => "voices/bea/attendance/attendance-recorded-for.wav",
+        "Thank you, and have a great day." => "voices/bea/attendance/thank-you-great-day.wav",
 
         // Hybrid Splicing Suffixes
-        "Your time in has been recorded." => Some("voices/bea/attendance/time-in-standard.wav"),
-        "Your time in has been recorded. You are the first arrival today." => Some("voices/bea/attendance/time-in-first-arrival.wav"),
-        "Your time in has been recorded within the grace period." => Some("voices/bea/attendance/time-in-grace.wav"),
-        "Your time in has been recorded within the grace period. You are the first arrival today." => Some("voices/bea/attendance/time-in-grace-first-arrival.wav"),
-        "Your time in has been recorded. You made it within the grace period." => Some("voices/bea/attendance/time-in-grace.wav"),
-        "Your time in has been recorded. You made it within the grace period. You are the first arrival today." => Some("voices/bea/attendance/time-in-grace-first-arrival.wav"),
-        "Your time in has been recorded. You are late." => Some("voices/bea/attendance/time-in-late.wav"),
-        "Your time in has been recorded. You are late. You are the first arrival today." => Some("voices/bea/attendance/time-in-late-first-arrival.wav"),
-        "Your assisted time in has been recorded." => Some("voices/bea/attendance/time-in-assisted-standard.wav"),
-        "Your assisted time in has been recorded. You are the first arrival today." => Some("voices/bea/attendance/time-in-assisted-first-arrival.wav"),
-        "Your assisted time in has been recorded within the grace period." => Some("voices/bea/attendance/time-in-assisted-grace.wav"),
-        "Your assisted time in has been recorded within the grace period. You are the first arrival today." => Some("voices/bea/attendance/time-in-assisted-grace-first-arrival.wav"),
-        "Your assisted time in has been recorded. You made it within the grace period." => Some("voices/bea/attendance/time-in-assisted-grace.wav"),
-        "Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today." => Some("voices/bea/attendance/time-in-assisted-grace-first-arrival.wav"),
-        "Your assisted time in has been recorded. You are late." => Some("voices/bea/attendance/time-in-assisted-late.wav"),
-        "Your assisted time in has been recorded. You are late. You are the first arrival today." => Some("voices/bea/attendance/time-in-assisted-late-first-arrival.wav"),
-        "Your time out has been recorded." => Some("voices/bea/attendance/time-out-standard.wav"),
-        "Your time out was recorded after office hours. Manual correction is required." => Some("voices/bea/attendance/time-out-late-timeout.wav"),
-        "Your assisted time out has been recorded." => Some("voices/bea/attendance/time-out-assisted-standard.wav"),
-        "Your assisted time out was recorded after office hours. Manual correction is required." => Some("voices/bea/attendance/time-out-assisted-late-timeout.wav"),
+        "Your time in has been recorded." => "voices/bea/attendance/time-in-standard.wav",
+        "Your time in has been recorded. You are the first arrival today." => "voices/bea/attendance/time-in-first-arrival.wav",
+        "Your time in has been recorded within the grace period." => "voices/bea/attendance/time-in-grace.wav",
+        "Your time in has been recorded within the grace period. You are the first arrival today." => "voices/bea/attendance/time-in-grace-first-arrival.wav",
+        "Your time in has been recorded. You made it within the grace period." => "voices/bea/attendance/time-in-grace.wav",
+        "Your time in has been recorded. You made it within the grace period. You are the first arrival today." => "voices/bea/attendance/time-in-grace-first-arrival.wav",
+        "Your time in has been recorded. You are late." => "voices/bea/attendance/time-in-late.wav",
+        "Your time in has been recorded. You are late. You are the first arrival today." => "voices/bea/attendance/time-in-late-first-arrival.wav",
+        "Your assisted time in has been recorded." => "voices/bea/attendance/time-in-assisted-standard.wav",
+        "Your assisted time in has been recorded. You are the first arrival today." => "voices/bea/attendance/time-in-assisted-first-arrival.wav",
+        "Your assisted time in has been recorded within the grace period." => "voices/bea/attendance/time-in-assisted-grace.wav",
+        "Your assisted time in has been recorded within the grace period. You are the first arrival today." => "voices/bea/attendance/time-in-assisted-grace-first-arrival.wav",
+        "Your assisted time in has been recorded. You made it within the grace period." => "voices/bea/attendance/time-in-assisted-grace.wav",
+        "Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today." => "voices/bea/attendance/time-in-assisted-grace-first-arrival.wav",
+        "Your assisted time in has been recorded. You are late." => "voices/bea/attendance/time-in-assisted-late.wav",
+        "Your assisted time in has been recorded. You are late. You are the first arrival today." => "voices/bea/attendance/time-in-assisted-late-first-arrival.wav",
+        "Your time out has been recorded." => "voices/bea/attendance/time-out-standard.wav",
+        "Your time out was recorded after office hours. Manual correction is required." => "voices/bea/attendance/time-out-late-timeout.wav",
+        "Your assisted time out has been recorded." => "voices/bea/attendance/time-out-assisted-standard.wav",
+        "Your assisted time out was recorded after office hours. Manual correction is required." => "voices/bea/attendance/time-out-assisted-late-timeout.wav",
 
         // Bathroom Key Management (Warm Tone)
-        "Your bathroom key has been checked out. Please return it within fifteen minutes." => Some("voices/bea/bathroom/bathroom-key-checked-out-15min.wav"),
-        "Male bathroom key checked out." => Some("voices/bea/bathroom/checkout-male.wav"),
-        "Female bathroom key checked out." => Some("voices/bea/bathroom/checkout-female.wav"),
-        "Male bathroom key returned." => Some("voices/bea/bathroom/return-male.wav"),
-        "Female bathroom key returned." => Some("voices/bea/bathroom/return-female.wav"),
+        "Your bathroom key has been checked out. Please return it within fifteen minutes." => "voices/bea/bathroom/bathroom-key-checked-out-15min.wav",
+        "Male bathroom key checked out." => "voices/bea/bathroom/checkout-male.wav",
+        "Female bathroom key checked out." => "voices/bea/bathroom/checkout-female.wav",
+        "Male bathroom key returned." => "voices/bea/bathroom/return-male.wav",
+        "Female bathroom key returned." => "voices/bea/bathroom/return-female.wav",
 
         // Admin Assist (Warm Tone)
-        "Admin assist card recognized. Please select an employee." => Some("voices/bea/admin-assist/admin-assist-prompt.wav"),
+        "Admin assist card recognized. Please select an employee." => "voices/bea/admin-assist/admin-assist-prompt.wav",
 
         // Scan Errors and Feedback (Neutral/Alert Tone)
-        "Sorry, that card wasn't recognized. Please try scanning again." => Some("voices/bea/scan-error/sorry-card-not-recognized.wav"),
-        "The male bathroom key is currently in use." => Some("voices/bea/scan-error/bathroom-key-in-use-male.wav"),
-        "The female bathroom key is currently in use." => Some("voices/bea/scan-error/bathroom-key-in-use-female.wav"),
-        "The bathroom key is currently in use." => Some("voices/bea/scan-error/bathroom-key-in-use.wav"),
-        "This card is not registered." => Some("voices/bea/scan-error/card-not-registered.wav"),
-        "Employee record is inactive." => Some("voices/bea/scan-error/employee-record-inactive.wav"),
-        "Card scanned too recently. Please wait." => Some("voices/bea/scan-error/card-scanned-too-recently.wav"),
-        "Admin cards cannot check out bathroom keys." => Some("voices/bea/scan-error/admin-card-not-allowed.wav"),
-        "Admin card requires employee selection." => Some("voices/bea/scan-error/admin-card-requires-selection.wav"),
-        "Attendance is already completed for today." => Some("voices/bea/scan-error/attendance-already-completed.wav"),
-        "Attendance timed out after office hours and is pending manual correction." => Some("voices/bea/scan-error/attendance-timed-out-correction.wav"),
-        "Attendance service is temporarily unavailable." => Some("voices/bea/scan-error/service-unavailable.wav"),
-        "Attendance conflict. Please try again." => Some("voices/bea/scan-error/attendance-conflict.wav"),
-        "Scan could not be processed." => Some("voices/bea/scan-error/scan-generic-error.wav"),
+        "Sorry, that card wasn't recognized. Please try scanning again." => "voices/bea/scan-error/sorry-card-not-recognized.wav",
+        "The male bathroom key is currently in use." => "voices/bea/scan-error/bathroom-key-in-use-male.wav",
+        "The female bathroom key is currently in use." => "voices/bea/scan-error/bathroom-key-in-use-female.wav",
+        "The bathroom key is currently in use." => "voices/bea/scan-error/bathroom-key-in-use.wav",
+        "This card is not registered." => "voices/bea/scan-error/card-not-registered.wav",
+        "Employee record is inactive." => "voices/bea/scan-error/employee-record-inactive.wav",
+        "Card scanned too recently. Please wait." => "voices/bea/scan-error/card-scanned-too-recently.wav",
+        "Admin cards cannot check out bathroom keys." => "voices/bea/scan-error/admin-card-not-allowed.wav",
+        "Admin card requires employee selection." => "voices/bea/scan-error/admin-card-requires-selection.wav",
+        "Attendance is already completed for today." => "voices/bea/scan-error/attendance-already-completed.wav",
+        "Attendance timed out after office hours and is pending manual correction." => "voices/bea/scan-error/attendance-timed-out-correction.wav",
+        "Attendance service is temporarily unavailable." => "voices/bea/scan-error/service-unavailable.wav",
+        "Attendance conflict. Please try again." => "voices/bea/scan-error/attendance-conflict.wav",
+        "Scan could not be processed." => "voices/bea/scan-error/scan-generic-error.wav",
 
         // General / Test Voice
-        "Voice announcements are working correctly." => Some("voices/bea/general/test-voice.wav"),
-        _ => None,
-    }
+        "Voice announcements are working correctly." => "voices/bea/general/test-voice.wav",
+        _ => return None,
+    };
+
+    Some(std::path::PathBuf::from(static_rel))
 }
 
 pub fn find_cloned_bea_wav(app_handle: &tauri::AppHandle, phrase: &str) -> Option<std::path::PathBuf> {
-    let rel_path = get_cloned_bea_rel_path(phrase)?;
-    let rel_path_buf = std::path::PathBuf::from(rel_path);
+    let rel_path_buf = get_cloned_bea_rel_path(phrase)?;
 
-    // 1. Check relative to client/public/ (dev mode from repo root or src-tauri)
+    // 1. Check relative to client/public/, resources/, or src-tauri (dev mode from repo root or src-tauri)
     let dev_candidates = [
         std::path::PathBuf::from("client").join("public").join(&rel_path_buf),
         std::path::PathBuf::from("..").join("client").join("public").join(&rel_path_buf),
         std::path::PathBuf::from("public").join(&rel_path_buf),
+        std::path::PathBuf::from("resources").join(&rel_path_buf),
+        std::path::PathBuf::from("src-tauri").join("resources").join(&rel_path_buf),
+        std::path::PathBuf::from("..").join("src-tauri").join("resources").join(&rel_path_buf),
     ];
     for candidate in dev_candidates {
         if candidate.is_file() {
@@ -368,9 +389,9 @@ pub fn find_cloned_bea_wav(app_handle: &tauri::AppHandle, phrase: &str) -> Optio
     if let Ok(res_dir) = app_handle.path().resource_dir() {
         let res_candidates = [
             res_dir.join(&rel_path_buf),
+            res_dir.join("resources").join(&rel_path_buf),
             res_dir.join("public").join(&rel_path_buf),
             res_dir.join("client").join("public").join(&rel_path_buf),
-            res_dir.join("resources").join(&rel_path_buf),
         ];
         for candidate in res_candidates {
             if candidate.is_file() {
@@ -384,9 +405,9 @@ pub fn find_cloned_bea_wav(app_handle: &tauri::AppHandle, phrase: &str) -> Optio
         if let Some(parent) = exe_path.parent() {
             let exe_candidates = [
                 parent.join(&rel_path_buf),
+                parent.join("resources").join(&rel_path_buf),
                 parent.join("public").join(&rel_path_buf),
                 parent.join("client").join("public").join(&rel_path_buf),
-                parent.join("resources").join(&rel_path_buf),
             ];
             for candidate in exe_candidates {
                 if candidate.is_file() {
