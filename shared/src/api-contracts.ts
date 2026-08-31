@@ -253,6 +253,8 @@ export type AttendanceSummary = {
   recordedBy?: string | null;
   recordedReason?: string | null;
   recordedAt?: string | null;
+  /** True only when this TIME_IN created the first attendance row for the date. */
+  isFirstArrivalToday?: boolean;
 };
 
 export type AttendanceListItem = AttendanceSummary & {

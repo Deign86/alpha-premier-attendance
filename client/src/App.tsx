@@ -247,7 +247,6 @@ export default function App() {
   const [bathroomStatus, setBathroomStatus] = useState<BathroomStatusResponse | null>(null);
   const [bathroomScanResult, setBathroomScanResult] = useState<BathroomScanResponse | null>(null);
   const bathroomResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const firstTimeInDateRef = useRef<string | null>(null);
 
   const fetchBathroomStatus = useCallback(async () => {
     try {
@@ -634,11 +633,7 @@ export default function App() {
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
           ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
           : undefined;
-        const currentDate = response.attendance.attendanceDate || (response.attendance.timeIn ? response.attendance.timeIn.slice(0, 10) : "");
-        const isFirstTimeInToday = response.action === "TIME_IN" && currentDate.length > 0 && firstTimeInDateRef.current !== currentDate;
-        if (isFirstTimeInToday) {
-          firstTimeInDateRef.current = currentDate;
-        }
+        const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
           employeeName: response.user.fullName,
           personId: response.user.userId,
@@ -683,11 +678,7 @@ export default function App() {
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
           ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
           : undefined;
-        const currentDate = response.attendance.attendanceDate || (response.attendance.timeIn ? response.attendance.timeIn.slice(0, 10) : "");
-        const isFirstTimeInToday = response.action === "TIME_IN" && currentDate.length > 0 && firstTimeInDateRef.current !== currentDate;
-        if (isFirstTimeInToday) {
-          firstTimeInDateRef.current = currentDate;
-        }
+        const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
           employeeName: response.user.fullName,
           personId: response.user.userId,

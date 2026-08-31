@@ -3944,6 +3944,12 @@ async fn scan_rfid(
     let timestamp = now.with_timezone(&Manila).to_rfc3339();
     let existing = sqlx::query("SELECT attendance_id, time_in, time_out, status, revision FROM attendance WHERE user_id = ? AND attendance_date = ?")
         .bind(&user_id).bind(&date).fetch_optional(&state.db).await.ok().flatten();
+    let is_first_arrival_today = if existing.is_none() {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM attendance WHERE attendance_date = ? AND time_in IS NOT NULL")
+            .bind(&date).fetch_one(&state.db).await.unwrap_or(1) == 0
+    } else {
+        false
+    };
     let (attendance_id, action, time_in, time_out, attendance_status) = match existing {
         None => {
             let id = uuid::Uuid::new_v4().to_string();
@@ -4098,6 +4104,7 @@ async fn scan_rfid(
                 "timeIn": time_in,
                 "timeOut": time_out,
                 "status": attendance_status,
+                "isFirstArrivalToday": if action == "TIME_IN" { Some(is_first_arrival_today) } else { None },
                 "source": effective_source,
                 "recordedBy": recorded_by,
                 "recordedReason": recorded_reason,

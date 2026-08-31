@@ -184,6 +184,13 @@ export function getClonedBeaAudioUrl(phrase: string): string | null {
   return CLONED_BEA_PHRASE_MANIFEST[clean] ?? null;
 }
 
+function getClonedBeaPhraseForAudioUrl(audioUrl: string): string | null {
+  for (const [phrase, url] of Object.entries(CLONED_BEA_PHRASE_MANIFEST)) {
+    if (url === audioUrl) return phrase;
+  }
+  return null;
+}
+
 /**
  * Checks whether a phrase is pre-rendered in the cloned voice audio cache.
  */
@@ -220,7 +227,9 @@ export async function playClonedBeaAudio(
   // In Tauri desktop environment, prefer native Rodio playback for seamless hardware output
   if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
     try {
-      const result = await tauriApi.ttsSpeak(audioUrl, {
+      const phrase = getClonedBeaPhraseForAudioUrl(audioUrl);
+      const nativeText = phrase ?? audioUrl;
+      const result = await tauriApi.ttsSpeak(nativeText, {
         engine: 'cloned-bea',
         volume,
         rate,

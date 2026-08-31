@@ -28,6 +28,7 @@ const successResponse = {
     timeIn: '2026-07-28T09:00:00+08:00',
     timeOut: null,
     status: 'WORKING',
+    isFirstArrivalToday: true,
   },
   user: { userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', gender: 'FEMALE', photoUrl: 'asset://localhost/C:/photos/ada.webp' },
 };
