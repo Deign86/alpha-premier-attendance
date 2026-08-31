@@ -253,7 +253,7 @@ export async function runBatchInternNameGeneration(
     profiles: {},
   };
 
-  if (fs.existsSync(CLIENT_MANIFEST_PATH)) {
+  if (!mockUsers && fs.existsSync(CLIENT_MANIFEST_PATH)) {
     try {
       manifest = JSON.parse(fs.readFileSync(CLIENT_MANIFEST_PATH, 'utf8'));
     } catch {
@@ -341,7 +341,7 @@ export async function runBatchInternNameGeneration(
 
   manifest.generatedAt = new Date().toISOString();
 
-  if (!dryRun || Object.keys(manifest.profiles).length > 0) {
+  if (!dryRun && !mockUsers) {
     fs.writeFileSync(CLIENT_MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8');
     fs.writeFileSync(TAURI_MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8');
   }
