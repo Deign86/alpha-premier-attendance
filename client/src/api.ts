@@ -366,8 +366,28 @@ export async function saveAdminAttendance<T extends object>(attendanceId: string
 }
 export async function createAdminBackdatedAttendance<T extends object>(payload: T): Promise<{ success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } }> {
   if (runningInTauri()) {
-    // SAFETY: Backend create backdated attendance returns success and record
-    return (await tauriApi.adminCreateBackdatedAttendance(nativeAdminToken ?? '', payload)) as { success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } };
+    try {
+      // SAFETY: Backend create backdated attendance returns success and record
+      return (await tauriApi.adminCreateBackdatedAttendance(nativeAdminToken ?? '', payload)) as { success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } };
+    } catch (err: unknown) {
+      const raw = errorString(err);
+      const msg = raw || 'Failed to add backdated attendance';
+      const friendlyMessage =
+        msg === 'ATTENDANCE_ALREADY_EXISTS_FOR_DATE'
+          ? 'An attendance record already exists for this employee on this date. Use attendance correction instead.'
+          : msg === 'BACKDATE_LIMIT_EXCEEDED'
+            ? 'Cannot add backdated attendance: date falls within a finalized payroll cutoff.'
+            : msg === 'ADMIN_VALIDATION_ERROR'
+              ? 'Please check the employee, date, time, and reason fields.'
+              : msg === 'ADMIN_AUTH_REQUIRED'
+                ? 'Administrator authentication required.'
+                : msg === 'INACTIVE_USER'
+                  ? 'Cannot create attendance for an inactive user.'
+                  : msg === 'ADMIN_CARD_REQUIRES_SELECTION' || msg === 'ADMIN_CARD_NOT_ALLOWED'
+                    ? 'Cannot create attendance for an Admin RFID card.'
+                    : msg;
+      return { success: false, error: { code: raw || undefined, message: friendlyMessage } };
+    }
   }
   const response = await fetch(apiUrl('/api/admin/attendance/backdate'), {
     method: 'POST',

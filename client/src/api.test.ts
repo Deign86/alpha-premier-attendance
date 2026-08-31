@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from './tauri-api';
-import { exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan } from './api';
+import { createAdminBackdatedAttendance, exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -134,6 +134,56 @@ describe('setupErrorFrom', () => {
       success: false,
       error: { code: 'SETUP_AUTH_REQUIRED', message: 'The setup request could not be completed.' },
     });
+  });
+});
+
+describe('createAdminBackdatedAttendance', () => {
+  it('handles successful creation in Tauri desktop mode', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    const spy = vi.spyOn(tauriApi, 'adminCreateBackdatedAttendance').mockResolvedValueOnce({
+      success: true,
+      attendance: {
+        attendanceId: 'att-123',
+        attendanceDate: '2026-08-20',
+        userId: 'u1',
+        fullName: 'Alice Cooper',
+        timeIn: '2026-08-20T08:00:00+08:00',
+        timeOut: '2026-08-20T17:00:00+08:00',
+        status: 'COMPLETED',
+        source: 'ADMIN_BACKDATED_ENTRY',
+      },
+    });
+
+    const result = await createAdminBackdatedAttendance({
+      userId: 'u1',
+      attendanceDate: '2026-08-20',
+      timeIn: '2026-08-20T08:00:00+08:00',
+      timeOut: '2026-08-20T17:00:00+08:00',
+      reason: 'Physical timecard verified',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.attendance?.attendanceId).toBe('att-123');
+    expect(spy).toHaveBeenCalled();
+    // SAFETY: Removing test mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it('maps known backend errors to friendly messages in Tauri mode', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    vi.spyOn(tauriApi, 'adminCreateBackdatedAttendance').mockRejectedValueOnce('ATTENDANCE_ALREADY_EXISTS_FOR_DATE');
+
+    const result = await createAdminBackdatedAttendance({
+      userId: 'u1',
+      attendanceDate: '2026-08-20',
+      timeIn: '2026-08-20T08:00:00+08:00',
+      reason: 'Physical timecard verified',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain('An attendance record already exists for this employee on this date');
+    // SAFETY: Removing test mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 });
 

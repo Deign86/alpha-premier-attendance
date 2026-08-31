@@ -1218,14 +1218,13 @@ async fn admin_update_attendance(
     )
 }
 
-#[tauri::command]
-async fn admin_create_backdated_attendance(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    token: String,
-    payload: serde_json::Value,
+async fn admin_create_backdated_attendance_impl(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    token: &str,
+    payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
+    if !admin_authorized(state, token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let user_id = payload
@@ -1358,7 +1357,7 @@ async fn admin_create_backdated_attendance(
             let employee_type: String = user.get("employee_type");
             let daily_rate: Option<i64> = user.get("daily_rate_centavos");
             let _ = ensure_payroll(
-                &state,
+                state,
                 &attendance_id,
                 user_id,
                 full_name.clone(),
@@ -1382,8 +1381,10 @@ async fn admin_create_backdated_attendance(
         "status": status,
         "sequence": seq
     });
-    let _ = app.emit("attendance-updated", &event_payload);
-    let _ = app.emit("attendance-changed", &event_payload);
+    if let Some(app_handle) = app {
+        let _ = app_handle.emit("attendance-updated", &event_payload);
+        let _ = app_handle.emit("attendance-changed", &event_payload);
+    }
     let _ = sqlx::query(
         "INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_ATTENDANCE_CREATED', ?, ?, ?)"
     )
@@ -1407,22 +1408,35 @@ async fn admin_create_backdated_attendance(
         "recordedReason": reason,
         "recordedAt": now_ts,
     });
-    enqueue_sync(&state, "Attendance", &attendance_id, "UPSERT", &sync_payload).await;
+    enqueue_sync(state, "Attendance", &attendance_id, "UPSERT", &sync_payload).await;
 
     Ok(serde_json::json!({
-        "attendanceId": attendance_id,
-        "attendanceDate": attendance_date,
-        "userId": user_id,
-        "fullName": full_name,
-        "department": department,
-        "timeIn": time_in,
-        "timeOut": time_out,
-        "status": status,
-        "source": "ADMIN_BACKDATED_ENTRY",
-        "recordedBy": "Admin",
-        "recordedReason": reason,
-        "recordedAt": now_ts,
+        "success": true,
+        "attendance": {
+            "attendanceId": attendance_id,
+            "attendanceDate": attendance_date,
+            "userId": user_id,
+            "fullName": full_name,
+            "department": department,
+            "timeIn": time_in,
+            "timeOut": time_out,
+            "status": status,
+            "source": "ADMIN_BACKDATED_ENTRY",
+            "recordedBy": "Admin",
+            "recordedReason": reason,
+            "recordedAt": now_ts,
+        }
     }))
+}
+
+#[tauri::command]
+async fn admin_create_backdated_attendance(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    admin_create_backdated_attendance_impl(Some(&app), &state, &token, &payload).await
 }
 
 #[tauri::command]
@@ -5252,6 +5266,84 @@ mod tests {
         assert_eq!(res4["success"], true);
         assert_eq!(res4["action"], "CHECKOUT");
         assert_eq!(res4["user"]["fullName"], "Bob Smith");
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn test_admin_create_backdated_attendance() {
+        let temp = std::env::temp_dir().join(format!("alpha-backdate-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let db_path = temp.join("attendance.db");
+        let exports_path = temp.join("exports");
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        let state = AppState::new(
+            temp.clone(),
+            db_path,
+            exports_path,
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        // Unlock admin
+        let unlock_res = super::setup_unlock_impl(&state, "1234".to_string()).await.unwrap();
+        let token = unlock_res["token"].as_str().unwrap().to_string();
+
+        super::upsert_user_record(
+            &state.db,
+            "EMP_01",
+            "CARD_01",
+            "Alice Cooper",
+            Some("IT"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("FEMALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        // 1. Success creating past backdated entry
+        let payload = serde_json::json!({
+            "userId": "EMP_01",
+            "attendanceDate": "2026-08-15",
+            "timeIn": "2026-08-15T08:00:00+08:00",
+            "timeOut": "2026-08-15T17:00:00+08:00",
+            "reason": "Missed scan physical log verified"
+        });
+        let res = super::admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap();
+        assert_eq!(res["success"], true);
+        assert_eq!(res["attendance"]["attendanceDate"], "2026-08-15");
+        assert_eq!(res["attendance"]["userId"], "EMP_01");
+        assert_eq!(res["attendance"]["source"], "ADMIN_BACKDATED_ENTRY");
+        assert_eq!(res["attendance"]["status"], "COMPLETED");
+
+        // 2. Reject duplicate date
+        let dup_err = super::admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap_err();
+        assert_eq!(dup_err, "ATTENDANCE_ALREADY_EXISTS_FOR_DATE");
+
+        // 3. Reject future or today date
+        let future_payload = serde_json::json!({
+            "userId": "EMP_01",
+            "attendanceDate": "2099-01-01",
+            "timeIn": "2099-01-01T08:00:00+08:00",
+            "reason": "Future date"
+        });
+        let future_err = super::admin_create_backdated_attendance_impl(None, &state, &token, &future_payload).await.unwrap_err();
+        assert_eq!(future_err, "ADMIN_VALIDATION_ERROR");
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
