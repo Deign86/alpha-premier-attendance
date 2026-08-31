@@ -1,13 +1,11 @@
 import type { UserGender } from '@rfid-attendance/shared';
 
 /**
- * Kiosk voice announcements via the Web Speech API.
+ * @deprecated Legacy Web Speech API helper.
  *
- * The kiosk greets an employee when a card times in ("Good morning") and says
- * goodbye when it times out ("Good bye [name]"). Phrases are spoken through a female
- * voice when the operating system provides one (Microsoft Aria/Jenny/Zira on
- * Windows, Google US English, Apple Samantha, etc.) and fall back to the
- * default voice otherwise.
+ * NOTE: All authoritative kiosk announcements are handled exclusively by
+ * `client/src/services/ttsService.ts` (Ma'am Bea Cloned Voice / Piper / SAPI).
+ * This module is maintained only for legacy backwards-compatibility unit tests.
  */
 
 /** Female voice names, best first. Each entry is matched as a lowercase substring. */

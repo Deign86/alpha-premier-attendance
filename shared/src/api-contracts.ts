@@ -775,7 +775,7 @@ export type AdminBackdatedAttendanceResponse = {
   attendance: AttendanceListItem;
 };
 
-export const ttsEngines = ['auto', 'piper', 'system', 'disabled'] as const;
+export const ttsEngines = ['auto', 'cloned-bea', 'piper', 'system', 'disabled'] as const;
 export type TtsEngine = (typeof ttsEngines)[number];
 
 export type TtsSettings = {
@@ -795,7 +795,7 @@ export type TtsSpeakOptions = {
 
 export type TtsSpeakResult = {
   success: boolean;
-  engineUsed: 'piper' | 'system' | 'none';
+  engineUsed: 'cloned-bea' | 'piper' | 'system' | 'none';
   message?: string;
 };
 

@@ -9,12 +9,29 @@ import type {
 } from '@rfid-attendance/shared';
 import { ATTENDANCE_TIMEZONE } from '@rfid-attendance/shared';
 import { tauriApi } from '../tauri-api';
+import {
+  getClonedBeaAudioUrl,
+  getClonedBeaNameAudioUrl,
+  playClonedBeaAudio,
+  stopClonedBeaAudio,
+} from './clonedBeaVoice';
+
+export {
+  CLONED_BEA_PHRASE_MANIFEST,
+  getClonedBeaAudioUrl,
+  getClonedBeaNameAudioUrl,
+  isClonedBeaPhraseAvailable,
+  loadNameManifest,
+  playClonedBeaAudio,
+  setNameManifest,
+  stopClonedBeaAudio,
+} from './clonedBeaVoice';
 
 const TTS_STORAGE_KEY = 'alpha_premier_tts_settings';
 
 export const DEFAULT_TTS_SETTINGS: TtsSettings = {
   enabled: true,
-  engine: 'auto',
+  engine: 'cloned-bea',
   voiceModel: 'en_US-amy-medium',
   rate: 1.0,
   volume: 1.0,
@@ -36,7 +53,7 @@ type SerializedTtsSettings = {
 };
 
 export function isTtsEngine(value?: string): value is TtsEngine {
-  return value === 'auto' || value === 'piper' || value === 'system' || value === 'disabled';
+  return value === 'auto' || value === 'cloned-bea' || value === 'piper' || value === 'system' || value === 'disabled';
 }
 
 function parseStoredTtsSettings(raw: string): TtsSettings {
@@ -145,9 +162,12 @@ export function sanitizeTextForSpeech(text: string, maxLen = 300): string {
 export type AttendancePhraseOptions = {
   attendanceType: 'time_in' | 'time_out';
   employeeName?: string | null;
+  personId?: string | null;
+  userId?: string | null;
   arrivalStatus?: ArrivalStatus | null;
   isLateTimeout?: boolean | null;
   isAssisted?: boolean;
+  isFirstTimeInToday?: boolean | null;
   timeInIso?: string | null;
   greeting?: string;
 };
@@ -199,8 +219,8 @@ function getGreetingForTime(timeIso?: string | null): string {
 /**
  * Generates the appropriate attendance announcement phrase.
  *
- * Supports grace period notes, late arrival notes, late time-out notices,
- * and admin assisted prefixing.
+ * Supports grace period notes, late arrival notes, first arrival of the day note,
+ * late time-out notices, and admin assisted prefixing.
  */
 export function buildAttendancePhrase(
   typeOrOptions: 'time_in' | 'time_out' | AttendancePhraseOptions,
@@ -221,25 +241,26 @@ export function buildAttendancePhrase(
 
   if (options.attendanceType === 'time_in') {
     const greeting = options.greeting || getGreetingForTime(options.timeInIso);
+    const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
 
     if (options.arrivalStatus === 'GRACE_PERIOD') {
       if (cleanName.length > 0) {
-        return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded. You made it within the grace period.`;
+        return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded. You made it within the grace period.${firstArrivalNote}`;
       }
-      return `Your ${assistedPrefix}time in has been recorded within the grace period.`;
+      return `Your ${assistedPrefix}time in has been recorded within the grace period.${firstArrivalNote}`;
     }
 
     if (options.arrivalStatus === 'LATE') {
       if (cleanName.length > 0) {
-        return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded. You are late.`;
+        return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
       }
-      return `Your ${assistedPrefix}time in has been recorded. You are late.`;
+      return `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
     }
 
     if (cleanName.length > 0) {
-      return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded.`;
+      return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
     }
-    return `Your ${assistedPrefix}time in has been recorded.`;
+    return `Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
   }
 
   // time_out
@@ -356,6 +377,86 @@ export async function announceAttendance(
     return null;
   }
 
+  const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
+  const isClonedBea = activeSettings.engine === 'cloned-bea';
+
+  // Hybrid Splicing: When using Ma'am Bea cloned voice and a dynamic employee/intern name is present:
+  // 1. Play pre-rendered cloned prefix carrier ("Good morning,", "Goodbye,", etc.)
+  // 2. Synthesize and speak dynamic name via local Piper engine on kiosk
+  // 3. Play pre-rendered cloned suffix carrier ("Your time in has been recorded.", etc.)
+  if (isClonedBea && cleanName.length > 0) {
+    const greeting = options.greeting || getGreetingForTime(options.timeInIso);
+    const prefixPhrase = options.attendanceType === 'time_in' ? `${greeting},` : 'Goodbye,';
+
+    const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
+    const assistedPrefix = options.isAssisted ? 'assisted ' : '';
+    let suffixPhrase: string;
+
+    if (options.attendanceType === 'time_in') {
+      if (options.arrivalStatus === 'GRACE_PERIOD') {
+        suffixPhrase = `Your ${assistedPrefix}time in has been recorded. You made it within the grace period.${firstArrivalNote}`;
+      } else if (options.arrivalStatus === 'LATE') {
+        suffixPhrase = `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
+      } else {
+        suffixPhrase = `Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
+      }
+    } else {
+      // time_out
+      if (options.isLateTimeout) {
+        suffixPhrase = `Your ${assistedPrefix}time out was recorded after office hours. Manual correction is required.`;
+      } else {
+        suffixPhrase = `Your ${assistedPrefix}time out has been recorded.`;
+      }
+    }
+
+    const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+    const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
+    const targetPersonId = options.personId || options.userId;
+    const clonedNameUrl = getClonedBeaNameAudioUrl(targetPersonId);
+
+    // If both static cloned segments are present in cache, execute sequential playback:
+    // Case A (Existing Intern with generated name file): cloned prefix -> cloned name -> cloned suffix (all Ma'am Bea)
+    // Case B (Future Intern/Employee): cloned prefix -> live Piper name -> cloned suffix (hybrid splicing)
+    if (prefixUrl && suffixUrl) {
+      try {
+        // Step 1: Play cloned greeting / prefix
+        const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+        if (prefixPlayed) {
+          let namePlayed = false;
+          // Step 2A: Play pre-rendered cloned name if available
+          if (clonedNameUrl) {
+            namePlayed = await playClonedBeaAudio(clonedNameUrl, activeSettings.volume, activeSettings.rate);
+          }
+
+          // Step 2B: If no pre-rendered name file or playback failed, synthesize name live via local Piper engine
+          if (!namePlayed) {
+            try {
+              await tauriApi.ttsSpeak(cleanName, {
+                engine: 'piper',
+                voiceModel: activeSettings.voiceModel,
+                rate: activeSettings.rate,
+                volume: activeSettings.volume,
+              });
+            } catch (piperErr) {
+              console.warn('Local Piper synthesis for dynamic name failed:', piperErr);
+            }
+          }
+
+          // Step 3: Play cloned carrier suffix segment
+          await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+
+          return {
+            success: true,
+            engineUsed: 'cloned-bea',
+          };
+        }
+      } catch (spliceErr) {
+        console.warn('Hybrid splicing failed, falling back to full Piper/SAPI synthesis:', spliceErr);
+      }
+    }
+  }
+
+  // Pure static phrase or full fallback phrase
   const phrase = buildAttendancePhrase(options);
   return speakText(phrase, {
     engine: activeSettings.engine,
@@ -367,6 +468,7 @@ export async function announceAttendance(
 
 /**
  * Non-blocking offline TTS voice announcement for bathroom key checkout and returns.
+ * When Ma'am Bea is active, plays pure static cloned audio file without splicing.
  */
 export async function announceBathroom(
   options: AnnounceBathroomOptions,
@@ -377,7 +479,13 @@ export async function announceBathroom(
     return null;
   }
 
-  const phrase = buildBathroomPhrase(options);
+  const isClonedBea = activeSettings.engine === 'cloned-bea';
+  const phrase = isClonedBea
+    ? (options.action === 'CHECKOUT'
+        ? 'Your bathroom key has been checked out. Please return it within fifteen minutes.'
+        : `${options.genderKey === 'MALE' ? 'Male' : 'Female'} bathroom key returned.`)
+    : buildBathroomPhrase(options);
+
   return speakText(phrase, {
     engine: activeSettings.engine,
     voiceModel: activeSettings.voiceModel,
@@ -388,6 +496,7 @@ export async function announceBathroom(
 
 /**
  * Non-blocking offline TTS voice announcement when an Admin Assist card is recognized.
+ * Pure static cloned carrier phrase.
  */
 export async function announceAdminAssist(
   settings?: TtsSettings,
@@ -408,6 +517,7 @@ export async function announceAdminAssist(
 
 /**
  * Non-blocking offline TTS voice announcement for scan error feedback.
+ * When Ma'am Bea is active, plays pure static cloned error file without splicing.
  */
 export async function announceScanError(
   options: AnnounceScanErrorOptions,
@@ -418,7 +528,13 @@ export async function announceScanError(
     return null;
   }
 
-  const phrase = buildScanErrorPhrase(options);
+  const isClonedBea = activeSettings.engine === 'cloned-bea';
+  const phrase = isClonedBea
+    ? (options.errorCode === 'INVALID_UID' || options.errorCode === 'UNREGISTERED_CARD'
+        ? "Sorry, that card wasn't recognized. Please try scanning again."
+        : buildScanErrorPhrase({ ...options, activeHolderName: null }))
+    : buildScanErrorPhrase(options);
+
   return speakText(phrase, {
     engine: activeSettings.engine,
     voiceModel: activeSettings.voiceModel,
@@ -428,7 +544,7 @@ export async function announceScanError(
 }
 
 /**
- * Speaks arbitrary text using local backend TTS engines (Piper / SAPI).
+ * Speaks arbitrary text using local backend TTS engines (Piper / SAPI) or cloned voice audio cache.
  */
 export async function speakText(
   text: string,
@@ -436,6 +552,56 @@ export async function speakText(
 ): Promise<TtsSpeakResult | null> {
   const sanitized = sanitizeTextForSpeech(text);
   if (!sanitized) return null;
+
+  // In Tauri desktop environment, native Tauri TTS handles playback (cloned-bea, piper, SAPI) with native Rodio audio.
+  if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
+    try {
+      return await tauriApi.ttsSpeak(sanitized, options);
+    } catch (error) {
+      console.warn('Native TTS speech synthesis failed:', error);
+      return {
+        success: false,
+        engineUsed: 'none',
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  if (options?.engine === 'cloned-bea') {
+    const cachedUrl = getClonedBeaAudioUrl(sanitized);
+    if (cachedUrl) {
+      try {
+        const played = await playClonedBeaAudio(cachedUrl, options.volume, options.rate);
+        if (played) {
+          return {
+            success: true,
+            engineUsed: 'cloned-bea',
+          };
+        }
+        console.warn(
+          `Cloned voice audio playback failed for phrase: "${sanitized}". Falling back to Piper/SAPI TTS.`,
+        );
+      } catch (audioError) {
+        console.warn('Cloned voice audio playback error, falling back to Piper/SAPI:', audioError);
+      }
+    } else {
+      console.warn(
+        `Cloned voice ("Ma'am Bea") cache miss for phrase: "${sanitized}". Falling back to Piper/SAPI TTS.`,
+      );
+    }
+
+    // Fall back gracefully to backend TTS (auto engine)
+    try {
+      return await tauriApi.ttsSpeak(sanitized, { ...options, engine: 'auto' });
+    } catch (fallbackError) {
+      console.warn('Fallback TTS speech synthesis failed:', fallbackError);
+      return {
+        success: false,
+        engineUsed: 'none',
+        message: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+      };
+    }
+  }
 
   try {
     return await tauriApi.ttsSpeak(sanitized, options);
@@ -453,6 +619,7 @@ export async function speakText(
  * Immediately stops any currently playing audio or speech process.
  */
 export async function stopSpeech(): Promise<void> {
+  stopClonedBeaAudio();
   try {
     await tauriApi.ttsStop();
   } catch (error) {

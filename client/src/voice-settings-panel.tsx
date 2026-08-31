@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { TtsSettings, TtsStatusResponse } from '@rfid-attendance/shared';
 import {
-  AVAILABLE_VOICE_MODELS,
   DEFAULT_TTS_SETTINGS,
   getTtsStatus,
-  isTtsEngine,
   loadTtsSettings,
   saveTtsSettings,
   stopSpeech,
@@ -59,11 +57,13 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
 
     if (result && result.success) {
       const engineLabel =
-        result.engineUsed === 'piper'
-          ? 'Piper (local neural voice)'
-          : result.engineUsed === 'system'
-            ? 'Windows SAPI (system voice)'
-            : 'No voice played';
+        result.engineUsed === 'cloned-bea'
+          ? "Ma'am Bea (Cloned voice)"
+          : result.engineUsed === 'piper'
+            ? 'Piper (local neural voice)'
+            : result.engineUsed === 'system'
+              ? 'Windows SAPI (system voice)'
+              : 'No voice played';
       setFeedback(`Voice played successfully via ${engineLabel}.`);
       setFeedbackType('success');
     } else {
@@ -82,7 +82,6 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
   };
 
   const isTtsDisabled = !settings.enabled || settings.engine === 'disabled';
-  const isPiperSelected = settings.engine === 'auto' || settings.engine === 'piper';
 
   return (
     <section className="lan-panel" aria-label="Voice Announcements">
@@ -94,57 +93,49 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         {status && (
           <span
             className={`lan-state ${
-              status.piperAvailable
+              settings.engine === 'cloned-bea' || status.piperAvailable
                 ? 'lan-state-running'
                 : status.systemSapiAvailable
                   ? 'lan-state-starting'
                   : 'lan-state-disabled'
             }`}
             title={
-              status.piperAvailable
-                ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
-                : status.systemSapiAvailable
-                  ? 'Windows SAPI system voice active'
-                  : 'No offline TTS engine detected'
+              settings.engine === 'cloned-bea'
+                ? "Ma'am Bea cloned voice active (pre-rendered phrases + neural fallback)"
+                : status.piperAvailable
+                  ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
+                  : status.systemSapiAvailable
+                    ? 'Windows SAPI system voice active'
+                    : 'No offline TTS engine detected'
             }
           >
             <i />
-            {status.piperAvailable
-              ? 'Piper TTS Ready'
-              : status.systemSapiAvailable
-                ? 'SAPI Ready'
-                : 'Offline TTS Unavailable'}
+            {settings.engine === 'cloned-bea'
+              ? "Ma'am Bea Ready"
+              : status.piperAvailable
+                ? 'Piper TTS Ready'
+                : status.systemSapiAvailable
+                  ? 'SAPI Ready'
+                  : 'Offline TTS Unavailable'}
           </span>
         )}
       </div>
 
       <div className="lan-facts db-facts">
         <span>
-          TTS Engine{' '}
+          Voice{' '}
           <strong>
             {!settings.enabled
               ? 'Disabled'
-              : settings.engine === 'auto'
-                ? 'Auto (Neural / SAPI)'
-                : settings.engine === 'piper'
-                  ? 'Piper (Neural)'
-                  : 'Windows SAPI'}
+              : "Ma'am Bea (Hybrid Cloned Voice)"}
           </strong>
         </span>
         <span>
-          Engine Status{' '}
+          Status{' '}
           <strong>
-            {status?.piperAvailable
-              ? 'Piper Active (Local)'
-              : status?.systemSapiAvailable
-                ? 'Windows SAPI Fallback'
-                : 'Unavailable'}
-          </strong>
-        </span>
-        <span>
-          Voice Model{' '}
-          <strong>
-            {AVAILABLE_VOICE_MODELS.find((m) => m.id === settings.voiceModel)?.label.split(' ')[0] ?? 'Amy'}
+            {!settings.enabled
+              ? 'Disabled'
+              : 'Ready (Local Offline)'}
           </strong>
         </span>
         <span>
@@ -178,60 +169,6 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           </label>
           <p className="form-help">
             When enabled, attendance scans greet employees on time-in and say goodbye on time-out.
-          </p>
-        </div>
-
-        {/* TTS Engine Selector Card */}
-        <div className={`voice-control-card ${!settings.enabled ? 'is-disabled' : ''}`}>
-          <div className="voice-control-header">
-            <label htmlFor="tts-engine-select" className="voice-control-label">
-              TTS Engine
-            </label>
-          </div>
-          <select
-            id="tts-engine-select"
-            className="voice-select"
-            value={settings.engine}
-            disabled={!settings.enabled}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (isTtsEngine(val)) {
-                updateSetting('engine', val);
-              }
-            }}
-          >
-            <option value="auto">Auto (Piper, then system fallback)</option>
-            <option value="piper">Piper (Bundled Neural Voice)</option>
-            <option value="system">System Voice (Windows SAPI)</option>
-            <option value="disabled">Disabled</option>
-          </select>
-          <p className="form-help">
-            Auto tries high-quality Piper first, falling back smoothly to Windows SAPI if unavailable.
-          </p>
-        </div>
-
-        {/* Piper Voice Model Selector Card */}
-        <div className={`voice-control-card ${isTtsDisabled || !isPiperSelected ? 'is-disabled' : ''}`}>
-          <div className="voice-control-header">
-            <label htmlFor="tts-model-select" className="voice-control-label">
-              Piper Voice Model
-            </label>
-          </div>
-          <select
-            id="tts-model-select"
-            className="voice-select"
-            value={settings.voiceModel}
-            disabled={isTtsDisabled || !isPiperSelected}
-            onChange={(e) => updateSetting('voiceModel', e.target.value)}
-          >
-            {AVAILABLE_VOICE_MODELS.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </select>
-          <p className="form-help">
-            Lightweight neural models designed for responsive, natural office voice playback.
           </p>
         </div>
 
@@ -319,7 +256,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           <strong>Zero-cloud, offline speech synthesis:</strong>
         </p>
         <p>
-          Runs 100% locally with high-quality Piper neural voices (ONNX) and Windows SAPI fallback.
+          Runs 100% locally with Ma&apos;am Bea cloned voice (multi-tone pre-rendered clips) and high-quality Piper neural voices (ONNX) with Windows SAPI fallback.
           Spoken greetings are triggered immediately on successful RFID card scans with zero internet latency.
         </p>
       </div>

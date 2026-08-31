@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as clonedBeaVoice from './clonedBeaVoice';
 import {
   DEFAULT_TTS_SETTINGS,
   announceAdminAssist,
@@ -8,10 +9,15 @@ import {
   buildAttendancePhrase,
   buildBathroomPhrase,
   buildScanErrorPhrase,
+  getClonedBeaAudioUrl,
   getTtsStatus,
+  isClonedBeaPhraseAvailable,
+  isTtsEngine,
   loadTtsSettings,
   sanitizeTextForSpeech,
   saveTtsSettings,
+  setNameManifest,
+  speakText,
   stopSpeech,
   testVoice,
 } from './ttsService';
@@ -34,6 +40,35 @@ describe('ttsService', () => {
       expect(buildAttendancePhrase('time_out', 'Grace Hopper')).toBe(
         'Goodbye, Grace Hopper. Your time out has been recorded.',
       );
+    });
+
+    it('builds first arrival of the day time-in phrases', () => {
+      expect(
+        buildAttendancePhrase({
+          attendanceType: 'time_in',
+          employeeName: 'Ada Lovelace',
+          isFirstTimeInToday: true,
+        }),
+      ).toBe(
+        'Good morning, Ada Lovelace. Your time in has been recorded. You are the first arrival today.',
+      );
+
+      expect(
+        buildAttendancePhrase({
+          attendanceType: 'time_in',
+          employeeName: null,
+          isFirstTimeInToday: true,
+        }),
+      ).toBe('Your time in has been recorded. You are the first arrival today.');
+
+      expect(
+        buildAttendancePhrase({
+          attendanceType: 'time_in',
+          employeeName: null,
+          isAssisted: true,
+          isFirstTimeInToday: true,
+        }),
+      ).toBe('Your assisted time in has been recorded. You are the first arrival today.');
     });
 
     it('builds grace period time-in phrase noting outlier', () => {
@@ -371,7 +406,7 @@ describe('ttsService', () => {
   });
 
   describe('announceAttendance', () => {
-    it('triggers speech when TTS is enabled', async () => {
+    it('triggers speech when TTS is enabled with Piper', async () => {
       const spy = vi
         .spyOn(tauriApi, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'piper' });
@@ -381,7 +416,7 @@ describe('ttsService', () => {
         attendanceType: 'time_in',
         settings: {
           enabled: true,
-          engine: 'auto',
+          engine: 'piper',
           voiceModel: 'en_US-lessac-medium',
           rate: 1.0,
           volume: 1.0,
@@ -391,13 +426,76 @@ describe('ttsService', () => {
       expect(spy).toHaveBeenCalledWith(
         'Good morning, Ada Lovelace. Your time in has been recorded.',
         {
-          engine: 'auto',
+          engine: 'piper',
           voiceModel: 'en_US-lessac-medium',
           rate: 1.0,
           volume: 1.0,
         },
       );
       expect(result?.success).toBe(true);
+    });
+
+    it('performs hybrid splicing: static cloned prefix + dynamic Piper name + static cloned suffix', async () => {
+      const callOrder: string[] = [];
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockImplementation(async (url) => {
+        callOrder.push(`cloned:${url}`);
+        return true;
+      });
+      const ttsSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockImplementation(async (text, opts) => {
+        callOrder.push(`piper:${text}:${opts?.engine ?? 'default'}`);
+        return { success: true, engineUsed: 'piper' };
+      });
+
+      const result = await announceAttendance({
+        employeeName: 'Ada Lovelace',
+        attendanceType: 'time_in',
+        greeting: 'Good morning',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledTimes(2);
+      expect(ttsSpy).toHaveBeenCalledWith(
+        'Ada Lovelace',
+        expect.objectContaining({ engine: 'piper' }),
+      );
+      expect(callOrder).toEqual([
+        'cloned:/voices/bea/attendance/good-morning.wav',
+        'piper:Ada Lovelace:piper',
+        'cloned:/voices/bea/attendance/time-in-standard.wav',
+      ]);
+      expect(result?.success).toBe(true);
+      expect(result?.engineUsed).toBe('cloned-bea');
+    });
+
+    it('plays pure static cloned file directly when no employee name is present', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const ttsSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceAttendance({
+        attendanceType: 'time_in',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/attendance/time-in-standard.wav',
+        1.0,
+        1.0,
+      );
+      expect(ttsSpy).not.toHaveBeenCalled();
+      expect(result?.success).toBe(true);
+      expect(result?.engineUsed).toBe('cloned-bea');
     });
 
     it('does not speak when TTS is disabled', async () => {
@@ -427,6 +525,13 @@ describe('ttsService', () => {
       const result = await announceAttendance({
         employeeName: 'Ada Lovelace',
         attendanceType: 'time_in',
+        settings: {
+          enabled: true,
+          engine: 'piper',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
       });
 
       expect(result).toEqual({
@@ -438,7 +543,33 @@ describe('ttsService', () => {
   });
 
   describe('announceBathroom', () => {
-    it('triggers speech with bathroom phrase when enabled', async () => {
+    it('plays single pre-rendered cloned file directly for bathroom checkout when cloned-bea is active', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceBathroom({
+        action: 'CHECKOUT',
+        genderKey: 'MALE',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/bathroom/bathroom-key-checked-out-15min.wav',
+        1.0,
+        1.0,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result?.success).toBe(true);
+      expect(result?.engineUsed).toBe('cloned-bea');
+    });
+
+    it('triggers speech with bathroom phrase when enabled with Piper', async () => {
       const spy = vi
         .spyOn(tauriApi, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'piper' });
@@ -447,6 +578,13 @@ describe('ttsService', () => {
         action: 'CHECKOUT',
         genderKey: 'MALE',
         employeeName: 'John Doe',
+        settings: {
+          enabled: true,
+          engine: 'piper',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
       });
 
       expect(spy).toHaveBeenCalledWith(
@@ -479,21 +617,40 @@ describe('ttsService', () => {
 
   describe('announceAdminAssist', () => {
     it('speaks admin assist recognition phrase when enabled', async () => {
-      const spy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
-        .mockResolvedValue({ success: true, engineUsed: 'piper' });
-
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
       const result = await announceAdminAssist();
-      expect(spy).toHaveBeenCalledWith(
-        'Admin assist card recognized. Please select an employee.',
-        expect.any(Object),
-      );
       expect(result?.success).toBe(true);
+      expect(result?.engineUsed).toBe('cloned-bea');
     });
   });
 
   describe('announceScanError', () => {
-    it('speaks scan error phrase when enabled', async () => {
+    it('plays single pre-rendered cloned file directly for scan errors when cloned-bea is active', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceScanError({
+        errorCode: 'UNREGISTERED_CARD',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/scan-error/sorry-card-not-recognized.wav',
+        1.0,
+        1.0,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result?.success).toBe(true);
+      expect(result?.engineUsed).toBe('cloned-bea');
+    });
+
+    it('speaks scan error phrase when enabled with Piper', async () => {
       const spy = vi
         .spyOn(tauriApi, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'system' });
@@ -502,6 +659,13 @@ describe('ttsService', () => {
         errorCode: 'BATHROOM_KEY_IN_USE',
         activeHolderName: 'John Doe',
         genderKey: 'MALE',
+        settings: {
+          enabled: true,
+          engine: 'piper',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
       });
 
       expect(spy).toHaveBeenCalledWith(
@@ -547,6 +711,344 @@ describe('ttsService', () => {
       const status = await getTtsStatus();
       expect(status?.piperAvailable).toBe(true);
       expect(status?.systemSapiAvailable).toBe(true);
+    });
+  });
+
+  describe('cloned-bea engine', () => {
+    it('recognizes cloned-bea as valid TtsEngine', () => {
+      expect(isTtsEngine('cloned-bea')).toBe(true);
+      expect(isTtsEngine('invalid-engine')).toBe(false);
+    });
+
+    it('resolves pre-rendered phrases and rejects uncached dynamic phrases', () => {
+      expect(isClonedBeaPhraseAvailable('Your time in has been recorded.')).toBe(true);
+      expect(getClonedBeaAudioUrl('Your time in has been recorded.')).toBe(
+        '/voices/bea/attendance/time-in-standard.wav',
+      );
+      expect(isClonedBeaPhraseAvailable('Good morning, Ada Lovelace. Your time in has been recorded.')).toBe(
+        false,
+      );
+      expect(getClonedBeaAudioUrl('Good morning, Ada Lovelace. Your time in has been recorded.')).toBeNull();
+    });
+
+    it('plays pre-rendered attendance audio directly when cloned-bea is selected', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: null,
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 0.9,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/attendance/time-in-standard.wav',
+        0.9,
+        1.0,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('plays pre-rendered bathroom audio directly when cloned-bea is selected', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceBathroom({
+        action: 'CHECKOUT',
+        genderKey: 'MALE',
+        employeeName: null,
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.1,
+          volume: 0.8,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/bathroom/bathroom-key-checked-out-15min.wav',
+        0.8,
+        1.1,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('plays pre-rendered admin assist audio directly when cloned-bea is selected', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceAdminAssist({
+        enabled: true,
+        engine: 'cloned-bea',
+        voiceModel: 'en_US-amy-medium',
+        rate: 1.0,
+        volume: 1.0,
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/admin-assist/admin-assist-prompt.wav',
+        1.0,
+        1.0,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('plays pre-rendered scan error audio directly when cloned-bea is selected', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceScanError({
+        errorCode: 'UNKNOWN_RFID_CARD',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/scan-error/card-not-registered.wav',
+        1.0,
+        1.0,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('plays pre-rendered test voice audio directly when cloned-bea is selected', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await testVoice({
+        enabled: true,
+        engine: 'cloned-bea',
+        voiceModel: 'en_US-amy-medium',
+        rate: 1.0,
+        volume: 1.0,
+      });
+
+      expect(playSpy).toHaveBeenCalledWith(
+        '/voices/bea/general/test-voice.wav',
+        1.0,
+        1.0,
+      );
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('falls back gracefully to backend Piper/SAPI when phrase contains dynamic text', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio');
+      const backendSpy = vi
+        .spyOn(tauriApi, 'ttsSpeak')
+        .mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      const result = await speakText('Custom non-cached employee announcement for Ada Lovelace.', {
+        engine: 'cloned-bea',
+        voiceModel: 'en_US-amy-medium',
+        rate: 1.0,
+        volume: 1.0,
+      });
+
+      expect(playSpy).not.toHaveBeenCalled();
+      expect(backendSpy).toHaveBeenCalledWith(
+        'Custom non-cached employee announcement for Ada Lovelace.',
+        expect.objectContaining({ engine: 'auto' }),
+      );
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'piper',
+      });
+    });
+
+    it('falls back gracefully to backend Piper/SAPI when audio playback fails', async () => {
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(false);
+      const backendSpy = vi
+        .spyOn(tauriApi, 'ttsSpeak')
+        .mockResolvedValue({ success: true, engineUsed: 'system' });
+
+      const result = await speakText('Your time in has been recorded.', {
+        engine: 'cloned-bea',
+        volume: 1.0,
+        rate: 1.0,
+      });
+
+      expect(backendSpy).toHaveBeenCalledWith(
+        'Your time in has been recorded.',
+        expect.objectContaining({ engine: 'auto' }),
+      );
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'system',
+      });
+    });
+
+    it('falls back gracefully when playClonedBeaAudio throws an unexpected error', async () => {
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockRejectedValue(
+        new Error('MediaDecodeError'),
+      );
+      const backendSpy = vi
+        .spyOn(tauriApi, 'ttsSpeak')
+        .mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      const result = await speakText('Your time in has been recorded.', {
+        engine: 'cloned-bea',
+        volume: 1.0,
+        rate: 1.0,
+      });
+
+      expect(backendSpy).toHaveBeenCalledWith(
+        'Your time in has been recorded.',
+        expect.objectContaining({ engine: 'auto' }),
+      );
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'piper',
+      });
+    });
+
+    it('plays cloned prefix -> cloned name -> cloned suffix for existing intern in manifest', async () => {
+      setNameManifest({
+        usr_intern_123: { audioFile: '/voices/bea/names/usr_intern_123.wav' },
+      });
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Maria Santos',
+        personId: 'usr_intern_123',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledTimes(3);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/attendance/good-morning.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/usr_intern_123.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/attendance/time-in-standard.wav', 1.0, 1.0);
+      expect(piperSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('plays cloned prefix -> live Piper name -> cloned suffix for future registrations without cached name', async () => {
+      setNameManifest(null);
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      const result = await announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'New Intern',
+        personId: 'usr_new_999',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledTimes(2);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/attendance/good-morning.wav', 1.0, 1.0);
+      expect(piperSpy).toHaveBeenCalledWith('New Intern', expect.objectContaining({ engine: 'piper' }));
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/attendance/time-in-standard.wav', 1.0, 1.0);
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('falls back to Piper dynamic name when cached name file fails to play', async () => {
+      setNameManifest({
+        usr_intern_broken: { audioFile: '/voices/bea/names/corrupted.wav' },
+      });
+      const playSpy = vi
+        .spyOn(clonedBeaVoice, 'playClonedBeaAudio')
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      const result = await announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Maria Santos',
+        personId: 'usr_intern_broken',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledTimes(3);
+      expect(piperSpy).toHaveBeenCalledWith('Maria Santos', expect.objectContaining({ engine: 'piper' }));
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('handles backend failure on fallback without throwing', async () => {
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(false);
+      vi.spyOn(tauriApi, 'ttsSpeak').mockRejectedValue(new Error('Audio device offline'));
+
+      const result = await speakText('Your time in has been recorded.', {
+        engine: 'cloned-bea',
+        volume: 1.0,
+        rate: 1.0,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        engineUsed: 'none',
+        message: 'Audio device offline',
+      });
+    });
+
+    it('stops active cloned voice playback when stopSpeech is called', async () => {
+      const stopClonedSpy = vi.spyOn(clonedBeaVoice, 'stopClonedBeaAudio');
+      const stopBackendSpy = vi.spyOn(tauriApi, 'ttsStop').mockResolvedValue();
+
+      await stopSpeech();
+
+      expect(stopClonedSpy).toHaveBeenCalled();
+      expect(stopBackendSpy).toHaveBeenCalled();
     });
   });
 });

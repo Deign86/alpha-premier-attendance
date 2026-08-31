@@ -25,18 +25,16 @@ describe('VoiceSettingsPanel', () => {
     });
     expect(screen.getByRole('heading', { name: 'Voice Announcements' })).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable Voice Announcements/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/TTS Engine/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Piper Voice Model/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Speech Rate/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Volume/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Test Voice' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 
-  it('triggers test voice on click', async () => {
+  it('triggers test voice on click and displays feedback', async () => {
     const testSpy = vi.spyOn(ttsService, 'testVoice').mockResolvedValue({
       success: true,
-      engineUsed: 'piper',
+      engineUsed: 'cloned-bea',
     });
 
     await act(async () => {
@@ -49,7 +47,9 @@ describe('VoiceSettingsPanel', () => {
     });
 
     expect(testSpy).toHaveBeenCalled();
-    expect(await screen.findByText(/Voice played successfully via Piper/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Voice played successfully via Ma'am Bea \(Cloned voice\)/i),
+    ).toBeInTheDocument();
   });
 
   it('disables controls when voice announcements are unchecked', async () => {
@@ -62,7 +62,8 @@ describe('VoiceSettingsPanel', () => {
       fireEvent.click(toggle);
     });
 
-    expect(screen.getByLabelText(/TTS Engine/i)).toBeDisabled();
+    expect(screen.getByLabelText(/Speech Rate/i)).toBeDisabled();
+    expect(screen.getByLabelText(/Volume/i)).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Test Voice' })).toBeDisabled();
   });
 
@@ -80,6 +81,17 @@ describe('VoiceSettingsPanel', () => {
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
         rate: 1.4,
+      }),
+    );
+
+    const volumeSlider = screen.getByLabelText(/Volume/i);
+    await act(async () => {
+      fireEvent.change(volumeSlider, { target: { value: '0.8' } });
+    });
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        volume: 0.8,
       }),
     );
   });

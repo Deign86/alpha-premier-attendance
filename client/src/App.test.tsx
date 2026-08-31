@@ -263,10 +263,13 @@ describe('RFID kiosk', () => {
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
+      personId: 'u-1',
+      userId: 'u-1',
       attendanceType: 'time_in',
       arrivalStatus: 'ON_TIME',
       isLateTimeout: false,
       isAssisted: false,
+      isFirstTimeInToday: true,
       timeInIso: '2026-07-28T08:00:00+08:00',
     });
   });
@@ -287,10 +290,13 @@ describe('RFID kiosk', () => {
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
+      personId: 'u-1',
+      userId: 'u-1',
       attendanceType: 'time_in',
       arrivalStatus: 'GRACE_PERIOD',
       isLateTimeout: false,
       isAssisted: false,
+      isFirstTimeInToday: true,
       timeInIso: '2026-07-28T08:08:00+08:00',
     });
   });
@@ -311,10 +317,13 @@ describe('RFID kiosk', () => {
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
+      personId: 'u-1',
+      userId: 'u-1',
       attendanceType: 'time_in',
       arrivalStatus: 'LATE',
       isLateTimeout: false,
       isAssisted: false,
+      isFirstTimeInToday: true,
       timeInIso: '2026-07-28T08:30:00+08:00',
     });
   });
@@ -331,10 +340,13 @@ describe('RFID kiosk', () => {
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
+      personId: 'u-1',
+      userId: 'u-1',
       attendanceType: 'time_out',
       arrivalStatus: undefined,
       isLateTimeout: false,
       isAssisted: false,
+      isFirstTimeInToday: undefined,
       timeInIso: '2026-07-28T09:00:00+08:00',
     });
   });
@@ -351,10 +363,13 @@ describe('RFID kiosk', () => {
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
+      personId: 'u-1',
+      userId: 'u-1',
       attendanceType: 'time_out',
       arrivalStatus: undefined,
       isLateTimeout: true,
       isAssisted: false,
+      isFirstTimeInToday: undefined,
       timeInIso: '2026-07-28T09:00:00+08:00',
     });
   });

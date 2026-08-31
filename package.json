@@ -2,7 +2,7 @@
   "name": "rfid-time-in-out",
   "private": true,
   "type": "module",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "workspaces": [
     "client",
     "server",
@@ -23,7 +23,10 @@
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "migrate:from-sheets": "cargo run --manifest-path src-tauri/Cargo.toml --bin migrate_from_sheets --",
     "doctor:mcp": "node scripts/doctor-tauri-mcp.mjs",
-    "verify:mcp": "node scripts/verify-tauri-mcp.mjs"
+    "verify:mcp": "node scripts/verify-tauri-mcp.mjs",
+    "generate:voices": "python scripts/generate_cloned_voices.py",
+    "voice:generate-existing-names": "npx tsx scripts/generate_existing_intern_names.ts",
+    "voice:generate-existing-intern-names": "npx tsx scripts/generate_existing_intern_names.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

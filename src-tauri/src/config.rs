@@ -206,7 +206,7 @@ fn default_tts_enabled() -> bool {
     true
 }
 fn default_tts_engine() -> String {
-    "auto".into()
+    "cloned-bea".into()
 }
 fn default_tts_rate() -> f32 {
     1.0

@@ -1,0 +1,258 @@
+{
+  "version": "1.0.0",
+  "voice": "bea",
+  "engine": "voicebox-qwen-1.7B-cuda-cloned",
+  "generatedAt": "2026-08-31T05:36:01.746Z",
+  "profiles": {
+    "APG-2026-019": {
+      "personId": "APG-2026-019",
+      "displayName": "Beatriz Conos",
+      "normalizedSpeechText": "Beatriz Conos",
+      "employeeType": "EMPLOYEE",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-019.wav",
+      "generatedAt": "2026-08-31T05:21:32Z",
+      "audioHash": "14b6b19601f02fe050588b5d07e036832f3c9c1cc945e5c46d0eac5ddc6ed469"
+    },
+    "APG-2026-113": {
+      "personId": "APG-2026-113",
+      "displayName": "Ar-jee Felizarte",
+      "normalizedSpeechText": "Arjee Felizarte",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-113.wav",
+      "generatedAt": "2026-08-31T05:21:46Z",
+      "audioHash": "5649a878b319abb0b4748d4f8ae0862fac2ead65ee49f7c65ec2cdd4718d24b3"
+    },
+    "APG-2026-110": {
+      "personId": "APG-2026-110",
+      "displayName": "Bianca Marie Antoy",
+      "normalizedSpeechText": "Bianca Marie Antoy",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-110.wav",
+      "generatedAt": "2026-08-31T05:22:12Z",
+      "audioHash": "ccd9e1cb4abeb8b9d178e44a84a8c9da3f160ad1413afc1b8a32a578c9a544ea"
+    },
+    "APG-2026-102": {
+      "personId": "APG-2026-102",
+      "displayName": "Deign Grey O. Lazaro",
+      "normalizedSpeechText": "Deign Grey Lazaro",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-102.wav",
+      "generatedAt": "2026-08-31T05:22:28Z",
+      "audioHash": "f5c79836c52be8b9155085f462b5b6e1e1031f4cb6a19c4b83b984dbdd8c548f"
+    },
+    "APG-2026-109": {
+      "personId": "APG-2026-109",
+      "displayName": "Elaizah Jane Altiche",
+      "normalizedSpeechText": "Elaizah Jane Altiche",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-109.wav",
+      "generatedAt": "2026-08-31T05:22:48Z",
+      "audioHash": "b2ed31ad5a4e7a35418beea00677679a8feccaadfe6e05641d27b1e60d63800b"
+    },
+    "APG-2026-095": {
+      "personId": "APG-2026-095",
+      "displayName": "Jannela Pasacay",
+      "normalizedSpeechText": "Jannela Pasacay",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-095.wav",
+      "generatedAt": "2026-08-31T05:23:02Z",
+      "audioHash": "5bb4796fb4def52449ca4a97b29937866f9b81f40f427bd6eeea3c09cf34a45d"
+    },
+    "APG-2026-099": {
+      "personId": "APG-2026-099",
+      "displayName": "Jeremy Bugarin",
+      "normalizedSpeechText": "Jeremy Bugarin",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-099.wav",
+      "generatedAt": "2026-08-31T05:23:16Z",
+      "audioHash": "e2a7db370389ffd257a75dd94780144bf4652137a63906a1924c968a05f48fd2"
+    },
+    "APG-2026-112": {
+      "personId": "APG-2026-112",
+      "displayName": "John Frederick Ruiz",
+      "normalizedSpeechText": "John Frederick Ruiz",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-112.wav",
+      "generatedAt": "2026-08-31T05:23:35Z",
+      "audioHash": "cf2753df3b9dfa2a442e051f130ca2d3532a98c22c3b20423e3bfd4405ad97b3"
+    },
+    "APG-2026-092": {
+      "personId": "APG-2026-092",
+      "displayName": "Joseph Amandy",
+      "normalizedSpeechText": "Joseph Amandy",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-092.wav",
+      "generatedAt": "2026-08-31T05:23:49Z",
+      "audioHash": "3c8663755b734947a26578130fa4968584c4d43a60aaa4f12113126cc9845946"
+    },
+    "APG-2026-101": {
+      "personId": "APG-2026-101",
+      "displayName": "Khemuel Rosh Timkang",
+      "normalizedSpeechText": "Khemuel Rosh Timkang",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-101.wav",
+      "generatedAt": "2026-08-31T05:24:05Z",
+      "audioHash": "cd146e6f64763ebdc47bf24fb8e4d66cc88e68d253c9a44141d458d1ff5d9bd5"
+    },
+    "APG-2026-104": {
+      "personId": "APG-2026-104",
+      "displayName": "Kizziah Ishi De Guerto",
+      "normalizedSpeechText": "Kizziah Ishi De Guerto",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-104.wav",
+      "generatedAt": "2026-08-31T05:24:23Z",
+      "audioHash": "b3fc8a994adf955cf5e7914d984e38f6139bfa3a8ce7d7d60d6833a9c3a0e503"
+    },
+    "APG-2026-098": {
+      "personId": "APG-2026-098",
+      "displayName": "Kurt Lawrenz De Leon",
+      "normalizedSpeechText": "Kurt Lawrenz De Leon",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-098.wav",
+      "generatedAt": "2026-08-31T05:24:41Z",
+      "audioHash": "6524b0b21b0b4a72a6c0a58156163c3cdf6d3aba1d65f6ff2ec4c4c0573e72df"
+    },
+    "APG-2026-100": {
+      "personId": "APG-2026-100",
+      "displayName": "Kylle Ricio",
+      "normalizedSpeechText": "Kylle Ricio",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-100.wav",
+      "generatedAt": "2026-08-31T05:25:05Z",
+      "audioHash": "55e3870a1953f27a593bcc4b38a34937ed5083b0e72d355099825b82ccf1a203"
+    },
+    "APG-2026-103": {
+      "personId": "APG-2026-103",
+      "displayName": "Lorraine Isabel Cabigon",
+      "normalizedSpeechText": "Lorraine Isabel Cabigon",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-103.wav",
+      "generatedAt": "2026-08-31T05:25:25Z",
+      "audioHash": "2af8e4ba85050d315713f2c4b5e9adc1d9f9aa9e19b5254605874aa3a8a2f2e7"
+    },
+    "APG-2026-111": {
+      "personId": "APG-2026-111",
+      "displayName": "Ma. Ellaine Zapico",
+      "normalizedSpeechText": "Maria Ellaine Zapico",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-111.wav",
+      "generatedAt": "2026-08-31T05:25:43Z",
+      "audioHash": "c5432ca87aea0f4ce3715a621c46af1832a18135819ba77c1dba2d531e5fcb50"
+    },
+    "APG-2026-107": {
+      "personId": "APG-2026-107",
+      "displayName": "Margaux Zyann Delaog",
+      "normalizedSpeechText": "Margaux Zyann Delaog",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-107.wav",
+      "generatedAt": "2026-08-31T05:26:10Z",
+      "audioHash": "167d12f7c05466c9700eb5fa89a6c3405b7233dde82772aa74a028ac0d7c910b"
+    },
+    "APG-2026-097": {
+      "personId": "APG-2026-097",
+      "displayName": "Mary Antonette Yaguel",
+      "normalizedSpeechText": "Mary Antonette Yaguel",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-097.wav",
+      "generatedAt": "2026-08-31T05:26:26Z",
+      "audioHash": "17f585ea35cee82857e91181804d6c69c8ba0b379dffd10ebd70c560dd06a26c"
+    },
+    "APG-2026-106": {
+      "personId": "APG-2026-106",
+      "displayName": "Mitchi Hashidate",
+      "normalizedSpeechText": "Mitchi Hashidate",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-106.wav",
+      "generatedAt": "2026-08-31T05:26:42Z",
+      "audioHash": "24249617e6f91c10d6303d939557a4988d6090a7e40d04a45281f3ce7667b165"
+    },
+    "APG-2026-105": {
+      "personId": "APG-2026-105",
+      "displayName": "Narciso Lontoc",
+      "normalizedSpeechText": "Narciso Lontoc",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-105.wav",
+      "generatedAt": "2026-08-31T05:26:58Z",
+      "audioHash": "95e6ea82f771fe9b86d067b1a04c346949f950c8c133ea15a5bf2380cbe61ae7"
+    },
+    "APG-2026-114": {
+      "personId": "APG-2026-114",
+      "displayName": "Noeme P. Diola",
+      "normalizedSpeechText": "Noeme Diola",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-114.wav",
+      "generatedAt": "2026-08-31T05:27:14Z",
+      "audioHash": "ab7214bbd5bff94fd9aff14c8e7d79be40e34aca79e6844fbc1c3f0ca6eebc7c"
+    },
+    "APG-2026-108": {
+      "personId": "APG-2026-108",
+      "displayName": "Raineer C. Rosado",
+      "normalizedSpeechText": "Raineer Rosado",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-108.wav",
+      "generatedAt": "2026-08-31T05:27:36Z",
+      "audioHash": "ef0becb4627f24f45ba13f35c4d4a33a774a3d105ba18a41eb24bc42a12f2fbb"
+    },
+    "APG-2026-094": {
+      "personId": "APG-2026-094",
+      "displayName": "Rona Khristelle Angelique Pacada",
+      "normalizedSpeechText": "Rona Khristelle Angelique Pacada",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-094.wav",
+      "generatedAt": "2026-08-31T05:28:03Z",
+      "audioHash": "74519fe370587727e84ead339a01d2f03173fd90fd5404763aebc87d334a804d"
+    },
+    "USR_INT_001": {
+      "personId": "USR_INT_001",
+      "displayName": "Maria Santos",
+      "normalizedSpeechText": "Maria Santos",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/USR_INT_001.wav",
+      "generatedAt": "2026-08-31T05:36:01.746Z",
+      "audioHash": "dry-run-hash"
+    },
+    "USR_INT_002": {
+      "personId": "USR_INT_002",
+      "displayName": "JUAN DELA CRUZ",
+      "normalizedSpeechText": "Juan Dela Cruz",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/USR_INT_002.wav",
+      "generatedAt": "2026-08-31T05:36:01.742Z",
+      "audioHash": "dry-run-hash"
+    },
+    "USR_EMP_001": {
+      "personId": "USR_EMP_001",
+      "displayName": "Ada Lovelace",
+      "normalizedSpeechText": "Ada Lovelace",
+      "employeeType": "EMPLOYEE",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/USR_EMP_001.wav",
+      "generatedAt": "2026-08-31T05:36:01.746Z",
+      "audioHash": "dry-run-hash"
+    }
+  }
+}

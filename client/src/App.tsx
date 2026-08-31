@@ -123,6 +123,7 @@ import {
   announceAttendance,
   announceBathroom,
   announceScanError,
+  loadNameManifest,
 } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
@@ -246,6 +247,7 @@ export default function App() {
   const [bathroomStatus, setBathroomStatus] = useState<BathroomStatusResponse | null>(null);
   const [bathroomScanResult, setBathroomScanResult] = useState<BathroomScanResponse | null>(null);
   const bathroomResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstTimeInDateRef = useRef<string | null>(null);
 
   const fetchBathroomStatus = useCallback(async () => {
     try {
@@ -266,6 +268,7 @@ export default function App() {
   useEffect(() => {
     const controller = new AbortController();
     void loadConfig(controller.signal).then(setConfig);
+    void loadNameManifest();
     return () => controller.abort();
   }, []);
 
@@ -631,12 +634,20 @@ export default function App() {
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
           ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
           : undefined;
+        const currentDate = response.attendance.attendanceDate || (response.attendance.timeIn ? response.attendance.timeIn.slice(0, 10) : "");
+        const isFirstTimeInToday = response.action === "TIME_IN" && currentDate.length > 0 && firstTimeInDateRef.current !== currentDate;
+        if (isFirstTimeInToday) {
+          firstTimeInDateRef.current = currentDate;
+        }
         void announceAttendance({
           employeeName: response.user.fullName,
+          personId: response.user.userId,
+          userId: response.user.userId,
           attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
           arrivalStatus: arrival,
           isLateTimeout: isLate,
           isAssisted: response.attendance.source === "ADMIN_ASSISTED_SCAN",
+          isFirstTimeInToday: response.action === "TIME_IN" ? isFirstTimeInToday : undefined,
           timeInIso: response.attendance.timeIn,
         });
       } else {
@@ -672,12 +683,20 @@ export default function App() {
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
           ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
           : undefined;
+        const currentDate = response.attendance.attendanceDate || (response.attendance.timeIn ? response.attendance.timeIn.slice(0, 10) : "");
+        const isFirstTimeInToday = response.action === "TIME_IN" && currentDate.length > 0 && firstTimeInDateRef.current !== currentDate;
+        if (isFirstTimeInToday) {
+          firstTimeInDateRef.current = currentDate;
+        }
         void announceAttendance({
           employeeName: response.user.fullName,
+          personId: response.user.userId,
+          userId: response.user.userId,
           attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
           arrivalStatus: arrival,
           isLateTimeout: isLate,
           isAssisted: true,
+          isFirstTimeInToday: response.action === "TIME_IN" ? isFirstTimeInToday : undefined,
           timeInIso: response.attendance.timeIn,
         });
         if (resetTimer.current) clearTimeout(resetTimer.current);

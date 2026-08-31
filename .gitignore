@@ -2,6 +2,8 @@ node_modules/
 dist/
 coverage/
 .vite/
+__pycache__/
+*.pyc
 *.log
 server/.env
 client/.env
@@ -31,3 +33,9 @@ src-tauri/gen/
 .pi/
 temp_edge_profile/
 *.tsbuildinfo
+
+# Private raw reference voice recordings
+resources/voices/
+*.wav.tmp
+test_voicebox_*.wav
+

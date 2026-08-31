@@ -126,8 +126,8 @@ impl AudioPlayer {
                             let sink_arc = Arc::new(sink);
                             current_sink = Some(sink_arc.clone());
 
-                            // Clean up file after playback completes in a helper thread
-                            let file_to_clean = cleanup_file.or_else(|| Some(wav_path.clone()));
+                            // Clean up file after playback completes only if explicitly requested
+                            let file_to_clean = cleanup_file;
                             let sink_for_monitor = sink_arc.clone();
                             std::thread::spawn(move || {
                                 while !sink_for_monitor.empty() {
