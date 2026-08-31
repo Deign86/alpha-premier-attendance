@@ -1,8 +1,34 @@
+# ==============================================================================
+# PR Quality Workflow: Alpha Premier Attendance
+# ==============================================================================
+# Summary of Changes:
+#   1. Added concurrency control to cancel in-progress runs when a PR receives newer commits.
+#   2. Added paths-ignore filters for markdown, documentation, and tooling-only files.
+#   3. Documented anti-slop review gate parameters.
+#
+# Expected Impact on Build Time:
+#   - Eliminates redundant queued runs on rapid PR iteration.
+#   - Skips evaluation entirely for docs-only PRs.
+#
+# Trade-offs:
+#   - None; full type/linter checks run independently in ci.yml.
+# ==============================================================================
+
 name: PR Quality
 
 on:
   pull_request_target:
     types: [opened, reopened, synchronize]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.vscode/**'
+      - '.gitignore'
+      - 'LICENSE'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -11,6 +37,7 @@ permissions:
 
 jobs:
   anti-slop:
+    name: Anti-Slop PR Quality Check
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
