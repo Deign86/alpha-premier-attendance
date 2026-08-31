@@ -861,7 +861,7 @@ mod tests {
     fn tts_config_parses_section_and_defaults() {
         let tts = TtsConfig::default();
         assert!(tts.enabled);
-        assert_eq!(tts.engine, "auto");
+        assert_eq!(tts.engine, "cloned-bea");
         assert_eq!(tts.rate, 1.0);
         assert_eq!(tts.volume, 1.0);
 
