@@ -104,4 +104,4 @@ jobs:
           workspaces: "src-tauri"
 
       - name: Run Rust unit and integration tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=2
