@@ -1,5 +1,5 @@
 {
-  "version": "5.1.0",
+  "version": "6.0.0",
   "engine": "voicebox-qwen-1.7B-cuda-cloned",
   "voice": "bea",
   "voicebox_profile_id": "1ccbe006-2269-4c08-aa85-0167598232a1",
@@ -46,118 +46,6 @@
       "tauri_path": "voices/bea/attendance/thank-you-great-day.wav",
       "tone": "main"
     },
-    "suffix-time-in-recorded": {
-      "phrase": "Your time in has been recorded.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-in-recorded.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-in-recorded.wav",
-      "tone": "main"
-    },
-    "suffix-time-in-first-arrival": {
-      "phrase": "Your time in has been recorded. You are the first arrival today.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-in-first-arrival.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-in-first-arrival.wav",
-      "tone": "main"
-    },
-    "suffix-time-in-grace": {
-      "phrase": "Your time in has been recorded. You made it within the grace period.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-in-grace.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-in-grace.wav",
-      "tone": "main"
-    },
-    "suffix-time-in-grace-first-arrival": {
-      "phrase": "Your time in has been recorded. You made it within the grace period. You are the first arrival today.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-in-grace-first-arrival.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-in-grace-first-arrival.wav",
-      "tone": "main"
-    },
-    "suffix-time-in-late": {
-      "phrase": "Your time in has been recorded. You are late.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-in-late.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-in-late.wav",
-      "tone": "main"
-    },
-    "suffix-time-in-late-first-arrival": {
-      "phrase": "Your time in has been recorded. You are late. You are the first arrival today.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-in-late-first-arrival.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-in-late-first-arrival.wav",
-      "tone": "main"
-    },
-    "suffix-time-out-recorded": {
-      "phrase": "Your time out has been recorded.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-out-recorded.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-out-recorded.wav",
-      "tone": "main"
-    },
-    "suffix-time-out-late": {
-      "phrase": "Your time out was recorded after office hours. Manual correction is required.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-time-out-late.wav",
-      "tauri_path": "voices/bea/attendance/suffix-time-out-late.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-in": {
-      "phrase": "Your assisted time in has been recorded.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-in.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-in.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-in-first-arrival": {
-      "phrase": "Your assisted time in has been recorded. You are the first arrival today.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-in-first-arrival.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-in-first-arrival.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-in-grace": {
-      "phrase": "Your assisted time in has been recorded. You made it within the grace period.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-in-grace.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-in-grace.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-in-grace-first-arrival": {
-      "phrase": "Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-in-grace-first-arrival.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-in-grace-first-arrival.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-in-late": {
-      "phrase": "Your assisted time in has been recorded. You are late.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-in-late.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-in-late.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-in-late-first-arrival": {
-      "phrase": "Your assisted time in has been recorded. You are late. You are the first arrival today.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-in-late-first-arrival.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-in-late-first-arrival.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-out": {
-      "phrase": "Your assisted time out has been recorded.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-out.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-out.wav",
-      "tone": "main"
-    },
-    "suffix-assisted-time-out-late": {
-      "phrase": "Your assisted time out was recorded after office hours. Manual correction is required.",
-      "category": "attendance",
-      "url": "/voices/bea/attendance/suffix-assisted-time-out-late.wav",
-      "tauri_path": "voices/bea/attendance/suffix-assisted-time-out-late.wav",
-      "tone": "main"
-    },
     "time-in-standard": {
       "phrase": "Your time in has been recorded.",
       "category": "attendance",
@@ -173,14 +61,14 @@
       "tone": "main"
     },
     "time-in-grace": {
-      "phrase": "Your time in has been recorded within the grace period.",
+      "phrase": "Your time in has been recorded. You made it within the grace period.",
       "category": "attendance",
       "url": "/voices/bea/attendance/time-in-grace.wav",
       "tauri_path": "voices/bea/attendance/time-in-grace.wav",
       "tone": "main"
     },
     "time-in-grace-first-arrival": {
-      "phrase": "Your time in has been recorded within the grace period. You are the first arrival today.",
+      "phrase": "Your time in has been recorded. You made it within the grace period. You are the first arrival today.",
       "category": "attendance",
       "url": "/voices/bea/attendance/time-in-grace-first-arrival.wav",
       "tauri_path": "voices/bea/attendance/time-in-grace-first-arrival.wav",
@@ -215,14 +103,14 @@
       "tone": "main"
     },
     "time-in-assisted-grace": {
-      "phrase": "Your assisted time in has been recorded within the grace period.",
+      "phrase": "Your assisted time in has been recorded. You made it within the grace period.",
       "category": "attendance",
       "url": "/voices/bea/attendance/time-in-assisted-grace.wav",
       "tauri_path": "voices/bea/attendance/time-in-assisted-grace.wav",
       "tone": "main"
     },
     "time-in-assisted-grace-first-arrival": {
-      "phrase": "Your assisted time in has been recorded within the grace period. You are the first arrival today.",
+      "phrase": "Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today.",
       "category": "attendance",
       "url": "/voices/bea/attendance/time-in-assisted-grace-first-arrival.wav",
       "tauri_path": "voices/bea/attendance/time-in-assisted-grace-first-arrival.wav",
@@ -284,6 +172,13 @@
       "tauri_path": "voices/bea/bathroom/checkout-male.wav",
       "tone": "warm"
     },
+    "checkout-male-for": {
+      "phrase": "Male bathroom key checked out for",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/checkout-male-for.wav",
+      "tauri_path": "voices/bea/bathroom/checkout-male-for.wav",
+      "tone": "warm"
+    },
     "checkout-female": {
       "phrase": "Female bathroom key checked out.",
       "category": "bathroom",
@@ -291,11 +186,32 @@
       "tauri_path": "voices/bea/bathroom/checkout-female.wav",
       "tone": "warm"
     },
+    "checkout-female-for": {
+      "phrase": "Female bathroom key checked out for",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/checkout-female-for.wav",
+      "tauri_path": "voices/bea/bathroom/checkout-female-for.wav",
+      "tone": "warm"
+    },
+    "checkout-female-name": {
+      "phrase": "Female bathroom key checked out for Jane Doe.",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/checkout-female-name.wav",
+      "tauri_path": "voices/bea/bathroom/checkout-female-name.wav",
+      "tone": "warm"
+    },
     "checkout-male-name": {
       "phrase": "Male bathroom key checked out for John Doe.",
       "category": "bathroom",
       "url": "/voices/bea/bathroom/checkout-male-name.wav",
       "tauri_path": "voices/bea/bathroom/checkout-male-name.wav",
+      "tone": "warm"
+    },
+    "thank-you": {
+      "phrase": "Thank you,",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/thank-you.wav",
+      "tauri_path": "voices/bea/bathroom/thank-you.wav",
       "tone": "warm"
     },
     "return-male": {
@@ -333,11 +249,25 @@
       "tauri_path": "voices/bea/scan-error/bathroom-key-in-use-male.wav",
       "tone": "neutral"
     },
+    "bathroom-key-in-use-male-by": {
+      "phrase": "The male bathroom key is currently in use by",
+      "category": "scan-error",
+      "url": "/voices/bea/scan-error/bathroom-key-in-use-male-by.wav",
+      "tauri_path": "voices/bea/scan-error/bathroom-key-in-use-male-by.wav",
+      "tone": "neutral"
+    },
     "bathroom-key-in-use-female": {
       "phrase": "The female bathroom key is currently in use.",
       "category": "scan-error",
       "url": "/voices/bea/scan-error/bathroom-key-in-use-female.wav",
       "tauri_path": "voices/bea/scan-error/bathroom-key-in-use-female.wav",
+      "tone": "neutral"
+    },
+    "bathroom-key-in-use-female-by": {
+      "phrase": "The female bathroom key is currently in use by",
+      "category": "scan-error",
+      "url": "/voices/bea/scan-error/bathroom-key-in-use-female-by.wav",
+      "tauri_path": "voices/bea/scan-error/bathroom-key-in-use-female-by.wav",
       "tone": "neutral"
     },
     "bathroom-key-in-use": {
@@ -423,27 +353,6 @@
       "url": "/voices/bea/general/test-voice.wav",
       "tauri_path": "voices/bea/general/test-voice.wav",
       "tone": "main"
-    },
-    "checkout-male-for": {
-      "phrase": "Male bathroom key checked out for",
-      "category": "bathroom",
-      "url": "/voices/bea/bathroom/checkout-male-for.wav",
-      "tauri_path": "voices/bea/bathroom/checkout-male-for.wav",
-      "tone": "warm"
-    },
-    "checkout-female-for": {
-      "phrase": "Female bathroom key checked out for",
-      "category": "bathroom",
-      "url": "/voices/bea/bathroom/checkout-female-for.wav",
-      "tauri_path": "voices/bea/bathroom/checkout-female-for.wav",
-      "tone": "warm"
-    },
-    "thank-you": {
-      "phrase": "Thank you,",
-      "category": "bathroom",
-      "url": "/voices/bea/bathroom/thank-you.wav",
-      "tauri_path": "voices/bea/bathroom/thank-you.wav",
-      "tone": "warm"
     }
   },
   "phrases": {
@@ -455,34 +364,36 @@
     "Thank you, and have a great day.": "/voices/bea/attendance/thank-you-great-day.wav",
     "Your time in has been recorded.": "/voices/bea/attendance/time-in-standard.wav",
     "Your time in has been recorded. You are the first arrival today.": "/voices/bea/attendance/time-in-first-arrival.wav",
-    "Your time in has been recorded. You made it within the grace period.": "/voices/bea/attendance/suffix-time-in-grace.wav",
-    "Your time in has been recorded. You made it within the grace period. You are the first arrival today.": "/voices/bea/attendance/suffix-time-in-grace-first-arrival.wav",
+    "Your time in has been recorded. You made it within the grace period.": "/voices/bea/attendance/time-in-grace.wav",
+    "Your time in has been recorded. You made it within the grace period. You are the first arrival today.": "/voices/bea/attendance/time-in-grace-first-arrival.wav",
     "Your time in has been recorded. You are late.": "/voices/bea/attendance/time-in-late.wav",
     "Your time in has been recorded. You are late. You are the first arrival today.": "/voices/bea/attendance/time-in-late-first-arrival.wav",
-    "Your time out has been recorded.": "/voices/bea/attendance/time-out-standard.wav",
-    "Your time out was recorded after office hours. Manual correction is required.": "/voices/bea/attendance/time-out-late-timeout.wav",
     "Your assisted time in has been recorded.": "/voices/bea/attendance/time-in-assisted-standard.wav",
     "Your assisted time in has been recorded. You are the first arrival today.": "/voices/bea/attendance/time-in-assisted-first-arrival.wav",
-    "Your assisted time in has been recorded. You made it within the grace period.": "/voices/bea/attendance/suffix-assisted-time-in-grace.wav",
-    "Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today.": "/voices/bea/attendance/suffix-assisted-time-in-grace-first-arrival.wav",
+    "Your assisted time in has been recorded. You made it within the grace period.": "/voices/bea/attendance/time-in-assisted-grace.wav",
+    "Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today.": "/voices/bea/attendance/time-in-assisted-grace-first-arrival.wav",
     "Your assisted time in has been recorded. You are late.": "/voices/bea/attendance/time-in-assisted-late.wav",
     "Your assisted time in has been recorded. You are late. You are the first arrival today.": "/voices/bea/attendance/time-in-assisted-late-first-arrival.wav",
+    "Your time out has been recorded.": "/voices/bea/attendance/time-out-standard.wav",
+    "Your time out was recorded after office hours. Manual correction is required.": "/voices/bea/attendance/time-out-late-timeout.wav",
     "Your assisted time out has been recorded.": "/voices/bea/attendance/time-out-assisted-standard.wav",
     "Your assisted time out was recorded after office hours. Manual correction is required.": "/voices/bea/attendance/time-out-assisted-late-timeout.wav",
-    "Your time in has been recorded within the grace period.": "/voices/bea/attendance/time-in-grace.wav",
-    "Your time in has been recorded within the grace period. You are the first arrival today.": "/voices/bea/attendance/time-in-grace-first-arrival.wav",
-    "Your assisted time in has been recorded within the grace period.": "/voices/bea/attendance/time-in-assisted-grace.wav",
-    "Your assisted time in has been recorded within the grace period. You are the first arrival today.": "/voices/bea/attendance/time-in-assisted-grace-first-arrival.wav",
     "Your bathroom key has been checked out. Please return it within fifteen minutes.": "/voices/bea/bathroom/bathroom-key-checked-out-15min.wav",
     "Male bathroom key checked out.": "/voices/bea/bathroom/checkout-male.wav",
+    "Male bathroom key checked out for": "/voices/bea/bathroom/checkout-male-for.wav",
     "Female bathroom key checked out.": "/voices/bea/bathroom/checkout-female.wav",
+    "Female bathroom key checked out for": "/voices/bea/bathroom/checkout-female-for.wav",
+    "Female bathroom key checked out for Jane Doe.": "/voices/bea/bathroom/checkout-female-name.wav",
     "Male bathroom key checked out for John Doe.": "/voices/bea/bathroom/checkout-male-name.wav",
+    "Thank you,": "/voices/bea/bathroom/thank-you.wav",
     "Male bathroom key returned.": "/voices/bea/bathroom/return-male.wav",
     "Female bathroom key returned.": "/voices/bea/bathroom/return-female.wav",
     "Admin assist card recognized. Please select an employee.": "/voices/bea/admin-assist/admin-assist-prompt.wav",
     "Sorry, that card wasn't recognized. Please try scanning again.": "/voices/bea/scan-error/sorry-card-not-recognized.wav",
     "The male bathroom key is currently in use.": "/voices/bea/scan-error/bathroom-key-in-use-male.wav",
+    "The male bathroom key is currently in use by": "/voices/bea/scan-error/bathroom-key-in-use-male-by.wav",
     "The female bathroom key is currently in use.": "/voices/bea/scan-error/bathroom-key-in-use-female.wav",
+    "The female bathroom key is currently in use by": "/voices/bea/scan-error/bathroom-key-in-use-female-by.wav",
     "The bathroom key is currently in use.": "/voices/bea/scan-error/bathroom-key-in-use.wav",
     "This card is not registered.": "/voices/bea/scan-error/card-not-registered.wav",
     "Employee record is inactive.": "/voices/bea/scan-error/employee-record-inactive.wav",
@@ -494,9 +405,6 @@
     "Attendance service is temporarily unavailable.": "/voices/bea/scan-error/service-unavailable.wav",
     "Attendance conflict. Please try again.": "/voices/bea/scan-error/attendance-conflict.wav",
     "Scan could not be processed.": "/voices/bea/scan-error/scan-generic-error.wav",
-    "Voice announcements are working correctly.": "/voices/bea/general/test-voice.wav",
-    "Male bathroom key checked out for": "/voices/bea/bathroom/checkout-male-for.wav",
-    "Female bathroom key checked out for": "/voices/bea/bathroom/checkout-female-for.wav",
-    "Thank you,": "/voices/bea/bathroom/thank-you.wav"
+    "Voice announcements are working correctly.": "/voices/bea/general/test-voice.wav"
   }
 }

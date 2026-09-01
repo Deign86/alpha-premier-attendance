@@ -45,6 +45,13 @@ Follow the rules in `.agent/rules/` and `.agents/rules/` (`ponytail.md`, `unlazy
 
 ---
 
+### Local Release Policy (Never CI/CD Releases)
+- **Do not use GitHub Actions for releases**: Building Windows Tauri desktop release bundles in CI/CD takes too long.
+- **Generate on Local PC**: All production release installers/bundles must be generated locally on the developer PC via `npm run tauri:build`.
+- **Upload Manually to GitHub**: Upload the generated MSI/EXE bundles directly to GitHub Releases.
+
+---
+
 ### Verification Workflow
 Run the narrowest relevant checks first, followed by required repository gates. Review the diff for dead code, unrequested complexity, type assertions without safety comments, and unnecessary dependencies.
 

@@ -189,6 +189,18 @@ PHRASE_CATALOG = [
     },
     {
         "category": "bathroom",
+        "slug": "checkout-female-name",
+        "phrase": "Female bathroom key checked out for Jane Doe.",
+        "tone": "warm",
+    },
+    {
+        "category": "bathroom",
+        "slug": "checkout-male-name",
+        "phrase": "Male bathroom key checked out for John Doe.",
+        "tone": "warm",
+    },
+    {
+        "category": "bathroom",
         "slug": "thank-you",
         "phrase": "Thank you,",
         "tone": "warm",
@@ -229,8 +241,20 @@ PHRASE_CATALOG = [
     },
     {
         "category": "scan-error",
+        "slug": "bathroom-key-in-use-male-by",
+        "phrase": "The male bathroom key is currently in use by",
+        "tone": "neutral",
+    },
+    {
+        "category": "scan-error",
         "slug": "bathroom-key-in-use-female",
         "phrase": "The female bathroom key is currently in use.",
+        "tone": "neutral",
+    },
+    {
+        "category": "scan-error",
+        "slug": "bathroom-key-in-use-female-by",
+        "phrase": "The female bathroom key is currently in use by",
         "tone": "neutral",
     },
     {
@@ -312,14 +336,23 @@ PHRASE_CATALOG = [
 
 def get_voicebox_bea_profile():
     try:
-        req = urllib.request.urlopen(f"{VOICEBOX_BASE}/profiles")
+        req = urllib.request.urlopen(f"{VOICEBOX_BASE}/profiles", timeout=2)
         profiles = json.loads(req.read().decode())
         for p in profiles:
-            if "bea" in p["name"].lower():
+            if "bea" in p.get("name", "").lower():
                 return p["id"]
     except Exception as e:
-        print(f"Error connecting to Voicebox at {VOICEBOX_BASE}: {e}", file=sys.stderr)
-    return None
+        print(f"Notice: Voicebox not reachable at {VOICEBOX_BASE} ({e}). Using cached profile ID.")
+    # Fallback to existing manifest profile ID or known ID
+    if (CLIENT_OUTPUT_BASE / "manifest.json").is_file():
+        try:
+            with open(CLIENT_OUTPUT_BASE / "manifest.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("voicebox_profile_id"):
+                    return data["voicebox_profile_id"]
+        except Exception:
+            pass
+    return "1ccbe006-2269-4c08-aa85-0167598232a1"
 
 
 def generate_phrase_voicebox(profile_id: str, phrase: str, out_file: Path) -> bool:
@@ -337,18 +370,18 @@ def generate_phrase_voicebox(profile_id: str, phrase: str, out_file: Path) -> bo
         method="POST"
     )
     try:
-        with urllib.request.urlopen(req) as res:
+        with urllib.request.urlopen(req, timeout=5) as res:
             gen_data = json.loads(res.read().decode())
             gen_id = gen_data["id"]
     except Exception as e:
-        print(f"  Failed to start generation: {e}", file=sys.stderr)
+        print(f"  [Offline/Pending] Voicebox generation unavailable: {e}", file=sys.stderr)
         return False
 
     # Poll status
     for _ in range(90):
         time.sleep(2)
         try:
-            req = urllib.request.urlopen(f"{VOICEBOX_BASE}/history/{gen_id}")
+            req = urllib.request.urlopen(f"{VOICEBOX_BASE}/history/{gen_id}", timeout=5)
             hist = json.loads(req.read().decode())
             status = hist.get("status")
             if status == "completed":
@@ -367,13 +400,10 @@ def generate_phrase_voicebox(profile_id: str, phrase: str, out_file: Path) -> bo
 def main():
     print("=" * 70)
     print(" Alpha Premier Attendance — Deduplicated Voicebox Qwen-TTS 1.7B")
-    print(" Master Catalog: 43 Distinct Announcement Phrases")
+    print(f" Master Catalog: {len(PHRASE_CATALOG)} Distinct Announcement Phrases")
     print("=" * 70)
 
     profile_id = get_voicebox_bea_profile()
-    if not profile_id:
-        print("Could not find Ma'am Bea profile in Voicebox.", file=sys.stderr)
-        sys.exit(1)
 
     CLIENT_OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
     TAURI_OUTPUT_BASE.mkdir(parents=True, exist_ok=True)

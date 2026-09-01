@@ -104,12 +104,18 @@ npm run voice:generate-existing-names -- --missing-only
    - `client/dist/voices/bea/names/<personId>.wav`
 5. Computes SHA-256 hashes and writes [`bea-name-manifest.json`](file:///c:/Users/Deign/Downloads/alpha-premier-attendance/client/public/voices/bea/bea-name-manifest.json).
 
-### Step 4 (Alternative): Generate Directly from a Backup File (`.apbackup`)
-If working offline from an exported application backup archive:
+### Step 4: Audit and Verify Generated Audio Files
+To check audio durations, file integrity, and history duplicates against Voicebox:
 
 ```bash
-python scripts/generate_backup_names.py
+npm run voice:audit
 ```
+
+*Note on generation scripts*:
+- `generate_cloned_voices.py` (`npm run generate:voices`): Canonical generator for the 50 master fixed kiosk announcement phrases.
+- `generate_existing_intern_names.ts` (`npm run voice:generate-existing-names`): Canonical generator for employee and intern dynamic name clips.
+- `audit_voicebox_results.py` (`npm run voice:audit`): Canonical QA and duration audit tool.
+- One-off bootstrap and migration scripts (`setup_voicebox_bea.py`, `generate_backup_names.py`, `verify_backup_cloned_names.py`) are archived under [`scripts/archive/`](file:///c:/Users/Deign/Downloads/alpha-premier-attendance/scripts/archive/).
 
 ### Step 5: Force Regenerating a Specific User's Name
 If an employee's name was misspelled or needs pronunciation adjustment:

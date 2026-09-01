@@ -117,6 +117,8 @@ describe("PayrollWorkspace", () => {
   let loadPayrollPdfsSpy: MockInstance;
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T12:00:00Z"));
     window.print = vi.fn();
     generatePayrollCutoffSpy = vi.spyOn(api, "generatePayrollCutoff");
     generatePayrollPdfSpy = vi.spyOn(api, "generatePayrollPdf");
@@ -124,6 +126,7 @@ describe("PayrollWorkspace", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 

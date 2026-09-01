@@ -231,8 +231,8 @@
       "employeeType": "INTERN",
       "voiceProfileVersion": "1.7B-qwen-cloned-v1",
       "audioFile": "/voices/bea/names/USR_INT_001.wav",
-      "generatedAt": "2026-08-31T05:36:01.746Z",
-      "audioHash": "dry-run-hash"
+      "generatedAt": "2026-09-01T01:48:12Z",
+      "audioHash": "0d8306aef705e0030cd147f5e21f7e318232a65d2c11cbefbdc8bd51c80501f2"
     },
     "USR_INT_002": {
       "personId": "USR_INT_002",
@@ -241,8 +241,8 @@
       "employeeType": "INTERN",
       "voiceProfileVersion": "1.7B-qwen-cloned-v1",
       "audioFile": "/voices/bea/names/USR_INT_002.wav",
-      "generatedAt": "2026-08-31T05:36:01.742Z",
-      "audioHash": "dry-run-hash"
+      "generatedAt": "2026-09-01T01:48:20Z",
+      "audioHash": "aa532bfe25db28f1051d716a3f126ac2f4bc5f83305f790702d5f917faeb3a1e"
     },
     "USR_EMP_001": {
       "personId": "USR_EMP_001",
@@ -251,8 +251,8 @@
       "employeeType": "EMPLOYEE",
       "voiceProfileVersion": "1.7B-qwen-cloned-v1",
       "audioFile": "/voices/bea/names/USR_EMP_001.wav",
-      "generatedAt": "2026-08-31T05:36:01.746Z",
-      "audioHash": "dry-run-hash"
+      "generatedAt": "2026-09-01T01:48:28Z",
+      "audioHash": "a3fe8347955c3dca169f9d7944cbd0aedfc3da90b41a00730b2f8accf7f38b02"
     }
   }
 }

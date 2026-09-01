@@ -1650,6 +1650,7 @@ describe('Admin Attendance Corrections', () => {
       action: 'CHECKOUT',
       genderKey: 'MALE',
       employeeName: 'John Doe',
+      personId: 'EMP-01',
     });
 
     // 2. Scan for return
@@ -1676,6 +1677,7 @@ describe('Admin Attendance Corrections', () => {
       action: 'RETURN',
       genderKey: 'FEMALE',
       employeeName: 'Jane Smith',
+      personId: 'EMP-02',
     });
 
     // 3. Scan with key in use error
