@@ -90,53 +90,69 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
 
 import { tauriApi } from '../tauri-api';
 
-const DEFAULT_NAME_PROFILES: Readonly<Record<string, { audioFile: string }>> = Object.freeze({
-  'APG-2026-019': { audioFile: '/voices/bea/names/APG-2026-019.wav' },
-  'APG-2026-113': { audioFile: '/voices/bea/names/APG-2026-113.wav' },
-  'APG-2026-110': { audioFile: '/voices/bea/names/APG-2026-110.wav' },
-  'APG-2026-102': { audioFile: '/voices/bea/names/APG-2026-102.wav' },
-  'APG-2026-109': { audioFile: '/voices/bea/names/APG-2026-109.wav' },
-  'APG-2026-095': { audioFile: '/voices/bea/names/APG-2026-095.wav' },
-  'APG-2026-099': { audioFile: '/voices/bea/names/APG-2026-099.wav' },
-  'APG-2026-112': { audioFile: '/voices/bea/names/APG-2026-112.wav' },
-  'APG-2026-092': { audioFile: '/voices/bea/names/APG-2026-092.wav' },
-  'APG-2026-101': { audioFile: '/voices/bea/names/APG-2026-101.wav' },
-  'APG-2026-104': { audioFile: '/voices/bea/names/APG-2026-104.wav' },
-  'APG-2026-098': { audioFile: '/voices/bea/names/APG-2026-098.wav' },
-  'APG-2026-100': { audioFile: '/voices/bea/names/APG-2026-100.wav' },
-  'APG-2026-103': { audioFile: '/voices/bea/names/APG-2026-103.wav' },
-  'APG-2026-111': { audioFile: '/voices/bea/names/APG-2026-111.wav' },
-  'APG-2026-107': { audioFile: '/voices/bea/names/APG-2026-107.wav' },
-  'APG-2026-097': { audioFile: '/voices/bea/names/APG-2026-097.wav' },
-  'APG-2026-106': { audioFile: '/voices/bea/names/APG-2026-106.wav' },
-  'APG-2026-105': { audioFile: '/voices/bea/names/APG-2026-105.wav' },
-  'APG-2026-114': { audioFile: '/voices/bea/names/APG-2026-114.wav' },
-  'APG-2026-108': { audioFile: '/voices/bea/names/APG-2026-108.wav' },
-  'APG-2026-094': { audioFile: '/voices/bea/names/APG-2026-094.wav' },
-  'USR_INT_001': { audioFile: '/voices/bea/names/USR_INT_001.wav' },
-  'USR_INT_002': { audioFile: '/voices/bea/names/USR_INT_002.wav' },
-  'USR_EMP_001': { audioFile: '/voices/bea/names/USR_EMP_001.wav' },
+interface NameProfileEntry {
+  personId?: string;
+  displayName?: string;
+  normalizedSpeechText?: string;
+  audioFile: string;
+}
+
+const DEFAULT_NAME_PROFILES: Readonly<Record<string, NameProfileEntry>> = Object.freeze({
+  'APG-2026-019': { personId: 'APG-2026-019', displayName: 'Beatriz Conos', normalizedSpeechText: 'Beatriz Conos', audioFile: '/voices/bea/names/APG-2026-019.wav' },
+  'APG-2026-113': { personId: 'APG-2026-113', displayName: 'Ar-jee Felizarte', normalizedSpeechText: 'Arjee Felizarte', audioFile: '/voices/bea/names/APG-2026-113.wav' },
+  'APG-2026-110': { personId: 'APG-2026-110', displayName: 'Bianca Marie Antoy', normalizedSpeechText: 'Bianca Marie Antoy', audioFile: '/voices/bea/names/APG-2026-110.wav' },
+  'APG-2026-102': { personId: 'APG-2026-102', displayName: 'Deign Grey O. Lazaro', normalizedSpeechText: 'Deign Grey Lazaro', audioFile: '/voices/bea/names/APG-2026-102.wav' },
+  'APG-2026-109': { personId: 'APG-2026-109', displayName: 'Elaizah Jane Altiche', normalizedSpeechText: 'Elaizah Jane Altiche', audioFile: '/voices/bea/names/APG-2026-109.wav' },
+  'APG-2026-095': { personId: 'APG-2026-095', displayName: 'Jannela Pasacay', normalizedSpeechText: 'Jannela Pasacay', audioFile: '/voices/bea/names/APG-2026-095.wav' },
+  'APG-2026-099': { personId: 'APG-2026-099', displayName: 'Jeremy Bugarin', normalizedSpeechText: 'Jeremy Bugarin', audioFile: '/voices/bea/names/APG-2026-099.wav' },
+  'APG-2026-112': { personId: 'APG-2026-112', displayName: 'John Frederick Ruiz', normalizedSpeechText: 'John Frederick Ruiz', audioFile: '/voices/bea/names/APG-2026-112.wav' },
+  'APG-2026-092': { personId: 'APG-2026-092', displayName: 'Joseph Amandy', normalizedSpeechText: 'Joseph Amandy', audioFile: '/voices/bea/names/APG-2026-092.wav' },
+  'APG-2026-101': { personId: 'APG-2026-101', displayName: 'Khemuel Rosh Timkang', normalizedSpeechText: 'Khemuel Rosh Timkang', audioFile: '/voices/bea/names/APG-2026-101.wav' },
+  'APG-2026-104': { personId: 'APG-2026-104', displayName: 'Kizziah Ishi De Guerto', normalizedSpeechText: 'Kizziah Ishi De Guerto', audioFile: '/voices/bea/names/APG-2026-104.wav' },
+  'APG-2026-098': { personId: 'APG-2026-098', displayName: 'Kurt Lawrenz De Leon', normalizedSpeechText: 'Kurt Lawrenz De Leon', audioFile: '/voices/bea/names/APG-2026-098.wav' },
+  'APG-2026-100': { personId: 'APG-2026-100', displayName: 'Kylle Ricio', normalizedSpeechText: 'Kylle Ricio', audioFile: '/voices/bea/names/APG-2026-100.wav' },
+  'APG-2026-103': { personId: 'APG-2026-103', displayName: 'Lorraine Isabel Cabigon', normalizedSpeechText: 'Lorraine Isabel Cabigon', audioFile: '/voices/bea/names/APG-2026-103.wav' },
+  'APG-2026-111': { personId: 'APG-2026-111', displayName: 'Ma. Ellaine Zapico', normalizedSpeechText: 'Maria Ellaine Zapico', audioFile: '/voices/bea/names/APG-2026-111.wav' },
+  'APG-2026-107': { personId: 'APG-2026-107', displayName: 'Margaux Zyann Delaog', normalizedSpeechText: 'Margaux Zyann Delaog', audioFile: '/voices/bea/names/APG-2026-107.wav' },
+  'APG-2026-097': { personId: 'APG-2026-097', displayName: 'Mary Antonette Yaguel', normalizedSpeechText: 'Mary Antonette Yaguel', audioFile: '/voices/bea/names/APG-2026-097.wav' },
+  'APG-2026-106': { personId: 'APG-2026-106', displayName: 'Mitchi Hashidate', normalizedSpeechText: 'Mitchi Hashidate', audioFile: '/voices/bea/names/APG-2026-106.wav' },
+  'APG-2026-105': { personId: 'APG-2026-105', displayName: 'Narciso Lontoc', normalizedSpeechText: 'Narciso Lontoc', audioFile: '/voices/bea/names/APG-2026-105.wav' },
+  'APG-2026-114': { personId: 'APG-2026-114', displayName: 'Noeme P. Diola', normalizedSpeechText: 'Noeme Diola', audioFile: '/voices/bea/names/APG-2026-114.wav' },
+  'APG-2026-108': { personId: 'APG-2026-108', displayName: 'Raineer C. Rosado', normalizedSpeechText: 'Raineer Rosado', audioFile: '/voices/bea/names/APG-2026-108.wav' },
+  'APG-2026-094': { personId: 'APG-2026-094', displayName: 'Rona Khristelle Angelique Pacada', normalizedSpeechText: 'Rona Khristelle Angelique Pacada', audioFile: '/voices/bea/names/APG-2026-094.wav' },
+  'USR_INT_001': { personId: 'USR_INT_001', displayName: 'Maria Santos', normalizedSpeechText: 'Maria Santos', audioFile: '/voices/bea/names/USR_INT_001.wav' },
+  'USR_INT_002': { personId: 'USR_INT_002', displayName: 'JUAN DELA CRUZ', normalizedSpeechText: 'Juan Dela Cruz', audioFile: '/voices/bea/names/USR_INT_002.wav' },
+  'USR_EMP_001': { personId: 'USR_EMP_001', displayName: 'Ada Lovelace', normalizedSpeechText: 'Ada Lovelace', audioFile: '/voices/bea/names/USR_EMP_001.wav' },
+  'APG-2026-115': { personId: 'APG-2026-115', displayName: 'Allaena Nicole E. Vizon', normalizedSpeechText: 'Allaena Nicole Vizon', audioFile: '/voices/bea/names/APG-2026-115.wav' },
 });
 
-let nameManifestCache: Record<string, { audioFile: string }> | null = { ...DEFAULT_NAME_PROFILES };
+function normalizeNameForLookup(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+let nameManifestCache: Record<string, NameProfileEntry> | null = { ...DEFAULT_NAME_PROFILES };
 let nameManifestLoaded = false;
 
 /**
  * Manually set the name manifest for tests or runtime registration.
  */
-export function setNameManifest(manifest: Record<string, { audioFile: string }> | null): void {
+export function setNameManifest(manifest: Record<string, { audioFile: string; displayName?: string; normalizedSpeechText?: string; personId?: string }> | null): void {
   nameManifestCache = manifest;
   nameManifestLoaded = true;
 }
 
 interface NameManifestJson {
-  profiles?: Record<string, { audioFile?: string }>;
+  profiles?: Record<string, NameProfileEntry>;
 }
 
 /**
  * Loads the name manifest from /voices/bea/bea-name-manifest.json if available.
  */
-export async function loadNameManifest(): Promise<Record<string, { audioFile: string }> | null> {
+export async function loadNameManifest(): Promise<Record<string, NameProfileEntry> | null> {
   if (nameManifestLoaded) {
     return nameManifestCache;
   }
@@ -153,7 +169,7 @@ export async function loadNameManifest(): Promise<Record<string, { audioFile: st
         // SAFETY: Verified profiles is dictionary
         nameManifestCache = {
           ...DEFAULT_NAME_PROFILES,
-          ...(data.profiles as Record<string, { audioFile: string }>),
+          ...(data.profiles as Record<string, NameProfileEntry>),
         };
       }
     }
@@ -165,19 +181,55 @@ export async function loadNameManifest(): Promise<Record<string, { audioFile: st
 }
 
 /**
- * Returns the cached audio URL for an existing intern's cloned name audio by personId, or null if uncached.
+ * Returns the cached audio URL for an existing intern's or employee's cloned name audio
+ * by personId or employeeName, or null if uncached.
  */
-export function getClonedBeaNameAudioUrl(personId?: string | null): string | null {
-  if (!personId || personId.trim().length === 0) {
-    return null;
+export function getClonedBeaNameAudioUrl(
+  personId?: string | null,
+  employeeName?: string | null,
+): string | null {
+  const cleanId = personId?.trim() ?? '';
+  if (cleanId.length > 0) {
+    if (nameManifestCache && cleanId in nameManifestCache) {
+      return nameManifestCache[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
+    }
+    if (cleanId in DEFAULT_NAME_PROFILES) {
+      return DEFAULT_NAME_PROFILES[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
+    }
   }
-  const cleanId = personId.trim();
-  if (nameManifestCache && cleanId in nameManifestCache) {
-    return nameManifestCache[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
+
+  const cleanName = employeeName?.trim() ?? '';
+  if (cleanName.length > 0) {
+    const normalizedInput = normalizeNameForLookup(cleanName);
+    const profiles = nameManifestCache ?? DEFAULT_NAME_PROFILES;
+    for (const [id, profile] of Object.entries(profiles)) {
+      if (profile.displayName && normalizeNameForLookup(profile.displayName) === normalizedInput) {
+        return profile.audioFile ?? `/voices/bea/names/${id}.wav`;
+      }
+      if (profile.normalizedSpeechText && normalizeNameForLookup(profile.normalizedSpeechText) === normalizedInput) {
+        return profile.audioFile ?? `/voices/bea/names/${id}.wav`;
+      }
+    }
+
+    // Secondary relaxed match: check if first & last name match (e.g. "Deign Lazaro" matching "Deign Grey O. Lazaro")
+    const inputParts = normalizedInput.split(' ').filter(Boolean);
+    if (inputParts.length >= 2) {
+      const inputFirst = inputParts[0];
+      const inputLast = inputParts[inputParts.length - 1];
+      for (const [id, profile] of Object.entries(profiles)) {
+        const target = normalizeNameForLookup(profile.displayName || profile.normalizedSpeechText || '');
+        const targetParts = target.split(' ').filter(Boolean);
+        if (targetParts.length >= 2) {
+          const targetFirst = targetParts[0];
+          const targetLast = targetParts[targetParts.length - 1];
+          if (inputFirst === targetFirst && inputLast === targetLast) {
+            return profile.audioFile ?? `/voices/bea/names/${id}.wav`;
+          }
+        }
+      }
+    }
   }
-  if (cleanId in DEFAULT_NAME_PROFILES) {
-    return DEFAULT_NAME_PROFILES[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
-  }
+
   return null;
 }
 

@@ -413,7 +413,7 @@ export async function announceAttendance(
     const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
     const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
     const targetPersonId = options.personId || options.userId;
-    const clonedNameUrl = getClonedBeaNameAudioUrl(targetPersonId);
+    const clonedNameUrl = getClonedBeaNameAudioUrl(targetPersonId, cleanName);
 
     // If both static cloned segments are present in cache, execute sequential playback:
     // Case A (Existing Intern with generated name file): cloned prefix -> cloned name -> cloned suffix (all Ma'am Bea)
@@ -469,7 +469,9 @@ export async function announceAttendance(
 
 /**
  * Non-blocking offline TTS voice announcement for bathroom key checkout and returns.
- * When Ma'am Bea is active, plays pure static cloned audio file without splicing.
+ * - Checkout with employee name: prefix ("Male/Female bathroom key checked out for") + name clip (or dynamic Piper name)
+ * - Return with employee name: prefix ("Thank you,") + name clip (or dynamic Piper name) + suffix ("Male/Female bathroom key returned.")
+ * - Anonymous checkout/return: static pre-rendered carrier clip ("Male/Female bathroom key checked out/returned.")
  */
 export async function announceBathroom(
   options: AnnounceBathroomOptions,
@@ -483,55 +485,106 @@ export async function announceBathroom(
   const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
 
-  if (isClonedBea && cleanName.length > 0) {
+  if (isClonedBea) {
     const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
-    const prefixPhrase = options.action === 'CHECKOUT'
-      ? `${genderLabel} bathroom key checked out for`
-      : 'Thank you,';
-    const suffixPhrase = options.action === 'CHECKOUT'
-      ? `${genderLabel} bathroom key checked out.`
-      : `${genderLabel} bathroom key returned.`;
-    const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
-    const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
-    const nameUrl = getClonedBeaNameAudioUrl(options.personId);
+    const targetPersonId = options.personId;
 
-    if (prefixUrl && suffixUrl) {
-      try {
-        const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
-        if (prefixPlayed) {
-          let namePlayed = nameUrl
-            ? await playClonedBeaAudio(nameUrl, activeSettings.volume, activeSettings.rate)
-            : false;
-          if (!namePlayed) {
-            try {
-              await tauriApi.ttsSpeak(cleanName, {
-                engine: 'piper',
-                voiceModel: activeSettings.voiceModel,
-                rate: activeSettings.rate,
-                volume: activeSettings.volume,
-              });
-              namePlayed = true;
-            } catch (error) {
-              console.warn('Local Piper synthesis for bathroom name failed:', error);
+    if (cleanName.length > 0) {
+      const nameUrl = getClonedBeaNameAudioUrl(targetPersonId, cleanName);
+
+      if (options.action === 'CHECKOUT') {
+        const prefixPhrase = `${genderLabel} bathroom key checked out for`;
+        const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+
+        if (prefixUrl) {
+          try {
+            const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+            if (prefixPlayed) {
+              let namePlayed = false;
+              if (nameUrl) {
+                namePlayed = await playClonedBeaAudio(nameUrl, activeSettings.volume, activeSettings.rate);
+              }
+              if (!namePlayed) {
+                try {
+                  await tauriApi.ttsSpeak(cleanName, {
+                    engine: 'piper',
+                    voiceModel: activeSettings.voiceModel,
+                    rate: activeSettings.rate,
+                    volume: activeSettings.volume,
+                  });
+                  namePlayed = true;
+                } catch (error) {
+                  console.warn('Local Piper synthesis for bathroom name failed:', error);
+                }
+              }
+              if (namePlayed) {
+                return { success: true, engineUsed: 'cloned-bea' };
+              }
             }
-          }
-          if (namePlayed) {
-            const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
-            if (suffixPlayed) {
-              return { success: true, engineUsed: 'cloned-bea' };
-            }
+          } catch (error) {
+            console.warn('Bathroom checkout cloned voice splicing failed:', error);
           }
         }
-      } catch (error) {
-        console.warn('Bathroom cloned voice splicing failed:', error);
+      } else {
+        // RETURN with dynamic or known employee name: "Thank you, [Name]. Male/Female bathroom key returned."
+        const prefixPhrase = 'Thank you,';
+        const suffixPhrase = `${genderLabel} bathroom key returned.`;
+        const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+        const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
+
+        if (prefixUrl && suffixUrl) {
+          try {
+            const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+            if (prefixPlayed) {
+              let namePlayed = false;
+              if (nameUrl) {
+                namePlayed = await playClonedBeaAudio(nameUrl, activeSettings.volume, activeSettings.rate);
+              }
+              if (!namePlayed) {
+                try {
+                  await tauriApi.ttsSpeak(cleanName, {
+                    engine: 'piper',
+                    voiceModel: activeSettings.voiceModel,
+                    rate: activeSettings.rate,
+                    volume: activeSettings.volume,
+                  });
+                  namePlayed = true;
+                } catch (error) {
+                  console.warn('Local Piper synthesis for bathroom name failed:', error);
+                }
+              }
+              if (namePlayed) {
+                const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+                if (suffixPlayed) {
+                  return { success: true, engineUsed: 'cloned-bea' };
+                }
+              }
+            }
+          } catch (error) {
+            console.warn('Bathroom return cloned voice splicing failed:', error);
+          }
+        }
+      }
+    } else {
+      // Anonymous bathroom checkout or return (no employee name)
+      const staticPhrase = options.action === 'CHECKOUT'
+        ? `${genderLabel} bathroom key checked out.`
+        : `${genderLabel} bathroom key returned.`;
+      const staticUrl = getClonedBeaAudioUrl(staticPhrase);
+      if (staticUrl) {
+        try {
+          const played = await playClonedBeaAudio(staticUrl, activeSettings.volume, activeSettings.rate);
+          if (played) {
+            return { success: true, engineUsed: 'cloned-bea' };
+          }
+        } catch (error) {
+          console.warn('Bathroom static cloned voice playback failed:', error);
+        }
       }
     }
   }
 
-  const phrase = isClonedBea && options.action === 'CHECKOUT' && cleanName.length === 0
-    ? 'Your bathroom key has been checked out. Please return it within fifteen minutes.'
-    : buildBathroomPhrase(options);
-
+  const phrase = buildBathroomPhrase(options);
   return speakText(phrase, {
     engine: activeSettings.engine,
     voiceModel: activeSettings.voiceModel,
