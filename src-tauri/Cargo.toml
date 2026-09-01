@@ -60,10 +60,6 @@ zip = "8"
 [profile.dev]
 incremental = true
 
-# Optimize external dependencies in development/test builds to keep test runtime fast
-[profile.dev.package."*"]
-opt-level = 2
-
 # Optimized production release profile: thin LTO and 16 codegen units give fast compile times with high runtime performance
 [profile.release]
 opt-level = 3
