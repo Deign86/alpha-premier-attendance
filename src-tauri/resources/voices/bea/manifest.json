@@ -423,6 +423,27 @@
       "url": "/voices/bea/general/test-voice.wav",
       "tauri_path": "voices/bea/general/test-voice.wav",
       "tone": "main"
+    },
+    "checkout-male-for": {
+      "phrase": "Male bathroom key checked out for",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/checkout-male-for.wav",
+      "tauri_path": "voices/bea/bathroom/checkout-male-for.wav",
+      "tone": "warm"
+    },
+    "checkout-female-for": {
+      "phrase": "Female bathroom key checked out for",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/checkout-female-for.wav",
+      "tauri_path": "voices/bea/bathroom/checkout-female-for.wav",
+      "tone": "warm"
+    },
+    "thank-you": {
+      "phrase": "Thank you,",
+      "category": "bathroom",
+      "url": "/voices/bea/bathroom/thank-you.wav",
+      "tauri_path": "voices/bea/bathroom/thank-you.wav",
+      "tone": "warm"
     }
   },
   "phrases": {
@@ -473,6 +494,9 @@
     "Attendance service is temporarily unavailable.": "/voices/bea/scan-error/service-unavailable.wav",
     "Attendance conflict. Please try again.": "/voices/bea/scan-error/attendance-conflict.wav",
     "Scan could not be processed.": "/voices/bea/scan-error/scan-generic-error.wav",
-    "Voice announcements are working correctly.": "/voices/bea/general/test-voice.wav"
+    "Voice announcements are working correctly.": "/voices/bea/general/test-voice.wav",
+    "Male bathroom key checked out for": "/voices/bea/bathroom/checkout-male-for.wav",
+    "Female bathroom key checked out for": "/voices/bea/bathroom/checkout-female-for.wav",
+    "Thank you,": "/voices/bea/bathroom/thank-you.wav"
   }
 }

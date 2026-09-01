@@ -55,6 +55,9 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
   'Your bathroom key has been checked out. Please return it within fifteen minutes.': '/voices/bea/bathroom/bathroom-key-checked-out-15min.wav',
   'Male bathroom key checked out.': '/voices/bea/bathroom/checkout-male.wav',
   'Female bathroom key checked out.': '/voices/bea/bathroom/checkout-female.wav',
+  'Male bathroom key checked out for': '/voices/bea/bathroom/checkout-male-for.wav',
+  'Female bathroom key checked out for': '/voices/bea/bathroom/checkout-female-for.wav',
+  'Thank you,': '/voices/bea/bathroom/thank-you.wav',
   'Male bathroom key returned.': '/voices/bea/bathroom/return-male.wav',
   'Female bathroom key returned.': '/voices/bea/bathroom/return-female.wav',
 

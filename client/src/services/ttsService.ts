@@ -180,6 +180,7 @@ export type BathroomPhraseOptions = {
   action: 'CHECKOUT' | 'RETURN';
   genderKey: BathroomGenderKey;
   employeeName?: string | null;
+  personId?: string | null;
 };
 
 export type AnnounceBathroomOptions = BathroomPhraseOptions & {
@@ -480,10 +481,55 @@ export async function announceBathroom(
   }
 
   const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
-  const phrase = isClonedBea
-    ? (options.action === 'CHECKOUT'
-        ? 'Your bathroom key has been checked out. Please return it within fifteen minutes.'
-        : `${options.genderKey === 'MALE' ? 'Male' : 'Female'} bathroom key returned.`)
+  const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
+
+  if (isClonedBea && cleanName.length > 0) {
+    const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
+    const prefixPhrase = options.action === 'CHECKOUT'
+      ? `${genderLabel} bathroom key checked out for`
+      : 'Thank you,';
+    const suffixPhrase = options.action === 'CHECKOUT'
+      ? `${genderLabel} bathroom key checked out.`
+      : `${genderLabel} bathroom key returned.`;
+    const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+    const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
+    const nameUrl = getClonedBeaNameAudioUrl(options.personId);
+
+    if (prefixUrl && suffixUrl) {
+      try {
+        const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+        if (prefixPlayed) {
+          let namePlayed = nameUrl
+            ? await playClonedBeaAudio(nameUrl, activeSettings.volume, activeSettings.rate)
+            : false;
+          if (!namePlayed) {
+            try {
+              await tauriApi.ttsSpeak(cleanName, {
+                engine: 'piper',
+                voiceModel: activeSettings.voiceModel,
+                rate: activeSettings.rate,
+                volume: activeSettings.volume,
+              });
+              namePlayed = true;
+            } catch (error) {
+              console.warn('Local Piper synthesis for bathroom name failed:', error);
+            }
+          }
+          if (namePlayed) {
+            const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+            if (suffixPlayed) {
+              return { success: true, engineUsed: 'cloned-bea' };
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Bathroom cloned voice splicing failed:', error);
+      }
+    }
+  }
+
+  const phrase = isClonedBea && options.action === 'CHECKOUT' && cleanName.length === 0
+    ? 'Your bathroom key has been checked out. Please return it within fifteen minutes.'
     : buildBathroomPhrase(options);
 
   return speakText(phrase, {

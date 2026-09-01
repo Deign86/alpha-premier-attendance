@@ -755,6 +755,7 @@ export default function App() {
             action: response.action,
             genderKey: response.genderKey,
             employeeName: response.user.fullName,
+            personId: response.user.userId,
           });
         } else {
           void announceScanError({

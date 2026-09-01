@@ -16,6 +16,7 @@ import type {
   BathroomStatusResponse,
 } from "@rfid-attendance/shared";
 import { bathroomTimeIn, bathroomTimeOut, loadBathroomStatus } from "./api";
+import { announceBathroom } from "./services/ttsService";
 
 export function getAvatarInitials(name: string): string {
   const tokens = name.trim().split(/\s+/).filter(Boolean);
@@ -151,8 +152,15 @@ export function BathroomKeyLogPanel({
     setSuccessMsg("");
     setActionBusy(genderKey);
     try {
+      const selectedEmployee = activeEmployees.find((employee) => employee.userId === userId);
       const res = await bathroomTimeOut(userId, genderKey);
       if (res.success) {
+        void announceBathroom({
+          action: "CHECKOUT",
+          genderKey,
+          employeeName: selectedEmployee?.fullName,
+          personId: selectedEmployee?.userId,
+        });
         setSuccessMsg(`Checked out ${genderKey.toLowerCase()} key.`);
         if (genderKey === "MALE") {
           setSelectedMaleUserId(null);
@@ -184,8 +192,15 @@ export function BathroomKeyLogPanel({
     setSuccessMsg("");
     setActionBusy(genderKey);
     try {
+      const activeHolder = genderKey === "MALE" ? status?.maleActive : status?.femaleActive;
       const res = await bathroomTimeIn(logId);
       if (res.success) {
+        void announceBathroom({
+          action: "RETURN",
+          genderKey,
+          employeeName: activeHolder?.fullName,
+          personId: activeHolder?.userId,
+        });
         setSuccessMsg(`Returned ${genderKey.toLowerCase()} key.`);
         await refreshStatus(date);
       } else {

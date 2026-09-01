@@ -171,8 +171,26 @@ PHRASE_CATALOG = [
     },
     {
         "category": "bathroom",
+        "slug": "checkout-male-for",
+        "phrase": "Male bathroom key checked out for",
+        "tone": "warm",
+    },
+    {
+        "category": "bathroom",
         "slug": "checkout-female",
         "phrase": "Female bathroom key checked out.",
+        "tone": "warm",
+    },
+    {
+        "category": "bathroom",
+        "slug": "checkout-female-for",
+        "phrase": "Female bathroom key checked out for",
+        "tone": "warm",
+    },
+    {
+        "category": "bathroom",
+        "slug": "thank-you",
+        "phrase": "Thank you,",
         "tone": "warm",
     },
     {

@@ -759,6 +759,15 @@ describe('ttsService', () => {
       });
     });
 
+    it('resolves both gendered bathroom checkout-name carriers', () => {
+      expect(getClonedBeaAudioUrl('Male bathroom key checked out for')).toBe(
+        '/voices/bea/bathroom/checkout-male-for.wav',
+      );
+      expect(getClonedBeaAudioUrl('Female bathroom key checked out for')).toBe(
+        '/voices/bea/bathroom/checkout-female-for.wav',
+      );
+    });
+
     it('plays pre-rendered bathroom audio directly when cloned-bea is selected', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
       const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
