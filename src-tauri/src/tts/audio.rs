@@ -28,7 +28,7 @@ enum AudioCommand {
 /// compatibility across all platforms and keeps audio decoding off the main runtime threads.
 #[derive(Clone)]
 pub struct AudioPlayer {
-    sender: mpsc::UnboundedSender<AudioCommand>,
+    sender: Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<AudioCommand>>>>,
 }
 
 impl Default for AudioPlayer {
@@ -39,6 +39,20 @@ impl Default for AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
+        Self {
+            sender: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn get_or_init_sender(&self) -> Result<mpsc::UnboundedSender<AudioCommand>, String> {
+        let mut guard = self
+            .sender
+            .lock()
+            .map_err(|e| format!("Audio player mutex poisoned: {e}"))?;
+        if let Some(tx) = &*guard {
+            return Ok(tx.clone());
+        }
+
         let (sender, mut receiver) = mpsc::unbounded_channel::<AudioCommand>();
 
         std::thread::Builder::new()
@@ -102,77 +116,93 @@ impl AudioPlayer {
                                 }
                             };
 
-                            let reader = BufReader::new(file);
-                            let decoder = match Decoder::new(reader) {
-                                Ok(d) => d,
+                            let source = match Decoder::new(BufReader::new(file)) {
+                                Ok(s) => s,
                                 Err(err) => {
-                                    let _ = response
-                                        .send(Err(format!("Failed to decode WAV audio: {err}")));
+                                    let _ = response.send(Err(format!(
+                                        "Failed to decode audio file {}: {err}",
+                                        wav_path.display()
+                                    )));
                                     continue;
                                 }
                             };
 
                             let sink = match Sink::try_new(handle) {
-                                Ok(s) => s,
+                                Ok(s) => Arc::new(s),
                                 Err(err) => {
-                                    let _ = response
-                                        .send(Err(format!("Failed to create audio sink: {err}")));
+                                    let _ = response.send(Err(format!(
+                                        "Failed to create audio sink: {err}"
+                                    )));
                                     continue;
                                 }
                             };
 
-                            let clamped_volume = volume.clamp(0.0, 1.0);
-                            sink.set_volume(clamped_volume);
-                            sink.append(decoder);
+                            sink.set_volume(volume);
+                            sink.append(source);
+                            current_sink = Some(sink.clone());
 
-                            let sink_arc = Arc::new(sink);
-                            current_sink = Some(sink_arc.clone());
-
+                            let sink_for_monitor = sink.clone();
                             let file_to_clean = cleanup_file;
-                            let sink_for_monitor = sink_arc.clone();
 
                             if wait_for_completion {
                                 std::thread::spawn(move || {
-                                    while !sink_for_monitor.empty() {
-                                        std::thread::sleep(Duration::from_millis(25));
-                                    }
+                                    sink_for_monitor.sleep_until_end();
                                     if let Some(path) = file_to_clean {
                                         let _ = std::fs::remove_file(path);
                                     }
                                     let _ = response.send(Ok(()));
                                 });
                             } else {
-                                std::thread::spawn(move || {
-                                    while !sink_for_monitor.empty() {
-                                        std::thread::sleep(Duration::from_millis(50));
-                                    }
-                                    if let Some(path) = file_to_clean {
+                                if let Some(path) = file_to_clean {
+                                    std::thread::spawn(move || {
+                                        sink_for_monitor.sleep_until_end();
                                         let _ = std::fs::remove_file(path);
-                                    }
-                                });
+                                    });
+                                }
                                 let _ = response.send(Ok(()));
                             }
                         }
                     }
                 }
             })
-            .expect("spawn audio worker thread");
+            .map_err(|e| format!("Failed to spawn audio worker thread: {e}"))?;
 
-        Self { sender }
+        *guard = Some(sender.clone());
+        Ok(sender)
     }
 
     /// Stops any currently playing audio immediately.
     pub async fn stop(&self) {
-        let _ = self.sender.send(AudioCommand::Stop);
+        let sender = {
+            if let Ok(guard) = self.sender.lock() {
+                guard.clone()
+            } else {
+                None
+            }
+        };
+        if let Some(tx) = sender {
+            let _ = tx.send(AudioCommand::Stop);
+        }
     }
 
     /// Checks if audio is currently playing.
     pub async fn is_playing(&self) -> bool {
-        let (tx, rx) = oneshot::channel();
-        if self.sender.send(AudioCommand::IsPlaying { response: tx }).is_err() {
-            return false;
+        let sender = {
+            if let Ok(guard) = self.sender.lock() {
+                guard.clone()
+            } else {
+                None
+            }
+        };
+        if let Some(tx) = sender {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            if tx.send(AudioCommand::IsPlaying { response: resp_tx }).is_err() {
+                return false;
+            }
+            resp_rx.await.unwrap_or(false)
+        } else {
+            false
         }
-        rx.await.unwrap_or(false)
     }
 
     /// Plays a WAV file from the filesystem on the audio worker thread.
@@ -183,8 +213,9 @@ impl AudioPlayer {
         cleanup_file: Option<PathBuf>,
         wait_for_completion: bool,
     ) -> Result<(), String> {
+        let sender = self.get_or_init_sender()?;
         let (tx, rx) = oneshot::channel();
-        self.sender
+        sender
             .send(AudioCommand::Play {
                 wav_path: wav_path.to_path_buf(),
                 volume,
