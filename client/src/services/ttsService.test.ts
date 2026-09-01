@@ -1051,4 +1051,16 @@ describe('ttsService', () => {
       expect(stopBackendSpy).toHaveBeenCalled();
     });
   });
+
+  describe('Voicebox runtime isolation', () => {
+    it('confirms cloned-bea audio manifest contains no Voicebox network endpoints', () => {
+      const manifestStr = JSON.stringify(clonedBeaVoice.CLONED_BEA_PHRASE_MANIFEST);
+      expect(manifestStr).not.toContain('127.0.0.1:17493');
+      expect(manifestStr).not.toContain('localhost:17493');
+      expect(manifestStr).not.toContain('voicebox');
+      expect(manifestStr).not.toContain('http://');
+      expect(manifestStr).not.toContain('https://');
+      expect(manifestStr).toContain('/voices/bea/');
+    });
+  });
 });

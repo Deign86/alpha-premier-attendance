@@ -40,6 +40,17 @@ pub fn restore_failed_path(data_dir: &Path) -> PathBuf {
     data_dir.join(RESTORE_FAILED_FILE)
 }
 
+fn record_restore_failure(data_dir: &Path, source: Option<&Path>, error: &str) {
+    let detail = match source {
+        Some(path) => format!("{}: {error}", path.display()),
+        None => error.to_string(),
+    };
+    let failed_path = restore_failed_path(data_dir);
+    if let Err(write_error) = std::fs::write(&failed_path, detail) {
+        log::error!("cannot record restore failure in {}: {write_error}", failed_path.display());
+    }
+}
+
 /// Timestamped backup file name, e.g. `attendance-backup-20260805-143000.apbackup`.
 /// Names sort lexicographically newest-first, which backup rotation relies on.
 pub fn backup_file_name(now: &chrono::DateTime<chrono::Utc>) -> String {
@@ -471,11 +482,16 @@ pub async fn process_restore_request(
             Ok(text) => Some(text.trim().to_string()),
             Err(error) => {
                 log::error!("cannot read restore request {error}; keeping current database");
-                let _ = std::fs::rename(&marker, restore_failed_path(data_dir));
+                record_restore_failure(
+                    data_dir,
+                    None,
+                    &format!("cannot read restore request: {error}"),
+                );
                 return RestoreOutcome::Failed {
                     source: PathBuf::new(),
                     error: format!("cannot read restore request: {error}"),
                 };
+
             }
         }
     } else {
@@ -490,7 +506,8 @@ pub async fn process_restore_request(
             source: source.clone(),
         };
         if marker.is_file() {
-            let _ = std::fs::rename(&marker, restore_failed_path(data_dir));
+            record_restore_failure(data_dir, Some(&source), "source file is missing");
+            let _ = std::fs::remove_file(&marker);
         }
         log::warn!(
             "restore source {} missing; keeping current database",
@@ -506,9 +523,10 @@ pub async fn process_restore_request(
                 error: error.clone(),
             };
             if marker.is_file() {
-                let _ = std::fs::rename(&marker, restore_failed_path(data_dir));
+                record_restore_failure(data_dir, Some(&source), &error);
+                let _ = std::fs::remove_file(&marker);
             }
-            log::error!("restore from {} rejected: {error}", source.display());
+
             return outcome;
         }
     };
@@ -522,9 +540,10 @@ pub async fn process_restore_request(
             error: error.clone(),
         };
         if marker.is_file() {
-            let _ = std::fs::rename(&marker, restore_failed_path(data_dir));
+            record_restore_failure(data_dir, Some(&source), &error);
+            let _ = std::fs::remove_file(&marker);
         }
-        log::error!("restore from {} rejected: {error}", source.display());
+
         return outcome;
     }
     // Safety snapshot of the current database so the restore can be undone.
@@ -563,9 +582,10 @@ pub async fn process_restore_request(
             error: error.clone(),
         };
         if marker.is_file() {
-            let _ = std::fs::rename(&marker, restore_failed_path(data_dir));
+            record_restore_failure(data_dir, Some(&source), &error);
+            let _ = std::fs::remove_file(&marker);
         }
-        log::error!("restore from {} failed: {error}", source.display());
+
         return outcome;
     }
     if marker.is_file() {
@@ -951,6 +971,13 @@ mod tests {
             RestoreOutcome::SkippedMissingSource { .. }
         ));
         assert!(restore_failed_path(&dir).exists());
+        let failure = std::fs::read_to_string(restore_failed_path(&dir)).unwrap();
+        assert!(failure.contains("source file is missing"));
+        assert!(failure.contains("gone.db"));
+        assert!(
+            !failure.trim().eq("gone.db"),
+            "failure marker must explain the restore failure, not just repeat the backup path"
+        );
         assert!(db_path.exists(), "current database must be kept");
         let _ = std::fs::remove_dir_all(&dir);
     }

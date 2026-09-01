@@ -3247,7 +3247,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         <div className="warning-banner" role="alert">
           <ShieldAlert size={20} />
           <div>
-            <strong>Scheduled database restore failed</strong>
+            <strong>Database restore failed</strong>
             <p>{info.restoreFailed}</p>
           </div>
         </div>
