@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicebox-qwen-1.7B-cuda-cloned",
-  "generatedAt": "2026-08-31T05:36:01.746Z",
+  "generatedAt": "2026-09-01T03:57:49Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -253,6 +253,16 @@
       "audioFile": "/voices/bea/names/USR_EMP_001.wav",
       "generatedAt": "2026-09-01T01:48:28Z",
       "audioHash": "a3fe8347955c3dca169f9d7944cbd0aedfc3da90b41a00730b2f8accf7f38b02"
+    },
+    "APG-2026-115": {
+      "personId": "APG-2026-115",
+      "displayName": "Allaena Nicole E. Vizon",
+      "normalizedSpeechText": "Allaena Nicole Vizon",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "1.7B-qwen-cloned-v1",
+      "audioFile": "/voices/bea/names/APG-2026-115.wav",
+      "generatedAt": "2026-09-01T03:57:49Z",
+      "audioHash": "920ec2aee5f498183755446ebd054b46c40d3b1d34b2d7a2a966d8536b3c7bea"
     }
   }
 }
