@@ -641,9 +641,12 @@ async fn restore_portable_backup(
         .map_err(|e| format!("cannot copy staging database: {e}"))?;
 
     // Re-align photo URLs in the restored database to the local machine data_dir
+    let connect_opts = SqliteConnectOptions::new()
+        .filename(&temp_restore)
+        .create_if_missing(false);
     if let Ok(pool) = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
-        .connect(&format!("sqlite://{}", temp_restore.to_string_lossy()))
+        .connect_with(connect_opts)
         .await
     {
         let photos_dir_str = data_dir.join("photos").to_string_lossy().replace('\\', "/");
