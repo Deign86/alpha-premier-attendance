@@ -151,7 +151,7 @@ describe('updateService', () => {
       expect(result.update).toBeNull();
     });
 
-    it('returns error message on true network failure during manual check', async () => {
+    it('returns user-friendly error message on true network failure during manual check', async () => {
       const mockClient: UpdaterClient = {
         check: vi.fn().mockRejectedValue(new Error('Connection timed out')),
         relaunch: vi.fn().mockResolvedValue(undefined),
@@ -159,7 +159,18 @@ describe('updateService', () => {
 
       const result = await checkForUpdates(true, mockClient);
       expect(result.available).toBe(false);
-      expect(result.error).toContain('Connection timed out');
+      expect(result.error).toContain('Unable to connect to the update server');
+    });
+
+    it('handles reqwest unreachable network error gracefully with clear message', async () => {
+      const mockClient: UpdaterClient = {
+        check: vi.fn().mockRejectedValue(new Error('error sending request for url (https://github.com/Deign86/alpha-premier-attendance/releases/latest/download/latest.json)')),
+        relaunch: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const result = await checkForUpdates(true, mockClient);
+      expect(result.available).toBe(false);
+      expect(result.error).toContain('Unable to connect to the update server');
     });
 
     it('handles non-Tauri browser environments gracefully', async () => {

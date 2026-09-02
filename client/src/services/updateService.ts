@@ -1,4 +1,4 @@
-import { check, type Update } from '@tauri-apps/plugin-updater';
+import { check, type CheckOptions, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 
 export const TERMINAL_DISABLE_AUTO_UPDATE_KEY = 'alpha_premier_terminal_disable_auto_update';
@@ -25,12 +25,12 @@ export interface CheckUpdateResult {
 }
 
 export interface UpdaterClient {
-  check: () => Promise<Update | null>;
+  check: (options?: CheckOptions) => Promise<Update | null>;
   relaunch: () => Promise<void>;
 }
 
 export const defaultUpdaterClient: UpdaterClient = {
-  check: () => check(),
+  check: (options?: CheckOptions) => check(options),
   relaunch: () => relaunch(),
 };
 
@@ -95,7 +95,7 @@ export async function checkForUpdates(
   }
 
   try {
-    const update = await client.check();
+    const update = await client.check({ timeout: 8_000 });
     if (update) {
       return {
         available: true,
@@ -137,7 +137,10 @@ export async function checkForUpdates(
       normalized.includes('releasenotfound') ||
       normalized.includes('could not find a release') ||
       normalized.includes('no release found') ||
+      normalized.includes('status 404') ||
+      normalized.includes('404 not found') ||
       normalized.includes('404') ||
+      normalized.includes('not found') ||
       normalized.includes('uptodate') ||
       normalized.includes('up to date')
     ) {
@@ -146,6 +149,30 @@ export async function checkForUpdates(
         update: null,
         info: null,
         error: null,
+      };
+    }
+
+    // Network / connectivity / timeout issues
+    if (
+      normalized.includes('error sending request') ||
+      normalized.includes('connect error') ||
+      normalized.includes('timed out') ||
+      normalized.includes('timeout') ||
+      normalized.includes('network unreachable') ||
+      normalized.includes('unreachable network') ||
+      normalized.includes('could not connect') ||
+      normalized.includes('connection refused') ||
+      normalized.includes('connection reset') ||
+      normalized.includes('dns error') ||
+      normalized.includes('failed to resolve') ||
+      normalized.includes('failed to connect') ||
+      normalized.includes('failed to fetch')
+    ) {
+      return {
+        available: false,
+        update: null,
+        info: null,
+        error: 'Unable to connect to the update server. Please check your internet connection.',
       };
     }
 

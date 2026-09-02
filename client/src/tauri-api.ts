@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
+import type { ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
 
 export interface HealthStatusResponse {
   status: string;
@@ -19,6 +19,7 @@ export const tauriApi = {
   bathroomScanRfid: (rfidUid: string) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),
   bathroomTimeOut: (token: string, userId: string, genderKey: 'MALE' | 'FEMALE', notes?: string) => invoke<BathroomActionResponse>('bathroom_time_out', { token, userId, genderKey, notes }),
   bathroomTimeIn: (token: string, logId: string, notes?: string) => invoke<BathroomActionResponse>('bathroom_time_in', { token, logId, notes }),
+  bathroomUpdateLog: (token: string, logId: string, request: BathroomUpdateRequest) => invoke<BathroomActionResponse>('bathroom_update_log', { token, logId, request }),
   lanStatus: () => invoke<LanStatusResponse>('lan_status'),
   lanStart: () => invoke<LanStatusResponse>('lan_start'),
   lanStop: () => invoke<LanStatusResponse>('lan_stop'),
@@ -94,10 +95,21 @@ export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: st
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
 /** Listen for tray menu "Check for updates…" trigger. */
-export const listenForCheckForUpdates = (handler: () => void): Promise<() => void> => {
+export const listenForCheckForUpdates = async (handler: () => void): Promise<() => void> => {
   if (globalThis.window === undefined || !('__TAURI_INTERNALS__' in globalThis.window)) {
-    return Promise.resolve(() => {});
+    return () => {};
   }
-  return listen<void>('check-for-updates', () => handler());
+  const globalUnlisten = await listen<void>('check-for-updates', () => handler());
+  let winUnlisten: (() => void) | undefined;
+  try {
+    const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+    winUnlisten = await getCurrentWebviewWindow().listen<void>('check-for-updates', () => handler());
+  } catch {
+    // Ignore webview window listener setup failure in mock/test environments
+  }
+  return () => {
+    globalUnlisten();
+    if (winUnlisten) winUnlisten();
+  };
 };
 

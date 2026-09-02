@@ -904,6 +904,161 @@ async fn bathroom_time_in(
     }))
 }
 
+async fn bathroom_update_log_impl(
+    state: &AppState,
+    token: &str,
+    log_id: &str,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(state, token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+
+    let existing = sqlx::query(
+        "SELECT log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at FROM bathroom_log WHERE log_id = ?",
+    )
+    .bind(&log_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "BATHROOM_LOG_NOT_FOUND: Bathroom log entry not found".to_string())?;
+
+    let log_date: String = existing.get("log_date");
+    let user_id: String = existing.get("user_id");
+    let full_name: String = existing.get("full_name");
+    let department: Option<String> = existing.get("department");
+    let gender_key: String = existing.get("gender_key");
+    let current_time_out: String = existing.get("time_out");
+    let current_time_in: Option<String> = existing.get("time_in");
+    let current_notes: String = existing.get("notes");
+    let created_at: String = existing.get("created_at");
+
+    let next_time_out = if let Some(to_val) = request.get("timeOut") {
+        if let Some(s) = to_val.as_str() {
+            let s_trimmed = s.trim();
+            if s_trimmed.is_empty() {
+                return Err("Time-out cannot be empty.".into());
+            }
+            s_trimmed.to_string()
+        } else {
+            current_time_out
+        }
+    } else {
+        current_time_out
+    };
+
+    let parsed_out = chrono::DateTime::parse_from_rfc3339(&next_time_out)
+        .map_err(|_| "Time-out must be a valid RFC3339 timestamp.".to_string())?;
+
+    let next_time_in: Option<String> = if let Some(ti_val) = request.get("timeIn") {
+        if ti_val.is_null() {
+            None
+        } else if let Some(s) = ti_val.as_str() {
+            let s_trimmed = s.trim();
+            if s_trimmed.is_empty() {
+                None
+            } else {
+                Some(s_trimmed.to_string())
+            }
+        } else {
+            current_time_in
+        }
+    } else {
+        current_time_in
+    };
+
+    let next_duration_seconds: Option<i64>;
+    let next_status: String;
+
+    if let Some(ref ti_str) = next_time_in {
+        let parsed_in = chrono::DateTime::parse_from_rfc3339(ti_str)
+            .map_err(|_| "Time-in must be a valid RFC3339 timestamp.".to_string())?;
+
+        if parsed_in < parsed_out {
+            return Err("Time-in (return) cannot precede time-out (checkout).".into());
+        }
+
+        let dur = (parsed_in - parsed_out).num_seconds().max(0);
+        next_duration_seconds = Some(dur);
+        next_status = "RETURNED".to_string();
+    } else {
+        // If status is going to be OUT, ensure no other active key is currently OUT for this gender
+        let conflict = sqlx::query(
+            "SELECT full_name FROM bathroom_log WHERE gender_key = ? AND status = 'OUT' AND log_id != ? LIMIT 1",
+        )
+        .bind(&gender_key)
+        .bind(&log_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if let Some(active) = conflict {
+            let holder: String = active.get("full_name");
+            return Err(format!(
+                "BATHROOM_KEY_ALREADY_CHECKED_OUT: The {gender_key} bathroom key is currently checked out by {holder}."
+            ));
+        }
+
+        next_duration_seconds = None;
+        next_status = "OUT".to_string();
+    }
+
+    let next_notes = if let Some(notes_val) = request.get("notes") {
+        if let Some(s) = notes_val.as_str() {
+            s.trim().to_string()
+        } else {
+            current_notes
+        }
+    } else {
+        current_notes
+    };
+
+    let now_utc = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "UPDATE bathroom_log SET time_out = ?, time_in = ?, duration_seconds = ?, status = ?, notes = ?, updated_at = ? WHERE log_id = ?",
+    )
+    .bind(&next_time_out)
+    .bind(&next_time_in)
+    .bind(next_duration_seconds)
+    .bind(&next_status)
+    .bind(&next_notes)
+    .bind(&now_utc)
+    .bind(&log_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| format!("Failed to update bathroom log: {e}"))?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "entry": {
+            "logId": log_id,
+            "logDate": log_date,
+            "userId": user_id,
+            "fullName": full_name,
+            "department": department,
+            "genderKey": gender_key,
+            "timeOut": next_time_out,
+            "timeIn": next_time_in,
+            "durationSeconds": next_duration_seconds,
+            "status": next_status,
+            "notes": next_notes,
+            "createdAt": created_at,
+            "updatedAt": now_utc
+        }
+    }))
+}
+
+#[tauri::command]
+async fn bathroom_update_log(
+    state: State<'_, AppState>,
+    token: String,
+    log_id: String,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    bathroom_update_log_impl(&state, &token, &log_id, &request).await
+}
+
 async fn process_bathroom_scan(
     state: &AppState,
     rfid_uid: &str,
@@ -4525,6 +4680,7 @@ pub fn run() {
             bathroom_get_status,
             bathroom_time_out,
             bathroom_time_in,
+            bathroom_update_log,
             bathroom_scan_rfid
         ])
         .run(tauri::generate_context!())
@@ -5351,6 +5507,105 @@ mod tests {
         });
         let future_err = super::admin_create_backdated_attendance_impl(None, &state, &token, &future_payload).await.unwrap_err();
         assert_eq!(future_err, "ADMIN_VALIDATION_ERROR");
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn bathroom_update_log_flow() {
+        let temp = std::env::temp_dir().join(format!("alpha-bathroom-update-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let db_path = temp.join("attendance.db");
+        let exports_path = temp.join("exports");
+        let state = AppState::new(
+            temp.clone(),
+            db_path,
+            exports_path,
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+
+        super::upsert_user_record(
+            &state.db,
+            "EMP_01",
+            "CARD_01",
+            "Raineer C. Rosado",
+            Some("IT/ Marketing Associate"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-27T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        // 1. Check out Male key
+        let log_id = uuid::Uuid::new_v4().to_string();
+        let now_utc = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES (?, '2026-08-31', 'EMP_01', 'Raineer C. Rosado', 'IT/ Marketing Associate', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', ?, ?)",
+        )
+        .bind(&log_id)
+        .bind(&now_utc)
+        .bind(&now_utc)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        // 2. Update log with return time and notes
+        let update_req = serde_json::json!({
+            "timeOut": "2026-08-31T10:00:00+08:00",
+            "timeIn": "2026-08-31T10:15:00+08:00",
+            "notes": "Forgot to tap back in"
+        });
+
+        let updated = super::bathroom_update_log_impl(
+            &state,
+            &token,
+            &log_id,
+            &update_req,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated["success"], true);
+        assert_eq!(updated["entry"]["status"], "RETURNED");
+        assert_eq!(updated["entry"]["durationSeconds"], 900);
+        assert_eq!(updated["entry"]["notes"], "Forgot to tap back in");
+        assert_eq!(updated["entry"]["timeOut"], "2026-08-31T10:00:00+08:00");
+        assert_eq!(updated["entry"]["timeIn"], "2026-08-31T10:15:00+08:00");
+
+        // 3. Invalid return time (before checkout) must fail
+        let invalid_req = serde_json::json!({
+            "timeOut": "2026-08-31T10:15:00+08:00",
+            "timeIn": "2026-08-31T10:00:00+08:00",
+        });
+        let invalid_res = super::bathroom_update_log_impl(
+            &state,
+            &token,
+            &log_id,
+            &invalid_req,
+        )
+        .await;
+        assert!(invalid_res.is_err());
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);

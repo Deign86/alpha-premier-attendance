@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from './tauri-api';
-import { createAdminBackdatedAttendance, exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan } from './api';
+import { createAdminBackdatedAttendance, exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan, updateBathroomLog } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -186,4 +186,96 @@ describe('createAdminBackdatedAttendance', () => {
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 });
+
+describe('updateBathroomLog', () => {
+  it('updates bathroom log via tauriApi in desktop mode', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    const spy = vi.spyOn(tauriApi, 'bathroomUpdateLog').mockResolvedValueOnce({
+      success: true,
+      entry: {
+        logId: 'bath-1',
+        logDate: '2026-08-31',
+        userId: 'u1',
+        fullName: 'Raineer C. Rosado',
+        department: 'IT/ Marketing Associate',
+        genderKey: 'MALE',
+        timeOut: '2026-08-31T10:00:00+08:00',
+        timeIn: '2026-08-31T10:15:00+08:00',
+        durationSeconds: 900,
+        status: 'RETURNED',
+        notes: 'Forgot to tap back in',
+        createdAt: '2026-08-31T10:00:00+08:00',
+        updatedAt: '2026-08-31T10:15:00+08:00',
+      },
+    });
+
+    const result = await updateBathroomLog('bath-1', {
+      timeOut: '2026-08-31T10:00:00+08:00',
+      timeIn: '2026-08-31T10:15:00+08:00',
+      notes: 'Forgot to tap back in',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.entry?.status).toBe('RETURNED');
+    expect(spy).toHaveBeenCalledWith('', 'bath-1', {
+      timeOut: '2026-08-31T10:00:00+08:00',
+      timeIn: '2026-08-31T10:15:00+08:00',
+      notes: 'Forgot to tap back in',
+    });
+    // SAFETY: Removing test mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it('maps Tauri errors to failure response', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    vi.spyOn(tauriApi, 'bathroomUpdateLog').mockRejectedValueOnce('Time-in (return) cannot precede time-out (checkout).');
+
+    const result = await updateBathroomLog('bath-1', {
+      timeOut: '2026-08-31T10:15:00+08:00',
+      timeIn: '2026-08-31T10:00:00+08:00',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain('Time-in (return) cannot precede time-out (checkout).');
+    // SAFETY: Removing test mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it('falls back to fetch in web mode', async () => {
+    // SAFETY: Mock Response object for fetch
+    const mockResponse = {
+      ok: true,
+      json: async () => ({
+        success: true,
+        entry: {
+          logId: 'bath-1',
+          logDate: '2026-08-31',
+          userId: 'u1',
+          fullName: 'Raineer C. Rosado',
+          genderKey: 'MALE',
+          timeOut: '2026-08-31T10:00:00+08:00',
+          timeIn: '2026-08-31T10:15:00+08:00',
+          durationSeconds: 900,
+          status: 'RETURNED',
+          notes: 'Forgot to tap back in',
+          createdAt: '2026-08-31T10:00:00+08:00',
+          updatedAt: '2026-08-31T10:15:00+08:00',
+        },
+      }),
+    } as Response;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse);
+
+    const result = await updateBathroomLog('bath-1', {
+      timeOut: '2026-08-31T10:00:00+08:00',
+      timeIn: '2026-08-31T10:15:00+08:00',
+    });
+
+    expect(result.success).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/admin/bathroom/bath-1'),
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+  });
+});
+
 

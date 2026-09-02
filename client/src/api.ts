@@ -752,6 +752,13 @@ export async function updateBathroomLog(
   logId: string,
   request: BathroomUpdateRequest,
 ): Promise<BathroomActionResponse> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.bathroomUpdateLog(nativeAdminToken ?? '', logId, request);
+    } catch (error) {
+      return { success: false, error: { code: 'BATHROOM_ERROR', message: errorString(error) } };
+    }
+  }
   const response = await fetch(apiUrl(`/api/admin/bathroom/${encodeURIComponent(logId)}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

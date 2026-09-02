@@ -179,6 +179,7 @@ pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
                 }
             }
             "check_updates" => {
+                let _ = app.emit("check-for-updates", ());
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();
