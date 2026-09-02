@@ -59,20 +59,16 @@
   EVIDENCE: All 8 package manifests, Cargo.toml, and tauri.conf.json synchronized at version 0.1.38; swatinem/rust-cache configured for src-tauri.
 
 
-## Attendance corrections date range filtering gates
+## Attendance corrections specific date filtering gates
 
-- [x] Each row's displayed date is derived strictly from its own attendanceDate, and filterFrom/filterTo act purely as range filters.
-  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('client/src/App.tsx','utf8'); if(!s.includes('filterFrom') || !s.includes('filterTo') || !s.includes('row.attendanceDate')) process.exit(1);"
+- [x] Attendance corrections uses single specific date filtering (no from/to date ranges or range presets).
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('client/src/App.tsx','utf8'); if(s.includes('filterFrom') || s.includes('filterTo') || s.includes('getDatesInRange') || !s.includes('Filter attendance date')) process.exit(1);"
   EXPECT: command exits 0
-  EVIDENCE: App.tsx variables renamed to filterFrom/filterTo; row.attendanceDate is strictly rendered and used for ISO generation; getPresetRange("today") returns localDate(); BackdatedAttendanceModal onSaved passes created attendanceDate.
-- [x] filteredRows explicitly filters active rows by attendanceDate between filterFrom and filterTo inclusive.
-  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('client/src/App.tsx','utf8'); if(!s.includes('row.attendanceDate < minDate') || !s.includes('row.attendanceDate > maxDate')) process.exit(1);"
-  EXPECT: command exits 0
-  EVIDENCE: App.tsx filteredRows applies minDate/maxDate boundary checks on row.attendanceDate when rangeRows is active; labels updated to "Show corrections from" and "To".
-- [x] Client test suite passes including new tests for backdated correction creation, date range filtering, and row date preservation.
+  EVIDENCE: App.tsx removed filterFrom, filterTo, getDatesInRange, getPresetRange, and range presets. Uses single Date input with Today button matching BathroomKeyLogPanel pattern.
+- [x] Client test suite passes including specific date filtering test.
   CHECK: npm test -w client -- src/App.test.tsx
   EXPECT: all tests pass
-  EVIDENCE: 46/46 tests pass in src/App.test.tsx, and 198/198 tests pass across all 14 test files in the client test suite. Oxlint anti-slop rules pass with 0 errors.
+  EVIDENCE: 46/46 tests pass in src/App.test.tsx, and 200/200 tests pass across all 14 test files in the client test suite. Oxlint anti-slop rules pass with 0 errors.
 
 
 ## Bathroom key log time editing gates

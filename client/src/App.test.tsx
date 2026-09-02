@@ -1526,7 +1526,7 @@ describe('Admin Attendance Corrections', () => {
     }
   });
 
-  it('applies a date range filter and verifies rows outside the range are hidden and inside keep their attendanceDate', async () => {
+  it('filters attendance by specific date and verifies records for that date are shown', async () => {
     vi.restoreAllMocks();
     type MockAttendanceItem = {
       attendanceId: string;
@@ -1568,7 +1568,7 @@ describe('Admin Attendance Corrections', () => {
         const match = url.match(/date=([^&]+)/);
         const reqDate = match ? match[1] : '2026-09-02';
         const rows = recordsByDate[reqDate] ?? [];
-        // SAFETY: Return attendance for range date
+        // SAFETY: Return attendance for requested date
         return {
           ok: true,
           json: async () => ({
@@ -1589,22 +1589,20 @@ describe('Admin Attendance Corrections', () => {
     try {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      // Set date range: 2026-09-01 to 2026-09-02
-      const fromInput = screen.getByLabelText(/filter attendance from date/i);
-      const toInput = screen.getByLabelText(/filter attendance to date/i);
+      // By default, initial date shows Ada Lovelace for 2026-09-02
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
 
-      fireEvent.change(fromInput, { target: { value: '2026-09-01' } });
-      fireEvent.change(toInput, { target: { value: '2026-09-02' } });
+      // Change specific date to 2026-09-01
+      const dateInput = screen.getByLabelText(/filter attendance date/i);
+      fireEvent.change(dateInput, { target: { value: '2026-09-01' } });
 
-      // In range: 2026-09-01 (Charles Babbage) and 2026-09-02 (Ada Lovelace)
+      // After changing date to 2026-09-01, Charles Babbage is shown
       expect(await screen.findByText('Charles Babbage')).toBeInTheDocument();
       expect(screen.getByText('2026-09-01')).toBeInTheDocument();
-      expect(screen.getByText('2026-09-02')).toBeInTheDocument();
 
-      // Outside range: 2026-08-30 and 2026-09-05 must NOT be shown
+      // Other dates are not shown
       expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
       expect(screen.queryByText('2026-08-30')).not.toBeInTheDocument();
-      expect(screen.queryByText('2026-09-05')).not.toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }

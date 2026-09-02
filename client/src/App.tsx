@@ -5433,70 +5433,8 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   );
 }
 
-function getDatesInRange(startDate: string, endDate: string): string[] {
-  let start = startDate;
-  let end = endDate;
-  if (start > end) {
-    [start, end] = [end, start];
-  }
-  const dates: string[] = [];
-  const current = new Date(`${start}T00:00:00Z`);
-  const stop = new Date(`${end}T00:00:00Z`);
-  let count = 0;
-  while (current <= stop && count < 62) {
-    dates.push(current.toISOString().slice(0, 10));
-    current.setUTCDate(current.getUTCDate() + 1);
-    count++;
-  }
-  return dates;
-}
-
-interface DateRangePreset {
-  start: string;
-  end: string;
-}
-
-function getPresetRange(
-  preset: "today" | "week" | "month",
-  baseDate: string,
-): DateRangePreset {
-  if (preset === "today") {
-    const today = localDate();
-    return { start: today, end: today };
-  }
-  const d = new Date(`${baseDate}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) {
-    const today = localDate();
-    return { start: today, end: today };
-  }
-  const dateStr = d.toISOString().slice(0, 10);
-  if (preset === "week") {
-    const day = d.getUTCDay();
-    const diffToMonday = day === 0 ? -6 : 1 - day;
-    const monday = new Date(d);
-    monday.setUTCDate(d.getUTCDate() + diffToMonday);
-    const sunday = new Date(monday);
-    sunday.setUTCDate(monday.getUTCDate() + 6);
-    return {
-      start: monday.toISOString().slice(0, 10),
-      end: sunday.toISOString().slice(0, 10),
-    };
-  }
-  if (preset === "month") {
-    const year = d.getUTCFullYear();
-    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const start = `${year}-${month}-01`;
-    const lastDay = new Date(
-      Date.UTC(year, d.getUTCMonth() + 1, 0),
-    ).getUTCDate();
-    const end = `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
-    return { start, end };
-  }
-  return { start: dateStr, end: dateStr };
-}
-
 function AdminAttendance({
-  rows: initialRows,
+  rows,
   date,
   setDate,
   users = [],
@@ -5508,15 +5446,6 @@ function AdminAttendance({
   users?: AdminUser[];
   onSaved: () => void;
 }) {
-  // Source of truth: each row's displayed date is strictly row.attendanceDate.
-  // filterFrom and filterTo act purely as range filters and must never modify what date is shown for any row.
-  const [filterFrom, setFilterFrom] = useState(date);
-  const [filterTo, setFilterTo] = useState(date);
-  const [preset, setPreset] = useState<"today" | "week" | "month" | "custom">(
-    "today",
-  );
-  const [rangeRows, setRangeRows] = useState<AttendanceListItem[] | null>(null);
-  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [exporting, setExporting] = useState(false);
   const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(
@@ -5528,61 +5457,7 @@ function AdminAttendance({
   const [sourceFilter, setSourceFilter] = useState("");
   const [backdatedModalOpen, setBackdatedModalOpen] = useState(false);
 
-  const activeRows = rangeRows ?? initialRows;
-
-  const loadRange = useCallback(
-    async (from: string, to: string) => {
-      if (!from || !to) return;
-      const [start, end] = from <= to ? [from, to] : [to, from];
-      if (start === end) {
-        setDate(start);
-      }
-      const dates = getDatesInRange(start, end);
-      try {
-        setLoading(true);
-        const responses = await Promise.all(
-          dates.map((d) => loadAdminAttendance(d)),
-        );
-        const combined = responses.flatMap((r) =>
-          r.success ? r.attendance : [],
-        );
-        const map = new Map<string, AttendanceListItem>();
-        for (const row of combined) {
-          map.set(row.attendanceId, row);
-        }
-        const unique = Array.from(map.values()).sort((a, b) => {
-          const dateComp = b.attendanceDate.localeCompare(a.attendanceDate);
-          if (dateComp !== 0) return dateComp;
-          return (b.timeIn ?? "").localeCompare(a.timeIn ?? "");
-        });
-        setRangeRows(unique);
-      } catch {
-        setMessage("Unable to load attendance for selected date range.");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [setDate],
-  );
-
-  const applyPreset = (p: "today" | "week" | "month") => {
-    setPreset(p);
-    const range = getPresetRange(p, date);
-    setFilterFrom(range.start);
-    setFilterTo(range.end);
-    void loadRange(range.start, range.end);
-  };
-
-  const handleCustomDateChange = (type: "start" | "end", val: string) => {
-    setPreset("custom");
-    const newFrom = type === "start" ? val : filterFrom;
-    const newTo = type === "end" ? val : filterTo;
-    if (type === "start") setFilterFrom(val);
-    if (type === "end") setFilterTo(val);
-    if (newFrom && newTo) {
-      void loadRange(newFrom, newTo);
-    }
-  };
+  const activeRows = rows;
 
   const arrivalMap = useMemo(
     () => evaluateAttendanceArrivals(activeRows),
@@ -5609,32 +5484,7 @@ function AdminAttendance({
     };
   }, [activeRows, arrivalMap]);
 
-  useEffect(() => {
-    if (rangeRows === null && initialRows.length > 0 && preset === "today") {
-      const initialDate = initialRows[0].attendanceDate;
-      if (initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate)) {
-        setFilterFrom(initialDate);
-        setFilterTo(initialDate);
-      }
-    }
-  }, [initialRows, preset, rangeRows]);
-
   const filteredRows = activeRows.filter((row) => {
-    // Pure date filter: when a date range filter is active (rangeRows !== null), include a row
-    // only if its attendanceDate falls between filterFrom and filterTo (inclusive).
-    // attendanceDate is the source of truth for each row and is NEVER altered by the filter range.
-    if (rangeRows !== null) {
-      const [minDate, maxDate] =
-        filterFrom <= filterTo
-          ? [filterFrom, filterTo]
-          : [filterTo, filterFrom];
-      if (filterFrom && row.attendanceDate < minDate) {
-        return false;
-      }
-      if (filterTo && row.attendanceDate > maxDate) {
-        return false;
-      }
-    }
     if (
       employeeFilter &&
       !`${row.fullName} ${row.userId}`
@@ -5714,15 +5564,10 @@ function AdminAttendance({
   const exportSelectedAttendance = () => {
     const selectedRows = filteredRows.filter((r) => selectedAttendanceIds.has(r.attendanceId));
     if (selectedRows.length === 0) return;
-    const [exportStart, exportEnd] =
-      filterFrom <= filterTo
-        ? [filterFrom, filterTo]
-        : [filterTo, filterFrom];
     const result = exportAttendanceCsv(
       selectedRows,
       arrivalMap,
-      exportStart,
-      exportEnd !== exportStart ? exportEnd : undefined,
+      date,
     );
     if (result.success) {
       setMessage(`Generated ${result.fileName} (${selectedRows.length} rows).`);
@@ -5750,20 +5595,14 @@ function AdminAttendance({
     setSelectedAttendanceIds(new Set());
     setMessage(`Deleted ${count} attendance record(s).`);
     onSaved();
-    void loadRange(filterFrom, filterTo);
   };
 
   const exportWorkbook = async () => {
     setExporting(true);
-    const [exportStart, exportEnd] =
-      filterFrom <= filterTo
-        ? [filterFrom, filterTo]
-        : [filterTo, filterFrom];
     const result = exportAttendanceCsv(
       filteredRows,
       arrivalMap,
-      exportStart,
-      exportEnd !== exportStart ? exportEnd : undefined,
+      date,
     );
     setExporting(false);
     if (result.success) {
@@ -5782,32 +5621,6 @@ function AdminAttendance({
     <section className="table-with-bar">
       <div className="attendance-filter-bar">
         <div className="attendance-filter-top">
-          <div className="filter-presets">
-            <span className="field-label" style={{ marginRight: 4 }}>
-              Period:
-            </span>
-            <button
-              className={`filter-preset-btn ${preset === "today" ? "is-active" : ""}`}
-              type="button"
-              onClick={() => applyPreset("today")}
-            >
-              Today
-            </button>
-            <button
-              className={`filter-preset-btn ${preset === "week" ? "is-active" : ""}`}
-              type="button"
-              onClick={() => applyPreset("week")}
-            >
-              This Week
-            </button>
-            <button
-              className={`filter-preset-btn ${preset === "month" ? "is-active" : ""}`}
-              type="button"
-              onClick={() => applyPreset("month")}
-            >
-              This Month
-            </button>
-          </div>
           <div className="attendance-pills">
             <button
               className={`filter-pill ${!statusFilter ? "is-active" : ""}`}
@@ -5910,27 +5723,26 @@ function AdminAttendance({
         </div>
         <div className="date-filter">
           <label>
-            Show corrections from
+            Date
             <input
               type="date"
-              aria-label="Filter attendance from date"
-              value={filterFrom}
-              onChange={(event) =>
-                handleCustomDateChange("start", event.target.value)
-              }
+              aria-label="Filter attendance date"
+              value={date}
+              onChange={(event) => {
+                const val = event.target.value;
+                if (val) setDate(val);
+              }}
             />
           </label>
-          <label>
-            To
-            <input
-              type="date"
-              aria-label="Filter attendance to date"
-              value={filterTo}
-              onChange={(event) =>
-                handleCustomDateChange("end", event.target.value)
-              }
-            />
-          </label>
+          <button
+            type="button"
+            className="filter-preset-btn"
+            style={{ height: 42, alignSelf: "flex-end" }}
+            onClick={() => setDate(localDate())}
+            disabled={date === localDate()}
+          >
+            Today
+          </button>
           <label>
             Employee
             <input
@@ -5964,7 +5776,7 @@ function AdminAttendance({
           <button
             className="admin-button"
             type="button"
-            disabled={exporting || loading}
+            disabled={exporting}
             onClick={() => void exportWorkbook()}
           >
             {exporting ? (
@@ -5975,7 +5787,6 @@ function AdminAttendance({
               </>
             )}
           </button>
-          {loading && <small role="status">Loading records…</small>}
           {message && <small role="status">{message}</small>}
         </div>
       </div>
@@ -6063,11 +5874,8 @@ function AdminAttendance({
               <tr>
                 <td colSpan={8} className="table-empty-cell">
                   <div className="empty-state">
-                    No attendance records found for{" "}
-                    {filterFrom === filterTo
-                      ? filterFrom
-                      : `${filterFrom <= filterTo ? filterFrom : filterTo} to ${filterFrom <= filterTo ? filterTo : filterFrom}`}
-                    {employeeFilter || departmentFilter || statusFilter
+                    No attendance records found for {date}
+                    {employeeFilter || departmentFilter || statusFilter || sourceFilter
                       ? " matching the selected filters"
                       : ""}
                     .
@@ -6082,10 +5890,7 @@ function AdminAttendance({
                   selected={selectedAttendanceIds.has(row.attendanceId)}
                   onToggleSelect={() => toggleSelectAttendance(row.attendanceId)}
                   arrivalInfo={arrivalMap.get(row.attendanceId)}
-                  onSaved={() => {
-                    onSaved();
-                    void loadRange(filterFrom, filterTo);
-                  }}
+                  onSaved={onSaved}
                 />
               ))
             )}
@@ -6107,17 +5912,10 @@ function AdminAttendance({
           )}
           onClose={() => setBackdatedModalOpen(false)}
           onSaved={(createdDate?: string) => {
-            let nextFrom = filterFrom;
-            let nextTo = filterTo;
             if (createdDate) {
-              if (createdDate < nextFrom) nextFrom = createdDate;
-              if (createdDate > nextTo) nextTo = createdDate;
-              setFilterFrom(nextFrom);
-              setFilterTo(nextTo);
-              setPreset("custom");
+              setDate(createdDate);
             }
             onSaved();
-            void loadRange(nextFrom, nextTo);
           }}
         />
       )}
