@@ -313,6 +313,61 @@ export class AdminService {
     return item;
   }
 
+  async updateBathroomLog<T>(logId: string, input: T): Promise<BathroomLogItem> {
+    if (!logId) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A valid log ID is required.');
+    const parsed = parseBathroomUpdateInput(input);
+    if (!parsed) throw new AdminError('ADMIN_VALIDATION_ERROR', 'At least one valid field to update is required.');
+
+    const item = this.bathroomLogs.find((l) => l.logId === logId);
+    if (!item) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Bathroom log entry was not found.', 404);
+
+    let nextTimeOut = item.timeOut;
+    if (parsed.timeOut !== undefined) {
+      const normalized = normalizeBathroomTimestamp(parsed.timeOut, item.logDate);
+      if (!normalized || !validTimestamp(normalized, item.logDate)) {
+        throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-out must be a valid timestamp matching the log date.');
+      }
+      nextTimeOut = normalized;
+    }
+
+    let nextTimeIn = item.timeIn;
+    if (parsed.timeIn !== undefined) {
+      if (parsed.timeIn === null) {
+        nextTimeIn = null;
+      } else {
+        const normalized = normalizeBathroomTimestamp(parsed.timeIn, item.logDate);
+        if (!normalized || !validTimestamp(normalized, item.logDate)) {
+          throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-in must be a valid timestamp matching the log date.');
+        }
+        nextTimeIn = normalized;
+      }
+    }
+
+    if (nextTimeOut && nextTimeIn) {
+      const outMs = new Date(nextTimeOut).getTime();
+      const inMs = new Date(nextTimeIn).getTime();
+      if (inMs < outMs) {
+        throw new AdminError('ADMIN_VALIDATION_ERROR', 'Time-in (return) cannot precede time-out (checkout).');
+      }
+    }
+
+    item.timeOut = nextTimeOut;
+    item.timeIn = nextTimeIn;
+    if (nextTimeIn) {
+      const outMs = new Date(nextTimeOut).getTime();
+      const inMs = new Date(nextTimeIn).getTime();
+      item.durationSeconds = Math.max(0, Math.round((inMs - outMs) / 1000));
+      item.status = 'RETURNED';
+    } else {
+      item.durationSeconds = null;
+      item.status = 'OUT';
+    }
+
+    if (parsed.notes !== undefined) item.notes = parsed.notes;
+    item.updatedAt = manilaTimestamp(new Date(), this.config.timezone);
+    return item;
+  }
+
   async bathroomScanRfid(rawUid: string): Promise<BathroomScanResponse> {
     const normalizedUid = normalizeRfidUid(rawUid);
     if (!normalizedUid) {
@@ -824,4 +879,57 @@ function parseBathroomTimeInInput<T>(input: T): BathroomTimeInInput | null {
   const notes = isString(input.notes) ? input.notes.trim() : undefined;
   if (!logId) return null;
   return { logId, notes };
+}
+
+type BathroomUpdateInput = {
+  timeOut?: string;
+  timeIn?: string | null;
+  notes?: string;
+};
+
+function normalizeBathroomTimestamp(val: string, date: string): string {
+  const trimmed = val.trim();
+  if (/^\d{2}:\d{2}$/.test(trimmed)) {
+    return `${date}T${trimmed}:00+08:00`;
+  }
+  if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+    return `${date}T${trimmed}+08:00`;
+  }
+  return trimmed;
+}
+
+function parseBathroomUpdateInput<T>(input: T): BathroomUpdateInput | null {
+  if (!isInputObject(input)) return null;
+  let hasField = false;
+  let timeOut: string | undefined;
+  let timeIn: string | null | undefined;
+  let notes: string | undefined;
+
+  if ('timeOut' in input) {
+    if (isString(input.timeOut) && input.timeOut.trim()) {
+      timeOut = input.timeOut.trim();
+      hasField = true;
+    } else {
+      return null;
+    }
+  }
+
+  if ('timeIn' in input) {
+    hasField = true;
+    if (input.timeIn === null || input.timeIn === '') {
+      timeIn = null;
+    } else if (isString(input.timeIn) && input.timeIn.trim()) {
+      timeIn = input.timeIn.trim();
+    } else {
+      return null;
+    }
+  }
+
+  if ('notes' in input && isString(input.notes)) {
+    notes = input.notes.trim();
+    hasField = true;
+  }
+
+  if (!hasField) return null;
+  return { timeOut, timeIn, notes };
 }

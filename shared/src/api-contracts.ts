@@ -864,6 +864,12 @@ export type BathroomTimeInRequest = {
   notes?: string;
 };
 
+export type BathroomUpdateRequest = {
+  timeOut?: string;
+  timeIn?: string | null;
+  notes?: string;
+};
+
 export type BathroomActionResponse = {
   success: boolean;
   entry?: BathroomLogItem;

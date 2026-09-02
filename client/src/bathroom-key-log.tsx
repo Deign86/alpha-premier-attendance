@@ -7,7 +7,9 @@ import {
   LoaderCircle,
   LogOut,
   LogIn,
+  Pencil,
   Search,
+  X,
 } from "lucide-react";
 import type {
   BathroomActiveHolder,
@@ -15,7 +17,7 @@ import type {
   BathroomLogItem,
   BathroomStatusResponse,
 } from "@rfid-attendance/shared";
-import { bathroomTimeIn, bathroomTimeOut, loadBathroomStatus } from "./api";
+import { bathroomTimeIn, bathroomTimeOut, loadBathroomStatus, updateBathroomLog } from "./api";
 import { announceBathroom } from "./services/ttsService";
 
 export function getAvatarInitials(name: string): string {
@@ -94,6 +96,56 @@ export function BathroomKeyLogPanel({
   const [femaleSearch, setFemaleSearch] = useState("");
   const [selectedMaleUserId, setSelectedMaleUserId] = useState<string | null>(null);
   const [selectedFemaleUserId, setSelectedFemaleUserId] = useState<string | null>(null);
+  const [editingLog, setEditingLog] = useState<BathroomLogItem | null>(null);
+
+  const handleLogUpdated = (updated: BathroomLogItem) => {
+    setStatus((prev) => {
+      if (!prev) return prev;
+      const isMale = updated.genderKey === "MALE";
+      const targetLogs = isMale ? prev.maleLogs : prev.femaleLogs;
+      const newLogs = targetLogs.map((item) => (item.logId === updated.logId ? updated : item));
+
+      let maleActive = prev.maleActive;
+      let femaleActive = prev.femaleActive;
+      if (isMale) {
+        if (updated.status === "RETURNED" && maleActive?.logId === updated.logId) {
+          maleActive = null;
+        } else if (updated.status === "OUT") {
+          maleActive = {
+            logId: updated.logId,
+            userId: updated.userId,
+            fullName: updated.fullName,
+            department: updated.department,
+            genderKey: updated.genderKey,
+            timeOut: updated.timeOut,
+          };
+        }
+      } else {
+        if (updated.status === "RETURNED" && femaleActive?.logId === updated.logId) {
+          femaleActive = null;
+        } else if (updated.status === "OUT") {
+          femaleActive = {
+            logId: updated.logId,
+            userId: updated.userId,
+            fullName: updated.fullName,
+            department: updated.department,
+            genderKey: updated.genderKey,
+            timeOut: updated.timeOut,
+          };
+        }
+      }
+
+      return {
+        ...prev,
+        maleActive,
+        femaleActive,
+        maleLogs: isMale ? newLogs : prev.maleLogs,
+        femaleLogs: isMale ? prev.femaleLogs : newLogs,
+      };
+    });
+    setError("");
+    setSuccessMsg("Saved — bathroom key times updated.");
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -362,12 +414,13 @@ export function BathroomKeyLogPanel({
                   <th>Time In</th>
                   <th>Duration</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {logs.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
+                    <td colSpan={6} style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
                       No {genderKey.toLowerCase()} key activity recorded for {date}.
                     </td>
                   </tr>
@@ -385,6 +438,17 @@ export function BathroomKeyLogPanel({
                         <span className={`status-pill ${log.status === "OUT" ? "status-working" : "status-completed"}`}>
                           {log.status === "OUT" ? "OUT" : "RETURNED"}
                         </span>
+                      </td>
+                      <td className="payroll-actions-cell">
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => setEditingLog(log)}
+                          aria-label={`Edit key log for ${log.fullName}`}
+                        >
+                          <Pencil size={13} style={{ marginRight: 4, verticalAlign: -1 }} />
+                          Edit
+                        </button>
                       </td>
                     </tr>
                   ))
@@ -460,6 +524,208 @@ export function BathroomKeyLogPanel({
           )}
         </div>
       )}
+
+      {editingLog && (
+        <EditBathroomLogModal
+          log={editingLog}
+          onClose={() => setEditingLog(null)}
+          onSaved={(updated) => {
+            handleLogUpdated(updated);
+            setEditingLog(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function EditBathroomLogModal({
+  log,
+  onClose,
+  onSaved,
+}: {
+  log: BathroomLogItem;
+  onClose: () => void;
+  onSaved: (updated: BathroomLogItem) => void;
+}) {
+  const initialTimeOut = useMemo(() => {
+    return log.timeOut ? log.timeOut.slice(11, 16) : "08:00";
+  }, [log.timeOut]);
+
+  const initialTimeIn = useMemo(() => {
+    return log.timeIn ? log.timeIn.slice(11, 16) : "";
+  }, [log.timeIn]);
+
+  const [timeOut, setTimeOut] = useState(initialTimeOut);
+  const [timeIn, setTimeIn] = useState(initialTimeIn);
+  const [notes, setNotes] = useState(log.notes ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!timeOut) {
+      setError("Time-out is required.");
+      return;
+    }
+
+    if (timeIn && timeIn < timeOut) {
+      setError("Time-out cannot precede time-in. Return time cannot be earlier than checkout time.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    const timeOutIso = `${log.logDate}T${timeOut}:00+08:00`;
+    const timeInIso = timeIn ? `${log.logDate}T${timeIn}:00+08:00` : null;
+
+    try {
+      const response = await updateBathroomLog(log.logId, {
+        timeOut: timeOutIso,
+        timeIn: timeInIso,
+        notes: notes.trim(),
+      });
+      setBusy(false);
+      if (response.success && response.entry) {
+        onSaved(response.entry);
+      } else {
+        setError(response.error?.message ?? "Failed to update bathroom key log.");
+      }
+    } catch {
+      setBusy(false);
+      setError("Network or server error while updating bathroom key log.");
+    }
+  };
+
+  return (
+    <div
+      className="assisted-modal-backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="assisted-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-bathroom-log-title"
+      >
+        <div className="assisted-modal-header">
+          <div className="assisted-modal-title-wrap">
+            <div className="assisted-modal-icon icon-purple" aria-hidden="true">
+              <KeyRound size={22} />
+            </div>
+            <div>
+              <p className="section-kicker">Key Log Administration</p>
+              <h3 id="edit-bathroom-log-title">Edit Bathroom Key Log</h3>
+              <p className="assisted-modal-subtitle">
+                {log.fullName} • {log.genderKey === "MALE" ? "Male Key" : "Female Key"}
+                {log.department ? ` • ${log.department}` : ""}
+              </p>
+            </div>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label="Close dialog"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="assisted-modal-body">
+            {error && <p className="dashboard-alert" role="alert">{error}</p>}
+
+            <div className="modal-section-group">
+              <label className="field-label" htmlFor="edit-log-date">
+                Date (read-only)
+              </label>
+              <input
+                id="edit-log-date"
+                type="text"
+                className="input"
+                value={`Date: ${log.logDate}`}
+                readOnly
+                disabled
+              />
+            </div>
+
+            <div className="modal-section-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div>
+                <label className="field-label" htmlFor="edit-log-timeout">
+                  Time Out (Checkout)
+                </label>
+                <input
+                  id="edit-log-timeout"
+                  aria-label="Time out"
+                  type="time"
+                  className="input"
+                  value={timeOut}
+                  onChange={(e) => setTimeOut(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="edit-log-timein">
+                  Time In (Return)
+                </label>
+                <input
+                  id="edit-log-timein"
+                  aria-label="Time in"
+                  type="time"
+                  className="input"
+                  value={timeIn}
+                  onChange={(e) => setTimeIn(e.target.value)}
+                  placeholder="Optional if key still out"
+                />
+              </div>
+            </div>
+
+            <div className="modal-section-group">
+              <label className="field-label" htmlFor="edit-log-notes">
+                Notes / Reason
+              </label>
+              <input
+                id="edit-log-notes"
+                aria-label="Notes"
+                type="text"
+                className="input"
+                placeholder="Optional correction notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="assisted-modal-footer">
+            <button
+              className="modal-btn-cancel"
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              className="modal-btn-primary"
+              type="submit"
+              disabled={busy}
+            >
+              {busy ? (
+                <>
+                  <LoaderCircle className="spin" size={16} /> Saving…
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }

@@ -1399,6 +1399,313 @@ describe('Admin Attendance Corrections', () => {
     });
   });
 
+  it('creates a correction for 2026-09-01 while today is 2026-09-02 and ensures the row still shows 2026-09-01', async () => {
+    vi.restoreAllMocks();
+    let capturedBody: {
+      userId?: string;
+      attendanceDate?: string;
+      timeIn?: string;
+      timeOut?: string | null;
+      reason?: string;
+    } | null = null;
+    const recordsMap = new Map<string, Array<{
+      attendanceId: string;
+      userId: string;
+      fullName: string;
+      department: string;
+      attendanceDate: string;
+      timeIn: string | null;
+      timeOut: string | null;
+      status: string;
+      source: string;
+      recordedBy?: string;
+      recordedReason?: string;
+      recordedAt?: string;
+    }>>();
+    recordsMap.set('2026-09-02', []);
+    recordsMap.set('2026-09-01', []);
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch admin session mock
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [{ userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', status: 'ACTIVE', cardType: 'EMPLOYEE' }],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance/backdate') && init?.method === 'POST') {
+        capturedBody = JSON.parse(String(init.body));
+        const newRecord = {
+          attendanceId: 'att-bdt-1',
+          userId: 'u1',
+          fullName: 'Ada Lovelace',
+          department: 'Engineering',
+          attendanceDate: capturedBody?.attendanceDate ?? '2026-09-01',
+          timeIn: capturedBody?.timeIn ?? null,
+          timeOut: capturedBody?.timeOut ?? null,
+          status: 'COMPLETED',
+          source: 'ADMIN_BACKDATED_ENTRY',
+          recordedBy: 'Admin',
+          recordedReason: capturedBody?.reason,
+          recordedAt: '2026-09-02T08:00:00+08:00',
+        };
+        const list = recordsMap.get(newRecord.attendanceDate) ?? [];
+        list.push(newRecord);
+        recordsMap.set(newRecord.attendanceDate, list);
+        // SAFETY: Return backdated attendance response
+        return { ok: true, json: async () => ({ success: true, attendance: newRecord }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        const match = url.match(/date=([^&]+)/);
+        const reqDate = match ? match[1] : '2026-09-02';
+        // SAFETY: Return attendance for requested date
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: reqDate,
+            attendance: recordsMap.get(reqDate) ?? [],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true, profiles: [], cutoffs: [] }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+
+    try {
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      // Click Add missed attendance
+      await user.click(screen.getByRole('button', { name: /\+ add missed attendance/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
+      expect(dialog).toBeInTheDocument();
+
+      // Change attendance date to 2026-09-01
+      const dateInput = within(dialog).getByLabelText(/attendance date \(past date only\):/i);
+      fireEvent.change(dateInput, { target: { value: '2026-09-01' } });
+
+      const reasonInput = within(dialog).getByLabelText(/reason \(mandatory audit trail\):/i);
+      await user.type(reasonInput, 'Forgotten checkout on 09/01');
+
+      // Submit
+      const submitBtn = within(dialog).getByRole('button', { name: /add missed attendance/i });
+      await user.click(submitBtn);
+
+      // Verify payload
+      await waitFor(() => {
+        expect(capturedBody).toMatchObject({
+          userId: 'u1',
+          attendanceDate: '2026-09-01',
+          timeIn: '2026-09-01T08:00:00+08:00',
+          timeOut: '2026-09-01T17:00:00+08:00',
+        });
+      });
+
+      // The row for 2026-09-01 is displayed in the table with date 2026-09-01
+      expect(await screen.findByText('2026-09-01')).toBeInTheDocument();
+      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('applies a date range filter and verifies rows outside the range are hidden and inside keep their attendanceDate', async () => {
+    vi.restoreAllMocks();
+    type MockAttendanceItem = {
+      attendanceId: string;
+      userId: string;
+      fullName: string;
+      department: string;
+      attendanceDate: string;
+      timeIn: string | null;
+      timeOut: string | null;
+      status: string;
+    };
+    type AttendanceDateRecords = Record<string, MockAttendanceItem[]>;
+    const recordsByDate: AttendanceDateRecords = {
+      '2026-08-30': [
+        { attendanceId: 'att-1', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', attendanceDate: '2026-08-30', timeIn: '2026-08-30T08:00:00+08:00', timeOut: '2026-08-30T17:00:00+08:00', status: 'COMPLETED' },
+      ],
+      '2026-09-01': [
+        { attendanceId: 'att-2', userId: 'u2', fullName: 'Charles Babbage', department: 'Engineering', attendanceDate: '2026-09-01', timeIn: '2026-09-01T08:30:00+08:00', timeOut: '2026-09-01T17:30:00+08:00', status: 'COMPLETED' },
+      ],
+      '2026-09-02': [
+        { attendanceId: 'att-3', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', attendanceDate: '2026-09-02', timeIn: '2026-09-02T08:15:00+08:00', timeOut: null, status: 'WORKING' },
+      ],
+      '2026-09-05': [
+        { attendanceId: 'att-4', userId: 'u3', fullName: 'Grace Hopper', department: 'Engineering', attendanceDate: '2026-09-05', timeIn: '2026-09-05T09:00:00+08:00', timeOut: '2026-09-05T18:00:00+08:00', status: 'COMPLETED' },
+      ],
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch admin session mock
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        const match = url.match(/date=([^&]+)/);
+        const reqDate = match ? match[1] : '2026-09-02';
+        const rows = recordsByDate[reqDate] ?? [];
+        // SAFETY: Return attendance for range date
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: reqDate,
+            attendance: rows,
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true, users: [], profiles: [], cutoffs: [] }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+
+    try {
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      // Set date range: 2026-09-01 to 2026-09-02
+      const fromInput = screen.getByLabelText(/filter attendance from date/i);
+      const toInput = screen.getByLabelText(/filter attendance to date/i);
+
+      fireEvent.change(fromInput, { target: { value: '2026-09-01' } });
+      fireEvent.change(toInput, { target: { value: '2026-09-02' } });
+
+      // In range: 2026-09-01 (Charles Babbage) and 2026-09-02 (Ada Lovelace)
+      expect(await screen.findByText('Charles Babbage')).toBeInTheDocument();
+      expect(screen.getByText('2026-09-01')).toBeInTheDocument();
+      expect(screen.getByText('2026-09-02')).toBeInTheDocument();
+
+      // Outside range: 2026-08-30 and 2026-09-05 must NOT be shown
+      expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-08-30')).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-09-05')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('ensures editing a correction does not change its displayed date in the table or request payload', async () => {
+    vi.restoreAllMocks();
+    let savedPayload: {
+      attendanceDate?: string;
+      timeIn?: string | null;
+      timeOut?: string | null;
+    } | null = null;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch admin session mock
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance/att-edit-1') && init?.method === 'PATCH') {
+        savedPayload = JSON.parse(String(init.body));
+        // SAFETY: Return patched attendance
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            attendance: {
+              attendanceId: 'att-edit-1',
+              attendanceDate: '2026-09-01',
+              userId: 'u1',
+              fullName: 'Ada Lovelace',
+              department: 'Engineering',
+              timeIn: savedPayload?.timeIn,
+              timeOut: savedPayload?.timeOut,
+              status: 'COMPLETED',
+            },
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Return attendance for Ada Lovelace on 2026-09-01
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-09-01',
+            attendance: [
+              {
+                attendanceId: 'att-edit-1',
+                attendanceDate: '2026-09-01',
+                userId: 'u1',
+                fullName: 'Ada Lovelace',
+                department: 'Engineering',
+                timeIn: '2026-09-01T08:00:00+08:00',
+                timeOut: '2026-09-01T17:00:00+08:00',
+                status: 'COMPLETED',
+              },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true, users: [], profiles: [], cutoffs: [] }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+
+    try {
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      // Table row shows 2026-09-01
+      expect(await screen.findByText('2026-09-01')).toBeInTheDocument();
+
+      // Edit time-out
+      const timeOutInput = screen.getByLabelText(/^time out for ada lovelace$/i);
+      fireEvent.change(timeOutInput, { target: { value: '18:00' } });
+
+      // Save
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(savedPayload).toMatchObject({
+          attendanceDate: '2026-09-01',
+          timeIn: '2026-09-01T08:00:00+08:00',
+          timeOut: '2026-09-01T18:00:00+08:00',
+        });
+      });
+
+      // Row still displays 2026-09-01
+      expect(screen.getByText('2026-09-01')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('allows unlocking setup dialog alternatively using Admin RFID card tap without typing password', async () => {
     let capturedUnlockBody: { pin?: string; rfidUid?: string } | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

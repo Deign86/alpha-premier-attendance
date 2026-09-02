@@ -5,6 +5,7 @@ import type {
   BathroomScanRequest,
   BathroomScanResponse,
   BathroomStatusResponse,
+  BathroomUpdateRequest,
   DatabaseBackupResponse,
   DatabaseInfoResponse,
   LanStatusResponse,
@@ -742,6 +743,19 @@ export async function bathroomTimeIn(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ logId, notes }),
+  });
+  // SAFETY: Parsing bathroom action response JSON
+  return (await response.json()) as BathroomActionResponse;
+}
+
+export async function updateBathroomLog(
+  logId: string,
+  request: BathroomUpdateRequest,
+): Promise<BathroomActionResponse> {
+  const response = await fetch(apiUrl(`/api/admin/bathroom/${encodeURIComponent(logId)}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
   });
   // SAFETY: Parsing bathroom action response JSON
   return (await response.json()) as BathroomActionResponse;

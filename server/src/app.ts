@@ -178,6 +178,20 @@ export function createApp(options: CreateAppOptions): express.Express {
       res.json({ success: true, entry: await admin.bathroomTimeIn(req.body) });
     } catch (error) { sendAdminError(req, res, error); }
   });
+  app.patch('/api/admin/bathroom/:logId', async (req, res) => {
+    try {
+      requireAdmin(req);
+      const logId = asString(req.params.logId);
+      res.json({ success: true, entry: await admin.updateBathroomLog(logId, req.body) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
+  app.patch('/api/bathroom-key-logs/:logId', async (req, res) => {
+    try {
+      requireAdmin(req);
+      const logId = asString(req.params.logId);
+      res.json({ success: true, entry: await admin.updateBathroomLog(logId, req.body) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
   app.get('/api/admin/payroll/profiles', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profiles: await admin.payrollProfiles() }); } catch (error) { sendAdminError(req, res, error); } });
   app.put('/api/admin/payroll/profiles/:profileId', async (req, res) => {
     try {

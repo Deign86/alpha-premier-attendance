@@ -58,3 +58,36 @@
   EXPECT: all workspace versions match exactly.
   EVIDENCE: All 8 package manifests, Cargo.toml, and tauri.conf.json synchronized at version 0.1.38; swatinem/rust-cache configured for src-tauri.
 
+
+## Attendance corrections date range filtering gates
+
+- [x] Each row's displayed date is derived strictly from its own attendanceDate, and filterFrom/filterTo act purely as range filters.
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('client/src/App.tsx','utf8'); if(!s.includes('filterFrom') || !s.includes('filterTo') || !s.includes('row.attendanceDate')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: App.tsx variables renamed to filterFrom/filterTo; row.attendanceDate is strictly rendered and used for ISO generation; getPresetRange("today") returns localDate(); BackdatedAttendanceModal onSaved passes created attendanceDate.
+- [x] filteredRows explicitly filters active rows by attendanceDate between filterFrom and filterTo inclusive.
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('client/src/App.tsx','utf8'); if(!s.includes('row.attendanceDate < minDate') || !s.includes('row.attendanceDate > maxDate')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: App.tsx filteredRows applies minDate/maxDate boundary checks on row.attendanceDate when rangeRows is active; labels updated to "Show corrections from" and "To".
+- [x] Client test suite passes including new tests for backdated correction creation, date range filtering, and row date preservation.
+  CHECK: npm test -w client -- src/App.test.tsx
+  EXPECT: all tests pass
+  EVIDENCE: 46/46 tests pass in src/App.test.tsx, and 198/198 tests pass across all 14 test files in the client test suite. Oxlint anti-slop rules pass with 0 errors.
+
+
+## Bathroom key log time editing gates
+
+- [x] Shared contracts and server backend support updating bathroom key log time-in and time-out via PATCH /api/admin/bathroom/:logId.
+  CHECK: node -e "const s=require('fs').readFileSync('server/src/admin.ts','utf8'); if(!s.includes('updateBathroomLog')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `updateBathroomLog` and `parseBathroomUpdateInput` added to `server/src/admin.ts`; `PATCH /api/admin/bathroom/:logId` and alias `PATCH /api/bathroom-key-logs/:logId` added to `server/src/app.ts`; 15/15 test files and 71/71 tests pass in server test suite including admin permission and time range validation tests.
+- [x] Bathroom key log UI includes Edit button per row, modal with fixed date and editable times, and validation preventing saving if return precedes checkout.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/bathroom-key-log.tsx','utf8'); if(!s.includes('EditBathroomLogModal') || !s.includes('updateBathroomLog')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `client/src/bathroom-key-log.tsx` features Actions column in table with Edit button per row, `EditBathroomLogModal` with fixed `logDate`, editable `timeOut`, `timeIn`, and `notes`, and inline validation preventing save if return precedes checkout. Immediate status update and success toast notification.
+- [x] Client test suite includes tests for editing bathroom key log timestamps, verifying UI update, and testing validation error when return precedes checkout.
+  CHECK: npm test -w client -- src/bathroom-key-log.test.tsx
+  EXPECT: all tests pass
+  EVIDENCE: 6/6 tests pass in `src/bathroom-key-log.test.tsx`, and all 200 tests across 14 test files pass in the client test suite. Oxlint anti-slop rules pass with 0 errors and 0 warnings.
+
+

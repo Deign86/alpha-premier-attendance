@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { AdminUser, BathroomStatusResponse } from "@rfid-attendance/shared";
@@ -192,6 +192,138 @@ describe("BathroomKeyLogPanel", () => {
     const malePicker = screen.getByRole("listbox", { name: /select male employee/i });
     expect(withinList(malePicker, "John Doe")).toBeInTheDocument();
     expect(withinList(malePicker, "Jane Smith")).toBeNull();
+  });
+
+  it("opens the edit dialog for a row, changes timeIn and timeOut, and updates UI on save", async () => {
+    const mockStatus: BathroomStatusResponse = {
+      success: true,
+      date: "2026-08-27",
+      maleActive: null,
+      femaleActive: null,
+      maleLogs: [
+        {
+          logId: "log-789",
+          logDate: "2026-08-27",
+          userId: "EMP-01",
+          fullName: "John Doe",
+          department: "Engineering",
+          genderKey: "MALE",
+          timeOut: "2026-08-27T10:00:00+08:00",
+          timeIn: "2026-08-27T10:10:00+08:00",
+          durationSeconds: 600,
+          status: "RETURNED",
+          notes: "",
+          createdAt: "2026-08-27T10:00:00+08:00",
+          updatedAt: "2026-08-27T10:10:00+08:00",
+        },
+      ],
+      femaleLogs: [],
+      fetchedAt: "2026-08-27T10:00:00Z",
+    };
+    vi.spyOn(api, "loadBathroomStatus").mockResolvedValue(mockStatus);
+    const updateSpy = vi.spyOn(api, "updateBathroomLog").mockResolvedValue({
+      success: true,
+      entry: {
+        logId: "log-789",
+        logDate: "2026-08-27",
+        userId: "EMP-01",
+        fullName: "John Doe",
+        department: "Engineering",
+        genderKey: "MALE",
+        timeOut: "2026-08-27T10:05:00+08:00",
+        timeIn: "2026-08-27T10:25:00+08:00",
+        durationSeconds: 1200,
+        status: "RETURNED",
+        notes: "Forgot to time in",
+        createdAt: "2026-08-27T10:00:00+08:00",
+        updatedAt: "2026-08-27T10:25:00+08:00",
+      },
+    });
+
+    const user = userEvent.setup();
+    render(<BathroomKeyLogPanel users={mockUsers} />);
+
+    // Click Edit button
+    const editBtn = await screen.findByRole("button", { name: /edit key log for john doe/i });
+    await user.click(editBtn);
+
+    // Dialog opens
+    const dialog = await screen.findByRole("dialog", { name: /edit bathroom key log/i });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Date: 2026-08-27")).toBeInTheDocument();
+
+    const timeOutInput = screen.getByLabelText(/^time out/i);
+    const timeInInput = screen.getByLabelText(/^time in/i);
+
+    fireEvent.change(timeOutInput, { target: { value: "10:05" } });
+    fireEvent.change(timeInInput, { target: { value: "10:25" } });
+
+    const notesInput = screen.getByLabelText(/^notes/i);
+    await user.type(notesInput, "Forgot to time in");
+
+    // Save
+    const saveBtn = screen.getByRole("button", { name: /save changes/i });
+    await user.click(saveBtn);
+
+    expect(updateSpy).toHaveBeenCalledWith("log-789", {
+      timeOut: "2026-08-27T10:05:00+08:00",
+      timeIn: "2026-08-27T10:25:00+08:00",
+      notes: "Forgot to time in",
+    });
+
+    // Success message is displayed
+    expect(await screen.findByText(/saved — bathroom key times updated/i)).toBeInTheDocument();
+  });
+
+  it("prevents saving and shows validation error when timeIn precedes timeOut", async () => {
+    const mockStatus: BathroomStatusResponse = {
+      success: true,
+      date: "2026-08-27",
+      maleActive: null,
+      femaleActive: null,
+      maleLogs: [
+        {
+          logId: "log-789",
+          logDate: "2026-08-27",
+          userId: "EMP-01",
+          fullName: "John Doe",
+          department: "Engineering",
+          genderKey: "MALE",
+          timeOut: "2026-08-27T10:00:00+08:00",
+          timeIn: "2026-08-27T10:10:00+08:00",
+          durationSeconds: 600,
+          status: "RETURNED",
+          notes: "",
+          createdAt: "2026-08-27T10:00:00+08:00",
+          updatedAt: "2026-08-27T10:10:00+08:00",
+        },
+      ],
+      femaleLogs: [],
+      fetchedAt: "2026-08-27T10:00:00Z",
+    };
+    vi.spyOn(api, "loadBathroomStatus").mockResolvedValue(mockStatus);
+    const updateSpy = vi.spyOn(api, "updateBathroomLog");
+
+    const user = userEvent.setup();
+    render(<BathroomKeyLogPanel users={mockUsers} />);
+
+    const editBtn = await screen.findByRole("button", { name: /edit key log for john doe/i });
+    await user.click(editBtn);
+
+    expect(await screen.findByRole("dialog", { name: /edit bathroom key log/i })).toBeInTheDocument();
+
+    const timeOutInput = screen.getByLabelText(/^time out/i);
+    const timeInInput = screen.getByLabelText(/^time in/i);
+
+    // Set timeOut to 10:30 and timeIn to 10:15 (invalid: return time earlier than checkout)
+    fireEvent.change(timeOutInput, { target: { value: "10:30" } });
+    fireEvent.change(timeInInput, { target: { value: "10:15" } });
+
+    const saveBtn = screen.getByRole("button", { name: /save changes/i });
+    await user.click(saveBtn);
+
+    expect(await screen.findByText(/time-out cannot precede time-in/i)).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 });
 

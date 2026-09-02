@@ -228,4 +228,55 @@ describe('admin and live attendance API', () => {
     const users = await agent.get('/api/admin/users').expect(200);
     expect(users.body.users).toHaveLength(2);
   });
+
+  it('allows editing bathroom key log timestamps with validation and permission checks', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABB', department: 'Engineering', active: true, gender: 'FEMALE' },
+    ]);
+    const app = createApp({ sheets, config, logger: false });
+    const unauth = request(app);
+    await unauth.patch('/api/admin/bathroom/log-123').send({ timeOut: '10:00' }).expect(401);
+
+    const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    const checkout = await agent.post('/api/admin/bathroom/time-out').send({
+      userId: 'u1',
+      genderKey: 'FEMALE',
+      notes: 'Initial checkout',
+    }).expect(200);
+
+    const logId = checkout.body.entry.logId as string;
+    const logDate = checkout.body.entry.logDate as string;
+
+    // Test validation: timeIn earlier than timeOut
+    const invalidRes = await agent.patch(`/api/admin/bathroom/${logId}`).send({
+      timeOut: `${logDate}T10:30:00+08:00`,
+      timeIn: `${logDate}T10:15:00+08:00`,
+    }).expect(400);
+    expect(invalidRes.body.error.message).toContain('cannot precede');
+
+    // Valid edit
+    const updateRes = await agent.patch(`/api/admin/bathroom/${logId}`).send({
+      timeOut: `${logDate}T10:00:00+08:00`,
+      timeIn: `${logDate}T10:20:00+08:00`,
+      notes: 'Adjusted by custodian',
+    }).expect(200);
+
+    expect(updateRes.body.entry).toMatchObject({
+      logId,
+      timeOut: `${logDate}T10:00:00+08:00`,
+      timeIn: `${logDate}T10:20:00+08:00`,
+      durationSeconds: 1200,
+      status: 'RETURNED',
+      notes: 'Adjusted by custodian',
+    });
+
+    // Also test alias path /api/bathroom-key-logs/:logId with short time format
+    const aliasRes = await agent.patch(`/api/bathroom-key-logs/${logId}`).send({
+      timeOut: '10:05',
+      timeIn: '10:25',
+    }).expect(200);
+    expect(aliasRes.body.entry.durationSeconds).toBe(1200);
+  });
 });
