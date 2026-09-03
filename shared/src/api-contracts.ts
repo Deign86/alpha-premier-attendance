@@ -35,8 +35,10 @@ export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
 export const OFFICE_HOURS_START = '08:00';
 /** Official end of grace period window (8:00 AM - 8:15 AM). */
 export const GRACE_PERIOD_END = '08:15';
-/** Official end of office hours. Time-outs strictly after this (6 PM onwards) are flagged `LATE_TIMEOUT`. */
-export const OFFICE_HOURS_END = '18:00';
+/** Official end of office hours (5:00 PM / 17:00). Time-outs strictly after this (5 PM onwards) are flagged `LATE_TIMEOUT`. */
+export const OFFICE_HOURS_END = '17:00';
+/** Alias for official end of workday / office hours (5:00 PM / 17:00). */
+export const WORKDAY_END = OFFICE_HOURS_END;
 
 export type ArrivalStatus = 'ON_TIME' | 'GRACE_PERIOD' | 'LATE' | 'NONE';
 
@@ -193,8 +195,8 @@ export function evaluateArrivalFromTimestamp(
 
 /**
  * True when the Manila-local clock time of a time-out timestamp is strictly
- * after the end of office hours (18:00 / 6 PM onwards). A time-out up to
- * 18:00 is a normal end-of-day COMPLETED shift; anything later must be corrected
+ * after the end of office hours (17:00 / 5 PM onwards). A time-out up to
+ * 17:00 is a normal end-of-day COMPLETED shift; anything later must be corrected
  * because the office does not allow overtime.
  */
 export function isLateTimeout(timeOutIso: string): boolean {
@@ -210,6 +212,27 @@ export function isLateTimeout(timeOutIso: string): boolean {
   const minutesSinceMidnight = read('hour') * 60 + read('minute');
   const [endHour, endMinute] = OFFICE_HOURS_END.split(':').map(Number);
   return minutesSinceMidnight > endHour * 60 + endMinute;
+}
+
+/**
+ * True when the Manila-local clock time of a time-out timestamp is strictly
+ * before 5:00 PM (17:00:00). A time-out before 5:00 PM is automatically considered
+ * a half day.
+ */
+export function isBeforeFivePm(timeOutIso: string): boolean {
+  const date = new Date(timeOutIso);
+  if (!Number.isFinite(date.getTime())) return false;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: ATTENDANCE_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  const secondsSinceMidnight = read('hour') * 3600 + read('minute') * 60 + read('second');
+  const [endHour, endMinute] = WORKDAY_END.split(':').map(Number);
+  return secondsSinceMidnight < endHour * 3600 + endMinute * 60;
 }
 
 /**

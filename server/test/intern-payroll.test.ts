@@ -44,11 +44,49 @@ describe('intern payroll policy', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result.workedHours).toBe(8);
+    expect(result.isHalfDay).toBe(false);
+    expect(result.dailyPay).toBe(80);
+  });
+
+  it('automatically considers time-outs before 5:00 PM as half day and deducts half daily rate', () => {
+    // 08:00 to 16:00 (4:00 PM): 7 payable hours, timed out before 5:00 PM -> half day.
+    const early = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T16:00:00+08:00',
       graceAvailable: true,
     });
-    expect(result.workedHours).toBe(7);
-    expect(result.dailyPay).toBe(80); // Fixed PHP 80/day intern rule untouched.
+    expect(early.workedHours).toBe(7);
+    expect(early.isHalfDay).toBe(true);
+    expect(early.halfDayDeduction).toBe(40);
+    expect(early.dailyPay).toBe(40);
+
+    // 08:00 to 16:59:59: before 5:00 PM -> half day.
+    const justBeforeFive = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T16:59:59+08:00',
+      graceAvailable: true,
+    });
+    expect(justBeforeFive.isHalfDay).toBe(true);
+    expect(justBeforeFive.halfDayDeduction).toBe(40);
+    expect(justBeforeFive.dailyPay).toBe(40);
+
+    // 08:00 to 17:00:00: full day.
+    const fullDay = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(fullDay.workedHours).toBe(8);
+    expect(fullDay.isHalfDay).toBe(false);
+    expect(fullDay.halfDayDeduction).toBe(0);
+    expect(fullDay.dailyPay).toBe(80);
   });
 
   it('snaps later lates and floors daily pay at zero', () => {

@@ -8,7 +8,8 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   const actualTimeOut = manilaTimestamp(input.actualTimeOut);
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
-  const isHalfDay = workedHours > 0 && workedHours <= 4;
+  const isBeforeFivePm = actualTimeOut.hour < 17;
+  const isHalfDay = workedHours > 0 && (workedHours <= 4 || isBeforeFivePm);
   const halfDayDeduction = isHalfDay ? input.dailyRate / 2 : 0;
 
   // TODO: Employee late rules TBD by client

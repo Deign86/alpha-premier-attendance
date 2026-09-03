@@ -334,7 +334,7 @@ describe('RFID kiosk', () => {
       ...successResponse,
       action: 'TIME_OUT',
       message: 'Time out recorded',
-      attendance: { ...successResponse.attendance, timeOut: '2026-07-28T18:00:00+08:00', status: 'COMPLETED' },
+      attendance: { ...successResponse.attendance, timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
     });
     render(<App />);
     act(() => emitRfidScan('04A1B2C3'));
@@ -1528,6 +1528,8 @@ describe('Admin Attendance Corrections', () => {
 
   it('filters attendance by specific date and verifies records for that date are shown', async () => {
     vi.restoreAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-02T10:00:00+08:00'));
     type MockAttendanceItem = {
       attendanceId: string;
       userId: string;
@@ -1604,6 +1606,7 @@ describe('Admin Attendance Corrections', () => {
       expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
       expect(screen.queryByText('2026-08-30')).not.toBeInTheDocument();
     } finally {
+      vi.useRealTimers();
       window.history.pushState({}, '', '/');
     }
   });

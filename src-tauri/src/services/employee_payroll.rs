@@ -48,7 +48,8 @@ pub fn calculate(
         .single()
         .unwrap();
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
-    let is_half_day = worked_hours > 0 && worked_hours <= 4;
+    let is_before_5pm = time_out.hour() < 17;
+    let is_half_day = worked_hours > 0 && (worked_hours <= 4 || is_before_5pm);
     let half_day_deduction = if is_half_day {
         daily_rate_centavos / 2
     } else {
@@ -103,6 +104,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.worked_hours, 4);
+        assert!(result.is_half_day);
+        assert_eq!(result.half_day_deduction_centavos, 50_000);
+        assert_eq!(result.daily_pay_centavos, 50_000);
+    }
+
+    #[test]
+    fn calculate_early_clock_out_before_5pm_is_half_day() {
+        // 08:00 to 16:00: 7 worked hours, but clocked out before 17:00 (5:00 PM).
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T16:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 7);
         assert!(result.is_half_day);
         assert_eq!(result.half_day_deduction_centavos, 50_000);
         assert_eq!(result.daily_pay_centavos, 50_000);

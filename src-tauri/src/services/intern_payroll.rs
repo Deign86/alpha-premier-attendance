@@ -39,15 +39,8 @@ pub fn calculate(
     let time_out = DateTime::parse_from_rfc3339(actual_time_out)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
-    // Evening and night interns are measured from their actual shift anchor,
-    // rather than being compared with the daytime 08:00 schedule.
-    let start_hour = if time_in.hour() >= 18 {
-        time_in.hour()
-    } else {
-        8
-    };
     let start = Manila
-        .with_ymd_and_hms(date.year(), date.month(), date.day(), start_hour, 0, 0)
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
         .single()
         .ok_or("Invalid Manila start time")?;
     let grace_end = start + Duration::minutes(15);
@@ -73,7 +66,8 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
-    let is_half_day = worked_hours > 0 && worked_hours <= 4;
+    let is_before_5pm = time_out.hour() < 17;
+    let is_half_day = worked_hours > 0 && (worked_hours <= 4 || is_before_5pm);
     let half_day_deduction = if is_half_day { base / 2 } else { 0 };
     Ok(InternPayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -164,20 +158,19 @@ mod tests {
         assert_eq!(result.daily_pay_centavos, 7000);
     }
     #[test]
-    fn evening_shift_is_not_late_against_daytime_start() {
-        // A 22:30 evening arrival is measured against the evening anchor
-        // (22:00), not the daytime 08:00 schedule: 30 minutes late rounds up
-        // to one late hour (PHP 10) instead of 14.5 hours (PHP 150).
+    fn arrivals_are_always_measured_against_08_00_office_start() {
+        // There are no night shifts: office hours are 8 am to 5 pm.
+        // An arrival at 10:30 is measured against 08:00 (2.5 hours late -> 3 late hours).
         let result = calculate(
             "2026-08-10",
-            "2026-08-10T22:30:00+08:00",
-            "2026-08-11T06:30:00+08:00",
-            true,
+            "2026-08-10T10:30:00+08:00",
+            "2026-08-10T17:00:00+08:00",
+            false,
         )
         .unwrap();
-        assert_eq!(result.late_hours, 1);
-        assert_eq!(result.late_deduction_centavos, 1000);
-        assert_eq!(result.daily_pay_centavos, 7000);
+        assert_eq!(result.late_hours, 3);
+        assert_eq!(result.late_deduction_centavos, 3000);
+        assert_eq!(result.daily_pay_centavos, 5000);
     }
 
     #[test]
@@ -191,6 +184,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.worked_hours, 4);
+        assert!(result.is_half_day);
+        assert_eq!(result.half_day_deduction_centavos, 4000);
+        assert_eq!(result.daily_pay_centavos, 4000);
+    }
+
+    #[test]
+    fn early_clock_out_before_5pm_is_half_day() {
+        // 08:00–16:00 → 7 paid hours, but clocked out before 17:00 (5:00 PM).
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T16:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 7);
         assert!(result.is_half_day);
         assert_eq!(result.half_day_deduction_centavos, 4000);
         assert_eq!(result.daily_pay_centavos, 4000);

@@ -2,7 +2,7 @@
   "name": "rfid-time-in-out",
   "private": true,
   "type": "module",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "workspaces": [
     "client",
     "server",
@@ -20,7 +20,7 @@
     "validate:sheets": "npm run validate:sheets -w server",
     "tauri": "tauri",
     "tauri:dev": "node scripts/auto-clean.mjs && npm run build -w shared && npm run build -w client && tauri dev",
-    "tauri:build": "node scripts/auto-clean.mjs && npm run build -w shared && npm run build -w client && tauri build",
+    "tauri:build": "node scripts/auto-clean.mjs && npm run build -w shared && npm run build -w client && tauri build --no-sign",
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "migrate:from-sheets": "cargo run --manifest-path src-tauri/Cargo.toml --bin migrate_from_sheets --",

@@ -86,4 +86,35 @@
   EXPECT: all tests pass
   EVIDENCE: 6/6 tests pass in `src/bathroom-key-log.test.tsx`, and all 200 tests across 14 test files pass in the client test suite. Oxlint anti-slop rules pass with 0 errors and 0 warnings.
 
+## Half-day calculation logic gates
+
+- [x] Time-outs before 5:00 PM (17:00 Manila time) are automatically classified as half-day with daily pay reduced by half daily rate for both employees and interns.
+  CHECK: node -e "const { calculateEmployeePayroll } = require('./server/dist/employee-payroll.js'); const res = calculateEmployeePayroll({ actualTimeIn: '2026-07-28T08:00:00+08:00', actualTimeOut: '2026-07-28T16:00:00+08:00', dailyRate: 600 }); if (!res.isHalfDay || res.dailyPay !== 300 || res.halfDayDeduction !== 300) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: Verified: `isHalfDay: true`, `dailyPay: 300`, `halfDayDeduction: 300` for 08:00–16:00 shift. Same logic verified for interns (40 PHP deduction, 40 PHP daily pay).
+- [x] Shifts completing at or after 5:00 PM with > 4 worked hours receive full day pay.
+  CHECK: node -e "const { calculateEmployeePayroll } = require('./server/dist/employee-payroll.js'); const res = calculateEmployeePayroll({ actualTimeIn: '2026-07-28T08:00:00+08:00', actualTimeOut: '2026-07-28T17:00:00+08:00', dailyRate: 600 }); if (res.isHalfDay || res.dailyPay !== 600) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: 600`, `halfDayDeduction: 0` for 08:00–17:00 shift.
+- [x] Rust desktop backend employee and intern payroll services match half-day calculation logic.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml services::employee_payroll services::intern_payroll
+  EXPECT: all tests pass
+  EVIDENCE: 155/155 tests pass in `src-tauri`, including `calculate_early_clock_out_before_5pm_is_half_day` and `early_clock_out_before_5pm_is_half_day`.
+- [x] Full repository gates pass (oxlint, typecheck, Vitest, and Cargo tests).
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all checks exit 0
+  EVIDENCE: Oxlint passed (0 warnings, 0 errors); typecheck passed with 0 errors; Vitest passed 309/309 tests across shared (32), client (204), and server (73); Cargo test passed 155/155 tests.
+
+## Night shift removal and 8 AM - 5 PM office hours gates
+
+- [x] Night shifts removed from employee and intern payroll in TypeScript and Rust.
+  CHECK: node -e "const fs=require('fs'); const t1=fs.readFileSync('server/src/employee-payroll.ts','utf8'); const t2=fs.readFileSync('server/src/intern-payroll.ts','utf8'); const t3=fs.readFileSync('src-tauri/src/services/intern_payroll.rs','utf8'); if(t1.includes('isNightShift') || t2.includes('isNightShift') || t3.includes('is_night_shift')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `isNightShift` removed from employee-payroll.ts, intern-payroll.ts, and `is_night_shift` removed from intern_payroll.rs and employee_payroll.rs. All shifts anchor to 08:00 start.
+- [x] Office hours end is 17:00 (5:00 PM) in shared contracts and Rust backend.
+  CHECK: node -e "const { OFFICE_HOURS_END, isLateTimeout } = require('./shared/dist/api-contracts.js'); if(OFFICE_HOURS_END !== '17:00' || !isLateTimeout('2026-08-04T17:05:00+08:00') || isLateTimeout('2026-08-04T17:00:00+08:00')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `OFFICE_HOURS_END = '17:00'`; 17:00:00 is normal COMPLETED checkout; 17:05:00 is flagged LATE_TIMEOUT.
+
+
 

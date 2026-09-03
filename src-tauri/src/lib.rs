@@ -2029,7 +2029,7 @@ async fn payroll_intern_report(
     let rows = sqlx::query(
         "SELECT u.user_id, u.full_name, \
          COALESCE(COUNT(p.payroll_id), 0) AS actual_days, \
-         COALESCE(SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND (strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) <= 18000) THEN 1 ELSE 0 END), 0) AS half_day_count, \
+         COALESCE(SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) <= 18000 OR substr(p.actual_time_out, 12, 5) < '17:00')) THEN 1 ELSE 0 END), 0) AS half_day_count, \
          COALESCE(SUM(p.base_pay_centavos), 0) AS basic_pay, \
          COALESCE(SUM(p.late_hours), 0) AS late_units, \
          COALESCE(SUM(p.late_deduction_centavos), 0) AS late_deduction \
@@ -2172,7 +2172,7 @@ async fn payroll_generate_cutoff(
         "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, \
          COALESCE(MAX(u.daily_rate_centavos), MAX(p.base_pay_centavos), 0) AS daily_rate_centavos, \
          COUNT(*) AS actual_days, \
-         SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND (strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) <= 18000) THEN 1 ELSE 0 END) AS half_day_count, \
+         SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) <= 18000 OR substr(p.actual_time_out, 12, 5) < '17:00')) THEN 1 ELSE 0 END) AS half_day_count, \
          SUM(p.late_hours) AS late_units, \
          SUM(p.late_deduction_centavos) AS late_deduction_centavos, \
          u.payroll_profile_id \

@@ -47,7 +47,8 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
-  const isHalfDay = workedHours > 0 && workedHours <= 4;
+  const isBeforeFivePm = actualTimeOut.hour < 17;
+  const isHalfDay = workedHours > 0 && (workedHours <= 4 || isBeforeFivePm);
   const halfDayDeduction = isHalfDay ? basePay / 2 : 0;
 
   return {

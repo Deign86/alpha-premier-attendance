@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isLateTimeout, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isBeforeFivePm, isLateTimeout, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -45,27 +45,27 @@ describe('scanner status contract', () => {
 });
 
 describe('office-hours late timeout policy', () => {
-  it('flags time-outs strictly after 18:00 Manila (true overtime hours from 6 PM onwards)', () => {
-    expect(isLateTimeout('2026-08-04T18:55:12+08:00')).toBe(true);
-    expect(isLateTimeout('2026-08-04T18:01:00+08:00')).toBe(true);
+  it('flags time-outs strictly after 17:00 Manila (overtime strictly after 5 PM)', () => {
+    expect(isLateTimeout('2026-08-04T17:01:00+08:00')).toBe(true);
+    expect(isLateTimeout('2026-08-04T17:05:00+08:00')).toBe(true);
+    expect(isLateTimeout('2026-08-04T18:00:00+08:00')).toBe(true);
     expect(isLateTimeout('2026-08-04T23:59:00+08:00')).toBe(true);
   });
 
-  it('keeps time-outs at or before 18:00 Manila as normal (including 5:05 PM)', () => {
-    expect(isLateTimeout('2026-08-04T18:00:00+08:00')).toBe(false);
-    expect(isLateTimeout('2026-08-04T17:05:00+08:00')).toBe(false);
+  it('keeps time-outs at or before 17:00 Manila as normal (not late timeout)', () => {
     expect(isLateTimeout('2026-08-04T17:00:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T16:59:00+08:00')).toBe(false);
+    expect(isLateTimeout('2026-08-04T12:00:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T07:30:00+08:00')).toBe(false);
   });
 
   it('compares in Manila time regardless of the timestamp offset', () => {
-    // 18:55 Manila == 10:55 UTC on the same day (late).
-    expect(isLateTimeout('2026-08-04T10:55:00Z')).toBe(true);
-    // 17:05 Manila == 09:05 UTC on the same day (normal).
-    expect(isLateTimeout('2026-08-04T09:05:00Z')).toBe(false);
-    // 18:00 Manila == 10:00 UTC on the same day (normal).
-    expect(isLateTimeout('2026-08-04T10:00:00Z')).toBe(false);
+    // 17:05 Manila == 09:05 UTC on the same day (late timeout).
+    expect(isLateTimeout('2026-08-04T09:05:00Z')).toBe(true);
+    // 17:00 Manila == 09:00 UTC on the same day (normal).
+    expect(isLateTimeout('2026-08-04T09:00:00Z')).toBe(false);
+    // 16:59 Manila == 08:59 UTC (normal).
+    expect(isLateTimeout('2026-08-04T08:59:00Z')).toBe(false);
     // 16:00 Manila == 08:00 UTC (normal).
     expect(isLateTimeout('2026-08-04T08:00:00Z')).toBe(false);
   });
@@ -73,6 +73,39 @@ describe('office-hours late timeout policy', () => {
   it('never treats an unparseable timestamp as late', () => {
     expect(isLateTimeout('not-a-timestamp')).toBe(false);
     expect(isLateTimeout('')).toBe(false);
+  });
+});
+
+describe('workday 5:00 PM half-day timeout policy', () => {
+  it('identifies workday shift end as 17:00', () => {
+    expect(WORKDAY_END).toBe('17:00');
+  });
+
+  it('detects time-outs strictly before 17:00 Manila as half day', () => {
+    expect(isBeforeFivePm('2026-08-04T16:59:59+08:00')).toBe(true);
+    expect(isBeforeFivePm('2026-08-04T16:30:00+08:00')).toBe(true);
+    expect(isBeforeFivePm('2026-08-04T12:00:00+08:00')).toBe(true);
+    expect(isBeforeFivePm('2026-08-04T08:00:00+08:00')).toBe(true);
+  });
+
+  it('keeps time-outs at or after 17:00 Manila as full day (not before 5 PM)', () => {
+    expect(isBeforeFivePm('2026-08-04T17:00:00+08:00')).toBe(false);
+    expect(isBeforeFivePm('2026-08-04T17:05:00+08:00')).toBe(false);
+    expect(isBeforeFivePm('2026-08-04T18:00:00+08:00')).toBe(false);
+  });
+
+  it('compares in Manila time regardless of timezone offset', () => {
+    // 16:59 Manila == 08:59 UTC (before 5 PM).
+    expect(isBeforeFivePm('2026-08-04T08:59:00Z')).toBe(true);
+    // 17:00 Manila == 09:00 UTC (not before 5 PM).
+    expect(isBeforeFivePm('2026-08-04T09:00:00Z')).toBe(false);
+    // 17:05 Manila == 09:05 UTC (not before 5 PM).
+    expect(isBeforeFivePm('2026-08-04T09:05:00Z')).toBe(false);
+  });
+
+  it('never treats an unparseable timestamp as before 5 PM', () => {
+    expect(isBeforeFivePm('not-a-timestamp')).toBe(false);
+    expect(isBeforeFivePm('')).toBe(false);
   });
 });
 
