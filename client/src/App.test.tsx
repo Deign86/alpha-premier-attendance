@@ -1218,7 +1218,7 @@ describe('Admin Attendance Corrections', () => {
     expect(screen.getByText('Bob Smith')).toBeInTheDocument();
     expect(screen.queryByText('Carol Danvers')).not.toBeInTheDocument();
 
-    const employeeOption = screen.getByRole('option', { name: /bob smith/i });
+    const employeeOption = screen.getByRole('button', { name: /bob smith/i });
     await user.click(employeeOption);
 
     // Confirm assisted attendance

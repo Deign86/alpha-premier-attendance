@@ -45,7 +45,7 @@ import {
   resolveOfficeDisplay,
   INTERN_DAILY_RATE_PHP,
   INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
-  OFFICE_HOURS_END,
+  LATE_TIMEOUT_THRESHOLD,
   isLateTimeout,
   normalizeName,
   evaluateArrivalFromTimestamp,
@@ -126,6 +126,7 @@ import {
   loadNameManifest,
 } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
+import { VoiceboxNamesPage } from "./voicebox-names-page";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { AdminUpdatesCard } from "./admin-updates-card";
@@ -195,8 +196,33 @@ export function shouldRouteGlobalRfidToSetup(
 }
 
 export default function App() {
+  const [routeHash, setRouteHash] = useState(() =>
+    'window' in globalThis ? window.location.hash : "",
+  );
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setRouteHash(window.location.hash);
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
   const path = window.location.pathname;
   if (path === "/attendance") return <LiveAttendance />;
+  if (path === "/voicebox-names" || routeHash === "#/voicebox-names") {
+    return (
+      <VoiceboxNamesPage
+        onBack={() => {
+          if (window.location.hash === "#/voicebox-names") {
+            window.location.hash = "";
+          } else {
+            window.location.pathname = "/admin";
+          }
+        }}
+      />
+    );
+  }
   if (path === "/admin") return <AdminPanel />;
   const [state, setState] = useState<KioskState>("ready");
   const [uid, setUid] = useState("");
@@ -1110,7 +1136,7 @@ export default function App() {
         </div>
       </header>
 
-      <section className="kiosk-stage" aria-labelledby="kiosk-heading">
+      <section className="kiosk-stage" aria-label="Kiosk status">
         {/* ATTENDANCE SCAN SUCCESS */}
         {kioskMode === "attendance" && state === "success" && success && (
           <div
@@ -2057,7 +2083,7 @@ function AssistedAttendanceModal({
                 autoFocus
               />
             </div>
-            <div className="employee-picker-list" role="listbox" aria-label="Active employees">
+            <div className="employee-picker-list" role="group" aria-label="Active employees">
               {filteredEmployees.length === 0 ? (
                 <div style={{ padding: "20px 12px", textAlign: "center", color: "var(--muted)", fontSize: "0.82rem" }}>
                   No active employees found matching &ldquo;{search}&rdquo;.
@@ -2076,8 +2102,7 @@ function AssistedAttendanceModal({
                     <button
                       key={emp.userId}
                       type="button"
-                      role="option"
-                      aria-selected={isSelected}
+                      aria-pressed={isSelected}
                       className={`employee-picker-item ${isSelected ? "is-selected" : ""}`}
                       onClick={() => setSelectedUserId(emp.userId)}
                     >
@@ -3085,7 +3110,7 @@ function AdminPanel() {
               onSaved={load}
             />
           ) : tab === "voice" ? (
-            <VoiceSettingsPanel />
+            <VoiceSettingsPanel onOpenVoiceboxNames={() => { window.location.hash = "#/voicebox-names"; }} />
           ) : (
             <DatabasePanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} />
           )}
@@ -6328,7 +6353,7 @@ function AttendanceEditRow({
         <tr className="admin-attention-row">
           <td colSpan={8} className="admin-attention">
             <strong>Late time-out — manual correction required.</strong> This
-            time-out was recorded after office hours ({OFFICE_HOURS_END}); the
+            time-out was recorded after office hours ({LATE_TIMEOUT_THRESHOLD}); the
             office does not allow overtime. Re-enter the official time-out below
             to complete the shift.
           </td>

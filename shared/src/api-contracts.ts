@@ -27,7 +27,7 @@ export type AttendanceStatus = (typeof attendanceStatuses)[number];
 
 /**
  * Attendance policy constants. The office does not allow overtime: a time-out
- * recorded strictly after the end of office hours is saved as `LATE_TIMEOUT`
+ * recorded strictly after the late-timeout cutoff is saved as `LATE_TIMEOUT`
  * (flagged for manual correction) instead of a normal `COMPLETED` shift.
  */
 export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
@@ -35,8 +35,10 @@ export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
 export const OFFICE_HOURS_START = '08:00';
 /** Official end of grace period window (8:00 AM - 8:15 AM). */
 export const GRACE_PERIOD_END = '08:15';
-/** Official end of office hours (5:00 PM / 17:00). Time-outs strictly after this (5 PM onwards) are flagged `LATE_TIMEOUT`. */
+/** Official end of office hours (5:00 PM / 17:00). */
 export const OFFICE_HOURS_END = '17:00';
+/** Late time-out cutoff (6:00 PM / 18:00). Time-outs strictly after 17:59 are flagged `LATE_TIMEOUT`. */
+export const LATE_TIMEOUT_THRESHOLD = '18:00';
 /** Alias for official end of workday / office hours (5:00 PM / 17:00). */
 export const WORKDAY_END = OFFICE_HOURS_END;
 
@@ -195,8 +197,8 @@ export function evaluateArrivalFromTimestamp(
 
 /**
  * True when the Manila-local clock time of a time-out timestamp is strictly
- * after the end of office hours (17:00 / 5 PM onwards). A time-out up to
- * 17:00 is a normal end-of-day COMPLETED shift; anything later must be corrected
+ * after 17:59 (i.e. 18:00 / 6 PM onwards). A time-out up to 17:59 is a normal
+ * end-of-day COMPLETED shift; anything at or after 18:00 must be corrected
  * because the office does not allow overtime.
  */
 export function isLateTimeout(timeOutIso: string): boolean {
@@ -210,8 +212,8 @@ export function isLateTimeout(timeOutIso: string): boolean {
   }).formatToParts(date);
   const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
   const minutesSinceMidnight = read('hour') * 60 + read('minute');
-  const [endHour, endMinute] = OFFICE_HOURS_END.split(':').map(Number);
-  return minutesSinceMidnight > endHour * 60 + endMinute;
+  const [cutoffHour, cutoffMinute] = LATE_TIMEOUT_THRESHOLD.split(':').map(Number);
+  return minutesSinceMidnight >= cutoffHour * 60 + cutoffMinute;
 }
 
 /**
@@ -936,4 +938,56 @@ export type BathroomScanErrorResponse = {
 };
 
 export type BathroomScanResponse = BathroomScanSuccessResponse | BathroomScanErrorResponse;
+
+export type VoiceboxDetectedName = {
+  employeeId: string;
+  fullName: string;
+  firstName: string;
+  lastName: string;
+  existingDisplayName: string;
+};
+
+export type PronunciationRecord = {
+  id?: number;
+  employeeId: string;
+  displayName: string | null;
+  phoneticSimple: string | null;
+  phoneticIpa: string | null;
+  languageTag: string | null;
+  notes: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type VoiceboxNameListItem = {
+  employeeId: string;
+  fullName: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  hasPronunciation: boolean;
+  phoneticSimple?: string | null;
+  phoneticIpa?: string | null;
+  languageTag?: string | null;
+  notes?: string | null;
+};
+
+export type VoiceboxPronunciationItem = {
+  employeeId: string;
+  displayName: string;
+  fullName?: string;
+  phoneticSimple: string | null;
+  phoneticIpa: string | null;
+  languageTag: string | null;
+  notes: string | null;
+};
+
+export type UpsertPronunciationRequest = {
+  displayName?: string;
+  phoneticSimple?: string;
+  phoneticIpa?: string;
+  languageTag?: string;
+  notes?: string;
+};
+
 

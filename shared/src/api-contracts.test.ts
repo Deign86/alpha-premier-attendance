@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isBeforeFivePm, isLateTimeout, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -45,23 +45,35 @@ describe('scanner status contract', () => {
 });
 
 describe('office-hours late timeout policy', () => {
-  it('flags time-outs strictly after 17:00 Manila (overtime strictly after 5 PM)', () => {
-    expect(isLateTimeout('2026-08-04T17:01:00+08:00')).toBe(true);
-    expect(isLateTimeout('2026-08-04T17:05:00+08:00')).toBe(true);
+  it('identifies late time-out cutoff as 18:00', () => {
+    expect(LATE_TIMEOUT_THRESHOLD).toBe('18:00');
+  });
+
+  it('flags time-outs at or after 18:00 Manila (overtime beyond 5:59 PM)', () => {
     expect(isLateTimeout('2026-08-04T18:00:00+08:00')).toBe(true);
+    expect(isLateTimeout('2026-08-04T18:05:00+08:00')).toBe(true);
     expect(isLateTimeout('2026-08-04T23:59:00+08:00')).toBe(true);
   });
 
-  it('keeps time-outs at or before 17:00 Manila as normal (not late timeout)', () => {
+  it('keeps time-outs before 18:00 Manila as normal (not late timeout)', () => {
     expect(isLateTimeout('2026-08-04T17:00:00+08:00')).toBe(false);
+    expect(isLateTimeout('2026-08-04T17:01:00+08:00')).toBe(false);
+    expect(isLateTimeout('2026-08-04T17:05:00+08:00')).toBe(false);
+    expect(isLateTimeout('2026-08-04T17:59:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T16:59:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T12:00:00+08:00')).toBe(false);
     expect(isLateTimeout('2026-08-04T07:30:00+08:00')).toBe(false);
   });
 
   it('compares in Manila time regardless of the timestamp offset', () => {
-    // 17:05 Manila == 09:05 UTC on the same day (late timeout).
-    expect(isLateTimeout('2026-08-04T09:05:00Z')).toBe(true);
+    // 18:05 Manila == 10:05 UTC on the same day (late timeout).
+    expect(isLateTimeout('2026-08-04T10:05:00Z')).toBe(true);
+    // 18:00 Manila == 10:00 UTC on the same day (late timeout).
+    expect(isLateTimeout('2026-08-04T10:00:00Z')).toBe(true);
+    // 17:59 Manila == 09:59 UTC (normal).
+    expect(isLateTimeout('2026-08-04T09:59:00Z')).toBe(false);
+    // 17:05 Manila == 09:05 UTC (normal).
+    expect(isLateTimeout('2026-08-04T09:05:00Z')).toBe(false);
     // 17:00 Manila == 09:00 UTC on the same day (normal).
     expect(isLateTimeout('2026-08-04T09:00:00Z')).toBe(false);
     // 16:59 Manila == 08:59 UTC (normal).

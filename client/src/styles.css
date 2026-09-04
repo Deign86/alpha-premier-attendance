@@ -64,7 +64,7 @@
   --surface-input: #0f100e;
   --ink: #f6f2e9;
   --muted: #aaa79e;
-  --quiet: #77746c;
+  --quiet: #9a968c;
   --gold: #c6a254;
   --gold-bright: #e1c477;
   --gold-soft: #8d753e;
@@ -114,7 +114,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .scanner-pill.is-offline, .scanner-pill.is-error { color: var(--danger); border-color: #955e4f; }
 .clock { display: grid; gap: 2px; text-align: right; }
 .clock span { color: var(--quiet); font-size: .64rem; font-weight: 600; white-space: nowrap; }
-.clock strong { color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: 1.05rem; font-weight: 600; letter-spacing: .02em; }
+.clock strong { color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: 1.05rem; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 
 /* Center stage: the tap prompt and scan feedback are the product. */
 .kiosk-stage { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; padding: 28px max(24px, calc((100% - 1220px) / 2)); }
@@ -122,7 +122,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .hero-icon { display: grid; place-items: center; width: 104px; height: 104px; border-radius: 50%; }
 .icon-ready { color: var(--gold-bright); background: #242015; border: 1px solid var(--gold); }
 .icon-processing { color: #d5c48e; background: #1e211c; border: 1px solid #78835d; }
-.kiosk-hero h1 { max-width: 14ch; margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(3.2rem, 8vw, 6.2rem); font-weight: 600; line-height: 1.08; letter-spacing: 0; }
+.kiosk-hero h1 { max-width: 14ch; margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(3.2rem, 8vw, 6.2rem); font-weight: 600; line-height: 1.08; letter-spacing: 0; text-wrap: balance; }
 .hero-sub { color: var(--muted); font-size: 1.05rem; font-weight: 600; }
 .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -132,7 +132,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .result-photo { display: block; width: min(250px, 44vw); margin: 0 0 8px; border: 3px solid var(--gold); border-radius: 12px; background: var(--surface-raised); }
 .result-photo-full { height: auto; aspect-ratio: auto; object-fit: contain; }
 .result-photo-fallback { display: grid; place-items: center; aspect-ratio: 1; color: var(--gold-bright); background: var(--surface-raised); }
-.result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(1.7rem, 4vw, 2.5rem); font-weight: 600; line-height: 1.15; }
+.result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(1.7rem, 4vw, 2.5rem); font-weight: 600; line-height: 1.15; text-wrap: balance; overflow-wrap: anywhere; }
 .result-message { margin: 2px 0 0; color: var(--muted); font-size: .95rem; }
 .result-user-id { margin: 2px 0 0; color: var(--gold-bright); font-size: .8rem; }
 .result-meta { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; color: var(--ink); font-size: .76rem; }
@@ -146,7 +146,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .reset-hint { margin: 0; color: var(--quiet); font-size: .72rem; }
 
 .input-row { display: flex; gap: 10px; }
-.input-row input { min-width: 0; flex: 1; height: 48px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; padding: 0 14px; font-size: .95rem; }
+.input-row input { min-width: 0; flex: 1; height: 48px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: 2px solid transparent; outline-offset: 2px; padding: 0 14px; font-size: .95rem; }
 .input-row input::placeholder { color: var(--quiet); }
 .input-row input:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .13); }
 .submit-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 48px; padding: 0 18px; border: 1px solid var(--gold); border-radius: 3px; background: var(--gold); color: #11100c; font-size: .75rem; font-weight: 700; white-space: nowrap; transition: background 180ms ease, border-color 180ms ease, transform 180ms ease; }
@@ -168,7 +168,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .section-description { color: var(--muted); margin: 0; max-width: 56ch; font-size: .92rem; line-height: 1.6; }
 
 .setup-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .84); backdrop-filter: blur(6px); }
-.setup-dialog { width: min(560px, 100%); max-height: min(740px, calc(100dvh - 40px)); overflow: auto; color: var(--ink); background: var(--surface); border: 1px solid var(--gold-soft); border-top: 2px solid var(--gold); border-radius: 4px; box-shadow: 0 25px 70px rgba(0, 0, 0, .56); }
+.setup-dialog { width: min(560px, 100%); max-height: min(740px, 90dvh); overflow: auto; color: var(--ink); background: var(--surface); border: 1px solid var(--gold-soft); border-top: 2px solid var(--gold); border-radius: 4px; box-shadow: 0 25px 70px rgba(0, 0, 0, .56); }
 .setup-dialog-header { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px 19px; border-bottom: 1px solid var(--line); }
 .setup-title-wrap { display: flex; align-items: center; gap: 12px; }
 .setup-icon { display: grid; place-items: center; width: 38px; height: 38px; color: var(--gold-bright); background: #242015; border: 1px solid var(--gold-soft); border-radius: 50%; }
@@ -184,7 +184,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-fields label { grid-template-rows: minmax(1.1em, auto) 46px; align-content: start; }
 .setup-fields label small { color: var(--quiet); font-size: .68rem; font-weight: 400; line-height: 1.35; }
 .setup-fields input[readonly] { color: var(--quiet); background: var(--surface-raised); }
-.setup-form input, .setup-form select { width: 100%; min-width: 0; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: none; }
+.setup-form input, .setup-form select { width: 100%; min-width: 0; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: 2px solid transparent; outline-offset: 2px; }
 .setup-form input::placeholder { color: var(--quiet); }
 .setup-form input:focus, .setup-form select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .13); }
 .setup-progress, .setup-success, .setup-error { display: flex; align-items: center; gap: 7px; margin: 1px 0 0; font-size: .76rem; line-height: 1.4; }
@@ -252,7 +252,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .dashboard-alert { color: var(--danger); margin: 16px 0; font-size: .8rem; }
 .table-wrap { overflow-x: auto; overscroll-behavior-x: contain; max-width: 100%; border: 1px solid var(--line); background: var(--surface); }
 table { width: 100%; border-collapse: collapse; min-width: 640px; }
-th, td { padding: 16px 18px; border-bottom: 1px solid var(--line); text-align: left; font-size: .78rem; }
+th, td { padding: 16px 18px; border-bottom: 1px solid var(--line); text-align: left; font-size: .78rem; font-variant-numeric: tabular-nums; }
 th { color: var(--gold); text-transform: uppercase; font-size: .62rem; letter-spacing: .04em; }
 td strong, td small { display: block; } td small { color: var(--quiet); margin-top: 4px; font-size: .68rem; }
 .status-pill { display: inline-block; padding: 5px 8px; border: 1px solid var(--line-bright); font-size: .63rem; }
@@ -439,7 +439,7 @@ td small { font-size: .7rem; }
   cursor: pointer;
 }
 .admin-form select:hover:not(:disabled), .date-filter select:hover:not(:disabled), .voice-select:hover:not(:disabled), .lan-panel select:hover:not(:disabled) { border-color: var(--gold); background-color: var(--surface-raised); }
-.admin-form select:focus, .date-filter select:focus, .voice-select:focus, .lan-panel select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .12); outline: none; }
+.admin-form select:focus, .date-filter select:focus, .voice-select:focus, .lan-panel select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .12); outline: 2px solid var(--gold-bright); outline-offset: 2px; }
 .admin-form select:disabled, .date-filter select:disabled, .voice-select:disabled, .lan-panel select:disabled { opacity: .45; cursor: not-allowed; }
 .admin-form select option, .date-filter select option, .voice-select option, .lan-panel select option { color: var(--ink); background: var(--surface); }
 .admin-tabs { gap: 4px; margin: 22px 0 20px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
@@ -1306,7 +1306,8 @@ input[type="checkbox"] {
   vertical-align: middle;
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 120ms ease;
   position: relative;
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
 }
 
 input[type="checkbox"]:hover:not(:disabled) {
@@ -1317,7 +1318,8 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 input[type="checkbox"]:focus-visible {
-  outline: none;
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
   border-color: var(--gold-bright);
   box-shadow: 0 0 0 3px rgba(198, 162, 84, 0.28);
 }
@@ -2917,7 +2919,7 @@ textarea.input {
 
 .bathroom-kiosk-keys-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 20px;
 }
 
@@ -3261,4 +3263,50 @@ textarea.input {
   background: #162419;
   color: var(--success);
   border: 1px solid #34583c;
+}
+
+/* Scaling audit (100/125/150% CSS zoom, 1280x800): height-driven guards.
+   Zoom shrinks CSS px without tripping width queries, so these rules key off
+   viewport height (and one 1100px stack that also fires at 125% zoom,
+   where 1280px logical shrinks to ~1024 CSS px) instead of width. */
+/* #1 Kiosk topbar: keep the subtitle readable instead of squeezing to "...O..." */
+.brand-text { flex: 1 1 auto; }
+.topbar-cluster { flex: 0 1 auto; min-width: 0; }
+.brand-subtitle { max-width: min(38vw, 340px); }
+/* #9 Admin Users: stop the rightmost column pushing past the table container
+   (horizontal scroll itself is already declared on .table-wrap above) */
+.table-wrap th, .table-wrap td { min-width: 0; overflow-wrap: anywhere; }
+/* #10 Attendance pills: never wrap mid-pill */
+.filter-pill { white-space: nowrap; }
+/* #13 Data & Backup: long DB paths may break anywhere (belt-and-braces
+   alongside .file-result-path); #15 Voicebox headers stay single-line */
+.db-backup-list li { overflow-wrap: anywhere; }
+.voicebox-names-shell th { white-space: nowrap; }
+/* #14 Voice cards: description text wraps instead of clipping */
+.voice-control-card { min-height: 0; }
+.voice-control-card .form-help { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+/* #11 Attendance controls + #12 Payroll panels: explicit single-column stack.
+   1100px (not 920px) so it fires at 125% zoom (~1024 CSS px) as well as 150%. */
+@media (max-width: 1100px) {
+  .attendance-filter-top { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .filter-pill { padding: 4px 10px; font-size: .68rem; }
+  .payroll-toolbar { flex-direction: column; }
+  .payroll-generate-panel, .payroll-pdf-actions-panel { flex: 1 1 auto; min-width: 0; }
+}
+/* #2/#4 hero, #3/#5 kiosk no-scroll, #7 setup save reachability,
+   #8 admin unlock island, #16 live-attendance reflow */
+@media (max-height: 760px) {
+  .kiosk-shell { height: 100dvh; overflow-y: auto; }
+  .kiosk-stage { gap: 18px; padding: 24px var(--kiosk-gutter, 24px) 32px; }
+  .kiosk-hero { gap: 10px; }
+  .kiosk-hero h1 { font-size: clamp(2rem, 8vh, 3.2rem); }
+  .hero-icon { width: 72px; height: 72px; margin-bottom: 0; }
+  .hero-sub { font-size: .88rem; }
+  .scan-console { padding: 14px 16px 12px; }
+  .bathroom-kiosk-wrapper { gap: 12px; }
+  .setup-dialog { max-height: 92dvh; }
+  .setup-form { padding: 18px 20px 22px; }
+  .admin-login { align-content: start; padding-top: 40px; }
+  .lan-facts { grid-template-columns: 1fr 1fr; }
+  .lan-note, .lan-guidance p { font-size: .72rem; }
 }

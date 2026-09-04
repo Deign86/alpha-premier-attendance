@@ -116,5 +116,29 @@
   EXPECT: command exits 0
   EVIDENCE: `OFFICE_HOURS_END = '17:00'`; 17:00:00 is normal COMPLETED checkout; 17:05:00 is flagged LATE_TIMEOUT.
 
+## Scaling audit (100/125/150% CSS zoom, 1280x800) gates
+
+- [x] Setup dialog is viewport-bound (`min(740px, 90dvh)`, `92dvh` under 760px height) so step-3 Save stays reachable.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); if(!s.includes('max-height: min(740px, 90dvh)')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `client/src/styles.css` setup-dialog rule uses `min(740px, 90dvh)`; short-viewport block sets `92dvh`.
+- [x] Height-driven guards exist for kiosk hero shrink, kiosk shell cap, admin unlock, and live-attendance reflow.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); if(!s.includes('@media (max-height: 760px)') || !s.includes('.kiosk-hero h1 { font-size: clamp(2rem, 8vh, 3.2rem); }')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `@media (max-height: 760px)` block shrinks hero/stage/icon, caps `.kiosk-shell` at `100dvh`, top-aligns `.admin-login`, reflows `.lan-facts` to 2 columns.
+- [x] Controls/payroll stacking fires at 125% zoom (~1024 CSS px), not only at 150%.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); if(!s.includes('@media (max-width: 1100px)')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `@media (max-width: 1100px)` stacks `.attendance-filter-top` and `.payroll-toolbar`; parent arbitration raised it from 920px after review showed 920px misses the 125% case.
+- [x] Table/pill/path/voice guards are present with no duplicate declarations.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); if(!s.includes('.filter-pill { white-space: nowrap; }') || !s.includes('.voicebox-names-shell th { white-space: nowrap; }') || !s.includes('.db-backup-list li { overflow-wrap: anywhere; }')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: pill nowrap, voicebox header nowrap, DB path break-anywhere present; redundant `.table-wrap` scroll line removed (single declaration remains at styles.css:253, verified by grep).
+- [x] Required repository verification gates pass after the change.
+  CHECK: npm run lint:oxlint && npm run typecheck -w client && npm test -w client
+  EXPECT: lint, typecheck, and client tests exit 0.
+  EVIDENCE: oxlint passed (0 errors); `tsc --noEmit` clean; 16 files, 215/215 client tests passed.
+- [ ] Visual re-sweep at 100/125/150% via Tauri MCP screenshots confirms all 16 issues closed (static CSS review only so far).
+
 
 

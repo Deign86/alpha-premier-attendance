@@ -15,8 +15,9 @@ import { manilaTimestamp } from './time.js';
 import { SetupError, SetupService, setupTokenFromRequest } from './setup.js';
 import { AdminError, AdminService } from './admin.js';
 import { uploadPhotoDataUrl } from './photo-storage.js';
+import { createVoiceboxRouter } from './voicebox-routes.js';
 
-export type CreateAppOptions = { sheets: GoogleSheetsService; config: AppConfig; logger?: boolean; staticDir?: string };
+export type CreateAppOptions = { sheets: GoogleSheetsService; config: AppConfig; logger?: boolean; staticDir?: string; voiceboxDbPath?: string };
 
 function requestId(req: Request): string {
   const existing = req.header('x-request-id');
@@ -280,6 +281,8 @@ export function createApp(options: CreateAppOptions): express.Express {
       sendSetupError(req, res, error);
     }
   });
+
+  app.use(createVoiceboxRouter({ dbPath: options.voiceboxDbPath }));
 
   const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     const scanError = error instanceof SyntaxError ? new ScanError('INVALID_SCAN_INPUT', 'Request body must be valid JSON.', 400) : asScanError(error);

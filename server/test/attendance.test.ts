@@ -139,19 +139,35 @@ describe('AttendanceService', () => {
     }
   });
 
-  it('flags 5:05 PM (17:05) and 6:00 PM (18:00) time-outs as LATE_TIMEOUT shifts requiring manual correction', async () => {
+  it('keeps 5:05 PM (17:05) time-outs as normal COMPLETED shifts within grace period', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABBCC11', department: 'Engineering', active: true, employeeType: 'EMPLOYEE', dailyRate: 500 },
     ]);
     const service = new AttendanceService(sheets, config, () => new Date('2026-07-28T01:00:00.000Z'));
     await service.scan({ rfidUid: 'AABBCC11', source: 'RFID' }, 'r1');
-    // 17:05 Manila (5:05 PM) — strictly after 5 PM office hours.
+    // 17:05 Manila (5:05 PM) — within grace period before 18:00 cutoff.
     service.setNowProvider(() => new Date('2026-07-28T09:05:00.000Z'));
     const outResult = await service.scan({ rfidUid: 'AABBCC11', source: 'RFID' }, 'r2');
     expect(outResult.success).toBe(true);
     if (outResult.success) {
-      expect(outResult.attendance.status).toBe('LATE_TIMEOUT');
+      expect(outResult.attendance.status).toBe('COMPLETED');
       expect(outResult.attendance.timeOut).toBe('2026-07-28T17:05:00+08:00');
+    }
+  });
+
+  it('flags 6:05 PM (18:05) time-outs as LATE_TIMEOUT shifts requiring manual correction', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABBCC11', department: 'Engineering', active: true, employeeType: 'EMPLOYEE', dailyRate: 500 },
+    ]);
+    const service = new AttendanceService(sheets, config, () => new Date('2026-07-28T01:00:00.000Z'));
+    await service.scan({ rfidUid: 'AABBCC11', source: 'RFID' }, 'r1');
+    // 18:05 Manila (6:05 PM) — at/after 18:00 cutoff.
+    service.setNowProvider(() => new Date('2026-07-28T10:05:00.000Z'));
+    const outResult = await service.scan({ rfidUid: 'AABBCC11', source: 'RFID' }, 'r2');
+    expect(outResult.success).toBe(true);
+    if (outResult.success) {
+      expect(outResult.attendance.status).toBe('LATE_TIMEOUT');
+      expect(outResult.attendance.timeOut).toBe('2026-07-28T18:05:00+08:00');
       expect(outResult.message).toContain('after office hours');
     }
   });
