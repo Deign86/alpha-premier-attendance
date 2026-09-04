@@ -183,3 +183,13 @@
   EXPECT: both exit 0 with working `.exe` installers
   EVIDENCE: both exit 0; release installer verified on disk `src-tauri/target/release/bundle/nsis/Alpha Premier Attendance_0.1.48_x64-setup.exe` (146,960,895 B). Fast installer size (146,918,969 B) is worker-measured only — artifact was wiped before parent verification (see confound).
 - [ ] CONFOUND (must read): `tauri:build`'s `auto-clean` tripped the 15 GB threshold between runs and `cargo clean`-wiped `target/` (17G incl. 13G debug cache + the fast installer). Both builds were therefore cold-cache; order/profile/cache all differ. Treat the ~44s (~10%) gap as directional, not a benchmark. Warm debug caches are gone — next `tauri dev`/`cargo check` will re-warm (slow once). Prefer `tauri:build:fastlocal` / `tauri:build:fast` (skip auto-clean) for iteration.
+
+## Close-out: fast installer verified + dev cache re-warmed
+- [x] `--profile fast` passthrough honored; fast installer verified on disk.
+  CHECK: ls src-tauri/target/fast/bundle/nsis/
+  EXPECT: working `Alpha Premier Attendance_0.1.48_x64-setup.exe`
+  EVIDENCE: `tauri:build:fastlocal` exit 0, wall 7m52s; installer 146,927,854 B (33 KB / 0.02% under release 146,960,895 B); exe 21,842,944 B; release dir untouched (no auto-clean ran). Timing single-sample — do not over-read vs the A/B's 6m27s.
+- [x] Dev iteration cache re-warmed after the auto-clean wipe.
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml
+  EXPECT: exit 0
+  EVIDENCE: exit 0, wall 2m26s (was fully cold). Full debug codegen (~13G) still cold — first `tauri dev` will take several minutes once.
