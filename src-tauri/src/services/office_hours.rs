@@ -8,7 +8,9 @@ use chrono_tz::Asia::Manila;
 /// normal `COMPLETED` shift. This mirrors the shared TS policy in
 /// `shared/src/api-contracts.ts` (`isLateTimeout` / `LATE_TIMEOUT_THRESHOLD`)
 /// so the desktop app and the web-compatible server agree.
+#[allow(dead_code)]
 pub const OFFICE_HOURS_END_HOUR: u32 = 17;
+#[allow(dead_code)]
 pub const OFFICE_HOURS_END_MINUTE: u32 = 0;
 /// Late time-out cutoff (6:00 PM / 18:00). Time-outs at or after this are flagged.
 pub const LATE_TIMEOUT_HOUR: u32 = 18;
