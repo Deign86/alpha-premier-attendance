@@ -11,10 +11,9 @@ import {
 
 export interface VoiceSettingsPanelProps {
   onSettingsChange?: (settings: TtsSettings) => void;
-  onOpenVoiceboxNames?: () => void;
 }
 
-export function VoiceSettingsPanel({ onSettingsChange, onOpenVoiceboxNames }: VoiceSettingsPanelProps) {
+export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps) {
   const [settings, setSettings] = useState<TtsSettings>(DEFAULT_TTS_SETTINGS);
   const [status, setStatus] = useState<TtsStatusResponse | null>(null);
   const [testing, setTesting] = useState(false);
@@ -250,43 +249,6 @@ export function VoiceSettingsPanel({ onSettingsChange, onOpenVoiceboxNames }: Vo
         >
           Reset Defaults
         </button>
-      </div>
-
-      {/* Voicebox Name Pronunciations Card */}
-      <div
-        className="kiosk-card voicebox-names-promo-card"
-        style={{
-          marginTop: '22px',
-          padding: '18px 20px',
-          borderRadius: '8px',
-          background: 'var(--surface-input, rgba(255, 255, 255, 0.03))',
-          border: '1px solid var(--gold-soft, rgba(198, 162, 84, 0.3))',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
-          <div>
-            <p className="section-kicker" style={{ color: 'var(--gold, #c6a254)' }}>Phonetics &amp; Overrides</p>
-            <h3 style={{ margin: '4px 0 0', fontFamily: 'Orbitron, sans-serif', fontSize: '1.05rem' }}>
-              Voicebox Name Pronunciations
-            </h3>
-            <p className="form-help" style={{ margin: '4px 0 0' }}>
-              Manage pronunciation overrides and phonetic dictionaries for TTS name playback from apgbackup.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="admin-button file-action-primary"
-            onClick={() => {
-              if (onOpenVoiceboxNames) {
-                onOpenVoiceboxNames();
-              } else if ('window' in globalThis) {
-                window.location.hash = '#/voicebox-names';
-              }
-            }}
-          >
-            Open Pronunciation Manager
-          </button>
-        </div>
       </div>
 
       <div className="lan-guidance" style={{ marginTop: '18px' }}>

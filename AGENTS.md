@@ -45,6 +45,13 @@ Follow the rules in `.agent/rules/` and `.agents/rules/` (`ponytail.md`, `unlazy
 
 ---
 
+### UI Skills (Repo-Wide Design System)
+- **When**: any UI/UX work (new screens, polish, layout fixes, scaling-audit follow-ups). Start with `npm run ui:start` routing, then load at most 1–3 skills: `baseline-ui` for fast cleanup, `improve-ui` for audits (writes `design-plans/` only, never product source).
+- **CLI (zero-install, stdlib only)**: `npm run ui:start`, `npm run ui:categories`, `npm run ui:list -- --category <topic>`, `npm run ui:get -- <slug>` (e.g. `npm run ui:get -- baseline-ui`). Backed by `scripts/ui-skills.mjs`, which mirrors `npx ui-skills` against the public registry — use it instead of npx (the published CLI wrapper silently exits 1 under npx on some Windows PCs when its tsx loader fails to resolve).
+- **MCP**: `.mcp.json` registers the `ui-skills` server (`https://www.ui-skills.com/mcp`, tools `list_skills`/`get_skill`) for MCP-capable agents (Claude Code, Cursor, VS Code). For Pi (stdio-only gateway), `scripts/ui-skills-mcp.mjs` bridges stdio ↔ the remote endpoint — registered in the Pi global `mcp.json`, takes effect on next Pi start. This repo uses custom CSS in `client/src/styles.css`, not Tailwind — apply ui-skills principles (spacing, hierarchy, typography, one accent per view) through the existing tokens.
+
+---
+
 ### Local Release Policy (Never CI/CD Releases)
 - **Do not use GitHub Actions for releases**: Building Windows Tauri desktop release bundles in CI/CD takes too long.
 - **Generate on Local PC**: All production release installers/bundles must be generated locally on the developer PC via `npm run tauri:build`.

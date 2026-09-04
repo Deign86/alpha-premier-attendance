@@ -140,5 +140,17 @@
   EVIDENCE: oxlint passed (0 errors); `tsc --noEmit` clean; 16 files, 215/215 client tests passed.
 - [ ] Visual re-sweep at 100/125/150% via Tauri MCP screenshots confirms all 16 issues closed (static CSS review only so far).
 
-
+## UI Skills repo-wide install gates
+- [x] `.mcp.json` registers the ui-skills MCP server with `list_skills`/`get_skill` tools.
+  CHECK: node -e "const m=require('./.mcp.json'); if(m.mcpServers['ui-skills'].url!=='https://www.ui-skills.com/mcp') process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: `.mcp.json` contains `mcpServers.ui-skills.url = https://www.ui-skills.com/mcp`; live `tools/list` returns `list_skills,get_skill`; `tools/call list_skills(baseline)` returns count 2; `get_skill(baseline-ui)` returns the Baseline UI markdown.
+- [x] npm scripts expose the ui-skills CLI repo-wide with zero new dependencies.
+  CHECK: npm run ui:categories
+  EXPECT: prints the category list (accessibility, color, craft, layout, motion, typography, …)
+  EVIDENCE: `npm run ui:categories` exits 0 and prints 27 categories; `ui:list -- --category visual` and `ui:get -- baseline-ui` verified. Backed by stdlib-only `scripts/ui-skills.mjs` (the published `npx ui-skills` wrapper silently exits 1 under npx on this Windows PC — its tsx loader fails to resolve).
+- [x] ui-skills registry and MCP endpoint serve skill content end to end.
+  CHECK: npm run ui:get -- baseline-ui && curl -s -m 15 -X POST https://www.ui-skills.com/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"baseline-ui"}}}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{if(!s.includes('Baseline UI'))process.exit(1);});"
+  EXPECT: CLI prints the Baseline UI skill; MCP `get_skill` returns its markdown
+  EVIDENCE: CLI prints the full Baseline UI skill; MCP `get_skill` returns identical markdown. Additionally `scripts/ui-skills-mcp.mjs` stdio bridge verified (`initialize` → `tools/list` → `list_skills` count 2 → `get_skill` contains "Baseline UI", BRIDGE OK) and registered in Pi global `mcp.json` (takes effect on next Pi start; hot-connect unsupported this session).
 

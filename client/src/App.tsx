@@ -126,7 +126,6 @@ import {
   loadNameManifest,
 } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
-import { VoiceboxNamesPage } from "./voicebox-names-page";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { AdminUpdatesCard } from "./admin-updates-card";
@@ -196,33 +195,8 @@ export function shouldRouteGlobalRfidToSetup(
 }
 
 export default function App() {
-  const [routeHash, setRouteHash] = useState(() =>
-    'window' in globalThis ? window.location.hash : "",
-  );
-
-  useEffect(() => {
-    const handleHashChange = () => {
-      setRouteHash(window.location.hash);
-    };
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
-  }, []);
-
   const path = window.location.pathname;
   if (path === "/attendance") return <LiveAttendance />;
-  if (path === "/voicebox-names" || routeHash === "#/voicebox-names") {
-    return (
-      <VoiceboxNamesPage
-        onBack={() => {
-          if (window.location.hash === "#/voicebox-names") {
-            window.location.hash = "";
-          } else {
-            window.location.pathname = "/admin";
-          }
-        }}
-      />
-    );
-  }
   if (path === "/admin") return <AdminPanel />;
   const [state, setState] = useState<KioskState>("ready");
   const [uid, setUid] = useState("");
@@ -3110,7 +3084,7 @@ function AdminPanel() {
               onSaved={load}
             />
           ) : tab === "voice" ? (
-            <VoiceSettingsPanel onOpenVoiceboxNames={() => { window.location.hash = "#/voicebox-names"; }} />
+            <VoiceSettingsPanel />
           ) : (
             <DatabasePanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} />
           )}
