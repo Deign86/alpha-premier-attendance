@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regenerates all 22050 Hz fallback placeholder clips using Voicebox Qwen-TTS 1.7B Ma'am Bea profile (24000 Hz).
+Regenerates missing or corrupt clips using the VoiceStudio Ma'am Bea profile (24000 Hz).
 """
 
 import sys
@@ -9,16 +9,16 @@ import shutil
 from pathlib import Path
 from generate_cloned_voices import (
     PHRASE_CATALOG,
-    get_voicebox_bea_profile,
-    generate_phrase_voicebox,
+    get_voicestudio_bea_profile,
+    generate_phrase_voicestudio,
     CLIENT_OUTPUT_BASE,
     TAURI_OUTPUT_BASE,
 )
 
 def main():
-    profile_id = get_voicebox_bea_profile()
+    profile_id = get_voicestudio_bea_profile()
     print("=" * 70)
-    print(" Regenerating Cloned Bea Voice Clips via Voicebox AI Studio")
+    print(" Regenerating Cloned Bea Voice Clips via VoiceStudio")
     print(f" Profile ID: {profile_id}")
     print("=" * 70)
 
@@ -55,7 +55,7 @@ def main():
         client_wav.parent.mkdir(parents=True, exist_ok=True)
         tauri_wav.parent.mkdir(parents=True, exist_ok=True)
 
-        ok = generate_phrase_voicebox(profile_id, phrase, client_wav)
+        ok = generate_phrase_voicestudio(profile_id, phrase, client_wav)
         if ok and client_wav.is_file() and client_wav.stat().st_size > 1000:
             shutil.copy2(client_wav, tauri_wav)
             regenerated += 1

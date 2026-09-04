@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 
-VOICEBOX_BASE = "http://127.0.0.1:17493"
+VOICESTUDIO_BASE = "http://127.0.0.1:3900"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_OUTPUT_BASE = REPO_ROOT / "client" / "public" / "voices" / "bea"
 
@@ -27,17 +27,17 @@ def audit():
     from generate_cloned_voices import PHRASE_CATALOG
 
     print("=" * 80)
-    print(" AUDITING VOICEBOX GENERATED AUDIO RESULTS")
+    print(" AUDITING VOICESTUDIO CLONED BEA AUDIO RESULTS")
     print("=" * 80)
 
-    # 1. Fetch Voicebox history
+    # 1. Fetch VoiceStudio history (optional; skipped when the endpoint is absent)
     try:
-        req = urllib.request.urlopen(f"{VOICEBOX_BASE}/history?limit=200")
+        req = urllib.request.urlopen(f"{VOICESTUDIO_BASE}/history?limit=200", timeout=10)
         hist_data = json.loads(req.read().decode())
         items = hist_data.get("items", [])
-        print(f"Total items in Voicebox history: {len(items)}")
+        print(f"Total items in VoiceStudio history: {len(items)}")
     except Exception as e:
-        print(f"Error connecting to Voicebox: {e}")
+        print(f"VoiceStudio history unavailable, auditing local files only ({e})")
         items = []
 
     # Count text occurrences in history

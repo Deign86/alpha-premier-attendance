@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-Alpha Premier Attendance — Voicebox AI Studio Voice Generation.
-Clean, deduplicated master catalog for "Ma'am Bea" Zero-Shot Voice Cloning.
+Alpha Premier Attendance — VoiceStudio Voice Generation.
+Clean, deduplicated master catalog for "Ma'am Bea" Cloned Voice.
 """
 
 import os
 import sys
 import json
-import time
 import shutil
 import urllib.request
 import urllib.error
+import wave
+from io import BytesIO
 from pathlib import Path
 
-VOICEBOX_BASE = "http://127.0.0.1:17493"
+VOICESTUDIO_BASE = os.environ.get("VOICESTUDIO_BASE_URL", "http://127.0.0.1:3900")
+VOICESTUDIO_BEA_PROFILE_ID = "1b3e828b"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_OUTPUT_BASE = REPO_ROOT / "client" / "public" / "voices" / "bea"
 TAURI_OUTPUT_BASE = REPO_ROOT / "src-tauri" / "resources" / "voices" / "bea"
@@ -334,84 +336,88 @@ PHRASE_CATALOG = [
 ]
 
 
-def get_voicebox_bea_profile():
+def get_voicestudio_bea_profile():
     try:
-        req = urllib.request.urlopen(f"{VOICEBOX_BASE}/profiles", timeout=2)
+        req = urllib.request.urlopen(f"{VOICESTUDIO_BASE}/profiles", timeout=10)
         profiles = json.loads(req.read().decode())
         for p in profiles:
             if "bea" in p.get("name", "").lower():
                 return p["id"]
     except Exception as e:
-        print(f"Notice: Voicebox not reachable at {VOICEBOX_BASE} ({e}). Using cached profile ID.")
+        print(f"Notice: VoiceStudio not reachable at {VOICESTUDIO_BASE} ({e}). Using cached profile ID.")
     # Fallback to existing manifest profile ID or known ID
     if (CLIENT_OUTPUT_BASE / "manifest.json").is_file():
         try:
             with open(CLIENT_OUTPUT_BASE / "manifest.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if data.get("voicestudio_profile_id"):
+                    return data["voicestudio_profile_id"]
                 if data.get("voicebox_profile_id"):
                     return data["voicebox_profile_id"]
         except Exception:
             pass
-    return "1ccbe006-2269-4c08-aa85-0167598232a1"
+    return VOICESTUDIO_BEA_PROFILE_ID
 
 
-def generate_phrase_voicebox(profile_id: str, phrase: str, out_file: Path) -> bool:
-    payload = json.dumps({
-        "profile_id": profile_id,
+def _multipart_fields(fields: dict) -> tuple:
+    boundary = "----bea" + os.urandom(8).hex()
+    buf = BytesIO()
+    for name, value in fields.items():
+        buf.write(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8"))
+    buf.write(f"--{boundary}--\r\n".encode("utf-8"))
+    return buf.getvalue(), f"multipart/form-data; boundary={boundary}"
+
+
+def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) -> bool:
+    """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes)."""
+    body, content_type = _multipart_fields({
         "text": phrase,
-        "engine": "qwen",
-        "model_size": "1.7B",
-    }).encode("utf-8")
-
+        "profile_id": profile_id,
+        "language": "en",
+    })
     req = urllib.request.Request(
-        f"{VOICEBOX_BASE}/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
+        f"{VOICESTUDIO_BASE}/generate",
+        data=body,
+        headers={"Content-Type": content_type},
         method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as res:
-            gen_data = json.loads(res.read().decode())
-            gen_id = gen_data["id"]
+        with urllib.request.urlopen(req, timeout=180) as res:
+            audio = res.read()
     except Exception as e:
-        print(f"  [Offline/Pending] Voicebox generation unavailable: {e}", file=sys.stderr)
+        print(f"  [Offline/Pending] VoiceStudio generation unavailable: {e}", file=sys.stderr)
         return False
-
-    # Poll status
-    for _ in range(90):
-        time.sleep(2)
-        try:
-            req = urllib.request.urlopen(f"{VOICEBOX_BASE}/history/{gen_id}", timeout=5)
-            hist = json.loads(req.read().decode())
-            status = hist.get("status")
-            if status == "completed":
-                audio_url = f"{VOICEBOX_BASE}/audio/{gen_id}"
-                urllib.request.urlretrieve(audio_url, out_file)
-                return out_file.is_file() and out_file.stat().st_size > 100
-            elif status == "failed":
-                print(f"  Voicebox error for '{phrase}': {hist.get('error')}", file=sys.stderr)
+    if len(audio) <= 1000 or audio[:4] != b"RIFF":
+        print(f"  VoiceStudio returned invalid audio for '{phrase}' ({len(audio)} bytes)", file=sys.stderr)
+        return False
+    try:
+        with wave.open(BytesIO(audio), "rb") as w:
+            if w.getframerate() != 24000 or w.getnchannels() != 1:
+                print(f"  Unexpected VoiceStudio format for '{phrase}': {w.getframerate()}Hz/{w.getnchannels()}ch", file=sys.stderr)
                 return False
-        except Exception:
-            pass
-
-    return False
+    except Exception as e:
+        print(f"  VoiceStudio audio parse failed for '{phrase}': {e}", file=sys.stderr)
+        return False
+    out_file.write_bytes(audio)
+    return out_file.is_file() and out_file.stat().st_size > 1000
 
 
 def main():
     print("=" * 70)
-    print(" Alpha Premier Attendance — Deduplicated Voicebox Qwen-TTS 1.7B")
+    print(" Alpha Premier Attendance — Deduplicated VoiceStudio (Ma'am Bea)")
     print(f" Master Catalog: {len(PHRASE_CATALOG)} Distinct Announcement Phrases")
     print("=" * 70)
 
-    profile_id = get_voicebox_bea_profile()
+    profile_id = get_voicestudio_bea_profile()
 
     CLIENT_OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
     TAURI_OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "version": "6.0.0",
-        "engine": "voicebox-qwen-1.7B-cuda-cloned",
+        "version": "7.0.0",
+        "engine": "voicestudio-bea-cloned",
         "voice": "bea",
+        "voicestudio_profile_id": profile_id,
         "voicebox_profile_id": profile_id,
         "segments": {},
         "phrases": {},
@@ -439,7 +445,7 @@ def main():
 
         # Generate only if missing or too small
         if not (out_file_client.is_file() and out_file_client.stat().st_size > 1000):
-            success = generate_phrase_voicebox(profile_id, phrase, out_file_client)
+            success = generate_phrase_voicestudio(profile_id, phrase, out_file_client)
             if success and out_file_client.is_file():
                 print(f"  ✓ Generated ({out_file_client.stat().st_size} bytes)")
             else:

@@ -1,8 +1,9 @@
 {
-  "version": "6.0.0",
-  "engine": "voicebox-qwen-1.7B-cuda-cloned",
+  "version": "7.0.0",
+  "engine": "voicestudio-bea-cloned",
   "voice": "bea",
-  "voicebox_profile_id": "1ccbe006-2269-4c08-aa85-0167598232a1",
+  "voicestudio_profile_id": "1b3e828b",
+  "voicebox_profile_id": "1b3e828b",
   "segments": {
     "good-morning": {
       "phrase": "Good morning,",
