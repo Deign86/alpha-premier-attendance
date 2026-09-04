@@ -5,6 +5,7 @@ Clean, deduplicated master catalog for "Ma'am Bea" Cloned Voice.
 """
 
 import os
+import subprocess
 import sys
 import json
 import shutil
@@ -369,7 +370,10 @@ def _multipart_fields(fields: dict) -> tuple:
 
 
 def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) -> bool:
-    """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes)."""
+    """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes).
+
+    The API returns WAV; the repo standard is MP3 (64k mono), so the WAV is
+    transcoded via ffmpeg and only the `.mp3` is kept. Requires ffmpeg."""
     body, content_type = _multipart_fields({
         "text": phrase,
         "profile_id": profile_id,
@@ -398,7 +402,19 @@ def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) ->
     except Exception as e:
         print(f"  VoiceStudio audio parse failed for '{phrase}': {e}", file=sys.stderr)
         return False
-    out_file.write_bytes(audio)
+    tmp_wav = out_file.with_suffix(".tmp.wav")
+    tmp_wav.write_bytes(audio)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(tmp_wav),
+             "-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1", str(out_file)],
+            check=True,
+        )
+    except Exception as e:
+        print(f"  ffmpeg transcode failed for '{phrase}': {e}", file=sys.stderr)
+        return False
+    finally:
+        tmp_wav.unlink(missing_ok=True)
     return out_file.is_file() and out_file.stat().st_size > 1000
 
 
@@ -436,10 +452,10 @@ def main():
         cat_dir_tauri = TAURI_OUTPUT_BASE / category
         cat_dir_tauri.mkdir(parents=True, exist_ok=True)
 
-        out_file_client = cat_dir_client / f"{slug}.wav"
-        out_file_tauri = cat_dir_tauri / f"{slug}.wav"
-        rel_url = f"/voices/bea/{category}/{slug}.wav"
-        rel_tauri = f"voices/bea/{category}/{slug}.wav"
+        out_file_client = cat_dir_client / f"{slug}.mp3"
+        out_file_tauri = cat_dir_tauri / f"{slug}.mp3"
+        rel_url = f"/voices/bea/{category}/{slug}.mp3"
+        rel_tauri = f"voices/bea/{category}/{slug}.mp3"
 
         print(f"[{idx}/{len(PHRASE_CATALOG)}] [{category}] {slug}: \"{phrase}\"")
 

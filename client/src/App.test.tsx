@@ -1959,6 +1959,7 @@ describe('Admin Attendance Corrections', () => {
       genderKey: 'MALE',
       employeeName: 'John Doe',
       personId: 'EMP-01',
+      remindReturnWindow: true,
     });
 
     // 2. Scan for return
@@ -2011,6 +2012,7 @@ describe('Admin Attendance Corrections', () => {
       errorCode: 'BATHROOM_KEY_IN_USE',
       message: 'The male bathroom key is currently in use by John Doe.',
       activeHolderName: 'John Doe',
+      activeHolderId: 'EMP-01',
       genderKey: 'MALE',
     });
   });

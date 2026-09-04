@@ -4,6 +4,12 @@ import { attendanceApiProxy } from './src/dev-server-config';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Faster local/release frontend builds: skip gzip-size reporting and sourcemaps.
+    reportCompressedSize: false,
+    sourcemap: false,
+    chunkSizeWarningLimit: 1000,
+  },
   server: {
     host: true,
     proxy: {

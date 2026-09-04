@@ -181,6 +181,8 @@ export type BathroomPhraseOptions = {
   genderKey: BathroomGenderKey;
   employeeName?: string | null;
   personId?: string | null;
+  /** Kiosk self-service checkout: append the 15-minute return reminder (Bea clip). */
+  remindReturnWindow?: boolean;
 };
 
 export type AnnounceBathroomOptions = BathroomPhraseOptions & {
@@ -191,6 +193,7 @@ export type ScanErrorPhraseOptions = {
   errorCode: string;
   message?: string;
   activeHolderName?: string | null;
+  activeHolderId?: string | null;
   genderKey?: BathroomGenderKey | null;
 };
 
@@ -278,6 +281,10 @@ export function buildAttendancePhrase(
   return `Your ${assistedPrefix}time out has been recorded.`;
 }
 
+/** Static Bea carrier for the kiosk return-window reminder (played after checkout). */
+const RETURN_REMINDER_PHRASE =
+  'Your bathroom key has been checked out. Please return it within fifteen minutes.';
+
 /**
  * Generates bathroom key checkout or return announcement phrases.
  */
@@ -285,15 +292,17 @@ export function buildBathroomPhrase({
   action,
   genderKey,
   employeeName,
+  remindReturnWindow,
 }: BathroomPhraseOptions): string {
   const cleanName = sanitizeTextForSpeech(employeeName ?? '', 100);
   const genderLabel = genderKey === 'MALE' ? 'Male' : 'Female';
+  const reminder = remindReturnWindow === true ? ` ${RETURN_REMINDER_PHRASE}` : '';
 
   if (action === 'CHECKOUT') {
     if (cleanName.length > 0) {
-      return `${genderLabel} bathroom key checked out for ${cleanName}.`;
+      return `${genderLabel} bathroom key checked out for ${cleanName}.${reminder}`;
     }
-    return `${genderLabel} bathroom key checked out.`;
+    return `${genderLabel} bathroom key checked out.${reminder}`;
   }
 
   if (cleanName.length > 0) {
@@ -489,6 +498,18 @@ export async function announceBathroom(
     const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
     const targetPersonId = options.personId;
 
+    // Bea-first return-window reminder for kiosk self-service checkout.
+    const playReturnReminder = async (): Promise<void> => {
+      if (options.remindReturnWindow !== true) return;
+      const reminderUrl = getClonedBeaAudioUrl(RETURN_REMINDER_PHRASE);
+      if (!reminderUrl) return;
+      try {
+        await playClonedBeaAudio(reminderUrl, activeSettings.volume, activeSettings.rate);
+      } catch (error) {
+        console.warn('Return-window reminder playback failed:', error);
+      }
+    };
+
     if (cleanName.length > 0) {
       const nameUrl = getClonedBeaNameAudioUrl(targetPersonId, cleanName);
 
@@ -518,6 +539,7 @@ export async function announceBathroom(
                 }
               }
               if (namePlayed) {
+                await playReturnReminder();
                 return { success: true, engineUsed: 'cloned-bea' };
               }
             }
@@ -575,6 +597,9 @@ export async function announceBathroom(
         try {
           const played = await playClonedBeaAudio(staticUrl, activeSettings.volume, activeSettings.rate);
           if (played) {
+            if (options.action === 'CHECKOUT') {
+              await playReturnReminder();
+            }
             return { success: true, engineUsed: 'cloned-bea' };
           }
         } catch (error) {
@@ -616,7 +641,8 @@ export async function announceAdminAssist(
 
 /**
  * Non-blocking offline TTS voice announcement for scan error feedback.
- * When Ma'am Bea is active, plays pure static cloned error file without splicing.
+ * When Ma'am Bea is active, plays the static cloned error clip; a known key
+ * holder is spliced as "-by" carrier + cloned name clip (Bea-first).
  */
 export async function announceScanError(
   options: AnnounceScanErrorOptions,
@@ -628,6 +654,62 @@ export async function announceScanError(
   }
 
   const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
+
+  // Bea-first: splice the static "-by" carrier with the holder's cloned name clip
+  // so the holder is actually named (previously the name was dropped in Bea mode).
+  // Piper speaks only the holder name when no cloned clip exists for them.
+  if (isClonedBea && options.errorCode === 'BATHROOM_KEY_IN_USE') {
+    const holderName = sanitizeTextForSpeech(options.activeHolderName ?? '', 100);
+    if (holderName.length > 0) {
+      const holderGender =
+        options.genderKey === 'MALE' ? 'male' : options.genderKey === 'FEMALE' ? 'female' : '';
+      const holderPrefix =
+        holderGender.length > 0
+          ? `The ${holderGender} bathroom key is currently in use by`
+          : 'The bathroom key is currently in use by';
+      const holderPrefixUrl = getClonedBeaAudioUrl(holderPrefix);
+      const holderId = options.activeHolderId?.trim() ? options.activeHolderId.trim() : null;
+      const holderNameUrl = getClonedBeaNameAudioUrl(holderId, holderName);
+      if (holderPrefixUrl) {
+        try {
+          const prefixPlayed = await playClonedBeaAudio(
+            holderPrefixUrl,
+            activeSettings.volume,
+            activeSettings.rate,
+          );
+          if (prefixPlayed) {
+            let holderPlayed = false;
+            if (holderNameUrl) {
+              holderPlayed = await playClonedBeaAudio(
+                holderNameUrl,
+                activeSettings.volume,
+                activeSettings.rate,
+              );
+            }
+            if (!holderPlayed) {
+              try {
+                await tauriApi.ttsSpeak(holderName, {
+                  engine: 'piper',
+                  voiceModel: activeSettings.voiceModel,
+                  rate: activeSettings.rate,
+                  volume: activeSettings.volume,
+                });
+                holderPlayed = true;
+              } catch (error) {
+                console.warn('Local Piper synthesis for key-holder name failed:', error);
+              }
+            }
+            if (holderPlayed) {
+              return { success: true, engineUsed: 'cloned-bea' };
+            }
+          }
+        } catch (error) {
+          console.warn('Key-in-use cloned voice splicing failed:', error);
+        }
+      }
+    }
+  }
+
   const phrase = isClonedBea
     ? (options.errorCode === 'INVALID_UID' || options.errorCode === 'UNREGISTERED_CARD'
         ? "Sorry, that card wasn't recognized. Please try scanning again."

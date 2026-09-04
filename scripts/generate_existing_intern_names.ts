@@ -9,6 +9,7 @@
  *   npx tsx scripts/generate_existing_intern_names.ts [--dry-run] [--missing-only] [--force] [--person-id <id>] [--interns-only]
  */
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -104,6 +105,7 @@ export async function generateVoicestudioClip(
 ): Promise<boolean> {
   try {
     // VoiceStudio POST /generate accepts multipart form fields and returns raw WAV bytes.
+    // Repo standard is MP3 (64k mono): transcode via ffmpeg, keep only the `.mp3`.
     const boundary = '----bea' + crypto.randomBytes(8).toString('hex');
     const chunks: Buffer[] = [];
     const pushField = (name: string, value: string): void => {
@@ -142,7 +144,16 @@ export async function generateVoicestudioClip(
       console.error(`[VoiceStudio] Invalid audio for "${text}" (${audio.length} bytes)`);
       return false;
     }
-    fs.writeFileSync(outPath, audio);
+    const tmpWav = /\.mp3$/i.test(outPath) ? outPath.replace(/\.mp3$/i, '.tmp.wav') : `${outPath}.tmp.wav`;
+    fs.writeFileSync(tmpWav, audio);
+    try {
+      execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', tmpWav, '-codec:a', 'libmp3lame', '-b:a', '64k', '-ac', '1', outPath]);
+    } catch (err) {
+      console.error(`[VoiceStudio] ffmpeg transcode failed for "${text}":`, err);
+      return false;
+    } finally {
+      fs.rmSync(tmpWav, { force: true });
+    }
     return fs.existsSync(outPath) && fs.statSync(outPath).size > 100;
   } catch (err) {
     console.error(`[VoiceStudio] Error during generation for "${text}":`, err);
@@ -244,7 +255,7 @@ export async function runBatchInternNameGeneration(
   for (const user of targetUsers) {
     const rawName = user.fullName || '';
     const speechName = normalizeName(rawName);
-    const audioFileName = `${user.userId}.wav`;
+    const audioFileName = `${user.userId}.mp3`;
     const clientAudioPath = path.join(CLIENT_NAMES_DIR, audioFileName);
     const tauriAudioPath = path.join(TAURI_NAMES_DIR, audioFileName);
     const relativeUrl = `/voices/bea/names/${audioFileName}`;

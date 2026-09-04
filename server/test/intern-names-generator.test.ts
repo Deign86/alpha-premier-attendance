@@ -58,7 +58,7 @@ describe('batch intern name voice generation', () => {
     expect(profiles['USR_INT_001']).toBeDefined();
     expect(profiles['USR_INT_001'].normalizedSpeechText).toBe('Maria Clara Santos');
     expect(profiles['USR_INT_001'].employeeType).toBe('INTERN');
-    expect(profiles['USR_INT_001'].audioFile).toBe('/voices/bea/names/USR_INT_001.wav');
+    expect(profiles['USR_INT_001'].audioFile).toBe('/voices/bea/names/USR_INT_001.mp3');
 
     expect(profiles['USR_INT_002']).toBeDefined();
     expect(profiles['USR_INT_002'].normalizedSpeechText).toBe('Juan Dela Cruz');

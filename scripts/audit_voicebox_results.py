@@ -63,14 +63,14 @@ def audit():
         category = item["category"]
         slug = item["slug"]
         phrase = item["phrase"]
-        wav_path = CLIENT_OUTPUT_BASE / category / f"{slug}.wav"
+        mp3_path = CLIENT_OUTPUT_BASE / category / f"{slug}.mp3"
 
-        if not wav_path.is_file():
-            print(f"[{idx}/{total}] MISSING FILE: {category}/{slug}.wav (\"{phrase}\")")
+        if not mp3_path.is_file():
+            print(f"[{idx}/{total}] MISSING FILE: {category}/{slug}.mp3 (\"{phrase}\")")
             issues.append((category, slug, phrase, "Missing file"))
             continue
 
-        dur, sz = get_audio_duration_and_stats(wav_path)
+        dur, sz = get_audio_duration_and_stats(mp3_path)
 
         # Sanity check on duration
         # Very short greetings like "Goodbye," or "Good morning," might be 0.5s - 1.5s
@@ -91,7 +91,7 @@ def audit():
         else:
             valid_count += 1
 
-        print(f"[{idx}/{total}] [{status_flag}] {category}/{slug}.wav | {dur:.2f}s | {sz}B | \"{phrase}\"")
+        print(f"[{idx}/{total}] [{status_flag}] {category}/{slug}.mp3 | {dur:.2f}s | {sz}B | \"{phrase}\"")
 
     print("\n" + "=" * 80)
     print(f"Summary: {valid_count}/{total} files valid, {len(issues)} issues detected.")

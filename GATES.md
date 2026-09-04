@@ -154,3 +154,32 @@
   EXPECT: CLI prints the Baseline UI skill; MCP `get_skill` returns its markdown
   EVIDENCE: CLI prints the full Baseline UI skill; MCP `get_skill` returns identical markdown. Additionally `scripts/ui-skills-mcp.mjs` stdio bridge verified (`initialize` → `tools/list` → `list_skills` count 2 → `get_skill` contains "Baseline UI", BRIDGE OK) and registered in Pi global `mcp.json` (takes effect on next Pi start; hot-connect unsupported this session).
 
+
+## Voice mp3 cutover BLOCK fix (parent arbitration)
+- [x] `src-tauri/resources` manifests re-synced to `.mp3` and byte-identical to client manifests.
+  CHECK: node -e "const fs=require('fs');for(const f of ['client/public/voices/bea/manifest.json','src-tauri/resources/voices/bea/manifest.json','client/public/voices/bea/bea-name-manifest.json','src-tauri/resources/voices/bea/bea-name-manifest.json']){const s=fs.readFileSync(f,'utf8');JSON.parse(s);if(s.includes('.wav'))process.exit(1);}"
+  EXPECT: command exits 0 (valid JSON, zero `.wav` refs across all 4 manifests)
+  EVIDENCE: 150 `.mp3` refs in each `manifest.json`, 26 in each `bea-name-manifest.json`; `diff` client-vs-resources identical.
+- [x] Voice generators emit `.mp3` (ffmpeg transcode in-line), audit probes `.mp3`, server test expects `.mp3`.
+  CHECK: python -m py_compile scripts/generate_cloned_voices.py scripts/generate_missing_cloned_voices.py scripts/audit_voicebox_results.py && python scripts/audit_voicebox_results.py
+  EXPECT: compile clean; audit reports 50/50 valid, 0 issues
+  EVIDENCE: `generate_phrase_voicestudio` + `generateVoicestudioClip` write WAV to temp, transcode `libmp3lame 64k mono`, keep only `.mp3`; audit 50/50 OK via ffprobe; `intern-names-generator.test.ts` asserts `.mp3`.
+- [x] Reference clips untouched; deleted WAVs git-restorable.
+  CHECK: git status --short -- resources
+  EXPECT: no output (reference `main/neutral/warm.wav` unmodified)
+  EVIDENCE: `resources/voices/bea/{main,neutral,warm}.wav` present and unmodified; 152 deleted generated WAVs restorable via git.
+- [x] Required gates pass after the fix.
+  CHECK: npm run lint:oxlint && npm run typecheck -w client && npm run typecheck -w server && cargo check --manifest-path src-tauri/Cargo.toml
+  EXPECT: all exit 0
+  EVIDENCE: oxlint clean; both typechecks clean; cargo check dev 2.26s; tests 33 shared + 76 client voice + 2 server name-gen pass; `vite build` 2.24s, `dist/voices` 2.2M (was 12M), 76 mp3 / 0 wav.
+
+## Final acceptance: full suite + NSIS A/B (with confound disclosed)
+- [x] Full JS suite green.
+  CHECK: npm test
+  EXPECT: exit 0 across shared/client/server
+  EVIDENCE: 33 files, 330 tests pass (shared 33, client 223, server 74); wall 26.1s.
+- [x] NSIS A/B: `tauri:build:fastlocal` 6m27s vs `tauri:build` 7m11s (single sample, directional only).
+  CHECK: time npm run tauri:build:fastlocal && time npm run tauri:build
+  EXPECT: both exit 0 with working `.exe` installers
+  EVIDENCE: both exit 0; release installer verified on disk `src-tauri/target/release/bundle/nsis/Alpha Premier Attendance_0.1.48_x64-setup.exe` (146,960,895 B). Fast installer size (146,918,969 B) is worker-measured only — artifact was wiped before parent verification (see confound).
+- [ ] CONFOUND (must read): `tauri:build`'s `auto-clean` tripped the 15 GB threshold between runs and `cargo clean`-wiped `target/` (17G incl. 13G debug cache + the fast installer). Both builds were therefore cold-cache; order/profile/cache all differ. Treat the ~44s (~10%) gap as directional, not a benchmark. Warm debug caches are gone — next `tauri dev`/`cargo check` will re-warm (slow once). Prefer `tauri:build:fastlocal` / `tauri:build:fast` (skip auto-clean) for iteration.

@@ -51,7 +51,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 urlencoding = "2"
 zip = "8"
 tauri-plugin-mcp-bridge = "0.13.0"
-rodio = { version = "0.19", default-features = false, features = ["wav"] }
+rodio = { version = "0.19", default-features = false, features = ["wav", "mp3"] }
 
 [dev-dependencies]
 # Used only by tests to read back generated XLSX metadata.
@@ -67,3 +67,17 @@ lto = "thin"
 codegen-units = 16
 strip = true
 panic = "abort"
+
+# Build scripts (incl. tauri-build codegen) do not affect runtime perf;
+# compiling them unoptimized shortens every release build's compile phase.
+[profile.release.build-override]
+opt-level = 0
+
+# Fast local profile for iteration: near-release opts without thin-LTO link cost.
+# Default `release` stays max-perf for shipped bundles; use via
+# `npm run tauri:build:fastlocal`. Backend wav playback is unaffected.
+[profile.fast]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16

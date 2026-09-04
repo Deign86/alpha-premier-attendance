@@ -4,7 +4,6 @@ Regenerates missing or corrupt clips using the VoiceStudio Ma'am Bea profile (24
 """
 
 import sys
-import wave
 import shutil
 from pathlib import Path
 from generate_cloned_voices import (
@@ -30,46 +29,34 @@ def main():
         category = item["category"]
         slug = item["slug"]
         phrase = item["phrase"]
-        client_wav = CLIENT_OUTPUT_BASE / category / f"{slug}.wav"
-        tauri_wav = TAURI_OUTPUT_BASE / category / f"{slug}.wav"
+        client_mp3 = CLIENT_OUTPUT_BASE / category / f"{slug}.mp3"
+        tauri_mp3 = TAURI_OUTPUT_BASE / category / f"{slug}.mp3"
 
-        # Check if file is missing, empty, or has framerate != 24000 Hz
+        # Check if the MP3 is missing or suspiciously small
         needs_generation = False
-        if not client_wav.is_file() or client_wav.stat().st_size < 1000:
+        if not client_mp3.is_file() or client_mp3.stat().st_size < 1000:
             needs_generation = True
-        else:
-            try:
-                with wave.open(str(client_wav), "rb") as w:
-                    rate = w.getframerate()
-                    if rate != 24000:
-                        needs_generation = True
-            except Exception:
-                needs_generation = True
 
         if not needs_generation:
             skipped += 1
-            print(f"[{idx}/{len(PHRASE_CATALOG)}] [SKIP 24kHz] {category}/{slug}.wav (\"{phrase}\")")
+            print(f"[{idx}/{len(PHRASE_CATALOG)}] [SKIP] {category}/{slug}.mp3 (\"{phrase}\")")
             continue
 
-        print(f"[{idx}/{len(PHRASE_CATALOG)}] [GENERATING] {category}/{slug}.wav: \"{phrase}\"...")
-        client_wav.parent.mkdir(parents=True, exist_ok=True)
-        tauri_wav.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[{idx}/{len(PHRASE_CATALOG)}] [GENERATING] {category}/{slug}.mp3: \"{phrase}\"...")
+        client_mp3.parent.mkdir(parents=True, exist_ok=True)
+        tauri_mp3.parent.mkdir(parents=True, exist_ok=True)
 
-        ok = generate_phrase_voicestudio(profile_id, phrase, client_wav)
-        if ok and client_wav.is_file() and client_wav.stat().st_size > 1000:
-            shutil.copy2(client_wav, tauri_wav)
+        ok = generate_phrase_voicestudio(profile_id, phrase, client_mp3)
+        if ok and client_mp3.is_file() and client_mp3.stat().st_size > 1000:
+            shutil.copy2(client_mp3, tauri_mp3)
             regenerated += 1
-            try:
-                with wave.open(str(client_wav), "rb") as w:
-                    print(f"  ✓ Success: {client_wav.stat().st_size} bytes @ {w.getframerate()} Hz")
-            except Exception:
-                print(f"  ✓ Success: {client_wav.stat().st_size} bytes")
+            print(f"  ✓ Success: {client_mp3.stat().st_size} bytes")
         else:
             failed += 1
             print(f"  ✗ Failed for phrase: \"{phrase}\"", file=sys.stderr)
 
     print("\n" + "=" * 70)
-    print(f" Generation complete: {regenerated} generated, {skipped} kept (already 24kHz), {failed} failed.")
+    print(f" Generation complete: {regenerated} generated, {skipped} kept (already present), {failed} failed.")
     print("=" * 70)
 
 if __name__ == "__main__":

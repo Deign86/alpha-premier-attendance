@@ -11,6 +11,7 @@ enum AudioCommand {
     Play {
         wav_path: PathBuf,
         volume: f32,
+        rate: f32,
         cleanup_file: Option<PathBuf>,
         wait_for_completion: bool,
         response: oneshot::Sender<Result<(), String>>,
@@ -85,6 +86,7 @@ impl AudioPlayer {
                         AudioCommand::Play {
                             wav_path,
                             volume,
+                            rate,
                             cleanup_file,
                             wait_for_completion,
                             response,
@@ -137,6 +139,12 @@ impl AudioPlayer {
                             };
 
                             sink.set_volume(volume);
+                            let speed = if rate.is_finite() {
+                                rate.clamp(0.5, 2.0)
+                            } else {
+                                1.0
+                            };
+                            sink.set_speed(speed);
                             sink.append(source);
                             current_sink = Some(sink.clone());
 
@@ -205,10 +213,13 @@ impl AudioPlayer {
     }
 
     /// Plays a WAV file from the filesystem on the audio worker thread.
+    /// `rate` is the speech-rate multiplier (0.5-2.0, 1.0 = normal) applied
+    /// via the Rodio sink so pre-rendered clips honor the TTS speed setting.
     pub async fn play_wav(
         &self,
         wav_path: &Path,
         volume: f32,
+        rate: f32,
         cleanup_file: Option<PathBuf>,
         wait_for_completion: bool,
     ) -> Result<(), String> {
@@ -218,6 +229,7 @@ impl AudioPlayer {
             .send(AudioCommand::Play {
                 wav_path: wav_path.to_path_buf(),
                 volume,
+                rate,
                 cleanup_file,
                 wait_for_completion,
                 response: tx,

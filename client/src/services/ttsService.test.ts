@@ -272,6 +272,19 @@ describe('ttsService', () => {
         }),
       ).toBe('Female bathroom key returned.');
     });
+
+    it('appends the return-window reminder to checkout phrases when requested', () => {
+      expect(
+        buildBathroomPhrase({
+          action: 'CHECKOUT',
+          genderKey: 'MALE',
+          employeeName: 'John Doe',
+          remindReturnWindow: true,
+        }),
+      ).toBe(
+        'Male bathroom key checked out for John Doe. Your bathroom key has been checked out. Please return it within fifteen minutes.',
+      );
+    });
   });
 
   describe('buildScanErrorPhrase', () => {
@@ -465,9 +478,9 @@ describe('ttsService', () => {
         expect.objectContaining({ engine: 'piper' }),
       );
       expect(callOrder).toEqual([
-        'cloned:/voices/bea/attendance/good-morning.wav',
+        'cloned:/voices/bea/attendance/good-morning.mp3',
         'piper:Dynamic Future Intern:piper',
-        'cloned:/voices/bea/attendance/time-in-standard.wav',
+        'cloned:/voices/bea/attendance/time-in-standard.mp3',
       ]);
       expect(result?.success).toBe(true);
       expect(result?.engineUsed).toBe('cloned-bea');
@@ -489,7 +502,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/attendance/time-in-standard.wav',
+        '/voices/bea/attendance/time-in-standard.mp3',
         1.0,
         1.0,
       );
@@ -560,7 +573,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/bathroom/checkout-male.wav',
+        '/voices/bea/bathroom/checkout-male.mp3',
         1.0,
         1.0,
       );
@@ -589,8 +602,39 @@ describe('ttsService', () => {
 
       // Checkout only plays 2 segments (prefix + name), NO extra suffix phrase
       expect(playSpy).toHaveBeenCalledTimes(2);
-      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/checkout-male-for.wav', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/checkout-male-for.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.mp3', 1.0, 1.0);
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('appends the Bea return-window reminder to kiosk checkout without Piper', async () => {
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceBathroom({
+        action: 'CHECKOUT',
+        genderKey: 'MALE',
+        employeeName: 'Deign Lazaro',
+        personId: 'APG-2026-102',
+        remindReturnWindow: true,
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      // Checkout plays 3 Bea segments (prefix + name + 15-minute reminder)
+      expect(playSpy).toHaveBeenCalledTimes(3);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/checkout-male-for.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/bathroom/bathroom-key-checked-out-15min.mp3', 1.0, 1.0);
       expect(backendSpy).not.toHaveBeenCalled();
       expect(result).toEqual({
         success: true,
@@ -618,9 +662,9 @@ describe('ttsService', () => {
 
       // Return plays 3 segments (prefix + name + suffix)
       expect(playSpy).toHaveBeenCalledTimes(3);
-      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/thank-you.wav', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.wav', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/bathroom/return-male.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/thank-you.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/bathroom/return-male.mp3', 1.0, 1.0);
       expect(backendSpy).not.toHaveBeenCalled();
       expect(result).toEqual({
         success: true,
@@ -647,7 +691,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledTimes(1);
-      expect(playSpy).toHaveBeenCalledWith('/voices/bea/bathroom/checkout-female-for.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenCalledWith('/voices/bea/bathroom/checkout-female-for.mp3', 1.0, 1.0);
       expect(backendSpy).toHaveBeenCalledWith('Dynamic Employee', expect.objectContaining({ engine: 'piper' }));
       expect(result).toEqual({
         success: true,
@@ -727,7 +771,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/scan-error/sorry-card-not-recognized.wav',
+        '/voices/bea/scan-error/sorry-card-not-recognized.mp3',
         1.0,
         1.0,
       );
@@ -759,6 +803,65 @@ describe('ttsService', () => {
         expect.any(Object),
       );
       expect(result?.success).toBe(true);
+    });
+
+    it('splices the Bea "-by" carrier with the holder cloned name without Piper', async () => {
+      setNameManifest({
+        'EMP-01': { personId: 'EMP-01', displayName: 'John Doe', audioFile: '/voices/bea/names/EMP-01.mp3' },
+      });
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+
+      const result = await announceScanError({
+        errorCode: 'BATHROOM_KEY_IN_USE',
+        activeHolderName: 'John Doe',
+        activeHolderId: 'EMP-01',
+        genderKey: 'MALE',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledTimes(2);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/scan-error/bathroom-key-in-use-male-by.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/EMP-01.mp3', 1.0, 1.0);
+      expect(backendSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
+    it('falls back to Piper only for the holder name when no cloned clip exists', async () => {
+      setNameManifest(null);
+      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      const result = await announceScanError({
+        errorCode: 'BATHROOM_KEY_IN_USE',
+        activeHolderName: 'Dynamic Employee',
+        activeHolderId: 'USR_NEW_999',
+        genderKey: 'FEMALE',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        },
+      });
+
+      expect(playSpy).toHaveBeenCalledTimes(1);
+      expect(playSpy).toHaveBeenCalledWith('/voices/bea/scan-error/bathroom-key-in-use-female-by.mp3', 1.0, 1.0);
+      expect(backendSpy).toHaveBeenCalledWith('Dynamic Employee', expect.objectContaining({ engine: 'piper' }));
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
     });
   });
 
@@ -809,7 +912,7 @@ describe('ttsService', () => {
     it('resolves pre-rendered phrases and rejects uncached dynamic phrases', () => {
       expect(isClonedBeaPhraseAvailable('Your time in has been recorded.')).toBe(true);
       expect(getClonedBeaAudioUrl('Your time in has been recorded.')).toBe(
-        '/voices/bea/attendance/time-in-standard.wav',
+        '/voices/bea/attendance/time-in-standard.mp3',
       );
       expect(isClonedBeaPhraseAvailable('Good morning, Ada Lovelace. Your time in has been recorded.')).toBe(
         false,
@@ -834,7 +937,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/attendance/time-in-standard.wav',
+        '/voices/bea/attendance/time-in-standard.mp3',
         0.9,
         1.0,
       );
@@ -847,10 +950,10 @@ describe('ttsService', () => {
 
     it('resolves both gendered bathroom checkout-name carriers', () => {
       expect(getClonedBeaAudioUrl('Male bathroom key checked out for')).toBe(
-        '/voices/bea/bathroom/checkout-male-for.wav',
+        '/voices/bea/bathroom/checkout-male-for.mp3',
       );
       expect(getClonedBeaAudioUrl('Female bathroom key checked out for')).toBe(
-        '/voices/bea/bathroom/checkout-female-for.wav',
+        '/voices/bea/bathroom/checkout-female-for.mp3',
       );
     });
 
@@ -872,7 +975,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/bathroom/checkout-male.wav',
+        '/voices/bea/bathroom/checkout-male.mp3',
         0.8,
         1.1,
       );
@@ -896,7 +999,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/admin-assist/admin-assist-prompt.wav',
+        '/voices/bea/admin-assist/admin-assist-prompt.mp3',
         1.0,
         1.0,
       );
@@ -923,7 +1026,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/scan-error/card-not-registered.wav',
+        '/voices/bea/scan-error/card-not-registered.mp3',
         1.0,
         1.0,
       );
@@ -947,7 +1050,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/general/test-voice.wav',
+        '/voices/bea/general/test-voice.mp3',
         1.0,
         1.0,
       );
@@ -1030,7 +1133,7 @@ describe('ttsService', () => {
 
     it('plays cloned prefix -> cloned name -> cloned suffix for existing intern in manifest', async () => {
       setNameManifest({
-        usr_intern_123: { audioFile: '/voices/bea/names/usr_intern_123.wav' },
+        usr_intern_123: { audioFile: '/voices/bea/names/usr_intern_123.mp3' },
       });
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
       const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak');
@@ -1049,9 +1152,9 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledTimes(3);
-      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/attendance/good-morning.wav', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/usr_intern_123.wav', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/attendance/time-in-standard.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/attendance/good-morning.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/usr_intern_123.mp3', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/attendance/time-in-standard.mp3', 1.0, 1.0);
       expect(piperSpy).not.toHaveBeenCalled();
       expect(result).toEqual({
         success: true,
@@ -1078,9 +1181,9 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledTimes(2);
-      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/attendance/good-morning.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/attendance/good-morning.mp3', 1.0, 1.0);
       expect(piperSpy).toHaveBeenCalledWith('New Intern', expect.objectContaining({ engine: 'piper' }));
-      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/attendance/time-in-standard.wav', 1.0, 1.0);
+      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/attendance/time-in-standard.mp3', 1.0, 1.0);
       expect(result).toEqual({
         success: true,
         engineUsed: 'cloned-bea',
@@ -1089,7 +1192,7 @@ describe('ttsService', () => {
 
     it('falls back to Piper dynamic name when cached name file fails to play', async () => {
       setNameManifest({
-        usr_intern_broken: { audioFile: '/voices/bea/names/corrupted.wav' },
+        usr_intern_broken: { audioFile: '/voices/bea/names/corrupted.mp3' },
       });
       const playSpy = vi
         .spyOn(clonedBeaVoice, 'playClonedBeaAudio')

@@ -3186,6 +3186,20 @@ async fn db_restore_request(
 }
 
 #[tauri::command]
+/// Dismiss the persisted restore-failure notice after the operator reviewed it.
+async fn db_dismiss_restore_failure(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let marker = crate::database::restore_failed_path(&state.data_dir);
+    let _ = std::fs::remove_file(&marker);
+    Ok(serde_json::json!({"success": true, "message": "Restore failure notice dismissed."}))
+}
+
+#[tauri::command]
 /// Open the backups folder in the OS file explorer.
 async fn db_open_backups_dir(
     app: tauri::AppHandle,
@@ -4656,6 +4670,7 @@ pub fn run() {
             db_info,
             db_backup,
             db_restore_request,
+            db_dismiss_restore_failure,
             db_open_backups_dir,
             setup_unlock,
             setup_lock,

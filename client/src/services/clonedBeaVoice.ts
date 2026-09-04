@@ -22,70 +22,70 @@
  */
 export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Object.freeze({
   // 1. Hybrid Splicing Carrier Prefixes (Main Tone)
-  'Good morning,': '/voices/bea/attendance/good-morning.wav',
-  'Good afternoon,': '/voices/bea/attendance/good-afternoon.wav',
-  'Good evening,': '/voices/bea/attendance/good-evening.wav',
-  'Goodbye,': '/voices/bea/attendance/goodbye.wav',
-  'Attendance recorded for': '/voices/bea/attendance/attendance-recorded-for.wav',
-  'Thank you, and have a great day.': '/voices/bea/attendance/thank-you-great-day.wav',
+  'Good morning,': '/voices/bea/attendance/good-morning.mp3',
+  'Good afternoon,': '/voices/bea/attendance/good-afternoon.mp3',
+  'Good evening,': '/voices/bea/attendance/good-evening.mp3',
+  'Goodbye,': '/voices/bea/attendance/goodbye.mp3',
+  'Attendance recorded for': '/voices/bea/attendance/attendance-recorded-for.mp3',
+  'Thank you, and have a great day.': '/voices/bea/attendance/thank-you-great-day.mp3',
 
   // 2. Hybrid Splicing Suffixes & Attendance Announcements
-  'Your time in has been recorded.': '/voices/bea/attendance/time-in-standard.wav',
-  'Your time in has been recorded. You are the first arrival today.': '/voices/bea/attendance/time-in-first-arrival.wav',
-  'Your time in has been recorded within the grace period.': '/voices/bea/attendance/time-in-grace.wav',
-  'Your time in has been recorded within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-grace-first-arrival.wav',
-  'Your time in has been recorded. You made it within the grace period.': '/voices/bea/attendance/time-in-grace.wav',
-  'Your time in has been recorded. You made it within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-grace-first-arrival.wav',
-  'Your time in has been recorded. You are late.': '/voices/bea/attendance/time-in-late.wav',
-  'Your time in has been recorded. You are late. You are the first arrival today.': '/voices/bea/attendance/time-in-late-first-arrival.wav',
-  'Your assisted time in has been recorded.': '/voices/bea/attendance/time-in-assisted-standard.wav',
-  'Your assisted time in has been recorded. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-first-arrival.wav',
-  'Your assisted time in has been recorded within the grace period.': '/voices/bea/attendance/time-in-assisted-grace.wav',
-  'Your assisted time in has been recorded within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-grace-first-arrival.wav',
-  'Your assisted time in has been recorded. You made it within the grace period.': '/voices/bea/attendance/time-in-assisted-grace.wav',
-  'Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-grace-first-arrival.wav',
-  'Your assisted time in has been recorded. You are late.': '/voices/bea/attendance/time-in-assisted-late.wav',
-  'Your assisted time in has been recorded. You are late. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-late-first-arrival.wav',
-  'Your time out has been recorded.': '/voices/bea/attendance/time-out-standard.wav',
-  'Your time out was recorded after office hours. Manual correction is required.': '/voices/bea/attendance/time-out-late-timeout.wav',
-  'Your assisted time out has been recorded.': '/voices/bea/attendance/time-out-assisted-standard.wav',
-  'Your assisted time out was recorded after office hours. Manual correction is required.': '/voices/bea/attendance/time-out-assisted-late-timeout.wav',
+  'Your time in has been recorded.': '/voices/bea/attendance/time-in-standard.mp3',
+  'Your time in has been recorded. You are the first arrival today.': '/voices/bea/attendance/time-in-first-arrival.mp3',
+  'Your time in has been recorded within the grace period.': '/voices/bea/attendance/time-in-grace.mp3',
+  'Your time in has been recorded within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-grace-first-arrival.mp3',
+  'Your time in has been recorded. You made it within the grace period.': '/voices/bea/attendance/time-in-grace.mp3',
+  'Your time in has been recorded. You made it within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-grace-first-arrival.mp3',
+  'Your time in has been recorded. You are late.': '/voices/bea/attendance/time-in-late.mp3',
+  'Your time in has been recorded. You are late. You are the first arrival today.': '/voices/bea/attendance/time-in-late-first-arrival.mp3',
+  'Your assisted time in has been recorded.': '/voices/bea/attendance/time-in-assisted-standard.mp3',
+  'Your assisted time in has been recorded. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-first-arrival.mp3',
+  'Your assisted time in has been recorded within the grace period.': '/voices/bea/attendance/time-in-assisted-grace.mp3',
+  'Your assisted time in has been recorded within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-grace-first-arrival.mp3',
+  'Your assisted time in has been recorded. You made it within the grace period.': '/voices/bea/attendance/time-in-assisted-grace.mp3',
+  'Your assisted time in has been recorded. You made it within the grace period. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-grace-first-arrival.mp3',
+  'Your assisted time in has been recorded. You are late.': '/voices/bea/attendance/time-in-assisted-late.mp3',
+  'Your assisted time in has been recorded. You are late. You are the first arrival today.': '/voices/bea/attendance/time-in-assisted-late-first-arrival.mp3',
+  'Your time out has been recorded.': '/voices/bea/attendance/time-out-standard.mp3',
+  'Your time out was recorded after office hours. Manual correction is required.': '/voices/bea/attendance/time-out-late-timeout.mp3',
+  'Your assisted time out has been recorded.': '/voices/bea/attendance/time-out-assisted-standard.mp3',
+  'Your assisted time out was recorded after office hours. Manual correction is required.': '/voices/bea/attendance/time-out-assisted-late-timeout.mp3',
 
   // 3. Bathroom (Warm Tone)
-  'Your bathroom key has been checked out. Please return it within fifteen minutes.': '/voices/bea/bathroom/bathroom-key-checked-out-15min.wav',
-  'Male bathroom key checked out.': '/voices/bea/bathroom/checkout-male.wav',
-  'Female bathroom key checked out.': '/voices/bea/bathroom/checkout-female.wav',
-  'Male bathroom key checked out for': '/voices/bea/bathroom/checkout-male-for.wav',
-  'Female bathroom key checked out for': '/voices/bea/bathroom/checkout-female-for.wav',
-  'Female bathroom key checked out for Jane Doe.': '/voices/bea/bathroom/checkout-female-name.wav',
-  'Male bathroom key checked out for John Doe.': '/voices/bea/bathroom/checkout-male-name.wav',
-  'Thank you,': '/voices/bea/bathroom/thank-you.wav',
-  'Male bathroom key returned.': '/voices/bea/bathroom/return-male.wav',
-  'Female bathroom key returned.': '/voices/bea/bathroom/return-female.wav',
+  'Your bathroom key has been checked out. Please return it within fifteen minutes.': '/voices/bea/bathroom/bathroom-key-checked-out-15min.mp3',
+  'Male bathroom key checked out.': '/voices/bea/bathroom/checkout-male.mp3',
+  'Female bathroom key checked out.': '/voices/bea/bathroom/checkout-female.mp3',
+  'Male bathroom key checked out for': '/voices/bea/bathroom/checkout-male-for.mp3',
+  'Female bathroom key checked out for': '/voices/bea/bathroom/checkout-female-for.mp3',
+  'Female bathroom key checked out for Jane Doe.': '/voices/bea/bathroom/checkout-female-name.mp3',
+  'Male bathroom key checked out for John Doe.': '/voices/bea/bathroom/checkout-male-name.mp3',
+  'Thank you,': '/voices/bea/bathroom/thank-you.mp3',
+  'Male bathroom key returned.': '/voices/bea/bathroom/return-male.mp3',
+  'Female bathroom key returned.': '/voices/bea/bathroom/return-female.mp3',
 
   // 4. Admin Assist (Warm Tone)
-  'Admin assist card recognized. Please select an employee.': '/voices/bea/admin-assist/admin-assist-prompt.wav',
+  'Admin assist card recognized. Please select an employee.': '/voices/bea/admin-assist/admin-assist-prompt.mp3',
 
   // 5. Scan Errors (Neutral/Alert Tone)
-  "Sorry, that card wasn't recognized. Please try scanning again.": '/voices/bea/scan-error/sorry-card-not-recognized.wav',
-  'The male bathroom key is currently in use.': '/voices/bea/scan-error/bathroom-key-in-use-male.wav',
-  'The female bathroom key is currently in use.': '/voices/bea/scan-error/bathroom-key-in-use-female.wav',
-  'The bathroom key is currently in use.': '/voices/bea/scan-error/bathroom-key-in-use.wav',
-  'The male bathroom key is currently in use by': '/voices/bea/scan-error/bathroom-key-in-use-male-by.wav',
-  'The female bathroom key is currently in use by': '/voices/bea/scan-error/bathroom-key-in-use-female-by.wav',
-  'This card is not registered.': '/voices/bea/scan-error/card-not-registered.wav',
-  'Employee record is inactive.': '/voices/bea/scan-error/employee-record-inactive.wav',
-  'Card scanned too recently. Please wait.': '/voices/bea/scan-error/card-scanned-too-recently.wav',
-  'Admin cards cannot check out bathroom keys.': '/voices/bea/scan-error/admin-card-not-allowed.wav',
-  'Admin card requires employee selection.': '/voices/bea/scan-error/admin-card-requires-selection.wav',
-  'Attendance is already completed for today.': '/voices/bea/scan-error/attendance-already-completed.wav',
-  'Attendance timed out after office hours and is pending manual correction.': '/voices/bea/scan-error/attendance-timed-out-correction.wav',
-  'Attendance service is temporarily unavailable.': '/voices/bea/scan-error/service-unavailable.wav',
-  'Attendance conflict. Please try again.': '/voices/bea/scan-error/attendance-conflict.wav',
-  'Scan could not be processed.': '/voices/bea/scan-error/scan-generic-error.wav',
+  "Sorry, that card wasn't recognized. Please try scanning again.": '/voices/bea/scan-error/sorry-card-not-recognized.mp3',
+  'The male bathroom key is currently in use.': '/voices/bea/scan-error/bathroom-key-in-use-male.mp3',
+  'The female bathroom key is currently in use.': '/voices/bea/scan-error/bathroom-key-in-use-female.mp3',
+  'The bathroom key is currently in use.': '/voices/bea/scan-error/bathroom-key-in-use.mp3',
+  'The male bathroom key is currently in use by': '/voices/bea/scan-error/bathroom-key-in-use-male-by.mp3',
+  'The female bathroom key is currently in use by': '/voices/bea/scan-error/bathroom-key-in-use-female-by.mp3',
+  'This card is not registered.': '/voices/bea/scan-error/card-not-registered.mp3',
+  'Employee record is inactive.': '/voices/bea/scan-error/employee-record-inactive.mp3',
+  'Card scanned too recently. Please wait.': '/voices/bea/scan-error/card-scanned-too-recently.mp3',
+  'Admin cards cannot check out bathroom keys.': '/voices/bea/scan-error/admin-card-not-allowed.mp3',
+  'Admin card requires employee selection.': '/voices/bea/scan-error/admin-card-requires-selection.mp3',
+  'Attendance is already completed for today.': '/voices/bea/scan-error/attendance-already-completed.mp3',
+  'Attendance timed out after office hours and is pending manual correction.': '/voices/bea/scan-error/attendance-timed-out-correction.mp3',
+  'Attendance service is temporarily unavailable.': '/voices/bea/scan-error/service-unavailable.mp3',
+  'Attendance conflict. Please try again.': '/voices/bea/scan-error/attendance-conflict.mp3',
+  'Scan could not be processed.': '/voices/bea/scan-error/scan-generic-error.mp3',
 
   // 6. General / Test (Main Tone)
-  'Voice announcements are working correctly.': '/voices/bea/general/test-voice.wav',
+  'Voice announcements are working correctly.': '/voices/bea/general/test-voice.mp3',
 });
 
 import { tauriApi } from '../tauri-api';
@@ -98,32 +98,32 @@ interface NameProfileEntry {
 }
 
 const DEFAULT_NAME_PROFILES: Readonly<Record<string, NameProfileEntry>> = Object.freeze({
-  'APG-2026-019': { personId: 'APG-2026-019', displayName: 'Beatriz Conos', normalizedSpeechText: 'Beatriz Conos', audioFile: '/voices/bea/names/APG-2026-019.wav' },
-  'APG-2026-113': { personId: 'APG-2026-113', displayName: 'Ar-jee Felizarte', normalizedSpeechText: 'Arjee Felizarte', audioFile: '/voices/bea/names/APG-2026-113.wav' },
-  'APG-2026-110': { personId: 'APG-2026-110', displayName: 'Bianca Marie Antoy', normalizedSpeechText: 'Bianca Marie Antoy', audioFile: '/voices/bea/names/APG-2026-110.wav' },
-  'APG-2026-102': { personId: 'APG-2026-102', displayName: 'Deign Grey O. Lazaro', normalizedSpeechText: 'Deign Grey Lazaro', audioFile: '/voices/bea/names/APG-2026-102.wav' },
-  'APG-2026-109': { personId: 'APG-2026-109', displayName: 'Elaizah Jane Altiche', normalizedSpeechText: 'Elaizah Jane Altiche', audioFile: '/voices/bea/names/APG-2026-109.wav' },
-  'APG-2026-095': { personId: 'APG-2026-095', displayName: 'Jannela Pasacay', normalizedSpeechText: 'Jannela Pasacay', audioFile: '/voices/bea/names/APG-2026-095.wav' },
-  'APG-2026-099': { personId: 'APG-2026-099', displayName: 'Jeremy Bugarin', normalizedSpeechText: 'Jeremy Bugarin', audioFile: '/voices/bea/names/APG-2026-099.wav' },
-  'APG-2026-112': { personId: 'APG-2026-112', displayName: 'John Frederick Ruiz', normalizedSpeechText: 'John Frederick Ruiz', audioFile: '/voices/bea/names/APG-2026-112.wav' },
-  'APG-2026-092': { personId: 'APG-2026-092', displayName: 'Joseph Amandy', normalizedSpeechText: 'Joseph Amandy', audioFile: '/voices/bea/names/APG-2026-092.wav' },
-  'APG-2026-101': { personId: 'APG-2026-101', displayName: 'Khemuel Rosh Timkang', normalizedSpeechText: 'Khemuel Rosh Timkang', audioFile: '/voices/bea/names/APG-2026-101.wav' },
-  'APG-2026-104': { personId: 'APG-2026-104', displayName: 'Kizziah Ishi De Guerto', normalizedSpeechText: 'Kizziah Ishi De Guerto', audioFile: '/voices/bea/names/APG-2026-104.wav' },
-  'APG-2026-098': { personId: 'APG-2026-098', displayName: 'Kurt Lawrenz De Leon', normalizedSpeechText: 'Kurt Lawrenz De Leon', audioFile: '/voices/bea/names/APG-2026-098.wav' },
-  'APG-2026-100': { personId: 'APG-2026-100', displayName: 'Kylle Ricio', normalizedSpeechText: 'Kylle Ricio', audioFile: '/voices/bea/names/APG-2026-100.wav' },
-  'APG-2026-103': { personId: 'APG-2026-103', displayName: 'Lorraine Isabel Cabigon', normalizedSpeechText: 'Lorraine Isabel Cabigon', audioFile: '/voices/bea/names/APG-2026-103.wav' },
-  'APG-2026-111': { personId: 'APG-2026-111', displayName: 'Ma. Ellaine Zapico', normalizedSpeechText: 'Maria Ellaine Zapico', audioFile: '/voices/bea/names/APG-2026-111.wav' },
-  'APG-2026-107': { personId: 'APG-2026-107', displayName: 'Margaux Zyann Delaog', normalizedSpeechText: 'Margaux Zyann Delaog', audioFile: '/voices/bea/names/APG-2026-107.wav' },
-  'APG-2026-097': { personId: 'APG-2026-097', displayName: 'Mary Antonette Yaguel', normalizedSpeechText: 'Mary Antonette Yaguel', audioFile: '/voices/bea/names/APG-2026-097.wav' },
-  'APG-2026-106': { personId: 'APG-2026-106', displayName: 'Mitchi Hashidate', normalizedSpeechText: 'Mitchi Hashidate', audioFile: '/voices/bea/names/APG-2026-106.wav' },
-  'APG-2026-105': { personId: 'APG-2026-105', displayName: 'Narciso Lontoc', normalizedSpeechText: 'Narciso Lontoc', audioFile: '/voices/bea/names/APG-2026-105.wav' },
-  'APG-2026-114': { personId: 'APG-2026-114', displayName: 'Noeme P. Diola', normalizedSpeechText: 'Noeme Diola', audioFile: '/voices/bea/names/APG-2026-114.wav' },
-  'APG-2026-108': { personId: 'APG-2026-108', displayName: 'Raineer C. Rosado', normalizedSpeechText: 'Raineer Rosado', audioFile: '/voices/bea/names/APG-2026-108.wav' },
-  'APG-2026-094': { personId: 'APG-2026-094', displayName: 'Rona Khristelle Angelique Pacada', normalizedSpeechText: 'Rona Khristelle Angelique Pacada', audioFile: '/voices/bea/names/APG-2026-094.wav' },
-  'USR_INT_001': { personId: 'USR_INT_001', displayName: 'Maria Santos', normalizedSpeechText: 'Maria Santos', audioFile: '/voices/bea/names/USR_INT_001.wav' },
-  'USR_INT_002': { personId: 'USR_INT_002', displayName: 'JUAN DELA CRUZ', normalizedSpeechText: 'Juan Dela Cruz', audioFile: '/voices/bea/names/USR_INT_002.wav' },
-  'USR_EMP_001': { personId: 'USR_EMP_001', displayName: 'Ada Lovelace', normalizedSpeechText: 'Ada Lovelace', audioFile: '/voices/bea/names/USR_EMP_001.wav' },
-  'APG-2026-115': { personId: 'APG-2026-115', displayName: 'Allaena Nicole E. Vizon', normalizedSpeechText: 'Allaena Nicole Vizon', audioFile: '/voices/bea/names/APG-2026-115.wav' },
+  'APG-2026-019': { personId: 'APG-2026-019', displayName: 'Beatriz Conos', normalizedSpeechText: 'Beatriz Conos', audioFile: '/voices/bea/names/APG-2026-019.mp3' },
+  'APG-2026-113': { personId: 'APG-2026-113', displayName: 'Ar-jee Felizarte', normalizedSpeechText: 'Arjee Felizarte', audioFile: '/voices/bea/names/APG-2026-113.mp3' },
+  'APG-2026-110': { personId: 'APG-2026-110', displayName: 'Bianca Marie Antoy', normalizedSpeechText: 'Bianca Marie Antoy', audioFile: '/voices/bea/names/APG-2026-110.mp3' },
+  'APG-2026-102': { personId: 'APG-2026-102', displayName: 'Deign Grey O. Lazaro', normalizedSpeechText: 'Deign Grey Lazaro', audioFile: '/voices/bea/names/APG-2026-102.mp3' },
+  'APG-2026-109': { personId: 'APG-2026-109', displayName: 'Elaizah Jane Altiche', normalizedSpeechText: 'Elaizah Jane Altiche', audioFile: '/voices/bea/names/APG-2026-109.mp3' },
+  'APG-2026-095': { personId: 'APG-2026-095', displayName: 'Jannela Pasacay', normalizedSpeechText: 'Jannela Pasacay', audioFile: '/voices/bea/names/APG-2026-095.mp3' },
+  'APG-2026-099': { personId: 'APG-2026-099', displayName: 'Jeremy Bugarin', normalizedSpeechText: 'Jeremy Bugarin', audioFile: '/voices/bea/names/APG-2026-099.mp3' },
+  'APG-2026-112': { personId: 'APG-2026-112', displayName: 'John Frederick Ruiz', normalizedSpeechText: 'John Frederick Ruiz', audioFile: '/voices/bea/names/APG-2026-112.mp3' },
+  'APG-2026-092': { personId: 'APG-2026-092', displayName: 'Joseph Amandy', normalizedSpeechText: 'Joseph Amandy', audioFile: '/voices/bea/names/APG-2026-092.mp3' },
+  'APG-2026-101': { personId: 'APG-2026-101', displayName: 'Khemuel Rosh Timkang', normalizedSpeechText: 'Khemuel Rosh Timkang', audioFile: '/voices/bea/names/APG-2026-101.mp3' },
+  'APG-2026-104': { personId: 'APG-2026-104', displayName: 'Kizziah Ishi De Guerto', normalizedSpeechText: 'Kizziah Ishi De Guerto', audioFile: '/voices/bea/names/APG-2026-104.mp3' },
+  'APG-2026-098': { personId: 'APG-2026-098', displayName: 'Kurt Lawrenz De Leon', normalizedSpeechText: 'Kurt Lawrenz De Leon', audioFile: '/voices/bea/names/APG-2026-098.mp3' },
+  'APG-2026-100': { personId: 'APG-2026-100', displayName: 'Kylle Ricio', normalizedSpeechText: 'Kylle Ricio', audioFile: '/voices/bea/names/APG-2026-100.mp3' },
+  'APG-2026-103': { personId: 'APG-2026-103', displayName: 'Lorraine Isabel Cabigon', normalizedSpeechText: 'Lorraine Isabel Cabigon', audioFile: '/voices/bea/names/APG-2026-103.mp3' },
+  'APG-2026-111': { personId: 'APG-2026-111', displayName: 'Ma. Ellaine Zapico', normalizedSpeechText: 'Maria Ellaine Zapico', audioFile: '/voices/bea/names/APG-2026-111.mp3' },
+  'APG-2026-107': { personId: 'APG-2026-107', displayName: 'Margaux Zyann Delaog', normalizedSpeechText: 'Margaux Zyann Delaog', audioFile: '/voices/bea/names/APG-2026-107.mp3' },
+  'APG-2026-097': { personId: 'APG-2026-097', displayName: 'Mary Antonette Yaguel', normalizedSpeechText: 'Mary Antonette Yaguel', audioFile: '/voices/bea/names/APG-2026-097.mp3' },
+  'APG-2026-106': { personId: 'APG-2026-106', displayName: 'Mitchi Hashidate', normalizedSpeechText: 'Mitchi Hashidate', audioFile: '/voices/bea/names/APG-2026-106.mp3' },
+  'APG-2026-105': { personId: 'APG-2026-105', displayName: 'Narciso Lontoc', normalizedSpeechText: 'Narciso Lontoc', audioFile: '/voices/bea/names/APG-2026-105.mp3' },
+  'APG-2026-114': { personId: 'APG-2026-114', displayName: 'Noeme P. Diola', normalizedSpeechText: 'Noeme Diola', audioFile: '/voices/bea/names/APG-2026-114.mp3' },
+  'APG-2026-108': { personId: 'APG-2026-108', displayName: 'Raineer C. Rosado', normalizedSpeechText: 'Raineer Rosado', audioFile: '/voices/bea/names/APG-2026-108.mp3' },
+  'APG-2026-094': { personId: 'APG-2026-094', displayName: 'Rona Khristelle Angelique Pacada', normalizedSpeechText: 'Rona Khristelle Angelique Pacada', audioFile: '/voices/bea/names/APG-2026-094.mp3' },
+  'USR_INT_001': { personId: 'USR_INT_001', displayName: 'Maria Santos', normalizedSpeechText: 'Maria Santos', audioFile: '/voices/bea/names/USR_INT_001.mp3' },
+  'USR_INT_002': { personId: 'USR_INT_002', displayName: 'JUAN DELA CRUZ', normalizedSpeechText: 'Juan Dela Cruz', audioFile: '/voices/bea/names/USR_INT_002.mp3' },
+  'USR_EMP_001': { personId: 'USR_EMP_001', displayName: 'Ada Lovelace', normalizedSpeechText: 'Ada Lovelace', audioFile: '/voices/bea/names/USR_EMP_001.mp3' },
+  'APG-2026-115': { personId: 'APG-2026-115', displayName: 'Allaena Nicole E. Vizon', normalizedSpeechText: 'Allaena Nicole Vizon', audioFile: '/voices/bea/names/APG-2026-115.mp3' },
 });
 
 function normalizeNameForLookup(name: string): string {
@@ -191,10 +191,10 @@ export function getClonedBeaNameAudioUrl(
   const cleanId = personId?.trim() ?? '';
   if (cleanId.length > 0) {
     if (nameManifestCache && cleanId in nameManifestCache) {
-      return nameManifestCache[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
+      return nameManifestCache[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.mp3`;
     }
     if (cleanId in DEFAULT_NAME_PROFILES) {
-      return DEFAULT_NAME_PROFILES[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.wav`;
+      return DEFAULT_NAME_PROFILES[cleanId]?.audioFile ?? `/voices/bea/names/${cleanId}.mp3`;
     }
   }
 
@@ -204,10 +204,10 @@ export function getClonedBeaNameAudioUrl(
     const profiles = nameManifestCache ?? DEFAULT_NAME_PROFILES;
     for (const [id, profile] of Object.entries(profiles)) {
       if (profile.displayName && normalizeNameForLookup(profile.displayName) === normalizedInput) {
-        return profile.audioFile ?? `/voices/bea/names/${id}.wav`;
+        return profile.audioFile ?? `/voices/bea/names/${id}.mp3`;
       }
       if (profile.normalizedSpeechText && normalizeNameForLookup(profile.normalizedSpeechText) === normalizedInput) {
-        return profile.audioFile ?? `/voices/bea/names/${id}.wav`;
+        return profile.audioFile ?? `/voices/bea/names/${id}.mp3`;
       }
     }
 
@@ -223,7 +223,7 @@ export function getClonedBeaNameAudioUrl(
           const targetFirst = targetParts[0];
           const targetLast = targetParts[targetParts.length - 1];
           if (inputFirst === targetFirst && inputLast === targetLast) {
-            return profile.audioFile ?? `/voices/bea/names/${id}.wav`;
+            return profile.audioFile ?? `/voices/bea/names/${id}.mp3`;
           }
         }
       }
@@ -234,6 +234,18 @@ export function getClonedBeaNameAudioUrl(
 }
 
 let activeAudioElement: HTMLAudioElement | null = null;
+
+/**
+ * Fallback voice URL resolver.
+ *
+ * Manifests now reference `.mp3` as the primary format. If an `.mp3` fails to load,
+ * this resolver attempts the `.wav` fallback for legacy or incomplete conversions.
+ * The `.mp3` plays natively in WebView2/HTML5 Audio and (with the `mp3` rodio feature)
+ * in the Rust backend, at roughly 1/5 the bytes of the original `.wav`.
+ */
+export function resolveWavFallbackUrl(mp3Url: string): string {
+  return mp3Url.replace(/\.mp3$/i, '.wav');
+}
 
 /**
  * Returns the cached audio URL for a known fixed announcement phrase, or null if uncached.
@@ -306,7 +318,29 @@ export async function playClonedBeaAudio(
   }
 
   try {
-    const audio = new Audio(audioUrl);
+    const attempted = await attemptAudioPlay(audioUrl, volume, rate);
+    if (attempted) return true;
+    const wavFallback = resolveWavFallbackUrl(audioUrl);
+    if (wavFallback !== audioUrl) {
+      return attemptAudioPlay(wavFallback, volume, rate);
+    }
+    return false;
+  } catch (error) {
+    console.warn('Cloned voice audio playback threw exception:', error);
+    return false;
+  }
+}
+
+/**
+ * Single-URL HTML5 Audio playback attempt. Returns true on end/timeout, false on error.
+ */
+async function attemptAudioPlay(
+  url: string,
+  volume: number,
+  rate: number,
+): Promise<boolean> {
+  try {
+    const audio = new Audio(url);
     activeAudioElement = audio;
 
     const clampedVolume = Math.min(Math.max(Number.isFinite(volume) ? volume : 1.0, 0.0), 1.0);

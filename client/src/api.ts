@@ -600,6 +600,15 @@ export async function requestDatabaseRestore(sourcePath: string): Promise<{ succ
   return { success: false, error: { message: 'Restore is available in the desktop application.' } };
 }
 
+/** Desktop-only: dismiss the persisted restore-failure notice after it has been reviewed. */
+export async function dismissRestoreFailure(): Promise<{ success: true; message: string } | { success: false; error: { message: string } }> {
+  if (runningInTauri()) {
+    try { return await tauriApi.dbDismissRestoreFailure(nativeAdminToken ?? ''); }
+    catch { return { success: false, error: { message: 'Unable to dismiss the restore notice.' } }; }
+  }
+  return { success: false, error: { message: 'Restore is available in the desktop application.' } };
+}
+
 /** Desktop-only: open the backups folder in the OS file explorer. */
 export function openDatabaseBackupsFolder(): Promise<FileActionResult> {
   return runFileAction((token) => tauriApi.dbOpenBackupsDir(token));

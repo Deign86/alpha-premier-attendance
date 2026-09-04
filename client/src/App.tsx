@@ -59,6 +59,7 @@ import {
   deletePayrollCutoff,
   deleteAdminAttendance,
   deleteAdminUser,
+  dismissRestoreFailure,
   finalizePayrollCutoff,
   getLanStatus,
   loadAttendance,
@@ -124,6 +125,7 @@ import {
   announceBathroom,
   announceScanError,
   loadNameManifest,
+  type AnnounceBathroomOptions,
 } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
@@ -751,17 +753,22 @@ export default function App() {
           if (document.visibilityState === "hidden" || !document.hasFocus()) {
             void notifyScanSuccess(response.user.fullName).catch(() => undefined);
           }
-          void announceBathroom({
+          const bathroomAnnouncement: AnnounceBathroomOptions = {
             action: response.action,
             genderKey: response.genderKey,
             employeeName: response.user.fullName,
             personId: response.user.userId,
-          });
+          };
+          if (response.action === 'CHECKOUT') {
+            bathroomAnnouncement.remindReturnWindow = true;
+          }
+          void announceBathroom(bathroomAnnouncement);
         } else {
           void announceScanError({
             errorCode: response.error.code,
             message: response.error.message,
             activeHolderName: response.activeHolder?.fullName,
+            activeHolderId: response.activeHolder?.userId,
             genderKey: response.genderKey,
           });
         }
@@ -3119,6 +3126,62 @@ type AdminUser = {
 };
 
 /** Data & backup panel: configurable DB location, safe backups, and the PC-switch restore flow. */
+type RestoreFailureDetail = {
+  friendly: string;
+  sourceFile: string | null;
+};
+
+function describeRestoreFailure(raw: string): RestoreFailureDetail {
+  const text = raw.trim();
+  let sourceFile: string | null = null;
+  let detail = text;
+  const sep = text.indexOf(": ");
+  if (sep > 0) {
+    const head = text.slice(0, sep).trim();
+    if (head.length > 0 && head.length < 300 && /[/\\.]/.test(head)) {
+      sourceFile = head.split(/[/\\]/).filter(Boolean).pop() ?? head;
+      detail = text.slice(sep + 2).trim() || head;
+    }
+  }
+  const lower = detail.toLowerCase();
+  if (lower.includes("missing") || lower.includes("not found") || lower.includes("no such file")) {
+    return {
+      friendly: "The selected backup file could no longer be found when the app restarted (it may have been moved, renamed, or removed from the USB drive).",
+      sourceFile,
+    };
+  }
+  if (
+    lower.includes("not a valid") ||
+    lower.includes("not an alpha premier") ||
+    lower.includes("integrity") ||
+    lower.includes("foreign key") ||
+    lower.includes("schema") ||
+    lower.includes("not a database") ||
+    lower.includes("file is encrypted")
+  ) {
+    return {
+      friendly: "The selected file is not a valid Alpha Premier attendance backup (it failed the database integrity check).",
+      sourceFile,
+    };
+  }
+  if (
+    lower.includes("unsafe path") ||
+    lower.includes("zip") ||
+    lower.includes("unpack") ||
+    lower.includes("config") ||
+    lower.includes("staging")
+  ) {
+    return {
+      friendly: "The backup file could not be unpacked on this computer (the archive looks incomplete or damaged).",
+      sourceFile,
+    };
+  }
+  return {
+    friendly: "The restore could not be applied on the next launch.",
+    sourceFile,
+  };
+}
+
 export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) {
   const [info, setInfo] = useState<DatabaseInfoResponse | null>(null);
   const [error, setError] = useState("");
@@ -3128,6 +3191,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     null,
   );
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
+  const [dismissingRestore, setDismissingRestore] = useState(false);
 
   const refresh = useCallback(async () => {
     const response = await loadDatabaseInfo();
@@ -3188,6 +3252,18 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     else setError(response.error.message);
   };
 
+  const dismissRestoreNotice = async () => {
+    setDismissingRestore(true);
+    const response = await dismissRestoreFailure();
+    setDismissingRestore(false);
+    if (response.success) {
+      setInfo((current) => (current ? { ...current, restoreFailed: null } : current));
+      setNotice("Restore notice dismissed. Your current data was left untouched.");
+    } else {
+      setError(response.error.message);
+    }
+  };
+
   const openBackups = async () => {
     const outcome = await openDatabaseBackupsFolder();
     if (!outcome.ok) setError(outcome.message);
@@ -3243,15 +3319,45 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           </strong>
         </span>
       </div>
-      {info?.restoreFailed && (
-        <div className="warning-banner" role="alert">
-          <ShieldAlert size={20} />
-          <div>
-            <strong>Database restore failed</strong>
-            <p>{info.restoreFailed}</p>
+      {info?.restoreFailed && (() => {
+        const failure = describeRestoreFailure(info.restoreFailed ?? "");
+        return (
+          <div className="warning-banner" role="alert">
+            <ShieldAlert size={20} />
+            <div>
+              <strong>Restore didn&apos;t go through — your current data is safe</strong>
+              <p>{failure.friendly}</p>
+              {failure.sourceFile && (
+                <p>Backup file: <code>{failure.sourceFile}</code></p>
+              )}
+              <p>Your current database was kept — nothing was replaced and no attendance data was lost.</p>
+              <p>What to do next: pick the correct <code>attendance-backup-*.apbackup</code> file and choose Restore again, or dismiss this notice if you no longer need the restore.</p>
+              <details>
+                <summary>Technical details (for support)</summary>
+                <code>{info.restoreFailed}</code>
+              </details>
+              <div className="lan-actions" style={{ marginTop: 8 }}>
+                <button
+                  className="admin-button file-action-primary"
+                  type="button"
+                  disabled={busy || dismissingRestore}
+                  onClick={() => void restore()}
+                >
+                  Try again…
+                </button>
+                <button
+                  className="admin-button"
+                  type="button"
+                  disabled={busy || dismissingRestore}
+                  onClick={() => void dismissRestoreNotice()}
+                >
+                  {dismissingRestore ? "Dismissing…" : "Dismiss"}
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       <div className="lan-actions">
         <button
           className="admin-button file-action-primary"
@@ -3379,7 +3485,20 @@ function UserEditor({
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [batchDeleteUsersOpen, setBatchDeleteUsersOpen] = useState(false);
   const [batchUpdatingUsers, setBatchUpdatingUsers] = useState(false);
+  const [userSearch, setUserSearch] = useState("");
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const filteredUsers = useMemo(() => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) =>
+      u.fullName.toLowerCase().includes(q) ||
+      u.userId.toLowerCase().includes(q) ||
+      u.rfidUid.toLowerCase().includes(q) ||
+      (u.department ?? "").toLowerCase().includes(q),
+    );
+  }, [users, userSearch]);
+  const isUserFiltering = userSearch.trim().length > 0;
 
   const allUsersSelected = users.length > 0 && selectedUserIds.size === users.length;
   const someUsersSelected = selectedUserIds.size > 0 && selectedUserIds.size < users.length;
@@ -3790,6 +3909,8 @@ function UserEditor({
           <div className="table-selection-count">
             {selectedUserIds.size > 0 ? (
               <span className="table-selection-badge">{selectedUserIds.size} of {users.length} user(s) selected</span>
+            ) : isUserFiltering ? (
+              <span>Showing {filteredUsers.length} of {users.length} users</span>
             ) : (
               <span>Total users: {users.length}</span>
             )}
@@ -3849,6 +3970,19 @@ function UserEditor({
             )}
           </div>
         </div>
+        <div className="user-search-row" style={{ padding: "8px 14px" }}>
+          <div className="search-input-wrap">
+            <Search size={15} />
+            <input
+              type="search"
+              className="input"
+              aria-label="Search users"
+              placeholder="Search users by name, ID, RFID, or department…"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+            />
+          </div>
+        </div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -3870,7 +4004,17 @@ function UserEditor({
               </tr>
             </thead>
             <tbody>
-              {users.map((user) => (
+              {filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: "center", padding: "20px 12px" }}>
+                    No users match &ldquo;{userSearch.trim()}&rdquo;.{" "}
+                    <button className="text-button" type="button" onClick={() => setUserSearch("")}>
+                      Clear
+                    </button>
+                  </td>
+                </tr>
+              ) : (
+                filteredUsers.map((user) => (
                 <tr
                   key={user.userId}
                   className={`${editing?.userId === user.userId ? "is-editing" : ""} ${selectedUserIds.has(user.userId) ? "selected-row" : ""}`}
@@ -3935,7 +4079,8 @@ function UserEditor({
                     </button>
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>

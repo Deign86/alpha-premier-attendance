@@ -34,7 +34,7 @@ To deliver studio-quality voice cloning without demanding GPU hardware or high-l
 ```
 
 1. **Tier 1 — Existing Active Interns & Employees (100% Cloned Voice)**:
-   Names of existing personnel are pre-rendered into individual audio clips (`names/<personId>.wav`) in Ma'am Bea's voice using VoiceStudio on the admin machine. When they scan, the kiosk plays:
+   Names of existing personnel are pre-rendered into individual audio clips (`names/<personId>.mp3`) in Ma'am Bea's voice using VoiceStudio on the admin machine. When they scan, the kiosk plays:
    $$\text{Cloned Bea Prefix} \longrightarrow \text{Cloned Bea Name} \longrightarrow \text{Cloned Bea Suffix}$$
 2. **Tier 2 — Future Registrations & Dynamic Names (Zero-Delay Hybrid Splicing)**:
    For interns or employees enrolled *after* batch generation, the kiosk automatically bridges speech at runtime using local Piper TTS without manual generation:
@@ -83,7 +83,7 @@ npm run voice:generate-existing-names -- --dry-run
 *Output example:*
 ```
 [Person ID: APG-2026-115] INTERN: "Ma. Teresa Carandang" -> Spoken: "Maria Teresa Carandang"
-  [DRY-RUN] Would generate clip via VoiceStudio -> /voices/bea/names/APG-2026-115.wav
+  [DRY-RUN] Would generate clip via VoiceStudio -> /voices/bea/names/APG-2026-115.mp3
 ```
 
 ### Step 3: Run Batch Generation for Missing Names
@@ -97,10 +97,10 @@ npm run voice:generate-existing-names -- --missing-only
 1. Connects to Google Sheets / SQLite database and discovers all active `INTERN` and `EMPLOYEE` records.
 2. Normalizes full names for Filipino/English speech phonetics.
 3. Sends generation requests to VoiceStudio (`Ma'am Bea` profile `1b3e828b`).
-4. Saves 16-bit 24kHz/48kHz PCM WAV files to:
-   - `client/public/voices/bea/names/<personId>.wav`
-   - `src-tauri/resources/voices/bea/names/<personId>.wav`
-   - `client/dist/voices/bea/names/<personId>.wav`
+4. Transcodes each clip to 64k mono MP3 via ffmpeg and saves to:
+   - `client/public/voices/bea/names/<personId>.mp3`
+   - `src-tauri/resources/voices/bea/names/<personId>.mp3`
+   - `client/dist/voices/bea/names/<personId>.mp3` (on next frontend build)
 5. Computes SHA-256 hashes and writes [`bea-name-manifest.json`](file:///c:/Users/Deign/Downloads/alpha-premier-attendance/client/public/voices/bea/bea-name-manifest.json).
 
 ### Step 4: Audit and Verify Generated Audio Files
@@ -209,7 +209,7 @@ If Ma'am Bea or an employee revokes consent to use their cloned voice profile:
 | `Error connecting to VoiceStudio` | VoiceStudio backend is down | Launch VoiceStudio; verify port `3900` with `curl http://127.0.0.1:3900/profiles` |
 | `Generation failed` | VoiceStudio profile missing or backend error | Confirm the `Ma'am Bea` profile exists in VoiceStudio and retry |
 | `Name pronounced with "dot"` | Middle initial not cleaned | Ensure name is run through `normalizePronunciation()` or add to `CUSTOM_PRONUNCIATION_OVERRIDES` |
-| `Kiosk plays Piper name instead of Bea` | Missing manifest entry or missing WAV file | Check `bea-name-manifest.json` and ensure `names/<personId>.wav` exists in resources |
+| `Kiosk plays Piper name instead of Bea` | Missing manifest entry or missing MP3 file | Check `bea-name-manifest.json` and ensure `names/<personId>.mp3` exists in resources |
 
 ### Verification Commands
 ```bash
