@@ -75,7 +75,7 @@ export function BathroomKioskView({
                 <p className="bathroom-card-subtitle">Floor Restroom Key 1</p>
               </div>
             </div>
-            <span className={`status-pill ${maleActive ? "status-in-use" : "status-available"}`}>
+            <span className={`status-pill ${maleActive ? "status-in-use" : "status-available"}`} data-testid="bathroom-kiosk-status-male">
               {maleActive ? "IN USE" : "AVAILABLE"}
             </span>
           </div>
@@ -89,7 +89,7 @@ export function BathroomKioskView({
                   </div>
                   <div>
                     <p className="holder-label">Currently with</p>
-                    <h4 className="holder-name">{maleActive.fullName}</h4>
+                    <h4 className="holder-name" data-testid="bathroom-kiosk-holder-male">{maleActive.fullName}</h4>
                     <p className="holder-dept">
                       {maleActive.department ?? "General Staff"} · {maleActive.userId}
                     </p>
@@ -135,7 +135,7 @@ export function BathroomKioskView({
                 <p className="bathroom-card-subtitle">Floor Restroom Key 1</p>
               </div>
             </div>
-            <span className={`status-pill ${femaleActive ? "status-in-use" : "status-available"}`}>
+            <span className={`status-pill ${femaleActive ? "status-in-use" : "status-available"}`} data-testid="bathroom-kiosk-status-female">
               {femaleActive ? "IN USE" : "AVAILABLE"}
             </span>
           </div>
@@ -149,7 +149,7 @@ export function BathroomKioskView({
                   </div>
                   <div>
                     <p className="holder-label">Currently with</p>
-                    <h4 className="holder-name">{femaleActive.fullName}</h4>
+                    <h4 className="holder-name" data-testid="bathroom-kiosk-holder-female">{femaleActive.fullName}</h4>
                     <p className="holder-dept">
                       {femaleActive.department ?? "General Staff"} · {femaleActive.userId}
                     </p>

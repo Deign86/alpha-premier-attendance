@@ -47,7 +47,7 @@ describe('cutoff payroll calculator', () => {
       halfDayCount: 0, halfDayFraction: 0, absentDays: 0, overtimeHours: 0, overtimeRate: 0,
     };
     const result = calculateCutoffPayroll(internInput);
-    expect(result).toMatchObject({ dailyRate: 80, basicPay: 800, totalCompensation: 800, totalAllowance: 0, lateUnits: 3, lateDeduction: 30, grossCompensation: 770, totalDeductions: 30, netPay: 770, employeeType: 'INTERN' });
+    expect(result).toMatchObject({ dailyRate: 80, basicPay: 800, totalCompensation: 800, totalAllowance: 0, lateUnits: 3, lateDeduction: 30, grossCompensation: 800, totalDeductions: 30, netPay: 770, employeeType: 'INTERN' });
     // An intern can never owe money for a cutoff (floor at zero).
     const zeroed = calculateCutoffPayroll({ ...internInput, actualWorkingDays: 0, lateUnits: 9, lateDeduction: 90 });
     expect(zeroed.grossCompensation).toBe(0);
@@ -70,7 +70,7 @@ describe('cutoff payroll calculator', () => {
       totalCompensation: 880,
       absenceDeduction: 800,
       totalDeductions: 800,
-      grossCompensation: 80,
+      grossCompensation: 880,
       netPay: 80,
       employeeType: 'INTERN',
     });
@@ -95,7 +95,7 @@ describe('cutoff payroll calculator', () => {
       absentDays: 8,
       absenceDeduction: 640,
       totalDeductions: 680,
-      grossCompensation: 200,
+      grossCompensation: 880,
       netPay: 200,
       employeeType: 'INTERN',
     });
@@ -125,5 +125,25 @@ describe('cutoff payroll calculator', () => {
     expect(result.grossCompensation).toBe(15416.5);
     expect(result.totalDeductions).toBe(1850);
     expect(result.netPay).toBe(13566.5);
+  });
+
+  it('T2: zeroes allowances on a zero-day cutoff instead of paying the flat sum', () => {
+    const zeroDay = calculateCutoffPayroll({
+      ...jeanInput,
+      employeeId: 'INT-009', employeeName: 'Zero Day', employeeType: 'INTERN' as const, payrollProfileId: 'INTERN_STANDARD',
+      dailyRate: 80, standardWorkingDays: 11, actualWorkingDays: 0,
+      specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
+      incentivesAllowance: 1000, specialAllowance: 100, hra: 200,
+      lateUnits: 0, lateDeduction: 0, halfDayCount: 0, halfDayFraction: 0, absentDays: 11,
+      overtimeHours: 0, overtimeRate: 0,
+    });
+    expect(zeroDay.totalAllowance).toBe(0);
+    expect(zeroDay.grossCompensation).toBe(880);
+    expect(zeroDay.netPay).toBe(0);
+  });
+
+  it('P7: rejects impossible calendar dates like Feb-30', () => {
+    expect(() => calculateCutoffPayroll({ ...jeanInput, cutoffStart: '2026-02-30', cutoffEnd: '2026-03-15' })).toThrow('valid cutoff dates');
+    expect(() => calculateCutoffPayroll({ ...jeanInput, cutoffStart: '2026-13-01', cutoffEnd: '2026-03-15' })).toThrow('valid cutoff dates');
   });
 });

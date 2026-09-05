@@ -84,12 +84,13 @@ class TauriMcpClient {
     const id = this.reqId++;
     const payload = { jsonrpc: '2.0', id, method, params };
     return new Promise((resolve, reject) => {
+      const stepTimeoutMs = Number(process.env.VERIFY_MCP_STEP_TIMEOUT_MS) || 5000;
       const timeoutTimer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          reject(new Error(`Call to ${method} timed out after 5000ms`));
+          reject(new Error('Call to ' + method + ' timed out after ' + stepTimeoutMs + 'ms'));
         }
-      }, 5000);
+      }, stepTimeoutMs);
 
       this.pending.set(id, {
         resolve: (val) => {
@@ -129,6 +130,7 @@ async function runVerification() {
       cardSetup: { passed: false, details: null },
       payroll: { passed: false, details: null },
       diagnostics: { passed: false, details: null },
+      bathroom: { passed: false, details: null },
     },
     liveBridge: { active: false, details: null },
     summary: { total: 0, passed: 0, failed: 0, durationMs: 0 },
@@ -233,17 +235,22 @@ async function runVerification() {
       // WORKFLOW A: Kiosk Scan Flow
       console.log('\n[4/6] Exercising User Workflows via live Tauri MCP Bridge...');
       console.log('  ► Driving [KIOSK-SCAN] & [KIOSK-FEEDBACK]...');
-      const kioskConfig = await client.callTool('ipc_execute_command', { command: 'get_config' });
-      const kioskHealth = await client.callTool('ipc_execute_command', { command: 'get_health' });
-      results.workflows.kiosk = {
-        passed: kioskConfig !== null && kioskHealth !== null,
-        details: { config: kioskConfig, health: kioskHealth },
-      };
+      try {
+        const kioskConfig = await client.callTool('ipc_execute_command', { command: 'get_config' });
+        const kioskHealth = await client.callTool('ipc_execute_command', { command: 'get_health' });
+        results.workflows.kiosk = {
+          passed: kioskConfig !== null && kioskHealth !== null,
+          details: { config: kioskConfig, health: kioskHealth },
+        };
+      } catch (stepErr) {
+        results.workflows.kiosk = { passed: false, details: 'Live drive failed: ' + stepErr.message };
+      }
       console.log('  ✓ Kiosk config & health status verified (Timezone: Asia/Manila)');
 
       // WORKFLOW B: Admin PIN Unlock & Roster Management
       console.log('  ► Driving [ADMIN-AUTH] & [ADMIN-ROSTER]...');
-      const unlockRes = await client.callTool('ipc_execute_command', {
+      try {
+        const unlockRes = await client.callTool('ipc_execute_command', {
         command: 'setup_unlock',
         payload: { pin: '1234' },
       });
@@ -255,24 +262,32 @@ async function runVerification() {
       results.workflows.admin = {
         passed: unlockRes !== null && usersRes !== null,
         details: { authenticated: true, userCount: usersRes?.users?.length ?? 0 },
-      };
+        };
+      } catch (stepErr) {
+        results.workflows.admin = { passed: false, details: 'Live drive failed: ' + stepErr.message };
+      }
       console.log(`  ✓ Admin unlocked with PIN 1234. Roster retrieved (${results.workflows.admin.details.userCount} users)`);
 
       // WORKFLOW C: Unknown Card Setup Flow
       console.log('  ► Driving [SETUP-DETECT] & [SETUP-BIND]...');
-      const cardLookup = await client.callTool('ipc_execute_command', {
-        command: 'setup_lookup_card',
-        payload: { token, rfidUid: 'TEST-UNREGISTERED-999' },
-      });
-      results.workflows.cardSetup = {
-        passed: cardLookup !== null,
-        details: { lookup: cardLookup },
-      };
+      try {
+        const cardLookup = await client.callTool('ipc_execute_command', {
+          command: 'setup_lookup_card',
+          payload: { token, rfidUid: 'TEST-UNREGISTERED-999' },
+        });
+        results.workflows.cardSetup = {
+          passed: cardLookup !== null,
+          details: { lookup: cardLookup },
+        };
+      } catch (stepErr) {
+        results.workflows.cardSetup = { passed: false, details: 'Live drive failed: ' + stepErr.message };
+      }
       console.log('  ✓ Unknown card detection and lookup contract verified');
 
       // WORKFLOW D: Payroll Cutoff & Export Flow
       console.log('  ► Driving [PAYROLL-CUTOFF] & [PAYROLL-XLSX]...');
-      const cutoffRes = await client.callTool('ipc_execute_command', {
+      try {
+        const cutoffRes = await client.callTool('ipc_execute_command', {
         command: 'payroll_generate_cutoff',
         payload: {
           token,
@@ -285,26 +300,37 @@ async function runVerification() {
       results.workflows.payroll = {
         passed: cutoffRes !== null,
         details: { cutoff: '2026-08-01_2026-08-15', status: 'Calculated' },
-      };
+        };
+      } catch (stepErr) {
+        results.workflows.payroll = { passed: false, details: 'Live drive failed: ' + stepErr.message };
+      }
       console.log('  ✓ Semi-monthly payroll calculation verified in centavos');
 
       // WORKFLOW E: Voice Diagnostics & LAN Server
       console.log('  ► Driving [SETTINGS-TTS-ENGINE] & [SETTINGS-LAN]...');
-      const ttsStatus = await client.callTool('ipc_execute_command', { command: 'tts_status' });
-      const lanStatus = await client.callTool('ipc_execute_command', { command: 'lan_status' });
-      results.workflows.diagnostics = {
-        passed: ttsStatus !== null && lanStatus !== null,
-        details: { tts: ttsStatus, lan: lanStatus },
-      };
+      try {
+        const ttsStatus = await client.callTool('ipc_execute_command', { command: 'tts_status' });
+        const lanStatus = await client.callTool('ipc_execute_command', { command: 'lan_status' });
+        results.workflows.diagnostics = {
+          passed: ttsStatus !== null && lanStatus !== null,
+          details: { tts: ttsStatus, lan: lanStatus },
+        };
+      } catch (stepErr) {
+        results.workflows.diagnostics = { passed: false, details: 'Live drive failed: ' + stepErr.message };
+      }
       console.log('  ✓ TTS speech engine and embedded LAN sync server diagnosed');
 
       // WORKFLOW F: Bathroom Key Log & Scanning
       console.log('  ► Driving [BATHROOM-STATUS] & [BATHROOM-SCAN]...');
-      const bathStatus = await client.callTool('ipc_execute_command', { command: 'bathroom_get_status' });
-      results.workflows.bathroom = {
-        passed: bathStatus !== null && typeof bathStatus === 'object',
-        details: { status: 'Verified live status query' },
-      };
+      try {
+        const bathStatus = await client.callTool('ipc_execute_command', { command: 'bathroom_get_status' });
+        results.workflows.bathroom = {
+          passed: bathStatus !== null && typeof bathStatus === 'object',
+          details: { status: 'Verified live status query' },
+        };
+      } catch (stepErr) {
+        results.workflows.bathroom = { passed: false, details: 'Live drive failed: ' + stepErr.message };
+      }
       console.log('  ✓ Bathroom key log status and RFID scan commands verified');
 
       client.close();

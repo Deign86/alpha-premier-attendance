@@ -34,7 +34,11 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   const hra = cents(input.hra ?? 0);
   const incentivesAllowance = cents(input.incentivesAllowance);
   const specialAllowance = cents(input.specialAllowance);
-  const totalAllowance = incentivesAllowance + specialAllowance + hra;
+  // T2: zero-day cutoff proration (mirrors Rust BUG-PAY-02) — an employee who
+  // worked 0 days must not receive the full flat allowance sum.
+  const workedZeroDays = input.actualWorkingDays === 0 && input.standardWorkingDays > 0;
+  const allowanceFactor = workedZeroDays ? Math.min(1, Math.max(0, input.actualWorkingDays / input.standardWorkingDays)) : 1;
+  const totalAllowance = multiply(incentivesAllowance + specialAllowance + hra, allowanceFactor);
   const lateDeduction = cents(input.lateDeduction);
   const halfDayDeduction = multiply(dailyRate * input.halfDayCount, halfDayFraction);
   const absenceDeduction = input.absenceDeduction != null ? cents(input.absenceDeduction) : dailyRate * input.absentDays;
@@ -46,9 +50,10 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   const manualAdjustment = cents(input.manualAdjustment);
   const totalDeductions = lateDeduction + halfDayDeduction + absenceDeduction + sss + phic + hdmf + salaryAdvance;
   // Intern payroll floors at zero for the cutoff: an intern can never owe
-  // money for a period (mirrors the floor-at-zero daily intern rule).
+  // money for a period (mirrors the floor-at-zero daily intern rule). Gross
+  // is floored on its own — it must never subtract deductions (review P1).
   const grossEarnings = totalCompensation + totalAllowance + overtimePay + manualAdjustment;
-  const grossCompensation = input.employeeType === 'INTERN' ? Math.max(0, grossEarnings - totalDeductions) : grossEarnings;
+  const grossCompensation = input.employeeType === 'INTERN' ? Math.max(0, grossEarnings) : grossEarnings;
   const netBeforeFloor = grossEarnings - totalDeductions;
   const netPay = input.employeeType === 'INTERN' ? Math.max(0, netBeforeFloor) : netBeforeFloor;
   const record = {
@@ -87,7 +92,16 @@ function validate(input: CutoffInput): void {
   if (input.manualAdjustment !== 0 && !input.adjustmentReason?.trim()) throw new Error('A manual adjustment reason is required.');
 }
 
-function validDate(value: string): boolean { return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime()); }
+function validDate(value: string): boolean {
+  // P7: shape checks alone accepted Feb-30 — verify a real calendar day (stdlib only).
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
 function cents(value: number): number { return Math.round(value * 100); }
 function pesos(value: number): number { return Number((value / 100).toFixed(2)); }
 function multiply(value: number, multiplier: number): number { return Math.round(value * multiplier); }

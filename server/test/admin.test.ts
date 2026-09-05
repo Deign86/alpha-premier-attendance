@@ -21,6 +21,13 @@ describe('admin and live attendance API', () => {
     const payrollId = created.body.payroll.payrollId as string;
     await agent.post(`/api/admin/payroll/cutoffs/${payrollId}/finalize`).expect(200);
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll[0]).toMatchObject({ payrollId, status: 'FINALIZED', netPay: 16216.5 });
+    // T3: a FINALIZED cutoff cannot be deleted; drafts can.
+    const deleteFinalized = await agent.delete(`/api/admin/payroll/cutoffs/${payrollId}`).expect(400);
+    expect(deleteFinalized.body.error.code).toBe('ADMIN_VALIDATION_ERROR');
+    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(1);
+    const draft = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 11 }).expect(200);
+    await agent.delete(`/api/admin/payroll/cutoffs/${draft.body.payroll.payrollId}`).expect(200);
+    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(1);
     const exported = await agent.get('/api/admin/payroll/export').expect(200);
     expect(exported.text).toContain('CHICO, JEAN ASHLEY');
     expect(exported.text).toContain('"Company","Alpha Premier Group of Companies OPC."');
@@ -74,7 +81,7 @@ describe('admin and live attendance API', () => {
     expect(created.body.payroll).toMatchObject({
       employeeId: 'INT-001', employeeName: 'Maria Santos', employeeType: 'INTERN', dailyRate: 80,
       standardWorkingDays: 12, actualWorkingDays: 10, basicPay: 960, totalCompensation: 960, totalAllowance: 0,
-      lateUnits: 3, lateDeduction: 30, absenceDeduction: 160, totalDeductions: 190, grossCompensation: 770, netPay: 770, status: 'DRAFT',
+      lateUnits: 3, lateDeduction: 30, absenceDeduction: 160, totalDeductions: 190, grossCompensation: 960, netPay: 770, status: 'DRAFT',
     });
     // The payroll list derives intern classification from the Users register.
     const payroll = await agent.get('/api/admin/payroll/cutoffs').expect(200);

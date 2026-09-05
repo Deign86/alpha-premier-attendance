@@ -131,6 +131,15 @@ describe('RFID kiosk', () => {
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
   });
 
+  it('shows a scan notice when the wedge drops an unrecognized burst', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    const input = screen.getByLabelText(/scanner card id/i);
+    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8']) fireEvent.keyDown(input, { key });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(await screen.findByTestId('kiosk-scan-notice')).toHaveTextContent(/not recognized/i);
+  });
+
   it('rejects letters in decimal keyboard-wedge input without later partial submission', async () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     render(<App />);
@@ -466,6 +475,39 @@ describe('RFID kiosk', () => {
       '/api/attendance/scan',
       expect.objectContaining({ body: JSON.stringify({ rfidUid: 'MANUAL-001', source: 'MANUAL_TEST' }) }),
     ));
+  });
+
+  it('routes the manual Record button to the bathroom pipeline in bathroom mode (B1)', async () => {
+    window.history.pushState({}, '', '/');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns mock Response for config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url.startsWith('/api/bathroom/status')) {
+        // SAFETY: Fetch returns mock bathroom status
+        return { ok: true, json: async () => ({ success: true, maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [] }) } as Response;
+      }
+      if (url === '/api/bathroom/scan') {
+        // SAFETY: Fetch returns mock bathroom checkout
+        return { ok: true, json: async () => ({ success: true, action: 'CHECKOUT', genderKey: 'MALE', user: { userId: 'u-1', fullName: 'Ada Lovelace' }, message: 'ok', timestamp: '2026-07-28T09:00:00+08:00' }) } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /manual entry/i }));
+    await user.type(screen.getByLabelText(/manual card id/i), 'BATH-001');
+    await user.click(screen.getByRole('button', { name: /record/i }));
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/bathroom/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: 'BATH-001', source: 'MANUAL_TEST' }) }),
+    ));
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
   });
 
   it('renders an API error and returns to ready after the reset delay', async () => {

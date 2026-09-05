@@ -2,6 +2,7 @@
 pub struct CutoffInput {
     pub employee_id: String,
     pub employee_name: String,
+    pub employee_type: String,
     pub cutoff_start: String,
     pub cutoff_end: String,
     pub daily_rate: f64,
@@ -67,8 +68,8 @@ fn multiply(value: i64, factor: f64) -> i64 {
 pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     if input.employee_id.trim().is_empty()
         || input.employee_name.trim().is_empty()
-        || input.cutoff_start.len() != 10
-        || input.cutoff_end.len() != 10
+        || chrono::NaiveDate::parse_from_str(&input.cutoff_start, "%Y-%m-%d").is_err()
+        || chrono::NaiveDate::parse_from_str(&input.cutoff_end, "%Y-%m-%d").is_err()
         || input.cutoff_end < input.cutoff_start
     {
         return Err("Employee and valid cutoff dates are required.".into());
@@ -184,6 +185,13 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
         + cents(input.manual_adjustment);
     let total_deductions = late + half + absence + sss + phic + hdmf + salary_advance;
     let net = gross - total_deductions;
+    // T2: intern cutoff floors at zero (mirrors the TS engine and the daily
+    // intern rule) — an intern can never owe money for a period.
+    let (gross_compensation, net_pay) = if input.employee_type == "INTERN" {
+        (gross.max(0), net.max(0))
+    } else {
+        (gross, net)
+    };
 
     Ok(CutoffResult {
         basic_pay: basic,
@@ -203,8 +211,8 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
         hdmf_employee_share: hdmf,
         salary_advance,
         total_deductions,
-        gross_compensation: gross,
-        net_pay: net,
+        gross_compensation,
+        net_pay,
     })
 }
 
@@ -216,6 +224,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "e".into(),
             employee_name: "A".into(),
+            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-07-01".into(),
             cutoff_end: "2026-07-15".into(),
             daily_rate: 1000.0,
@@ -258,6 +267,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APGCO-25-013".into(),
             employee_name: "CHICO, JEAN ASHLEY".into(),
+            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-06-01".into(),
             cutoff_end: "2026-06-15".into(),
             daily_rate: 705.0,
@@ -313,6 +323,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-102".into(),
             employee_name: "Deign Grey O. Lazaro".into(),
+            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-16".into(),
             cutoff_end: "2026-08-31".into(),
             daily_rate: 80.0,
@@ -358,6 +369,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-103".into(),
             employee_name: "Alex Cruz".into(),
+            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-16".into(),
             cutoff_end: "2026-08-31".into(),
             daily_rate: 80.0,
@@ -403,6 +415,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-104".into(),
             employee_name: "Test Intern 10 Days".into(),
+            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-01".into(),
             cutoff_end: "2026-08-15".into(),
             daily_rate: 80.0,
@@ -449,6 +462,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-105".into(),
             employee_name: "Test Intern 12 Days".into(),
+            employee_type: "INTERN".into(),
             cutoff_start: "2026-07-16".into(),
             cutoff_end: "2026-07-31".into(),
             daily_rate: 80.0,
@@ -496,6 +510,7 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-106".into(),
             employee_name: "Zero Attendance".into(),
+            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-01".into(),
             cutoff_end: "2026-08-15".into(),
             daily_rate: 80.0,
@@ -541,6 +556,98 @@ mod tests {
         assert_eq!(result.gross_compensation, 88_000);
         assert_eq!(result.total_deductions, 88_000);
         assert_eq!(result.net_pay, 0);
+    }
+
+    #[test]
+    fn intern_cutoff_floors_negative_net_at_zero() {
+        // T2: deductions exceeding earnings floor to zero for interns only.
+        let base = CutoffInput {
+            employee_id: "X".into(),
+            employee_name: "X".into(),
+            employee_type: "INTERN".into(),
+            cutoff_start: "2026-08-01".into(),
+            cutoff_end: "2026-08-15".into(),
+            daily_rate: 80.0,
+            standard_working_days: 11.0,
+            actual_working_days: 1.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.0,
+            half_day_fraction: 0.5,
+            absent_days: 0.0,
+            absence_deduction: None,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 1000.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        };
+        let intern = calculate(&base).unwrap();
+        assert_eq!(intern.net_pay, 0);
+        assert_eq!(intern.gross_compensation, 8_000);
+        let employee = calculate(&CutoffInput {
+            employee_type: "EMPLOYEE".into(),
+            ..base
+        })
+        .unwrap();
+        assert_eq!(employee.net_pay, -92_000);
+    }
+
+    #[test]
+    fn invalid_calendar_dates_are_rejected() {
+        // P7: shape checks alone accepted Feb-30 and month 99.
+        for (start, end) in [("2026-02-30", "2026-03-15"), ("2026-13-01", "2026-03-15")] {
+            let result = calculate(&CutoffInput {
+                employee_id: "e".into(),
+                employee_name: "A".into(),
+                employee_type: "EMPLOYEE".into(),
+                cutoff_start: start.into(),
+                cutoff_end: end.into(),
+                daily_rate: 1000.0,
+                standard_working_days: 11.0,
+                actual_working_days: 10.0,
+                basic_pay: None,
+                special_holiday_days: 0.0,
+                special_holiday_multiplier: 0.3,
+                special_holiday_pay: None,
+                regular_holiday_days: 0.0,
+                regular_holiday_multiplier: 1.0,
+                regular_holiday_pay: None,
+                hra: 0.0,
+                incentives_allowance: 0.0,
+                special_allowance: 0.0,
+                late_deduction: 0.0,
+                half_day_count: 0.0,
+                half_day_fraction: 0.5,
+                absent_days: 0.0,
+                absence_deduction: None,
+                overtime_hours: 0.0,
+                overtime_rate: 0.0,
+                overtime_pay: None,
+                sss_employee_share: 0.0,
+                phic_employee_share: 0.0,
+                hdmf_employee_share: 0.0,
+                salary_advance: 0.0,
+                manual_adjustment: 0.0,
+                adjustment_reason: None,
+                approved_working_day_overage: false,
+            });
+            assert!(result.is_err(), "{start}..{end} must be rejected");
+        }
     }
 }
 

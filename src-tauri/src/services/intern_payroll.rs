@@ -39,6 +39,11 @@ pub fn calculate(
     let time_out = DateTime::parse_from_rfc3339(actual_time_out)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
+    // P4: reject inverted time logs instead of silently flooring worked
+    // hours to zero (BUG-PAY-03 parity with the employee engine).
+    if time_out < time_in {
+        return Err("time_out cannot be earlier than time_in".into());
+    }
     let start = Manila
         .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
         .single()
@@ -66,8 +71,21 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
-    let is_before_5pm = time_out.hour() < 17;
-    let is_half_day = worked_hours > 0 && (worked_hours <= 4 || is_before_5pm);
+    // T6 (decision A): minute-precision office close — clock-out at exactly
+    // 17:00:00 Manila counts a full day; anything earlier is a half-day.
+    let office_close = Manila
+        .with_ymd_and_hms(
+            time_out.year(),
+            time_out.month(),
+            time_out.day(),
+            17,
+            0,
+            0,
+        )
+        .single()
+        .unwrap();
+    let is_before_close = time_out < office_close;
+    let is_half_day = worked_hours > 0 && (worked_hours <= 4 || is_before_close);
     let half_day_deduction = if is_half_day { base / 2 } else { 0 };
     Ok(InternPayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -84,11 +102,13 @@ pub fn calculate(
 }
 
 fn ceil_hour(value: DateTime<chrono_tz::Tz>) -> DateTime<chrono_tz::Tz> {
-    if value.minute() == 0 && value.second() == 0 {
-        value
+    // P5: truncate sub-second residue first so 08:00:00.500 counts exact-hour (TS parity).
+    let truncated = value.with_nanosecond(0).unwrap_or(value);
+    if truncated.minute() == 0 && truncated.second() == 0 {
+        truncated
     } else {
         Manila
-            .with_ymd_and_hms(value.year(), value.month(), value.day(), value.hour(), 0, 0)
+            .with_ymd_and_hms(truncated.year(), truncated.month(), truncated.day(), truncated.hour(), 0, 0)
             .single()
             .unwrap()
             + Duration::hours(1)
@@ -203,5 +223,42 @@ mod tests {
         assert!(result.is_half_day);
         assert_eq!(result.half_day_deduction_centavos, 4000);
         assert_eq!(result.daily_pay_centavos, 4000);
+    }
+
+    #[test]
+    fn inverted_time_logs_return_validation_error() {
+        // P4: time_out before time_in must surface as an error, not a zero.
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T02:00:00+08:00",
+            "2026-08-01T01:00:00+08:00",
+            true,
+        );
+        assert!(matches!(
+            result,
+            Err(message) if message.contains("time_out cannot be earlier than time_in")
+        ));
+    }
+
+    #[test]
+    fn close_boundary_is_minute_precise() {
+        // T6 decision A: 16:59:59 is half-day; exactly 17:00:00 and 17:00:01 are full.
+        let just_before = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T16:59:59+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(just_before.is_half_day);
+        assert_eq!(just_before.daily_pay_centavos, 4000);
+        for time_out in [
+            "2026-08-01T17:00:00+08:00",
+            "2026-08-01T17:00:01+08:00",
+        ] {
+            let result = calculate("2026-08-01", "2026-08-01T08:00:00+08:00", time_out, true).unwrap();
+            assert!(!result.is_half_day);
+            assert_eq!(result.daily_pay_centavos, 8000);
+        }
     }
 }

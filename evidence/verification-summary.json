@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-02T01:49:50.771Z",
+  "timestamp": "2026-09-04T12:59:33.292Z",
   "doctor": {
     "passed": true,
     "checks": [
@@ -29,6 +29,10 @@
     "diagnostics": {
       "passed": false,
       "details": null
+    },
+    "bathroom": {
+      "passed": false,
+      "details": null
     }
   },
   "liveBridge": {
@@ -36,9 +40,9 @@
     "details": null
   },
   "summary": {
-    "total": 6,
+    "total": 7,
     "passed": 1,
     "failed": 0,
-    "durationMs": 5104
+    "durationMs": 2052
   }
 }

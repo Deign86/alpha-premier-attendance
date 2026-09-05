@@ -8,6 +8,10 @@ use chrono_tz::{Asia::Manila, Tz};
 /// here so every consumer (daily payroll, worked-hours reports, overtime
 /// inputs) stays consistent and the rule can be audited or changed in one
 /// place.
+///
+/// Overnight/multi-day spans subtract EVERY touched day's window (a 22:00 to
+/// next-day 14:00 shift loses one hour per day crossed). Night shifts are
+/// unsupported by design: office hours are 08:00–17:00 Asia/Manila.
 pub const LUNCH_START_HOUR: u32 = 12;
 pub const LUNCH_END_HOUR: u32 = 13;
 

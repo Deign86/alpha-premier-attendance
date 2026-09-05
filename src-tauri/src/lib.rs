@@ -805,7 +805,20 @@ async fn bathroom_time_out(
     .bind(&now_utc)
     .execute(&state.db)
     .await
-    .map_err(|e| format!("Failed to record time-out: {e}"))?;
+    .map_err(|e| {
+        // T10: concurrent checkout raced past the SELECT — the partial unique
+        // index is the atomic backstop; report conflict, not generic failure.
+        let code = e
+            .as_database_error()
+            .and_then(|db_err| db_err.code())
+            .map(|c| c.into_owned())
+            .unwrap_or_default();
+        if code == "2067" || code == "1555" || e.to_string().contains("UNIQUE constraint failed") {
+            format!("BATHROOM_KEY_ALREADY_CHECKED_OUT: The {normalized_gender} bathroom key was just checked out by another session.")
+        } else {
+            format!("Failed to record time-out: {e}")
+        }
+    })?;
 
     Ok(serde_json::json!({
         "success": true,
@@ -866,8 +879,8 @@ async fn bathroom_time_in(
         _ => existing.get::<String, _>("notes"),
     };
 
-    sqlx::query(
-        "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', notes = ?, updated_at = ? WHERE log_id = ?",
+    let outcome = sqlx::query(
+        "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', notes = ?, updated_at = ? WHERE log_id = ? AND status = 'OUT'",
     )
     .bind(&time_in)
     .bind(duration_seconds)
@@ -877,6 +890,11 @@ async fn bathroom_time_in(
     .execute(&state.db)
     .await
     .map_err(|e| format!("Failed to record time-in: {e}"))?;
+    // T10: lost-update guard — a concurrent return already flipped this row
+    // between the SELECT above and this UPDATE.
+    if outcome.rows_affected() != 1 {
+        return Err("BATHROOM_KEY_ALREADY_RETURNED: This bathroom key has already been returned".into());
+    }
 
     let user_id: String = existing.get("user_id");
     let full_name: String = existing.get("full_name");
@@ -950,6 +968,12 @@ async fn bathroom_update_log_impl(
     let parsed_out = chrono::DateTime::parse_from_rfc3339(&next_time_out)
         .map_err(|_| "Time-out must be a valid RFC3339 timestamp.".to_string())?;
 
+    // T4: edited timestamps must belong to the log's own date (Manila);
+    // otherwise per-date history silently disagrees with log_date.
+    if parsed_out.with_timezone(&Manila).format("%Y-%m-%d").to_string() != log_date {
+        return Err("Edited time-out must fall on the log date.".into());
+    };
+
     let next_time_in: Option<String> = if let Some(ti_val) = request.get("timeIn") {
         if ti_val.is_null() {
             None
@@ -976,6 +1000,10 @@ async fn bathroom_update_log_impl(
 
         if parsed_in < parsed_out {
             return Err("Time-in (return) cannot precede time-out (checkout).".into());
+        }
+
+        if parsed_in.with_timezone(&Manila).format("%Y-%m-%d").to_string() != log_date {
+            return Err("Edited time-in must fall on the log date.".into());
         }
 
         let dur = (parsed_in - parsed_out).num_seconds().max(0);
@@ -1153,8 +1181,8 @@ async fn process_bathroom_scan(
                 .unwrap_or(now_manila);
             let duration_seconds = (now_manila - out_dt).num_seconds().max(0);
 
-            sqlx::query(
-                "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', updated_at = ? WHERE log_id = ?",
+            let returned = sqlx::query(
+                "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', updated_at = ? WHERE log_id = ? AND status = 'OUT'",
             )
             .bind(&now_iso)
             .bind(duration_seconds)
@@ -1163,6 +1191,24 @@ async fn process_bathroom_scan(
             .execute(&state.db)
             .await
             .map_err(|e| e.to_string())?;
+            // T10: a concurrent return flipped this row after the SELECT.
+            if returned.rows_affected() != 1 {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "error": {
+                        "code": "BATHROOM_KEY_IN_USE",
+                        "message": format!("The {} bathroom key is currently in use by {}.", if gender_key == "MALE" { "male" } else { "female" }, active_full_name)
+                    },
+                    "genderKey": gender_key,
+                    "activeHolder": {
+                        "logId": active_log_id,
+                        "userId": active_user_id,
+                        "fullName": active_full_name,
+                        "genderKey": gender_key,
+                        "timeOut": active_time_out_str
+                    }
+                }));
+            }
 
             return Ok(serde_json::json!({
                 "success": true,
@@ -1203,7 +1249,7 @@ async fn process_bathroom_scan(
 
     // CHECKOUT KEY (Time Out)
     let log_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'OUT', '', ?, ?)",
     )
     .bind(&log_id)
@@ -1216,8 +1262,34 @@ async fn process_bathroom_scan(
     .bind(&now_iso)
     .bind(&now_iso)
     .execute(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
+    // T10: concurrent checkout raced past the SELECT — the partial unique
+    // index is the atomic backstop; map its violation to a conflict, not a
+    // generic failure, and re-read the winner for an accurate message.
+    if let Err(e) = inserted {
+        let code = e
+            .as_database_error()
+            .and_then(|db_err| db_err.code())
+            .map(|c| c.into_owned())
+            .unwrap_or_default();
+        if code != "2067" && code != "1555" && !e.to_string().contains("UNIQUE constraint failed") {
+            return Err(e.to_string());
+        }
+        let holder: Option<String> = sqlx::query_scalar("SELECT full_name FROM bathroom_log WHERE gender_key = ? AND status = 'OUT' LIMIT 1")
+            .bind(gender_key)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .flatten();
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": {
+                "code": "BATHROOM_KEY_IN_USE",
+                "message": format!("The {} bathroom key is currently in use{}.", if gender_key == "MALE" { "male" } else { "female" }, holder.map(|h| format!(" by {h}")).unwrap_or_default())
+            },
+            "genderKey": gender_key
+        }));
+    }
 
     Ok(serde_json::json!({
         "success": true,
@@ -2316,6 +2388,7 @@ async fn payroll_generate_cutoff(
         let input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: employee_id.clone(),
             employee_name: employee_name.clone(),
+            employee_type: employee_type.clone(),
             cutoff_start: cutoff_start.clone(),
             cutoff_end: cutoff_end.clone(),
             daily_rate: daily_rate_centavos as f64 / 100.0,
@@ -2584,17 +2657,17 @@ async fn payroll_finalize_cutoff(
 }
 
 #[tauri::command]
-async fn payroll_delete_cutoff(
-    state: State<'_, AppState>,
-    token: String,
+async fn delete_cutoff_record(
+    state: &AppState,
     payroll_id: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
     let row = sqlx::query("SELECT status,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?
         .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
+    // T3: finalized cutoffs are immutable — refuse destructive delete.
+    if row.get::<String, _>("status") == "FINALIZED" {
+        return Err("PAYROLL_FINALIZED".to_string());
+    }
     sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id)
         .execute(&state.db)
@@ -2620,6 +2693,18 @@ async fn payroll_delete_cutoff(
     )
     .await;
     Ok(serde_json::json!({"success":true,"payrollId":payroll_id}))
+}
+
+#[tauri::command]
+async fn payroll_delete_cutoff(
+    state: State<'_, AppState>,
+    token: String,
+    payroll_id: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    delete_cutoff_record(&state, payroll_id).await
 }
 
 #[tauri::command]
@@ -2859,6 +2944,11 @@ fn cutoff_input(value: &serde_json::Value) -> crate::services::cutoff_payroll::C
             .get("employeeName")
             .and_then(|v| v.as_str())
             .unwrap_or("")
+            .into(),
+        employee_type: value
+            .get("employeeType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("EMPLOYEE")
             .into(),
         cutoff_start: value
             .get("cutoffStart")
@@ -3430,10 +3520,22 @@ async fn admin_sync_now(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let processed =
-        crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
+    // T10: drain the queue in batches so "Sync now" cannot report partial
+    // work as complete; the pass cap backstops against a poison-item loop.
+    let mut processed_total: u64 = 0;
+    for _ in 0..20 {
+        let processed = crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
             .await?;
-    Ok(serde_json::json!({"success":true,"processed":processed}))
+        processed_total += processed;
+        if processed == 0 {
+            break;
+        }
+    }
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING','RETRY')")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"success":true,"processed":processed_total,"remaining":remaining}))
 }
 
 /// Dev/test utility (hidden admin action): wipes every managed Google Sheets
@@ -3902,14 +4004,9 @@ async fn list_payroll_pdfs(
 }
 
 fn valid_cutoff_date(value: &str) -> bool {
-    value.len() == 10
-        && value.as_bytes().iter().enumerate().all(|(index, byte)| {
-            if index == 4 || index == 7 {
-                *byte == b'-'
-            } else {
-                byte.is_ascii_digit()
-            }
-        })
+    // P7: shape checks alone accepted Feb-30 and month 99 — parse a real
+    // calendar day instead.
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
 }
 
 #[tauri::command]
@@ -4713,6 +4810,17 @@ mod tests {
     use sqlx::{sqlite::SqlitePoolOptions, Row};
 
     #[test]
+    fn cutoff_dates_require_real_calendar_days() {
+        // P7: shape checks alone accepted Feb-30 and month 99.
+        assert!(super::valid_cutoff_date("2026-08-01"));
+        assert!(super::valid_cutoff_date("2026-8-1")); // unpadded but a real day
+        assert!(!super::valid_cutoff_date("2026-02-30"));
+        assert!(!super::valid_cutoff_date("2026-13-01"));
+        assert!(!super::valid_cutoff_date("2026-99-99"));
+        assert!(!super::valid_cutoff_date(""));
+    }
+
+    #[test]
     fn gender_normalization_can_never_violate_the_check_constraint() {
         // NULL / absent stays unset.
         assert_eq!(normalize_gender(None), None);
@@ -4804,6 +4912,49 @@ mod tests {
         assert_eq!(enriched["dailyRate"], 500.0);
     }
 
+    async fn insert_cutoff_row(db: &sqlx::SqlitePool, payroll_id: &str, status: &str) {
+        sqlx::query("INSERT INTO payroll_cutoffs (payroll_id, employee_id, employee_name, payroll_profile_id, payroll_cutoff_label, cutoff_start, cutoff_end, payroll_frequency, daily_rate_centavos, standard_working_days, actual_working_days, basic_pay_centavos, special_holiday_days, special_holiday_multiplier, special_holiday_pay_centavos, regular_holiday_days, regular_holiday_multiplier, regular_holiday_pay_centavos, incentives_allowance_centavos, special_allowance_centavos, total_compensation_centavos, total_allowance_centavos, late_units, late_deduction_centavos, half_day_count, half_day_deduction_centavos, absent_days, absence_deduction_centavos, overtime_hours, overtime_rate_centavos, overtime_pay_centavos, gross_compensation_centavos, net_pay_centavos, calculation_breakdown, approved_working_day_overage, status, created_at, updated_at) VALUES (?, 'EMP-1', 'Ada Lovelace', 'BEA_STANDARD', 'Aug 1-15, 2026', '2026-08-01', '2026-08-15', 'SEMI_MONTHLY', 50000, 11, 11, 550000, 0, 1, 0, 0, 1, 0, 0, 0, 550000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 550000, 550000, '{}', 0, ?, '2026-08-16T00:00:00Z', '2026-08-16T00:00:00Z')")
+            .bind(payroll_id)
+            .bind(status)
+            .execute(db)
+            .await
+            .expect("cutoff row");
+    }
+
+    #[tokio::test]
+    async fn finalized_cutoff_cannot_be_deleted() {
+        // T3: FINALIZED cutoffs are immutable; DRAFTs still delete.
+        let temp = std::env::temp_dir().join(format!("alpha-cutoff-delete-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        insert_cutoff_row(&state.db, "PAY-FIN", "FINALIZED").await;
+        insert_cutoff_row(&state.db, "PAY-DRAFT", "DRAFT").await;
+        let err = super::delete_cutoff_record(&state, "PAY-FIN".to_string())
+            .await
+            .unwrap_err();
+        assert!(err.contains("PAYROLL_FINALIZED"));
+        super::delete_cutoff_record(&state, "PAY-DRAFT".to_string())
+            .await
+            .expect("draft deletes");
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_cutoffs")
+            .fetch_one(&state.db)
+            .await
+            .expect("count");
+        assert_eq!(remaining, 1);
+    }
+
     #[tokio::test]
     async fn applies_fixed_intern_rules_to_intern_cutoff_input() {
         let db = SqlitePoolOptions::new()
@@ -4865,6 +5016,7 @@ mod tests {
         let employee_input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: "EMP-1".into(),
             employee_name: "John Doe".into(),
+            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-08-18".into(),
             cutoff_end: "2026-08-18".into(),
             daily_rate: 500.0,
@@ -4903,6 +5055,7 @@ mod tests {
         let intern_input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: "INT-1".into(),
             employee_name: "Deign Grey O. Lazaro".into(),
+            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-18".into(),
             cutoff_end: "2026-08-18".into(),
             daily_rate: 80.0,
@@ -5525,6 +5678,142 @@ mod tests {
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn bathroom_concurrent_scan_keeps_single_active_key() {
+        // T10: two simultaneous taps for the same key must not double-issue it.
+        // The loser always lands on IN_USE — either via the SELECT seeing the
+        // winner's row, or via the partial unique index on the INSERT race.
+        let temp = std::env::temp_dir().join(format!("alpha-bathroom-race-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        for (user_id, rfid, name) in [("EMP_01", "A1B2C3D4", "John Doe"), ("EMP_02", "E5F6A7B8", "Bob Smith")] {
+            super::upsert_user_record(
+                &state.db,
+                user_id,
+                rfid,
+                name,
+                Some("Engineering"),
+                "ACTIVE",
+                "EMPLOYEE",
+                Some("MALE"),
+                Some(50_000),
+                Some("BEA_STANDARD"),
+                None,
+                "EMPLOYEE",
+                "2026-08-27T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        }
+        let (first, second) = tokio::join!(
+            super::process_bathroom_scan(&state, "A1B2C3D4"),
+            super::process_bathroom_scan(&state, "E5F6A7B8")
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        let first_checkout = first["action"].as_str() == Some("CHECKOUT");
+        let second_checkout = second["action"].as_str() == Some("CHECKOUT");
+        assert!(first_checkout ^ second_checkout, "exactly one checkout wins");
+        for outcome in [&first, &second] {
+            if outcome["success"].as_bool() == Some(true) {
+                assert_eq!(outcome["action"].as_str(), Some("CHECKOUT"));
+            } else {
+                assert_eq!(outcome["error"]["code"].as_str(), Some("BATHROOM_KEY_IN_USE"));
+            }
+        }
+        let active: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM bathroom_log WHERE gender_key = 'MALE' AND status = 'OUT'")
+                .fetch_one(&state.db)
+                .await
+                .expect("count");
+        assert_eq!(active, 1);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn bathroom_edit_rejects_dates_outside_log_date() {
+        // T4: edited timestamps must fall on the stored log_date (Manila).
+        let temp = std::env::temp_dir().join(format!("alpha-bathroom-date-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+        super::upsert_user_record(
+            &state.db,
+            "EMP_01",
+            "CARD_01",
+            "Raineer C. Rosado",
+            Some("IT"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-27T00:00:00Z",
+        )
+        .await
+        .expect("user row for FK");
+        let now_utc = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES ('LOG-1', '2026-08-31', 'EMP_01', 'Raineer C. Rosado', 'IT', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', ?, ?)",
+        )
+        .bind(&now_utc)
+        .bind(&now_utc)
+        .execute(&state.db)
+        .await
+        .unwrap();
+        // Return stamped on the next day must be rejected, not silently stored.
+        let bad = serde_json::json!({
+            "timeOut": "2026-08-31T10:00:00+08:00",
+            "timeIn": "2026-09-01T10:15:00+08:00",
+            "notes": ""
+        });
+        let err = super::bathroom_update_log_impl(&state, &token, "LOG-1", &bad)
+            .await
+            .unwrap_err();
+        assert!(err.contains("must fall on the log date"));
+        // Same-date edit succeeds.
+        let good = serde_json::json!({
+            "timeOut": "2026-08-31T10:00:00+08:00",
+            "timeIn": "2026-08-31T10:15:00+08:00",
+            "notes": ""
+        });
+        let updated = super::bathroom_update_log_impl(&state, &token, "LOG-1", &good)
+            .await
+            .expect("same-date edit");
+        assert_eq!(updated["entry"]["status"].as_str(), Some("RETURNED"));
     }
 
     #[tokio::test]

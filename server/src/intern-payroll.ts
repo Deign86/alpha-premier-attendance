@@ -33,6 +33,8 @@ export function manilaWeekStart(attendanceDate: string): string {
 export function calculateInternPayroll(input: InternPayrollInput): InternPayrollResult {
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   const actualTimeOut = manilaTimestamp(input.actualTimeOut);
+  // P4: reject inverted logs instead of silently flooring worked hours to zero.
+  if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
   const graceEnd = DateTime.fromISO(`${input.attendanceDate}T08:15:00`, { zone: timezone });
   if (!start.isValid || !graceEnd.isValid) throw new Error('Payroll timestamps must be valid ISO values');
@@ -47,8 +49,11 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
-  const isBeforeFivePm = actualTimeOut.hour < 17;
-  const isHalfDay = workedHours > 0 && (workedHours <= 4 || isBeforeFivePm);
+  // T6 (decision A): minute-precision office close — clock-out at exactly
+  // 17:00:00 counts a full day; anything earlier is a half-day.
+  const officeClose = actualTimeOut.set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
+  const isBeforeClose = actualTimeOut < officeClose;
+  const isHalfDay = workedHours > 0 && (workedHours <= 4 || isBeforeClose);
   const halfDayDeduction = isHalfDay ? basePay / 2 : 0;
 
   return {
@@ -67,6 +72,8 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
 }
 
 function ceilHour(value: DateTime): DateTime {
-  const floor = value.startOf('hour');
-  return value.equals(floor) ? floor : floor.plus({ hours: 1 });
+  // P5: truncate sub-second residue first so 08:00:00.500 counts exact-hour.
+  const truncated = value.set({ millisecond: 0 });
+  const floor = truncated.startOf('hour');
+  return truncated.equals(floor) ? floor : floor.plus({ hours: 1 });
 }

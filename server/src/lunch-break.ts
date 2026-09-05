@@ -9,6 +9,10 @@ import { DateTime } from 'luxon';
  * here so every consumer (daily payroll, worked-hours reporting) stays
  * consistent and the rule can be audited or changed in one place. The desktop
  * app mirrors this in `src-tauri/src/services/lunch_break.rs`.
+ *
+ * Overnight/multi-day spans subtract EVERY touched day's window (a 22:00 to
+ * next-day 14:00 shift loses one hour per day crossed). Night shifts are
+ * unsupported by design: office hours are 08:00–17:00 Asia/Manila.
  */
 export const LUNCH_START_HOUR = 12;
 export const LUNCH_END_HOUR = 13;
@@ -65,7 +69,11 @@ export function paidWorkHoursCeiled(start: DateTime, end: DateTime): number {
 
 /** Parses an ISO timestamp into Manila time, throwing on invalid input. */
 export function manilaTimestamp(value: string): DateTime {
-  const parsed = DateTime.fromISO(value, { setZone: true }).setZone(timezone);
+  // P6: require an explicit UTC offset (RFC3339) — offset-less local times
+  // are silently misread when client and server zones disagree.
+  const text = value.trim();
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) throw new Error('Payroll timestamps must include a UTC offset (RFC3339)');
+  const parsed = DateTime.fromISO(text, { setZone: true }).setZone(timezone);
   if (!parsed.isValid) throw new Error('Payroll timestamps must be valid ISO values');
   return parsed;
 }

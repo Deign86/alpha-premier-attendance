@@ -291,7 +291,7 @@ export function BathroomKeyLogPanel({
               <p className="bathroom-card-subtitle">Floor Restroom Key 1</p>
             </div>
           </div>
-          <span className={`status-pill ${isOut ? "status-working" : "status-completed"}`}>
+          <span className={`status-pill ${isOut ? "status-working" : "status-completed"}`} data-testid={`bathroom-status-${genderKey.toLowerCase()}`}>
             {isOut ? "IN USE" : "AVAILABLE"}
           </span>
         </div>
@@ -325,6 +325,7 @@ export function BathroomKeyLogPanel({
               <button
                 className="submit-button bathroom-action-button button-return"
                 type="button"
+                data-testid={`bathroom-return-${genderKey.toLowerCase()}`}
                 disabled={isBusy || !navigator.onLine}
                 onClick={() => void handleReturn(genderKey, activeHolder.logId)}
               >
@@ -346,6 +347,7 @@ export function BathroomKeyLogPanel({
                 <Search size={15} />
                 <input
                   id={`search-${genderKey.toLowerCase()}`}
+                  data-testid={`bathroom-search-${genderKey.toLowerCase()}`}
                   type="text"
                   className="input"
                   placeholder="Search staff by name or ID…"
@@ -357,6 +359,7 @@ export function BathroomKeyLogPanel({
               <div
                 className="employee-picker-list bathroom-picker-list"
                 role="listbox"
+                data-testid={`bathroom-staff-list-${genderKey.toLowerCase()}`}
                 aria-label={`Select ${genderKey.toLowerCase()} employee`}
               >
                 {filteredList.length === 0 ? (
@@ -373,6 +376,7 @@ export function BathroomKeyLogPanel({
                         type="button"
                         role="option"
                         aria-selected={isSelected}
+                        data-selected={isSelected}
                         className={`employee-picker-item ${isSelected ? "is-selected" : ""}`}
                         onClick={() => onSelectUser(emp.userId)}
                       >
@@ -393,6 +397,7 @@ export function BathroomKeyLogPanel({
               <button
                 className="submit-button bathroom-action-button button-checkout"
                 type="button"
+                data-testid={`bathroom-checkout-${genderKey.toLowerCase()}`}
                 disabled={!selectedUserId || isBusy || !navigator.onLine}
                 onClick={() => void handleCheckout(genderKey, selectedUserId)}
               >
@@ -445,6 +450,7 @@ export function BathroomKeyLogPanel({
                           type="button"
                           onClick={() => setEditingLog(log)}
                           aria-label={`Edit key log for ${log.fullName}`}
+                          data-testid={`bathroom-log-edit-${log.logId}`}
                         >
                           <Pencil size={13} style={{ marginRight: 4, verticalAlign: -1 }} />
                           Edit
@@ -485,6 +491,7 @@ export function BathroomKeyLogPanel({
             type="button"
             className="text-button"
             onClick={() => setDate(todayManila())}
+            data-testid="bathroom-log-today"
             disabled={date === todayManila()}
           >
             Today
@@ -609,6 +616,7 @@ function EditBathroomLogModal({
       <section
         className="assisted-modal"
         role="dialog"
+        data-testid="bathroom-edit-dialog"
         aria-modal="true"
         aria-labelledby="edit-bathroom-log-title"
       >
@@ -705,6 +713,7 @@ function EditBathroomLogModal({
             <button
               className="modal-btn-cancel"
               type="button"
+              data-testid="bathroom-edit-cancel"
               onClick={onClose}
               disabled={busy}
             >
@@ -713,6 +722,7 @@ function EditBathroomLogModal({
             <button
               className="modal-btn-primary"
               type="submit"
+              data-testid="bathroom-edit-save"
               disabled={busy}
             >
               {busy ? (

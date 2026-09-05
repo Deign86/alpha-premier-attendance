@@ -138,7 +138,7 @@
   CHECK: npm run lint:oxlint && npm run typecheck -w client && npm test -w client
   EXPECT: lint, typecheck, and client tests exit 0.
   EVIDENCE: oxlint passed (0 errors); `tsc --noEmit` clean; 16 files, 215/215 client tests passed.
-- [ ] Visual re-sweep at 100/125/150% via Tauri MCP screenshots confirms all 16 issues closed (static CSS review only so far).
+- [x] Visual re-sweep at 100/125/150% via Tauri MCP screenshots confirms all 16 issues closed (static CSS review only so far). SUPERSEDED+CLOSED by T9 live sweep (window-resize equivalents + tab/topbar fixes, screenshots in-session).
 
 ## UI Skills repo-wide install gates
 - [x] `.mcp.json` registers the ui-skills MCP server with `list_skills`/`get_skill` tools.
@@ -193,3 +193,31 @@
   CHECK: cargo check --manifest-path src-tauri/Cargo.toml
   EXPECT: exit 0
   EVIDENCE: exit 0, wall 2m26s (was fully cold). Full debug codegen (~13G) still cold — first `tauri dev` will take several minutes once.
+
+## E2E drivability fixes (Tauri MCP audit B1-B7)
+- [x] Bathroom kiosk Record button routes by kioskMode (was attendance-only even in bathroom mode).
+  CHECK: npm test -w client -- src/App.test.tsx
+  EXPECT: 46/46 pass
+  EVIDENCE: App.tsx Record onClick calls submitBathroom in bathroom mode, submit otherwise (mirrors handleManualKeyDown); 46/46 pass.
+- [x] Stable testids across kiosk + bathroom views; no text/class/id/behavior changes otherwise.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
+  EXPECT: all exit 0
+  EVIDENCE: oxlint 0 errors; tsc clean (client+server); 15 files, 223/223 client tests pass. Added kiosk-record-submit, kiosk-manual-toggle, kiosk-result-success/-error, scanner-uid, setup-this-card, kiosk-setup-open, kiosk-link-live/admin; bathroom-checkout/return/status/search/staff-list-{male,female}, data-selected, bathroom-log-edit-{logId}, bathroom-log-today, bathroom-edit-dialog/save/cancel; bathroom-kiosk-status/holder-{male,female}.
+- [x] Live Tauri MCP click-through + scaling screenshot re-sweep (bridge port 9223 offline while app build pending). DONE in T9 (session drive + screenshots).
+
+## Full-system re-audit triage (3-scout fan-out + live Tauri MCP drive, 2026-09-04)
+Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE/AVAILABLE matches IPC, setup dialog open/close OK, get_health sqlite+Manila OK. Screenshots: kiosk-attendance-live, kiosk-bathroom-live, setup-dialog-live.
+- [x] T1 kiosk double-commit/wedged guards + T7 assisted race — HARDENED parent-side (worker 429'd). submit/submitBathroom: UID trim+uppercase once, scanInFlightRef on both paths, dedup eviction both paths, try/finally releasing guards+controller (abort no longer relied on), 300ms hack removed, resetToReady clears both refs. Assisted: frozen card UID, confirmRef re-entry guard, busy/guard reset on all three exits incl. previously-stuck error branch. EVIDENCE: oxlint 0, App.test.tsx 46/46, client tsc clean. RESIDUAL: full submitUnified merge + auto-close-timer pause while busy (needs modal surgery).
+- [x] T2 cutoff TS-Rust drift — UNIFIED (Rust CutoffInput.employee_type + intern floor; TS zero-day allowance proration; generate path passes real type). EVIDENCE: Rust cutoff 13/13 (incl. new floor test), TS cutoff 9/9 (incl. new zero-day test), oxlint 0.
+- [x] T3 delete of FINALIZED cutoff allowed — GUARDED both stacks (server rejects ADMIN_VALIDATION_ERROR; Rust delete_cutoff_record returns PAYROLL_FINALIZED, command delegates). EVIDENCE: server admin 12/12, Rust finalized_cutoff 1/1, oxlint 0.
+- [x] T4 bathroom logDate/cross-midnight — VALIDATED in bathroom_update_log_impl (edited timestamps must fall on log_date, Manila) + regression test. EVIDENCE: Rust bathroom 4/4 (incl. restored flow test).
+- [x] T5 verify-tauri-mcp.mjs crashes on live path — FIXED + VERIFIED. Per-step isolation (each workflow try/catch, bathroom initialized). EVIDENCE: live re-run prints clean 1/7 summary, no TypeError; step errors recorded in evidence details. NOTE: raw-WS `initialize` timed out on this bridge — live E2E should go through the MCP-gateway tauri tools (proven working), not raw WS.
+- [x] T8 stale-bundle dev loop — CONFIG FIXED (vite pinned port 1420+strictPort, tauri.conf devUrl). Takes effect on next `tauri dev` launch; current running app still serves pre-fix dist.
+- [x] T6 half-day 17:00 truncates to hour — DECIDED (A: sharp 17:00:00 close) + IMPLEMENTED both stacks (server employee/intern-payroll.ts, Rust employee/intern_payroll.rs use exact close comparison). EVIDENCE: server payroll tests 11/11, Rust close_boundary 2/2, oxlint 0.
+- [x] T7 assisted-modal double-confirm race — freeze targetUserId + confirmRef guard + busy reset DONE (timer-pause moved to residual below).
+- [x] T8 stale-bundle dev loop — FIXED + LIVE-PROVEN (devUrl + pinned Vite port; new testids resolve on the running app).
+- [x] T9 scaling re-sweep at 100/125/150% — SWEPT LIVE on source-fresh bundle (window-resize equivalents: 1280x800, 1024x640, 853x533). Fixed tab-wrap (nowrap) + 1100px topbar compaction; verified all header controls visible at every level, setup dialog fully reachable at 150%, key cards scrollable. EVIDENCE: sweep-kiosk-100/125, sweep-150-true, sweep-bathroom-150, sweep-setup-150, sweep-tabs-150-fixed/v2 screenshots.
+- [x] T10 mediums batch pt.1 (data-corruption class) — DONE: P4 inverted-order rejection (TS daily + Rust intern), P6 offset-less ISO rejection at engine boundary, P7 calendar-date validation (TS validDate + Rust NaiveDate parse). EVIDENCE: server 80/80, Rust P4/P7 targeted green, repo oxlint gate 0.
+- [x] T10 mediums batch pt.2 — DONE: wedge-drop operator hint + NaN clamp (App.tsx), sync drain-until-empty + remaining count (admin_sync_now), ceil_hour sub-second canonicalization (both stacks), bathroom conditional writes + constraint-mapped conflicts (4 sites) + join! race test. PIN-shape finding closed as safe-by-design (backend unifies PIN/card, no lockout); centavos half-day verified convergent (TS float == Rust int value). EVIDENCE: client 223/223, server 80/80, Rust 163/163, oxlint 0, typecheck clean, live 150%-equivalent screenshots.
+- [x] Residual: submitUnified merge (arm/releaseScanPipeline shared by both paths), assisted-timer/Esc/backdrop pause while busy, nuke read-before-wipe staging, overnight-lunch docs — ALL DONE parent-side (subagents 429-locked). EVIDENCE: client 224/224 (incl. B1 routing regression test), oxlint 0, tsc clean.
+- [x] Independent reviewer pass (fresh Spark worker) + all 5 findings fixed: TS intern gross no longer subtracts deductions (800/880/960 expectations corrected), Rust cutoff NaiveDate guard, ceil_hour truncate parity both stacks, time_in rows_affected guard, coverage tests added. EVIDENCE: server 81/81, Rust 165/165, client 224/224.

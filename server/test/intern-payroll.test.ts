@@ -89,6 +89,18 @@ describe('intern payroll policy', () => {
     expect(fullDay.dailyPay).toBe(80);
   });
 
+  it('T6 decision A: one second past 17:00:00 is still a full day', () => {
+    const justAfterFive = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:01+08:00',
+      graceAvailable: true,
+    });
+    expect(justAfterFive.isHalfDay).toBe(false);
+    expect(justAfterFive.halfDayDeduction).toBe(0);
+    expect(justAfterFive.dailyPay).toBe(80);
+  });
+
   it('snaps later lates and floors daily pay at zero', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
@@ -119,5 +131,14 @@ describe('intern payroll policy', () => {
       basePay: 80,
       dailyPay: 40,
     });
+  });
+
+  it('P4: rejects time-out earlier than time-in instead of zeroing hours', () => {
+    expect(() => calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T09:00:00+08:00',
+      actualTimeOut: '2026-07-28T08:00:00+08:00',
+      graceAvailable: true,
+    })).toThrow('earlier than time-in');
   });
 });

@@ -205,6 +205,14 @@ export default function App() {
   const [manualMode, setManualMode] = useState(false);
   const [manualUid, setManualUid] = useState("");
   const [result, setResult] = useState<Result | null>(null);
+  // Transient operator hint when the wedge drops a scan (bad charset/length).
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashScanNotice = useCallback((message: string) => {
+    setScanNotice(message);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setScanNotice(null), 3000);
+  }, []);
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [now, setNow] = useState(() => new Date());
   const [scannerStatus, setScannerStatus] = useState<ScannerStatus | null>(() =>
@@ -226,6 +234,10 @@ export default function App() {
   // scan events can never start two attendance writes for the same tap.
   const processingRef = useRef(false);
   const scanInFlightRef = useRef(false);
+  // Synchronous assisted-confirm guard: prevents double-post when Confirm is
+  // activated twice before busy state propagates, or the auto-close timer
+  // fires mid-flight.
+  const assistConfirmRef = useRef(false);
 
   const [setupToken, setSetupToken] = useState("");
   const [setupExpiresAt, setSetupExpiresAt] = useState("");
@@ -344,6 +356,7 @@ export default function App() {
   const resetToReady = useCallback(() => {
     requestController.current?.abort();
     processingRef.current = false;
+    scanInFlightRef.current = false;
     setState("ready");
     setResult(null);
     setUid("");
@@ -573,46 +586,65 @@ export default function App() {
     setSetupError("Photo uploaded and ready to save.");
   };
 
+  // Shared scan pipeline: normalize, dedupe, guard, and arm the request
+  // controller identically for attendance and bathroom scans so the two paths
+  // can never diverge again (T1 unification).
+  const armScanPipeline = (
+    rawUid: string,
+  ): { normalizedUid: string; controller: AbortController } | null => {
+    // The read-only scanner box and the native pipeline both capture the same
+    // card tap in the desktop app; drop the second copy so one tap never posts
+    // twice (which the backend would reject as a duplicate scan).
+    const normalizedUid = rawUid.trim().toUpperCase();
+    if (!normalizedUid || processingRef.current) return null;
+    const now = Date.now();
+    const previousScanAt = recentScans.current.get(normalizedUid);
+    if (
+      previousScanAt !== undefined &&
+      now - previousScanAt < SCAN_DEDUP_WINDOW_MS
+    )
+      return null;
+    recentScans.current.set(normalizedUid, now);
+    if (recentScans.current.size > 128) {
+      for (const [key, at] of recentScans.current) {
+        if (now - at >= SCAN_DEDUP_WINDOW_MS) recentScans.current.delete(key);
+      }
+    }
+    if (scanInFlightRef.current) return null;
+    scanInFlightRef.current = true;
+    processingRef.current = true;
+    setUid(normalizedUid);
+    setState("processing");
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
+    return { normalizedUid, controller };
+  };
+
+  const releaseScanPipeline = (controller: AbortController) => {
+    // Abort is a no-op under Tauri invoke: always release the guards so a
+    // failed or superseded scan can never wedge the kiosk in processing.
+    if (requestController.current === controller) requestController.current = null;
+    scanInFlightRef.current = false;
+    processingRef.current = false;
+  };
+
   const submit = useCallback(
     async (rawUid: string, source: "RFID" | "MANUAL_TEST") => {
-      const normalizedUid = rawUid.trim();
-      if (!normalizedUid || processingRef.current) return;
-      // The read-only scanner box and the native pipeline both capture the same
-      // card tap in the desktop app; drop the second copy so one tap never posts
-      // twice (which the backend would reject as a duplicate scan).
-      const now = Date.now();
-      const previousScanAt = recentScans.current.get(normalizedUid);
-      if (
-        previousScanAt !== undefined &&
-        now - previousScanAt < SCAN_DEDUP_WINDOW_MS
-      )
-        return;
-      recentScans.current.set(normalizedUid, now);
-      if (recentScans.current.size > 128) {
-        for (const [key, at] of recentScans.current) {
-          if (now - at >= SCAN_DEDUP_WINDOW_MS) recentScans.current.delete(key);
-        }
-      }
-      if (scanInFlightRef.current) return;
-      scanInFlightRef.current = true;
-      processingRef.current = true;
-      setUid(normalizedUid);
-      setState("processing");
+      const armed = armScanPipeline(rawUid);
+      if (!armed) return;
+      const { normalizedUid, controller } = armed;
       setResult(null);
-      requestController.current?.abort();
-      const controller = new AbortController();
-      requestController.current = controller;
-      const response = await submitScan(
-        { rfidUid: normalizedUid, source },
-        controller.signal,
-      );
+      let response: Awaited<ReturnType<typeof submitScan>>;
+      try {
+        response = await submitScan(
+          { rfidUid: normalizedUid, source },
+          controller.signal,
+        );
+      } finally {
+        releaseScanPipeline(controller);
+      }
       if (controller.signal.aborted) return;
-      requestController.current = null;
-      scanInFlightRef.current = false;
-      processingRef.current = false;
-      setTimeout(() => {
-        scanInFlightRef.current = false;
-      }, 300);
       if (response.success && "action" in response && response.action === "ADMIN_ASSIST") {
         setAdminAssistData(response);
         setAssistedError("");
@@ -660,17 +692,22 @@ export default function App() {
   );
 
   const handleAssistedConfirm = async (targetUserId: string, reason: string) => {
-    if (!adminAssistData) return;
+    // Freeze the card UID and guard re-entry: the 25s auto-close timer or a
+    // second Confirm activation must not move or duplicate the in-flight post.
+    if (!adminAssistData || assistConfirmRef.current) return;
+    assistConfirmRef.current = true;
+    const adminCardUid = adminAssistData.adminCard.rfidUid;
     setAssistedBusy(true);
     setAssistedError("");
     try {
       const response = await submitScan({
-        rfidUid: adminAssistData.adminCard.rfidUid,
+        rfidUid: adminCardUid,
         source: "ADMIN_ASSISTED_SCAN",
         targetUserId,
         reason,
       });
       setAssistedBusy(false);
+      assistConfirmRef.current = false;
       if (response.success && "attendance" in response) {
         setAdminAssistData(null);
         setResult(response);
@@ -695,6 +732,8 @@ export default function App() {
         if (resetTimer.current) clearTimeout(resetTimer.current);
         resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
       } else if (!response.success) {
+        setAssistedBusy(false);
+        assistConfirmRef.current = false;
         setAssistedError(response.error.message);
         void announceScanError({
           errorCode: response.error.code,
@@ -703,6 +742,7 @@ export default function App() {
       }
     } catch {
       setAssistedBusy(false);
+      assistConfirmRef.current = false;
       const msg = "Failed to record assisted attendance. Please try again.";
       setAssistedError(msg);
       void announceScanError({
@@ -714,27 +754,10 @@ export default function App() {
 
   const submitBathroom = useCallback(
     async (rawUid: string, source: "RFID" | "MANUAL_TEST") => {
-      const normalizedUid = rawUid.trim();
-      if (!normalizedUid || processingRef.current) return;
-
-      const nowTime = Date.now();
-      const previousScanAt = recentScans.current.get(normalizedUid);
-      if (
-        previousScanAt !== undefined &&
-        nowTime - previousScanAt < SCAN_DEDUP_WINDOW_MS
-      ) {
-        return;
-      }
-      recentScans.current.set(normalizedUid, nowTime);
-
-      processingRef.current = true;
-      setUid(normalizedUid);
-      setState("processing");
+      const armed = armScanPipeline(rawUid);
+      if (!armed) return;
+      const { normalizedUid, controller } = armed;
       setBathroomScanResult(null);
-
-      requestController.current?.abort();
-      const controller = new AbortController();
-      requestController.current = controller;
 
       try {
         const response = await submitBathroomScan(
@@ -742,8 +765,6 @@ export default function App() {
           controller.signal,
         );
         if (controller.signal.aborted) return;
-        requestController.current = null;
-        processingRef.current = false;
 
         setBathroomScanResult(response);
         setState(response.success ? "success" : "error");
@@ -781,12 +802,13 @@ export default function App() {
           setState("ready");
         }, config.resultResetDelayMs);
       } catch {
-        processingRef.current = false;
         setState("error");
         void announceScanError({
           errorCode: "SERVICE_ERROR",
           message: "Bathroom service is temporarily unavailable.",
         });
+      } finally {
+        releaseScanPipeline(controller);
       }
     },
     [config.resultResetDelayMs, fetchBathroomStatus],
@@ -843,13 +865,24 @@ export default function App() {
     const flush = () => {
       const candidate = buffer;
       resetBuffer();
-      const expectedLength = Number(config.scanner?.expectedLength ?? 10);
+      if (!candidate) return;
+      const rawExpectedLength = Number(config.scanner?.expectedLength ?? 10);
+      const expectedLength = Number.isFinite(rawExpectedLength) && rawExpectedLength >= 0 ? rawExpectedLength : 10;
       const characterSet = config.scanner?.characterSet ?? "decimal";
       const allowedRegex = characterSet === "hex" ? /^[0-9a-fA-F]+$/ : /^[0-9]+$/;
 
-      if (!allowedRegex.test(candidate)) return;
-      if (candidate.length < 4 || candidate.length > 64) return;
-      if (expectedLength > 0 && candidate.length !== expectedLength) return;
+      if (!allowedRegex.test(candidate)) {
+        flashScanNotice("Card not recognized — check the reader format.");
+        return;
+      }
+      if (candidate.length < 4 || candidate.length > 64) {
+        flashScanNotice("Card not recognized — check the reader format.");
+        return;
+      }
+      if (expectedLength > 0 && candidate.length !== expectedLength) {
+        flashScanNotice("Card not recognized — check the reader format.");
+        return;
+      }
 
       const normalized = candidate.toUpperCase();
       if (setupDialogOpen && !setupToken) {
@@ -931,9 +964,10 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("blur", onBlur);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
       resetBuffer();
     };
-  }, [adminAssistData, config, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard]);
+  }, [adminAssistData, config, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -1122,6 +1156,7 @@ export default function App() {
         {kioskMode === "attendance" && state === "success" && success && (
           <div
             className="kiosk-result is-success"
+            data-testid="kiosk-result-success"
             role="status"
             aria-live="polite"
           >
@@ -1171,6 +1206,7 @@ export default function App() {
         {kioskMode === "bathroom" && state === "success" && bathroomScanResult?.success && (
           <div
             className="kiosk-result is-success"
+            data-testid="kiosk-result-success"
             role="status"
             aria-live="polite"
           >
@@ -1222,6 +1258,7 @@ export default function App() {
         {kioskMode === "attendance" && state === "error" && error && (
           <div
             className="kiosk-result is-error"
+            data-testid="kiosk-result-error"
             role="alert"
             aria-live="assertive"
           >
@@ -1238,6 +1275,7 @@ export default function App() {
               config.enableCardSetup && (
                 <button
                   className="setup-card-button"
+                  data-testid="setup-this-card"
                   type="button"
                   onClick={() => openSetup(uid)}
                 >
@@ -1251,6 +1289,7 @@ export default function App() {
         {kioskMode === "bathroom" && state === "error" && bathroomScanResult && !bathroomScanResult.success && (
           <div
             className="kiosk-result is-error"
+            data-testid="kiosk-result-error"
             role="alert"
             aria-live="assertive"
           >
@@ -1317,6 +1356,7 @@ export default function App() {
               )}
               <input
                 id="scanner-uid"
+                data-testid="scanner-uid"
                 aria-label={manualMode ? "Manual card ID" : "Scanner card ID"}
                 type="password"
                 value={manualMode ? manualUid : (uid ? "•".repeat(Math.max(8, uid.length)) : "")}
@@ -1336,8 +1376,15 @@ export default function App() {
               {manualMode && (
                 <button
                   className="submit-button"
+                  data-testid="kiosk-record-submit"
                   type="button"
-                  onClick={() => void submit(manualUid, "MANUAL_TEST")}
+                  onClick={() => {
+                    if (kioskMode === "bathroom") {
+                      void submitBathroom(manualUid, "MANUAL_TEST");
+                    } else {
+                      void submit(manualUid, "MANUAL_TEST");
+                    }
+                  }}
                   disabled={!manualUid.trim() || state !== "ready"}
                 >
                   <ArrowRight size={18} /> Record
@@ -1360,6 +1407,11 @@ export default function App() {
                 </>
               )}
             </p>
+            {scanNotice && (
+              <p className="input-hint" role="status" data-testid="kiosk-scan-notice">
+                {scanNotice}
+              </p>
+            )}
           </div>
         )}
 
@@ -1373,6 +1425,7 @@ export default function App() {
       <footer className="kiosk-actions">
         <button
           className="kiosk-action"
+          data-testid="kiosk-manual-toggle"
           type="button"
           onClick={toggleManualMode}
           disabled={state !== "ready"}
@@ -1381,17 +1434,18 @@ export default function App() {
           {manualMode ? <CreditCard size={16} /> : <Keyboard size={16} />}
           {manualMode ? "Use card reader" : "Manual entry"}
         </button>
-        <a className="kiosk-action" href="/attendance">
+        <a className="kiosk-action" data-testid="kiosk-link-live" href="/attendance">
           Live attendance
         </a>
         {config.enableAdmin && (
-          <a className="kiosk-action" href="/admin">
+          <a className="kiosk-action" data-testid="kiosk-link-admin" href="/admin">
             Admin
           </a>
         )}
         {config.enableCardSetup && (
           <button
             className="kiosk-action"
+            data-testid="kiosk-setup-open"
             type="button"
             onClick={() => openSetup()}
           >
@@ -1959,6 +2013,9 @@ function AssistedAttendanceModal({
   const [customReason, setCustomReason] = useState("");
 
   useEffect(() => {
+    // Pause the auto-close countdown while a confirm is in flight so the
+    // modal can never close under an awaiting post.
+    if (busy) return;
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
@@ -1970,17 +2027,17 @@ function AssistedAttendanceModal({
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [onClose]);
+  }, [onClose, busy]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !busy) {
         onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, busy]);
 
   const filteredEmployees = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -2008,7 +2065,7 @@ function AssistedAttendanceModal({
       className="assisted-modal-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
       <section

@@ -2865,6 +2865,7 @@ textarea.input {
   padding: 6px 14px;
   font-size: 0.82rem;
   font-weight: 600;
+  white-space: nowrap;
   border-radius: 9999px;
   border: 1px solid transparent;
   background: transparent;
@@ -3291,6 +3292,14 @@ textarea.input {
   .filter-pill { padding: 4px 10px; font-size: .68rem; }
   .payroll-toolbar { flex-direction: column; }
   .payroll-generate-panel, .payroll-pdf-actions-panel { flex: 1 1 auto; min-width: 0; }
+  /* Narrow kiosk topbar (high zoom): compact switcher + clock so brand, tabs,
+     status, and time all fit without clipping. */
+  .kiosk-topbar { gap: 10px; }
+  .kiosk-mode-switcher { gap: 4px; padding: 3px 4px; }
+  .kiosk-mode-tab { padding: 4px 8px; font-size: .75rem; gap: 6px; }
+  .mode-shortcut-badge { width: 17px; height: 17px; font-size: .64rem; }
+  .brand-subtitle { display: none; }
+  .clock strong { font-size: .9rem; }
 }
 /* #2/#4 hero, #3/#5 kiosk no-scroll, #7 setup save reachability,
    #8 admin unlock island, #16 live-attendance reflow */

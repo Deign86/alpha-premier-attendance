@@ -1860,6 +1860,9 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
     let mut queued = 0usize;
     for table_name in MANAGED_TABLES {
         ensure_tab_exists(&client, &token, &spreadsheet, table_name).await?;
+        // T10 staging: load restorable payloads BEFORE wiping anything — a
+        // load failure aborts before the remote clear, never after it.
+        let rows = load_table_payloads(&state.db, table_name).await?;
         let clear_range = format!("{}!A2:Z", table_name);
         client
             .post(format!(
@@ -1880,7 +1883,6 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
             .execute(&state.db)
             .await
             .map_err(|e| e.to_string())?;
-        let rows = load_table_payloads(&state.db, table_name).await?;
         let now = chrono::Utc::now().to_rfc3339();
         for (row_id, payload) in rows {
             let idempotency_key = format!("{table_name}:{row_id}:UPSERT");
