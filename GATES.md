@@ -221,3 +221,13 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
 - [x] T10 mediums batch pt.2 — DONE: wedge-drop operator hint + NaN clamp (App.tsx), sync drain-until-empty + remaining count (admin_sync_now), ceil_hour sub-second canonicalization (both stacks), bathroom conditional writes + constraint-mapped conflicts (4 sites) + join! race test. PIN-shape finding closed as safe-by-design (backend unifies PIN/card, no lockout); centavos half-day verified convergent (TS float == Rust int value). EVIDENCE: client 223/223, server 80/80, Rust 163/163, oxlint 0, typecheck clean, live 150%-equivalent screenshots.
 - [x] Residual: submitUnified merge (arm/releaseScanPipeline shared by both paths), assisted-timer/Esc/backdrop pause while busy, nuke read-before-wipe staging, overnight-lunch docs — ALL DONE parent-side (subagents 429-locked). EVIDENCE: client 224/224 (incl. B1 routing regression test), oxlint 0, tsc clean.
 - [x] Independent reviewer pass (fresh Spark worker) + all 5 findings fixed: TS intern gross no longer subtracts deductions (800/880/960 expectations corrected), Rust cutoff NaiveDate guard, ceil_hour truncate parity both stacks, time_in rows_affected guard, coverage tests added. EVIDENCE: server 81/81, Rust 165/165, client 224/224.
+
+## Release v0.1.49 (audit remediation bundle)
+- [x] Fix batch + version sync committed and pushed to main.
+  CHECK: git log --oneline -2 && git status --short
+  EXPECT: e8aad59 fix batch, 69af146 release prep; clean tree
+  EVIDENCE: pushed fa9fd30..69af146, tag v0.1.49 on remote.
+- [x] Release installer built locally and uploaded to GitHub release.
+  CHECK: gh release view v0.1.49 --json assets
+  EXPECT: Alpha.Premier.Attendance_0.1.49_x64-setup.exe present
+  EVIDENCE: 147,004,781 B via `npm run tauri:build`; https://github.com/Deign86/alpha-premier-attendance/releases/tag/v0.1.49
