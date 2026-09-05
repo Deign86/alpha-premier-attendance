@@ -913,7 +913,14 @@ export default function App() {
           (target.matches("textarea, select, [contenteditable='true']") ||
             (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid" && target.id !== "admin-pin")),
       );
-      if (isTextEntry || manualMode || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
+      // While any modal dialog is open (e.g. Associate RFID unlock input
+      // #admin-pin), keys must go only to the dialog. Without this, typing
+      // "2" in the PIN box arms the kiosk mode-switch timer below and flips
+      // the background kiosk to Bathroom mode. Scans still work: wedge digits
+      // land in the focused input's React state and native scanner events
+      // bypass this keyboard-wedge path entirely.
+      const isInDialog = Boolean(target?.closest('[role="dialog"]') || setupDialogOpen);
+      if (isInDialog || isTextEntry || manualMode || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
         resetBuffer();
         return;
       }

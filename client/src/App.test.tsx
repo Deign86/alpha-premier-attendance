@@ -2058,4 +2058,41 @@ describe('Admin Attendance Corrections', () => {
       genderKey: 'MALE',
     });
   });
+
+  it('does not switch kiosk mode when typing 2 in Associate RFID #admin-pin', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Mock config with card setup enabled so Admin setup button renders
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableCardSetup: true }) } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    window.history.pushState({}, '', '/');
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Open SetupDialog on the kiosk route
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+    expect(await screen.findByRole('dialog', { name: /associate rfid card/i })).toBeInTheDocument();
+
+    // Focus #admin-pin and type 2: must NOT arm the kiosk mode-switch timer
+    // SAFETY: #admin-pin is rendered by the open SetupDialog above
+    const pinInput = document.getElementById('admin-pin') as HTMLInputElement;
+    pinInput.focus();
+    fireEvent.keyDown(pinInput, { key: '2' });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active');
+    expect(screen.queryByTestId('bathroom-kiosk-view')).not.toBeInTheDocument();
+
+    // Close dialog: pressing 2 on window DOES switch to bathroom kiosk
+    await user.click(screen.getByRole('button', { name: /close card setup/i }));
+    fireEvent.keyDown(window, { key: '2' });
+    expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+  });
 });
