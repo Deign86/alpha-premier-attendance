@@ -55,6 +55,20 @@ const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const GOOGLE_SCOPES: &str =
     "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive";
 
+/// Total HTTP timeout for every Google API call. The 30s sync tick must never
+/// stall on a hung connection: a timed-out call surfaces as `Err` and flows
+/// into the existing warn + RETRY/backoff path instead of freezing the queue.
+const SHEETS_HTTP_TIMEOUT_SECS: u64 = 25;
+
+/// Single configured HTTP client for all Google API calls. Never use
+/// `reqwest::Client::new()` here: the default client has no timeouts.
+pub(crate) fn sheets_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(SHEETS_HTTP_TIMEOUT_SECS))
+        .build()
+        .expect("reqwest client with timeout builds")
+}
+
 /// Persisted in `data_dir/google-sheets-state.json`. Only generated resource
 /// IDs live here; never service-account keys or tokens.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -249,6 +263,163 @@ fn key_column_index(table_name: &str) -> usize {
         "InternGrace" => 1,
         _ => 0,
     }
+}
+
+/// Sheets column letters for a 0-based index: 0→A … 25→Z, 26→AA, 27→AB.
+/// The read ranges below must stay correct past column Z (PayrollCutoffs
+/// already spans 18 managed columns).
+fn column_letter(mut col: usize) -> String {
+    let mut out = Vec::new();
+    loop {
+        out.push((b'A' + (col % 26) as u8) as char);
+        if col < 26 {
+            break;
+        }
+        col = col / 26 - 1;
+    }
+    out.iter().rev().collect()
+}
+
+/// Last managed column letter for a tab (headers define the width).
+fn managed_last_column(table_name: &str) -> String {
+    column_letter(sheet_headers(table_name).len().saturating_sub(1))
+}
+
+/// Header-only read. Bounded to one row so tab growth can never slow it.
+fn header_read_range(table_name: &str) -> String {
+    format!("{}!A1:{}1", table_name, managed_last_column(table_name))
+}
+
+/// Single-column read anchored at sheet row 1 (key cell of row 1 first).
+/// Indices into the returned array therefore equal sheet row numbers minus
+/// one, and the existing skip(1) matchers keep working unchanged. The Sheets
+/// API only trims *trailing* empty rows/columns, so interior positions —
+/// including leading blanks — are preserved and the mapping stays exact.
+fn key_column_read_range(table_name: &str, col_0based: usize) -> String {
+    let letter = column_letter(col_0based);
+    format!("{table_name}!{letter}1:{letter}")
+}
+
+/// Full-width fetch of exactly one sheet row, for merge-before-write.
+fn single_row_read_range(table_name: &str, row_1based: usize) -> String {
+    format!(
+        "{}!A{}:{}{}",
+        table_name,
+        row_1based,
+        managed_last_column(table_name),
+        row_1based
+    )
+}
+
+/// True when the key column holds any value below the header cell (index 0).
+/// Every pipeline-written row fills column A first, so an empty key column
+/// means the tab holds no data rows at all.
+fn key_column_has_data(key_rows: &[serde_json::Value]) -> bool {
+    key_rows.iter().skip(1).any(|row| {
+        row.as_array().is_some_and(|cells| {
+            cells
+                .iter()
+                .any(|cell| !(cell.is_null() || cell.as_str() == Some("")))
+        })
+    })
+}
+
+/// Outcome of reconciling a tab's actual header row against the pipeline
+/// contract (`sheet_headers`). `Rewrite` fires only for legacy (e.g.
+/// Node-era snake_case) headers on tabs with zero data rows — rewriting
+/// row 1 then loses nothing. Tabs with data under foreign headers keep
+/// failing loudly so no column is ever silently reinterpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderRepair {
+    Proceed(HeaderDecision),
+    Rewrite,
+    Mismatch,
+}
+
+fn header_repair_action(
+    decision: Result<HeaderDecision, &'static str>,
+    key_has_data: bool,
+) -> HeaderRepair {
+    match decision {
+        Ok(outcome) => HeaderRepair::Proceed(outcome),
+        Err(SHEETS_SCHEMA_MISMATCH_ERROR) if !key_has_data => HeaderRepair::Rewrite,
+        Err(_) => HeaderRepair::Mismatch,
+    }
+}
+
+/// Prefix a pipeline stage onto a Google API error for queue/log diagnosis
+/// (`append read: GOOGLE_PERMISSION_DENIED`). Carries the call site plus the
+/// upstream status code only — never bodies, keys, or filesystem paths.
+fn stage_err(stage: &str, err: String) -> String {
+    format!("{stage}: {err}")
+}
+
+/// GET a JSON body with stage context. Transport failures stay generic;
+/// HTTP statuses keep their distinct codes via `google_status_error`.
+async fn google_stage_json(
+    stage: &'static str,
+    request: Result<reqwest::Response, reqwest::Error>,
+) -> Result<serde_json::Value, String> {
+    let response =
+        request.map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(stage_err(stage, google_status_error(status).to_string()));
+    }
+    response
+        .json()
+        .await
+        .map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))
+}
+
+/// PUT/POST/batchUpdate with stage context; response body is discarded.
+async fn google_stage_status(
+    stage: &'static str,
+    request: Result<reqwest::Response, reqwest::Error>,
+) -> Result<(), String> {
+    let response =
+        request.map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(stage_err(stage, google_status_error(status).to_string()));
+    }
+    Ok(())
+}
+
+/// Write (or rewrite) the canonical header row. Shared by the blank-tab
+/// path and the empty-tab legacy-header repair path.
+async fn put_header_row(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    table_name: &str,
+) -> Result<(), String> {
+    let header_body = serde_json::json!({ "values": [sheet_headers(table_name)] });
+    google_stage_status(
+        "header write",
+        client
+            .put(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}!A1?valueInputOption=RAW",
+                urlencoding::encode(table_name)
+            ))
+            .bearer_auth(token)
+            .json(&header_body)
+            .send()
+            .await,
+    )
+    .await
+}
+
+/// Batch range for trimming trailing blank rows. Sheets refuses to delete
+/// every non-frozen row, so at least one row below the header always
+/// remains (header-only tabs keep exactly one blank data row).
+fn trailing_delete_range(
+    last_data_row_0based: i64,
+    frozen_rows: i64,
+    row_count: i64,
+) -> Option<(i64, i64)> {
+    let start = (last_data_row_0based + 1).max(frozen_rows + 1);
+    (start < row_count).then_some((start, row_count))
 }
 
 fn header_position(headers: &[&str], name: &str) -> Option<usize> {
@@ -679,7 +850,7 @@ async fn recover_stale_processing_leases(
     Ok(())
 }
 
-async fn google_access_token(path: &str) -> Result<String, String> {
+pub(crate) async fn google_access_token(path: &str) -> Result<String, String> {
     let raw = tokio::fs::read_to_string(path)
         .await
         .map_err(|_| "service account read failed".to_string())?;
@@ -701,7 +872,7 @@ async fn google_access_token(path: &str) -> Result<String, String> {
         .map_err(|_| "service account key invalid".to_string())?;
     let assertion = jsonwebtoken::encode(&header, &claims, &key)
         .map_err(|_| "JWT signing failed".to_string())?;
-    let response: serde_json::Value = reqwest::Client::new()
+    let response: serde_json::Value = sheets_client()
         .post(claims.aud)
         .form(&[
             ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
@@ -1158,7 +1329,7 @@ pub async fn provision_google_sheets(
     }
 
     let token = google_access_token(path).await?;
-    let client = reqwest::Client::new();
+    let client = sheets_client();
     let folder_id = resolve_drive_folder(&client, &token, state, &mut persisted, &file).await?;
 
     let explicit_spreadsheet = state
@@ -1203,9 +1374,15 @@ pub async fn provision_google_sheets(
     }
 
     for table_name in MANAGED_TABLES {
-        ensure_tab_exists(&client, &token, &spreadsheet_id, table_name).await?;
-        ensure_tab_header(&client, &token, &spreadsheet_id, table_name).await?;
-        google_format_sheet_with_token(&client, &token, &spreadsheet_id, table_name).await?;
+        ensure_tab_exists(&client, &token, &spreadsheet_id, table_name)
+            .await
+            .map_err(|e| stage_err("reconcile tab", e))?;
+        ensure_tab_header(&client, &token, &spreadsheet_id, table_name)
+            .await
+            .map_err(|e| stage_err("reconcile header", e))?;
+        google_format_sheet_with_token(&client, &token, &spreadsheet_id, table_name)
+            .await
+            .map_err(|e| stage_err("reconcile format", e))?;
     }
 
     write_google_state(&file, &persisted)?;
@@ -1351,49 +1528,112 @@ async fn google_append_row(
     }
 
     let token = google_access_token(path).await?;
-    let client = reqwest::Client::new();
-    let read_range = format!("{}!A:Z", table_name);
-    let existing: serde_json::Value = client
-        .get(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
-            urlencoding::encode(&read_range)
-        ))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .error_for_status()
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .json()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+    let client = sheets_client();
+    // Bounded reads: the header row plus the key column (row-anchored at
+    // sheet row 1, so `find_existing_row_index` keeps working unchanged).
+    // A full-tab fetch here would grow with every synced row; the key
+    // column alone locates the row, and the full row is fetched only when
+    // a merge-before-write is actually needed.
+    let header_doc: serde_json::Value = google_stage_json(
+        "append header read",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&header_read_range(table_name))
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await,
+    )
+    .await?;
+    let header_rows = header_doc
+        .get("values")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let key_rows: Vec<serde_json::Value> = google_stage_json(
+        "append key read",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&key_column_read_range(table_name, 0))
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await,
+    )
+    .await?
+    .get("values")
+    .and_then(|value| value.as_array())
+    .cloned()
+    .unwrap_or_default();
     let headers = sheet_headers(table_name);
-    let decision = header_decision(&existing, headers).map_err(str::to_owned)?;
-    let rows = existing.get("values").and_then(|value| value.as_array());
+    let decision = header_repair_action(
+        header_decision(
+            &serde_json::json!({ "values": header_rows }),
+            headers,
+        ),
+        key_column_has_data(&key_rows),
+    );
+    let decision = match decision {
+        HeaderRepair::Proceed(outcome) => outcome,
+        HeaderRepair::Rewrite => {
+            put_header_row(&client, &token, spreadsheet_id, table_name).await?;
+            HeaderDecision::Match
+        }
+        HeaderRepair::Mismatch => {
+            return Err(stage_err(
+                "append header",
+                SHEETS_SCHEMA_MISMATCH_ERROR.to_string(),
+            ))
+        }
+    };
     if decision == HeaderDecision::Initialize {
-        let header_body = serde_json::json!({"values":[headers]});
-        client.put(format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}!A1?valueInputOption=RAW", urlencoding::encode(table_name))).bearer_auth(&token).json(&header_body).send().await.map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?.error_for_status().map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+        put_header_row(&client, &token, spreadsheet_id, table_name).await?;
     }
-    let row_index = rows
-        .map(|rows| find_existing_row_index(rows, row_id))
-        .transpose()?
-        .flatten();
-    let existing_cells = row_index
-        .and_then(|index| rows.and_then(|rows| rows.get(index)))
-        .and_then(|row| row.as_array());
-    let row = serde_json::json!({"values":[project_row_values(table_name, row_id, payload, existing_cells)]});
+    let row_index = find_existing_row_index(&key_rows, row_id).map_err(str::to_owned)?;
+    let existing_cells: Option<Vec<serde_json::Value>> = match row_index {
+        Some(index) => {
+            let row_number = index + 1;
+            let fetched: serde_json::Value = google_stage_json(
+                "append row read",
+                client
+                    .get(format!(
+                        "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                        urlencoding::encode(&single_row_read_range(
+                            table_name,
+                            row_number
+                        ))
+                    ))
+                    .bearer_auth(&token)
+                    .send()
+                    .await,
+            )
+            .await?;
+            fetched
+                .get("values")
+                .and_then(|value| value.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.as_array())
+                .cloned()
+        }
+        None => None,
+    };
+    let row = serde_json::json!({"values":[project_row_values(table_name, row_id, payload, existing_cells.as_ref())]});
 
     if let Some(row_index) = row_index {
         let row_number = row_index + 1;
-        let end_column = (b'A' + sheet_headers(table_name).len().saturating_sub(1) as u8) as char;
         let range = format!(
             "{}!A{}:{}{}",
-            table_name, row_number, end_column, row_number
+            table_name,
+            row_number,
+            managed_last_column(table_name),
+            row_number
         );
-        client.put(format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}?valueInputOption=RAW", urlencoding::encode(&range))).bearer_auth(token).json(&row).send().await.map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?.error_for_status().map(|_| ()).map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())
+        google_stage_status("append row write", client.put(format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}?valueInputOption=RAW", urlencoding::encode(&range))).bearer_auth(token).json(&row).send().await).await
     } else {
         let range = format!("{}!A1", table_name);
-        client.post(format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", urlencoding::encode(&range))).bearer_auth(token).json(&row).send().await.map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?.error_for_status().map(|_| ()).map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())
+        google_stage_status("append row insert", client.post(format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", urlencoding::encode(&range))).bearer_auth(token).json(&row).send().await).await
     }
 }
 
@@ -1412,66 +1652,148 @@ async fn google_delete_row(
     }
 
     let token = google_access_token(path).await?;
-    let client = reqwest::Client::new();
-    let read_range = format!("{}!A:Z", table_name);
-    let existing: serde_json::Value = client
-        .get(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
-            urlencoding::encode(&read_range)
-        ))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .error_for_status()
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .json()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
-    let headers = sheet_headers(table_name);
-    let decision = header_decision(&existing, headers).map_err(str::to_owned)?;
-    let rows = existing
+    let client = sheets_client();
+    // Bounded reads (see `google_append_row`): header row plus the key
+    // column only. Full rows are fetched solely to disambiguate duplicate
+    // key matches, and then only across the matched span.
+    let header_doc: serde_json::Value = google_stage_json(
+        "delete header read",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&header_read_range(table_name))
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await,
+    )
+    .await?;
+    let header_rows = header_doc
         .get("values")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
+    let key_col = key_column_index(table_name);
+    let key_rows: Vec<serde_json::Value> = google_stage_json(
+        "delete key read",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&key_column_read_range(table_name, key_col))
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await,
+    )
+    .await?
+    .get("values")
+    .and_then(|value| value.as_array())
+    .cloned()
+    .unwrap_or_default();
+    let headers = sheet_headers(table_name);
+    let decision = match header_repair_action(
+        header_decision(
+            &serde_json::json!({ "values": header_rows }),
+            headers,
+        ),
+        key_column_has_data(&key_rows),
+    ) {
+        HeaderRepair::Proceed(outcome) => outcome,
+        HeaderRepair::Rewrite => {
+            put_header_row(&client, &token, spreadsheet_id, table_name).await?;
+            HeaderDecision::Match
+        }
+        HeaderRepair::Mismatch => {
+            return Err(stage_err(
+                "delete header",
+                SHEETS_SCHEMA_MISMATCH_ERROR.to_string(),
+            ))
+        }
+    };
     if decision == HeaderDecision::Initialize {
-        let header_body = serde_json::json!({"values":[headers]});
-        client.put(format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}!A1?valueInputOption=RAW", urlencoding::encode(table_name))).bearer_auth(&token).json(&header_body).send().await.map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?.error_for_status().map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+        put_header_row(&client, &token, spreadsheet_id, table_name).await?;
         return Ok(false);
     }
-    let matches = find_rows_to_delete(table_name, &rows, row_id, payload).map_err(str::to_owned)?;
+    // Key-column positions map 1:1 to sheet rows (range starts at row 1).
+    let mut matches: Vec<usize> = key_rows
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(index, row)| {
+            row.as_array()
+                .and_then(|cells| cells.first())
+                .filter(|cell| cell_matches_row_id(cell, row_id))
+                .map(|_| index + 1)
+        })
+        .collect();
     if matches.is_empty() {
         return Ok(false);
     }
     if matches.len() > 1 {
-        return Err(SHEETS_ROW_ID_AMBIGUOUS_ERROR.to_string());
+        // Disambiguate with full rows, fetched once from row 1 across the
+        // matched span (values[0] is sheet row 1, so `find_rows_to_delete`
+        // indices stay sheet-row aligned exactly as with full-tab reads).
+        let hi = matches[matches.len() - 1];
+        let span: Vec<serde_json::Value> = google_stage_json(
+            "delete span read",
+            client
+                .get(format!(
+                    "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                    urlencoding::encode(&format!(
+                        "{}!A1:{}{}",
+                        table_name,
+                        managed_last_column(table_name),
+                        hi
+                    ))
+                ))
+                .bearer_auth(&token)
+                .send()
+                .await,
+        )
+        .await?
+        .get("values")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+        matches = find_rows_to_delete(table_name, &span, row_id, payload)
+            .map_err(|e| stage_err("delete match", e.to_owned()))?;
     }
-    let sheet_id = sheet_id_for_tab(&client, &token, spreadsheet_id, table_name).await?;
-    let row_index = matches[0];
-    client
-        .post(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
-        ))
-        .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "requests": [{
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "ROWS",
-                        "startIndex": row_index,
-                        "endIndex": row_index + 1
-                    }
-                }
-            }]
-        }))
-        .send()
+    if matches.is_empty() {
+        return Ok(false);
+    }
+    if matches.len() > 1 {
+        return Err(stage_err(
+            "delete match",
+            SHEETS_ROW_ID_AMBIGUOUS_ERROR.to_string(),
+        ));
+    }
+    let sheet_id = sheet_id_for_tab(&client, &token, spreadsheet_id, table_name)
         .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .error_for_status()
-        .map(|_| ())
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+        .map_err(|e| stage_err("delete tab id", e))?;
+    let row_index = matches[0];
+    google_stage_status(
+        "delete rows",
+        client
+            .post(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
+            ))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({
+                "requests": [{
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": row_index,
+                            "endIndex": row_index + 1
+                        }
+                    }
+                }]
+            }))
+            .send()
+            .await,
+    )
+    .await?;
     Ok(true)
 }
 
@@ -1485,7 +1807,7 @@ async fn google_format_sheet(
     table_name: &str,
 ) -> Result<(), String> {
     let token = google_access_token(path).await?;
-    let client = reqwest::Client::new();
+    let client = sheets_client();
     google_format_sheet_with_token(&client, &token, spreadsheet_id, table_name).await
 }
 
@@ -1498,19 +1820,17 @@ async fn google_format_sheet_with_token(
     let headers = sheet_headers(table_name);
     let col_count = headers.len();
 
-    let metadata: serde_json::Value = client
-        .get(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(sheetId,properties(sheetId,title,gridProperties(rowCount)),bandedRanges(bandedRangeId))"
-        ))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .error_for_status()
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .json()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+    let metadata: serde_json::Value = google_stage_json(
+        "format metadata",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(sheetId,properties(sheetId,title,gridProperties(rowCount,frozenRowCount)),bandedRanges(bandedRangeId))"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await,
+    )
+    .await?;
     let sheets = metadata
         .get("sheets")
         .and_then(|value| value.as_array())
@@ -1536,22 +1856,30 @@ async fn google_format_sheet_with_token(
         .and_then(|grid| grid.get("rowCount"))
         .and_then(|value| value.as_i64())
         .unwrap_or(1000);
+    // Frozen rows can never be deleted; the API rejects a deleteDimension
+    // that would remove every non-frozen row, which is exactly what a
+    // header-only tab produced before (400 on every pass, starving the
+    // whole queue). Always leave at least one row below the data.
+    let frozen_rows: i64 = sheet
+        .get("properties")
+        .and_then(|properties| properties.get("gridProperties"))
+        .and_then(|grid| grid.get("frozenRowCount"))
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1);
 
     let read_range = format!("{}!A:Z", table_name);
-    let existing: serde_json::Value = client
-        .get(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
-            urlencoding::encode(&read_range)
-        ))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .error_for_status()
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-        .json()
-        .await
-        .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+    let existing: serde_json::Value = google_stage_json(
+        "format values",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&read_range)
+            ))
+            .bearer_auth(token)
+            .send()
+            .await,
+    )
+    .await?;
     let rows = existing
         .get("values")
         .and_then(|value| value.as_array())
@@ -1660,31 +1988,33 @@ async fn google_format_sheet_with_token(
             }
         }
     }));
-    if row_count > last_data_row + 1 {
+    if let Some((delete_start, delete_end)) =
+        trailing_delete_range(last_data_row, frozen_rows, row_count)
+    {
         requests.push(serde_json::json!({
             "deleteDimension": {
                 "range": {
                     "sheetId": sheet_id,
                     "dimension": "ROWS",
-                    "startIndex": last_data_row + 1,
-                    "endIndex": row_count
+                    "startIndex": delete_start,
+                    "endIndex": delete_end
                 }
             }
         }));
     }
     for chunk in requests.chunks(50) {
-        client
-            .post(format!(
-                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
-            ))
-            .bearer_auth(token)
-            .json(&serde_json::json!({ "requests": chunk }))
-            .send()
-            .await
-            .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?
-            .error_for_status()
-            .map(|_| ())
-            .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())?;
+        google_stage_status(
+            "format batch",
+            client
+                .post(format!(
+                    "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
+                ))
+                .bearer_auth(token)
+                .json(&serde_json::json!({ "requests": chunk }))
+                .send()
+                .await,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1854,7 +2184,7 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
         .google_service_account_json_path
         .as_deref()
         .ok_or_else(|| "GOOGLE_SHEETS_NOT_CONFIGURED".to_string())?;
-    let client = reqwest::Client::new();
+    let client = sheets_client();
     let token = google_access_token(path).await?;
     let mut cleared = 0usize;
     let mut queued = 0usize;
@@ -1894,23 +2224,87 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
     Ok(serde_json::json!({"success":true,"tablesCleared":cleared,"rowsQueued":queued}))
 }
 
+/// Downgrades an ops-sheet provisioning failure to "not provisioned" so the
+/// pass continues to the DTR section (which fetches its own token and never
+/// touches the ops sheet). Ops rows then fail individually with clear codes
+/// and backoff instead of freezing DTR behind one `?`.
+fn downgrade_provision(
+    result: Result<Option<GoogleSheetsTarget>, String>,
+) -> Option<GoogleSheetsTarget> {
+    match result {
+        Ok(target) => target,
+        Err(error) => {
+            log::warn!("ops sheets provisioning unavailable, DTR continues: {error}");
+            None
+        }
+    }
+}
+
+/// Whether a sync pass should proceed to row dispatch. DTR runs even when
+/// the ops sheet failed to provision: only "everything absent" means off.
+fn should_dispatch(endpoint_none: bool, ops_ready: bool, dtr_ready: bool) -> bool {
+    !(endpoint_none && !ops_ready && !dtr_ready)
+}
+
 /// Bounded SQLite-first queue worker. The configured exporter endpoint is intentionally
 /// optional; when absent rows remain pending instead of being discarded.
 pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, String> {
     let now_at = Utc::now();
     recover_stale_processing_leases(state, now_at).await?;
     let google_target = if endpoint.is_none() {
-        ensure_provisioned(state).await?
+        downgrade_provision(ensure_provisioned(state).await)
     } else {
         None
     };
-    if endpoint.is_none() && google_target.is_none() {
+    // Intern-DTR auto-push targets its own human spreadsheet and runs
+    // even when the ops sheet is unprovisioned (or ops mirror via LAN
+    // endpoint). The resolver hard-wires the production sheet by default;
+    // only an explicitly blank `ALPHA_PREMIER_DTR_SHEET_ID` switches off.
+    let dtr_sheet = crate::config::dtr_spreadsheet_id_resolved(&state.lan);
+    log::debug!(
+        "sync tick: endpoint_none={} ops_target={} dtr={}",
+        endpoint.is_none(),
+        google_target.is_some(),
+        dtr_sheet.as_deref().unwrap_or("<none>")
+    );
+    if !should_dispatch(endpoint.is_none(), google_target.is_some(), dtr_sheet.is_some()) {
         return Ok(0);
+    }
+    // New-intern recheck: interns whose DTR tab did not exist yet are
+    // tracked in `dtr_pending`; re-search titles and backfill history once
+    // the owner creates the tab. Log-only — must never break the loop.
+    // One token fetch per run at most, and only when pending rows exist.
+    if let (Some(path), Some(sheet)) = (
+        state.lan.google_service_account_json_path.as_deref(),
+        dtr_sheet.as_deref(),
+    ) {
+        let pending_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(0);
+        if pending_count > 0 {
+            match google_access_token(path).await {
+                Ok(token) => {
+                    let client = sheets_client();
+                    if let Err(error) =
+                        crate::services::dtr_sync::process_dtr_pending(state, &client, &token, sheet)
+                            .await
+                    {
+                        eprintln!("[sheets] dtr pending recheck failed: {error}");
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[sheets] dtr pending recheck skipped: {error}");
+                }
+            }
+        }
     }
 
     let now = now_at.to_rfc3339();
     let rows = sqlx::query("SELECT id, table_name, row_id, operation, payload_json, attempts FROM sync_queue WHERE status IN ('PENDING','RETRY') AND next_attempt_at <= ? ORDER BY id LIMIT ?")
         .bind(&now).bind(SYNC_BATCH_SIZE).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    log::debug!("sync tick: rows_due={}", rows.len());
     if rows.is_empty() {
         return Ok(0);
     }
@@ -1923,17 +2317,28 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
 
     if google_mode {
         if let (Some(path), Some(spreadsheet)) = (google_path, spreadsheet_id) {
-            let client = reqwest::Client::new();
-            let token = google_access_token(path).await?;
-            let mut tables: Vec<String> = Vec::new();
-            for row in &rows {
-                let table: String = row.get("table_name");
-                if !tables.contains(&table) {
-                    tables.push(table);
+            let client = sheets_client();
+            // A failed pre-check must not abort the pass (same starvation
+            // class as provisioning): rows fail individually with backoff.
+            match google_access_token(path).await {
+                Ok(token) => {
+                    let mut tables: Vec<String> = Vec::new();
+                    for row in &rows {
+                        let table: String = row.get("table_name");
+                        if !tables.contains(&table) {
+                            tables.push(table);
+                        }
+                    }
+                    for table in tables {
+                        // InternDtr rows target the human DTR spreadsheet, handled
+                        // below — never create/format tabs for it in the ops sheet.
+                        if table == crate::services::dtr_sync::DTR_TABLE_NAME {
+                            continue;
+                        }
+                        ensure_tab_exists(&client, &token, spreadsheet, &table).await?;
+                    }
                 }
-            }
-            for table in tables {
-                ensure_tab_exists(&client, &token, spreadsheet, &table).await?;
+                Err(error) => log::warn!("ops tab pre-check skipped, rows fail individually: {error}"),
             }
         }
     }
@@ -1959,8 +2364,31 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         let result: Result<bool, String> = if row_id.trim().is_empty() {
             Err(SHEETS_ROW_ID_MISSING_ERROR.to_string())
         } else if let Some(payload) = payload.as_ref() {
-            if let Some(url) = endpoint {
-                reqwest::Client::new()
+            if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+                if is_delete {
+                    // The human DTR sheet is operator-owned: rows are only
+                    // ever upserted, never deleted.
+                    Ok(false)
+                } else {
+                    match (google_path, dtr_sheet.as_deref()) {
+                        (Some(path), Some(sheet)) => {
+                            let client = sheets_client();
+                            match google_access_token(path).await {
+                                Ok(token) => {
+                                    crate::services::dtr_sync::push_dtr_row(
+                                        state, &client, &token, sheet, payload,
+                                    )
+                                    .await
+                                    .map(|_| false)
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        _ => Err("DTR sync is not configured".to_string()),
+                    }
+                }
+            } else if let Some(url) = endpoint {
+                sheets_client()
                     .post(url)
                     .json(&serde_json::json!({"table":table_name,"rowId":row_id,"operation":operation,"payload":payload}))
                     .send()
@@ -2008,15 +2436,14 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                 touched.insert(table_name);
             }
             Err(error) => {
-                let is_schema_mismatch = error == SHEETS_SCHEMA_MISMATCH_ERROR;
+                let is_schema_mismatch = error.contains(SHEETS_SCHEMA_MISMATCH_ERROR);
                 let next = Utc::now()
                     + Duration::from_secs(2_u64.saturating_pow((attempts as u32).min(5)));
                 let status = if attempts + 1 >= 5 { "DEAD" } else { "RETRY" };
-                let last_error = if is_schema_mismatch {
-                    SHEETS_SCHEMA_MISMATCH_ERROR
-                } else {
-                    "Google Sheets sync failed; retry scheduled"
-                };
+                // Store the actual error text (call-site stage + upstream
+                // status) instead of collapsing everything to generic: the
+                // code field keeps the stable GOOGLE_SYNC_FAILED contract.
+                let last_error = error;
                 sqlx::query("UPDATE sync_queue SET attempts=attempts+1, status=?, last_error=?, last_error_code='GOOGLE_SYNC_FAILED', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'").bind(status).bind(last_error).bind(next.to_rfc3339()).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
                 schema_mismatch |= is_schema_mismatch;
             }
@@ -2025,6 +2452,9 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
     if google_mode && !touched.is_empty() {
         if let (Some(path), Some(spreadsheet)) = (google_path, spreadsheet_id) {
             for table in touched {
+                if table == crate::services::dtr_sync::DTR_TABLE_NAME {
+                    continue;
+                }
                 if let Err(error) = google_format_sheet(path, spreadsheet, &table).await {
                     eprintln!("[sheets] formatting failed for {table}: {error}");
                 }
@@ -2401,5 +2831,157 @@ mod tests {
         assert_eq!(default.spreadsheet_id, None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sheets_client_carries_explicit_timeout() {
+        // The sync tick is 30s: no Google call may hang past 25s total.
+        assert_eq!(SHEETS_HTTP_TIMEOUT_SECS, 25);
+        // Builder must succeed; Debug must show the configured timeout.
+        let debug = format!("{:?}", sheets_client());
+        assert!(
+            debug.contains("25s"),
+            "client must carry a 25s timeout, debug was: {debug}"
+        );
+    }
+
+    #[test]
+    fn downgrade_provision_neutralizes_errors_but_keeps_targets() {
+        let target = GoogleSheetsTarget {
+            spreadsheet_id: "sheet-1".into(),
+            drive_folder_id: None,
+        };
+        assert_eq!(
+            downgrade_provision(Ok(Some(target.clone()))),
+            Some(target)
+        );
+        assert_eq!(downgrade_provision(Ok(None)), None);
+        // A provisioning blow-up becomes "not provisioned" (warned) so the
+        // DTR section still runs instead of aborting the whole pass.
+        assert_eq!(
+            downgrade_provision(Err("GOOGLE_REQUEST_FAILED".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn should_dispatch_runs_dtr_without_ops() {
+        // LAN-endpoint mode always dispatches (rows POST to the endpoint).
+        assert!(should_dispatch(false, false, false));
+        assert!(should_dispatch(false, true, false));
+        assert!(should_dispatch(false, false, true));
+        // Google mode with nothing configured: off (feature disabled).
+        assert!(!should_dispatch(true, false, false));
+        // Google mode with only DTR configured: dispatch (the decoupling).
+        assert!(should_dispatch(true, false, true));
+        assert!(should_dispatch(true, true, false));
+        assert!(should_dispatch(true, true, true));
+    }
+
+    #[test]
+    fn column_letter_covers_single_and_multi_letter_columns() {
+        assert_eq!(column_letter(0), "A");
+        assert_eq!(column_letter(9), "J");
+        assert_eq!(column_letter(25), "Z");
+        assert_eq!(column_letter(26), "AA");
+        assert_eq!(column_letter(27), "AB");
+        assert_eq!(column_letter(51), "AZ");
+        assert_eq!(column_letter(52), "BA");
+        assert_eq!(column_letter(701), "ZZ");
+        assert_eq!(column_letter(702), "AAA");
+        assert_eq!(managed_last_column("Users"), "J");
+        assert_eq!(managed_last_column("PayrollCutoffs"), "R");
+    }
+
+    #[test]
+    fn bounded_read_ranges_stay_row_anchored() {
+        assert_eq!(header_read_range("Attendance"), "Attendance!A1:M1");
+        // Key column includes row 1 so matcher indices equal sheet rows.
+        assert_eq!(key_column_read_range("Attendance", 0), "Attendance!A1:A");
+        assert_eq!(key_column_read_range("InternGrace", 1), "InternGrace!B1:B");
+        assert_eq!(
+            single_row_read_range("Attendance", 107),
+            "Attendance!A107:M107"
+        );
+        // Single-column fixtures map index-for-index to sheet rows;
+        // leading blanks are preserved, only trailing empties trim.
+        let key_rows = vec![
+            json!(["attendanceId"]),
+            json!(["u-1"]),
+            json!([]),
+            json!(["u-3"]),
+        ];
+        assert_eq!(find_existing_row_index(&key_rows, "u-3").unwrap(), Some(3));
+        assert_eq!(find_existing_row_index(&key_rows, "missing").unwrap(), None);
+        // The header cell itself never matches.
+        assert_eq!(
+            find_existing_row_index(&key_rows, "attendanceId").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn key_column_data_gate_detects_data_rows() {
+        assert!(!key_column_has_data(&[]));
+        assert!(!key_column_has_data(&[json!(["userId"])]));
+        assert!(!key_column_has_data(&[json!(["userId"]), json!([])]));
+        assert!(key_column_has_data(&[json!(["userId"]), json!(["u-1"])]));
+    }
+
+    #[test]
+    fn header_repair_rewrites_only_empty_legacy_tabs() {
+        let headers = sheet_headers("Users");
+        let matching = header_decision(&json!({ "values": [headers] }), headers);
+        assert_eq!(
+            header_repair_action(matching, false),
+            HeaderRepair::Proceed(HeaderDecision::Match)
+        );
+        let blank = header_decision(&json!({ "values": [] }), headers);
+        assert_eq!(
+            header_repair_action(blank, false),
+            HeaderRepair::Proceed(HeaderDecision::Initialize)
+        );
+        // Legacy snake_case header, zero data rows: safe to rewrite.
+        let legacy = header_decision(
+            &json!({ "values": [["user_id", "rfid_uid", "full_name", "department", "status", "created_at", "employee_type", "daily_rate", "photo_url", "payroll_profile_id"]] }),
+            headers,
+        );
+        assert_eq!(header_repair_action(legacy, false), HeaderRepair::Rewrite);
+        // Same legacy header WITH data rows: never reinterpret columns.
+        assert_eq!(
+            header_repair_action(
+                header_decision(
+                    &json!({ "values": [["user_id"], ["u-1"]] }),
+                    headers,
+                ),
+                true,
+            ),
+            HeaderRepair::Mismatch
+        );
+    }
+
+    #[test]
+    fn trailing_delete_never_removes_all_non_frozen_rows() {
+        // Header-only tab (the live 400): keep exactly one blank data row.
+        assert_eq!(trailing_delete_range(0, 1, 1000), Some((2, 1000)));
+        // Full tab: nothing to trim.
+        assert_eq!(trailing_delete_range(999, 1, 1000), None);
+        // No trailing blanks: nothing to trim.
+        assert_eq!(trailing_delete_range(5, 1, 6), None);
+        // Unfrozen sheet: still leaves a single row standing.
+        assert_eq!(trailing_delete_range(0, 0, 1000), Some((1, 1000)));
+        // Deeper freeze: deletion starts below it.
+        assert_eq!(trailing_delete_range(3, 2, 100), Some((4, 100)));
+    }
+
+    #[test]
+    fn stage_errors_carry_call_site_without_secrets() {
+        let err = stage_err("append read", SHEETS_REQUEST_FAILED_ERROR.to_string());
+        assert_eq!(err, "append read: Google Sheets sync failed");
+        // The schema-mismatch contract survives prefixing (run_once keys
+        // off substring match).
+        let mismatch = stage_err("delete header", SHEETS_SCHEMA_MISMATCH_ERROR.to_string());
+        assert!(mismatch.contains(SHEETS_SCHEMA_MISMATCH_ERROR));
+        assert!(mismatch.starts_with("delete header: "));
     }
 }

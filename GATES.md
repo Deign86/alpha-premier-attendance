@@ -231,3 +231,67 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: gh release view v0.1.49 --json assets
   EXPECT: Alpha.Premier.Attendance_0.1.49_x64-setup.exe present
   EVIDENCE: 147,004,781 B via `npm run tauri:build`; https://github.com/Deign86/alpha-premier-attendance/releases/tag/v0.1.49
+
+## Intern DTR 2026 live-sync test (time-in appears on sheet)
+- [x] Sync CLI pushes kiosk time-in to the human DTR sheet.
+  CHECK: npm run sync:intern-dtr -w server -- --date 2026-09-05 --user Deign --execute (after a kiosk time-in)
+  EXPECT: exit 0; the person's tab shows today's TIME IN MORNING; formulas in F/J untouched
+  EVIDENCE: 2026-09-05 live test — time-in 09:46:23+08:00 for Deign Grey O. Lazaro (APG-2026-102, INTERN) recorded in attendance.db (WORKING/MANUAL_TEST); dry-run planned `WRITE → 'LAZARO DEIGN ' row 107: B=9:46:23 AM C=12:00:00 PM D=1:00:00 PM E=(empty)`; `--execute` wrote=1 skipped=0 failed=0; CSV readback + browser screenshot confirm row 107 `9/5/2026,9:46:23 AM,12:00:00 PM,1:00:00 PM,,(formula)`; only B:E touched, F/J formulas intact. Independent reviewer: no ship-blockers (2x P2 follow-ups: dead parallel matcher file intern-dtr-tabs.ts, planPush docstring).
+- [x] Time-out completes the same row (no duplicate rows).
+  CHECK: kiosk time-out, re-run sync --execute
+  EXPECT: same row's TIME OUT filled; TOTAL HOURS still formula-driven
+  EVIDENCE: SUPERSEDED by in-app path and proven live 2026-09-05: kiosk TIME_OUT 11:51:41 (RFID) auto-enqueued, queue row SYNCED, same sheet row 107 rewritten in half-day form (B kept, C fixed 12PM, D cleared, E empty), no duplicate rows; F/J formulas intact
+
+## In-system auto-sync wiring (no manual CLI)
+- [x] Kiosk time-in/out auto-pushes to the person's DTR tab via existing Rust sheets_sync + sync_queue.
+  CHECK: time in via kiosk, wait ~1 min, read tab cell
+  EXPECT: B:E filled for today's row without running any command; scan never fails because of DTR (log-only errors)
+  EVIDENCE: PROVEN LIVE 2026-09-05: kiosk TIME_IN 11:06:00 (RFID, Deign APG-2026-102) auto-enqueued InternDtr row → SYNCED with zero commands run; sheet row 107 filled B=11:06 AM C/D lunch pair; code reviewed SHIP; cargo 203/203, server 124/124, tsc+oxlint clean. Live debugging also fixed two real blockers (revoked SA key replaced; ops-provisioning starvation decoupled with timeouts)
+- [ ] Gates: cargo check + cargo test + server typecheck green.
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml && npx tsc -p server/tsconfig.json --noEmit
+  EXPECT: all exit 0
+  EVIDENCE: pending
+- [x] New intern with no DTR tab is tracked; on next interaction the sheet is re-searched and full history backfills into the new tab.
+  CHECK: register test intern (no tab) → time in → verify pending/skipped with reason; create tab from template → next time-in/out → verify ALL past rows appear in the new tab
+  EXPECT: no data loss, no duplicates, backfill covers every attendance_date for that user
+  EVIDENCE: PROVEN LIVE 2026-09-05 with test intern E2e Testling (INTERN-E2E-01): scan with no tab → dtr_pending tracked; tab E2E TESTLING created from template → backfill wrote 9/5 half-day row, dirty-October 9/5 correctly ignored, pending cleared. Test artifacts fully removed (user+attendance+queue rows deleted, test tab deleted via API). dtr_pending table (0013) + paginated backfill + skip-identical reruns; unit/integration tests green
+- [x] DTR-only half-day display: out before 4:59 PM → OUT LUNCH fixed 12:00 PM, afternoon/out empty (ref: 9/1/2026 row).
+  CHECK: half-day timeout → inspect tab row; full-day + WORKING rows unchanged in form
+  EXPECT: B=actual in, C=12:00:00 PM, D/E empty iff time_out < 16:59 Manila; system payroll logic untouched
+  EVIDENCE: VALUES proven live (9/5 half-day form exact incl D-clear rewrite). PAINT NOT PROVEN live: planner unit-tested both stacks + reviewer-verified ranges, absent-red seen on 8/28, but 9/5 D:E red missing after timeout push and row-whitening pattern inconsistent (possible owner-edit interleave — owner was editing sheet concurrently — or app row-mapping gap). Left open for an isolated re-test with owner hands-off
+- [x] Red paint: absents (past weekdays, no record) get B:E red; half-day remainder D:E red; recorded cells cleared white.
+  CHECK: past absent weekday row → red B:E; half-day row → red D:E only; weekend/future rows untouched; backdated entry clears red
+  EXPECT: backgroundColor matches sheet red {1,0,0} (measured LAZARO D103:E103); F/J never in a format range; single batchUpdate per push
+  EVIDENCE: CLOSED 2026-09-05 — stored fills verified exact via Sheets API (9/5 half-day: B/C white + D/E pure-red userEnteredFormat). Display mystery solved: tab carries 2 owner WEEKDAY>5 conditional rules that green-tint weekends and mask stored red on Sat/Sun (9/5 is a Saturday); weekday reds (9/1 D:E) display correctly. System writes correct stored formats; on-screen display follows owner rules. No code change needed.
+- [x] Edge cases audited + pinned: names (diacritics, hyphens, apostrophes, Jr/Sr, initials, collisions, renames), dates (dirty October block, duplicates, leap day, missing rows, year boundary), times (offsets, midnight cross, 16:59 boundary, WORKING transitions), paint (partial failure, stale red, weekends), pending/backfill (>200 rows, partial failure, deactivation), ops (403/429/offline, two kiosks, cache staleness).
+  CHECK: cargo test + npm test -w server (edge-case tests named) + review pass
+  EXPECT: every case either handled with test or logged as accepted limitation in code comment
+  EVIDENCE: audited + reviewed SHIP: suffix bug found+fixed, diacritic fold, dirty-October scoping, leap-date + deactivation guards tested; residuals pinned in code comments; cargo 199/199 at hardening time; re-verified 2026-09-05 node-side: oxlint clean, server tsc clean, server suite 16 files 124/124 pass (3.60s); final review verdict ship
+- [x] Gates: typecheck + matcher/sync tests green.
+  CHECK: npx tsc -p server/tsconfig.json --noEmit && npm test -w server
+  EXPECT: all exit 0
+  EVIDENCE: 2026-09-05 re-verify: `npx tsc -p server/tsconfig.json --noEmit` exit 0 (no output); `npm test -w server` 16 files, 124/124 tests pass (3.60s); `npm run lint:oxlint` clean (0 errors, 0 warnings)
+- [x] Admin corrections (update times, backdate, assisted entries) re-push the person's DTR row; deletes stay owner-cleared.
+  CHECK: admin-correct a time on a synced row → next loop → tab cell matches; admin-delete → tab row left untouched + logged
+  EXPECT: corrections converge without duplicates; deletes never propagate (operator-owned sheet rule)
+  EVIDENCE: PROVEN LIVE 2026-09-05 via Tauri MCP (dev kiosk) + ChromeDevTools MCP (sheet): admin_update_attendance timeIn 13:07:48→13:08:48 → InternDtr SYNCED → tab B=1:08:48 PM; corrected back 13:08:48→13:07:48 → mirrored again, screenshot row 107 B=1:07:48 PM. Production kiosk relaunched on release build after.
+- [ ] P0: admin partial-update must COALESCE (timeOut-only payload wiped time_in→NULL + COMPLETED→MISSED live 2026-09-05; row restored from known-good values).
+  CHECK: partial payload keeps other columns; full payload works; regression tests per mutator
+  EXPECT: no admin edit can null a column it did not name; status recomputed from resulting in/out
+  EVIDENCE: pending (fix in flight)
+- [x] DTR sync hard-wired: compiled-in default sheet ID (config/env only overrides for a future sheet), key path defaults to config-dir file; no silent-off from missing config.
+  CHECK: fresh config without google_dtr keys → intern scan still pushes; override with empty/other ID disables/retargets
+  EXPECT: zero-config works out of the box; documented override path
+  EVIDENCE: implemented + reviewed (DEFAULT_DTR_SPREADSHEET_ID compiled in; priority env > blank-off > config > default; key defaults to config-dir join; 206+ cargo tests incl. blank-off cases). Live on production kiosk 2026-09-05 (release rebuild + reinstall, sync ticking, queue drained)
+- [x] Tabs aligned to roster names; new interns get tabs auto-created (no owner step, no conflicts).
+  CHECK: 11 live renames match roster verbatim; scratch intern scan → tab auto-created from template → history backfilled → artifacts removed
+  EXPECT: exact-name tabs; overlap/invalid/duplicate races stay pending, never twin tabs; employees never mint tabs
+  EVIDENCE: PROVEN LIVE 2026-09-05 — 11 tabs renamed via API (roster-verbatim, trailing spaces gone); scratch intern E2e Testling Two scanned → tab auto-created (23 tabs) → 9/5 row backfilled WORKING form → pending empty → all artifacts removed (user+attendance+queue+tab). 10 orphan ex-intern tabs intentionally untouched. Rona Pacada (real, tab-less) auto-creates on her next scan.
+- [x] Allaena + Mitchi matched via ID cards (RFID blank/placeholder — MUST enroll real cards).
+  CHECK: tabs renamed to ID names; roster rows resolve MATCH; rfid_uid currently = user_id placeholder
+  EXPECT: no scan possible until real card UIDs replace placeholders via setup enrollment
+  EVIDENCE: 2026-09-05 — IDs read (Allaena Nicole E. Vizon APG-2026-115, Mitchi Hashidate APG-2026-106, Marketing Associates); tabs ALLAENA→Allaena Nicole E. Vizon, HASHIDATE MITCHI→Mitchi Hashidate via API; roster rows inserted ACTIVE/INTERN (department Marketing, designation Marketing Associate) with rfid_uid=user_id placeholder (schema NOT NULL + owner deferred card pairing); resolve MATCH on both. PLACEHOLDER RISK: scans with these IDs impossible (no card maps to them); on card arrival, replace rfid_uid with the real UID (unique) — do NOT create duplicate user rows.
+- [ ] RFID pairing for Allaena + Mitchi once the kiosk database file arrives.
+  CHECK: owner supplies DB file with real card UIDs → UPDATE users SET rfid_uid (single row each, keep user_id/full_name) → test scan per intern → tab fills
+  EXPECT: placeholder UIDs replaced in place (no duplicate rows); first real scans push to their tabs
+  EVIDENCE: pending owner DB file

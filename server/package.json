@@ -14,7 +14,8 @@
     "test": "vitest run",
     "validate:sheets": "tsx src/validate-sheets.ts",
     "migrate:payroll": "tsx src/migrate-payroll-sheets.ts",
-    "backfill:payroll": "tsx src/backfill-payroll.ts"
+    "backfill:payroll": "tsx src/backfill-payroll.ts",
+    "sync:intern-dtr": "tsx src/sync-intern-dtr.ts"
   },
   "dependencies": {
     "@rfid-attendance/shared": "file:../shared",

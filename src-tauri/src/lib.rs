@@ -1325,31 +1325,52 @@ async fn admin_update_attendance(
     attendance_id: String,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
+    admin_update_attendance_impl(&state, &token, &attendance_id, &payload).await
+}
+
+async fn admin_update_attendance_impl(
+    state: &AppState,
+    token: &str,
+    attendance_id: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(state, token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let row = sqlx::query(
-        "SELECT attendance_date,time_in,time_out,revision FROM attendance WHERE attendance_id=?",
+        "SELECT attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id=?",
     )
     .bind(&attendance_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "ATTENDANCE_NOT_FOUND".to_string())?;
-    let date = payload
+    let current_date: &str = row.get("attendance_date");
+    let current_in: Option<String> = row.get("time_in");
+    let current_out: Option<String> = row.get("time_out");
+    // P0 partial-update COALESCE: absent (or explicit-null) payload fields
+    // keep the stored values. Binding a bare payload Option into the
+    // UPDATE turned every partial correction into NULL writes (live
+    // data-loss 2026-09-05: timeOut-only payload wiped time_in). There is
+    // no clear-time flow, so null always means keep.
+    let date: &str = payload
         .get("attendanceDate")
         .and_then(|v| v.as_str())
-        .unwrap_or(row.get("attendance_date"));
-    let time_in = payload.get("timeIn").and_then(|v| v.as_str());
-    let time_out = payload.get("timeOut").and_then(|v| v.as_str());
+        .unwrap_or(current_date);
+    let time_in: Option<&str> = payload
+        .get("timeIn")
+        .and_then(|v| v.as_str())
+        .or(current_in.as_deref());
+    let time_out: Option<&str> = payload
+        .get("timeOut")
+        .and_then(|v| v.as_str())
+        .or(current_out.as_deref());
     if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err()
         || time_in.is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_err())
         || time_out.is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_err())
     {
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
-    let current_in: Option<String> = row.get("time_in");
-    let current_out: Option<String> = row.get("time_out");
     let expected_in = payload
         .get("expectedTimeIn")
         .and_then(|v| v.as_str())
@@ -1358,6 +1379,19 @@ async fn admin_update_attendance(
         .get("expectedTimeOut")
         .and_then(|v| v.as_str())
         .or(current_out.as_deref());
+    // No-op guard: resolved values identical and no conflicting expectation
+    // => return current state without bumping revision or re-enqueueing.
+    if date == current_date
+        && time_in == current_in.as_deref()
+        && time_out == current_out.as_deref()
+        && expected_in == current_in.as_deref()
+        && expected_out == current_out.as_deref()
+    {
+        let current_status: String = row.get("status");
+        return Ok(
+            serde_json::json!({"success":true,"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":current_status}),
+        );
+    }
     // The office does not allow overtime: an admin-saved time-out after
     // office hours stays flagged LATE_TIMEOUT instead of COMPLETED until the
     // official time is re-entered.
@@ -1375,7 +1409,7 @@ async fn admin_update_attendance(
     };
     let now = chrono::Utc::now().to_rfc3339();
     let updated = sqlx::query("UPDATE attendance SET attendance_date=?,time_in=?,time_out=?,status=?,revision=revision+1,updated_at=? WHERE attendance_id=? AND time_in IS ? AND time_out IS ? AND revision=?")
-        .bind(date).bind(time_in).bind(time_out).bind(status).bind(&now).bind(&attendance_id).bind(expected_in).bind(expected_out).bind(row.get::<i64,_>("revision")).execute(&state.db).await.map_err(|e|e.to_string())?;
+        .bind(date).bind(time_in).bind(time_out).bind(status).bind(&now).bind(attendance_id).bind(expected_in).bind(expected_out).bind(row.get::<i64,_>("revision")).execute(&state.db).await.map_err(|e|e.to_string())?;
     if updated.rows_affected() != 1 {
         return Err("ATTENDANCE_CONFLICT".into());
     }
@@ -1438,7 +1472,14 @@ async fn admin_update_attendance(
             }
         }
     }
-    enqueue_sync(&state, "Attendance", &attendance_id, "UPSERT", &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status})).await;
+    enqueue_sync(state, "Attendance", attendance_id, "UPSERT", &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status})).await;
+    // Mirror the correction to the intern DTR sheet: the idempotent re-push
+    // rewrites the same tab row (half-day/working/full tiers + paint), so
+    // corrections converge with no duplicates. Lookup failure skips silently;
+    // admin ops never fail because of DTR.
+    if let Ok(Some(user_row)) = sqlx::query("SELECT user_id, full_name, employee_type FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(attendance_id).fetch_optional(&state.db).await {
+        enqueue_intern_dtr(state, attendance_id, &user_row.get::<String, _>("user_id"), &user_row.get::<String, _>("full_name"), &user_row.get::<String, _>("employee_type"), date, time_in, time_out).await;
+    }
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'ADMIN_ATTENDANCE_UPDATED',?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(format!("Attendance {attendance_id} corrected")).bind(format!("admin-{}",uuid::Uuid::new_v4())).execute(&state.db).await;
     Ok(
         serde_json::json!({"success":true,"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status}),
@@ -1636,6 +1677,9 @@ async fn admin_create_backdated_attendance_impl(
         "recordedAt": now_ts,
     });
     enqueue_sync(state, "Attendance", &attendance_id, "UPSERT", &sync_payload).await;
+    // Mirror the entry to the intern DTR sheet (interns only, when
+    // configured). Same fire-and-forget contract as the scan path.
+    enqueue_intern_dtr(state, &attendance_id, user_id, &full_name, &user.get::<String, _>("employee_type"), attendance_date, Some(time_in), time_out).await;
 
     Ok(serde_json::json!({
         "success": true,
@@ -1673,13 +1717,24 @@ async fn admin_delete_attendance(
     attendance_id: String,
     date: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
+    admin_delete_attendance_impl(&state, &token, &attendance_id, &date).await
+}
+
+async fn admin_delete_attendance_impl(
+    state: &AppState,
+    token: &str,
+    attendance_id: &str,
+    date: &str,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(state, token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
+    // NOTE: deletions never propagate to the intern DTR sheet (operator-owned
+    // sheet rule) — only the ops-mirror rows below are enqueued.
     let payroll_ids: Vec<String> =
         sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
-            .bind(&attendance_id)
+            .bind(attendance_id)
             .fetch_all(&state.db)
             .await
             .map_err(|e| e.to_string())?
@@ -1688,7 +1743,7 @@ async fn admin_delete_attendance(
             .collect();
     let grace_rows: Vec<(String, String)> =
         sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
-            .bind(&attendance_id)
+            .bind(attendance_id)
             .fetch_all(&state.db)
             .await
             .map_err(|e| e.to_string())?
@@ -1701,8 +1756,8 @@ async fn admin_delete_attendance(
             })
             .collect();
     let result = sqlx::query("DELETE FROM attendance WHERE attendance_id=? AND attendance_date=?")
-        .bind(&attendance_id)
-        .bind(&date)
+        .bind(attendance_id)
+        .bind(date)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
@@ -1710,24 +1765,24 @@ async fn admin_delete_attendance(
         return Err("ATTENDANCE_NOT_FOUND".into());
     }
     let _ = sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
-        .bind(&attendance_id)
+        .bind(attendance_id)
         .execute(&state.db)
         .await;
     let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
-        .bind(&attendance_id)
+        .bind(attendance_id)
         .execute(&state.db)
         .await;
     enqueue_sync(
-        &state,
+        state,
         "Attendance",
-        &attendance_id,
+        attendance_id,
         "DELETE",
         &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date}),
     )
     .await;
     for payroll_id in payroll_ids {
         enqueue_sync(
-            &state,
+            state,
             "Payroll",
             &payroll_id,
             "DELETE",
@@ -1737,7 +1792,7 @@ async fn admin_delete_attendance(
     }
     for (grace_id, user_id) in grace_rows {
         enqueue_sync(
-            &state,
+            state,
             "InternGrace",
             &user_id,
             "DELETE",
@@ -4065,6 +4120,42 @@ async fn enqueue_sync(
         .bind(table_name).bind(row_id).bind(operation).bind(payload.to_string()).bind(&now).bind(&now).bind(&now).bind(&idempotency_key).execute(&state.db).await;
 }
 
+/// Mirror an attendance mutation to the intern DTR sheet (enqueue-only).
+/// Same contract as the scan path: interns-only, configured-only,
+/// fire-and-forget — a DTR failure can never fail the caller. Corrections
+/// converge through the existing idempotent re-push; deletions never
+/// propagate (operator-owned sheet rule).
+async fn enqueue_intern_dtr(
+    state: &AppState,
+    attendance_id: &str,
+    user_id: &str,
+    full_name: &str,
+    employee_type: &str,
+    date: &str,
+    time_in: Option<&str>,
+    time_out: Option<&str>,
+) {
+    if employee_type.to_uppercase() != "INTERN"
+        || crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_none()
+    {
+        return;
+    }
+    enqueue_sync(
+        state,
+        crate::services::dtr_sync::DTR_TABLE_NAME,
+        attendance_id,
+        "UPSERT",
+        &serde_json::json!({
+            "userId": user_id,
+            "fullName": full_name,
+            "attendanceDate": date,
+            "timeIn": time_in,
+            "timeOut": time_out,
+        }),
+    )
+    .await;
+}
+
 #[tauri::command]
 async fn scan_rfid(
     app: tauri::AppHandle,
@@ -4357,6 +4448,27 @@ async fn scan_rfid(
         &payload,
     )
     .await;
+    // Intern-DTR auto-push: same success path covers TIME_IN and TIME_OUT.
+    // Enqueue-only (the 30s sync loop does the network); a DTR failure can
+    // never fail the scan. Skipped for non-interns and when explicitly disabled.
+    if effective_user.get::<String, _>("employee_type").to_uppercase() == "INTERN"
+        && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some()
+    {
+        enqueue_sync(
+            &state,
+            crate::services::dtr_sync::DTR_TABLE_NAME,
+            &attendance_id,
+            "UPSERT",
+            &serde_json::json!({
+                "userId": user_id,
+                "fullName": effective_user.get::<String, _>("full_name"),
+                "attendanceDate": date,
+                "timeIn": time_in,
+                "timeOut": time_out,
+            }),
+        )
+        .await;
+    }
     let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, effective_user.get::<Option<String>,_>("photo_url"));
     Ok(
         serde_json::json!({
@@ -4662,7 +4774,12 @@ pub fn run() {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 loop {
                     let endpoint = sync_state.lan.sheets_sync_endpoint.as_deref();
-                    let _ = crate::services::sheets_sync::run_once(&sync_state, endpoint).await;
+                    if let Err(error) =
+                        crate::services::sheets_sync::run_once(&sync_state, endpoint).await
+                    {
+                        // Log-only: a failed sync pass must never disturb the kiosk.
+                        log::warn!("sheets sync pass failed: {error}");
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
@@ -5678,6 +5795,252 @@ mod tests {
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn admin_update_partial_payload_coalesces() {
+        // P0 live data-loss 2026-09-05: a timeOut-only correction payload
+        // wiped time_in to NULL and flipped COMPLETED to MISSED. Absent
+        // (or explicit-null) fields must keep stored values.
+        let temp = std::env::temp_dir().join(format!("alpha-admin-coalesce-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        lan.google_dtr_spreadsheet_id = Some("sheet-test".to_string());
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let unlock_res = super::setup_unlock_impl(&state, "1234".to_string()).await.unwrap();
+        let token = unlock_res["token"].as_str().unwrap().to_string();
+        super::upsert_user_record(
+            &state.db, "INT_P0", "CARD_INT_P0", "Coalesce Intern", Some("QA"),
+            "ACTIVE", "INTERN", Some("MALE"), None, Some("BEA_STANDARD"),
+            None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        // Row A: COMPLETED day. Row B: WORKING day (time-out open).
+        for (aid, tin, tout, status) in [
+            ("aid-a", "2026-08-11T08:00:00+08:00", Some("2026-08-11T17:00:00+08:00"), "COMPLETED"),
+            ("aid-b", "2026-08-12T08:05:00+08:00", None, "WORKING"),
+        ] {
+            let date = &tin[..10];
+            sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+                .bind(aid).bind(date).bind("INT_P0").bind("CARD_INT_P0").bind("Coalesce Intern").bind("QA")
+                .bind(tin).bind(tout).bind(status).bind("RFID").bind("2026-08-11T00:00:00Z").bind("2026-08-11T00:00:00Z")
+                .execute(&state.db).await.unwrap();
+        }
+        // 1. Live repro: timeOut-only payload keeps time_in, stays COMPLETED.
+        let r1 = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
+        assert_eq!(r1["success"], true);
+        assert_eq!(r1["timeIn"], "2026-08-11T08:00:00+08:00");
+        assert_eq!(r1["timeOut"], "2026-08-11T17:05:00+08:00");
+        assert_eq!(r1["status"], "COMPLETED");
+        let row = sqlx::query("SELECT attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id='aid-a'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.get::<Option<String>, _>("time_in").as_deref(), Some("2026-08-11T08:00:00+08:00"));
+        assert_eq!(row.get::<String, _>("status"), "COMPLETED");
+        // 2. timeIn-only on the WORKING row keeps the open time-out.
+        let r2 = super::admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({"timeIn": "2026-08-12T08:06:00+08:00"})).await.unwrap();
+        assert_eq!(r2["status"], "WORKING");
+        assert!(r2["timeOut"].is_null());
+        // 3. Explicit JSON null also keeps (no clear-time flow exists).
+        let r3 = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": serde_json::Value::Null, "timeIn": "2026-08-11T08:01:00+08:00"})).await.unwrap();
+        assert_eq!(r3["timeOut"], "2026-08-11T17:05:00+08:00");
+        assert_eq!(r3["timeIn"], "2026-08-11T08:01:00+08:00");
+        // 4. No-op full payload: revision untouched, no extra queue churn.
+        let rev_before: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-a'").fetch_one(&state.db).await.unwrap();
+        let q_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE row_id='aid-a'").fetch_one(&state.db).await.unwrap();
+        let r4 = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"attendanceDate": "2026-08-11", "timeIn": "2026-08-11T08:01:00+08:00", "timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
+        assert_eq!(r4["success"], true);
+        let rev_after: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-a'").fetch_one(&state.db).await.unwrap();
+        let q_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE row_id='aid-a'").fetch_one(&state.db).await.unwrap();
+        assert_eq!(rev_before, rev_after);
+        assert_eq!(q_before, q_after);
+        // 5. Invalid time still rejected; conflicting expectation still conflicts.
+        let bad = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeIn": "not-a-time"})).await.unwrap_err();
+        assert_eq!(bad, "ADMIN_VALIDATION_ERROR");
+        let conflict = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeIn": "2026-08-11T08:01:00+08:00", "expectedTimeIn": "2026-08-11T00:00:00+08:00"})).await.unwrap_err();
+        assert_eq!(conflict, "ATTENDANCE_CONFLICT");
+        // Row survived all of the above with real times intact.
+        let final_row = sqlx::query("SELECT attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id='aid-a'")
+            .fetch_one(&state.db).await.unwrap();
+        assert!(final_row.get::<Option<String>, _>("time_in").as_deref().is_some());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn admin_corrections_mirror_intern_dtr() {
+        let temp = std::env::temp_dir().join(format!("alpha-admin-dtr-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let db_path = temp.join("attendance.db");
+        let exports_path = temp.join("exports");
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        lan.google_dtr_spreadsheet_id = Some("sheet-test".to_string());
+        let state = AppState::new(
+            temp.clone(),
+            db_path,
+            exports_path,
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let unlock_res = super::setup_unlock_impl(&state, "1234".to_string()).await.unwrap();
+        let token = unlock_res["token"].as_str().unwrap().to_string();
+
+        for (uid, card, name, etype, rate) in [
+            ("INT_01", "CARD_INT_01", "Test Intern", "INTERN", None),
+            ("EMP_02", "CARD_EMP_02", "Test Employee", "EMPLOYEE", Some(50_000)),
+        ] {
+            super::upsert_user_record(
+                &state.db, uid, card, name, Some("QA"), "ACTIVE", etype,
+                Some("MALE"), rate, Some("BEA_STANDARD"), None, "EMPLOYEE",
+                "2026-08-01T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        }
+
+        // 1. Intern backdate → InternDtr UPSERT queued with exact times.
+        let payload = serde_json::json!({
+            "userId": "INT_01",
+            "attendanceDate": "2026-08-11",
+            "timeIn": "2026-08-11T08:00:00+08:00",
+            "timeOut": "2026-08-11T17:00:00+08:00",
+            "reason": "Missed scan physical log verified"
+        });
+        let res = super::admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap();
+        let aid = res["attendance"]["attendanceId"].as_str().unwrap().to_string();
+        let row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&aid).fetch_optional(&state.db).await.unwrap();
+        assert!(row.is_some(), "intern backdate must enqueue InternDtr");
+        let queued: serde_json::Value = serde_json::from_str(&row.unwrap()).unwrap();
+        assert_eq!(queued["userId"], "INT_01");
+        assert_eq!(queued["timeIn"], "2026-08-11T08:00:00+08:00");
+        assert_eq!(queued["timeOut"], "2026-08-11T17:00:00+08:00");
+
+        // 2. Employee backdate → no InternDtr row (interns-only guard).
+        let emp_payload = serde_json::json!({
+            "userId": "EMP_02",
+            "attendanceDate": "2026-08-12",
+            "timeIn": "2026-08-12T08:00:00+08:00",
+            "timeOut": "2026-08-12T17:00:00+08:00",
+            "reason": "Missed scan physical log verified"
+        });
+        let emp_res = super::admin_create_backdated_attendance_impl(None, &state, &token, &emp_payload).await.unwrap();
+        let emp_aid = emp_res["attendance"]["attendanceId"].as_str().unwrap().to_string();
+        let emp_row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&emp_aid).fetch_optional(&state.db).await.unwrap();
+        assert!(emp_row.is_none(), "employee backdate must not enqueue InternDtr");
+
+        // 3. Admin corrects the intern time-in → payload rewritten (converges),
+        // still exactly one InternDtr row (idempotent upsert, no duplicates).
+        let upd = serde_json::json!({
+            "attendanceDate": "2026-08-11",
+            "timeIn": "2026-08-11T07:30:00+08:00",
+            "timeOut": "2026-08-11T17:00:00+08:00",
+            "expectedTimeIn": "2026-08-11T08:00:00+08:00",
+            "expectedTimeOut": "2026-08-11T17:00:00+08:00"
+        });
+        let ures = super::admin_update_attendance_impl(&state, &token, &aid, &upd).await.unwrap();
+        assert_eq!(ures["success"], true);
+        let row2: String = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&aid).fetch_one(&state.db).await.unwrap();
+        let queued2: serde_json::Value = serde_json::from_str(&row2).unwrap();
+        assert_eq!(queued2["timeIn"], "2026-08-11T07:30:00+08:00");
+        // The corrected row renders differently, so the push rewrites it.
+        let before = crate::services::dtr_sync::build_dtr_row(Some("2026-08-11T08:00:00+08:00"), Some("2026-08-11T17:00:00+08:00"), "2026-08-11").unwrap();
+        let after = crate::services::dtr_sync::build_dtr_row(Some("2026-08-11T07:30:00+08:00"), Some("2026-08-11T17:00:00+08:00"), "2026-08-11").unwrap();
+        assert_ne!(before[0], after[0]);
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&aid).fetch_one(&state.db).await.unwrap();
+        assert_eq!(n, 1);
+
+        // 4. Delete → no new InternDtr row (deletions never propagate), while
+        // the ops-mirror Attendance DELETE is still enqueued.
+        super::admin_delete_attendance_impl(&state, &token, &aid, "2026-08-11").await.unwrap();
+        let n_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&aid).fetch_one(&state.db).await.unwrap();
+        assert_eq!(n_after, 1);
+        let del_op: Option<String> = sqlx::query_scalar("SELECT operation FROM sync_queue WHERE table_name='Attendance' AND row_id=? AND operation='DELETE'")
+            .bind(&aid).fetch_optional(&state.db).await.unwrap();
+        assert_eq!(del_op.as_deref(), Some("DELETE"));
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn admin_backdate_skips_dtr_when_explicitly_disabled() {
+        // SAFETY: mirrors the existing env-override test; restored below.
+        // DTR is hard-wired on by default, so the off path needs the
+        // explicit blank-env switch.
+        let saved = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        std::env::set_var(crate::config::ENV_DTR_SHEET_ID, "");
+        let temp = std::env::temp_dir().join(format!("alpha-admin-dtr-off-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let unlock_res = super::setup_unlock_impl(&state, "1234".to_string()).await.unwrap();
+        let token = unlock_res["token"].as_str().unwrap().to_string();
+        super::upsert_user_record(
+            &state.db, "INT_09", "CARD_INT_09", "Quiet Intern", Some("QA"),
+            "ACTIVE", "INTERN", Some("MALE"), None, Some("BEA_STANDARD"),
+            None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let payload = serde_json::json!({
+            "userId": "INT_09",
+            "attendanceDate": "2026-08-11",
+            "timeIn": "2026-08-11T08:00:00+08:00",
+            "timeOut": "2026-08-11T17:00:00+08:00",
+            "reason": "Missed scan physical log verified"
+        });
+        let res = super::admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap();
+        let aid = res["attendance"]["attendanceId"].as_str().unwrap().to_string();
+        let row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&aid).fetch_optional(&state.db).await.unwrap();
+        assert!(row.is_none(), "explicitly disabled DTR must not enqueue InternDtr");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+        match saved {
+            Some(v) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, v),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
     }
 
     #[tokio::test]

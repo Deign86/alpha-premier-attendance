@@ -10,6 +10,14 @@ pub struct LanConfig {
     pub google_service_account_json_path: Option<String>,
     #[serde(default)]
     pub google_spreadsheet_id: Option<String>,
+    /// Intern-DTR auto-push target (`INTERN DTR 2026` human spreadsheet).
+    /// `None` (default) = use the hard-wired [`DEFAULT_DTR_SPREADSHEET_ID`];
+    /// the feature is on unless explicitly disabled. Set this field (or env
+    /// `ALPHA_PREMIER_DTR_SHEET_ID`) to retarget a future sheet, or set the
+    /// env var to an empty string to switch DTR off; see
+    /// [`dtr_spreadsheet_id_resolved`].
+    #[serde(default)]
+    pub google_dtr_spreadsheet_id: Option<String>,
     /// Preferred Google Drive folder (already created and shared with the
     /// service account). When unset, the app reuses a previously generated
     /// folder ID from the app data state file, or creates one when
@@ -58,6 +66,7 @@ impl Default for LanConfig {
             sheets_sync_endpoint: None,
             google_service_account_json_path: None,
             google_spreadsheet_id: None,
+            google_dtr_spreadsheet_id: None,
             google_drive_folder_id: None,
             google_drive_folder_name: default_google_drive_folder_name(),
             google_create_folder_if_missing: false,
@@ -109,6 +118,46 @@ fn default_google_drive_folder_name() -> String {
 }
 fn default_google_spreadsheet_title() -> String {
     "Alpha Premier Attendance".into()
+}
+
+/// Env override for the intern-DTR target sheet (mirrors the
+/// `ALPHA_PREMIER_DB_PATH` pattern: env wins, config file is fallback).
+pub const ENV_DTR_SHEET_ID: &str = "ALPHA_PREMIER_DTR_SHEET_ID";
+
+/// Production `INTERN DTR 2026` spreadsheet. Hard-wired so a wiped or
+/// missing config can never silently switch DTR off. To retarget a future
+/// sheet, set config `google_dtr_spreadsheet_id` or env
+/// `ALPHA_PREMIER_DTR_SHEET_ID`; to switch DTR off, set the env var to an
+/// empty string (see [`dtr_spreadsheet_id_resolved`]).
+pub const DEFAULT_DTR_SPREADSHEET_ID: &str = "1ncnrcZY3Zr8ce_YBQQqU4LiMP80gqcd9WHr8dzjE-wE";
+
+/// Default service-account key filename, resolved against the application
+/// config directory when `google_service_account_json_path` is unset (see
+/// `load_config`). Only the location is hard-wired — never key material.
+pub const DEFAULT_SERVICE_ACCOUNT_FILENAME: &str = "attendance-sheets-key.json";
+
+/// Resolve the intern-DTR spreadsheet id. Priority: a non-blank
+/// `ALPHA_PREMIER_DTR_SHEET_ID` env value wins; an explicitly blank env
+/// value switches DTR off (`None`) and short-circuits config; otherwise a
+/// non-blank config value wins; otherwise the hard-wired
+/// [`DEFAULT_DTR_SPREADSHEET_ID`] keeps the feature on.
+pub fn dtr_spreadsheet_id_resolved(lan: &LanConfig) -> Option<String> {
+    if let Ok(env) = std::env::var(ENV_DTR_SHEET_ID) {
+        let trimmed = env.trim().to_string();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return Some(trimmed);
+    }
+    if let Some(id) = lan
+        .google_dtr_spreadsheet_id
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return Some(id);
+    }
+    Some(DEFAULT_DTR_SPREADSHEET_ID.to_string())
 }
 
 /// How the RFID reader is attached to the front-desk laptop.
@@ -551,6 +600,13 @@ pub fn load_config(
         lan.google_spreadsheet_id = None;
     }
     if lan
+        .google_dtr_spreadsheet_id
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        lan.google_dtr_spreadsheet_id = None;
+    }
+    if lan
         .google_drive_folder_id
         .as_deref()
         .is_some_and(str::is_empty)
@@ -574,6 +630,14 @@ pub fn load_config(
         lan.viewer_password_hash = None;
     }
     lan.validate()?;
+    if lan.google_service_account_json_path.is_none() {
+        // Hard-wired default: the key lives beside this config file unless
+        // overridden. The join below resolves it against config_dir, so a
+        // wiped config can never silently switch Google sync off; a missing
+        // file still fails loudly at token-fetch time with backoff.
+        lan.google_service_account_json_path =
+            Some(DEFAULT_SERVICE_ACCOUNT_FILENAME.to_string());
+    }
     if let Some(secret_path) = lan.google_service_account_json_path.clone() {
         let path_value = Path::new(&secret_path);
         if path_value.is_absolute() && !path_value.starts_with(config_dir) {
@@ -631,6 +695,43 @@ mod tests {
     }
 
     #[test]
+    fn dtr_sheet_id_hardwired_default_env_wins_and_blank_disables() {
+        // Raw field default stays unset (no override); the resolver applies
+        // the hard-wired production sheet.
+        let config = LanConfig::default();
+        assert_eq!(config.google_dtr_spreadsheet_id, None);
+        // SAFETY: tests run single-threaded here (CI --test-threads=1);
+        // env is restored below.
+        std::env::remove_var(ENV_DTR_SHEET_ID);
+        assert_eq!(
+            dtr_spreadsheet_id_resolved(&config),
+            Some(DEFAULT_DTR_SPREADSHEET_ID.to_string())
+        );
+        // Non-blank env wins over everything.
+        std::env::set_var(ENV_DTR_SHEET_ID, "sheet-from-env");
+        assert_eq!(
+            dtr_spreadsheet_id_resolved(&config),
+            Some("sheet-from-env".to_string())
+        );
+        std::env::remove_var(ENV_DTR_SHEET_ID);
+        // Non-blank config wins when env is absent.
+        let mut with_file = LanConfig::default();
+        with_file.google_dtr_spreadsheet_id = Some("sheet-from-file".to_string());
+        assert_eq!(
+            dtr_spreadsheet_id_resolved(&with_file),
+            Some("sheet-from-file".to_string())
+        );
+        // Explicitly blank env switches DTR off and short-circuits config.
+        std::env::set_var(ENV_DTR_SHEET_ID, "");
+        assert_eq!(dtr_spreadsheet_id_resolved(&with_file), None);
+        assert_eq!(dtr_spreadsheet_id_resolved(&config), None);
+        // Whitespace-only counts as blank.
+        std::env::set_var(ENV_DTR_SHEET_ID, "  ");
+        assert_eq!(dtr_spreadsheet_id_resolved(&with_file), None);
+        std::env::remove_var(ENV_DTR_SHEET_ID);
+    }
+
+    #[test]
     fn defaults_keep_google_drive_provisioning_disabled() {
         let config = LanConfig::default();
         assert_eq!(config.google_spreadsheet_id, None);
@@ -674,6 +775,68 @@ mod tests {
         assert_eq!(lan.google_drive_folder_id, None);
         assert_eq!(lan.google_spreadsheet_id, None);
         assert_eq!(lan.google_drive_folder_name, "Alpha Premier Attendance");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn service_account_path_resolves_against_config_dir() {
+        let temp = std::env::temp_dir().join(format!(
+            "alpha-config-sakey-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        // Relative path joins the config dir (never the process CWD).
+        std::fs::write(
+            temp.join("config.toml"),
+            "[lan]\ngoogle_service_account_json_path = \"attendance-sheets-key.json\"\n",
+        )
+        .unwrap();
+        let (lan, _, _, _, _, _) = load_config(&temp).expect("load config");
+        assert_eq!(
+            lan.google_service_account_json_path.as_deref(),
+            Some(temp.join("attendance-sheets-key.json").to_string_lossy().as_ref())
+        );
+        // Absolute path inside the config dir passes through unchanged.
+        let inside = temp.join("nested").join("key.json");
+        std::fs::write(
+            temp.join("config.toml"),
+            format!(
+                "[lan]\ngoogle_service_account_json_path = {:?}\n",
+                inside.to_string_lossy().into_owned()
+            ),
+        )
+        .unwrap();
+        let (lan, _, _, _, _, _) = load_config(&temp).expect("load config");
+        assert_eq!(
+            lan.google_service_account_json_path.as_deref(),
+            Some(inside.to_string_lossy().as_ref())
+        );
+        // Absolute path outside the config dir is rejected.
+        std::fs::write(
+            temp.join("config.toml"),
+            "[lan]\ngoogle_service_account_json_path = \"C:/elsewhere/key.json\"\n",
+        )
+        .unwrap();
+        assert!(load_config(&temp).is_err());
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn service_account_path_defaults_to_config_dir_key_file() {
+        // No key configured anywhere: hard-wired default joins config_dir so
+        // a wiped config can never silently switch Google sync off.
+        let temp = std::env::temp_dir().join(format!(
+            "alpha-config-sakey-default-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("config.toml"), "[lan]\n").unwrap();
+        let (lan, _, _, _, _, _) = load_config(&temp).expect("load config");
+        assert_eq!(
+            lan.google_service_account_json_path.as_deref(),
+            Some(temp.join(DEFAULT_SERVICE_ACCOUNT_FILENAME).to_string_lossy().as_ref())
+        );
+        assert_eq!(DEFAULT_SERVICE_ACCOUNT_FILENAME, "attendance-sheets-key.json");
         let _ = std::fs::remove_dir_all(&temp);
     }
 

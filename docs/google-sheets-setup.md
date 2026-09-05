@@ -198,3 +198,7 @@ If the spreadsheet is lost, stop the API and remove only the `spreadsheetId` pro
 | `INVALID_SETUP_PIN` | Verify the server-only `SETUP_ADMIN_PIN`; never send or store the PIN in the client bundle. |
 | `SETUP_SESSION_EXPIRED` | Unlock again and finish the operation within `SETUP_SESSION_MINUTES`; lock explicitly afterward. |
 | `USER_CONFLICT` | Stop; inspect `Users` for duplicate UID/user assignments before attempting a replacement-card workflow. |
+
+## 11. Tauri Desktop Pipeline Header Contract
+
+The Tauri desktop app (the live kiosk since v0.1.49) syncs the same seven tabs but expects **camelCase** row-1 headers (e.g. `userId`, `attendanceDate`), not the snake_case lists in §3 (those describe the legacy Node server contract). On startup the app reconciles each tab: tabs whose headers mismatch **and hold zero data rows** (e.g. the provisioned 2026-08-15 sheet) get row 1 rewritten to the camelCase contract automatically — this loses nothing. Tabs that already hold data under foreign headers are left untouched and the sync keeps failing loudly with a schema error instead of reinterpreting columns; export the tab, fix headers manually, then restart the app. Queue rows that exhaust retries land in `DEAD` with the stage-prefixed error preserved — inspect `sync_queue.last_error` before retrying.
