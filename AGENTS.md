@@ -52,10 +52,10 @@ Follow the rules in `.agent/rules/` and `.agents/rules/` (`ponytail.md`, `unlazy
 
 ---
 
-### Local Release Policy (Never CI/CD Releases)
-- **Do not use GitHub Actions for releases**: Building Windows Tauri desktop release bundles in CI/CD takes too long.
-- **Generate on Local PC**: All production release installers/bundles must be generated locally on the developer PC via `npm run tauri:build`.
-- **Upload Manually to GitHub**: Upload the generated MSI/EXE bundles directly to GitHub Releases.
+### Release Policy (GitHub CI/CD Releases)
+- **GitHub builds releases**: Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs typecheck, lint, tests, builds the frontend, and builds/signs the Windows Tauri bundles via `tauri-action`, attaching installers plus updater artifacts (`latest.json`) to the GitHub Release.
+- **Signing**: `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets must stay configured for updater artifacts.
+- **Local builds** (`npm run tauri:build`) remain available for manual verification, but official release bundles come from CI.
 
 ---
 
