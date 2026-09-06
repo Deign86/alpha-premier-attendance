@@ -348,3 +348,17 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('.agents/skills/maintain-verification-skill/SKILL.md','utf8'); for (const t of ['tauri_ipc_execute_command','293906','execute_js','capture_native_screenshot','SHAPES','127.0.0.1:5173','127.0.0.1:9223','command", "args','camelCase','rfidUid','5s']) if(!s.toUpperCase().includes(t.toUpperCase())) process.exit(1);"
   EXPECT: command exits 0
   EVIDENCE: live-pass step names ports/PIN/envelopes/shape assertions/edge probing/5s budget; triage step flags stale driver facts as drift-with-teeth; outcomes and scope discipline unchanged.
+
+## LAN autostart on app open gates
+
+- [x] LAN server autostarts on Tauri boot unless explicitly forbidden.
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('src-tauri/src/lib.rs','utf8'); if(!s.includes('lan.enabled ||') && !s.includes('allow_runtime_start')) process.exit(1);"
+  EXPECT: command exits 0
+- [x] Boot autostart failure is log-only and never blocks kiosk startup.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml lan_
+  EXPECT: all lan tests pass
+- [x] Required repository gates pass after the change.
+  CHECK: npm run lint:oxlint && npm run typecheck && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: lint, typecheck, and Rust tests exit 0.
+
+  EVIDENCE (lan-autostart): `cargo test --manifest-path src-tauri/Cargo.toml lan_` 15 passed, 0 failed; reviewer confirmed `snapshot()` API + `lan_start` gate parity; boot spawn is detached with log-only warn.

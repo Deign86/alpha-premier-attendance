@@ -4782,11 +4782,22 @@ pub fn run() {
                 }
             };
             log::info!("AppState initialized successfully");
-            if state.lan.enabled {
+            if state.lan.enabled || state.lan.allow_runtime_start {
                 let runtime = state.lan_runtime.clone();
                 let server_state = state.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = runtime.start(&server_state).await;
+                    match runtime.start(&server_state).await {
+                        Ok(()) => {
+                            let status = runtime.snapshot().await;
+                            log::info!(
+                                "LAN viewer auto-started at boot: {:?}",
+                                status.bind_address
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!("LAN viewer auto-start failed (kiosk unaffected): {error}");
+                        }
+                    }
                 });
             }
             let sync_state = state.clone();
