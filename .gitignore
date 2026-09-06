@@ -39,3 +39,7 @@ resources/voices/
 *.wav.tmp
 test_voicebox_*.wav
 
+# Local dev/E2E/build log scratch
+logs/
+tauri-build.err
+
