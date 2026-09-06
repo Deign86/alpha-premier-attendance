@@ -368,3 +368,13 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml embedded
   EXPECT: embedded fallback tests pass; no key bytes in repo/tests/logs
   EVIDENCE: worktree embed-key-zero-touch — `cargo test --lib embedded_` 2/2 pass, `sheets_sync` 28/28 pass, `cargo check` clean (3 pre-existing warnings), release.yml check-step + build.rs GITHUB_ACTIONS fail-closed panic verified, diff leak scan 0 hits; repo secret `ALPHA_PREMIER_EMBED_KEY_JSON` live via gh (2026-09-06)
+
+## Release v0.1.52 creation-403 fix gates
+- [ ] release.yml declares workflow-level `permissions: contents: write` (repo Actions default is read-only).
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('.github/workflows/release.yml','utf8'); if(!/^permissions:\s*\n\s+contents:\s*write/m.test(s)) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: pending (fix in flight)
+- [ ] Failed v0.1.52 run (34017919768) rerun publishes the GitHub Release with NSIS + updater assets.
+  CHECK: gh release view v0.1.52 --json assets --jq ".assets[].name"
+  EXPECT: lists `Alpha Premier Attendance_0.1.52_x64-setup.exe`, `.sig`, and `latest.json`
+  EVIDENCE: pending (rerun in flight)
