@@ -274,7 +274,7 @@ export function createApp(options: CreateAppOptions): express.Express {
       res.status(200).json({ success: true, requestId: req.requestId, photoUrl });
     } catch (error) {
       if (error instanceof Error && error.message === 'Photo storage is not configured') {
-        sendSetupError(req, res, new SetupError('GOOGLE_SHEETS_UNAVAILABLE', 'Photo storage is not configured. Set BLOB_READ_WRITE_TOKEN before uploading photos.', 503));
+        sendSetupError(req, res, new SetupError('GOOGLE_SHEETS_UNAVAILABLE', 'Photo storage failed to save locally.', 503));
         return;
       }
       sendSetupError(req, res, error);

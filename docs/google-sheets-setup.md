@@ -65,7 +65,7 @@ Create the reusable `JEAN_TENURED` and `BEA_STANDARD` profiles through the admin
 
 `PayrollCutoffs` is the editable semi-monthly payroll report. The existing `Payroll` tab remains the attendance-linked daily payroll ledger and is not replaced. Currency is stored as two-decimal peso values; the service calculates in centavos before writing values. A non-zero `manual_adjustment` requires `adjustment_reason`.
 
-`employee_type` is `INTERN` or `EMPLOYEE`; enrollment defaults to `INTERN`. `daily_rate` is a positive peso amount for employees and may be blank for interns. `photo_url` is the public Vercel Blob URL returned by the protected setup photo upload. Payroll is appended only after a `COMPLETED` attendance row has a time-out; working attendance never creates payroll.
+`employee_type` is `INTERN` or `EMPLOYEE`; enrollment defaults to `INTERN`. `daily_rate` is a positive peso amount for employees and may be blank for interns. `photo_url` is the local photo path returned by the protected setup photo upload. Payroll is appended only after a `COMPLETED` attendance row has a time-out; working attendance never creates payroll.
 
 Freeze row 1. Keep data values as plain text/ISO timestamps; do not insert formulas into columns written by the service. Avoid sorting a live sheet while a kiosk is processing a scan.
 
@@ -105,7 +105,6 @@ PORT=3001
 ENABLE_CARD_SETUP=false
 SETUP_ADMIN_PIN=<server-only-pin-when-setup-is-needed>
 SETUP_SESSION_MINUTES=15
-BLOB_READ_WRITE_TOKEN=<server-only-vercel-blob-token>
 ```
 
 Keep a non-secret `server/.env.example` with variable names only. The private key is passed inline to the backend through `GOOGLE_PRIVATE_KEY`; store and ACL the `.env` file so ordinary kiosk users cannot read it.

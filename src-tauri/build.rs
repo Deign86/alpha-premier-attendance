@@ -13,13 +13,14 @@ fn main() {
 /// Releases), `ALPHA_PREMIER_EMBED_KEY_PATH` (file path),
 /// `%APPDATA%/com.alphapremier.attendance/attendance-sheets-key.json`,
 /// `$HOME/.rfid-attendance/attendance-sheets-key.json`.
-/// CI (`GITHUB_ACTIONS=true`) fails closed when no key is found so a
-/// release can never ship silently disconnected.
-/// Never prints key material; only whether the fallback is on or off.
+/// Release builds (`ALPHA_PREMIER_REQUIRE_EMBED_KEY=1`) fail closed when no
+/// key is found so a release can never ship silently disconnected.
+/// Ordinary CI (`ci.yml`) leaves the flag unset so `cargo test` runs
+/// with the fallback DISABLED. Never prints key material.
 fn embed_service_account_key() {
     println!("cargo:rerun-if-env-changed=ALPHA_PREMIER_EMBED_KEY_JSON");
     println!("cargo:rerun-if-env-changed=ALPHA_PREMIER_EMBED_KEY_PATH");
-    println!("cargo:rerun-if-env-changed=GITHUB_ACTIONS");
+    println!("cargo:rerun-if-env-changed=ALPHA_PREMIER_REQUIRE_EMBED_KEY");
     let mut embedded: Option<String> = None;
     if let Ok(raw) = std::env::var("ALPHA_PREMIER_EMBED_KEY_JSON") {
         if raw.contains("client_email") && raw.contains("private_key") {
@@ -67,7 +68,7 @@ fn embed_service_account_key() {
             println!("cargo:warning=embedded service-account fallback DISABLED");
         }
     } else {
-        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+        if std::env::var("ALPHA_PREMIER_REQUIRE_EMBED_KEY").as_deref() == Ok("1") {
             panic!("missing embedded sheets key: set ALPHA_PREMIER_EMBED_KEY_JSON repo secret (full service-account JSON) so GitHub Releases ship DTR-connected");
         }
         let _ = std::fs::write(&out, "");

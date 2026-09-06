@@ -53,6 +53,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
+          # Fail closed: build.rs panics without an embedded key when this is 1.
+          ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}

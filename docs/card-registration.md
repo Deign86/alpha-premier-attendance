@@ -11,9 +11,10 @@ $env:SHEETS_MODE = "google"
 $env:ENABLE_CARD_SETUP = "true"
 $env:SETUP_ADMIN_PIN = "choose-a-private-pin"
 $env:SETUP_SESSION_MINUTES = "15"
-$env:BLOB_READ_WRITE_TOKEN = "server-only-vercel-blob-token"
 npm run dev
 ```
+
+Photos are stored locally (Tauri desktop native only, no Vercel). Optional override: `$env:PHOTO_STORAGE_DIR`.
 
 The server also needs the normal Google Sheets variables: `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, and `GOOGLE_PRIVATE_KEY`. For local memory testing, use `SHEETS_MODE=memory`; the association will not survive a server restart.
 
