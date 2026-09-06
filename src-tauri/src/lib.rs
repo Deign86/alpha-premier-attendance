@@ -658,7 +658,7 @@ async fn bathroom_get_status(
     });
 
     let active_rows = sqlx::query(
-        "SELECT log_id, user_id, full_name, department, gender_key, time_out FROM bathroom_log WHERE status = 'OUT'",
+        "SELECT log_id, user_id, full_name, department, gender_key, time_out FROM bathroom_log WHERE time_in IS NULL",
     )
     .fetch_all(&state.db)
     .await
@@ -769,7 +769,7 @@ async fn bathroom_time_out(
     let department: Option<String> = user_row.get("department");
 
     let existing_active = sqlx::query(
-        "SELECT full_name FROM bathroom_log WHERE gender_key = ? AND status = 'OUT' LIMIT 1",
+        "SELECT full_name FROM bathroom_log WHERE gender_key = ? AND time_in IS NULL LIMIT 1",
     )
     .bind(&normalized_gender)
     .fetch_optional(&state.db)
@@ -852,7 +852,7 @@ async fn bathroom_time_in(
     }
 
     let existing = sqlx::query(
-        "SELECT log_id, log_date, user_id, full_name, department, gender_key, time_out, status, notes FROM bathroom_log WHERE log_id = ?",
+        "SELECT log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, status, notes FROM bathroom_log WHERE log_id = ?",
     )
     .bind(&log_id)
     .fetch_optional(&state.db)
@@ -860,8 +860,8 @@ async fn bathroom_time_in(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "BATHROOM_LOG_NOT_FOUND: Bathroom log entry not found".to_string())?;
 
-    let current_status: String = existing.get("status");
-    if current_status != "OUT" {
+    let current_time_in: Option<String> = existing.get("time_in");
+    if current_time_in.is_some() {
         return Err("BATHROOM_KEY_ALREADY_RETURNED: This bathroom key has already been returned".into());
     }
 
@@ -880,7 +880,7 @@ async fn bathroom_time_in(
     };
 
     let outcome = sqlx::query(
-        "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', notes = ?, updated_at = ? WHERE log_id = ? AND status = 'OUT'",
+        "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', notes = ?, updated_at = ? WHERE log_id = ? AND time_in IS NULL",
     )
     .bind(&time_in)
     .bind(duration_seconds)
@@ -1012,7 +1012,7 @@ async fn bathroom_update_log_impl(
     } else {
         // If status is going to be OUT, ensure no other active key is currently OUT for this gender
         let conflict = sqlx::query(
-            "SELECT full_name FROM bathroom_log WHERE gender_key = ? AND status = 'OUT' AND log_id != ? LIMIT 1",
+            "SELECT full_name FROM bathroom_log WHERE gender_key = ? AND time_in IS NULL AND log_id != ? LIMIT 1",
         )
         .bind(&gender_key)
         .bind(&log_id)
@@ -1157,7 +1157,7 @@ async fn process_bathroom_scan(
     };
 
     let active_row = sqlx::query(
-        "SELECT log_id, user_id, full_name, time_out FROM bathroom_log WHERE gender_key = ? AND status = 'OUT'",
+        "SELECT log_id, user_id, full_name, time_out FROM bathroom_log WHERE gender_key = ? AND time_in IS NULL",
     )
     .bind(gender_key)
     .fetch_optional(&state.db)
@@ -1182,7 +1182,7 @@ async fn process_bathroom_scan(
             let duration_seconds = (now_manila - out_dt).num_seconds().max(0);
 
             let returned = sqlx::query(
-                "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', updated_at = ? WHERE log_id = ? AND status = 'OUT'",
+                "UPDATE bathroom_log SET time_in = ?, duration_seconds = ?, status = 'RETURNED', updated_at = ? WHERE log_id = ? AND time_in IS NULL",
             )
             .bind(&now_iso)
             .bind(duration_seconds)
@@ -1275,7 +1275,7 @@ async fn process_bathroom_scan(
         if code != "2067" && code != "1555" && !e.to_string().contains("UNIQUE constraint failed") {
             return Err(e.to_string());
         }
-        let holder: Option<String> = sqlx::query_scalar("SELECT full_name FROM bathroom_log WHERE gender_key = ? AND status = 'OUT' LIMIT 1")
+        let holder: Option<String> = sqlx::query_scalar("SELECT full_name FROM bathroom_log WHERE gender_key = ? AND time_in IS NULL LIMIT 1")
             .bind(gender_key)
             .fetch_optional(&state.db)
             .await
@@ -4116,7 +4116,7 @@ async fn enqueue_sync(
 ) {
     let now = chrono::Utc::now().to_rfc3339();
     let idempotency_key = format!("{table_name}:{row_id}:{operation}");
-    let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
+    let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
         .bind(table_name).bind(row_id).bind(operation).bind(payload.to_string()).bind(&now).bind(&now).bind(&now).bind(&idempotency_key).execute(&state.db).await;
 }
 
@@ -4272,26 +4272,30 @@ async fn scan_rfid(
         uid.clone()
     };
     {
-        let mut guard = state.scan_guard.lock().await;
-        if guard
-            .get(&cooldown_key)
-            .is_some_and(|last| last.elapsed().as_millis() < 500)
-        {
-            return Ok(
-                serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently."}}),
-            );
+        let mut debounce = state.scan_debounce.lock().await;
+        let now = Instant::now();
+        if let Some(entry) = debounce.get(&cooldown_key) {
+            if entry.fast.elapsed().as_millis() < 500 {
+                return Ok(
+                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently."}}),
+                );
+            }
+            if entry
+                .slow
+                .is_some_and(|last| last.elapsed().as_secs() < 10)
+            {
+                return Ok(
+                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently.","retryAfterSeconds":10}}),
+                );
+            }
         }
-        guard.insert(cooldown_key.clone(), Instant::now());
-    }
-    {
-        let cooldown = state.physical_cooldown.lock().await;
-        if cooldown
-            .get(&cooldown_key)
-            .is_some_and(|last| last.elapsed().as_secs() < 10)
-        {
-            return Ok(
-                serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"This card was scanned too recently.","retryAfterSeconds":10}}),
-            );
+        let prev_slow = debounce.get(&cooldown_key).and_then(|entry| entry.slow);
+        debounce.insert(
+            cooldown_key.clone(),
+            crate::state::ScanDebounce { fast: now, slow: prev_slow },
+        );
+        if debounce.len() > 4096 {
+            debounce.retain(|_, entry| entry.fast.elapsed().as_secs() < 10);
         }
     }
 
@@ -4355,11 +4359,19 @@ async fn scan_rfid(
         }
     };
     let seq = state.next_sequence();
-    state
-        .physical_cooldown
-        .lock()
-        .await
-        .insert(cooldown_key, Instant::now());
+    {
+        let mut debounce = state.scan_debounce.lock().await;
+        let now = Instant::now();
+        match debounce.get_mut(&cooldown_key) {
+            Some(entry) => entry.slow = Some(now),
+            None => {
+                debounce.insert(
+                    cooldown_key,
+                    crate::state::ScanDebounce { fast: now, slow: Some(now) },
+                );
+            }
+        }
+    }
     if action == "TIME_OUT" && attendance_status == "COMPLETED" {
         if let (Some(actual_in), Some(actual_out)) = (time_in.as_deref(), time_out.as_deref()) {
             let employee_type: String = effective_user.get("employee_type");
@@ -5883,6 +5895,11 @@ mod tests {
 
     #[tokio::test]
     async fn admin_corrections_mirror_intern_dtr() {
+        // Serialize DTR env access; a parallel blank-env test would otherwise
+        // switch the resolver off mid-test and drop the InternDtr enqueue.
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let saved_env = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        std::env::remove_var(crate::config::ENV_DTR_SHEET_ID);
         let temp = std::env::temp_dir().join(format!("alpha-admin-dtr-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let db_path = temp.join("attendance.db");
@@ -5987,11 +6004,16 @@ mod tests {
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+        match saved_env {
+            Some(v) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, v),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
     }
 
     #[tokio::test]
     async fn admin_backdate_skips_dtr_when_explicitly_disabled() {
-        // SAFETY: mirrors the existing env-override test; restored below.
+        // Serialize DTR env access; restored below.
+        let _env_guard = crate::config::dtr_env_test_guard();
         // DTR is hard-wired on by default, so the off path needs the
         // explicit blank-env switch.
         let saved = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
@@ -6099,7 +6121,7 @@ mod tests {
             }
         }
         let active: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM bathroom_log WHERE gender_key = 'MALE' AND status = 'OUT'")
+            sqlx::query_scalar("SELECT COUNT(*) FROM bathroom_log WHERE gender_key = 'MALE' AND time_in IS NULL")
                 .fetch_one(&state.db)
                 .await
                 .expect("count");

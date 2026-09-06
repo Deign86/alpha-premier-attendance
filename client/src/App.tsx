@@ -232,7 +232,6 @@ export default function App() {
   const recentScans = useRef(new Map<string, number>());
   // Synchronous in-flight guard: set before the first await so two rapid native
   // scan events can never start two attendance writes for the same tap.
-  const processingRef = useRef(false);
   const scanInFlightRef = useRef(false);
   // Synchronous assisted-confirm guard: prevents double-post when Confirm is
   // activated twice before busy state propagates, or the auto-close timer
@@ -355,7 +354,6 @@ export default function App() {
 
   const resetToReady = useCallback(() => {
     requestController.current?.abort();
-    processingRef.current = false;
     scanInFlightRef.current = false;
     setState("ready");
     setResult(null);
@@ -596,7 +594,7 @@ export default function App() {
     // card tap in the desktop app; drop the second copy so one tap never posts
     // twice (which the backend would reject as a duplicate scan).
     const normalizedUid = rawUid.trim().toUpperCase();
-    if (!normalizedUid || processingRef.current) return null;
+    if (!normalizedUid || scanInFlightRef.current) return null;
     const now = Date.now();
     const previousScanAt = recentScans.current.get(normalizedUid);
     if (
@@ -610,9 +608,7 @@ export default function App() {
         if (now - at >= SCAN_DEDUP_WINDOW_MS) recentScans.current.delete(key);
       }
     }
-    if (scanInFlightRef.current) return null;
     scanInFlightRef.current = true;
-    processingRef.current = true;
     setUid(normalizedUid);
     setState("processing");
     requestController.current?.abort();
@@ -626,7 +622,6 @@ export default function App() {
     // failed or superseded scan can never wedge the kiosk in processing.
     if (requestController.current === controller) requestController.current = null;
     scanInFlightRef.current = false;
-    processingRef.current = false;
   };
 
   const submit = useCallback(

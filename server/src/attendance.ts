@@ -18,6 +18,15 @@ import { PayrollService } from './payroll.js';
 export type AttendanceServiceConfig = { timezone: string; scanCooldownMs: number };
 type Clock = () => Date;
 
+type ResolvedAssist = { by: string; reason: string; at: string };
+type ResolvedScan = {
+  cardUid: string;
+  subject: SheetUser;
+  adminUser: SheetUser;
+  assist: ResolvedAssist | null;
+  source: ScanRequest['source'] | 'ADMIN_ASSISTED_SCAN';
+};
+
 export class AttendanceService {
   private readonly mutex = new KeyedMutex();
   private readonly lastScans = new Map<string, number>();
@@ -53,70 +62,28 @@ export class AttendanceService {
 
         const timestamp = manilaTimestamp(now, this.config.timezone);
 
-        // Handle Admin Assist cards
-        const isAssist = user.cardType === 'ADMIN_ASSIST';
-        let effectiveUser: SheetUser = user;
-        let recordedBy: string | null = null;
-        let recordedReason: string | null = null;
-        let recordedAt: string | null = null;
-
-        if (isAssist) {
-          if (!request.targetUserId) {
-            const allUsers = await this.sheets.listUsers();
-            const activeEmployees = allUsers
-              .filter((u) => u.active && u.cardType !== 'ADMIN_ASSIST')
-              .map((u) => ({
-                userId: u.userId,
-                fullName: u.fullName,
-                department: u.department,
-                photoUrl: u.photoUrl ?? null,
-              }));
-            this.lastScans.set(uid, currentMs);
-            void this.writeAudit({
-              eventType: 'SCAN_SUCCESS',
-              rfidUid: uid,
-              userId: user.userId,
-              message: 'ADMIN_ASSIST card presented',
-              requestId,
-            });
-            const assistResponse: ScanAdminAssistResponse = {
-              success: true,
-              requestId,
-              action: 'ADMIN_ASSIST',
-              message: 'Admin assist card accepted. Select an employee to record attendance.',
-              adminCard: {
-                rfidUid: user.rfidUid,
-                label: user.fullName || 'Admin Assist Card',
-              },
-              activeEmployees,
-            };
-            return assistResponse;
-          }
-
-          if (request.targetUserId === user.userId) {
-            throw new ScanError('ADMIN_CARD_REQUIRES_SELECTION', 'Admin RFID cards cannot record attendance for themselves.', 400);
-          }
-          const target = await this.sheets.findUserById(request.targetUserId);
-          if (!target) {
-            throw new ScanError('UNKNOWN_RFID_CARD', 'Selected employee not found.', 404);
-          }
-          if (target.cardType === 'ADMIN_ASSIST') {
-            throw new ScanError('ADMIN_CARD_REQUIRES_SELECTION', 'Cannot record attendance for another admin card.', 400);
-          }
-          if (!target.active) {
-            throw new ScanError('INACTIVE_USER', 'This employee is inactive.', 403);
-          }
-
-          effectiveUser = target;
-          recordedBy = user.fullName || 'Admin';
-          recordedReason = request.reason?.trim() || 'Forgot RFID card';
-          recordedAt = timestamp;
-        } else if (request.targetUserId && request.targetUserId !== user.userId) {
-          throw new ScanError('INVALID_SCAN_INPUT', 'Only Admin RFID cards can record attendance for other employees.', 403);
+        const resolved = await this.resolvePrincipal(request, uid, user, timestamp, requestId);
+        if (resolved.kind === 'prompt') {
+          this.lastScans.set(user.userId, currentMs);
+          void this.writeAudit({
+            eventType: 'SCAN_SUCCESS',
+            rfidUid: uid,
+            userId: user.userId,
+            message: 'ADMIN_ASSIST card presented',
+            requestId,
+          });
+          return resolved.response;
         }
+        const effectiveUser = resolved.scan.subject;
+        const assist = resolved.scan.assist;
+        const adminUser = resolved.scan.adminUser;
+        const isAssist = assist !== null;
+        const recordedBy = assist?.by ?? null;
+        const recordedReason = assist?.reason ?? null;
+        const recordedAt = assist?.at ?? null;
+        const effectiveSource = resolved.scan.source;
 
-        const cooldownKey = isAssist && request.targetUserId ? effectiveUser.rfidUid : uid;
-        const previousMs = this.lastScans.get(cooldownKey);
+        const previousMs = this.lastScans.get(effectiveUser.userId);
         if (previousMs !== undefined && currentMs - previousMs < this.config.scanCooldownMs) {
           const retryAfterSeconds = Math.max(1, Math.ceil((this.config.scanCooldownMs - (currentMs - previousMs)) / 1000));
           throw new ScanError('DUPLICATE_SCAN', 'This card was scanned too recently.', 429, retryAfterSeconds);
@@ -132,7 +99,7 @@ export class AttendanceService {
 
         let action: (typeof attendanceActions)[number];
         let saved: SheetAttendance;
-        const effectiveSource = isAssist ? 'ADMIN_ASSISTED_SCAN' : request.source;
+        let auditNote: string | null = null;
 
         if (!attendance) {
           const newAttendance: SheetAttendance = {
@@ -160,7 +127,21 @@ export class AttendanceService {
           }
           action = 'TIME_IN';
         } else {
-          if (!attendance.timeIn && !attendance.timeOut) {
+          const hasTimeIn = !!attendance.timeIn;
+          const hasTimeOut = !!attendance.timeOut;
+          const isDoneStatus = attendance.status === 'COMPLETED' || attendance.status === 'LATE_TIMEOUT';
+          const isMissed = attendance.status === 'MISSED';
+          if (isMissed) {
+            if (hasTimeOut) {
+              if (!await this.sheets.findPayrollByAttendanceId(attendance.attendanceId)) {
+                try { await this.payroll.ensureForCompletedAttendance(attendance, effectiveUser); }
+                catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance is complete but payroll could not be generated.', 503); }
+              }
+              throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
+            }
+            throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
+          }
+          if (!hasTimeIn && !hasTimeOut) {
             const restarted: SheetAttendance = {
               ...attendance,
               rfidUid: isAssist ? effectiveUser.rfidUid : uid,
@@ -177,21 +158,10 @@ export class AttendanceService {
             try { saved = await this.sheets.updateAttendance(restarted, { timeIn: null, timeOut: null }); }
             catch { throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data changed before the scan was saved.', 409); }
             action = 'TIME_IN';
-            this.lastScans.set(uid, currentMs);
-            void this.writeAudit({
-              eventType: 'SCAN_SUCCESS',
-              rfidUid: uid,
-              userId: effectiveUser.userId,
-              message: isAssist ? `TIME_IN recorded (Assisted by ${user.fullName})` : 'TIME_IN recorded in a cleared row',
-              requestId,
-            });
-            return this.successResponse(requestId, action, saved, effectiveUser);
-          }
-          if (!attendance.timeIn && attendance.timeOut) throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance has a time-out but no time-in.', 409);
-          if (!attendance.timeIn || attendance.attendanceDate !== attendanceDate || (attendance.status === 'COMPLETED' && !attendance.timeOut) || (attendance.status === 'LATE_TIMEOUT' && !attendance.timeOut) || (attendance.status === 'WORKING' && attendance.timeOut)) {
-            throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
-          }
-          if (attendance.status === 'COMPLETED' || attendance.status === 'LATE_TIMEOUT') {
+            auditNote = 'TIME_IN recorded in a cleared row';
+          } else if (!hasTimeIn || attendance.attendanceDate !== attendanceDate || (isDoneStatus && !hasTimeOut) || (attendance.status === 'WORKING' && hasTimeOut)) {
+            throw new ScanError('ATTENDANCE_DATA_CONFLICT', attendance.timeOut && !hasTimeIn ? 'Attendance has a time-out but no time-in.' : 'Attendance data is inconsistent.', 409);
+          } else if (isDoneStatus) {
             if (attendance.status === 'LATE_TIMEOUT') {
               throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance timed out after office hours and is pending manual correction.', 409);
             }
@@ -200,9 +170,7 @@ export class AttendanceService {
               catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance is complete but payroll could not be generated.', 503); }
             }
             throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
-          }
-
-          if (isAssist) {
+          } else if (isAssist) {
             const completedRow: SheetAttendance = {
               ...attendance,
               timeOut: timestamp,
@@ -235,12 +203,12 @@ export class AttendanceService {
           }
         }
 
-        this.lastScans.set(uid, currentMs);
+        this.lastScans.set(effectiveUser.userId, currentMs);
         void this.writeAudit({
           eventType: 'SCAN_SUCCESS',
           rfidUid: uid,
           userId: effectiveUser.userId,
-          message: isAssist ? `${action} recorded (Assisted by ${user.fullName})` : `${action} recorded`,
+          message: auditNote ?? (isAssist ? `${action} recorded (Assisted by ${adminUser.fullName})` : `${action} recorded`),
           requestId,
         });
         return this.successResponse(requestId, action, saved, effectiveUser);
@@ -250,6 +218,77 @@ export class AttendanceService {
       void this.writeAudit({ eventType: auditEventFor(scanErr), rfidUid: uid, message: scanErr.message, requestId });
       return scanErr.toResponse(requestId);
     }
+  }
+
+  private async resolvePrincipal(
+    request: ScanRequest,
+    cardUid: string,
+    cardUser: SheetUser,
+    timestamp: string,
+    requestId: string,
+  ): Promise<
+    | { kind: 'principal'; scan: ResolvedScan }
+    | { kind: 'prompt'; response: ScanAdminAssistResponse }
+  > {
+    if (cardUser.cardType !== 'ADMIN_ASSIST') {
+      if (request.targetUserId && request.targetUserId !== cardUser.userId) {
+        throw new ScanError('INVALID_SCAN_INPUT', 'Only Admin RFID cards can record attendance for other employees.', 403);
+      }
+      return {
+        kind: 'principal',
+        scan: { cardUid, subject: cardUser, adminUser: cardUser, assist: null, source: request.source },
+      };
+    }
+    if (!request.targetUserId) {
+      const allUsers = await this.sheets.listUsers();
+      const activeEmployees = allUsers
+        .filter((u) => u.active && u.cardType !== 'ADMIN_ASSIST')
+        .map((u) => ({
+          userId: u.userId,
+          fullName: u.fullName,
+          department: u.department,
+          photoUrl: u.photoUrl ?? null,
+        }));
+      const response: ScanAdminAssistResponse = {
+        success: true,
+        requestId,
+        action: 'ADMIN_ASSIST',
+        message: 'Admin assist card accepted. Select an employee to record attendance.',
+        adminCard: {
+          rfidUid: cardUser.rfidUid,
+          label: cardUser.fullName || 'Admin Assist Card',
+        },
+        activeEmployees,
+      };
+      return { kind: 'prompt', response };
+    }
+    if (request.targetUserId === cardUser.userId) {
+      throw new ScanError('ADMIN_CARD_REQUIRES_SELECTION', 'Admin RFID cards cannot record attendance for themselves.', 400);
+    }
+    const target = await this.sheets.findUserById(request.targetUserId);
+    if (!target) {
+      throw new ScanError('UNKNOWN_RFID_CARD', 'Selected employee not found.', 404);
+    }
+    if (target.cardType === 'ADMIN_ASSIST') {
+      throw new ScanError('ADMIN_CARD_REQUIRES_SELECTION', 'Cannot record attendance for another admin card.', 400);
+    }
+    if (!target.active) {
+      throw new ScanError('INACTIVE_USER', 'This employee is inactive.', 403);
+    }
+    return {
+      kind: 'principal',
+      scan: {
+        cardUid,
+        subject: target,
+        adminUser: cardUser,
+        assist: {
+          by: cardUser.fullName || 'Admin',
+          reason: request.reason?.trim() || 'Forgot RFID card',
+          at: timestamp,
+        },
+        source: 'ADMIN_ASSISTED_SCAN',
+      },
+    };
   }
 
   private async writeAudit(event: AuditEvent): Promise<void> {

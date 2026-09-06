@@ -126,6 +126,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return config;
 }
 
+/** Discriminated admin-auth state: enabled carries its required credentials. */
+export type AdminAuth =
+  | { enabled: false }
+  | { enabled: true; pin: string; secret: string; sessionMinutes: number };
+
+export function resolveAdminAuth(config: Pick<AppConfig, 'enableAdmin' | 'enableCardSetup' | 'adminPin' | 'adminSessionSecret' | 'adminSessionMinutes'>): AdminAuth {
+  const enabled = config.enableAdmin ?? config.enableCardSetup;
+  if (!enabled) return { enabled: false };
+  if (!config.adminPin || !config.adminSessionSecret) return { enabled: false };
+  return { enabled: true, pin: config.adminPin, secret: config.adminSessionSecret, sessionMinutes: config.adminSessionMinutes ?? 15 };
+}
+
 export function safeConfig(config: AppConfig) {
   return {
     success: true as const,
@@ -133,7 +145,7 @@ export function safeConfig(config: AppConfig) {
     rfidAutoSubmitDelayMs: config.rfidAutoSubmitDelayMs,
     resultResetDelayMs: config.resultResetDelayMs,
     enableCardSetup: config.enableCardSetup,
-    enableAdmin: config.enableAdmin ?? config.enableCardSetup,
+    enableAdmin: resolveAdminAuth(config).enabled,
     office: config.office ?? DEFAULT_OFFICE_IDENTITY,
   };
 }

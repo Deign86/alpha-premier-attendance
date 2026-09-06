@@ -124,6 +124,20 @@ fn default_google_spreadsheet_title() -> String {
 /// `ALPHA_PREMIER_DB_PATH` pattern: env wins, config file is fallback).
 pub const ENV_DTR_SHEET_ID: &str = "ALPHA_PREMIER_DTR_SHEET_ID";
 
+/// Process-wide mutex serializing tests that mutate `ALPHA_PREMIER_DTR_SHEET_ID`.
+/// `cargo test` runs threads in one process; unsynchronized `set_var`/`remove_var`
+/// lets the blank-env "DTR off" test leak into the "DTR on" backdate test.
+/// Hold the guard for the whole env-mutating critical section.
+ pub(crate) static DTR_ENV_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+ pub(crate) fn dtr_env_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    DTR_ENV_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Production `INTERN DTR 2026` spreadsheet. Hard-wired so a wiped or
 /// missing config can never silently switch DTR off. To retarget a future
 /// sheet, set config `google_dtr_spreadsheet_id` or env
@@ -696,12 +710,13 @@ mod tests {
 
     #[test]
     fn dtr_sheet_id_hardwired_default_env_wins_and_blank_disables() {
+        // Serialize against other DTR env tests; cargo runs threads in one process.
+        let _guard = dtr_env_test_guard();
         // Raw field default stays unset (no override); the resolver applies
         // the hard-wired production sheet.
         let config = LanConfig::default();
         assert_eq!(config.google_dtr_spreadsheet_id, None);
-        // SAFETY: tests run single-threaded here (CI --test-threads=1);
-        // env is restored below.
+        // Env is restored below.
         std::env::remove_var(ENV_DTR_SHEET_ID);
         assert_eq!(
             dtr_spreadsheet_id_resolved(&config),

@@ -85,6 +85,48 @@ export interface GoogleSheetsService {
   healthCheck(): Promise<void>;
 }
 
+/** Bucketed key index over the in-memory sheet rows: O(1) lookup by key
+ * while preserving duplicate detection (a bucket with >1 row throws the
+ * same errors the linear scans used to raise). Keys are joined with NUL so
+ * composite keys can never collide with plain ones. */
+class KeyIndex<T> {
+  private readonly buckets = new Map<string, T[]>();
+
+  static composite(parts: Array<string>): string {
+    return parts.join('\0');
+  }
+
+  static build<T>(rows: Array<T>, keyOf: (row: T) => string): KeyIndex<T> {
+    const index = new KeyIndex<T>();
+    for (const row of rows) index.add(keyOf(row), row);
+    return index;
+  }
+
+  add(key: string, row: T): void {
+    const bucket = this.buckets.get(key);
+    if (bucket) bucket.push(row);
+    else this.buckets.set(key, [row]);
+  }
+
+  remove(key: string, row: T): void {
+    const bucket = this.buckets.get(key);
+    if (!bucket) return;
+    const at = bucket.indexOf(row);
+    if (at >= 0) bucket.splice(at, 1);
+    if (bucket.length === 0) this.buckets.delete(key);
+  }
+
+  rekey(oldKey: string, newKey: string, row: T): void {
+    if (oldKey === newKey) return;
+    this.remove(oldKey, row);
+    this.add(newKey, row);
+  }
+
+  get(key: string): T[] {
+    return this.buckets.get(key) ?? [];
+  }
+}
+
 export class InMemorySheetsService implements GoogleSheetsService {
   private readonly users: SheetUser[];
   private readonly attendance: SheetAttendance[];
@@ -92,16 +134,28 @@ export class InMemorySheetsService implements GoogleSheetsService {
   private readonly grace: SheetInternGrace[] = [];
   private readonly payrollProfiles: SheetPayrollProfile[] = [];
   private readonly payrollCutoffs: SheetPayrollCutoff[] = [];
+  private readonly usersByUid: KeyIndex<SheetUser>;
+  private readonly usersById: KeyIndex<SheetUser>;
+  private readonly attendanceByUserDate: KeyIndex<SheetAttendance>;
+  private readonly attendanceById: KeyIndex<SheetAttendance>;
+  private readonly payrollByAttendanceId: KeyIndex<SheetPayroll>;
+  private readonly graceByUserWeek: KeyIndex<SheetInternGrace>;
   readonly audits: AuditEvent[] = [];
 
   constructor(users: SheetUser[] = [], attendance: SheetAttendance[] = []) {
     this.users = users.map((user) => ({ ...user, rfidUid: normalizeRfidUid(user.rfidUid) }));
     this.attendance = attendance.map((row) => ({ ...row }));
+    this.usersByUid = KeyIndex.build(this.users, (user) => user.rfidUid);
+    this.usersById = KeyIndex.build(this.users, (user) => user.userId);
+    this.attendanceByUserDate = KeyIndex.build(this.attendance, (row) => KeyIndex.composite([row.userId, row.attendanceDate]));
+    this.attendanceById = KeyIndex.build(this.attendance, (row) => row.attendanceId);
+    this.payrollByAttendanceId = new KeyIndex<SheetPayroll>();
+    this.graceByUserWeek = new KeyIndex<SheetInternGrace>();
     this.payrollProfiles.push(...defaultPayrollProfiles.map((profile) => ({ ...profile })));
   }
 
   async findUserByUid(uid: string): Promise<SheetUser | null> {
-    const matches = this.users.filter((user) => user.rfidUid === uid);
+    const matches = this.usersByUid.get(uid);
     if (matches.length > 1) throw new Error('Duplicate RFID UID in Users sheet');
     return matches[0] ?? null;
   }
@@ -113,41 +167,54 @@ export class InMemorySheetsService implements GoogleSheetsService {
   }
 
   async findUserById(userId: string): Promise<SheetUser | null> {
-    const matches = this.users.filter((user) => user.userId === userId);
+    const matches = this.usersById.get(userId);
     if (matches.length > 1) throw new Error('Duplicate user ID in Users sheet');
     return matches[0] ? { ...matches[0] } : null;
   }
 
   async upsertUser(user: SheetUser): Promise<SheetUser> {
-    const uidMatches = this.users.filter((item) => item.rfidUid === user.rfidUid);
+    const uid = normalizeRfidUid(user.rfidUid);
+    const uidMatches = this.usersByUid.get(uid);
     if (uidMatches.some((item) => item.userId !== user.userId)) throw new Error('Duplicate RFID UID in Users sheet');
-    const idMatches = this.users.filter((item) => item.userId === user.userId);
+    const idMatches = this.usersById.get(user.userId);
     if (idMatches.length > 1) throw new Error('Duplicate user ID in Users sheet');
     const existing = idMatches[0];
-    if (existing) Object.assign(existing, { ...user, rfidUid: normalizeRfidUid(user.rfidUid) });
-    else this.users.push({ ...user, rfidUid: normalizeRfidUid(user.rfidUid) });
+    if (existing) {
+      this.usersByUid.rekey(existing.rfidUid, uid, existing);
+      Object.assign(existing, { ...user, rfidUid: uid });
+    } else {
+      const created = { ...user, rfidUid: uid };
+      this.users.push(created);
+      this.usersByUid.add(uid, created);
+      this.usersById.add(created.userId, created);
+    }
     return { ...(existing ?? this.users[this.users.length - 1]) };
   }
 
   async deleteUser(userId: string): Promise<void> {
     const index = this.users.findIndex((user) => user.userId === userId);
     if (index < 0) throw new Error('User row was not found');
-    this.users.splice(index, 1);
+    const [removed] = this.users.splice(index, 1);
+    this.usersByUid.remove(removed.rfidUid, removed);
+    this.usersById.remove(removed.userId, removed);
   }
 
   async findAttendance(userId: string, attendanceDate: string): Promise<SheetAttendance | null> {
-    const matches = this.attendance.filter((row) => row.userId === userId && row.attendanceDate === attendanceDate);
+    const matches = this.attendanceByUserDate.get(KeyIndex.composite([userId, attendanceDate]));
     if (matches.length > 1) throw new Error('Duplicate attendance rows for user and date');
     return matches[0] ? { ...matches[0] } : null;
   }
 
   async createAttendance(attendance: SheetAttendance): Promise<SheetAttendance> {
-    this.attendance.push({ ...attendance });
-    return { ...attendance };
+    const created = { ...attendance };
+    this.attendance.push(created);
+    this.attendanceByUserDate.add(KeyIndex.composite([created.userId, created.attendanceDate]), created);
+    this.attendanceById.add(created.attendanceId, created);
+    return { ...created };
   }
 
   async completeAttendance(attendance: SheetAttendance, timeOut: string): Promise<SheetAttendance> {
-    const row = this.attendance.find((item) => item.attendanceId === attendance.attendanceId);
+    const row = this.attendanceById.get(attendance.attendanceId)[0];
     if (!row || row.status !== 'WORKING' || row.timeOut) throw new Error('Attendance row is no longer working');
     row.timeOut = timeOut;
     row.status = isLateTimeout(timeOut) ? 'LATE_TIMEOUT' : 'COMPLETED';
@@ -155,7 +222,7 @@ export class InMemorySheetsService implements GoogleSheetsService {
   }
 
   async updateAttendance(attendance: SheetAttendance, expected: { timeIn: string | null; timeOut: string | null }): Promise<SheetAttendance> {
-    const row = this.attendance.find((item) => item.attendanceId === attendance.attendanceId);
+    const row = this.attendanceById.get(attendance.attendanceId)[0];
     if (!row || (row.timeIn || null) !== expected.timeIn || (row.timeOut || null) !== expected.timeOut) throw new Error('Attendance row has changed');
     Object.assign(row, attendance);
     return { ...row };
@@ -164,21 +231,25 @@ export class InMemorySheetsService implements GoogleSheetsService {
   async deleteAttendance(attendanceId: string, attendanceDate: string): Promise<void> {
     const index = this.attendance.findIndex((row) => row.attendanceId === attendanceId && row.attendanceDate === attendanceDate);
     if (index < 0) throw new Error('Attendance row was not found');
-    this.attendance.splice(index, 1);
+    const [removed] = this.attendance.splice(index, 1);
+    this.attendanceByUserDate.remove(KeyIndex.composite([removed.userId, removed.attendanceDate]), removed);
+    this.attendanceById.remove(removed.attendanceId, removed);
   }
 
   async findPayrollByAttendanceId(attendanceId: string): Promise<SheetPayroll | null> {
-    const matches = this.payroll.filter((row) => row.attendanceId === attendanceId);
+    const matches = this.payrollByAttendanceId.get(attendanceId);
     if (matches.length > 1) throw new Error('Duplicate payroll rows for attendance');
     return matches[0] ? { ...matches[0] } : null;
   }
 
   async createPayroll(payroll: SheetPayroll): Promise<SheetPayroll> {
     if (await this.findPayrollByAttendanceId(payroll.attendanceId)) throw new Error('Payroll already exists for attendance');
-    this.payroll.push({ ...payroll });
-    return { ...payroll };
+    const created = { ...payroll };
+    this.payroll.push(created);
+    this.payrollByAttendanceId.add(created.attendanceId, created);
+    return { ...created };
   }
-  async deletePayrollByAttendanceId(attendanceId: string): Promise<void> { const index = this.payroll.findIndex((row) => row.attendanceId === attendanceId); if (index >= 0) this.payroll.splice(index, 1); }
+  async deletePayrollByAttendanceId(attendanceId: string): Promise<void> { const index = this.payroll.findIndex((row) => row.attendanceId === attendanceId); if (index < 0) return; const [removed] = this.payroll.splice(index, 1); this.payrollByAttendanceId.remove(removed.attendanceId, removed); }
   async listPayrollProfiles(): Promise<SheetPayrollProfile[]> { return this.payrollProfiles.map((row) => ({ ...row })); }
   async upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile> { const existing = this.payrollProfiles.find((row) => row.profileId === profile.profileId); if (existing) Object.assign(existing, profile); else this.payrollProfiles.push({ ...profile }); return { ...(existing ?? this.payrollProfiles[this.payrollProfiles.length - 1]) }; }
   async listPayrollCutoffs(): Promise<SheetPayrollCutoff[]> { return this.payrollCutoffs.map((row) => ({ ...row })); }
@@ -187,15 +258,17 @@ export class InMemorySheetsService implements GoogleSheetsService {
   async deletePayrollCutoff(payrollId: string): Promise<void> { const index = this.payrollCutoffs.findIndex((row) => row.payrollId === payrollId); if (index >= 0) this.payrollCutoffs.splice(index, 1); }
 
   async findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null> {
-    const matches = this.grace.filter((row) => row.userId === userId && row.weekStart === weekStart);
+    const matches = this.graceByUserWeek.get(KeyIndex.composite([userId, weekStart]));
     if (matches.length > 1) throw new Error('Duplicate intern grace rows');
     return matches[0] ? { ...matches[0] } : null;
   }
 
   async claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace> {
     if (await this.findInternGrace(grace.userId, grace.weekStart)) throw new Error('Intern grace already claimed');
-    this.grace.push({ ...grace });
-    return { ...grace };
+    const created = { ...grace };
+    this.grace.push(created);
+    this.graceByUserWeek.add(KeyIndex.composite([created.userId, created.weekStart]), created);
+    return { ...created };
   }
 
   async writeAudit(event: AuditEvent): Promise<void> {
@@ -254,32 +327,29 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/drive',
 ];
 
-const requiredHeaders = {
-  Users: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'photourl'],
-  Attendance: ['attendanceid', 'attendancedate', 'userid', 'rfiduid', 'fullname', 'department', 'timein', 'timeout', 'status', 'source', 'notes'],
-  AuditLogs: ['logid', 'timestamp', 'eventtype', 'rfiduid', 'userid', 'message', 'requestid'],
-  Payroll: ['payrollid', 'attendanceid', 'userid', 'fullname', 'employeetype', 'attendancedate', 'actualtimein', 'actualtimeout', 'computedtimein', 'computedtimeout', 'graceused', 'latehours', 'latededuction', 'basepay', 'dailypay', 'notes'],
-  InternGrace: ['graceid', 'userid', 'weekstart', 'attendanceid', 'usedat'],
-  PayrollProfiles: ['profileid', 'label', 'payrollfrequency', 'standardworkingdayspercutoff', 'incentivesallowance', 'specialallowance', 'specialholidaymultiplier', 'regularholidaymultiplier', 'halfdayfraction', 'overtimerate'],
-  PayrollCutoffs: ['payrollid', 'employeeid', 'employeename', 'payrollprofileid', 'payrollcutofflabel', 'cutoffstart', 'cutoffend', 'payrollfrequency', 'dailyrate', 'standardworkingdays', 'actualworkingdays', 'basicpay', 'specialholidaydays', 'specialholidaymultiplier', 'specialholidaypay', 'regularholidaydays', 'regularholidaymultiplier', 'regularholidaypay', 'incentivesallowance', 'specialallowance', 'totalcompensation', 'totalallowance', 'lateunits', 'latededuction', 'halfdaycount', 'halfdaydeduction', 'absentdays', 'absencededuction', 'overtimehours', 'overtimerate', 'overtimepay', 'manualadjustment', 'adjustmentreason', 'grosscompensation', 'netpay', 'calculationbreakdown', 'approvedworkingdayoverage', 'status', 'finalizedat'],
-} as const;
-const optionalHeaders = { Users: ['payrollprofileid'] } as const;
-
 /**
- * Human-readable row-1 headers written when the adapter creates or repairs a
- * tab. They mirror the operator runbook and canonicalize to `requiredHeaders`
- * when read back, so existing snake_case and legacy flat header styles both
- * validate.
+ * Single source of truth for the seven Sheets tabs: range option key,
+ * canonical (lowercase, alphanumeric) headers, human-readable row-1 labels
+ * written when the adapter creates or repairs a tab, and optional trailing
+ * headers accepted on read. Previously four parallel structures
+ * (`requiredHeaders`, `sheetHeaderLabels`, the `rangeFor` switch, and the
+ * `tabSpecs()` array) had to agree by hand; `rangeFor`, `tabSpecs()`, and
+ * `validateHeaders` are all derived from this table now.
+ *
+ * Labels mirror the operator runbook and canonicalize to `required` when
+ * read back (see `canonicalHeader`), so existing snake_case and legacy flat
+ * header styles both validate.
  */
-const sheetHeaderLabels = {
-  Users: ['user_id', 'rfid_uid', 'full_name', 'department', 'status', 'created_at', 'employee_type', 'daily_rate', 'photo_url', 'payroll_profile_id'],
-  Attendance: ['attendance_id', 'attendance_date', 'user_id', 'rfid_uid', 'full_name', 'department', 'time_in', 'time_out', 'status', 'source', 'notes'],
-  AuditLogs: ['log_id', 'timestamp', 'event_type', 'rfid_uid', 'user_id', 'message', 'request_id'],
-  Payroll: ['payroll_id', 'attendance_id', 'user_id', 'full_name', 'employee_type', 'attendance_date', 'actual_time_in', 'actual_time_out', 'computed_time_in', 'computed_time_out', 'grace_used', 'late_hours', 'late_deduction', 'base_pay', 'daily_pay', 'notes'],
-  InternGrace: ['grace_id', 'user_id', 'week_start', 'attendance_id', 'used_at'],
-  PayrollProfiles: ['profile_id', 'label', 'payroll_frequency', 'standard_working_days_per_cutoff', 'incentives_allowance', 'special_allowance', 'special_holiday_multiplier', 'regular_holiday_multiplier', 'half_day_fraction', 'overtime_rate'],
-  PayrollCutoffs: ['payroll_id', 'employee_id', 'employee_name', 'payroll_profile_id', 'payroll_cutoff_label', 'cutoff_start', 'cutoff_end', 'payroll_frequency', 'daily_rate', 'standard_working_days', 'actual_working_days', 'basic_pay', 'special_holiday_days', 'special_holiday_multiplier', 'special_holiday_pay', 'regular_holiday_days', 'regular_holiday_multiplier', 'regular_holiday_pay', 'incentives_allowance', 'special_allowance', 'total_compensation', 'total_allowance', 'late_units', 'late_deduction', 'half_day_count', 'half_day_deduction', 'absent_days', 'absence_deduction', 'overtime_hours', 'overtime_rate', 'overtime_pay', 'manual_adjustment', 'adjustment_reason', 'gross_compensation', 'net_pay', 'calculation_breakdown', 'approved_working_day_overage', 'status', 'finalized_at'],
-} as const satisfies Record<keyof typeof requiredHeaders, readonly string[]>;
+const SHEET_SPECS = {
+  Users: { rangeKey: 'usersRange', required: ['userid', 'rfiduid', 'fullname', 'department', 'status', 'createdat', 'employeetype', 'dailyrate', 'photourl'], labels: ['user_id', 'rfid_uid', 'full_name', 'department', 'status', 'created_at', 'employee_type', 'daily_rate', 'photo_url', 'payroll_profile_id', 'gender', 'card_type'], optional: ['payrollprofileid', 'gender', 'cardtype'] },
+  Attendance: { rangeKey: 'attendanceRange', required: ['attendanceid', 'attendancedate', 'userid', 'rfiduid', 'fullname', 'department', 'timein', 'timeout', 'status', 'source', 'notes'], labels: ['attendance_id', 'attendance_date', 'user_id', 'rfid_uid', 'full_name', 'department', 'time_in', 'time_out', 'status', 'source', 'notes'], optional: [] },
+  AuditLogs: { rangeKey: 'auditRange', required: ['logid', 'timestamp', 'eventtype', 'rfiduid', 'userid', 'message', 'requestid'], labels: ['log_id', 'timestamp', 'event_type', 'rfid_uid', 'user_id', 'message', 'request_id'], optional: [] },
+  Payroll: { rangeKey: 'payrollRange', required: ['payrollid', 'attendanceid', 'userid', 'fullname', 'employeetype', 'attendancedate', 'actualtimein', 'actualtimeout', 'computedtimein', 'computedtimeout', 'graceused', 'latehours', 'latededuction', 'basepay', 'dailypay', 'notes'], labels: ['payroll_id', 'attendance_id', 'user_id', 'full_name', 'employee_type', 'attendance_date', 'actual_time_in', 'actual_time_out', 'computed_time_in', 'computed_time_out', 'grace_used', 'late_hours', 'late_deduction', 'base_pay', 'daily_pay', 'notes'], optional: [] },
+  InternGrace: { rangeKey: 'internGraceRange', required: ['graceid', 'userid', 'weekstart', 'attendanceid', 'usedat'], labels: ['grace_id', 'user_id', 'week_start', 'attendance_id', 'used_at'], optional: [] },
+  PayrollProfiles: { rangeKey: 'payrollProfilesRange', required: ['profileid', 'label', 'payrollfrequency', 'standardworkingdayspercutoff', 'incentivesallowance', 'specialallowance', 'specialholidaymultiplier', 'regularholidaymultiplier', 'halfdayfraction', 'overtimerate'], labels: ['profile_id', 'label', 'payroll_frequency', 'standard_working_days_per_cutoff', 'incentives_allowance', 'special_allowance', 'special_holiday_multiplier', 'regular_holiday_multiplier', 'half_day_fraction', 'overtime_rate'], optional: [] },
+  PayrollCutoffs: { rangeKey: 'payrollCutoffsRange', required: ['payrollid', 'employeeid', 'employeename', 'payrollprofileid', 'payrollcutofflabel', 'cutoffstart', 'cutoffend', 'payrollfrequency', 'dailyrate', 'standardworkingdays', 'actualworkingdays', 'basicpay', 'specialholidaydays', 'specialholidaymultiplier', 'specialholidaypay', 'regularholidaydays', 'regularholidaymultiplier', 'regularholidaypay', 'incentivesallowance', 'specialallowance', 'totalcompensation', 'totalallowance', 'lateunits', 'latededuction', 'halfdaycount', 'halfdaydeduction', 'absentdays', 'absencededuction', 'overtimehours', 'overtimerate', 'overtimepay', 'manualadjustment', 'adjustmentreason', 'grosscompensation', 'netpay', 'calculationbreakdown', 'approvedworkingdayoverage', 'status', 'finalizedat'], labels: ['payroll_id', 'employee_id', 'employee_name', 'payroll_profile_id', 'payroll_cutoff_label', 'cutoff_start', 'cutoff_end', 'payroll_frequency', 'daily_rate', 'standard_working_days', 'actual_working_days', 'basic_pay', 'special_holiday_days', 'special_holiday_multiplier', 'special_holiday_pay', 'regular_holiday_days', 'regular_holiday_multiplier', 'regular_holiday_pay', 'incentives_allowance', 'special_allowance', 'total_compensation', 'total_allowance', 'late_units', 'late_deduction', 'half_day_count', 'half_day_deduction', 'absent_days', 'absence_deduction', 'overtime_hours', 'overtime_rate', 'overtime_pay', 'manual_adjustment', 'adjustment_reason', 'gross_compensation', 'net_pay', 'calculation_breakdown', 'approved_working_day_overage', 'status', 'finalized_at'], optional: [] },
+} as const;
+type SheetName = keyof typeof SHEET_SPECS;
 
 export class GoogleSheetsAdapter implements GoogleSheetsService {
   private readonly api: sheets_v4.Sheets;
@@ -326,7 +396,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return this.driveApi;
   }
 
-  private readonly headersCache = new Map<keyof typeof requiredHeaders, { headers: string[]; fetchedAt: number }>();
+  private readonly headersCache = new Map<SheetName, { headers: string[]; fetchedAt: number }>();
   private readonly HEADER_CACHE_TTL_MS = 60_000;
 
   private async values(range: string): Promise<string[][]> {
@@ -335,28 +405,17 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return (result.data.values ?? []) as string[][];
   }
 
-  private rangeFor(sheet: keyof typeof requiredHeaders): string {
-    switch (sheet) {
-      case 'Users': return this.options.usersRange;
-      case 'Attendance': return this.options.attendanceRange;
-      case 'AuditLogs': return this.options.auditRange;
-      case 'Payroll': return this.options.payrollRange;
-      case 'InternGrace': return this.options.internGraceRange;
-      case 'PayrollProfiles': return this.options.payrollProfilesRange;
-      case 'PayrollCutoffs': return this.options.payrollCutoffsRange;
-    }
+  private rangeFor(sheet: SheetName): string {
+    return this.options[SHEET_SPECS[sheet].rangeKey];
   }
 
-  private tabSpecs(): Array<{ sheet: keyof typeof requiredHeaders; title: string; headers: readonly string[] }> {
-    return [
-      { sheet: 'Users', title: this.options.usersRange, headers: sheetHeaderLabels.Users },
-      { sheet: 'Attendance', title: this.options.attendanceRange, headers: sheetHeaderLabels.Attendance },
-      { sheet: 'AuditLogs', title: this.options.auditRange, headers: sheetHeaderLabels.AuditLogs },
-      { sheet: 'Payroll', title: this.options.payrollRange, headers: sheetHeaderLabels.Payroll },
-      { sheet: 'InternGrace', title: this.options.internGraceRange, headers: sheetHeaderLabels.InternGrace },
-      { sheet: 'PayrollProfiles', title: this.options.payrollProfilesRange, headers: sheetHeaderLabels.PayrollProfiles },
-      { sheet: 'PayrollCutoffs', title: this.options.payrollCutoffsRange, headers: sheetHeaderLabels.PayrollCutoffs },
-    ];
+  private tabSpecs(): Array<{ sheet: SheetName; title: string; headers: readonly string[] }> {
+    // SAFETY: SHEET_SPECS is a fixed module-level object literal, so Object.keys returns exactly its SheetName keys.
+    return (Object.keys(SHEET_SPECS) as SheetName[]).map((sheet) => ({
+      sheet,
+      title: this.rangeFor(sheet),
+      headers: SHEET_SPECS[sheet].labels,
+    }));
   }
 
   private async getState(): Promise<GoogleSheetsState> {
@@ -646,7 +705,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
   private async seedDefaultPayrollProfiles(): Promise<void> {
     const { rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
     if (rows.length > 0) return;
-    const headers = [...requiredHeaders.PayrollProfiles];
+    const headers = [...SHEET_SPECS.PayrollProfiles.required];
     const values = defaultPayrollProfiles.map((profile) => valuesForPayrollProfile(headers, profile));
     await this.api.spreadsheets.values.append({
       spreadsheetId: this.options.spreadsheetId,
@@ -663,7 +722,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
    * so this adds no round trip; a cold-cache sheet (e.g. AuditLogs, which is
    * only ever written) costs one read.
    */
-  private async headersFor(sheet: keyof typeof requiredHeaders): Promise<string[]> {
+  private async headersFor(sheet: SheetName): Promise<string[]> {
     const cached = this.headersCache.get(sheet);
     if (cached && Date.now() - cached.fetchedAt < this.HEADER_CACHE_TTL_MS) return cached.headers;
     const rows = await this.values(this.rangeFor(sheet));
@@ -673,7 +732,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return headers;
   }
 
-  private async table(range: string, sheet: keyof typeof requiredHeaders): Promise<Table> {
+  private async table(range: string, sheet: SheetName): Promise<Table> {
     const rows = await this.values(range);
     const headers = (rows[0] ?? []).map(canonicalHeader);
     validateHeaders(sheet, headers);
@@ -688,17 +747,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     if (matches.length > 1) throw new Error('Duplicate RFID UID in Users sheet');
     const row = matches[0];
     if (!row) return null;
-    return {
-      userId: row[index.userid] ?? '',
-      rfidUid: uid,
-      fullName: row[index.fullname] ?? '',
-      department: row[index.department] || null,
-      active: String(row[index.status] ?? '').trim().toUpperCase() === 'ACTIVE',
-      employeeType: String(row[index.employeetype] ?? '').trim().toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN',
-      dailyRate: parseRate(row[index.dailyrate]),
-      payrollProfileId: row[index.payrollprofileid] || null,
-      photoUrl: row[index.photourl] || null,
-    };
+    return userFromRow(row, index);
   }
 
   async listUsers(): Promise<SheetUser[]> {
@@ -778,7 +827,7 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
       timeIn: row[index.timein] ?? '',
       timeOut: row[index.timeout] || null,
       status: normalizeAttendanceStatus(row[index.status]),
-      source: String(row[index.source] ?? '').trim().toUpperCase() === 'MANUAL_TEST' ? 'MANUAL_TEST' : 'RFID',
+      source: parseScanSource(row[index.source]),
       notes: row[index.notes] ?? '',
       rowNumber: match.rowNumber,
     };
@@ -851,11 +900,11 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return payroll;
   }
   async deletePayrollByAttendanceId(attendanceId: string): Promise<void> {
-    const { rows } = await this.table(this.options.payrollRange, 'Payroll');
-    const { headers } = await this.table(this.options.payrollRange, 'Payroll');
+    const { headers, rows } = await this.table(this.options.payrollRange, 'Payroll');
     const index = indexMap(headers);
-    const match = rows.findIndex((row) => row[index.attendanceid] === attendanceId);
-    if (match >= 0) await this.deleteRow(this.options.payrollRange, match + 2);
+    const matches = rows.flatMap((row, offset) => row[index.attendanceid] === attendanceId ? [offset + 2] : []);
+    if (matches.length > 1) throw new Error('Duplicate payroll rows for attendance');
+    if (matches[0] !== undefined) await this.deleteRow(this.options.payrollRange, matches[0]);
   }
 
   async listPayrollProfiles(): Promise<SheetPayrollProfile[]> {
@@ -1009,13 +1058,14 @@ function canonicalHeader(value: string): string { return String(value ?? '').toL
 function normalizeCell(value: string | undefined): string {
   try { return normalizeRfidUid(value ?? ''); } catch { return String(value ?? '').trim().replace(/[\s:-]/g, '').toUpperCase(); }
 }
-function validateHeaders(sheet: keyof typeof requiredHeaders, headers: string[]): void {
-  const expected = requiredHeaders[sheet];
-  const optional = sheet === 'Users' ? optionalHeaders.Users : [];
-  const validLength = headers.length === expected.length || headers.length === expected.length + optional.length;
+function validateHeaders(sheet: SheetName, headers: string[]): void {
+  const expected = SHEET_SPECS[sheet].required;
+  const optional: readonly string[] = SHEET_SPECS[sheet].optional;
+  const inRange = headers.length >= expected.length && headers.length <= expected.length + optional.length;
   const prefixMatches = expected.every((header, index) => headers[index] === header);
-  const optionalMatches = headers.length === expected.length || optional.every((header, index) => headers[expected.length + index] === header);
-  if (!validLength || !prefixMatches || !optionalMatches) throw new Error(`${sheet} sheet headers are missing or out of order`);
+  const trailing = headers.slice(expected.length);
+  const optionalMatches = trailing.every((header, index) => header === optional[index]);
+  if (!inRange || !prefixMatches || !optionalMatches) throw new Error(`${sheet} sheet headers are missing or out of order`);
   if (new Set(headers).size !== headers.length) throw new Error(`${sheet} sheet has duplicate headers`);
 }
 function indexMap(headers: string[]): Record<string, number> { return Object.fromEntries(headers.map((header, index) => [header, index])); }
@@ -1045,6 +1095,7 @@ function valuesForAttendance(headers: string[], attendance: SheetAttendance, exi
   return row.slice(0, headers.length);
 }
 function userFromRow(row: string[], index: Record<string, number>): SheetUser {
+  const genderRaw = String(row[index.gender] ?? '').trim().toUpperCase();
   return {
     userId: row[index.userid] ?? '',
     rfidUid: normalizeCell(row[index.rfiduid]),
@@ -1052,7 +1103,9 @@ function userFromRow(row: string[], index: Record<string, number>): SheetUser {
     department: row[index.department] || null,
     active: String(row[index.status] ?? '').trim().toUpperCase() === 'ACTIVE',
     employeeType: String(row[index.employeetype] ?? '').trim().toUpperCase() === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN',
+    gender: genderRaw === 'FEMALE' ? 'FEMALE' : genderRaw === 'MALE' ? 'MALE' : null,
     dailyRate: parseRate(row[index.dailyrate]),
+    payrollProfileId: row[index.payrollprofileid] || null,
     photoUrl: row[index.photourl] || null,
     cardType: String(row[index.cardtype] ?? '').trim().toUpperCase() === 'ADMIN_ASSIST' ? 'ADMIN_ASSIST' : 'EMPLOYEE',
   };
@@ -1096,6 +1149,7 @@ function valuesForUser(headers: string[], user: SheetUser, existing: string[] = 
     ['dailyrate', user.dailyRate == null ? '' : String(user.dailyRate)],
     ['payrollprofileid', user.payrollProfileId ?? ''],
     ['photourl', user.photoUrl ?? ''],
+    ['gender', user.gender ?? ''],
     ['cardtype', user.cardType ?? 'EMPLOYEE'],
   ]);
   headers.forEach((header, offset) => {

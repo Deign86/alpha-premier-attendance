@@ -4,6 +4,7 @@ import {
   DEFAULT_TTS_SETTINGS,
   getTtsStatus,
   loadTtsSettings,
+  resolveTtsMode,
   saveTtsSettings,
   stopSpeech,
   testVoice,
@@ -81,7 +82,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     void refreshStatus();
   };
 
-  const isTtsDisabled = !settings.enabled || settings.engine === 'disabled';
+  const isTtsDisabled = resolveTtsMode(settings).kind === 'disabled';
 
   return (
     <section className="lan-panel" aria-label="Voice Announcements">

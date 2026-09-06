@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
+import { getManilaWeekStart } from '@rfid-attendance/shared';
 import { calculateEmployeePayroll } from './employee-payroll.js';
-import { calculateInternPayroll, manilaWeekStart } from './intern-payroll.js';
+import { calculateInternPayroll } from './intern-payroll.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayroll, SheetUser } from './sheets.js';
 
 export class PayrollService {
@@ -22,7 +23,7 @@ export class PayrollService {
       });
     }
 
-    const weekStart = manilaWeekStart(attendance.attendanceDate);
+    const weekStart = getManilaWeekStart(attendance.attendanceDate);
     const [existing, grace] = await Promise.all([
       this.sheets.findPayrollByAttendanceId(attendance.attendanceId),
       this.sheets.findInternGrace(user.userId, weekStart),

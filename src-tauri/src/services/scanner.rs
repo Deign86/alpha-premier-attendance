@@ -86,34 +86,6 @@ impl ScannerHandle {
     }
 }
 
-/// Buffer that accumulates characters until the scan is considered complete.
-#[allow(dead_code)]
-pub struct ScanBuffer {
-    pub data: String,
-    pub last_at: Instant,
-}
-
-impl Default for ScanBuffer {
-    fn default() -> Self {
-        Self {
-            data: String::new(),
-            last_at: Instant::now(),
-        }
-    }
-}
-
-#[allow(dead_code)]
-impl ScanBuffer {
-    pub fn take_if_idle(&mut self, now: Instant, idle_timeout: Duration) -> Option<String> {
-        if self.data.is_empty() || now.saturating_duration_since(self.last_at) < idle_timeout {
-            return None;
-        }
-        let value = std::mem::take(&mut self.data);
-        self.last_at = now;
-        Some(value)
-    }
-}
-
 struct Runtime {
     app: AppHandle,
     handle: Arc<ScannerHandle>,
@@ -267,9 +239,8 @@ fn set_status(runtime: &Arc<Runtime>, state: ScannerState, message: &str, detail
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, ScanBuffer, ScanParse};
+    use super::{normalize, ScanParse};
     use crate::config::{ScannerCharacterSet, ScannerConfig};
-    use std::time::{Duration, Instant};
 
     fn valid(raw: &str) -> String {
         let profile = ScannerConfig {
@@ -281,26 +252,6 @@ mod tests {
             ScanParse::Valid(uid) => uid,
             other => panic!("expected valid scan for {raw:?}, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn idle_timeout_completes_a_scan_without_sleeping() {
-        let started_at = Instant::now();
-        let mut buffer = ScanBuffer {
-            data: "04A1B2C3".into(),
-            last_at: started_at,
-        };
-        let timeout = Duration::from_millis(150);
-
-        assert_eq!(
-            buffer.take_if_idle(started_at + Duration::from_millis(149), timeout),
-            None
-        );
-        assert_eq!(
-            buffer.take_if_idle(started_at + Duration::from_millis(150), timeout),
-            Some("04A1B2C3".into())
-        );
-        assert!(buffer.data.is_empty());
     }
 
     #[test]

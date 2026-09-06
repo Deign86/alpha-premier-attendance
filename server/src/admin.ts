@@ -6,6 +6,7 @@ import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { PayrollService } from './payroll.js';
 import { calculateCutoffPayroll, defaultPayrollProfiles, type CutoffInput } from './cutoff-payroll.js';
+import { resolveAdminAuth } from './config.js';
 
 export type AdminConfig = { enableAdmin?: boolean; adminPin?: string; adminSessionSecret?: string; adminSessionMinutes?: number; timezone: string };
 export class AdminError extends Error {
@@ -556,7 +557,7 @@ export class AdminService {
     await this.sheets.deletePayrollCutoff(payrollId);
   }
 
-  private assertEnabled() { if (!this.config.enableAdmin || !this.config.adminPin || !this.config.adminSessionSecret) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
+  private assertEnabled() { if (!resolveAdminAuth({ enableAdmin: this.config.enableAdmin, enableCardSetup: false, adminPin: this.config.adminPin, adminSessionSecret: this.config.adminSessionSecret, adminSessionMinutes: this.config.adminSessionMinutes }).enabled) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
   private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
 }
 function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', gender: user.gender ?? null, dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null, cardType: user.cardType ?? 'EMPLOYEE' }; }

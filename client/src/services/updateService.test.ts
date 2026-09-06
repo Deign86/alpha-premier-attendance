@@ -78,7 +78,7 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(false, mockClient);
-      expect(result.available).toBe(false);
+      expect(result.state).toBe('disabled');
       expect(mockClient.check).not.toHaveBeenCalled();
     });
 
@@ -90,8 +90,7 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(true, mockClient);
-      expect(result.error).toBeNull();
-      expect(result.available).toBe(false);
+      expect(result.state).toBe('up-to-date');
       expect(mockClient.check).toHaveBeenCalled();
     });
   });
@@ -104,10 +103,7 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(false, mockClient);
-      expect(result.available).toBe(false);
-      expect(result.update).toBeNull();
-      expect(result.info).toBeNull();
-      expect(result.error).toBeNull();
+      expect(result.state).toBe('up-to-date');
     });
 
     it('returns available: true and info when an update is found', async () => {
@@ -122,10 +118,12 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(false, mockClient);
-      expect(result.available).toBe(true);
-      expect(result.info?.version).toBe('0.1.15');
-      expect(result.info?.currentVersion).toBe('0.1.14');
-      expect(result.info?.body).toBe('Bug fixes and performance improvements.');
+      expect(result.state).toBe('available');
+      if (result.state !== 'available') throw new Error('expected an available update');
+      expect(result.update).toBe(mockUpdate);
+      expect(result.info.version).toBe('0.1.15');
+      expect(result.info.currentVersion).toBe('0.1.14');
+      expect(result.info.body).toBe('Bug fixes and performance improvements.');
     });
 
     it('fails silently on network failure during background check', async () => {
@@ -135,8 +133,7 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(false, mockClient);
-      expect(result.available).toBe(false);
-      expect(result.error).toBeNull();
+      expect(result.state).toBe('disabled');
     });
 
     it('treats missing release JSON or 404 on remote as up to date during manual check', async () => {
@@ -146,9 +143,7 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(true, mockClient);
-      expect(result.available).toBe(false);
-      expect(result.error).toBeNull();
-      expect(result.update).toBeNull();
+      expect(result.state).toBe('up-to-date');
     });
 
     it('returns user-friendly error message on true network failure during manual check', async () => {
@@ -158,8 +153,9 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(true, mockClient);
-      expect(result.available).toBe(false);
-      expect(result.error).toContain('Unable to connect to the update server');
+      expect(result.state).toBe('error');
+      if (result.state !== 'error') throw new Error('expected an update error');
+      expect(result.message).toContain('Unable to connect to the update server');
     });
 
     it('handles reqwest unreachable network error gracefully with clear message', async () => {
@@ -169,8 +165,9 @@ describe('updateService', () => {
       };
 
       const result = await checkForUpdates(true, mockClient);
-      expect(result.available).toBe(false);
-      expect(result.error).toContain('Unable to connect to the update server');
+      expect(result.state).toBe('error');
+      if (result.state !== 'error') throw new Error('expected an update error');
+      expect(result.message).toContain('Unable to connect to the update server');
     });
 
     it('handles non-Tauri browser environments gracefully', async () => {
@@ -184,11 +181,12 @@ describe('updateService', () => {
       };
 
       const bgResult = await checkForUpdates(false, mockClient);
-      expect(bgResult.available).toBe(false);
-      expect(bgResult.error).toBeNull();
+      expect(bgResult.state).toBe('disabled');
 
       const manualResult = await checkForUpdates(true, mockClient);
-      expect(manualResult.error).toContain('desktop application only');
+      expect(manualResult.state).toBe('error');
+      if (manualResult.state !== 'error') throw new Error('expected a desktop-only error');
+      expect(manualResult.message).toContain('desktop application only');
     });
   });
 
@@ -214,8 +212,7 @@ describe('updateService', () => {
         mockClient,
       );
 
-      expect(outcome.success).toBe(true);
-      expect(outcome.error).toBeNull();
+      expect(outcome.ok).toBe(true);
       expect(mockClient.relaunch).toHaveBeenCalled();
       expect(progressSteps).toContain(0);
       expect(progressSteps).toContain(50);
@@ -233,8 +230,10 @@ describe('updateService', () => {
       });
 
       const outcome = await downloadAndInstallUpdate(mockUpdate, undefined, mockClient);
-      expect(outcome.success).toBe(false);
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('expected a failed install');
       expect(outcome.error).toContain('Signature verification failed');
+      expect(outcome.error.length).toBeGreaterThan(0);
     });
   });
 });

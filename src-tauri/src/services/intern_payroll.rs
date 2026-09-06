@@ -1,6 +1,6 @@
 use super::lunch_break::paid_work_hours_ceiled;
-use super::payroll::floor_zero;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike};
+use super::payroll::{ceil_hour, floor_zero, is_half_day};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use chrono_tz::Asia::Manila;
 
 /// Intern payroll policy shared with the admin payroll commands and the
@@ -71,21 +71,7 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
-    // T6 (decision A): minute-precision office close — clock-out at exactly
-    // 17:00:00 Manila counts a full day; anything earlier is a half-day.
-    let office_close = Manila
-        .with_ymd_and_hms(
-            time_out.year(),
-            time_out.month(),
-            time_out.day(),
-            17,
-            0,
-            0,
-        )
-        .single()
-        .unwrap();
-    let is_before_close = time_out < office_close;
-    let is_half_day = worked_hours > 0 && (worked_hours <= 4 || is_before_close);
+    let is_half_day = is_half_day(worked_hours, time_out);
     let half_day_deduction = if is_half_day { base / 2 } else { 0 };
     Ok(InternPayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -99,20 +85,6 @@ pub fn calculate(
         daily_pay_centavos: floor_zero(base - deduction - half_day_deduction),
         worked_hours,
     })
-}
-
-fn ceil_hour(value: DateTime<chrono_tz::Tz>) -> DateTime<chrono_tz::Tz> {
-    // P5: truncate sub-second residue first so 08:00:00.500 counts exact-hour (TS parity).
-    let truncated = value.with_nanosecond(0).unwrap_or(value);
-    if truncated.minute() == 0 && truncated.second() == 0 {
-        truncated
-    } else {
-        Manila
-            .with_ymd_and_hms(truncated.year(), truncated.month(), truncated.day(), truncated.hour(), 0, 0)
-            .single()
-            .unwrap()
-            + Duration::hours(1)
-    }
 }
 
 #[cfg(test)]

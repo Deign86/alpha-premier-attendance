@@ -1,4 +1,4 @@
-type QueueEntry = { tail: Promise<void>; waiters: number };
+type QueueEntry = { tail: Promise<void> };
 
 /** Per-key async mutex. A key is removed after the final queued operation settles. */
 export class KeyedMutex {
@@ -9,11 +9,10 @@ export class KeyedMutex {
     let release!: () => void;
     const current = new Promise<void>((resolve) => { release = resolve; });
     if (previous) {
-      previous.waiters += 1;
-      this.entries.set(key, { tail: current, waiters: previous.waiters });
+      this.entries.set(key, { tail: current });
       await previous.tail;
     } else {
-      this.entries.set(key, { tail: current, waiters: 1 });
+      this.entries.set(key, { tail: current });
     }
 
     try {

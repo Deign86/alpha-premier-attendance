@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
+import { ceilHour, isHalfDayWork, manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -24,12 +24,6 @@ export type InternPayrollResult = {
 
 const timezone = 'Asia/Manila';
 
-export function manilaWeekStart(attendanceDate: string): string {
-  const date = DateTime.fromISO(attendanceDate, { zone: timezone });
-  if (!date.isValid) throw new Error('attendanceDate must be a valid Manila date');
-  return date.minus({ days: date.weekday - 1 }).toISODate()!;
-}
-
 export function calculateInternPayroll(input: InternPayrollInput): InternPayrollResult {
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   const actualTimeOut = manilaTimestamp(input.actualTimeOut);
@@ -49,11 +43,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
-  // T6 (decision A): minute-precision office close — clock-out at exactly
-  // 17:00:00 counts a full day; anything earlier is a half-day.
-  const officeClose = actualTimeOut.set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
-  const isBeforeClose = actualTimeOut < officeClose;
-  const isHalfDay = workedHours > 0 && (workedHours <= 4 || isBeforeClose);
+  const isHalfDay = isHalfDayWork(workedHours, actualTimeOut);
   const halfDayDeduction = isHalfDay ? basePay / 2 : 0;
 
   return {
@@ -69,11 +59,4 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
     // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
     workedHours,
   };
-}
-
-function ceilHour(value: DateTime): DateTime {
-  // P5: truncate sub-second residue first so 08:00:00.500 counts exact-hour.
-  const truncated = value.set({ millisecond: 0 });
-  const floor = truncated.startOf('hour');
-  return truncated.equals(floor) ? floor : floor.plus({ hours: 1 });
 }

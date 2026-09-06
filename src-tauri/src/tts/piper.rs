@@ -1,9 +1,9 @@
+use super::paths::{first_existing, search_roots};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
 };
-use tauri::Manager;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -27,38 +27,20 @@ pub fn find_piper_binary(app_handle: &tauri::AppHandle, custom_path: Option<&str
         }
     }
 
-    // 2. Tauri resource directory (packaged builds & dev mode)
-    if let Ok(res_dir) = app_handle.path().resource_dir() {
-        let candidates = [
-            res_dir.join("piper").join(exe_name),
-            res_dir.join("resources").join("piper").join(exe_name),
-            res_dir.join("bin").join(exe_name),
-            res_dir.join(exe_name),
-        ];
-        for candidate in candidates {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+    let roots = search_roots(app_handle);
+    let suffixes = [
+        PathBuf::from("piper").join(exe_name),
+        PathBuf::from("resources").join("piper").join(exe_name),
+        PathBuf::from("bin").join(exe_name),
+        PathBuf::from(exe_name),
+    ];
+    for suffix in &suffixes {
+        if let Some(found) = first_existing(&roots, suffix) {
+            return Some(found);
         }
     }
 
-    // 3. Current executable directory (portable mode)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            let candidates = [
-                parent.join("piper").join(exe_name),
-                parent.join("resources").join("piper").join(exe_name),
-                parent.join(exe_name),
-            ];
-            for candidate in candidates {
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-
-    // 4. Standard relative development paths
+    // Standard relative paths outside the shared root set
     let dev_candidates = [
         PathBuf::from("resources").join("piper").join(exe_name),
         PathBuf::from("src-tauri").join("resources").join("piper").join(exe_name),
@@ -94,39 +76,20 @@ pub fn find_voice_model(
         format!("{model_str}.onnx")
     };
 
-    // 2. Search resource directory
-    if let Ok(res_dir) = app_handle.path().resource_dir() {
-        let candidates = [
-            res_dir.join("piper").join("models").join(&onnx_filename),
-            res_dir.join("resources").join("piper").join("models").join(&onnx_filename),
-            res_dir.join("models").join(&onnx_filename),
-        ];
-        for candidate in candidates {
-            if candidate.is_file() {
-                let config = find_companion_json(&candidate);
-                return Some((candidate, config));
-            }
+    let roots = search_roots(app_handle);
+    let suffixes = [
+        PathBuf::from("piper").join("models").join(&onnx_filename),
+        PathBuf::from("resources").join("piper").join("models").join(&onnx_filename),
+        PathBuf::from("models").join(&onnx_filename),
+    ];
+    for suffix in &suffixes {
+        if let Some(found) = first_existing(&roots, suffix) {
+            let config = find_companion_json(&found);
+            return Some((found, config));
         }
     }
 
-    // 3. Search exe directory
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            let candidates = [
-                parent.join("piper").join("models").join(&onnx_filename),
-                parent.join("resources").join("piper").join("models").join(&onnx_filename),
-                parent.join("models").join(&onnx_filename),
-            ];
-            for candidate in candidates {
-                if candidate.is_file() {
-                    let config = find_companion_json(&candidate);
-                    return Some((candidate, config));
-                }
-            }
-        }
-    }
-
-    // 4. Search dev relative paths
+    // Search dev relative paths outside the shared root set
     let dev_candidates = [
         PathBuf::from("resources").join("piper").join("models").join(&onnx_filename),
         PathBuf::from("src-tauri").join("resources").join("piper").join("models").join(&onnx_filename),

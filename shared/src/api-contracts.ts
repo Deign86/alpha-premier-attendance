@@ -46,16 +46,19 @@ export type ArrivalStatus = 'ON_TIME' | 'GRACE_PERIOD' | 'LATE' | 'NONE';
 
 /**
  * Returns Monday (YYYY-MM-DD) of the work week for a given Manila date string.
+ * Throws on invalid input instead of echoing it back: a bad week key would
+ * silently split one person's grace group across two weeks.
  */
 export function getManilaWeekStart(dateStr: string): string {
-  const [yearStr, monthStr, dayStr] = dateStr.split('-');
-  const year = Number(yearStr);
-  const month = Number(monthStr);
-  const day = Number(dayStr);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return dateStr;
-  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match) throw new Error('attendanceDate must be a valid Manila date');
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
   const utcDate = new Date(Date.UTC(year, month - 1, day));
+  if (utcDate.getUTCFullYear() !== year || utcDate.getUTCMonth() !== month - 1 || utcDate.getUTCDate() !== day) {
+    throw new Error('attendanceDate must be a valid Manila date');
+  }
   const dayOfWeek = utcDate.getUTCDay(); // 0 is Sunday, 1 is Monday...
   const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   const mondayUtc = new Date(Date.UTC(year, month - 1, day + diffToMonday));
@@ -89,6 +92,24 @@ export function countWorkdays(startDateStr: string, endDateStr: string): number 
   return count;
 }
 
+/**
+ * Manila-local seconds since midnight for an ISO timestamp, or null when
+ * unparseable. Single owner of the Date -> formatToParts -> read clock reader
+ * so the four policy call sites cannot drift apart.
+ */
+function manilaSecondsSinceMidnight(iso: string, timezone: string): number | null {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return read('hour') * 3600 + read('minute') * 60 + read('second');
+}
 
 /**
  * Determines arrival evaluation (ON_TIME, GRACE_PERIOD, LATE) across a collection of rows,
@@ -106,7 +127,13 @@ export function evaluateAttendanceArrivals(
       result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
       continue;
     }
-    const weekStart = getManilaWeekStart(row.attendanceDate);
+    let weekStart: string;
+    try {
+      weekStart = getManilaWeekStart(row.attendanceDate);
+    } catch {
+      result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
+      continue;
+    }
     const key = `${row.userId}:${weekStart}`;
     const list = groups.get(key) ?? [];
     list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn });
@@ -123,20 +150,11 @@ export function evaluateAttendanceArrivals(
     let graceUsedThisWeek = false;
 
     for (const item of list) {
-      const date = new Date(item.timeIn);
-      if (!Number.isFinite(date.getTime())) {
+      const seconds = manilaSecondsSinceMidnight(item.timeIn, ATTENDANCE_TIMEZONE);
+      if (seconds === null) {
         result.set(item.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
         continue;
       }
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: ATTENDANCE_TIMEZONE,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hourCycle: 'h23',
-      }).formatToParts(date);
-      const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-      const seconds = read('hour') * 3600 + read('minute') * 60 + read('second');
       const startSeconds = 8 * 3600; // 08:00:00
       const graceEndSeconds = 8 * 3600 + 15 * 60; // 08:15:00
 
@@ -174,17 +192,8 @@ export function evaluateArrivalFromTimestamp(
   timeInIso: string,
   timezone = ATTENDANCE_TIMEZONE,
 ): ArrivalStatus {
-  const date = new Date(timeInIso);
-  if (!Number.isFinite(date.getTime())) return 'NONE';
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  const seconds = read('hour') * 3600 + read('minute') * 60 + read('second');
+  const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
+  if (seconds === null) return 'NONE';
   const [startHour, startMinute] = OFFICE_HOURS_START.split(':').map(Number);
   const [graceHour, graceMinute] = GRACE_PERIOD_END.split(':').map(Number);
   const startSeconds = startHour * 3600 + startMinute * 60;
@@ -202,16 +211,9 @@ export function evaluateArrivalFromTimestamp(
  * because the office does not allow overtime.
  */
 export function isLateTimeout(timeOutIso: string): boolean {
-  const date = new Date(timeOutIso);
-  if (!Number.isFinite(date.getTime())) return false;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: ATTENDANCE_TIMEZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
-  const minutesSinceMidnight = read('hour') * 60 + read('minute');
+  const seconds = manilaSecondsSinceMidnight(timeOutIso, ATTENDANCE_TIMEZONE);
+  if (seconds === null) return false;
+  const minutesSinceMidnight = Math.floor(seconds / 60);
   const [cutoffHour, cutoffMinute] = LATE_TIMEOUT_THRESHOLD.split(':').map(Number);
   return minutesSinceMidnight >= cutoffHour * 60 + cutoffMinute;
 }
@@ -222,17 +224,8 @@ export function isLateTimeout(timeOutIso: string): boolean {
  * a half day.
  */
 export function isBeforeFivePm(timeOutIso: string): boolean {
-  const date = new Date(timeOutIso);
-  if (!Number.isFinite(date.getTime())) return false;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: ATTENDANCE_TIMEZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
-  const secondsSinceMidnight = read('hour') * 3600 + read('minute') * 60 + read('second');
+  const secondsSinceMidnight = manilaSecondsSinceMidnight(timeOutIso, ATTENDANCE_TIMEZONE);
+  if (secondsSinceMidnight === null) return false;
   const [endHour, endMinute] = WORKDAY_END.split(':').map(Number);
   return secondsSinceMidnight < endHour * 3600 + endMinute * 60;
 }
@@ -641,7 +634,6 @@ export type ScanSuccessResponse = {
 };
 
 export const scanErrorCodes = [
-  'SCAN_TIMEOUT',
   'INVALID_SCAN_INPUT',
   'UNKNOWN_RFID_CARD',
   'INACTIVE_USER',

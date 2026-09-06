@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { calculateInternPayroll, manilaWeekStart } from '../src/intern-payroll.js';
+import { getManilaWeekStart } from '@rfid-attendance/shared';
+import { calculateInternPayroll } from '../src/intern-payroll.js';
 
 describe('intern payroll policy', () => {
   it('applies weekly grace period for arrival between 08:00 and 08:15', () => {
@@ -113,8 +114,8 @@ describe('intern payroll policy', () => {
   });
 
   it('uses Monday as the Manila payroll week boundary', () => {
-    expect(manilaWeekStart('2026-08-02')).toBe('2026-07-27');
-    expect(manilaWeekStart('2026-08-03')).toBe('2026-08-03');
+    expect(getManilaWeekStart('2026-08-02')).toBe('2026-07-27');
+    expect(getManilaWeekStart('2026-08-03')).toBe('2026-08-03');
   });
 
   it('deducts half day pay when worked hours are 4 or fewer', () => {

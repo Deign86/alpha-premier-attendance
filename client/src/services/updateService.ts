@@ -17,11 +17,59 @@ export interface UpdateProgress {
   phase: 'starting' | 'downloading' | 'installing' | 'finished';
 }
 
-export interface CheckUpdateResult {
-  available: boolean;
-  update: Update | null;
-  info: UpdateInfo | null;
-  error: string | null;
+/**
+ * Discriminated update-check outcome: exactly one state is ever present, so
+ * callers narrow on `state` instead of re-checking an `available`/`error`
+ * pair that permitted `available: true` alongside a set error.
+ */
+export type CheckUpdateResult =
+  | { state: 'disabled' }
+  | { state: 'up-to-date' }
+  | { state: 'available'; update: Update; info: UpdateInfo }
+  | { state: 'error'; message: string };
+
+/** Release-endpoint responses that mean "no published update", not a failure. */
+const NOT_FOUND_PATTERNS = [
+  'could not fetch a valid release json',
+  'release json',
+  'releasenotfound',
+  'could not find a release',
+  'no release found',
+  'status 404',
+  '404 not found',
+  '404',
+  'not found',
+  'uptodate',
+  'up to date',
+] as const;
+
+/** Transport-level failures that mean "could not reach the update server". */
+const NETWORK_PATTERNS = [
+  'error sending request',
+  'connect error',
+  'timed out',
+  'timeout',
+  'network unreachable',
+  'unreachable network',
+  'could not connect',
+  'connection refused',
+  'connection reset',
+  'dns error',
+  'failed to resolve',
+  'failed to connect',
+  'failed to fetch',
+] as const;
+
+function matchesAny(normalizedMessage: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => normalizedMessage.includes(pattern));
+}
+
+export function isUpdateNotFoundMessage(normalizedMessage: string): boolean {
+  return matchesAny(normalizedMessage, NOT_FOUND_PATTERNS);
+}
+
+export function isUpdateNetworkMessage(normalizedMessage: string): boolean {
+  return matchesAny(normalizedMessage, NETWORK_PATTERNS);
 }
 
 export interface UpdaterClient {
@@ -69,36 +117,21 @@ export async function checkForUpdates(
   client: UpdaterClient = defaultUpdaterClient,
 ): Promise<CheckUpdateResult> {
   if (!manual && isAutoUpdateDisabledLocally()) {
-    return {
-      available: false,
-      update: null,
-      info: null,
-      error: null,
-    };
+    return { state: 'disabled' };
   }
 
   if (!runningInTauri()) {
     if (manual) {
-      return {
-        available: false,
-        update: null,
-        info: null,
-        error: 'Update checks are available in the desktop application only.',
-      };
+      return { state: 'error', message: 'Update checks are available in the desktop application only.' };
     }
-    return {
-      available: false,
-      update: null,
-      info: null,
-      error: null,
-    };
+    return { state: 'disabled' };
   }
 
   try {
     const update = await client.check({ timeout: 8_000 });
     if (update) {
       return {
-        available: true,
+        state: 'available',
         update,
         info: {
           version: update.version,
@@ -106,84 +139,39 @@ export async function checkForUpdates(
           body: update.body,
           date: update.date,
         },
-        error: null,
       };
     }
-    return {
-      available: false,
-      update: null,
-      info: null,
-      error: null,
-    };
+    return { state: 'up-to-date' };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (!manual) {
       // Background checks fail silently so kiosk operation is never blocked by network issues
       console.warn('Silent background update check failed:', message);
-      return {
-        available: false,
-        update: null,
-        info: null,
-        error: null,
-      };
+      return { state: 'disabled' };
     }
 
     const normalized = message.toLowerCase();
     // When the release endpoint returns 404 or no latest.json exists on the latest release,
     // there are no published updates available. Treat as up-to-date rather than an error.
-    if (
-      normalized.includes('could not fetch a valid release json') ||
-      normalized.includes('release json') ||
-      normalized.includes('releasenotfound') ||
-      normalized.includes('could not find a release') ||
-      normalized.includes('no release found') ||
-      normalized.includes('status 404') ||
-      normalized.includes('404 not found') ||
-      normalized.includes('404') ||
-      normalized.includes('not found') ||
-      normalized.includes('uptodate') ||
-      normalized.includes('up to date')
-    ) {
-      return {
-        available: false,
-        update: null,
-        info: null,
-        error: null,
-      };
+    if (isUpdateNotFoundMessage(normalized)) {
+      return { state: 'up-to-date' };
     }
 
     // Network / connectivity / timeout issues
-    if (
-      normalized.includes('error sending request') ||
-      normalized.includes('connect error') ||
-      normalized.includes('timed out') ||
-      normalized.includes('timeout') ||
-      normalized.includes('network unreachable') ||
-      normalized.includes('unreachable network') ||
-      normalized.includes('could not connect') ||
-      normalized.includes('connection refused') ||
-      normalized.includes('connection reset') ||
-      normalized.includes('dns error') ||
-      normalized.includes('failed to resolve') ||
-      normalized.includes('failed to connect') ||
-      normalized.includes('failed to fetch')
-    ) {
-      return {
-        available: false,
-        update: null,
-        info: null,
-        error: 'Unable to connect to the update server. Please check your internet connection.',
-      };
+    if (isUpdateNetworkMessage(normalized)) {
+      return { state: 'error', message: 'Unable to connect to the update server. Please check your internet connection.' };
     }
 
-    return {
-      available: false,
-      update: null,
-      info: null,
-      error: message || 'Unable to check for updates.',
-    };
+    return { state: 'error', message: message || 'Unable to check for updates.' };
   }
 }
+
+/**
+ * Install outcome as a discriminated union: success carries no error
+ * payload, failure always carries a message. Unlike the former
+ * `{success, error}` pair, `ok: true` alongside an error is unrepresentable.
+ */
+export type InstallUpdateResult = { ok: true } | { ok: false; error: string };
 
 /**
  * Download and install the update package, notifying progress, then relaunch.
@@ -192,7 +180,7 @@ export async function downloadAndInstallUpdate(
   update: Update,
   onProgress?: (progress: UpdateProgress) => void,
   client: UpdaterClient = defaultUpdaterClient,
-): Promise<{ success: boolean; error: string | null }> {
+): Promise<InstallUpdateResult> {
   try {
     let totalLength = 0;
     let downloaded = 0;
@@ -258,12 +246,12 @@ export async function downloadAndInstallUpdate(
 
     // Relaunch the desktop app into the updated version
     await client.relaunch();
-    return { success: true, error: null };
+    return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Update install failed:', message);
     return {
-      success: false,
+      ok: false,
       error: message || 'Failed to install update.',
     };
   }

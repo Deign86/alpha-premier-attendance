@@ -56,6 +56,31 @@ export function isTtsEngine(value?: string): value is TtsEngine {
   return value === 'auto' || value === 'cloned-bea' || value === 'piper' || value === 'system' || value === 'disabled';
 }
 
+/** Enabled engine choices (everything except the `disabled` sentinel). */
+export type TtsEngineChoice = 'auto' | 'cloned-bea' | 'piper' | 'system';
+
+/**
+ * Discriminated TTS mode: the single value every enable/disable decision
+ * narrows on. Unlike the `{enabled, engine}` storage bag (which permits the
+ * contradictory `enabled: false` plus a concrete engine), a `TtsMode` is
+ * either disabled or fully specified — callers never re-check the pair.
+ */
+export type TtsMode =
+  | { kind: 'disabled' }
+  | { kind: 'enabled'; engine: TtsEngineChoice; voiceModel: string; rate: number; volume: number };
+
+/** Collapse `{enabled, engine}` storage state into one discriminant. */
+export function resolveTtsMode(settings: TtsSettings): TtsMode {
+  if (!settings.enabled || settings.engine === 'disabled') return { kind: 'disabled' };
+  return {
+    kind: 'enabled',
+    engine: settings.engine,
+    voiceModel: settings.voiceModel,
+    rate: settings.rate,
+    volume: settings.volume,
+  };
+}
+
 function parseStoredTtsSettings(raw: string): TtsSettings {
   try {
     // SAFETY: Parsed JSON payload is checked field-by-field before constructing domain object
@@ -86,7 +111,12 @@ function parseStoredTtsSettings(raw: string): TtsSettings {
       ? Math.min(Math.max(volumeNum, 0.0), 1.0)
       : DEFAULT_TTS_SETTINGS.volume;
 
-    return { enabled, engine, voiceModel, rate, volume };
+    // Migrate legacy payloads: `enabled: false` stored alongside a concrete
+    // engine is the same state as `engine: 'disabled'` — canonicalize it so
+    // stored settings never encode the contradictory combination.
+    const canonicalEngine = enabled ? engine : 'disabled';
+
+    return { enabled, engine: canonicalEngine, voiceModel, rate, volume };
   } catch {
     return DEFAULT_TTS_SETTINGS;
   }
@@ -376,19 +406,48 @@ export function buildScanErrorPhrase({
 }
 
 /**
+ * Shared Step-2 of cloned-voice splicing: play the pre-rendered cloned name
+ * clip, falling back to live Piper synthesis of the name. Owns the Bea-first
+ * fallback rule (and its single warn path) so the four splice call sites
+ * cannot drift apart. Resolves to true when the name was heard in either
+ * form. Cloned-clip playback errors propagate (each caller owns its
+ * splice-abort fallback); only the Piper fallback is caught here.
+ */
+async function playNameWithPiperFallback(
+  nameUrl: string | null,
+  cleanName: string,
+  settings: Pick<TtsSettings, 'voiceModel' | 'rate' | 'volume'>,
+  warnLabel: string,
+): Promise<boolean> {
+  if (nameUrl && (await playClonedBeaAudio(nameUrl, settings.volume, settings.rate))) return true;
+  try {
+    await tauriApi.ttsSpeak(cleanName, {
+      engine: 'piper',
+      voiceModel: settings.voiceModel,
+      rate: settings.rate,
+      volume: settings.volume,
+    });
+    return true;
+  } catch (error) {
+    console.warn(warnLabel, error);
+    return false;
+  }
+}
+
+/**
  * Non-blocking offline TTS voice announcement for attendance events.
  */
 export async function announceAttendance(
   options: AnnounceAttendanceOptions,
 ): Promise<TtsSpeakResult | null> {
   const activeSettings = options.settings ?? loadTtsSettings();
-
-  if (!activeSettings.enabled || activeSettings.engine === 'disabled') {
+  const mode = resolveTtsMode(activeSettings);
+  if (mode.kind === 'disabled') {
     return null;
   }
 
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
-  const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
+  const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
 
   // Hybrid Splicing: When using Ma'am Bea cloned voice and a dynamic employee/intern name is present:
   // 1. Play pre-rendered cloned prefix carrier ("Good morning,", "Goodbye,", etc.)
@@ -432,25 +491,13 @@ export async function announceAttendance(
         // Step 1: Play cloned greeting / prefix
         const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
         if (prefixPlayed) {
-          let namePlayed = false;
-          // Step 2A: Play pre-rendered cloned name if available
-          if (clonedNameUrl) {
-            namePlayed = await playClonedBeaAudio(clonedNameUrl, activeSettings.volume, activeSettings.rate);
-          }
-
-          // Step 2B: If no pre-rendered name file or playback failed, synthesize name live via local Piper engine
-          if (!namePlayed) {
-            try {
-              await tauriApi.ttsSpeak(cleanName, {
-                engine: 'piper',
-                voiceModel: activeSettings.voiceModel,
-                rate: activeSettings.rate,
-                volume: activeSettings.volume,
-              });
-            } catch (piperErr) {
-              console.warn('Local Piper synthesis for dynamic name failed:', piperErr);
-            }
-          }
+          // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+          await playNameWithPiperFallback(
+            clonedNameUrl,
+            cleanName,
+            activeSettings,
+            'Local Piper synthesis for dynamic name failed:',
+          );
 
           // Step 3: Play cloned carrier suffix segment
           await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
@@ -486,12 +533,12 @@ export async function announceBathroom(
   options: AnnounceBathroomOptions,
 ): Promise<TtsSpeakResult | null> {
   const activeSettings = options.settings ?? loadTtsSettings();
-
-  if (!activeSettings.enabled || activeSettings.engine === 'disabled') {
+  const mode = resolveTtsMode(activeSettings);
+  if (mode.kind === 'disabled') {
     return null;
   }
 
-  const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
+  const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
 
   if (isClonedBea) {
@@ -521,23 +568,13 @@ export async function announceBathroom(
           try {
             const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
             if (prefixPlayed) {
-              let namePlayed = false;
-              if (nameUrl) {
-                namePlayed = await playClonedBeaAudio(nameUrl, activeSettings.volume, activeSettings.rate);
-              }
-              if (!namePlayed) {
-                try {
-                  await tauriApi.ttsSpeak(cleanName, {
-                    engine: 'piper',
-                    voiceModel: activeSettings.voiceModel,
-                    rate: activeSettings.rate,
-                    volume: activeSettings.volume,
-                  });
-                  namePlayed = true;
-                } catch (error) {
-                  console.warn('Local Piper synthesis for bathroom name failed:', error);
-                }
-              }
+              // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+              const namePlayed = await playNameWithPiperFallback(
+                nameUrl,
+                cleanName,
+                activeSettings,
+                'Local Piper synthesis for bathroom name failed:',
+              );
               if (namePlayed) {
                 await playReturnReminder();
                 return { success: true, engineUsed: 'cloned-bea' };
@@ -558,23 +595,13 @@ export async function announceBathroom(
           try {
             const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
             if (prefixPlayed) {
-              let namePlayed = false;
-              if (nameUrl) {
-                namePlayed = await playClonedBeaAudio(nameUrl, activeSettings.volume, activeSettings.rate);
-              }
-              if (!namePlayed) {
-                try {
-                  await tauriApi.ttsSpeak(cleanName, {
-                    engine: 'piper',
-                    voiceModel: activeSettings.voiceModel,
-                    rate: activeSettings.rate,
-                    volume: activeSettings.volume,
-                  });
-                  namePlayed = true;
-                } catch (error) {
-                  console.warn('Local Piper synthesis for bathroom name failed:', error);
-                }
-              }
+              // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+              const namePlayed = await playNameWithPiperFallback(
+                nameUrl,
+                cleanName,
+                activeSettings,
+                'Local Piper synthesis for bathroom name failed:',
+              );
               if (namePlayed) {
                 const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
                 if (suffixPlayed) {
@@ -626,8 +653,8 @@ export async function announceAdminAssist(
   settings?: TtsSettings,
 ): Promise<TtsSpeakResult | null> {
   const activeSettings = settings ?? loadTtsSettings();
-
-  if (!activeSettings.enabled || activeSettings.engine === 'disabled') {
+  const mode = resolveTtsMode(activeSettings);
+  if (mode.kind === 'disabled') {
     return null;
   }
 
@@ -648,12 +675,12 @@ export async function announceScanError(
   options: AnnounceScanErrorOptions,
 ): Promise<TtsSpeakResult | null> {
   const activeSettings = options.settings ?? loadTtsSettings();
-
-  if (!activeSettings.enabled || activeSettings.engine === 'disabled') {
+  const mode = resolveTtsMode(activeSettings);
+  if (mode.kind === 'disabled') {
     return null;
   }
 
-  const isClonedBea = activeSettings.engine === 'cloned-bea' || activeSettings.engine === 'auto';
+  const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
 
   // Bea-first: splice the static "-by" carrier with the holder's cloned name clip
   // so the holder is actually named (previously the name was dropped in Bea mode).
@@ -678,27 +705,13 @@ export async function announceScanError(
             activeSettings.rate,
           );
           if (prefixPlayed) {
-            let holderPlayed = false;
-            if (holderNameUrl) {
-              holderPlayed = await playClonedBeaAudio(
-                holderNameUrl,
-                activeSettings.volume,
-                activeSettings.rate,
-              );
-            }
-            if (!holderPlayed) {
-              try {
-                await tauriApi.ttsSpeak(holderName, {
-                  engine: 'piper',
-                  voiceModel: activeSettings.voiceModel,
-                  rate: activeSettings.rate,
-                  volume: activeSettings.volume,
-                });
-                holderPlayed = true;
-              } catch (error) {
-                console.warn('Local Piper synthesis for key-holder name failed:', error);
-              }
-            }
+            // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+            const holderPlayed = await playNameWithPiperFallback(
+              holderNameUrl,
+              holderName,
+              activeSettings,
+              'Local Piper synthesis for key-holder name failed:',
+            );
             if (holderPlayed) {
               return { success: true, engineUsed: 'cloned-bea' };
             }

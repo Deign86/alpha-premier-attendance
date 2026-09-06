@@ -2216,7 +2216,7 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
         let now = chrono::Utc::now().to_rfc3339();
         for (row_id, payload) in rows {
             let idempotency_key = format!("{table_name}:{row_id}:UPSERT");
-            let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
+            let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
                 .bind(table_name).bind(&row_id).bind("UPSERT").bind(payload.to_string()).bind(&now).bind(&now).bind(&now).bind(&idempotency_key).execute(&state.db).await.map_err(|e| e.to_string())?;
             queued += 1;
         }

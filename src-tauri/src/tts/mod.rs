@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod paths;
 pub mod piper;
 pub mod sanitizer;
 pub mod windows_sapi;
@@ -38,6 +39,37 @@ pub struct TtsStatusResponse {
     pub voice_model_path: Option<String>,
     pub system_sapi_available: bool,
     pub is_speaking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnginePlan {
+    None,
+    PiperOnly,
+    SapiOnly,
+    Full,
+}
+
+impl EnginePlan {
+    fn from_choice(choice: &str) -> Self {
+        match choice {
+            "auto" | "cloned-bea" => Self::Full,
+            "piper" => Self::PiperOnly,
+            "system" | "sapi" => Self::SapiOnly,
+            _ => Self::None,
+        }
+    }
+
+    fn includes_cloned(self) -> bool {
+        matches!(self, Self::Full)
+    }
+
+    fn includes_piper(self) -> bool {
+        matches!(self, Self::Full | Self::PiperOnly)
+    }
+
+    fn includes_sapi(self) -> bool {
+        matches!(self, Self::Full | Self::SapiOnly)
+    }
 }
 
 #[derive(Clone)]
@@ -149,12 +181,10 @@ impl TtsManager {
             .or(self.config.voice_model.as_deref())
             .unwrap_or(piper::DEFAULT_VOICE_MODEL);
 
-        let try_cloned = engine_choice == "cloned-bea" || engine_choice == "auto";
-        let try_piper = engine_choice == "auto" || engine_choice == "piper" || engine_choice == "cloned-bea";
-        let try_sapi = engine_choice == "auto" || engine_choice == "system" || engine_choice == "sapi" || engine_choice == "cloned-bea";
+        let plan = EnginePlan::from_choice(&engine_choice);
 
         // 1. Attempt Cloned Bea audio playback
-        if try_cloned {
+        if plan.includes_cloned() {
             if let Some(cached_wav) = find_cloned_bea_wav(app_handle, &sanitized) {
                 match self.audio_player.play_wav(&cached_wav, volume, rate, None, true).await {
                     Ok(()) => {
@@ -174,7 +204,7 @@ impl TtsManager {
         }
 
         // 2. Attempt Piper TTS
-        if try_piper || try_cloned {
+        if plan.includes_piper() {
             let piper_bin = piper::find_piper_binary(app_handle, self.config.piper_path.as_deref());
             let model_info = piper::find_voice_model(app_handle, requested_model);
 
@@ -224,7 +254,7 @@ impl TtsManager {
                 log::info!("Piper binary or voice model '{requested_model}' not found on disk");
             }
 
-            if engine_choice == "piper" {
+            if plan == EnginePlan::PiperOnly {
                 return Ok(TtsSpeakResult {
                     success: false,
                     engine_used: "none".into(),
@@ -233,8 +263,7 @@ impl TtsManager {
             }
         }
 
-        // 2. Attempt Windows SAPI Fallback
-        if try_sapi && windows_sapi::is_sapi_available() {
+        if plan.includes_sapi() && windows_sapi::is_sapi_available() {
             match windows_sapi::spawn_sapi_speech(
                 &sanitized,
                 Some(rate),
@@ -376,6 +405,7 @@ fn get_cloned_bea_rel_path(phrase: &str) -> Option<std::path::PathBuf> {
 
 pub fn find_cloned_bea_wav(app_handle: &tauri::AppHandle, phrase: &str) -> Option<std::path::PathBuf> {
     let rel_path_buf = get_cloned_bea_rel_path(phrase)?;
+    let roots = paths::search_roots(app_handle);
 
     // Try .mp3 first, then .wav fallback for each candidate location
     let try_with_fallback = |base: &std::path::Path| -> Option<std::path::PathBuf> {
@@ -395,50 +425,9 @@ pub fn find_cloned_bea_wav(app_handle: &tauri::AppHandle, phrase: &str) -> Optio
         None
     };
 
-    // 1. Check relative to client/public/, resources/, or src-tauri (dev mode from repo root or src-tauri)
-    let dev_bases = [
-        std::path::PathBuf::from("client").join("public"),
-        std::path::PathBuf::from("..").join("client").join("public"),
-        std::path::PathBuf::from("public"),
-        std::path::PathBuf::from("resources"),
-        std::path::PathBuf::from("src-tauri").join("resources"),
-        std::path::PathBuf::from("..").join("src-tauri").join("resources"),
-    ];
-    for base in dev_bases {
-        if let Some(found) = try_with_fallback(&base) {
+    for base in &roots {
+        if let Some(found) = try_with_fallback(base) {
             return Some(found);
-        }
-    }
-
-    // 2. Tauri resource directory (packaged builds)
-    if let Ok(res_dir) = app_handle.path().resource_dir() {
-        let res_bases = [
-            res_dir.clone(),
-            res_dir.join("resources"),
-            res_dir.join("public"),
-            res_dir.join("client").join("public"),
-        ];
-        for base in res_bases {
-            if let Some(found) = try_with_fallback(&base) {
-                return Some(found);
-            }
-        }
-    }
-
-    // 3. Current executable directory (portable mode)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            let exe_bases = [
-                parent.to_path_buf(),
-                parent.join("resources"),
-                parent.join("public"),
-                parent.join("client").join("public"),
-            ];
-            for base in exe_bases {
-                if let Some(found) = try_with_fallback(&base) {
-                    return Some(found);
-                }
-            }
         }
     }
 

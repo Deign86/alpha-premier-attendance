@@ -14,6 +14,7 @@ import {
   isClonedBeaPhraseAvailable,
   isTtsEngine,
   loadTtsSettings,
+  resolveTtsMode,
   sanitizeTextForSpeech,
   saveTtsSettings,
   setNameManifest,
@@ -1259,6 +1260,67 @@ describe('ttsService', () => {
       expect(manifestStr).not.toContain('http://');
       expect(manifestStr).not.toContain('https://');
       expect(manifestStr).toContain('/voices/bea/');
+    });
+  });
+
+  describe('resolveTtsMode', () => {
+    it('resolves enabled settings to the enabled variant preserving fields', () => {
+      expect(
+        resolveTtsMode({
+          enabled: true,
+          engine: 'piper',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.2,
+          volume: 0.8,
+        }),
+      ).toEqual({
+        kind: 'enabled',
+        engine: 'piper',
+        voiceModel: 'en_US-amy-medium',
+        rate: 1.2,
+        volume: 0.8,
+      });
+    });
+
+    it('resolves the disabled engine to the disabled variant', () => {
+      expect(
+        resolveTtsMode({
+          enabled: true,
+          engine: 'disabled',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        }),
+      ).toEqual({ kind: 'disabled' });
+    });
+
+    it('resolves the contradictory enabled:false plus concrete engine to disabled', () => {
+      expect(
+        resolveTtsMode({
+          enabled: false,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        }),
+      ).toEqual({ kind: 'disabled' });
+    });
+
+    it('migrates legacy enabled:false payloads to the canonical disabled engine on load', () => {
+      window.localStorage.setItem(
+        'alpha_premier_tts_settings',
+        JSON.stringify({
+          enabled: false,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+        }),
+      );
+      const loaded = loadTtsSettings();
+      expect(loaded.enabled).toBe(false);
+      expect(loaded.engine).toBe('disabled');
+      expect(resolveTtsMode(loaded)).toEqual({ kind: 'disabled' });
     });
   });
 });

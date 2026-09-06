@@ -37,8 +37,7 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   // T2: zero-day cutoff proration (mirrors Rust BUG-PAY-02) — an employee who
   // worked 0 days must not receive the full flat allowance sum.
   const workedZeroDays = input.actualWorkingDays === 0 && input.standardWorkingDays > 0;
-  const allowanceFactor = workedZeroDays ? Math.min(1, Math.max(0, input.actualWorkingDays / input.standardWorkingDays)) : 1;
-  const totalAllowance = multiply(incentivesAllowance + specialAllowance + hra, allowanceFactor);
+  const totalAllowance = workedZeroDays ? 0 : incentivesAllowance + specialAllowance + hra;
   const lateDeduction = cents(input.lateDeduction);
   const halfDayDeduction = multiply(dailyRate * input.halfDayCount, halfDayFraction);
   const absenceDeduction = input.absenceDeduction != null ? cents(input.absenceDeduction) : dailyRate * input.absentDays;

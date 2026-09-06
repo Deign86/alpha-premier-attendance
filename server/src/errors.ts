@@ -1,21 +1,7 @@
+import { scanErrorCodes } from '@rfid-attendance/shared';
 import type { ScanErrorCode, ScanErrorResponse } from '@rfid-attendance/shared';
 
-const scanErrorCodeSet = new Set<ScanErrorCode>([
-  'INVALID_SCAN_INPUT',
-  'UNKNOWN_RFID_CARD',
-  'INACTIVE_USER',
-  'DUPLICATE_SCAN',
-  'ATTENDANCE_ALREADY_COMPLETED',
-  'ATTENDANCE_DATA_CONFLICT',
-  'GOOGLE_SHEETS_UNAVAILABLE',
-  'PAYROLL_GENERATION_FAILED',
-  'RATE_LIMITED',
-  'INTERNAL_SERVER_ERROR',
-  'CONFIGURATION_ERROR',
-  'ADMIN_CARD_REQUIRES_SELECTION',
-  'ATTENDANCE_ALREADY_EXISTS_FOR_DATE',
-  'BACKDATE_LIMIT_EXCEEDED',
-]);
+const scanErrorCodeSet: Set<string> = new Set<string>(scanErrorCodes);
 
 export class ScanError extends Error {
   readonly code: ScanErrorCode;

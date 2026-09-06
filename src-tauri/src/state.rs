@@ -186,8 +186,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub exports_dir: PathBuf,
     pub is_portable: bool,
-    pub scan_guard: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
-    pub physical_cooldown: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
+    pub scan_debounce: Arc<tokio::sync::Mutex<HashMap<String, ScanDebounce>>>,
     pub connected_sse_clients: Arc<AtomicU64>,
     pub started_at: u64,
     pub admin_session: Arc<tokio::sync::Mutex<Option<AdminSession>>>,
@@ -202,6 +201,17 @@ pub struct AppState {
     pub google_sheets_target: Arc<tokio::sync::RwLock<Option<GoogleSheetsTarget>>>,
     pub tts: Arc<TtsManager>,
     pub updater: UpdaterConfig,
+}
+
+/// Single debounce record per card: `fast` stamps every scan attempt up front
+/// (500 ms duplicate guard, fires even when the DB write later fails) while
+/// `slow` stamps only successful writes (10 s physical cooldown). One map and
+/// one lock replace the former parallel `scan_guard` + `physical_cooldown`
+/// collections so the two windows can never disagree on the key.
+#[derive(Clone, Copy)]
+pub struct ScanDebounce {
+    pub fast: Instant,
+    pub slow: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -253,8 +263,7 @@ impl AppState {
             data_dir,
             exports_dir,
             is_portable,
-            scan_guard: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            physical_cooldown: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            scan_debounce: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             connected_sse_clients: Arc::new(AtomicU64::new(0)),
             started_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)

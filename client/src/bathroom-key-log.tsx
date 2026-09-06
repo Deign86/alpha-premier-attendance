@@ -79,6 +79,8 @@ export interface BathroomKeyUser {
   gender?: "MALE" | "FEMALE" | null;
 }
 
+type GenderPanelState = { search: string; selectedUserId: string | null };
+
 export function BathroomKeyLogPanel({
   users,
 }: {
@@ -92,10 +94,10 @@ export function BathroomKeyLogPanel({
   const [successMsg, setSuccessMsg] = useState("");
   const [nowMs, setNowMs] = useState(Date.now);
 
-  const [maleSearch, setMaleSearch] = useState("");
-  const [femaleSearch, setFemaleSearch] = useState("");
-  const [selectedMaleUserId, setSelectedMaleUserId] = useState<string | null>(null);
-  const [selectedFemaleUserId, setSelectedFemaleUserId] = useState<string | null>(null);
+  const [panelState, setPanelState] = useState<Record<BathroomGenderKey, GenderPanelState>>({
+    MALE: { search: "", selectedUserId: null },
+    FEMALE: { search: "", selectedUserId: null },
+  });
   const [editingLog, setEditingLog] = useState<BathroomLogItem | null>(null);
 
   const handleLogUpdated = (updated: BathroomLogItem) => {
@@ -105,43 +107,25 @@ export function BathroomKeyLogPanel({
       const targetLogs = isMale ? prev.maleLogs : prev.femaleLogs;
       const newLogs = targetLogs.map((item) => (item.logId === updated.logId ? updated : item));
 
-      let maleActive = prev.maleActive;
-      let femaleActive = prev.femaleActive;
-      if (isMale) {
-        if (updated.status === "RETURNED" && maleActive?.logId === updated.logId) {
-          maleActive = null;
-        } else if (updated.status === "OUT") {
-          maleActive = {
-            logId: updated.logId,
-            userId: updated.userId,
-            fullName: updated.fullName,
-            department: updated.department,
-            genderKey: updated.genderKey,
-            timeOut: updated.timeOut,
-          };
-        }
-      } else {
-        if (updated.status === "RETURNED" && femaleActive?.logId === updated.logId) {
-          femaleActive = null;
-        } else if (updated.status === "OUT") {
-          femaleActive = {
-            logId: updated.logId,
-            userId: updated.userId,
-            fullName: updated.fullName,
-            department: updated.department,
-            genderKey: updated.genderKey,
-            timeOut: updated.timeOut,
-          };
-        }
+      const currentActive = isMale ? prev.maleActive : prev.femaleActive;
+      let nextActive = currentActive;
+      if (updated.status === "RETURNED" && currentActive?.logId === updated.logId) {
+        nextActive = null;
+      } else if (updated.status === "OUT") {
+        nextActive = {
+          logId: updated.logId,
+          userId: updated.userId,
+          fullName: updated.fullName,
+          department: updated.department,
+          genderKey: updated.genderKey,
+          timeOut: updated.timeOut,
+        };
       }
 
-      return {
-        ...prev,
-        maleActive,
-        femaleActive,
-        maleLogs: isMale ? newLogs : prev.maleLogs,
-        femaleLogs: isMale ? prev.femaleLogs : newLogs,
-      };
+      if (isMale) {
+        return { ...prev, maleActive: nextActive, maleLogs: newLogs };
+      }
+      return { ...prev, femaleActive: nextActive, femaleLogs: newLogs };
     });
     setError("");
     setSuccessMsg("Saved — bathroom key times updated.");
@@ -174,29 +158,20 @@ export function BathroomKeyLogPanel({
     return users.filter((u) => u.status === "ACTIVE" && u.cardType !== "ADMIN_ASSIST");
   }, [users]);
 
-  const filteredMaleEmployees = useMemo(() => {
-    const q = maleSearch.toLowerCase().trim();
-    const list = activeEmployees.filter((employee) => !employee.gender || employee.gender === "MALE");
-    if (!q) return list;
-    return list.filter(
-      (e) =>
-        e.fullName.toLowerCase().includes(q) ||
-        (e.department && e.department.toLowerCase().includes(q)) ||
-        e.userId.toLowerCase().includes(q),
-    );
-  }, [activeEmployees, maleSearch]);
-
-  const filteredFemaleEmployees = useMemo(() => {
-    const q = femaleSearch.toLowerCase().trim();
-    const list = activeEmployees.filter((employee) => !employee.gender || employee.gender === "FEMALE");
-    if (!q) return list;
-    return list.filter(
-      (e) =>
-        e.fullName.toLowerCase().includes(q) ||
-        (e.department && e.department.toLowerCase().includes(q)) ||
-        e.userId.toLowerCase().includes(q),
-    );
-  }, [activeEmployees, femaleSearch]);
+  const filteredByGender = useMemo(() => {
+    const filterFor = (genderKey: BathroomGenderKey): BathroomKeyUser[] => {
+      const q = panelState[genderKey].search.toLowerCase().trim();
+      const list = activeEmployees.filter((employee) => !employee.gender || employee.gender === genderKey);
+      if (!q) return list;
+      return list.filter(
+        (e) =>
+          e.fullName.toLowerCase().includes(q) ||
+          (e.department && e.department.toLowerCase().includes(q)) ||
+          e.userId.toLowerCase().includes(q),
+      );
+    };
+    return { MALE: filterFor("MALE"), FEMALE: filterFor("FEMALE") };
+  }, [activeEmployees, panelState]);
 
   const handleCheckout = async (genderKey: BathroomGenderKey, userId: string | null) => {
     if (!userId || actionBusy) return;
@@ -214,13 +189,7 @@ export function BathroomKeyLogPanel({
           personId: selectedEmployee?.userId,
         });
         setSuccessMsg(`Checked out ${genderKey.toLowerCase()} key.`);
-        if (genderKey === "MALE") {
-          setSelectedMaleUserId(null);
-          setMaleSearch("");
-        } else {
-          setSelectedFemaleUserId(null);
-          setFemaleSearch("");
-        }
+        setPanelState((prev) => ({ ...prev, [genderKey]: { search: "", selectedUserId: null } }));
         await refreshStatus(date);
       } else {
         const message = res.error?.message ?? "Failed to check out key.";
@@ -269,14 +238,16 @@ export function BathroomKeyLogPanel({
     genderKey: BathroomGenderKey,
     activeHolder: BathroomActiveHolder | null,
     logs: BathroomLogItem[],
-    searchTerm: string,
-    onSearchChange: (v: string) => void,
-    selectedUserId: string | null,
-    onSelectUser: (id: string) => void,
-    filteredList: BathroomKeyUser[],
   ) => {
     const isBusy = actionBusy === genderKey;
     const isOut = Boolean(activeHolder);
+    const searchTerm = panelState[genderKey].search;
+    const selectedUserId = panelState[genderKey].selectedUserId;
+    const onSearchChange = (v: string) =>
+      setPanelState((prev) => ({ ...prev, [genderKey]: { ...prev[genderKey], search: v } }));
+    const onSelectUser = (id: string) =>
+      setPanelState((prev) => ({ ...prev, [genderKey]: { ...prev[genderKey], selectedUserId: id } }));
+    const filteredList = filteredByGender[genderKey];
     const selectedEmployee = activeEmployees.find((e) => e.userId === selectedUserId);
 
     return (
@@ -509,26 +480,8 @@ export function BathroomKeyLogPanel({
         </div>
       ) : (
         <div className="bathroom-panels-grid">
-          {renderKeyPanel(
-            "MALE",
-            status?.maleActive ?? null,
-            status?.maleLogs ?? [],
-            maleSearch,
-            setMaleSearch,
-            selectedMaleUserId,
-            setSelectedMaleUserId,
-            filteredMaleEmployees,
-          )}
-          {renderKeyPanel(
-            "FEMALE",
-            status?.femaleActive ?? null,
-            status?.femaleLogs ?? [],
-            femaleSearch,
-            setFemaleSearch,
-            selectedFemaleUserId,
-            setSelectedFemaleUserId,
-            filteredFemaleEmployees,
-          )}
+          {renderKeyPanel("MALE", status?.maleActive ?? null, status?.maleLogs ?? [])}
+          {renderKeyPanel("FEMALE", status?.femaleActive ?? null, status?.femaleLogs ?? [])}
         </div>
       )}
 

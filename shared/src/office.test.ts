@@ -9,12 +9,18 @@ import {
 
 describe('office identity', () => {
   it('renders the canonical full address from the default identity', () => {
+    expect(DEFAULT_OFFICE_IDENTITY.officeDisplayFull).toBe(
+      composeOfficeAddress(DEFAULT_OFFICE_IDENTITY, 'full'),
+    );
     expect(resolveOfficeDisplay(DEFAULT_OFFICE_IDENTITY, 'full')).toBe(
       'Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila',
     );
   });
 
   it('renders the canonical short display from the default identity', () => {
+    expect(DEFAULT_OFFICE_IDENTITY.officeDisplayShort).toBe(
+      composeOfficeAddress(DEFAULT_OFFICE_IDENTITY, 'short'),
+    );
     expect(resolveOfficeDisplay(DEFAULT_OFFICE_IDENTITY, 'short')).toBe(
       'Tektite East Tower, Ortigas Center, Pasig',
     );

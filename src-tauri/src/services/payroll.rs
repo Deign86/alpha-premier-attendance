@@ -5,3 +5,52 @@ pub fn floor_zero(value: i64) -> i64 {
 pub fn ceiling_hours(seconds: i64) -> i64 {
     ((seconds.max(0) + 3599) / 3600).max(0)
 }
+
+/// Official office close (17:00 Manila). Clock-out at exactly this instant counts a full day (T6 decision A).
+pub const OFFICE_CLOSE_HOUR: u32 = 17;
+/// Paid-hours threshold at or below which a shift is always a half-day.
+pub const HALF_DAY_MAX_HOURS: i64 = 4;
+
+/// 17:00:00 Manila on the same calendar day as the given clock-out.
+pub fn office_close_for(clock_out: chrono::DateTime<chrono_tz::Tz>) -> chrono::DateTime<chrono_tz::Tz> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    chrono_tz::Asia::Manila
+        .with_ymd_and_hms(
+            clock_out.year(),
+            clock_out.month(),
+            clock_out.day(),
+            OFFICE_CLOSE_HOUR,
+            0,
+            0,
+        )
+        .single()
+        .expect("17:00 is always a valid Manila time")
+}
+
+/// Shared half-day rule: short shifts or any clock-out before 17:00 Manila.
+pub fn is_half_day(worked_hours: i64, clock_out: chrono::DateTime<chrono_tz::Tz>) -> bool {
+    worked_hours > 0 && (worked_hours <= HALF_DAY_MAX_HOURS || clock_out < office_close_for(clock_out))
+}
+
+/// Round a Manila timestamp up to the next whole hour (exact hours stay put).
+/// Truncates sub-second residue first so 08:00:00.500 counts exact-hour (TS parity, P5).
+pub fn ceil_hour(value: chrono::DateTime<chrono_tz::Tz>) -> chrono::DateTime<chrono_tz::Tz> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let truncated = value.with_nanosecond(0).unwrap_or(value);
+    if truncated.minute() == 0 && truncated.second() == 0 {
+        truncated
+    } else {
+        chrono_tz::Asia::Manila
+            .with_ymd_and_hms(
+                truncated.year(),
+                truncated.month(),
+                truncated.day(),
+                truncated.hour(),
+                0,
+                0,
+            )
+            .single()
+            .expect("truncated hour is always valid")
+            + chrono::Duration::hours(1)
+    }
+}

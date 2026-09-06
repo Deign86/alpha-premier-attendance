@@ -29,10 +29,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
   describe('UpdateBanner', () => {
     it('does not display banner when no update is available', async () => {
       vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
-        available: false,
-        update: null,
-        info: null,
-        error: null,
+        state: 'up-to-date',
       });
 
       render(<UpdateBanner />);
@@ -45,14 +42,13 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       const mockUpdate = createMockUpdate('0.1.15', '0.1.14', 'Added new payroll export format.');
 
       vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
-        available: true,
+        state: 'available',
         update: mockUpdate,
         info: {
           version: mockUpdate.version,
           currentVersion: mockUpdate.currentVersion,
           body: mockUpdate.body,
         },
-        error: null,
       });
 
       render(<UpdateBanner manualCheckTrigger={1} />);
@@ -67,14 +63,13 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       const mockUpdate = createMockUpdate('0.1.15', '0.1.14', 'Security updates');
 
       vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
-        available: true,
+        state: 'available',
         update: mockUpdate,
         info: {
           version: mockUpdate.version,
           currentVersion: mockUpdate.currentVersion,
           body: mockUpdate.body,
         },
-        error: null,
       });
 
       const installSpy = vi.spyOn(updateService, 'downloadAndInstallUpdate').mockImplementation(async (_u, onProgress) => {
@@ -84,7 +79,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
           percentage: 50,
           phase: 'downloading',
         });
-        return { success: true, error: null };
+        return { ok: true };
       });
 
       render(<UpdateBanner manualCheckTrigger={1} />);
@@ -99,10 +94,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
 
     it('displays up-to-date toast on manual check when no update is available', async () => {
       vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
-        available: false,
-        update: null,
-        info: null,
-        error: null,
+        state: 'up-to-date',
       });
 
       render(<UpdateBanner manualCheckTrigger={1} />);
@@ -112,10 +104,8 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
 
     it('displays error toast with error icon on manual check when check returns error', async () => {
       vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
-        available: false,
-        update: null,
-        info: null,
-        error: 'Unable to connect to update server.',
+        state: 'error',
+        message: 'Unable to connect to update server.',
       });
 
       render(<UpdateBanner manualCheckTrigger={1} />);
@@ -127,10 +117,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
 
     it('does not re-trigger update check in a loop when checking returns up to date', async () => {
       const checkSpy = vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
-        available: false,
-        update: null,
-        info: null,
-        error: null,
+        state: 'up-to-date',
       });
 
       const { rerender } = render(<UpdateBanner manualCheckTrigger={1} />);

@@ -69,7 +69,7 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
 
     try {
       const result = await checkForUpdates(manual);
-      if (result.available && result.update && result.info) {
+      if (result.state === 'available') {
         setUpdateAvailable(true);
         setUpdateObj(result.update);
         setUpdateInfo(result.info);
@@ -78,19 +78,17 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
           setModalOpen(true);
           showToast(null);
         }
-      } else {
-        if (manual) {
-          if (result.error) {
-            showToast({ status: 'error', message: result.error }, 5000);
-          } else {
-            showToast(
-              {
-                status: 'success',
-                message: 'Alpha Premier Attendance is up to date.',
-              },
-              4000,
-            );
-          }
+      } else if (manual) {
+        if (result.state === 'error') {
+          showToast({ status: 'error', message: result.message }, 5000);
+        } else {
+          showToast(
+            {
+              status: 'success',
+              message: 'Alpha Premier Attendance is up to date.',
+            },
+            4000,
+          );
         }
       }
     } catch {
@@ -156,14 +154,16 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   const handleStartInstall = async () => {
     if (!updateObj || isInstalling) return;
     setIsInstalling(true);
+    isInstallingRef.current = true;
     setInstallError(null);
 
     const result = await downloadAndInstallUpdate(updateObj, (p) => {
       setProgress(p);
     });
 
-    if (!result.success) {
+    if (!result.ok) {
       setIsInstalling(false);
+      isInstallingRef.current = false;
       setInstallError(result.error);
     }
   };
