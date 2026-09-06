@@ -288,8 +288,13 @@ pub async fn build_lan_status(state: &AppState) -> LanStatusResponse {
         .map(|item| item.ip.to_string())
         .collect::<Vec<_>>();
     let active_lan_ip = crate::lan_net::pick_active_lan_ip().map(|ip| ip.to_string());
-    let network_profile = crate::lan_net::detect_network_profile().await;
-    let firewall_allow_rule = crate::lan_net::detect_firewall_allow_rule(state.lan.port).await;
+    // Run the two powershell-backed probes concurrently: sequentially they
+    // cost up to ~9s worst case, past the 5s IPC exec budget (lan_status
+    // timed out live). Joined with 2s caps each, worst case stays ~2s.
+    let (network_profile, firewall_allow_rule) = tokio::join!(
+        crate::lan_net::detect_network_profile(),
+        crate::lan_net::detect_firewall_allow_rule(state.lan.port)
+    );
     let running = runtime.phase == crate::state::LanPhase::Running;
 
     // The shareable URL must use the real LAN IP, not loopback. When the bind

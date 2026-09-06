@@ -1173,6 +1173,13 @@ async fn process_bathroom_scan(
         let active_log_id: String = active.get("log_id");
         let active_full_name: String = active.get("full_name");
         let active_time_out_str: String = active.get("time_out");
+        // Holder department for the activeHolder payload (App renders it).
+        let holder_department: Option<String> = sqlx::query("SELECT department FROM users WHERE user_id = ?")
+            .bind(&active_user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .and_then(|row| row.get("department"));
 
         if active_user_id == user_id {
             // RETURNING KEY (Time In)
@@ -1204,6 +1211,7 @@ async fn process_bathroom_scan(
                         "logId": active_log_id,
                         "userId": active_user_id,
                         "fullName": active_full_name,
+                        "department": holder_department,
                         "genderKey": gender_key,
                         "timeOut": active_time_out_str
                     }
@@ -1240,6 +1248,7 @@ async fn process_bathroom_scan(
                     "logId": active_log_id,
                     "userId": active_user_id,
                     "fullName": active_full_name,
+                    "department": holder_department,
                     "genderKey": gender_key,
                     "timeOut": active_time_out_str
                 }

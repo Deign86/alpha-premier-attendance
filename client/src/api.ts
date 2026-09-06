@@ -429,7 +429,7 @@ export async function savePayrollProfile(profile: PayrollCalculationProfile): Pr
     // SAFETY: Backend save profile returns success response
     return (await tauriApi.payrollUpsertProfile(nativeAdminToken ?? '', profile)) as { success: boolean };
   }
-  const response = await fetch(apiUrl('/api/admin/payroll/profiles'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) });
+  const response = await fetch(apiUrl(`/api/admin/payroll/profiles/${encodeURIComponent(profile.profileId)}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) });
   // SAFETY: Parsing admin save profile response JSON
   return (await response.json()) as { success: boolean };
 }

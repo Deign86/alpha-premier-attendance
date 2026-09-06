@@ -11,3 +11,4 @@ This directory contains the feature-by-feature verification specifications for A
 | [`card-setup.md`](card-setup.md) | Card Setup Modal | Unknown card fast-enrollment flow, operator PIN protection, direct employee binding |
 | [`payroll-exports.md`](payroll-exports.md) | Payroll Workspace | Semi-monthly cutoff calculations, official PDF payslip and register generation, XLSX export, file reveal |
 | [`settings-lan-tts.md`](settings-lan-tts.md) | Settings & Diagnostics | Voice selection (Windows SAPI / Piper ONNX), pitch/rate controls, LAN server toggle & sync |
+| [`bathroom-key-log.md`](bathroom-key-log.md) | Bathroom Key Log | Gender-separated key checkout/return via RFID scan or explicit actions, edit log, TTS announcements (desktop-only evidence) |

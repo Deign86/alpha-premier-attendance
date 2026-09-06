@@ -22,55 +22,35 @@ Preconditions:
 - At least one active test worker exists in the SQLite database (e.g. `EMP-001` or seeded employee).
 
 - **Verify Ready State**: Inspect scan status pill on the kiosk.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_find_element",
-    "Arguments": { "selector": "[aria-label='Scanner card ID'], .status-pill" }
-  }
+  ```
+  tool: tauri_webview_find_element, args: { "selector": "[aria-label='Scanner card ID'], .status-pill" }
   ```
   *Observable result*: Scanner status pill shows "Ready for scan" or "Listening" and input is locked against arbitrary keyboard spam.
 
 - **Execute Hardware RFID Scan**: Trigger a simulated hardware scan event.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
+  ```
+  tool: tauri_ipc_execute_command, args: {
       "command": "scan_rfid",
-      "payload": {
+      "args": {
         "request": { "rfidUid": "EMP-001", "source": "RFID" }
       }
     }
-  }
   ```
   *Observable result*: Returns `{ "success": true, "action": "TIME_IN" | "TIME_OUT", "employee": { "fullName": "..." } }`.
 
 - **Drive Manual UID Entry**: Toggle manual mode and enter UID.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_interact",
-    "Arguments": { "selector": "button:has-text('Manual entry')", "action": "click" }
-  }
+  ```
+  tool: tauri_webview_interact, args: { "selector": "button:has-text('Manual entry')", "action": "click" }
   ```
   Followed by typing:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_interact",
-    "Arguments": { "selector": "[aria-label='Manual card ID']", "action": "type", "value": "EMP-001\n" }
-  }
+  ```
+  tool: tauri_webview_interact, args: { "selector": "[aria-label='Manual card ID']", "action": "type", "value": "EMP-001\n" }
   ```
   *Observable result*: Input field accepts keystrokes and submits upon Enter keypress, recording attendance.
 
 - **Capture Visual & DOM Proof**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_screenshot",
-    "Arguments": { "name": "kiosk_attendance_success" }
-  }
+  ```
+  tool: tauri_webview_screenshot, args: { "name": "kiosk_attendance_success" }
   ```
   *Observable result*: Screenshot captured showing worker card banner, name, status, and Manila timestamp.
 
@@ -78,4 +58,5 @@ Preconditions:
 
 - Manual keyboard entry is disabled on the main scanner input to prevent accidental keystrokes from corrupting hardware card scans. Use the explicit manual entry mode toggle before typing.
 - The scanner status automatically pauses while dialogs or admin panels are active.
+- `scan_rfid` takes a single `request` JSON value whose inner fields are camelCase (`request.rfidUid`), consistent with the camelCase wire convention — keep `{ "request": { "rfidUid": "..." } }` as-is.
 

@@ -2,16 +2,21 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
 
-export interface HealthStatusResponse {
-  status: string;
-  uptimeSeconds?: number;
-  timestamp?: string;
+export interface NativeHealthResponse {
+  success: boolean;
+  service: string;
+  timestamp: string;
+  timezone: string;
+  sqlite: string;
+  lanEnabled: boolean;
+  lan: { bindAddress: string | null; port: number; connectedSseClients: number };
+  googleSheetsExport: string;
 }
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
-  getHealth: () => invoke<HealthStatusResponse>('get_health'),
+  getHealth: () => invoke<NativeHealthResponse>('get_health'),
   generatePayrollPdf: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, workerType: string) => invoke<PayrollPdfGenerateResponse>('generate_payroll_pdf', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, workerType }),
   listPayrollPdfs: (token: string) => invoke<PayrollPdfListResponse>('list_payroll_pdfs', { token }),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),

@@ -922,7 +922,7 @@ export type BathroomScanSuccessResponse = {
 export type BathroomScanErrorResponse = {
   success: false;
   error: {
-    code: 'BATHROOM_KEY_IN_USE' | 'USER_NOT_FOUND' | 'USER_INACTIVE' | 'ADMIN_CARD_NOT_ALLOWED' | 'GENDER_NOT_SET' | 'INTERNAL_ERROR';
+    code: 'BATHROOM_KEY_IN_USE' | 'USER_NOT_FOUND' | 'USER_INACTIVE' | 'ADMIN_CARD_NOT_ALLOWED' | 'GENDER_NOT_SET' | 'INVALID_RFID_UID' | 'INTERNAL_ERROR';
     message: string;
   };
   genderKey?: BathroomGenderKey;

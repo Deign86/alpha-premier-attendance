@@ -4,7 +4,7 @@ Administrative workspace for managing employee and intern profiles, RFID card ma
 
 ## Sub-features
 
-- `ADMIN-AUTH`: Protected entry requiring the configured administrator PIN (`1234`).
+- `ADMIN-AUTH`: Protected entry requiring the configured administrator PIN (`293906` — the `default_admin_pin` in `src-tauri/src/config.rs`; a config file can override it).
 - `ADMIN-ROSTER`: Paginated table listing all employees and interns with filtering and search.
 - `ADMIN-UPSERT`: Add new worker or edit details (name, employee ID, role, worker type, RFID UID, rate).
 - `ADMIN-PHOTO`: Client-side validation and storage of profile photo (JPEG/PNG/WebP, capped at 500 KiB / 4096x4096px).
@@ -13,7 +13,7 @@ Administrative workspace for managing employee and intern profiles, RFID card ma
 ## How to get to it (user POV)
 
 - From the Kiosk view, click the "Admin" button in the upper header.
-- Enter the Admin PIN (`1234`) in the PIN modal and click "Unlock".
+- Enter the Admin PIN (`293906`) in the PIN modal and click "Unlock".
 - The Admin workspace displays tabs for "Employees", "Attendance", "Payroll", and "Database".
 
 ## Driving it with Tauri MCP
@@ -23,39 +23,28 @@ Preconditions:
 - Database contains active system configuration with admin PIN configured.
 
 - **Authenticate Session**: Unlock admin panel with PIN.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
+  ```
+  tool: tauri_ipc_execute_command, args: {
       "command": "setup_unlock",
-      "payload": { "pin": "1234" }
+      "args": { "pin": "293906" }
     }
-  }
   ```
   *Observable result*: Returns `{ "success": true, "token": "<session_token>", "expiresAt": "..." }`.
 
 - **List Users**: Query employee and intern roster.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
+  ```
+  tool: tauri_ipc_execute_command, args: {
       "command": "admin_list_users",
-      "payload": { "token": "<session_token>" }
+      "args": { "token": "<session_token>" }
     }
-  }
   ```
   *Observable result*: Returns `{ "success": true, "users": [ ... ] }` containing all registered workers.
 
 - **Create or Update Worker Profile**: Add worker with explicit role and rate.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
+  ```
+  tool: tauri_ipc_execute_command, args: {
       "command": "admin_upsert_user",
-      "payload": {
+      "args": {
         "token": "<session_token>",
         "user": {
           "employeeId": "EMP-VERIFY-001",
@@ -65,17 +54,12 @@ Preconditions:
         }
       }
     }
-  }
   ```
   *Observable result*: Worker is stored in SQLite and appears in the roster query.
 
 - **Capture Visual & DOM Proof**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_screenshot",
-    "Arguments": { "name": "admin_roster_table" }
-  }
+  ```
+  tool: tauri_webview_screenshot, args: { "name": "admin_roster_table" }
   ```
   *Observable result*: Screenshot captured displaying the updated employee roster table.
 

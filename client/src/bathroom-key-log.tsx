@@ -142,6 +142,8 @@ export function BathroomKeyLogPanel({
       const res = await loadBathroomStatus(targetDate);
       if (res.success) {
         setStatus(res);
+      } else {
+        setError("Unable to load bathroom key log status.");
       }
     } catch {
       setError("Unable to load bathroom key log status.");

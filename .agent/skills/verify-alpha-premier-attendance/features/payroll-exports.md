@@ -12,7 +12,7 @@ Calculates semi-monthly cutoff attendance, overtime, deductions, and generates o
 
 ## How to get to it (user POV)
 
-- Navigate to the Admin workspace (requires PIN unlock `1234`).
+- Navigate to the Admin workspace (requires PIN unlock `293906`).
 - Select the "Payroll" tab.
 - Choose a payroll cutoff period from the cutoff selector dropdown (or pick custom dates).
 - Click "Generate Payroll Register" (Excel) or "Generate Payslip PDFs".
@@ -23,58 +23,42 @@ Preconditions:
 - App is running on Tauri MCP bridge port 9223.
 - An authenticated session token is available from `setup_unlock`.
 
-- **Calculate Cutoff Summary**: Request preview calculation.
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
-      "command": "payroll_generate_cutoff",
-      "payload": {
-        "token": "<token>",
-        "cutoffStart": "2026-08-01",
-        "cutoffEnd": "2026-08-15",
-        "payrollCutoffLabel": "August 1-15, 2026",
-        "customization": {}
-      }
+- **Calculate Cutoff Summary** (`tauri_ipc_execute_command`): Request preview calculation.
+  ```
+  tool: tauri_ipc_execute_command, args: {
+    "command": "payroll_generate_cutoff",
+    "args": {
+      "token": "<token>",
+      "cutoffStart": "2026-08-01",
+      "cutoffEnd": "2026-08-15",
+      "payrollCutoffLabel": "August 1-15, 2026",
+      "customization": {}
     }
   }
   ```
   *Observable result*: Returns calculated payroll records with basic pay, allowances, deductions, and net pay in centavos.
 
-- **Export Payroll XLSX**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
-      "command": "export_payroll_xlsx",
-      "payload": { "token": "<token>", "cutoff": "2026-08-01_2026-08-15" }
-    }
+- **Export Payroll XLSX** (`tauri_ipc_execute_command`):
+  ```
+  tool: tauri_ipc_execute_command, args: {
+    "command": "export_payroll_xlsx",
+    "args": { "token": "<token>", "cutoff": "2026-08-01_2026-08-15" }
   }
   ```
   *Observable result*: Returns `{ "success": true, "filePath": "...", "fileName": "payroll-2026-08-01_2026-08-15.xlsx" }`.
 
-- **Generate Official PDF Register & Payslips**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
-      "command": "generate_payroll_register_pdf",
-      "payload": { "token": "<token>", "cutoff": "2026-08-01_2026-08-15" }
-    }
+- **Generate Official PDF Register & Payslips** (`tauri_ipc_execute_command`):
+  ```
+  tool: tauri_ipc_execute_command, args: {
+    "command": "generate_payroll_register_pdf",
+    "args": { "token": "<token>", "cutoff": "2026-08-01_2026-08-15" }
   }
   ```
   *Observable result*: Generates valid PDF document in the exports directory.
 
-- **Capture Visual Evidence**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_screenshot",
-    "Arguments": { "name": "payroll_register_preview" }
-  }
+- **Capture Visual Evidence** (`tauri_webview_screenshot`):
+  ```
+  tool: tauri_webview_screenshot, args: { "name": "payroll_register_preview" }
   ```
   *Observable result*: Screenshot captured of the payroll register calculation table.
 

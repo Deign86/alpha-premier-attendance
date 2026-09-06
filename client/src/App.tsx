@@ -265,8 +265,9 @@ export default function App() {
     try {
       const data = await loadBathroomStatus();
       setBathroomStatus(data);
-    } catch {
-      /* ignore */
+    } catch (error) {
+      // Background refresh: keep stale state, log for diagnostics.
+      console.warn("Bathroom status refresh failed.", error);
     }
   }, []);
 
@@ -381,18 +382,23 @@ export default function App() {
       if (!candidate || setupBusy) return;
       setSetupBusy(true);
       setSetupError("");
-      const response = await unlockSetup(candidate);
-      setSetupBusy(false);
-      if (!response.success) {
-        setSetupError(response.error.message);
-        return;
+      try {
+        const response = await unlockSetup(candidate);
+        if (!response.success) {
+          setSetupError(response.error.message);
+          return;
+        }
+        setSetupToken(response.setupToken);
+        setSetupExpiresAt(response.expiresAt);
+        setAdminPin("");
+        setSetupStep("scan");
+        setSetupDialogOpen(true);
+        window.setTimeout(focusSetupInput, 0);
+      } catch (error) {
+        setSetupError(error instanceof Error ? error.message : "Unable to unlock setup. Please try again.");
+      } finally {
+        setSetupBusy(false);
       }
-      setSetupToken(response.setupToken);
-      setSetupExpiresAt(response.expiresAt);
-      setAdminPin("");
-      setSetupStep("scan");
-      setSetupDialogOpen(true);
-      window.setTimeout(focusSetupInput, 0);
     },
     [focusSetupInput, setupBusy],
   );
@@ -798,6 +804,10 @@ export default function App() {
         }, config.resultResetDelayMs);
       } catch {
         setState("error");
+        setBathroomScanResult({
+          success: false,
+          error: { code: "INTERNAL_ERROR", message: "Bathroom service is temporarily unavailable." },
+        });
         void announceScanError({
           errorCode: "SERVICE_ERROR",
           message: "Bathroom service is temporarily unavailable.",

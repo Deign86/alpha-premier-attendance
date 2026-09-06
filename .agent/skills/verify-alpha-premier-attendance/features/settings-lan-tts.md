@@ -20,48 +20,32 @@ Preconditions:
 - Desktop app is running and connected via Tauri MCP Bridge on port 9223.
 
 - **Check TTS Synthesizer Status**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": { "command": "tts_status" }
-  }
+  ```
+  tool: tauri_ipc_execute_command, args: { "command": "tts_status" }
   ```
   *Observable result*: Returns `{ "success": true, "engine": "piper" | "sapi", "available": true }`.
 
 - **Execute Test Voice Synthesis**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": {
+  ```
+  tool: tauri_ipc_execute_command, args: {
       "command": "tts_speak",
-      "payload": {
+      "args": {
         "text": "Time in recorded for Test Employee",
         "options": { "rate": 1.0, "volume": 0.8 }
       }
     }
-  }
   ```
   *Observable result*: Returns `{ "success": true, "played": true }` or status confirmation without crashing audio thread.
 
 - **Inspect LAN Server Diagnostics**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "ipc_execute_command",
-    "Arguments": { "command": "lan_status" }
-  }
+  ```
+  tool: tauri_ipc_execute_command, args: { "command": "lan_status" }
   ```
   *Observable result*: Returns `{ "enabled": boolean, "port": 8080, "bindAddress": "..." }`.
 
 - **Capture Visual Proof**:
-  ```json
-  {
-    "ServerName": "tauri",
-    "ToolName": "webview_screenshot",
-    "Arguments": { "name": "voice_settings_panel" }
-  }
+  ```
+  tool: tauri_webview_screenshot, args: { "name": "voice_settings_panel" }
   ```
   *Observable result*: Screenshot of the voice settings panel with slider controls and engine selectors.
 

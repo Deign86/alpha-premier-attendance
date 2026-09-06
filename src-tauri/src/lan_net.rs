@@ -150,7 +150,9 @@ try {
     let Ok(child) = cmd.spawn() else {
         return None;
     };
-    let output = tokio::time::timeout(std::time::Duration::from_secs(6), child.wait_with_output())
+    // Tight timeout: build_lan_status joins this with the network-profile
+    // probe, so the pair must stay well under the 5s IPC exec budget.
+    let output = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait_with_output())
         .await
         .ok()
         .and_then(|result| result.ok());
@@ -242,7 +244,8 @@ pub async fn detect_network_profile() -> NetworkProfile {
     let Ok(child) = cmd.spawn() else {
         return NetworkProfile::Unknown;
     };
-    let output = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait_with_output())
+    // Tight timeout (see detect_firewall_allow_rule).
+    let output = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait_with_output())
         .await
         .ok()
         .and_then(|result| result.ok());
