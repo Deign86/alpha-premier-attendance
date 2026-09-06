@@ -294,7 +294,7 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
 - [ ] RFID pairing for Allaena + Mitchi once the kiosk database file arrives.
   CHECK: owner supplies DB file with real card UIDs → UPDATE users SET rfid_uid (single row each, keep user_id/full_name) → test scan per intern → tab fills
   EXPECT: placeholder UIDs replaced in place (no duplicate rows); first real scans push to their tabs
-  EVIDENCE: pending owner DB file
+  EVIDENCE: Allaena PAIRED 2026-09-05 — roster row APG-2026-115 now carries real card UID 1259587435 (single row, no duplicates), resolves MATCH to tab Allaena Nicole E. Vizon; first real scan will push. Mitchi (APG-2026-106) still placeholder — pending owner card UID.
 
 ## Tauri IPC casing + verification skill refresh gates
 
