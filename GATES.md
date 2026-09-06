@@ -374,7 +374,7 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: script file (node -e is sandbox-blocked) asserting /^permissions:\s*\n\s+contents:\s*write/m in release.yml
   EXPECT: command exits 0
   EVIDENCE: `.tmp-verify-release.cjs` printed `release.yml structure OK`; committed as 596d567 and pushed to main (fix(release): declare workflow-level contents write)
-- [ ] Failed v0.1.52 run (34017919768) rerun publishes the GitHub Release with NSIS + updater assets.
+- [x] Failed v0.1.52 run (34017919768) rerun publishes the GitHub Release with NSIS + updater assets.
   CHECK: gh release view v0.1.52 --json assets --jq ".assets[].name"
   EXPECT: lists `Alpha Premier Attendance_0.1.52_x64-setup.exe`, `.sig`, and `latest.json`
-  EVIDENCE: `gh run rerun 34017919768 --failed` queued 2026-09-06 (~20 min rebuild); run shows queued
+  EVIDENCE: attempt 3 completed success 2026-09-06 09:09 UTC after manually creating the v0.1.52 release shell (Actions token 403'd on POST /releases twice; user-token create worked; upload path proved contents:write effective). Assets live: setup exe + .sig + latest.json. Build log 09:01 UTC: `embedded service-account fallback ENABLED`. Binary proof: 7z-extracted shipped exe contains `client_email` + `private_key` markers (findstr filename-only, exit 0); TEMP scratch removed. Code path: sheets_sync.rs:858 include_str! OUT_DIR key -> google_access_token (covers intern-DTR + ops mirror).
