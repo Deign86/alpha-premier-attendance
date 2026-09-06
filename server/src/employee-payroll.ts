@@ -9,7 +9,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   // P4: reject inverted logs instead of silently flooring worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
-  const isHalfDay = isHalfDayWork(workedHours, actualTimeOut);
+  const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const halfDayDeduction = isHalfDay ? input.dailyRate / 2 : 0;
 
   // TODO: Employee late rules TBD by client

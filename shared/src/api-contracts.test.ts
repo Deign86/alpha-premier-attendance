@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -118,6 +118,13 @@ describe('workday 5:00 PM half-day timeout policy', () => {
   it('never treats an unparseable timestamp as before 5 PM', () => {
     expect(isBeforeFivePm('not-a-timestamp')).toBe(false);
     expect(isBeforeFivePm('')).toBe(false);
+  });
+
+  it('detects afternoon arrivals at/after 12:00 noon as half day', () => {
+    expect(isAfternoonHalfDayArrival('2026-08-04T12:00:00+08:00')).toBe(true);
+    expect(isAfternoonHalfDayArrival('2026-08-04T13:00:00+08:00')).toBe(true);
+    expect(isAfternoonHalfDayArrival('2026-08-04T11:59:59+08:00')).toBe(false);
+    expect(isAfternoonHalfDayArrival('2026-08-04T08:00:00+08:00')).toBe(false);
   });
 });
 

@@ -19,6 +19,8 @@ export const LUNCH_END_HOUR = 13;
 export const LUNCH_DURATION_HOURS = 1;
 /** Official office close (17:00 Manila). Clock-out at exactly this instant counts a full day (T6 decision A). */
 export const OFFICE_CLOSE_HOUR = 17;
+/** Clock-in at/after this Manila hour is an afternoon half-day (missed morning). */
+export const HALF_DAY_LATE_ARRIVAL_HOUR = 12;
 /** Paid-hours threshold at or below which a shift is always a half-day. */
 export const HALF_DAY_MAX_HOURS = 4;
 const timezone = 'Asia/Manila';
@@ -95,7 +97,10 @@ export function officeCloseFor(clockOut: DateTime): DateTime {
   return clockOut.set({ hour: OFFICE_CLOSE_HOUR, minute: 0, second: 0, millisecond: 0 });
 }
 
-/** Shared half-day rule: short shifts or any clock-out before 17:00 Manila. */
-export function isHalfDayWork(workedHours: number, clockOut: DateTime): boolean {
-  return workedHours > 0 && (workedHours <= HALF_DAY_MAX_HOURS || clockOut < officeCloseFor(clockOut));
+/** Shared half-day rule: short shifts, early clock-out, or afternoon arrival (>=12:00 Manila). */
+export function isHalfDayWork(workedHours: number, clockOut: DateTime, clockIn?: DateTime): boolean {
+  if (!(workedHours > 0)) return false;
+  if (workedHours <= HALF_DAY_MAX_HOURS) return true;
+  if (clockOut < officeCloseFor(clockOut)) return true;
+  return clockIn !== undefined && clockIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR;
 }

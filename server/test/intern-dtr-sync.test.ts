@@ -275,6 +275,15 @@ describe('buildDtrRow', () => {
       '4:59:00 PM',
     ]);
   });
+  it('afternoon arrival renders afternoon-only [empty, empty, 1PM, out]', () => {
+    expect(buildDtrRow('2026-09-05T12:00:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
+      '',
+      '',
+      '1:00:00 PM',
+      '5:00:00 PM',
+    ]);
+  });
+
   it('working-to-half-day rewrite changes the row (skip-identical fires)', () => {
     const working = buildDtrRow('2026-09-05T08:00:00+08:00', null, date);
     const half = buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T12:30:00+08:00', date);
@@ -343,6 +352,7 @@ describe('red paint planner', () => {
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', null, '2026-09-05')).toBe('working');
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T12:30:00+08:00', '2026-09-05')).toBe('half');
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T17:00:00+08:00', '2026-09-05')).toBe('full');
+    expect(classifyRecordKind('2026-09-05T12:00:00+08:00', '2026-09-05T17:00:00+08:00', '2026-09-05')).toBe('half-pm');
     expect(classifyRecordKind(null, null, '2026-09-05')).toBe('absent');
   });
   it('absent paints B:E red; half whites morning + reds remainder', () => {
@@ -352,6 +362,12 @@ describe('red paint planner', () => {
     expect(planRowFormat('T', 107, 'half')).toEqual([
       { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 1, endCol0Excl: 3, red: false },
       { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 3, endCol0Excl: 5, red: true },
+    ]);
+  });
+  it('half-pm reds the empty morning + whites the afternoon', () => {
+    expect(planRowFormat('T', 107, 'half-pm')).toEqual([
+      { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 1, endCol0Excl: 3, red: true },
+      { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 3, endCol0Excl: 5, red: false },
     ]);
   });
   it('full whites everything; working leaves E untouched', () => {

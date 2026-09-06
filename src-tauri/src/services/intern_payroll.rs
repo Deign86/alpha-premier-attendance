@@ -71,7 +71,7 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
-    let is_half_day = is_half_day(worked_hours, time_out);
+    let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let half_day_deduction = if is_half_day { base / 2 } else { 0 };
     Ok(InternPayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -232,5 +232,18 @@ mod tests {
             assert!(!result.is_half_day);
             assert_eq!(result.daily_pay_centavos, 8000);
         }
+    }
+
+    #[test]
+    fn afternoon_arrival_at_noon_is_half_day() {
+        let noon = calculate(
+            "2026-08-01",
+            "2026-08-01T12:00:00+08:00",
+            "2026-08-01T17:00:00+08:00",
+            false,
+        )
+        .unwrap();
+        assert!(noon.is_half_day);
+        assert_eq!(noon.half_day_deduction_centavos, 4000);
     }
 }

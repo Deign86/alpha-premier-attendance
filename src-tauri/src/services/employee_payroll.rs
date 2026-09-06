@@ -49,7 +49,7 @@ pub fn calculate(
         .single()
         .unwrap();
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
-    let is_half_day = is_half_day(worked_hours, time_out);
+    let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let half_day_deduction = if is_half_day {
         daily_rate_centavos / 2
     } else {
@@ -143,6 +143,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.computed_time_in, "2026-08-01T08:00:00+08:00");
+    }
+
+    #[test]
+    fn afternoon_arrival_at_noon_is_half_day_even_with_overtime() {
+        let noon = calculate(
+            "2026-08-01T12:00:00+08:00",
+            "2026-08-01T17:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(noon.is_half_day);
+        assert_eq!(noon.half_day_deduction_centavos, 50_000);
+        let overtime = calculate(
+            "2026-08-01T12:00:00+08:00",
+            "2026-08-01T18:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(overtime.is_half_day);
+        let before = calculate(
+            "2026-08-01T11:59:00+08:00",
+            "2026-08-01T17:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(!before.is_half_day);
     }
 
     #[test]

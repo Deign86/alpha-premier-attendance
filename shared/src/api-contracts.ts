@@ -231,6 +231,17 @@ export function isBeforeFivePm(timeOutIso: string): boolean {
 }
 
 /**
+ * True when the Manila-local clock time of a time-in timestamp is at/after
+ * 12:00 noon. An afternoon arrival misses the morning and is a half day,
+ * even when the time-out reaches 17:00 or later (overtime stays half).
+ */
+export function isAfternoonHalfDayArrival(timeInIso: string): boolean {
+  const secondsSinceMidnight = manilaSecondsSinceMidnight(timeInIso, ATTENDANCE_TIMEZONE);
+  if (secondsSinceMidnight === null) return false;
+  return secondsSinceMidnight >= 12 * 3600;
+}
+
+/**
  * Normalizes and capitalizes a full name:
  * - Trims leading and trailing whitespace
  * - Collapses consecutive whitespace into a single space

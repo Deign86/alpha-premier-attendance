@@ -8,6 +8,8 @@ pub fn ceiling_hours(seconds: i64) -> i64 {
 
 /// Official office close (17:00 Manila). Clock-out at exactly this instant counts a full day (T6 decision A).
 pub const OFFICE_CLOSE_HOUR: u32 = 17;
+/// Clock-in at/after this Manila hour misses the morning: afternoon half-day.
+pub const HALF_DAY_LATE_ARRIVAL_HOUR: u32 = 12;
 /// Paid-hours threshold at or below which a shift is always a half-day.
 pub const HALF_DAY_MAX_HOURS: i64 = 4;
 
@@ -27,9 +29,23 @@ pub fn office_close_for(clock_out: chrono::DateTime<chrono_tz::Tz>) -> chrono::D
         .expect("17:00 is always a valid Manila time")
 }
 
-/// Shared half-day rule: short shifts or any clock-out before 17:00 Manila.
-pub fn is_half_day(worked_hours: i64, clock_out: chrono::DateTime<chrono_tz::Tz>) -> bool {
-    worked_hours > 0 && (worked_hours <= HALF_DAY_MAX_HOURS || clock_out < office_close_for(clock_out))
+/// Shared half-day rule: short shifts, early clock-out, or afternoon arrival (>=12:00 Manila).
+pub fn is_half_day(
+    worked_hours: i64,
+    clock_out: chrono::DateTime<chrono_tz::Tz>,
+    clock_in: chrono::DateTime<chrono_tz::Tz>,
+) -> bool {
+    use chrono::Timelike;
+    if !(worked_hours > 0) {
+        return false;
+    }
+    if worked_hours <= HALF_DAY_MAX_HOURS {
+        return true;
+    }
+    if clock_out < office_close_for(clock_out) {
+        return true;
+    }
+    clock_in.hour() >= HALF_DAY_LATE_ARRIVAL_HOUR
 }
 
 /// Round a Manila timestamp up to the next whole hour (exact hours stay put).

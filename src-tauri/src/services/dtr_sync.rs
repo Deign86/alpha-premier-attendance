@@ -354,11 +354,14 @@ pub fn format_sheet_time(iso: &str) -> Result<String, String> {
     Ok(local.format("%-I:%M:%S %p").to_string().to_uppercase())
 }
 
-/// Half-day cutoff (Manila wall clock): a time-out strictly before
-/// 16:59:00 renders the DTR row morning-only. DTR display rule only —
+/// Half-day cutoffs (Manila wall clock): a time-out strictly before
+/// 16:59:00 renders the DTR row morning-only; a time-in at/after 12:00
+/// renders afternoon-only. DTR display rule only —
 /// system payroll keeps its own half-day logic.
 const HALF_DAY_CUTOFF_HOUR: u32 = 16;
 const HALF_DAY_CUTOFF_MINUTE: u32 = 59;
+/// Clock-in at/after this Manila hour renders afternoon-only.
+const AFTERNOON_ARRIVAL_HOUR: u32 = 12;
 
 fn is_half_day_timeout(time_out: &str) -> Result<bool, String> {
     let dt = chrono::DateTime::parse_from_rfc3339(time_out.trim())
@@ -371,12 +374,20 @@ fn is_half_day_timeout(time_out: &str) -> Result<bool, String> {
     )
 }
 
+fn is_afternoon_arrival(time_in: &str) -> Result<bool, String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
+        .map_err(|_| format!("invalid timestamp: {time_in}"))?;
+    let t = dt.with_timezone(&Manila).time();
+    Ok(t.hour() >= AFTERNOON_ARRIVAL_HOUR)
+}
+
 /// Build `[B, C, D, E]` (DTR display rule, not payroll):
-/// - time-in is always written as-is once present;
 /// - still WORKING (no time-out): `[in, 12PM, 1PM, '']` intraday;
 /// - timed out before 16:59 Manila: morning-only `[in, 12PM, '', '']` —
 ///   the actual tap-out time is discarded, `C` is always 12:00 PM;
-/// - timed out at/after 16:59: full `[in, 12PM, 1PM, out]`.
+/// - timed in at/after 12:00 noon: afternoon-only `['', '', 1PM, out]` —
+///   the morning is discarded, `D` is always 1:00 PM (owner sheet shape);
+/// - otherwise: full `[in, 12PM, 1PM, out]`.
 /// - a time-out earlier than the time-in is rejected (mirrors the P4
 ///   inverted-log rule in payroll): overnight shifts are outside the
 ///   kiosk same-day model, so failing closed beats rendering nonsense.
@@ -414,6 +425,14 @@ pub fn build_dtr_row(
             String::new(),
         ]);
     }
+    if is_afternoon_arrival(tin)? {
+        return Ok([
+            String::new(),
+            String::new(),
+            DTR_LUNCH_IN.to_string(),
+            format_sheet_time(tout_raw)?,
+        ]);
+    }
     Ok([
         started,
         DTR_LUNCH_OUT.to_string(),
@@ -429,12 +448,13 @@ pub fn build_dtr_row(
 pub enum DtrRowKind {
     Absent,
     HalfDay,
+    HalfDayPm,
     FullDay,
     Working,
 }
 
 /// Classify one attendance record for paint purposes. Half-day uses the
-/// same Manila wall-clock cutoff as `build_dtr_row`.
+/// same Manila wall-clock cutoffs as `build_dtr_row`.
 pub fn classify_record_row(
     time_in: Option<&str>,
     time_out: Option<&str>,
@@ -450,10 +470,13 @@ pub fn classify_record_row(
     // SAFETY: has_out guard above ensures Some (possibly blank-checked).
     let out = time_out.unwrap_or("");
     if is_half_day_timeout(out)? {
-        Ok(DtrRowKind::HalfDay)
-    } else {
-        Ok(DtrRowKind::FullDay)
+        return Ok(DtrRowKind::HalfDay);
     }
+    let tin = time_in.unwrap_or("");
+    if is_afternoon_arrival(tin)? {
+        return Ok(DtrRowKind::HalfDayPm);
+    }
+    Ok(DtrRowKind::FullDay)
 }
 
 fn dtr_rgb(color: DtrCellColor) -> (f64, f64, f64) {
@@ -482,7 +505,8 @@ pub struct DtrFormatOp {
 }
 
 /// Format ops for one pushed row: absent paints B:E red; half-day keeps
-/// B:C white and paints the empty remainder D:E red; full-day whites
+/// B:C white and paints the empty remainder D:E red; half-day-pm paints
+/// the empty morning B:C red and keeps D:E white; full-day whites
 /// B:E (clears stale red, e.g. absent → backdated entry); WORKING
 /// whites B:D (cells holding values) and leaves E untouched.
 pub fn plan_row_format(
@@ -503,6 +527,10 @@ pub fn plan_row_format(
         DtrRowKind::HalfDay => vec![
             one(1, 3, DtrCellColor::White),
             one(3, 5, DtrCellColor::Red),
+        ],
+        DtrRowKind::HalfDayPm => vec![
+            one(1, 3, DtrCellColor::Red),
+            one(3, 5, DtrCellColor::White),
         ],
         DtrRowKind::FullDay => vec![one(1, 5, DtrCellColor::White)],
         DtrRowKind::Working => vec![one(1, 4, DtrCellColor::White)],
@@ -1646,6 +1674,36 @@ mod tests {
             build_dtr_row(tin, Some("2026-09-05T17:00:00+08:00"), "2026-09-05").unwrap()[3],
             "5:00:00 PM"
         );
+    }
+
+    #[test]
+    fn afternoon_arrival_renders_afternoon_only() {
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T12:00:00+08:00"),
+                Some("2026-09-05T17:00:00+08:00"),
+                "2026-09-05"
+            )
+            .unwrap(),
+            [
+                String::new(),
+                String::new(),
+                "1:00:00 PM".to_string(),
+                "5:00:00 PM".to_string()
+            ]
+        );
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T12:00:00+08:00"),
+                Some("2026-09-05T17:00:00+08:00")
+            ),
+            Ok(DtrRowKind::HalfDayPm)
+        );
+        let ops = plan_row_format(7, 107, DtrRowKind::HalfDayPm);
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].start_col_0, 1);
+        assert_eq!(ops[0].color, DtrCellColor::Red);
+        assert_eq!(ops[1].color, DtrCellColor::White);
     }
 
     #[test]

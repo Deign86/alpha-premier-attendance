@@ -353,11 +353,12 @@ export function formatSheetTime(isoManila: string): string {
 }
 
 /**
- * Build [B, C, D, E] (DTR display rule, not payroll): time-in is always
- * written as-is once present; still WORKING (no time-out) keeps the
- * lunch pair with E empty; a time-out before 16:59 Manila renders
- * morning-only [in, 12PM, '', ''] with the tap-out time discarded;
- * at/after 16:59 the full [in, 12PM, 1PM, out] row is written.
+ * Build [B, C, D, E] (DTR display rule, not payroll): still WORKING
+ * (no time-out) keeps the lunch pair with E empty; a time-out before
+ * 16:59 Manila renders morning-only [in, 12PM, '', ''] with the tap-out
+ * time discarded; a time-in at/after 12:00 noon renders afternoon-only
+ * ['', '', 1PM, out] with the morning discarded (owner sheet shape);
+ * otherwise the full [in, 12PM, 1PM, out] row is written.
  * A time-out earlier than the time-in is rejected (P4 inverted-log
  * precedent): overnight shifts are outside the kiosk same-day model.
  */
@@ -375,6 +376,7 @@ export function buildDtrRow(
   if (!tout.isValid) throw new Error(`invalid Manila timestamp: ${timeOut}`);
   if (tout < tin) throw new Error(`Time-out cannot be earlier than time-in: ${timeOut} < ${timeIn}`);
   if (isHalfDayTimeout(timeOut, attendanceDate)) return [started, LUNCH_OUT, '', ''];
+  if (isAfternoonArrival(timeIn)) return ['', '', LUNCH_IN, formatSheetTime(timeOut)];
   return [started, LUNCH_OUT, LUNCH_IN, formatSheetTime(timeOut)];
 }
 
@@ -389,6 +391,13 @@ export function isHalfDayTimeout(timeOut: string, _attendanceDate: string): bool
   return dt.hour < 16 || (dt.hour === 16 && dt.minute < 59);
 }
 
+/** True when the Manila wall-clock time-in is at/after 12:00 noon (afternoon half-day). */
+export function isAfternoonArrival(timeIn: string): boolean {
+  const dt = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
+  if (!dt.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
+  return dt.hour >= 12;
+}
+
 /**
  * DTR data-cell paint (B:E only — F TOTAL and H:J counters are formula
  * territory and never enter a format range).
@@ -400,7 +409,7 @@ export function isHalfDayTimeout(timeOut: string, _attendanceDate: string): bool
 export const DTR_RED = { red: 1, green: 0, blue: 0 } as const;
 export const DTR_WHITE = { red: 1, green: 1, blue: 1 } as const;
 
-export type DtrRowKind = 'absent' | 'half' | 'full' | 'working';
+export type DtrRowKind = 'absent' | 'half' | 'half-pm' | 'full' | 'working';
 
 export type FormatOp = {
   tab: string;
@@ -433,7 +442,7 @@ export type FormatRequest = {
   };
 };
 
-/** Classify one record for paint (same Manila cutoff as buildDtrRow). */
+/** Classify one record for paint (same Manila cutoffs as buildDtrRow). */
 export function classifyRecordKind(
   timeIn: string | null,
   timeOut: string | null,
@@ -441,12 +450,15 @@ export function classifyRecordKind(
 ): DtrRowKind {
   if (!timeIn) return 'absent';
   if (!timeOut) return 'working';
-  return isHalfDayTimeout(timeOut, attendanceDate) ? 'half' : 'full';
+  if (isHalfDayTimeout(timeOut, attendanceDate)) return 'half';
+  if (isAfternoonArrival(timeIn)) return 'half-pm';
+  return 'full';
 }
 
 /**
  * Format ops for one pushed row: absent → B:E red; half → B:C white +
- * D:E red (empty remainder); full → B:E white (clears stale red);
+ * D:E red (empty remainder); half-pm → B:C red (empty morning) +
+ * D:E white; full → B:E white (clears stale red);
  * working → B:D white, E untouched.
  */
 export function planRowFormat(tab: string, row1Based: number, kind: DtrRowKind): FormatOp[] {
@@ -460,6 +472,7 @@ export function planRowFormat(tab: string, row1Based: number, kind: DtrRowKind):
   });
   if (kind === 'absent') return [one(1, 5, true)];
   if (kind === 'half') return [one(1, 3, false), one(3, 5, true)];
+  if (kind === 'half-pm') return [one(1, 3, true), one(3, 5, false)];
   if (kind === 'full') return [one(1, 5, false)];
   return [one(1, 4, false)];
 }

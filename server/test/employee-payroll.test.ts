@@ -88,6 +88,29 @@ describe('employee payroll policy', () => {
     expect(justAfterFive.dailyPay).toBe(600);
   });
 
+  it('afternoon arrival at/after 12:00 PM is half day even with 17:00+ time-out', () => {
+    const noon = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T12:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      dailyRate: 600,
+    });
+    expect(noon.isHalfDay).toBe(true);
+    expect(noon.halfDayDeduction).toBe(300);
+    expect(noon.dailyPay).toBe(300);
+    const overtime = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T12:00:00+08:00',
+      actualTimeOut: '2026-07-28T18:00:00+08:00',
+      dailyRate: 600,
+    });
+    expect(overtime.isHalfDay).toBe(true);
+    const before = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T11:59:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      dailyRate: 600,
+    });
+    expect(before.isHalfDay).toBe(false);
+  });
+
   it('P5: sub-second residue does not push an exact hour up', () => {
     const result = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00.500+08:00',
