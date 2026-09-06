@@ -42,12 +42,17 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Check embedded sheets-key secret
+        shell: bash
+        run: if [ -z "${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}" ]; then echo "::error::Missing ALPHA_PREMIER_EMBED_KEY_JSON repo secret (full service-account JSON). GitHub Releases must ship DTR-connected."; exit 1; fi
+
       - name: Build Tauri app and attach to release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}

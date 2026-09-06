@@ -362,3 +362,9 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EXPECT: lint, typecheck, and Rust tests exit 0.
 
   EVIDENCE (lan-autostart): `cargo test --manifest-path src-tauri/Cargo.toml lan_` 15 passed, 0 failed; reviewer confirmed `snapshot()` API + `lan_start` gate parity; boot spawn is detached with log-only warn.
+
+## Embedded service-account fallback (fresh-install zero-touch)
+- [x] Fresh installs sync DTR+ops without manual key copy; explicit config file still wins.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml embedded
+  EXPECT: embedded fallback tests pass; no key bytes in repo/tests/logs
+  EVIDENCE: worktree embed-key-zero-touch — `cargo test --lib embedded_` 2/2 pass, `sheets_sync` 28/28 pass, `cargo check` clean (3 pre-existing warnings), release.yml check-step + build.rs GITHUB_ACTIONS fail-closed panic verified, diff leak scan 0 hits; repo secret `ALPHA_PREMIER_EMBED_KEY_JSON` live via gh (2026-09-06)

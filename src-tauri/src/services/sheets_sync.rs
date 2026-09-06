@@ -850,10 +850,38 @@ async fn recover_stale_processing_leases(
     Ok(())
 }
 
+/// Compile-time embedded service-account JSON (optional, see
+/// `src-tauri/build.rs`). `Some` when the build machine held a key, `None`
+/// on clean builds without the secret. Covers both the ops-mirror and the
+/// intern-DTR token fetch since both flow through [`google_access_token`].
+/// Never logged; only presence/absence is observable.
+fn embedded_service_account_json() -> Option<&'static str> {
+    const EMBEDDED: &str = include_str!(concat!(env!("OUT_DIR"), "/embedded-sheets-key.json"));
+    let trimmed = EMBEDDED.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(EMBEDDED)
+    }
+}
+
+/// Pure fallback priority: a non-empty config-file payload wins; otherwise
+/// the embedded payload (when the build embedded one). Keeps the explicit
+/// path authoritative and makes the fallback unit-testable without secrets.
+fn pick_service_account_json(file_payload: Option<&str>, embedded: Option<&str>) -> Option<String> {
+    if let Some(raw) = file_payload.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(raw.to_string());
+    }
+    embedded
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 pub(crate) async fn google_access_token(path: &str) -> Result<String, String> {
-    let raw = tokio::fs::read_to_string(path)
-        .await
-        .map_err(|_| "service account read failed".to_string())?;
+    let file_payload = tokio::fs::read_to_string(path).await.ok().filter(|s| !s.trim().is_empty());
+    let raw = pick_service_account_json(file_payload.as_deref(), embedded_service_account_json())
+        .ok_or_else(|| "service account read failed".to_string())?;
     let account: ServiceAccount =
         serde_json::from_str(&raw).map_err(|_| "service account JSON invalid".to_string())?;
     let now = chrono::Utc::now().timestamp();
@@ -2983,5 +3011,32 @@ mod tests {
         let mismatch = stage_err("delete header", SHEETS_SCHEMA_MISMATCH_ERROR.to_string());
         assert!(mismatch.contains(SHEETS_SCHEMA_MISMATCH_ERROR));
         assert!(mismatch.starts_with("delete header: "));
+    }
+
+    #[test]
+    fn embedded_fallback_serves_missing_file_but_explicit_path_wins() {
+        // Dummy payloads only; no real secrets in tests.
+        let file_json = "{\"client_email\":\"file@test\",\"private_key\":\"k\"}";
+        let embedded_json = "{\"client_email\":\"emb@test\",\"private_key\":\"k\"}";
+        assert_eq!(
+            pick_service_account_json(Some(file_json), Some(embedded_json)),
+            Some(file_json.to_string())
+        );
+        assert_eq!(
+            pick_service_account_json(None, Some(embedded_json)),
+            Some(embedded_json.to_string())
+        );
+        assert_eq!(pick_service_account_json(Some("  "), Some(embedded_json)), Some(embedded_json.to_string()));
+        assert_eq!(pick_service_account_json(None, None), None);
+        assert_eq!(pick_service_account_json(Some(""), Some("  ")), None);
+    }
+
+    #[test]
+    fn embedded_helper_is_absent_or_valid_shaped_without_secrets() {
+        // Shape-only assertion: never log or compare key bytes.
+        if let Some(raw) = embedded_service_account_json() {
+            assert!(raw.contains("client_email"));
+            assert!(raw.contains("private_key"));
+        }
     }
 }

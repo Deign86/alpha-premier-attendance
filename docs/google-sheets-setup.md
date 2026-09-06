@@ -185,6 +185,10 @@ If the spreadsheet is lost, stop the API and remove only the `spreadsheetId` pro
 - Export/download a spreadsheet backup before schema changes or bulk roster edits.
 - If the key is exposed, revoke it immediately, issue a new key, review audit/server logs, and rotate any host credentials that were colocated with it.
 
+## 10a. Embedded Key Fallback (Desktop Zero-Touch)
+
+Release builds embed the service-account JSON at compile time (build machine only, never committed). Priority: config key file wins when present/readable, otherwise the embedded copy is used for both the ops-mirror and INTERN DTR 2026 token fetch. GitHub Releases fail closed without repo secret `ALPHA_PREMIER_EMBED_KEY_JSON` (full service-account JSON), so a tagged build can never ship silently DTR-disconnected; local builds without the secret still compile with the fallback disabled. Accepted risk: anyone with the binary can extract Editor access — rotate promptly if a build leaks beyond kiosk PCs.
+
 ## Common Errors
 
 | Error | Check |
