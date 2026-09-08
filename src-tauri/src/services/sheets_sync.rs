@@ -1153,42 +1153,59 @@ async fn ensure_tab_header(
     spreadsheet_id: &str,
     table_name: &str,
 ) -> Result<(), String> {
-    let read_range = format!("{table_name}!A1:Z1");
-    let response = client
-        .get(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
-            urlencoding::encode(&read_range)
-        ))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-    let existing = google_json_response(response).await?;
-    let rows = existing
+    let header_doc: serde_json::Value = google_stage_json(
+        "reconcile header read",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&header_read_range(table_name))
+            ))
+            .bearer_auth(token)
+            .send()
+            .await,
+    )
+    .await?;
+    let header_rows = header_doc
         .get("values")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
-    let first_row_empty = rows.first().map_or(true, sheet_row_is_empty);
-    if !first_row_empty {
-        return Ok(());
+    let key_rows: Vec<serde_json::Value> = google_stage_json(
+        "reconcile key read",
+        client
+            .get(format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}",
+                urlencoding::encode(&key_column_read_range(table_name, 0))
+            ))
+            .bearer_auth(token)
+            .send()
+            .await,
+    )
+    .await?
+    .get("values")
+    .and_then(|value| value.as_array())
+    .cloned()
+    .unwrap_or_default();
+    let headers = sheet_headers(table_name);
+    let decision = header_repair_action(
+        header_decision(
+            &serde_json::json!({ "values": header_rows }),
+            headers,
+        ),
+        key_column_has_data(&key_rows),
+    );
+    match decision {
+        HeaderRepair::Proceed(HeaderDecision::Match) => Ok(()),
+        HeaderRepair::Proceed(HeaderDecision::Initialize) | HeaderRepair::Rewrite => {
+            put_header_row(client, token, spreadsheet_id, table_name).await
+        }
+        HeaderRepair::Mismatch => {
+            Err(stage_err(
+                "reconcile header",
+                SHEETS_SCHEMA_MISMATCH_ERROR.to_string(),
+            ))
+        }
     }
-    let header_body = serde_json::json!({ "values": [sheet_headers(table_name)] });
-    let response = client
-        .put(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}!A1?valueInputOption=RAW",
-            urlencoding::encode(table_name)
-        ))
-        .bearer_auth(token)
-        .json(&header_body)
-        .send()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(google_status_error(status).to_string());
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1514,7 +1531,7 @@ async fn sheet_id_for_tab(
 ) -> Result<i64, String> {
     let metadata: serde_json::Value = client
         .get(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(sheetId,properties(sheetId,title))"
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets.properties(sheetId,title)"
         ))
         .bearer_auth(token)
         .send()
@@ -1530,14 +1547,13 @@ async fn sheet_id_for_tab(
         .and_then(|value| value.as_array())
         .and_then(|sheets| {
             sheets.iter().find_map(|sheet| {
-                let title = sheet
-                    .get("properties")
-                    .and_then(|properties| properties.get("title"))
-                    .and_then(|title| title.as_str());
-                let id = sheet.get("sheetId").and_then(|value| value.as_i64());
-                match (title, id) {
-                    (Some(title), Some(id)) if title == table_name => Some(id),
-                    _ => None,
+                let props = sheet.get("properties")?;
+                let title = props.get("title")?.as_str()?;
+                let id = props.get("sheetId")?.as_i64()?;
+                if title == table_name {
+                    Some(id)
+                } else {
+                    None
                 }
             })
         })
@@ -1852,7 +1868,7 @@ async fn google_format_sheet_with_token(
         "format metadata",
         client
             .get(format!(
-                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(sheetId,properties(sheetId,title,gridProperties(rowCount,frozenRowCount)),bandedRanges(bandedRangeId))"
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(properties(sheetId,title,gridProperties(rowCount,frozenRowCount)),bandedRanges(bandedRangeId))"
             ))
             .bearer_auth(token)
             .send()

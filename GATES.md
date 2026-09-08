@@ -247,10 +247,10 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: time in via kiosk, wait ~1 min, read tab cell
   EXPECT: B:E filled for today's row without running any command; scan never fails because of DTR (log-only errors)
   EVIDENCE: PROVEN LIVE 2026-09-05: kiosk TIME_IN 11:06:00 (RFID, Deign APG-2026-102) auto-enqueued InternDtr row → SYNCED with zero commands run; sheet row 107 filled B=11:06 AM C/D lunch pair; code reviewed SHIP; cargo 203/203, server 124/124, tsc+oxlint clean. Live debugging also fixed two real blockers (revoked SA key replaced; ops-provisioning starvation decoupled with timeouts)
-- [ ] Gates: cargo check + cargo test + server typecheck green.
+- [x] Gates: cargo check + cargo test + server typecheck green.
   CHECK: cargo check --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml && npx tsc -p server/tsconfig.json --noEmit
   EXPECT: all exit 0
-  EVIDENCE: pending
+  EVIDENCE: measured 2026-09-08 — cargo check 0 new warnings (3 pre-existing from parallel 9/6 work), cargo test 220/220, server 141/141 (17 files), tsc clean, oxlint clean
 - [x] New intern with no DTR tab is tracked; on next interaction the sheet is re-searched and full history backfills into the new tab.
   CHECK: register test intern (no tab) → time in → verify pending/skipped with reason; create tab from template → next time-in/out → verify ALL past rows appear in the new tab
   EXPECT: no data loss, no duplicates, backfill covers every attendance_date for that user
@@ -279,10 +279,10 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: admin-correct a time on a synced row → next loop → tab cell matches; admin-delete → tab row left untouched + logged
   EXPECT: corrections converge without duplicates; deletes never propagate (operator-owned sheet rule)
   EVIDENCE: PROVEN LIVE 2026-09-05 via Tauri MCP (dev kiosk) + ChromeDevTools MCP (sheet): admin_update_attendance timeIn 13:07:48→13:08:48 → InternDtr SYNCED → tab B=1:08:48 PM; corrected back 13:08:48→13:07:48 → mirrored again, screenshot row 107 B=1:07:48 PM. Production kiosk relaunched on release build after.
-- [ ] P0: admin partial-update must COALESCE (timeOut-only payload wiped time_in→NULL + COMPLETED→MISSED live 2026-09-05; row restored from known-good values).
+- [x] P0: admin partial-update must COALESCE (timeOut-only payload wiped time_in→NULL + COMPLETED→MISSED live 2026-09-05; row restored from known-good values).
   CHECK: partial payload keeps other columns; full payload works; regression tests per mutator
   EXPECT: no admin edit can null a column it did not name; status recomputed from resulting in/out
-  EVIDENCE: pending (fix in flight)
+  EVIDENCE: PROVEN LIVE on dev kiosk (timeout-only correction preserved time_in + COMPLETED); fix shipped in prod 0.1.53; 213→220 cargo green. Production confirmation rides the next real admin correction.
 - [x] DTR sync hard-wired: compiled-in default sheet ID (config/env only overrides for a future sheet), key path defaults to config-dir file; no silent-off from missing config.
   CHECK: fresh config without google_dtr keys → intern scan still pushes; override with empty/other ID disables/retargets
   EXPECT: zero-config works out of the box; documented override path
@@ -384,7 +384,11 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EVIDENCE: attempt 3 completed success 2026-09-06 09:09 UTC after manually creating the v0.1.52 release shell (Actions token 403'd on POST /releases twice; user-token create worked; upload path proved contents:write effective). Assets live: setup exe + .sig + latest.json. Build log 09:01 UTC: `embedded service-account fallback ENABLED`. Binary proof: 7z-extracted shipped exe contains `client_email` + `private_key` markers (findstr filename-only, exit 0); TEMP scratch removed. Code path: sheets_sync.rs:858 include_str! OUT_DIR key -> google_access_token (covers intern-DTR + ops mirror).
 
 ## Release-build caching gates
-- [ ] release.yml restores/saves the Cargo cache via swatinem/rust-cache (same pattern as ci.yml rust-quality).
+- [x] release.yml restores/saves the Cargo cache via swatinem/rust-cache (same pattern as ci.yml rust-quality).
   CHECK: script-file assert release.yml contains `swatinem/rust-cache@v2` with `workspaces: "src-tauri"` before the tauri-action step
   EXPECT: command exits 0
-  EVIDENCE: pending (next v* tag run shows cache hit + shorter `Finished release profile` step)
+  EVIDENCE: verified — `.github/workflows/release.yml` lines 37-39 contain `uses: swatinem/rust-cache@v2` with `workspaces: "src-tauri"` before line 58 `uses: tauri-apps/tauri-action@v0`.
+- [x] Ops mirror revived and actively draining.
+  CHECK: verify ops spreadsheet tabs contain data rows and sync_queue moves to SYNCED
+  EXPECT: Users, Attendance, Payroll, InternGrace, PayrollCutoffs tabs populate without 400 invalid argument or 403 errors
+  EVIDENCE: verified 2026-09-08 — repaired `fields` query parameter syntax (removed top-level `sheetId` from `sheets(...)`), updated `ensure_tab_header` to automatically repair legacy snake_case empty headers to camelCase on startup, and verified live sync into ops sheet 1YF1YVDB_Kj3AT8T6ZJEVXC5SHH9JZjdkDq5_l9lB1lw across Users, Attendance, Payroll, InternGrace, PayrollCutoffs.
