@@ -288,7 +288,7 @@ describe('buildDtrRow', () => {
     const working = buildDtrRow('2026-09-05T08:00:00+08:00', null, date);
     const half = buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T12:30:00+08:00', date);
     expect(working).not.toEqual(half);
-    expect(half[2]).toBe('');
+    expect(half).toEqual(['8:00:00 AM', '12:30:00 PM', '', '']);
   });
   it('rejects inverted timestamps (time-out before time-in)', () => {
     expect(() =>
@@ -350,10 +350,29 @@ describe('planPush', () => {
 describe('red paint planner', () => {
   it('classifies records like the display rule', () => {
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', null, '2026-09-05')).toBe('working');
-    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T12:30:00+08:00', '2026-09-05')).toBe('half');
+    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T11:10:00+08:00', '2026-09-05')).toBe('morning-fragment');
+    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T12:30:00+08:00', '2026-09-05')).toBe('morning-fragment');
+    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', '2026-09-05')).toBe('half');
+    expect(classifyRecordKind('2026-09-05T14:00:00+08:00', '2026-09-05T16:00:00+08:00', '2026-09-05')).toBe('afternoon-fragment');
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T17:00:00+08:00', '2026-09-05')).toBe('full');
     expect(classifyRecordKind('2026-09-05T12:00:00+08:00', '2026-09-05T17:00:00+08:00', '2026-09-05')).toBe('half-pm');
     expect(classifyRecordKind(null, null, '2026-09-05')).toBe('absent');
+  });
+  it('fragment rows render actual stamps + paint like their half-day shape', () => {
+    expect(buildDtrRow('2026-09-05T11:06:00+08:00', '2026-09-05T11:10:00+08:00', '2026-09-05')).toEqual([
+      '11:06:00 AM',
+      '11:10:00 AM',
+      '',
+      '',
+    ]);
+    expect(buildDtrRow('2026-09-05T14:00:00+08:00', '2026-09-05T16:00:00+08:00', '2026-09-05')).toEqual([
+      '',
+      '',
+      '2:00:00 PM',
+      '4:00:00 PM',
+    ]);
+    expect(planRowFormat('T', 107, 'morning-fragment')).toEqual(planRowFormat('T', 107, 'half'));
+    expect(planRowFormat('T', 107, 'afternoon-fragment')).toEqual(planRowFormat('T', 107, 'half-pm'));
   });
   it('absent paints B:E red; half whites morning + reds remainder', () => {
     expect(planRowFormat('T', 107, 'absent')).toEqual([
@@ -437,7 +456,7 @@ describe('red paint planner', () => {
     const rec: AttendanceDay = { ...half, attendanceDate: '2026-09-01', timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T12:30:00+08:00' };
     const plan = await planPush(client, rec, ROSTER);
     expect(plan.skipped).toBe(false);
-    expect(plan.values).toEqual(['8:04:00 AM', '12:00:00 PM', '', '']);
+    expect(plan.values).toEqual(['8:04:00 AM', '12:30:00 PM', '', '']);
     await executePush(client, plan);
     const kind = classifyRecordKind(rec.timeIn, rec.timeOut, rec.attendanceDate);
     const ops = planRowFormat(plan.tab, plan.row1Based, kind);

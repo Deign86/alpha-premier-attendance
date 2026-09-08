@@ -1739,8 +1739,16 @@ async fn admin_delete_attendance_impl(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
-    // NOTE: deletions never propagate to the intern DTR sheet (operator-owned
-    // sheet rule) — only the ops-mirror rows below are enqueued.
+    // NOTE: deletions clear the date's B:E cells on the intern DTR sheet
+    // (values only — rows are never removed, so the template grid
+    // survives); only the ops-mirror rows below are deleted outright.
+    let dtr_owner: Option<(String, String)> = sqlx::query_as(
+        "SELECT user_id, full_name FROM attendance WHERE attendance_id=?",
+    )
+    .bind(attendance_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
     let payroll_ids: Vec<String> =
         sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
             .bind(attendance_id)
@@ -1789,6 +1797,18 @@ async fn admin_delete_attendance_impl(
         &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date}),
     )
     .await;
+    // Intern-DTR auto-clear for the deleted day (values emptied, row kept).
+    // Missing tab/row downstream is a silent no-op; failures never fail admin.
+    if let Some((dtr_user_id, dtr_full_name)) = dtr_owner {
+        enqueue_sync(
+            state,
+            crate::services::dtr_sync::DTR_TABLE_NAME,
+            attendance_id,
+            "DELETE",
+            &serde_json::json!({"userId": dtr_user_id, "fullName": dtr_full_name, "attendanceDate": date}),
+        )
+        .await;
+    }
     for payroll_id in payroll_ids {
         enqueue_sync(
             state,
@@ -4132,8 +4152,9 @@ async fn enqueue_sync(
 /// Mirror an attendance mutation to the intern DTR sheet (enqueue-only).
 /// Same contract as the scan path: interns-only, configured-only,
 /// fire-and-forget — a DTR failure can never fail the caller. Corrections
-/// converge through the existing idempotent re-push; deletions never
-/// propagate (operator-owned sheet rule).
+/// converge through the existing idempotent re-push; deletes clear the
+/// date's cells via a separate InternDtr DELETE row (rows are never
+/// removed from the sheet).
 async fn enqueue_intern_dtr(
     state: &AppState,
     attendance_id: &str,
@@ -6012,12 +6033,16 @@ mod tests {
             .bind(&aid).fetch_one(&state.db).await.unwrap();
         assert_eq!(n, 1);
 
-        // 4. Delete → no new InternDtr row (deletions never propagate), while
-        // the ops-mirror Attendance DELETE is still enqueued.
+        // 4. Delete → an InternDtr DELETE row (same attendance id, separate
+        // idempotency key per operation) so the sheet date clears; the ops
+        // Attendance DELETE is still enqueued too.
         super::admin_delete_attendance_impl(&state, &token, &aid, "2026-08-11").await.unwrap();
-        let n_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
-            .bind(&aid).fetch_one(&state.db).await.unwrap();
-        assert_eq!(n_after, 1);
+        let del_row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=? AND operation='DELETE'")
+            .bind(&aid).fetch_optional(&state.db).await.unwrap();
+        assert!(del_row.is_some(), "delete must enqueue InternDtr DELETE");
+        let del_payload: serde_json::Value = serde_json::from_str(&del_row.unwrap()).unwrap();
+        assert_eq!(del_payload["userId"], "INT_01");
+        assert_eq!(del_payload["attendanceDate"], "2026-08-11");
         let del_op: Option<String> = sqlx::query_scalar("SELECT operation FROM sync_queue WHERE table_name='Attendance' AND row_id=? AND operation='DELETE'")
             .bind(&aid).fetch_optional(&state.db).await.unwrap();
         assert_eq!(del_op.as_deref(), Some("DELETE"));

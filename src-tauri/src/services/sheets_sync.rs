@@ -2394,9 +2394,25 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         } else if let Some(payload) = payload.as_ref() {
             if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
                 if is_delete {
-                    // The human DTR sheet is operator-owned: rows are only
-                    // ever upserted, never deleted.
-                    Ok(false)
+                    // Admin-deleted attendance clears that date's B:E cells
+                    // (values only — the template row stays; missing tab/row
+                    // is a silent no-op downstream). No DTR row is ever removed.
+                    match (google_path, dtr_sheet.as_deref()) {
+                        (Some(path), Some(sheet)) => {
+                            let client = sheets_client();
+                            match google_access_token(path).await {
+                                Ok(token) => {
+                                    crate::services::dtr_sync::clear_dtr_row(
+                                        state, &client, &token, sheet, payload,
+                                    )
+                                    .await
+                                    .map(|_| false)
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        _ => Err(SHEETS_REQUEST_FAILED_ERROR.to_string()),
+                    }
                 } else {
                     match (google_path, dtr_sheet.as_deref()) {
                         (Some(path), Some(sheet)) => {

@@ -355,10 +355,12 @@ export function formatSheetTime(isoManila: string): string {
 /**
  * Build [B, C, D, E] (DTR display rule, not payroll): still WORKING
  * (no time-out) keeps the lunch pair with E empty; a time-out before
- * 16:59 Manila renders morning-only [in, 12PM, '', ''] with the tap-out
- * time discarded; a time-in at/after 12:00 noon renders afternoon-only
- * ['', '', 1PM, out] with the morning discarded (owner sheet shape);
- * otherwise the full [in, 12PM, 1PM, out] row is written.
+ * 13:00 Manila is a morning fragment with ACTUAL stamps [in, out, '', '']
+ * (an accidental tap must not read as a half day); a morning clock-in
+ * closing before 16:59 renders classic half-day [in, 12PM, '', ''];
+ * a clock-in at/after 12:00 noon with an early close renders afternoon
+ * actuals ['', '', in, out]; a noon arrival closing at/after 16:59 keeps
+ * ['', '', 1PM, out] (owner sheet shape); otherwise full [in, 12PM, 1PM, out].
  * A time-out earlier than the time-in is rejected (P4 inverted-log
  * precedent): overnight shifts are outside the kiosk same-day model.
  */
@@ -375,9 +377,24 @@ export function buildDtrRow(
   if (!tin.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
   if (!tout.isValid) throw new Error(`invalid Manila timestamp: ${timeOut}`);
   if (tout < tin) throw new Error(`Time-out cannot be earlier than time-in: ${timeOut} < ${timeIn}`);
+  const ended = formatSheetTime(timeOut);
+  if (isBeforeLunchOut(timeOut)) return [started, ended, '', ''];
+  if (isAfternoonArrival(timeIn)) {
+    if (isHalfDayTimeout(timeOut, attendanceDate)) return ['', '', started, ended];
+    return ['', '', LUNCH_IN, ended];
+  }
   if (isHalfDayTimeout(timeOut, attendanceDate)) return [started, LUNCH_OUT, '', ''];
-  if (isAfternoonArrival(timeIn)) return ['', '', LUNCH_IN, formatSheetTime(timeOut)];
-  return [started, LUNCH_OUT, LUNCH_IN, formatSheetTime(timeOut)];
+  return [started, LUNCH_OUT, LUNCH_IN, ended];
+}
+
+/**
+ * True when the Manila wall-clock time-out is strictly before 13:00 —
+ * a sub-half-day morning fragment (actual stamps, never fixed lunch).
+ */
+export function isBeforeLunchOut(timeOut: string): boolean {
+  const dt = DateTime.fromISO(timeOut, { zone: MANILA_ZONE });
+  if (!dt.isValid) throw new Error(`invalid Manila timestamp: ${timeOut}`);
+  return dt.hour < 13;
 }
 
 /**
@@ -409,7 +426,14 @@ export function isAfternoonArrival(timeIn: string): boolean {
 export const DTR_RED = { red: 1, green: 0, blue: 0 } as const;
 export const DTR_WHITE = { red: 1, green: 1, blue: 1 } as const;
 
-export type DtrRowKind = 'absent' | 'half' | 'half-pm' | 'full' | 'working';
+export type DtrRowKind =
+  | 'absent'
+  | 'half'
+  | 'half-pm'
+  | 'morning-fragment'
+  | 'afternoon-fragment'
+  | 'full'
+  | 'working';
 
 export type FormatOp = {
   tab: string;
@@ -450,15 +474,20 @@ export function classifyRecordKind(
 ): DtrRowKind {
   if (!timeIn) return 'absent';
   if (!timeOut) return 'working';
+  if (isBeforeLunchOut(timeOut)) return 'morning-fragment';
+  if (isAfternoonArrival(timeIn)) {
+    return isHalfDayTimeout(timeOut, attendanceDate) ? 'afternoon-fragment' : 'half-pm';
+  }
   if (isHalfDayTimeout(timeOut, attendanceDate)) return 'half';
-  if (isAfternoonArrival(timeIn)) return 'half-pm';
   return 'full';
 }
 
 /**
  * Format ops for one pushed row: absent → B:E red; half → B:C white +
  * D:E red (empty remainder); half-pm → B:C red (empty morning) +
- * D:E white; full → B:E white (clears stale red);
+ * D:E white; morning-fragment → B:C white + D:E red (like half);
+ * afternoon-fragment → B:C red + D:E white (like half-pm);
+ * full → B:E white (clears stale red);
  * working → B:D white, E untouched.
  */
 export function planRowFormat(tab: string, row1Based: number, kind: DtrRowKind): FormatOp[] {
@@ -471,8 +500,8 @@ export function planRowFormat(tab: string, row1Based: number, kind: DtrRowKind):
     red,
   });
   if (kind === 'absent') return [one(1, 5, true)];
-  if (kind === 'half') return [one(1, 3, false), one(3, 5, true)];
-  if (kind === 'half-pm') return [one(1, 3, true), one(3, 5, false)];
+  if (kind === 'half' || kind === 'morning-fragment') return [one(1, 3, false), one(3, 5, true)];
+  if (kind === 'half-pm' || kind === 'afternoon-fragment') return [one(1, 3, true), one(3, 5, false)];
   if (kind === 'full') return [one(1, 5, false)];
   return [one(1, 4, false)];
 }

@@ -354,14 +354,29 @@ pub fn format_sheet_time(iso: &str) -> Result<String, String> {
     Ok(local.format("%-I:%M:%S %p").to_string().to_uppercase())
 }
 
-/// Half-day cutoffs (Manila wall clock): a time-out strictly before
-/// 16:59:00 renders the DTR row morning-only; a time-in at/after 12:00
-/// renders afternoon-only. DTR display rule only —
-/// system payroll keeps its own half-day logic.
+/// Half-day cutoffs (Manila wall clock), DTR display only — system
+/// payroll keeps its own half-day logic:
+/// - time-out strictly before 16:59:00 with a morning clock-in renders
+///   the classic half-day `[in, 12PM, '', '']`;
+/// - a clock-out before 13:00 never earns the fixed 12PM convention:
+///   sub-half-day morning fragments render actual stamps
+///   `[in, out, '', '']` so accidental taps read as what they are;
+/// - a clock-in at/after 12:00 with an early time-out renders
+///   afternoon-only actuals `['', '', in, out]`.
 const HALF_DAY_CUTOFF_HOUR: u32 = 16;
 const HALF_DAY_CUTOFF_MINUTE: u32 = 59;
 /// Clock-in at/after this Manila hour renders afternoon-only.
 const AFTERNOON_ARRIVAL_HOUR: u32 = 12;
+/// Below this Manila hour a time-out is a morning fragment (actual
+/// stamps), never the fixed-lunch half-day form.
+const LUNCH_OUT_HOUR: u32 = 13;
+
+fn is_before_lunch_out(time_out: &str) -> Result<bool, String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_out.trim())
+        .map_err(|_| format!("invalid timestamp: {time_out}"))?;
+    let t = dt.with_timezone(&Manila).time();
+    Ok(t.hour() < LUNCH_OUT_HOUR)
+}
 
 fn is_half_day_timeout(time_out: &str) -> Result<bool, String> {
     let dt = chrono::DateTime::parse_from_rfc3339(time_out.trim())
@@ -381,12 +396,22 @@ fn is_afternoon_arrival(time_in: &str) -> Result<bool, String> {
     Ok(t.hour() >= AFTERNOON_ARRIVAL_HOUR)
 }
 
-/// Build `[B, C, D, E]` (DTR display rule, not payroll):
+/// Build `[B, C, D, E]` (DTR display rule, not payroll). A worked span
+/// under 4 hours is NEVER a half day — actual stamps land in their
+/// natural columns instead of the fixed-lunch convention:
 /// - still WORKING (no time-out): `[in, 12PM, 1PM, '']` intraday;
-/// - timed out before 16:59 Manila: morning-only `[in, 12PM, '', '']` —
-///   the actual tap-out time is discarded, `C` is always 12:00 PM;
-/// - timed in at/after 12:00 noon: afternoon-only `['', '', 1PM, out]` —
-///   the morning is discarded, `D` is always 1:00 PM (owner sheet shape);
+/// - clock-out before 13:00 Manila: morning actuals `[in, out, '', '']`;
+/// - sub-4h span crossing lunch: `[in, '', '', out]` (lunch unknown);
+/// - clock-in at/after 12:00 with an early close: afternoon actuals
+///   `['', '', in, out]`;
+/// - 4h+ morning span closing before 16:59: classic half-day
+///   `[in, 12PM, '', '']`;
+/// - timed out before 16:59 with a morning clock-in: classic half-day
+///   `[in, 12PM, '', '']` — the actual tap-out time is discarded;
+/// - timed in at/after 12:00 noon with an early time-out: afternoon
+///   fragment with actual stamps `['', '', in, out]`;
+/// - timed in at/after 12:00 noon closing at/after 16:59: `['', '', 1PM,
+///   out]` (owner sheet shape);
 /// - otherwise: full `[in, 12PM, 1PM, out]`.
 /// - a time-out earlier than the time-in is rejected (mirrors the P4
 ///   inverted-log rule in payroll): overnight shifts are outside the
@@ -417,20 +442,51 @@ pub fn build_dtr_row(
     if tout_dt < tin_dt {
         return Err(format!("Time-out cannot be earlier than time-in: {tout_raw} < {tin}"));
     }
+    let ended = format_sheet_time(tout_raw)?;
+    // DTR display rule (not payroll): a worked span under 4 hours is
+    // NEVER a half day — render the actual stamps in their natural
+    // columns instead of the fixed-lunch convention, so an accidental
+    // minutes-long tap reads as what it is.
+    let short_stint = tout_dt - tin_dt < chrono::Duration::hours(4);
+    // Clock-out before 13:00 Manila: morning actuals, no afternoon.
+    if is_before_lunch_out(tout_raw)? {
+        return Ok([started, ended, String::new(), String::new()]);
+    }
+    if is_afternoon_arrival(tin)? {
+        // Clock-in at/after noon: afternoon actuals for short stints,
+        // owner-shape 1PM lunch-in only when closing at/after 16:59.
+        if short_stint || is_half_day_timeout(tout_raw)? {
+            return Ok([
+                String::new(),
+                String::new(),
+                started,
+                ended,
+            ]);
+        }
+        return Ok([
+            String::new(),
+            String::new(),
+            DTR_LUNCH_IN.to_string(),
+            ended,
+        ]);
+    }
+    // Morning clock-in closing before 16:59: the fixed 12PM half-day
+    // form applies only once 4 hours actually elapsed; shorter spans
+    // that cross lunch keep actual stamps at both ends.
+    if short_stint {
+        return Ok([
+            started,
+            String::new(),
+            String::new(),
+            ended,
+        ]);
+    }
     if is_half_day_timeout(tout_raw)? {
         return Ok([
             started,
             DTR_LUNCH_OUT.to_string(),
             String::new(),
             String::new(),
-        ]);
-    }
-    if is_afternoon_arrival(tin)? {
-        return Ok([
-            String::new(),
-            String::new(),
-            DTR_LUNCH_IN.to_string(),
-            format_sheet_time(tout_raw)?,
         ]);
     }
     Ok([
@@ -449,6 +505,9 @@ pub enum DtrRowKind {
     Absent,
     HalfDay,
     HalfDayPm,
+    MorningFragment,
+    AfternoonFragment,
+    LunchSpanFragment,
     FullDay,
     Working,
 }
@@ -469,12 +528,30 @@ pub fn classify_record_row(
     }
     // SAFETY: has_out guard above ensures Some (possibly blank-checked).
     let out = time_out.unwrap_or("");
+    let tin = time_in.unwrap_or("");
+    // Tier order mirrors build_dtr_row exactly (duration-first).
+    if is_before_lunch_out(out)? {
+        return Ok(DtrRowKind::MorningFragment);
+    }
+    let tin_dt = chrono::DateTime::parse_from_rfc3339(tin.trim())
+        .map_err(|_| format!("invalid timestamp: {tin}"))?;
+    let tout_dt = chrono::DateTime::parse_from_rfc3339(out.trim())
+        .map_err(|_| format!("invalid timestamp: {out}"))?;
+    if tout_dt < tin_dt {
+        return Err(format!("Time-out cannot be earlier than time-in: {out} < {tin}"));
+    }
+    let short_stint = tout_dt - tin_dt < chrono::Duration::hours(4);
+    if is_afternoon_arrival(tin)? {
+        if short_stint || is_half_day_timeout(out)? {
+            return Ok(DtrRowKind::AfternoonFragment);
+        }
+        return Ok(DtrRowKind::HalfDayPm);
+    }
+    if short_stint {
+        return Ok(DtrRowKind::LunchSpanFragment);
+    }
     if is_half_day_timeout(out)? {
         return Ok(DtrRowKind::HalfDay);
-    }
-    let tin = time_in.unwrap_or("");
-    if is_afternoon_arrival(tin)? {
-        return Ok(DtrRowKind::HalfDayPm);
     }
     Ok(DtrRowKind::FullDay)
 }
@@ -506,7 +583,9 @@ pub struct DtrFormatOp {
 
 /// Format ops for one pushed row: absent paints B:E red; half-day keeps
 /// B:C white and paints the empty remainder D:E red; half-day-pm paints
-/// the empty morning B:C red and keeps D:E white; full-day whites
+/// the empty morning B:C red and keeps D:E white; morning fragments
+/// (actual stamps) white B:C and red D:E like half-day; afternoon
+/// fragments white D:E and red B:C like half-day-pm; full-day whites
 /// B:E (clears stale red, e.g. absent → backdated entry); WORKING
 /// whites B:D (cells holding values) and leaves E untouched.
 pub fn plan_row_format(
@@ -531,6 +610,21 @@ pub fn plan_row_format(
         DtrRowKind::HalfDayPm => vec![
             one(1, 3, DtrCellColor::Red),
             one(3, 5, DtrCellColor::White),
+        ],
+        DtrRowKind::MorningFragment => vec![
+            one(1, 3, DtrCellColor::White),
+            one(3, 5, DtrCellColor::Red),
+        ],
+        DtrRowKind::AfternoonFragment => vec![
+            one(1, 3, DtrCellColor::Red),
+            one(3, 5, DtrCellColor::White),
+        ],
+        // Lunch-spanning short stint: actual stamps at both ends (B, E
+        // white), unknown lunch middle (C:D red).
+        DtrRowKind::LunchSpanFragment => vec![
+            one(1, 2, DtrCellColor::White),
+            one(2, 4, DtrCellColor::Red),
+            one(4, 5, DtrCellColor::White),
         ],
         DtrRowKind::FullDay => vec![one(1, 5, DtrCellColor::White)],
         DtrRowKind::Working => vec![one(1, 4, DtrCellColor::White)],
@@ -1170,6 +1264,100 @@ async fn clear_dtr_pending(state: &AppState, user_id: &str) -> Result<(), String
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Clear one date's B:E cells after an admin attendance delete (values
+/// emptied, row kept so the template grid survives; the absent sweep
+/// repaints past weekdays red on the same pass). Missing tab/row or an
+/// already-empty row is a silent no-op (`Ok(false)`); transport errors
+/// propagate to retry. Never auto-creates a tab and never touches F/J.
+pub async fn clear_dtr_row(
+    state: &AppState,
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    payload: &serde_json::Value,
+) -> Result<bool, String> {
+    let user_id = str_field(payload, "userId")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "DTR payload missing userId".to_string())?;
+    let full_name = str_field(payload, "fullName")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "DTR payload missing fullName".to_string())?;
+    let attendance_date = str_field(payload, "attendanceDate")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "DTR payload missing attendanceDate".to_string())?;
+    let month: u32 = attendance_date
+        .get(5..7)
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("invalid attendanceDate: {attendance_date}"))?;
+    let roster = active_roster(state).await?;
+    let meta = fetch_tab_meta(client, token, spreadsheet_id).await?;
+    let titles = titles_of(&meta);
+    let Some(tab) = resolve_user_tab(&titles, &user_id, &full_name, &roster) else {
+        log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no tab");
+        return Ok(false);
+    };
+    let Some(sheet_id) = sheet_id_for_tab(&meta, &tab) else {
+        log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no tab id");
+        return Ok(false);
+    };
+    let range = urlencoding::encode(&format!("{}!A:F", quote_tab(&tab))).into_owned();
+    let tab_values = dtr_get_json(
+        client,
+        token,
+        format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}"),
+    )
+    .await?;
+    let rows = rows_from_values(&tab_values);
+    let Some((start, end)) = month_block_range(&rows, month) else {
+        log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no month block");
+        return Ok(false);
+    };
+    let Some(idx) = find_date_row_in(&rows, &attendance_date, start, end)? else {
+        log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no date row");
+        return Ok(false);
+    };
+    let row_number = idx + 1;
+    let existing = [
+        rows[idx].get(1).cloned().unwrap_or_default(),
+        rows[idx].get(2).cloned().unwrap_or_default(),
+        rows[idx].get(3).cloned().unwrap_or_default(),
+        rows[idx].get(4).cloned().unwrap_or_default(),
+    ];
+    if existing.iter().all(|c| c.is_empty()) {
+        return Ok(false);
+    }
+    let range = urlencoding::encode(&format!("{}!B{}:E{}", quote_tab(&tab), row_number, row_number)).into_owned();
+    let body = serde_json::json!({ "values": [["", "", "", ""]] });
+    client
+        .put(format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
+        ))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?
+        .error_for_status()
+        .map(|_| ())
+        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    // P1 rule: paint is cosmetic — log-only so a batchUpdate failure
+    // after cleared values never fails the pass.
+    let white = DtrFormatOp {
+        sheet_id,
+        start_row_1based: row_number,
+        end_row_1based_excl: row_number + 1,
+        start_col_0: 1,
+        end_col_0_excl: 5,
+        color: DtrCellColor::White,
+    };
+    if let Err(error) =
+        paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, vec![white]).await
+    {
+        log::warn!("dtr clear paint failed for {full_name} ({user_id}) on {attendance_date} (values cleared): {error}");
+    }
+    Ok(true)
 }
 
 /// Handle one `InternDtr` queue row. `Ok(false)` = already in sync or no
@@ -2075,6 +2263,93 @@ mod tests {
     }
 
     #[test]
+    fn fragment_rows_render_actual_stamps() {
+        // minutes-long morning stint: actual times, never fixed 12PM.
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T11:06:00+08:00"),
+                Some("2026-09-05T11:10:00+08:00"),
+                "2026-09-05"
+            ),
+            Ok([
+                "11:06:00 AM".to_string(),
+                "11:10:00 AM".to_string(),
+                String::new(),
+                String::new()
+            ])
+        );
+        // Afternoon-only fragment: actual stamps in D:E.
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T14:00:00+08:00"),
+                Some("2026-09-05T16:00:00+08:00"),
+                "2026-09-05"
+            ),
+            Ok([
+                String::new(),
+                String::new(),
+                "2:00:00 PM".to_string(),
+                "4:00:00 PM".to_string()
+            ])
+        );
+        let ops = plan_row_format(7, 107, DtrRowKind::MorningFragment);
+        assert_eq!(ops.len(), 2);
+        assert_eq!((ops[0].start_col_0, ops[0].end_col_0_excl), (1, 3));
+        assert_eq!(ops[0].color, DtrCellColor::White);
+        assert_eq!((ops[1].start_col_0, ops[1].end_col_0_excl), (3, 5));
+        assert_eq!(ops[1].color, DtrCellColor::Red);
+        let ops = plan_row_format(7, 107, DtrRowKind::AfternoonFragment);
+        assert_eq!(ops.len(), 2);
+        assert_eq!((ops[0].start_col_0, ops[0].end_col_0_excl), (1, 3));
+        assert_eq!(ops[0].color, DtrCellColor::Red);
+        assert_eq!((ops[1].start_col_0, ops[1].end_col_0_excl), (3, 5));
+        assert_eq!(ops[1].color, DtrCellColor::White);
+        // Sub-4h lunch-spanning stint: actual stamps at both ends.
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T11:30:00+08:00"),
+                Some("2026-09-05T14:30:00+08:00"),
+                "2026-09-05"
+            ),
+            Ok([
+                "11:30:00 AM".to_string(),
+                String::new(),
+                String::new(),
+                "2:30:00 PM".to_string()
+            ])
+        );
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T11:30:00+08:00"),
+                Some("2026-09-05T14:30:00+08:00")
+            ),
+            Ok(DtrRowKind::LunchSpanFragment)
+        );
+        // 4h+ morning span closing early: classic fixed half-day.
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T15:00:00+08:00"),
+                "2026-09-05"
+            ),
+            Ok([
+                "8:00:00 AM".to_string(),
+                "12:00:00 PM".to_string(),
+                String::new(),
+                String::new()
+            ])
+        );
+        let ops = plan_row_format(7, 107, DtrRowKind::LunchSpanFragment);
+        assert_eq!(ops.len(), 3);
+        assert_eq!((ops[0].start_col_0, ops[0].end_col_0_excl), (1, 2));
+        assert_eq!(ops[0].color, DtrCellColor::White);
+        assert_eq!((ops[1].start_col_0, ops[1].end_col_0_excl), (2, 4));
+        assert_eq!(ops[1].color, DtrCellColor::Red);
+        assert_eq!((ops[2].start_col_0, ops[2].end_col_0_excl), (4, 5));
+        assert_eq!(ops[2].color, DtrCellColor::White);
+    }
+
+    #[test]
     fn row_format_full_day_whites_everything() {
         // Clears stale red (absent → backdated entry, half → corrected).
         let ops = plan_row_format(7, 107, DtrRowKind::FullDay);
@@ -2102,7 +2377,23 @@ mod tests {
                 Some("2026-09-05T08:00:00+08:00"),
                 Some("2026-09-05T12:30:00+08:00")
             ),
+            Ok(DtrRowKind::MorningFragment)
+        );
+        // Classic half-day: morning clock-in, afternoon-early time-out.
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T15:00:00+08:00")
+            ),
             Ok(DtrRowKind::HalfDay)
+        );
+        // Afternoon-only fragment: clock-in at/after noon, early out.
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T14:00:00+08:00"),
+                Some("2026-09-05T16:00:00+08:00")
+            ),
+            Ok(DtrRowKind::AfternoonFragment)
         );
         assert_eq!(
             classify_record_row(
