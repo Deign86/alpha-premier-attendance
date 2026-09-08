@@ -966,6 +966,7 @@ describe('Admin Attendance Corrections', () => {
       await user.click(batchDeleteBtn);
 
       expect(screen.getByRole('dialog', { name: /delete selected users\?/i })).toBeInTheDocument();
+      expect(screen.getByText('Are you sure you want to delete 2 selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: /confirm/i }));
 
       await waitFor(() => {
@@ -974,6 +975,168 @@ describe('Admin Attendance Corrections', () => {
       });
     } finally {
       window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('confirms single user deletion with permanent records deletion warning', async () => {
+    vi.restoreAllMocks();
+    let deletedId = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users') && init?.method === 'DELETE') {
+        deletedId = url.split('/').pop() ?? '';
+        // SAFETY: Fetch delete user mock
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance list
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+
+      const deleteBtn = await screen.findByRole('button', { name: /^delete$/i });
+      await user.click(deleteBtn);
+
+      expect(screen.getByRole('dialog', { name: /delete user\?/i })).toBeInTheDocument();
+      expect(screen.getByText('Are you sure you want to delete Ada Lovelace (u1)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await waitFor(() => {
+        expect(deletedId).toBe('u1');
+      });
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('supports ID photo upload, preview, and removal in UserEditor', async () => {
+    let capturedPhotoBody: unknown;
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch mock users
+        return { ok: true, json: async () => ({ success: true, users: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      if (url.includes('/api/setup/photo')) {
+        capturedPhotoBody = JSON.parse(String(init?.body));
+        // SAFETY: Fetch returns photo upload mock
+        return { ok: true, json: async () => ({ success: true, photoUrl: 'asset://localhost/photos/u1.webp' }) } as Response;
+      }
+      // SAFETY: Fallback response mock
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    const mockBitmap: Partial<ImageBitmap> = { width: 200, height: 200, close: vi.fn() };
+    // SAFETY: Partial mock for ImageBitmap in node environment
+    globalThis.createImageBitmap = vi.fn().mockResolvedValue(mockBitmap as ImageBitmap);
+
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    const mockContext: Partial<CanvasRenderingContext2D> = { drawImage: vi.fn() };
+    // SAFETY: Partial mock for 2D canvas context in node environment
+    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(mockContext as CanvasRenderingContext2D);
+    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = vi.fn().mockReturnValue('data:image/jpeg;base64,mockadmindata');
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+
+      const dropzone = screen.getByText(/choose an id photo/i).closest('label');
+      expect(dropzone).not.toBeNull();
+
+      // Attempt photo upload before typing userId
+      const file = new File(['mock content'], 'admin-avatar.png', { type: 'image/png' });
+      fireEvent.drop(dropzone!, {
+        dataTransfer: { files: [file] },
+      });
+      expect(await screen.findByText('Enter the User ID before uploading a photo.')).toBeInTheDocument();
+
+      // Now enter User ID
+      await user.type(screen.getByLabelText(/^user id/i), 'EMP-999');
+
+      // Drop photo again
+      fireEvent.drop(dropzone!, {
+        dataTransfer: { files: [file] },
+      });
+
+      expect(await screen.findByText('Photo uploaded successfully.')).toBeInTheDocument();
+      expect(capturedPhotoBody).toEqual({
+        userId: 'EMP-999',
+        dataUrl: 'data:image/jpeg;base64,mockadmindata',
+      });
+
+      // Preview should show Change photo and Remove photo buttons
+      expect(screen.getByRole('button', { name: /remove photo/i })).toBeInTheDocument();
+      expect(screen.getByText(/change photo/i)).toBeInTheDocument();
+
+      // Click remove photo
+      await user.click(screen.getByRole('button', { name: /remove photo/i }));
+      expect(screen.getByText(/choose an id photo/i)).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+      globalThis.createImageBitmap = originalCreateImageBitmap;
+      HTMLCanvasElement.prototype.getContext = originalGetContext;
+      HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
     }
   });
 

@@ -90,6 +90,7 @@ import {
   submitScan,
   unlockAdmin,
   unlockSetup,
+  uploadAdminPhoto,
   uploadSetupPhoto,
   upsertSetupUser,
   createAdminBackdatedAttendance,
@@ -3546,6 +3547,7 @@ function UserEditor({
     gender: null,
     dailyRate: null,
     payrollProfileId: null,
+    photoUrl: null,
   };
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
   const [message, setMessage] = useState("");
@@ -3555,6 +3557,9 @@ function UserEditor({
   const [batchDeleteUsersOpen, setBatchDeleteUsersOpen] = useState(false);
   const [batchUpdatingUsers, setBatchUpdatingUsers] = useState(false);
   const [userSearch, setUserSearch] = useState("");
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
 
   const filteredUsers = useMemo(() => {
@@ -3645,7 +3650,58 @@ function UserEditor({
   useEffect(() => {
     setForm(editing ?? blankUser);
     setMessage("");
+    setPhotoBuster(Date.now());
   }, [editing]);
+
+  const handlePhotoUpload = async (file: File) => {
+    if (!form.userId.trim()) {
+      setMessage("Enter the User ID before uploading a photo.");
+      return;
+    }
+    const isImage =
+      ["image/jpeg", "image/png", "image/webp", "image/jpg"].includes(
+        file.type.toLowerCase(),
+      ) || /\.(jpe?g|png|webp)$/i.test(file.name);
+    if (!isImage) {
+      setMessage("Choose a JPEG, PNG, or WebP photo.");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setMessage("Photo file must be under 25 MB.");
+      return;
+    }
+    setPhotoUploading(true);
+    let dataUrl: string;
+    try {
+      dataUrl = await preparePhotoDataUrl(file);
+    } catch (error) {
+      setPhotoUploading(false);
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to prepare this photo.",
+      );
+      return;
+    }
+    try {
+      const response = await uploadAdminPhoto(
+        form.userId.trim().toUpperCase(),
+        dataUrl,
+      );
+      setPhotoUploading(false);
+      if (!response.success) {
+        setMessage(response.error.message);
+        return;
+      }
+      setForm((current) => ({ ...current, photoUrl: response.photoUrl }));
+      setPhotoBuster(Date.now());
+      setMessage("Photo uploaded successfully.");
+    } catch (err) {
+      setPhotoUploading(false);
+      setMessage(toErrorMessage(err, "Unable to upload photo."));
+    }
+  };
+
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
@@ -3663,6 +3719,7 @@ function UserEditor({
         dailyRate: form.employeeType === "EMPLOYEE" ? form.dailyRate : null,
         payrollProfileId:
           form.employeeType === "EMPLOYEE" ? form.payrollProfileId : null,
+        photoUrl: form.cardType === "ADMIN_ASSIST" ? null : (form.photoUrl ?? null),
       };
       const response = await saveAdminUser(payload, editing?.userId);
       if (response.success) {
@@ -3726,7 +3783,11 @@ function UserEditor({
               message.includes("already") ||
               message.includes("Unable") ||
               message.includes("conflict") ||
-              message.includes("Error")
+              message.includes("Error") ||
+              message.includes("Enter") ||
+              message.includes("Choose") ||
+              message.includes("must be") ||
+              message.includes("failed")
                 ? "is-error"
                 : "is-success"
             }`}
@@ -3951,6 +4012,140 @@ function UserEditor({
                   </label>
                 </>
               )}
+              <div className="photo-field">
+                <span className="field-label">
+                  ID photo <span className="optional">optional</span>
+                </span>
+                {form.photoUrl ? (
+                  <div className="photo-preview-wrap">
+                    <div
+                      className={`photo-dropzone has-photo${isDraggingPhoto ? " is-dragging" : ""}`}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+                      }}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setIsDraggingPhoto(true);
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+                        setIsDraggingPhoto(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setIsDraggingPhoto(false);
+                        const file = event.dataTransfer.files?.[0] ?? (event.dataTransfer.items?.[0]?.getAsFile() ?? null);
+                        if (file) void handlePhotoUpload(file);
+                      }}
+                    >
+                      <img
+                        key={photoBuster}
+                        src={photoSource(form.photoUrl)}
+                        alt="Uploaded ID preview"
+                      />
+                      {photoUploading ? (
+                        <span className="photo-overlay">
+                          <LoaderCircle size={16} className="spinning" /> Uploading photo…
+                        </span>
+                      ) : (
+                        <span className="photo-overlay">
+                          <Check size={16} /> Photo ready
+                        </span>
+                      )}
+                    </div>
+                    <div className="photo-preview-actions" style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
+                      <label className="text-button" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                        <Upload size={14} /> Change photo
+                        <input
+                          type="file"
+                          className="photo-input"
+                          accept="image/jpeg,image/png,image/webp"
+                          disabled={photoUploading}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) void handlePhotoUpload(file);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="text-button danger-button"
+                        disabled={photoUploading}
+                        onClick={() => setForm((f) => ({ ...f, photoUrl: null }))}
+                      >
+                        Remove photo
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <label
+                    className={`photo-dropzone${isDraggingPhoto ? " is-dragging" : ""}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+                    }}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setIsDraggingPhoto(true);
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+                      setIsDraggingPhoto(false);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setIsDraggingPhoto(false);
+                      const file = event.dataTransfer.files?.[0] ?? (event.dataTransfer.items?.[0]?.getAsFile() ?? null);
+                      if (file) void handlePhotoUpload(file);
+                    }}
+                  >
+                    <input
+                      className="photo-input"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={photoUploading}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) void handlePhotoUpload(file);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                    {photoUploading ? (
+                      <>
+                        <LoaderCircle size={25} className="spinning" />
+                        <strong>Uploading photo…</strong>
+                      </>
+                    ) : isDraggingPhoto ? (
+                      <>
+                        <ImagePlus size={28} />
+                        <strong>Drop ID photo here</strong>
+                        <small>Release mouse to upload photo</small>
+                      </>
+                    ) : (
+                      <>
+                        <ImagePlus size={25} />
+                        <strong>Choose an ID photo</strong>
+                        <small>JPG, PNG, or WebP - resized automatically</small>
+                        <span className="photo-upload-link">
+                          <Upload size={14} /> Browse files
+                        </span>
+                      </>
+                    )}
+                  </label>
+                )}
+              </div>
             </>
           )}
           <label>
@@ -4158,7 +4353,7 @@ function UserEditor({
         open={Boolean(deleteUserTarget)}
         busy={Boolean(deletingUserId)}
         title="Delete user?"
-        message={deleteUserTarget ? `Are you sure you want to delete ${deleteUserTarget.fullName} (${deleteUserTarget.userId})? This cannot be undone.` : ""}
+        message={deleteUserTarget ? `Are you sure you want to delete ${deleteUserTarget.fullName} (${deleteUserTarget.userId})? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.` : ""}
         onCancel={() => setDeleteUserTarget(null)}
         onConfirm={() => void remove()}
       />
@@ -4166,7 +4361,7 @@ function UserEditor({
         open={batchDeleteUsersOpen}
         busy={batchUpdatingUsers}
         title="Delete selected users?"
-        message={`Are you sure you want to delete ${selectedUserIds.size} selected user(s)? This will remove them from the roster.`}
+        message={`Are you sure you want to delete ${selectedUserIds.size} selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.`}
         onCancel={() => setBatchDeleteUsersOpen(false)}
         onConfirm={() => void removeBatchUsers()}
       />
@@ -4176,13 +4371,26 @@ function UserEditor({
 
 function UserPhoto({ photoUrl, name }: { photoUrl?: string | null; name: string }) {
   const [failed, setFailed] = useState(false);
+  const [timestamp, setTimestamp] = useState(() => Date.now());
+
+  useEffect(() => {
+    setFailed(false);
+    setTimestamp(Date.now());
+  }, [photoUrl]);
+
   if (!photoUrl || failed) {
     return <span className="user-photo-fallback" aria-label={`${name} has no available photo`}><UserRound size={16} /></span>;
   }
+  const rawSrc = photoSource(photoUrl);
+  const src = rawSrc && !rawSrc.startsWith("data:")
+    ? `${rawSrc}${rawSrc.includes("?") ? "&" : "?"}t=${timestamp}`
+    : rawSrc;
+
   return (
     <img
+      key={`${photoUrl}-${timestamp}`}
       className="user-photo"
-      src={photoSource(photoUrl)}
+      src={src}
       alt={`${name} profile`}
       onError={() => setFailed(true)}
     />

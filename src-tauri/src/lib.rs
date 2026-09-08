@@ -241,15 +241,10 @@ fn normalize_name(name: &str) -> String {
     result
 }
 
-#[tauri::command]
-async fn admin_upsert_user(
-    state: State<'_, AppState>,
-    token: String,
+async fn admin_upsert_user_inner(
+    state: &AppState,
     user: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
     let card_type = user
         .get("cardType")
         .and_then(|v| v.as_str())
@@ -352,6 +347,27 @@ async fn admin_upsert_user(
             .map(|v| v * 100)
     };
 
+    let photo_cleared = match user.get("photoUrl") {
+        Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+        _ => false,
+    };
+    if photo_cleared {
+        let local_photo = state.data_dir.join("photos").join(format!("{user_id}.webp"));
+        if local_photo.exists() {
+            let _ = std::fs::remove_file(&local_photo);
+        }
+    }
+
+    let photo_url_arg = if is_assist || photo_cleared {
+        None
+    } else {
+        user.get("photoUrl")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+    };
+
     let now = chrono::Utc::now().to_rfc3339();
     let result = upsert_user_record(
         &state.db,
@@ -364,7 +380,7 @@ async fn admin_upsert_user(
         gender.as_deref(),
         daily_rate,
         if is_assist { None } else { user.get("payrollProfileId").and_then(|v| v.as_str()) },
-        if is_assist { None } else { user.get("photoUrl").and_then(|v| v.as_str()) },
+        photo_url_arg,
         card_type,
         &now,
     )
@@ -377,8 +393,20 @@ async fn admin_upsert_user(
         }
     })?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(&user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
-    enqueue_sync(&state, "Users", &user_id, "UPSERT", &user).await;
+    enqueue_sync(state, "Users", &user_id, "UPSERT", &user).await;
     Ok(serde_json::json!({"success":true,"created":result == 1,"userId":&user_id}))
+}
+
+#[tauri::command]
+async fn admin_upsert_user(
+    state: State<'_, AppState>,
+    token: String,
+    user: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    admin_upsert_user_inner(state.inner(), user).await
 }
 
 #[tauri::command]
@@ -483,6 +511,21 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
         .execute(&state.db)
         .await;
 
+    let _ = sqlx::query("DELETE FROM bathroom_log WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
+    let _ = sqlx::query("DELETE FROM dtr_pending WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
+    let _ = sqlx::query("DELETE FROM dtr_recon_discrepancies WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+
     let result = sqlx::query("DELETE FROM users WHERE user_id = ?")
         .bind(user_id)
         .execute(&state.db)
@@ -491,6 +534,11 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
 
     if result.rows_affected() != 1 {
         return Err("USER_NOT_FOUND".into());
+    }
+
+    let photo_path = state.data_dir.join("photos").join(format!("{user_id}.webp"));
+    if photo_path.exists() {
+        let _ = std::fs::remove_file(&photo_path);
     }
 
     // Enqueue sync deletions
@@ -4665,16 +4713,11 @@ async fn ensure_payroll(
     Ok(())
 }
 
-#[tauri::command]
-async fn upload_photo(
-    state: State<'_, AppState>,
-    token: String,
-    user_id: String,
-    base64_data: String,
+async fn upload_photo_inner(
+    state: &AppState,
+    user_id: &str,
+    base64_data: &str,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("SETUP_AUTH_REQUIRED".into());
-    }
     if user_id.is_empty()
         || user_id.len() > 128
         || !user_id
@@ -4689,7 +4732,7 @@ async fn upload_photo(
             base64_data
                 .split_once(',')
                 .map(|(_, value)| value)
-                .unwrap_or(&base64_data),
+                .unwrap_or(base64_data),
         )
         .map_err(|_| "INVALID_IMAGE".to_string())?;
     if bytes.len() > MAX_PHOTO_BYTES {
@@ -4706,7 +4749,30 @@ async fn upload_photo(
         .save_with_format(&path, image::ImageFormat::WebP)
         .map_err(|e| e.to_string())?;
     let asset_path = path.to_string_lossy().replace('\\', "/");
-    Ok(serde_json::json!({"success":true,"photoUrl":format!("asset://localhost/{asset_path}")}))
+    let photo_url = format!("asset://localhost/{asset_path}");
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "UPDATE users SET photo_url = ?, revision = revision + 1, updated_at = ? WHERE user_id = ?",
+    )
+    .bind(&photo_url)
+    .bind(&now)
+    .bind(user_id)
+    .execute(&state.db)
+    .await;
+    Ok(serde_json::json!({"success":true,"photoUrl":photo_url}))
+}
+
+#[tauri::command]
+async fn upload_photo(
+    state: State<'_, AppState>,
+    token: String,
+    user_id: String,
+    base64_data: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("SETUP_AUTH_REQUIRED".into());
+    }
+    upload_photo_inner(state.inner(), &user_id, &base64_data).await
 }
 
 const MAX_PHOTO_BYTES: usize = 500 * 1024;
@@ -5478,6 +5544,234 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cutoff_count, 0);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn user_deletion_cascades_with_bathroom_log_and_pending_records() {
+        let temp = std::env::temp_dir().join(format!("alpha-bath-del-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let data_dir = temp.clone();
+        let exports_dir = temp.join("exports");
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            exports_dir.clone(),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = "EMP-BATH-TEST";
+
+        // Create user
+        super::upsert_user_record(
+            &state.db,
+            user_id,
+            "RFID-BATH-1",
+            "Bathroom Test User",
+            Some("Engineering"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        // Create completed bathroom_log record
+        sqlx::query(
+            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES ('BATH-DONE-1', '2026-08-31', ?, 'Bathroom Test User', 'Engineering', 'MALE', '2026-08-31T09:00:00+08:00', '2026-08-31T09:10:00+08:00', 600, 'RETURNED', '', '2026-08-31T09:00:00+08:00', '2026-08-31T09:10:00+08:00')"
+        )
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        // Create active (open) bathroom_log record
+        sqlx::query(
+            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES ('BATH-ACT-1', '2026-08-31', ?, 'Bathroom Test User', 'Engineering', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', '2026-08-31T10:00:00+08:00', '2026-08-31T10:00:00+08:00')"
+        )
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        // Create dtr_pending record
+        sqlx::query(
+            "INSERT INTO dtr_pending (user_id, full_name, first_seen, last_checked, attempts) VALUES (?, 'Bathroom Test User', '2026-08-31T00:00:00Z', NULL, 0)"
+        )
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        // Create dtr_recon_runs and dtr_recon_discrepancies record
+        sqlx::query(
+            "INSERT INTO dtr_recon_runs (run_id, started_at, status, report_only, summary_json) VALUES ('RUN-1', '2026-08-31T00:00:00Z', 'COMPLETED', 1, '{}')"
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO dtr_recon_discrepancies (run_id, user_id, full_name, attendance_date, action_taken) VALUES ('RUN-1', ?, 'Bathroom Test User', '2026-08-31', 'REPORTED')"
+        )
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        // Create dummy photo file on disk
+        let photos_dir = state.data_dir.join("photos");
+        std::fs::create_dir_all(&photos_dir).unwrap();
+        let photo_file = photos_dir.join(format!("{user_id}.webp"));
+        std::fs::write(&photo_file, b"fake-webp-bytes").unwrap();
+        assert!(photo_file.exists());
+
+        // Verify initial row counts
+        let bath_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bathroom_log WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(bath_count, 2);
+
+        // Delete user and cascade (must not fail on foreign key constraint)
+        super::delete_user_and_cascade(&state, user_id).await.unwrap();
+
+        // Verify user and all dependent records are gone
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(user_count, 0);
+
+        let bath_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bathroom_log WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(bath_after, 0);
+
+        let pending_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(pending_after, 0);
+
+        let recon_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_recon_discrepancies WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(recon_after, 0);
+
+        // Verify local photo file was deleted
+        assert!(!photo_file.exists());
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn upload_photo_updates_existing_user_and_clearing_deletes_file() {
+        let temp = std::env::temp_dir().join(format!("alpha-photo-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let data_dir = temp.clone();
+        let exports_dir = temp.join("exports");
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            exports_dir.clone(),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let user_id = "EMP-PHOTO-TEST";
+
+        // Create user with no photo
+        super::upsert_user_record(
+            &state.db,
+            user_id,
+            "RFID-PHOTO-1",
+            "Photo Test User",
+            Some("IT"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        // 1x1 transparent PNG base64
+        let png_base64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+        // Upload photo for existing user
+        let upload_res = super::upload_photo_inner(&state, user_id, png_base64).await.unwrap();
+        assert_eq!(upload_res["success"], true);
+        let photo_url = upload_res["photoUrl"].as_str().unwrap();
+        assert!(photo_url.starts_with("asset://localhost/"));
+
+        // Verify users table was updated with photo_url and revision incremented
+        let (stored_url, revision): (Option<String>, i64) = sqlx::query_as(
+            "SELECT photo_url, revision FROM users WHERE user_id = ?"
+        )
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(stored_url.as_deref(), Some(photo_url));
+        assert_eq!(revision, 2);
+
+        // Verify file exists on disk
+        let disk_photo = state.data_dir.join("photos").join(format!("{user_id}.webp"));
+        assert!(disk_photo.exists());
+
+        // Now clear photo via admin_upsert_user_inner with photoUrl: null
+        let update_payload = serde_json::json!({
+            "userId": user_id,
+            "rfidUid": "RFID-PHOTO-1",
+            "fullName": "Photo Test User",
+            "department": "IT",
+            "status": "ACTIVE",
+            "employeeType": "EMPLOYEE",
+            "gender": "MALE",
+            "photoUrl": null,
+        });
+        let upsert_res = super::admin_upsert_user_inner(&state, update_payload).await.unwrap();
+        assert_eq!(upsert_res["success"], true);
+
+        // Verify photo file on disk was removed
+        assert!(!disk_photo.exists());
+
+        // Verify resolve_user_photo_url now returns None
+        let resolved = super::resolve_user_photo_url(&state.data_dir, user_id, None);
+        assert_eq!(resolved, None);
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);

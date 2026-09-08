@@ -69,14 +69,17 @@ function errorString<T>(error: T): string {
 export function photoSource(photoUrl: string | null | undefined): string | undefined {
   if (!photoUrl || !runningInTauri()) return photoUrl || undefined;
   try {
-    if (photoUrl.startsWith('asset://localhost/')) {
-      return convertFileSrc(decodeURIComponent(photoUrl.slice('asset://localhost/'.length)));
+    const [rawPath, rawQuery] = photoUrl.includes('?') ? photoUrl.split('?', 2) : [photoUrl, ''];
+    let converted = rawPath;
+    if (rawPath.startsWith('asset://localhost/')) {
+      converted = convertFileSrc(decodeURIComponent(rawPath.slice('asset://localhost/'.length)));
+    } else if (/^[A-Za-z]:[\\/]/.test(rawPath) || rawPath.startsWith('\\\\')) {
+      converted = convertFileSrc(rawPath);
     }
-    if (/^[A-Za-z]:[\\/]/.test(photoUrl) || photoUrl.startsWith('\\\\')) return convertFileSrc(photoUrl);
+    return rawQuery ? `${converted}${converted.includes('?') ? '&' : '?'}${rawQuery}` : converted;
   } catch {
     return photoUrl;
   }
-  return photoUrl;
 }
 
 export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
@@ -242,6 +245,17 @@ export async function lockSetup(setupToken: string, signal?: AbortSignal): Promi
 export async function uploadSetupPhoto(userId: string, dataUrl: string, setupToken: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
   if (runningInTauri()) { try { return await tauriApi.uploadPhoto(setupToken, userId, dataUrl); } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
   return setupRequest<{ success: true; photoUrl: string }>(apiUrl('/api/setup/photo'), { method: 'POST', setupToken, body: JSON.stringify({ userId, dataUrl }) });
+}
+
+export async function uploadAdminPhoto(userId: string, dataUrl: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.uploadPhoto(nativeAdminToken ?? '', userId, dataUrl);
+    } catch (error) {
+      return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
+    }
+  }
+  return uploadSetupPhoto(userId, dataUrl, nativeAdminToken ?? '');
 }
 
 export async function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
