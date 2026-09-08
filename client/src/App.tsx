@@ -73,6 +73,7 @@ import {
   lockSetup,
   lookupSetupCard,
   nukeSheetsResync,
+  syncInternDtr,
   openDatabaseBackupsFolder,
   openViewerUrl,
   photoSource,
@@ -3274,6 +3275,21 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     void refresh();
   }, [refresh]);
 
+  const syncInterns = async () => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const response = await syncInternDtr();
+    setBusy(false);
+    if (response.success) {
+      const createdCount = response.tabsCreated?.length ?? 0;
+      const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
+      setNotice(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
+    } else {
+      setError(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+    }
+  };
+
   const createBackup = async () => {
     setBusy(true);
     setError("");
@@ -3452,6 +3468,14 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         >
           Open backups folder
         </button>
+        <button
+          className="admin-button"
+          type="button"
+          disabled={busy}
+          onClick={() => void syncInterns()}
+        >
+          Sync Intern DTR now
+        </button>
       </div>
       {notice && (
         <p className="dashboard-alert db-notice" role="status">
@@ -3556,11 +3580,26 @@ function UserEditor({
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [batchDeleteUsersOpen, setBatchDeleteUsersOpen] = useState(false);
   const [batchUpdatingUsers, setBatchUpdatingUsers] = useState(false);
+  const [syncingDtrUserId, setSyncingDtrUserId] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const handleSyncDtr = async (userId?: string) => {
+    setSyncingDtrUserId(userId ?? "ALL");
+    setMessage("");
+    const response = await syncInternDtr(userId);
+    setSyncingDtrUserId(null);
+    if (response.success) {
+      const createdCount = response.tabsCreated?.length ?? 0;
+      const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
+      setMessage(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
+    } else {
+      setMessage(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+    }
+  };
 
   const filteredUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
@@ -4224,13 +4263,23 @@ function UserEditor({
                 </button>
               </>
             ) : (
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => setSelectedUserIds(new Set(users.map((u) => u.userId)))}
-              >
-                Select all
-              </button>
+              <>
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => setSelectedUserIds(new Set(users.map((u) => u.userId)))}
+                >
+                  Select all
+                </button>
+                <button
+                  className="admin-button"
+                  type="button"
+                  disabled={Boolean(syncingDtrUserId)}
+                  onClick={() => void handleSyncDtr()}
+                >
+                  {syncingDtrUserId === "ALL" ? "Syncing DTR…" : "Sync Interns to DTR"}
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -4326,6 +4375,17 @@ function UserEditor({
                   </td>
                   <td>{user.status}</td>
                   <td>
+                    {user.employeeType === "INTERN" && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        disabled={Boolean(syncingDtrUserId)}
+                        onClick={() => void handleSyncDtr(user.userId)}
+                        title="Synchronize this intern to the Google Sheets DTR tab"
+                      >
+                        {syncingDtrUserId === user.userId ? "Syncing…" : "Sync DTR"}
+                      </button>
+                    )}
                     <button
                       className="text-button"
                       onClick={() => setEditing(user)}

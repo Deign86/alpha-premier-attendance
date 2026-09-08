@@ -940,5 +940,26 @@ export type BathroomScanErrorResponse = {
   activeHolder?: BathroomActiveHolder | null;
 };
 
+export type InternSyncDetail = {
+  userId: string;
+  fullName: string;
+  tab: string | null;
+  tabCreated: boolean;
+  rowsSynced: number;
+  status: string;
+};
+
+export type AdminSyncDtrResponse = {
+  success: boolean;
+  internsChecked: number;
+  tabsCreated: string[];
+  rowsSynced: number;
+  details: InternSyncDetail[];
+  errors: string[];
+  error?: {
+    message: string;
+  };
+};
+
 export type BathroomScanResponse = BathroomScanSuccessResponse | BathroomScanErrorResponse;
 

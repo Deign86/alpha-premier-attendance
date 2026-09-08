@@ -394,6 +394,16 @@ async fn admin_upsert_user_inner(
     })?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(&user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     enqueue_sync(state, "Users", &user_id, "UPSERT", &user).await;
+    if employee_type.to_uppercase() == "INTERN" && status.to_uppercase() == "ACTIVE" {
+        let _ = sqlx::query(
+            "INSERT INTO dtr_pending (user_id, full_name, first_seen, last_checked, attempts) VALUES (?, ?, ?, NULL, 0) ON CONFLICT(user_id) DO UPDATE SET full_name = excluded.full_name",
+        )
+        .bind(&user_id)
+        .bind(&full_name)
+        .bind(&now)
+        .execute(&state.db)
+        .await;
+    }
     Ok(serde_json::json!({"success":true,"created":result == 1,"userId":&user_id}))
 }
 
@@ -3698,6 +3708,19 @@ async fn dtr_recon_run_manual(
     }))
 }
 
+#[tauri::command]
+async fn admin_sync_intern_dtr(
+    state: State<'_, AppState>,
+    token: String,
+    user_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let report = crate::services::dtr_sync::manual_sync_intern_dtr(&state, user_id.as_deref()).await?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
+}
+
 /// Dev/test utility (hidden admin action): wipes every managed Google Sheets
 /// tab and re-enqueues the current SQLite state for a from-scratch re-export.
 /// Gated behind the admin session and an explicit confirmation flag.
@@ -5066,6 +5089,7 @@ pub fn run() {
             admin_sheets_nuke_resync,
             dtr_recon_get_latest_report,
             dtr_recon_run_manual,
+            admin_sync_intern_dtr,
             lan_status,
             lan_start,
             lan_stop,

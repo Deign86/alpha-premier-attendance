@@ -1,4 +1,5 @@
 import type {
+  AdminSyncDtrResponse,
   ArtifactExportResponse,
   AttendanceXlsxExportResponse,
   BathroomActionResponse,
@@ -587,6 +588,33 @@ export async function nukeSheetsResync(confirm: boolean): Promise<{ success: boo
     return (await tauriApi.sheetsNukeResync(nativeAdminToken ?? '', confirm)) as { success: boolean; error?: { message?: string } };
   }
   return { success: false, error: { message: 'Google Sheets sync is available in the desktop application.' } };
+}
+
+export async function syncInternDtr(userId?: string): Promise<AdminSyncDtrResponse> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.syncInternDtr(nativeAdminToken ?? '', userId);
+    } catch (error) {
+      return {
+        success: false,
+        internsChecked: 0,
+        tabsCreated: [],
+        rowsSynced: 0,
+        details: [],
+        errors: [errorString(error)],
+        error: { message: errorString(error) },
+      };
+    }
+  }
+  return {
+    success: false,
+    internsChecked: 0,
+    tabsCreated: [],
+    rowsSynced: 0,
+    details: [],
+    errors: ['Google Sheets sync is available in the desktop application.'],
+    error: { message: 'Google Sheets sync is available in the desktop application.' },
+  };
 }
 
 /** Desktop-only: read the live SQLite database status for the Data & backup panel. */

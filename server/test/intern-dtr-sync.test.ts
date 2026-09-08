@@ -527,6 +527,8 @@ describe('auto-create tab alignment', () => {
     expect(hasTabOverlap(['MARY', 'COPY OF TEMPLATE'], 'Mary Jane Santos')).toBe(true);
     expect(hasTabOverlap(['MARY', 'COPY OF TEMPLATE'], 'Rona Khristelle Angelique Pacada')).toBe(false);
     expect(hasTabOverlap(['COPY OF TEMPLATE'], 'Rona Khristelle Angelique Pacada')).toBe(false);
+    // Single-character middle initial "C." must not collide between distinct people
+    expect(hasTabOverlap(['Raineer C. Rosado'], 'Maricon C. Danao')).toBe(false);
     expect(hasTabOverlap([], '')).toBe(true);
   });
   it('creates a missing tab and resolves it', async () => {

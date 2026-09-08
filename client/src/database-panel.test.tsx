@@ -152,4 +152,33 @@ describe('DatabasePanel', () => {
     });
     expect(requestDatabaseRestoreSpy).not.toHaveBeenCalled();
   });
+
+  it('triggers Sync Intern DTR now and displays result', async () => {
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
+      success: true,
+      internsChecked: 1,
+      tabsCreated: ['Maricon C. Danao'],
+      rowsSynced: 4,
+      details: [
+        {
+          userId: 'APG-2026-116',
+          fullName: 'Maricon C. Danao',
+          tab: 'Maricon C. Danao',
+          tabCreated: true,
+          rowsSynced: 4,
+          status: 'SYNCED',
+        },
+      ],
+      errors: [],
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+
+    expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Maricon C\. Danao\)\./i)).toBeInTheDocument();
+  });
 });

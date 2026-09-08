@@ -100,10 +100,14 @@ export function hasTabOverlap(tabTitles: string[], fullName: string): boolean {
   const stripped = stripNameSuffix(userToks);
   const core = stripped.length > 0 ? stripped : userToks;
   if (core.length === 0) return true;
-  const owned = new Set(core);
+  const meaningful = core.filter((t) => t.length > 1);
+  if (meaningful.length === 0) return true;
+  const owned = new Set(meaningful);
   return tabTitles.some((title) => {
     if (isSkippableTitle(title)) return false;
-    return dtrTokens(title).some((t) => owned.has(t));
+    return dtrTokens(title)
+      .filter((t) => t.length > 1)
+      .some((t) => owned.has(t));
   });
 }
 

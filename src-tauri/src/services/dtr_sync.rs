@@ -909,13 +909,20 @@ fn tab_name_overlaps_user(tab_titles: &[String], full_name: &str) -> bool {
     if core.is_empty() {
         return true;
     }
+    // Single-character tokens (e.g. middle initials like "C" or "E") are not
+    // distinctive name words and must never trigger a false-positive overlap.
+    let meaningful_core: Vec<&String> = core.iter().filter(|t| t.len() > 1).collect();
+    if meaningful_core.is_empty() {
+        return true;
+    }
     tab_titles.iter().any(|title| {
         if is_skippable_title(title) {
             return false;
         }
         split_tokens(title)
             .iter()
-            .any(|t| core.contains(t))
+            .filter(|t| t.len() > 1)
+            .any(|t| meaningful_core.contains(&t))
     })
 }
 
@@ -1692,6 +1699,200 @@ pub async fn process_dtr_pending(
     Ok(backfilled)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternSyncDetail {
+    pub user_id: String,
+    pub full_name: String,
+    pub tab: Option<String>,
+    pub tab_created: bool,
+    pub rows_synced: usize,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualSyncReport {
+    pub success: bool,
+    pub interns_checked: usize,
+    pub tabs_created: Vec<String>,
+    pub rows_synced: usize,
+    pub details: Vec<InternSyncDetail>,
+    pub errors: Vec<String>,
+}
+
+/// Manually synchronize active interns onto the human DTR Google Sheets.
+///
+/// For each intern (or a specific targeted intern):
+/// 1. Checks if their tab exists; if missing, auto-creates it from the template.
+/// 2. Backfills all attendance history from SQLite into their tab.
+/// 3. Clears the intern from `dtr_pending` when completely synced.
+pub async fn manual_sync_intern_dtr(
+    state: &AppState,
+    target_user_id: Option<&str>,
+) -> Result<ManualSyncReport, String> {
+    use sqlx::Row;
+    let spreadsheet_id = crate::config::dtr_spreadsheet_id_resolved(&state.lan)
+        .ok_or_else(|| "DTR spreadsheet ID is not configured".to_string())?;
+    let path = state.lan.google_service_account_json_path.as_deref()
+        .ok_or_else(|| "Google service account JSON path is not configured".to_string())?;
+    let token = crate::services::sheets_sync::google_access_token(path)
+        .await
+        .map_err(|e| format!("Google Sheets auth failed: {e}"))?;
+    let client = crate::services::sheets_sync::sheets_client();
+
+    let mut meta = fetch_tab_meta(&client, &token, &spreadsheet_id).await?;
+    let roster = active_roster(state).await?;
+
+    let interns: Vec<(String, String)> = if let Some(target_id) = target_user_id {
+        sqlx::query("SELECT user_id, full_name FROM users WHERE user_id = ? AND employee_type = 'INTERN' AND status = 'ACTIVE'")
+            .bind(target_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|r| (r.get("user_id"), r.get("full_name")))
+            .collect()
+    } else {
+        sqlx::query("SELECT user_id, full_name FROM users WHERE employee_type = 'INTERN' AND status = 'ACTIVE' ORDER BY full_name ASC")
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|r| (r.get("user_id"), r.get("full_name")))
+            .collect()
+    };
+
+    if interns.is_empty() {
+        if let Some(target_id) = target_user_id {
+            return Err(format!("Active intern {target_id} not found in database"));
+        }
+    }
+
+    let mut tabs_created = Vec::new();
+    let mut rows_synced = 0;
+    let mut details = Vec::with_capacity(interns.len());
+    let mut errors = Vec::new();
+
+    for (user_id, full_name) in &interns {
+        let mut tab_created = false;
+        let tab_opt = match ensure_person_tab(
+            state, &client, &token, &spreadsheet_id, &meta, user_id, full_name, &roster,
+        )
+        .await
+        {
+            Ok(Some((resolved_tab, _sheet_id, fresh_meta, created))) => {
+                meta = fresh_meta;
+                if created {
+                    tab_created = true;
+                    tabs_created.push(full_name.clone());
+                }
+                Some(resolved_tab)
+            }
+            Ok(None) => {
+                // If ensure_person_tab returned None (e.g. initial collision edge-case),
+                // manual sync explicitly provisions the tab using their roster name.
+                if dtr_tab_name_valid(full_name) {
+                    if let Some(template_id) = pick_template_sheet_id(&meta) {
+                        match duplicate_template_tab(&client, &token, &spreadsheet_id, template_id, full_name).await {
+                            Ok(Some(_)) => {
+                                tab_created = true;
+                                tabs_created.push(full_name.clone());
+                                if let Ok(fresh_meta) = fetch_tab_meta(&client, &token, &spreadsheet_id).await {
+                                    meta = fresh_meta;
+                                }
+                                let titles = titles_of(&meta);
+                                resolve_user_tab(&titles, user_id, full_name, &roster)
+                            }
+                            Ok(None) => {
+                                if let Ok(fresh_meta) = fetch_tab_meta(&client, &token, &spreadsheet_id).await {
+                                    meta = fresh_meta;
+                                }
+                                let titles = titles_of(&meta);
+                                resolve_user_tab(&titles, user_id, full_name, &roster)
+                            }
+                            Err(e) => {
+                                errors.push(format!("{full_name}: Failed to duplicate template tab: {e}"));
+                                None
+                            }
+                        }
+                    } else {
+                        errors.push(format!("{full_name}: Template tab not found in DTR spreadsheet"));
+                        None
+                    }
+                } else {
+                    errors.push(format!("{full_name}: Roster name is not a valid sheet tab title"));
+                    None
+                }
+            }
+            Err(e) => {
+                errors.push(format!("{full_name}: {e}"));
+                None
+            }
+        };
+
+        let Some(tab) = tab_opt else {
+            details.push(InternSyncDetail {
+                user_id: user_id.clone(),
+                full_name: full_name.clone(),
+                tab: None,
+                tab_created: false,
+                rows_synced: 0,
+                status: "MISSING_TAB".to_string(),
+            });
+            continue;
+        };
+
+        // Backfill history
+        match backfill_user_history(
+            state, &client, &token, &spreadsheet_id, user_id, full_name, &roster, &meta,
+        )
+        .await
+        {
+            Ok((wrote, complete)) => {
+                rows_synced += wrote;
+                if complete {
+                    let _ = clear_dtr_pending(state, user_id).await;
+                }
+                details.push(InternSyncDetail {
+                    user_id: user_id.clone(),
+                    full_name: full_name.clone(),
+                    tab: Some(tab),
+                    tab_created,
+                    rows_synced: wrote,
+                    status: if tab_created {
+                        "TAB_CREATED_AND_SYNCED".to_string()
+                    } else if wrote > 0 {
+                        "SYNCED".to_string()
+                    } else {
+                        "IN_SYNC".to_string()
+                    },
+                });
+            }
+            Err(e) => {
+                errors.push(format!("{full_name}: Backfill failed: {e}"));
+                details.push(InternSyncDetail {
+                    user_id: user_id.clone(),
+                    full_name: full_name.clone(),
+                    tab: Some(tab),
+                    tab_created,
+                    rows_synced: 0,
+                    status: "BACKFILL_FAILED".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(ManualSyncReport {
+        success: true,
+        interns_checked: interns.len(),
+        tabs_created,
+        rows_synced,
+        details,
+        errors,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2098,6 +2299,9 @@ mod tests {
             &["COPY OF TEMPLATE".to_string()],
             "Rona Khristelle Angelique Pacada"
         ));
+        // Single-character tokens (e.g. middle initials like "C.") do not trigger false-positive overlap.
+        let titles_with_initial = vec!["Raineer C. Rosado".to_string()];
+        assert!(!tab_name_overlaps_user(&titles_with_initial, "Maricon C. Danao"));
         // Degenerate names never auto-create.
         assert!(tab_name_overlaps_user(&[], ""));
     }
