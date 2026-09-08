@@ -267,6 +267,7 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: 4-minute stint → B=in C=actual-out D/E empty; afternoon-only stint → D/E actuals; admin-delete → B:E emptied (row kept), absent repaint follows
   EXPECT: <4h elapsed → actuals positionally (out<13:00 → [in,out,'','']; lunch-spanning → [in,'','',out]; noon+ start → ['','',in,out]); ≥4h → convention tiers unchanged; deletes converge, never remove rows
   EVIDENCE: PROVEN LIVE 2026-09-08 (dev kiosk + API reads): scratch intern 73-second stint 09:03:43→09:04:56 → auto-created tab → row B=9:03:43 AM C=9:04:56 AM D/E red-empty (no fabricated lunch); admin_delete_attendance → InternDtr DELETE SYNCED → B:E fully cleared, row kept, F formula intact; artifacts removed. Suites: cargo 220/220, server 141/141, tsc+oxlint clean. Shipped in 0.1.53.
+  FOLLOW-UP 2026-09-08: server CLI path (sync-intern-dtr.ts) lacked the 4h duration rule — sub-4h lunch-spanning stints rendered half-day [in, 12PM, '', ''] while Rust wrote [in, '', '', out]. Ported isShortStint + lunch-span-fragment kind/paint to intern-dtr-sync.ts for parity (55/55 file tests incl. 2 new, full server suite 143/143).
 - [x] Edge cases audited + pinned: names (diacritics, hyphens, apostrophes, Jr/Sr, initials, collisions, renames), dates (dirty October block, duplicates, leap day, missing rows, year boundary), times (offsets, midnight cross, 16:59 boundary, WORKING transitions), paint (partial failure, stale red, weekends), pending/backfill (>200 rows, partial failure, deactivation), ops (403/429/offline, two kiosks, cache staleness).
   CHECK: cargo test + npm test -w server (edge-case tests named) + review pass
   EXPECT: every case either handled with test or logged as accepted limitation in code comment
@@ -279,10 +280,11 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: admin-correct a time on a synced row → next loop → tab cell matches; admin-delete → tab row left untouched + logged
   EXPECT: corrections converge without duplicates; deletes never propagate (operator-owned sheet rule)
   EVIDENCE: PROVEN LIVE 2026-09-05 via Tauri MCP (dev kiosk) + ChromeDevTools MCP (sheet): admin_update_attendance timeIn 13:07:48→13:08:48 → InternDtr SYNCED → tab B=1:08:48 PM; corrected back 13:08:48→13:07:48 → mirrored again, screenshot row 107 B=1:07:48 PM. Production kiosk relaunched on release build after.
-- [x] P0: admin partial-update must COALESCE (timeOut-only payload wiped time_in→NULL + COMPLETED→MISSED live 2026-09-05; row restored from known-good values).
-  CHECK: partial payload keeps other columns; full payload works; regression tests per mutator
-  EXPECT: no admin edit can null a column it did not name; status recomputed from resulting in/out
-  EVIDENCE: PROVEN LIVE on dev kiosk (timeout-only correction preserved time_in + COMPLETED); fix shipped in prod 0.1.53; 213→220 cargo green. Production confirmation rides the next real admin correction.
+- [x] P0: admin partial-update must COALESCE, but explicit null clears (clearing a tap-out in corrections silently kept the stale time 2026-09-08: null meant keep, UI said Saved, DTR re-pushed the removed tap-out).
+  CHECK: absent key keeps; explicit null clears + status recomputes + DTR re-push carries null
+  EXPECT: clearing the time-out field sets WORKING and the sheet shows [in, 12PM, 1PM, '']; no admin edit can null a column it did not name
+  EVIDENCE: 2026-09-08 verify-fix — lib.rs absent-vs-null match + coalesce test step 3 rewritten to assert clear (WORKING + InternDtr UPSERT timeOut null); cargo admin_update_partial_payload_coalesces + admin_corrections_mirror_intern_dtr green; server suite 143/143, tsc + oxlint clean.
+  EVIDENCE LIVE 2026-09-08 (Tauri MCP, dev binary with fix, scratch intern INT_E2E_01, all artifacts removed): TIME_IN 11:00:22 → TIME_OUT 11:03:13 (~3 min); sheet row held fragment [11:00:22 AM, 11:03:13 AM, '', ''] (no fabricated 12PM); admin_update_attendance timeOut:null → WORKING + time_out NULL in DB + InternDtr UPSERT re-push with timeOut null; CLI --execute rewrote sheet E to empty WORKING row; admin_delete + user delete + tab delete + 8 scratch queue rows removed, DB counts 0.
 - [x] DTR sync hard-wired: compiled-in default sheet ID (config/env only overrides for a future sheet), key path defaults to config-dir file; no silent-off from missing config.
   CHECK: fresh config without google_dtr keys → intern scan still pushes; override with empty/other ID disables/retargets
   EXPECT: zero-config works out of the box; documented override path

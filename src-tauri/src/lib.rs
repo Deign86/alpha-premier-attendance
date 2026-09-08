@@ -1357,23 +1357,25 @@ async fn admin_update_attendance_impl(
     let current_date: &str = row.get("attendance_date");
     let current_in: Option<String> = row.get("time_in");
     let current_out: Option<String> = row.get("time_out");
-    // P0 partial-update COALESCE: absent (or explicit-null) payload fields
-    // keep the stored values. Binding a bare payload Option into the
-    // UPDATE turned every partial correction into NULL writes (live
-    // data-loss 2026-09-05: timeOut-only payload wiped time_in). There is
-    // no clear-time flow, so null always means keep.
+    // P0 partial-update COALESCE: an ABSENT payload field keeps the stored
+    // value (live data-loss 2026-09-05: timeOut-only payload wiped time_in
+    // when bare Options were bound into the UPDATE). An EXPLICIT null
+    // clears the field, so admins can remove an inaccurate tap-out from
+    // corrections; the cleared row re-pushes to the intern DTR as WORKING.
     let date: &str = payload
         .get("attendanceDate")
         .and_then(|v| v.as_str())
         .unwrap_or(current_date);
-    let time_in: Option<&str> = payload
-        .get("timeIn")
-        .and_then(|v| v.as_str())
-        .or(current_in.as_deref());
-    let time_out: Option<&str> = payload
-        .get("timeOut")
-        .and_then(|v| v.as_str())
-        .or(current_out.as_deref());
+    let time_in: Option<&str> = match payload.get("timeIn") {
+        None => current_in.as_deref(),
+        Some(serde_json::Value::Null) => None,
+        Some(v) => v.as_str().or(current_in.as_deref()),
+    };
+    let time_out: Option<&str> = match payload.get("timeOut") {
+        None => current_out.as_deref(),
+        Some(serde_json::Value::Null) => None,
+        Some(v) => v.as_str().or(current_out.as_deref()),
+    };
     if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err()
         || time_in.is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_err())
         || time_out.is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_err())
@@ -5956,10 +5958,25 @@ mod tests {
         let r2 = super::admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({"timeIn": "2026-08-12T08:06:00+08:00"})).await.unwrap();
         assert_eq!(r2["status"], "WORKING");
         assert!(r2["timeOut"].is_null());
-        // 3. Explicit JSON null also keeps (no clear-time flow exists).
+        // 3. Explicit JSON null clears the field (admins can remove an
+        // inaccurate tap-out); status drops back to WORKING and the DTR
+        // re-push carries the cleared row.
         let r3 = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": serde_json::Value::Null, "timeIn": "2026-08-11T08:01:00+08:00"})).await.unwrap();
-        assert_eq!(r3["timeOut"], "2026-08-11T17:05:00+08:00");
+        assert!(r3["timeOut"].is_null());
         assert_eq!(r3["timeIn"], "2026-08-11T08:01:00+08:00");
+        assert_eq!(r3["status"], "WORKING");
+        let cleared = sqlx::query("SELECT time_in,time_out,status FROM attendance WHERE attendance_id='aid-a'")
+            .fetch_one(&state.db).await.unwrap();
+        assert!(cleared.get::<Option<String>, _>("time_out").is_none());
+        assert_eq!(cleared.get::<String, _>("status"), "WORKING");
+        let dtr_payload: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id='aid-a' AND operation='UPSERT'")
+            .fetch_optional(&state.db).await.unwrap();
+        let dtr_payload: serde_json::Value = serde_json::from_str(&dtr_payload.expect("correction must re-push InternDtr")).unwrap();
+        assert!(dtr_payload["timeOut"].is_null());
+        assert_eq!(dtr_payload["timeIn"], "2026-08-11T08:01:00+08:00");
+        // Restore the completed day for the no-op / conflict steps below.
+        let restore = super::admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
+        assert_eq!(restore["status"], "COMPLETED");
         // 4. No-op full payload: revision untouched, no extra queue churn.
         let rev_before: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-a'").fetch_one(&state.db).await.unwrap();
         let q_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE row_id='aid-a'").fetch_one(&state.db).await.unwrap();

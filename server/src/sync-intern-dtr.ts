@@ -284,7 +284,7 @@ async function main(): Promise<void> {
     return;
   }
   const client = createSheetsClient(key.client_email, key.private_key, sheetId);
-  const meta = await client.getTabMeta();
+  let meta = await client.getTabMeta();
   const sheetIdOf = (tab: string): number => {
     const found = meta.find((m) => m.title === tab);
     if (!found) throw new Error(`tab id missing for resolved tab ${tab}`);
@@ -308,6 +308,9 @@ async function main(): Promise<void> {
         const created = user ? await ensurePersonTab(client, user, users) : null;
         if (created) {
           console.log(`TAB-CREATED ${created} for ${record.fullName}; re-planning`);
+          // The tab is new since the meta snapshot: refresh so the paint
+          // pass below resolves its sheet id (else first-run paint fails).
+          meta = await client.getTabMeta();
           plan = await planPush(client, record, users);
           console.log(describePlan(plan));
         }

@@ -11,6 +11,7 @@ import {
   formatSheetTime,
   hasTabOverlap,
   isDuplicateNameError,
+  isShortStint,
   isValidTabName,
   monthBlockRange,
   normalizeDtrToken,
@@ -263,6 +264,32 @@ describe('buildDtrRow', () => {
       '',
       '',
     ]);
+  });
+  it('sub-4h lunch-spanning stint keeps actuals at both ends (never half-day)', () => {
+    expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
+      '11:30:00 AM',
+      '',
+      '',
+      '2:30:00 PM',
+    ]);
+    expect(classifyRecordKind('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toBe(
+      'lunch-span-fragment',
+    );
+    expect(planRowFormat('T', 107, 'lunch-span-fragment')).toEqual([
+      { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 1, endCol0Excl: 2, red: false },
+      { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 2, endCol0Excl: 4, red: true },
+      { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 4, endCol0Excl: 5, red: false },
+    ]);
+  });
+  it('4h+ morning span closing early keeps the classic fixed half-day', () => {
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
+      '8:00:00 AM',
+      '12:00:00 PM',
+      '',
+      '',
+    ]);
+    expect(isShortStint('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00')).toBe(false);
+    expect(isShortStint('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00')).toBe(true);
   });
   it('cutoff boundary 16:58:59 half, 16:59:00+ full', () => {
     const half = buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:58:59+08:00', date);
