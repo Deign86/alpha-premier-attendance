@@ -525,6 +525,18 @@ describe('RFID kiosk', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument(), { timeout: 1_000 });
   });
 
+  it('handles offline queued scans and returns to ready after reset delay', async () => {
+    mockFetch({
+      success: true,
+      offlineQueued: true,
+      message: 'Attendance saved offline. Will automatically sync when reconnected.',
+    });
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    act(() => emitRfidScan('OFFLINE01'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument(), { timeout: 1_000 });
+  });
+
   it('shows the canonical office short address on the kiosk', async () => {
     render(<App />);
     expect(await screen.findByText('Tektite East Tower, Ortigas Center, Pasig')).toBeInTheDocument();

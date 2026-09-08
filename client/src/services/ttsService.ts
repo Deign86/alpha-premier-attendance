@@ -29,6 +29,8 @@ export {
 
 const TTS_STORAGE_KEY = 'alpha_premier_tts_settings';
 
+let activePlaybackEpoch = 0;
+
 export const DEFAULT_TTS_SETTINGS: TtsSettings = {
   enabled: true,
   engine: 'cloned-bea',
@@ -250,6 +252,43 @@ function getGreetingForTime(timeIso?: string | null): string {
   }
 }
 
+export interface AttendanceSegments {
+  prefix: string;
+  suffix: string;
+}
+
+/**
+ * Resolves the static prefix and suffix segments for attendance announcements.
+ * Serves as the single source of truth for both monolithic phrase building and
+ * spliced cloned-voice carriers.
+ */
+export function resolveAttendanceSegments(options: AttendancePhraseOptions): AttendanceSegments {
+  const greeting = options.greeting || getGreetingForTime(options.timeInIso);
+  const prefix = options.attendanceType === 'time_in' ? `${greeting},` : 'Goodbye,';
+  const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
+  const assistedPrefix = options.isAssisted ? 'assisted ' : '';
+  let suffix: string;
+
+  if (options.attendanceType === 'time_in') {
+    if (options.arrivalStatus === 'GRACE_PERIOD') {
+      suffix = `Your ${assistedPrefix}time in has been recorded. You made it within the grace period.${firstArrivalNote}`;
+    } else if (options.arrivalStatus === 'LATE') {
+      suffix = `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
+    } else {
+      suffix = `Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
+    }
+  } else {
+    // time_out
+    if (options.isLateTimeout) {
+      suffix = `Your ${assistedPrefix}time out was recorded after office hours. Manual correction is required.`;
+    } else {
+      suffix = `Your ${assistedPrefix}time out has been recorded.`;
+    }
+  }
+
+  return { prefix, suffix };
+}
+
 /**
  * Generates the appropriate attendance announcement phrase.
  *
@@ -273,40 +312,28 @@ export function buildAttendancePhrase(
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
   const assistedPrefix = options.isAssisted ? 'assisted ' : '';
 
+  if (cleanName.length > 0) {
+    const { prefix, suffix } = resolveAttendanceSegments(options);
+    return `${prefix} ${cleanName}. ${suffix}`;
+  }
+
   if (options.attendanceType === 'time_in') {
-    const greeting = options.greeting || getGreetingForTime(options.timeInIso);
     const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
 
     if (options.arrivalStatus === 'GRACE_PERIOD') {
-      if (cleanName.length > 0) {
-        return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded. You made it within the grace period.${firstArrivalNote}`;
-      }
       return `Your ${assistedPrefix}time in has been recorded within the grace period.${firstArrivalNote}`;
     }
 
     if (options.arrivalStatus === 'LATE') {
-      if (cleanName.length > 0) {
-        return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
-      }
       return `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
     }
 
-    if (cleanName.length > 0) {
-      return `${greeting}, ${cleanName}. Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
-    }
     return `Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
   }
 
   // time_out
   if (options.isLateTimeout) {
-    if (cleanName.length > 0) {
-      return `Goodbye, ${cleanName}. Your ${assistedPrefix}time out was recorded after office hours. Manual correction is required.`;
-    }
     return `Your ${assistedPrefix}time out was recorded after office hours. Manual correction is required.`;
-  }
-
-  if (cleanName.length > 0) {
-    return `Goodbye, ${cleanName}. Your ${assistedPrefix}time out has been recorded.`;
   }
   return `Your ${assistedPrefix}time out has been recorded.`;
 }
@@ -448,36 +475,14 @@ export async function announceAttendance(
 
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
   const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
+  const currentEpoch = ++activePlaybackEpoch;
 
   // Hybrid Splicing: When using Ma'am Bea cloned voice and a dynamic employee/intern name is present:
   // 1. Play pre-rendered cloned prefix carrier ("Good morning,", "Goodbye,", etc.)
   // 2. Synthesize and speak dynamic name via local Piper engine on kiosk
   // 3. Play pre-rendered cloned suffix carrier ("Your time in has been recorded.", etc.)
   if (isClonedBea && cleanName.length > 0) {
-    const greeting = options.greeting || getGreetingForTime(options.timeInIso);
-    const prefixPhrase = options.attendanceType === 'time_in' ? `${greeting},` : 'Goodbye,';
-
-    const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
-    const assistedPrefix = options.isAssisted ? 'assisted ' : '';
-    let suffixPhrase: string;
-
-    if (options.attendanceType === 'time_in') {
-      if (options.arrivalStatus === 'GRACE_PERIOD') {
-        suffixPhrase = `Your ${assistedPrefix}time in has been recorded. You made it within the grace period.${firstArrivalNote}`;
-      } else if (options.arrivalStatus === 'LATE') {
-        suffixPhrase = `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
-      } else {
-        suffixPhrase = `Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
-      }
-    } else {
-      // time_out
-      if (options.isLateTimeout) {
-        suffixPhrase = `Your ${assistedPrefix}time out was recorded after office hours. Manual correction is required.`;
-      } else {
-        suffixPhrase = `Your ${assistedPrefix}time out has been recorded.`;
-      }
-    }
-
+    const { prefix: prefixPhrase, suffix: suffixPhrase } = resolveAttendanceSegments(options);
     const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
     const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
     const targetPersonId = options.personId || options.userId;
@@ -490,6 +495,7 @@ export async function announceAttendance(
       try {
         // Step 1: Play cloned greeting / prefix
         const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+        if (currentEpoch !== activePlaybackEpoch) return null;
         if (prefixPlayed) {
           // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
           await playNameWithPiperFallback(
@@ -498,9 +504,11 @@ export async function announceAttendance(
             activeSettings,
             'Local Piper synthesis for dynamic name failed:',
           );
+          if (currentEpoch !== activePlaybackEpoch) return null;
 
           // Step 3: Play cloned carrier suffix segment
           await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+          if (currentEpoch !== activePlaybackEpoch) return null;
 
           return {
             success: true,
@@ -512,6 +520,8 @@ export async function announceAttendance(
       }
     }
   }
+
+  if (currentEpoch !== activePlaybackEpoch) return null;
 
   // Pure static phrase or full fallback phrase
   const phrase = buildAttendancePhrase(options);
@@ -540,6 +550,7 @@ export async function announceBathroom(
 
   const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
+  const currentEpoch = ++activePlaybackEpoch;
 
   if (isClonedBea) {
     const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
@@ -567,6 +578,7 @@ export async function announceBathroom(
         if (prefixUrl) {
           try {
             const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+            if (currentEpoch !== activePlaybackEpoch) return null;
             if (prefixPlayed) {
               // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
               const namePlayed = await playNameWithPiperFallback(
@@ -575,8 +587,10 @@ export async function announceBathroom(
                 activeSettings,
                 'Local Piper synthesis for bathroom name failed:',
               );
+              if (currentEpoch !== activePlaybackEpoch) return null;
               if (namePlayed) {
                 await playReturnReminder();
+                if (currentEpoch !== activePlaybackEpoch) return null;
                 return { success: true, engineUsed: 'cloned-bea' };
               }
             }
@@ -594,6 +608,7 @@ export async function announceBathroom(
         if (prefixUrl && suffixUrl) {
           try {
             const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+            if (currentEpoch !== activePlaybackEpoch) return null;
             if (prefixPlayed) {
               // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
               const namePlayed = await playNameWithPiperFallback(
@@ -602,8 +617,10 @@ export async function announceBathroom(
                 activeSettings,
                 'Local Piper synthesis for bathroom name failed:',
               );
+              if (currentEpoch !== activePlaybackEpoch) return null;
               if (namePlayed) {
                 const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+                if (currentEpoch !== activePlaybackEpoch) return null;
                 if (suffixPlayed) {
                   return { success: true, engineUsed: 'cloned-bea' };
                 }
@@ -623,9 +640,11 @@ export async function announceBathroom(
       if (staticUrl) {
         try {
           const played = await playClonedBeaAudio(staticUrl, activeSettings.volume, activeSettings.rate);
+          if (currentEpoch !== activePlaybackEpoch) return null;
           if (played) {
             if (options.action === 'CHECKOUT') {
               await playReturnReminder();
+              if (currentEpoch !== activePlaybackEpoch) return null;
             }
             return { success: true, engineUsed: 'cloned-bea' };
           }
@@ -635,6 +654,8 @@ export async function announceBathroom(
       }
     }
   }
+
+  if (currentEpoch !== activePlaybackEpoch) return null;
 
   const phrase = buildBathroomPhrase(options);
   return speakText(phrase, {
@@ -681,6 +702,7 @@ export async function announceScanError(
   }
 
   const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
+  const currentEpoch = ++activePlaybackEpoch;
 
   // Bea-first: splice the static "-by" carrier with the holder's cloned name clip
   // so the holder is actually named (previously the name was dropped in Bea mode).
@@ -704,6 +726,7 @@ export async function announceScanError(
             activeSettings.volume,
             activeSettings.rate,
           );
+          if (currentEpoch !== activePlaybackEpoch) return null;
           if (prefixPlayed) {
             // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
             const holderPlayed = await playNameWithPiperFallback(
@@ -712,6 +735,7 @@ export async function announceScanError(
               activeSettings,
               'Local Piper synthesis for key-holder name failed:',
             );
+            if (currentEpoch !== activePlaybackEpoch) return null;
             if (holderPlayed) {
               return { success: true, engineUsed: 'cloned-bea' };
             }
@@ -722,6 +746,8 @@ export async function announceScanError(
       }
     }
   }
+
+  if (currentEpoch !== activePlaybackEpoch) return null;
 
   const phrase = isClonedBea
     ? (options.errorCode === 'INVALID_UID' || options.errorCode === 'UNREGISTERED_CARD'
@@ -813,6 +839,7 @@ export async function speakText(
  * Immediately stops any currently playing audio or speech process.
  */
 export async function stopSpeech(): Promise<void> {
+  activePlaybackEpoch++;
   stopClonedBeaAudio();
   try {
     await tauriApi.ttsStop();

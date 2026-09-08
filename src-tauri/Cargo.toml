@@ -1,8 +1,8 @@
 [package]
 name = "alpha-premier-attendance"
 default-run = "alpha-premier-attendance"
-version = "0.1.56"
-description = "Alpha Premier Attendance desktop application"
+version = "0.1.57"
+description = "RFID Attendance, Payroll & Office Management Desktop Application"
 authors = ["Alpha Premier"]
 edition = "2021"
 rust-version = "1.88"

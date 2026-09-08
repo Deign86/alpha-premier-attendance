@@ -437,3 +437,55 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EXPECT: test passes verifying first run enables autostart and creates .autostart_initialized marker.
   EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml test_autostart_default_on` passed (0.00s). Verified ensure_default_autostart creates .autostart_initialized on first run and preserves opt-out. Main window show, unminimize, and set_focus invoked on Tauri launch.
 
+## Codebase simplification & reliability audit remediation gates
+
+- [x] Kiosk scan pipeline unconditionally schedules return-to-ready timer on offline queued and network error paths.
+  CHECK: npm test -w client -- src/App.test.tsx
+  EXPECT: all client App tests pass, including offlineQueued recovery.
+  EVIDENCE: 52/52 client App tests passed in 12.91s (`handles offline queued scans and returns to ready after reset delay`).
+
+- [x] Native admin session contract in api.ts returns ISO expiration timestamp matching web contract.
+  CHECK: npm test -w client -- src/api.test.ts
+  EXPECT: test passes asserting checkAdminSession in Tauri mode returns valid ISO expiresAt string.
+  EVIDENCE: 17/17 client api tests passed (`unlocks and returns ISO expiresAt in Tauri mode`).
+
+- [x] SetupService.upsertUser preserves configured payrollProfileId when updating existing users.
+  CHECK: npm test -w server -- test/setup.test.ts
+  EXPECT: setup test passes verifying payrollProfileId is retained on existing user updates.
+  EVIDENCE: 8/8 server setup tests passed (`preserves payrollProfileId when updating existing users in upsertUser`).
+
+- [x] Attendance concurrency mutex locks on target employee userId instead of raw card UID.
+  CHECK: npm test -w server -- test/attendance.test.ts
+  EXPECT: attendance service tests pass.
+  EVIDENCE: 9/9 server attendance tests passed (`serializes concurrent scans for the same effective user even when presented with different card UIDs`).
+
+- [x] Rust individual payslip generation uses canonical EmployeePayslipData without fabricating standard days or zeroing statutory deductions.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml reporting::tests
+  EXPECT: reporting tests pass.
+  EVIDENCE: 4/4 reporting unit tests passed, including `generates_employee_payslip_document_with_official_format`.
+
+- [x] Rust consolidated payroll sheet selects manual_adjustment_centavos and projects persisted values without dropping them.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml reporting::tests
+  EXPECT: payroll sheet tests pass.
+  EVIDENCE: 4/4 reporting tests passed including `generates_payroll_sheet_pdf_with_reference_columns_and_grand_total`.
+
+- [x] Rust sheets_sync batches reuse OAuth access token within run_once rather than re-fetching per row.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml services::sheets_sync::tests
+  EXPECT: sheets_sync tests pass.
+  EVIDENCE: 31/31 sheets_sync tests passed.
+
+- [x] Scanner service unifies paused state in ScannerStatus and removes dead runtime scaffolding.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml services::scanner::tests
+  EXPECT: scanner tests pass.
+  EVIDENCE: 11/11 scanner tests passed (`test_scanner_handle_paused_state`).
+
+- [x] Verification script verify-tauri-mcp.mjs exits with non-zero code on workflow failure.
+  CHECK: node --check scripts/verify-tauri-mcp.mjs
+  EXPECT: syntax check passes.
+  EVIDENCE: `node --check scripts/verify-tauri-mcp.mjs` exited 0; standalone run passed 7/7 checks.
+
+- [x] Repository passes all linting, typechecking, and tests.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all checks exit 0.
+  EVIDENCE: oxlint 61 files (0 warnings, 0 errors); typecheck passed across shared/client/server; npm test passed 32 files / 382 tests (237 client, 145 server); cargo test passed 231 tests (0 failed).
+

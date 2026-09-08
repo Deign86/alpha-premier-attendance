@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.57] - 2026-09-08
+
+### Fixed
+- **Kiosk Offline Queue Recovery**: Unconditionally schedule return-to-ready timers in `handleScanSubmit` on offline queues and network failures, preventing kiosk UI hangs.
+- **Admin Session Duration**: Updated Tauri native `checkAdminSession()` to return ISO `expiresAt` rather than token string, fixing auto-lock timer `NaN` calculations.
+- **Voice Playback Cancellation**: Added `activeAudioCancel` and monotonic `activePlaybackEpoch` to abort pending HTML5 `Audio` and multi-segment voice playback when speech is interrupted.
+- **User Setup Profile Persistence**: Retained existing `payrollProfileId` during user updates in `SetupService.upsertUser`.
+- **Attendance Concurrency**: Keyed presenter mutex serialization on employee `userId` rather than physical card UID.
+- **Payroll Sheet Manual Adjustments**: Included `manual_adjustment_centavos` in consolidated payroll sheet projections so manual adjustments appear on exported sheets.
+- **Individual Payslip Canonicalization**: Consolidated individual payslip generation around `EmployeePayslipData` to reflect actual working days and statutory deductions.
+- **Google Sheets Sync Token Optimization**: Reused OAuth access tokens across batch operations in `run_once`, eliminating redundant JWT sign and network roundtrips.
+- **Native Scanner Handle Cleanup**: Unified pause state into `ScannerStatus` and eliminated dead runtime scaffolding.
+- **Test Suite Parallelism**: Acquired `dtr_env_test_guard` in `admin_update_partial_payload_coalesces` to prevent parallel environment variable race conditions.
+- **Verification Tooling**: Enforced non-zero exit codes on failed workflow steps in `scripts/verify-tauri-mcp.mjs`.
+
+---
+
 ## [0.1.56] - 2026-09-08
 
 ### Added

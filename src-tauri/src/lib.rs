@@ -3876,29 +3876,15 @@ async fn generate_payroll_payslip_pdf(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let row = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,basic_pay_centavos,total_allowance_centavos,incentives_allowance_centavos,late_deduction_centavos,manual_adjustment_centavos,gross_compensation_centavos,net_pay_centavos,status FROM payroll_cutoffs WHERE payroll_id=?").bind(&payroll_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?.ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
-    let payroll = crate::reporting::PayrollExportRow {
-        payroll_id: row.get("payroll_id"),
-        employee_id: row.get("employee_id"),
-        employee_name: row.get("employee_name"),
-        profile: row.get("payroll_profile_id"),
-        cutoff_label: row.get("payroll_cutoff_label"),
-        cutoff_start: row.get("cutoff_start"),
-        cutoff_end: row.get("cutoff_end"),
-        basic_pay_centavos: row.get("basic_pay_centavos"),
-        allowances_centavos: row.get("total_allowance_centavos"),
-        incentives_centavos: row.get("incentives_allowance_centavos"),
-        late_deduction_centavos: row.get("late_deduction_centavos"),
-        other_adjustments_centavos: row.get("manual_adjustment_centavos"),
-        gross_centavos: row.get("gross_compensation_centavos"),
-        net_centavos: row.get("net_pay_centavos"),
-        status: row.get("status"),
-    };
+    let payslip = crate::reporting::load_employee_payslip_by_id(&state.db, &payroll_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
     let job_id = uuid::Uuid::new_v4().to_string();
     let artifact_id = uuid::Uuid::new_v4().to_string();
     let file_name = crate::reporting::payroll_pdf_filename(
-        &payroll.payroll_id,
-        &payroll.cutoff_label,
+        &payslip.payroll_id,
+        &payslip.cutoff_label,
         &job_id[..8],
     );
     let relative_path = std::path::PathBuf::from("exports").join(&file_name);
@@ -3908,7 +3894,12 @@ async fn generate_payroll_payslip_pdf(
     if let Err(error) = (|| {
         std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
             .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_pdf(&payroll, &state.office, &output_path)
+        crate::reporting::generate_employee_payslip_document(
+            std::slice::from_ref(&payslip),
+            &payslip.cutoff_label,
+            &state.office,
+            &output_path,
+        )
     })() {
         let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
         return Err(error);
@@ -3916,21 +3907,21 @@ async fn generate_payroll_payslip_pdf(
     let bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
     let completed = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&payroll.payroll_id).bind("PAYSLIP_PDF").bind("PDF").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
+    sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&payslip.payroll_id).bind("PAYSLIP_PDF").bind("PDF").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
     let metadata = generated_file_metadata(
         &state,
         &file_name,
         &output_path,
         "pdf",
-        format!("Payslip PDF generated for {}.", payroll.employee_name),
+        format!("Payslip PDF generated for {}.", payslip.employee_name),
     );
     let mut response = metadata.as_object().cloned().unwrap_or_default();
     response.insert("jobId".into(), serde_json::json!(job_id));
     response.insert("artifactId".into(), serde_json::json!(artifact_id));
     response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
     response.insert("sha256".into(), serde_json::json!(hash));
-    response.insert("status".into(), serde_json::json!(payroll.status));
+    response.insert("status".into(), serde_json::json!(payslip.status));
     Ok(serde_json::Value::Object(response))
 }
 
@@ -6220,6 +6211,11 @@ mod tests {
 
     #[tokio::test]
     async fn admin_update_partial_payload_coalesces() {
+        // Serialize DTR env access; a parallel blank-env test would otherwise
+        // switch the resolver off mid-test and drop the InternDtr enqueue.
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let saved_env = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        std::env::remove_var(crate::config::ENV_DTR_SHEET_ID);
         // P0 live data-loss 2026-09-05: a timeOut-only correction payload
         // wiped time_in to NULL and flipped COMPLETED to MISSED. Absent
         // (or explicit-null) fields must keep stored values.
@@ -6315,6 +6311,10 @@ mod tests {
         assert!(final_row.get::<Option<String>, _>("time_in").as_deref().is_some());
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+        match saved_env {
+            Some(v) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, v),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
     }
 
     #[tokio::test]

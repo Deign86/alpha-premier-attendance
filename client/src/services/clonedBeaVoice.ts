@@ -270,10 +270,20 @@ export function isClonedBeaPhraseAvailable(phrase: string): boolean {
   return getClonedBeaAudioUrl(phrase) !== null;
 }
 
+let activeAudioCancel: (() => void) | null = null;
+
 /**
  * Immediately stops any playing cloned voice audio playback.
  */
 export function stopClonedBeaAudio(): void {
+  if (activeAudioCancel) {
+    try {
+      activeAudioCancel();
+    } catch {
+      // Ignore cancel errors
+    }
+    activeAudioCancel = null;
+  }
   if (activeAudioElement) {
     try {
       activeAudioElement.pause();
@@ -361,12 +371,15 @@ async function attemptAudioPlay(
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
+          activeAudioCancel = null;
           if (activeAudioElement === audio) {
             activeAudioElement = null;
           }
           resolve(ok);
         }
       };
+
+      activeAudioCancel = () => finish(false);
 
       audio.onended = () => finish(true);
       audio.onerror = () => finish(false);

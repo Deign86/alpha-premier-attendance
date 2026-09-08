@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tauriApi } from './tauri-api';
-import { createAdminBackdatedAttendance, exportPayrollCsv, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, exportPayrollCsv, lockAdmin, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -275,6 +275,40 @@ describe('updateBathroomLog', () => {
       expect.stringContaining('/api/admin/bathroom/bath-1'),
       expect.objectContaining({ method: 'PATCH' }),
     );
+  });
+});
+
+describe('admin session lifecycle', () => {
+  it('unlocks and returns ISO expiresAt in Tauri mode', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    const expiresAt = '2026-09-08T18:00:00.000Z';
+    vi.spyOn(tauriApi, 'setupUnlock').mockResolvedValueOnce({
+      success: true,
+      token: 'admin-uuid-token-1234',
+      expiresAt,
+    });
+    vi.spyOn(tauriApi, 'adminGetSession').mockResolvedValueOnce({
+      token: 'admin-uuid-token-1234',
+      expiresAt,
+      role: 'admin',
+    });
+    vi.spyOn(tauriApi, 'setupLock').mockResolvedValueOnce({ success: true });
+
+    const unlockResult = await unlockAdmin('293906');
+    expect(unlockResult.success).toBe(true);
+    if (unlockResult.success) {
+      expect(unlockResult.expiresAt).toBe(expiresAt);
+    }
+
+    const sessionResult = await checkAdminSession();
+    expect(sessionResult).toBe(expiresAt);
+
+    await lockAdmin();
+    const afterLock = await checkAdminSession();
+    expect(afterLock).toBeNull();
+
+    // SAFETY: Removing test mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 });
 

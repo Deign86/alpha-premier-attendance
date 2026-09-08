@@ -55,6 +55,7 @@ export async function pickRestoreBackupFile(): Promise<string | null> {
 
 const runningInTauri = () => globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 let nativeAdminToken: string | null = null;
+let nativeAdminExpiresAt: string | null = null;
 
 function errorString<T>(error: T): string {
   if (error && Object.prototype.toString.call(error) === '[object String]') {
@@ -197,7 +198,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
 }
 
 export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<SetupUnlockResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; return { success: true, setupToken: response.token, expiresAt: response.expiresAt }; } catch (error) { return setupErrorFrom(error, 'INVALID_SETUP_PIN'); } }
+  if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; nativeAdminExpiresAt = response.expiresAt; return { success: true, setupToken: response.token, expiresAt: response.expiresAt }; } catch (error) { return setupErrorFrom(error, 'INVALID_SETUP_PIN'); } }
   return setupRequest<SetupUnlockResponse | SetupErrorResponse>(apiUrl('/api/setup/unlock'), {
     method: 'POST',
     body: JSON.stringify({ pin }),
@@ -323,18 +324,42 @@ export async function openViewerUrl(url: string): Promise<boolean> {
 }
 
 export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | { success: false; error: { message: string } }> {
-  if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; return { success: true, expiresAt: response.expiresAt }; } catch { return { success: false, error: { message: 'The administrator PIN is invalid.' } }; } }
+  if (runningInTauri()) {
+    try {
+      const response = await tauriApi.setupUnlock(pin);
+      nativeAdminToken = response.token;
+      nativeAdminExpiresAt = response.expiresAt;
+      return { success: true, expiresAt: response.expiresAt };
+    } catch {
+      return { success: false, error: { message: 'The administrator PIN is invalid.' } };
+    }
+  }
   const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
   // SAFETY: Parsing admin unlock response JSON
   return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
 }
 
-export async function lockAdmin(): Promise<void> { if (runningInTauri()) { nativeAdminToken = null; await tauriApi.setupLock(); return; } await fetch(apiUrl('/api/admin/lock'), { method: 'POST' }); }
+export async function lockAdmin(): Promise<void> {
+  if (runningInTauri()) {
+    nativeAdminToken = null;
+    nativeAdminExpiresAt = null;
+    await tauriApi.setupLock();
+    return;
+  }
+  await fetch(apiUrl('/api/admin/lock'), { method: 'POST' });
+}
+
 export async function checkAdminSession(): Promise<string | null> {
   if (runningInTauri()) {
     if (!nativeAdminToken) return null;
-    try { await tauriApi.adminGetSession(nativeAdminToken); return nativeAdminToken; }
-    catch { nativeAdminToken = null; return null; }
+    try {
+      await tauriApi.adminGetSession(nativeAdminToken);
+      return nativeAdminExpiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    } catch {
+      nativeAdminToken = null;
+      nativeAdminExpiresAt = null;
+      return null;
+    }
   }
   try {
     const response = await fetch(apiUrl('/api/admin/session'));

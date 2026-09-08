@@ -1560,6 +1560,7 @@ async fn sheet_id_for_tab(
         .ok_or_else(|| SHEETS_REQUEST_FAILED_ERROR.to_string())
 }
 
+#[allow(dead_code)]
 async fn google_append_row(
     path: &str,
     spreadsheet_id: &str,
@@ -1573,6 +1574,21 @@ async fn google_append_row(
 
     let token = google_access_token(path).await?;
     let client = sheets_client();
+    google_append_row_with_token(&client, &token, spreadsheet_id, table_name, row_id, payload).await
+}
+
+async fn google_append_row_with_token(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    table_name: &str,
+    row_id: &str,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
+    if row_id.trim().is_empty() {
+        return Err(SHEETS_ROW_ID_MISSING_ERROR.to_string());
+    }
+
     // Bounded reads: the header row plus the key column (row-anchored at
     // sheet row 1, so `find_existing_row_index` keeps working unchanged).
     // A full-tab fetch here would grow with every synced row; the key
@@ -1684,6 +1700,7 @@ async fn google_append_row(
 /// Deletes the row identified by `row_id` (matched by cell value in the key
 /// column, never by position). Returns `true` when a row was actually removed
 /// and `false` when the row was already absent (no-op success).
+#[allow(dead_code)]
 async fn google_delete_row(
     path: &str,
     spreadsheet_id: &str,
@@ -1697,6 +1714,21 @@ async fn google_delete_row(
 
     let token = google_access_token(path).await?;
     let client = sheets_client();
+    google_delete_row_with_token(&client, &token, spreadsheet_id, table_name, row_id, payload).await
+}
+
+async fn google_delete_row_with_token(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    table_name: &str,
+    row_id: &str,
+    payload: &serde_json::Value,
+) -> Result<bool, String> {
+    if row_id.trim().is_empty() {
+        return Err(SHEETS_ROW_ID_MISSING_ERROR.to_string());
+    }
+
     // Bounded reads (see `google_append_row`): header row plus the key
     // column only. Full rows are fetched solely to disambiguate duplicate
     // key matches, and then only across the matched span.
@@ -1845,6 +1877,7 @@ async fn google_delete_row(
 /// frozen bold header on brand `#1a4e3f`, alternating white / `#f2f2f2` data
 /// bands, `0.00` money cells, plain-text date/time cells, auto-sized columns
 /// and trailing blank rows removed.
+#[allow(dead_code)]
 async fn google_format_sheet(
     path: &str,
     spreadsheet_id: &str,
@@ -2380,30 +2413,39 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         .as_ref()
         .map(|target| target.spreadsheet_id.as_str());
 
-    if google_mode {
-        if let (Some(path), Some(spreadsheet)) = (google_path, spreadsheet_id) {
-            let client = sheets_client();
-            // A failed pre-check must not abort the pass (same starvation
-            // class as provisioning): rows fail individually with backoff.
+    let shared_google_token: Option<String> = if google_mode || dtr_sheet.is_some() {
+        if let Some(path) = google_path {
             match google_access_token(path).await {
-                Ok(token) => {
-                    let mut tables: Vec<String> = Vec::new();
-                    for row in &rows {
-                        let table: String = row.get("table_name");
-                        if !tables.contains(&table) {
-                            tables.push(table);
-                        }
-                    }
-                    for table in tables {
-                        // InternDtr rows target the human DTR spreadsheet, handled
-                        // below — never create/format tabs for it in the ops sheet.
-                        if table == crate::services::dtr_sync::DTR_TABLE_NAME {
-                            continue;
-                        }
-                        ensure_tab_exists(&client, &token, spreadsheet, &table).await?;
-                    }
+                Ok(tok) => Some(tok),
+                Err(err) => {
+                    log::warn!("google token acquisition failed at batch start: {err}");
+                    None
                 }
-                Err(error) => log::warn!("ops tab pre-check skipped, rows fail individually: {error}"),
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if google_mode {
+        if let (Some(token), Some(spreadsheet)) = (shared_google_token.as_deref(), spreadsheet_id) {
+            let client = sheets_client();
+            let mut tables: Vec<String> = Vec::new();
+            for row in &rows {
+                let table: String = row.get("table_name");
+                if !tables.contains(&table) {
+                    tables.push(table);
+                }
+            }
+            for table in tables {
+                // InternDtr rows target the human DTR spreadsheet, handled
+                // below — never create/format tabs for it in the ops sheet.
+                if table == crate::services::dtr_sync::DTR_TABLE_NAME {
+                    continue;
+                }
+                ensure_tab_exists(&client, token, spreadsheet, &table).await?;
             }
         }
     }
@@ -2437,7 +2479,11 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                     match (google_path, dtr_sheet.as_deref()) {
                         (Some(path), Some(sheet)) => {
                             let client = sheets_client();
-                            match google_access_token(path).await {
+                            let token_res = match shared_google_token.as_deref() {
+                                Some(tok) => Ok(tok.to_string()),
+                                None => google_access_token(path).await,
+                            };
+                            match token_res {
                                 Ok(token) => {
                                     crate::services::dtr_sync::clear_dtr_row(
                                         state, &client, &token, sheet, payload,
@@ -2454,7 +2500,11 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                     match (google_path, dtr_sheet.as_deref()) {
                         (Some(path), Some(sheet)) => {
                             let client = sheets_client();
-                            match google_access_token(path).await {
+                            let token_res = match shared_google_token.as_deref() {
+                                Some(tok) => Ok(tok.to_string()),
+                                None => google_access_token(path).await,
+                            };
+                            match token_res {
                                 Ok(token) => {
                                     crate::services::dtr_sync::push_dtr_row(
                                         state, &client, &token, sheet, payload,
@@ -2482,12 +2532,22 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                             .map_err(|_| SHEETS_REQUEST_FAILED_ERROR.to_string())
                     })
             } else if let (Some(path), Some(spreadsheet)) = (google_path, spreadsheet_id) {
-                if is_delete {
-                    google_delete_row(path, spreadsheet, &table_name, &row_id, payload).await
-                } else {
-                    google_append_row(path, spreadsheet, &table_name, &row_id, payload)
-                        .await
-                        .map(|_| false)
+                let client = sheets_client();
+                let token_res = match shared_google_token.as_deref() {
+                    Some(tok) => Ok(tok.to_string()),
+                    None => google_access_token(path).await,
+                };
+                match token_res {
+                    Ok(tok) => {
+                        if is_delete {
+                            google_delete_row_with_token(&client, &tok, spreadsheet, &table_name, &row_id, payload).await
+                        } else {
+                            google_append_row_with_token(&client, &tok, spreadsheet, &table_name, &row_id, payload)
+                                .await
+                                .map(|_| false)
+                        }
+                    }
+                    Err(err) => Err(err),
                 }
             } else {
                 Err(SHEETS_REQUEST_FAILED_ERROR.to_string())
@@ -2554,12 +2614,19 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
     }
     if google_mode && !touched.is_empty() {
         if let (Some(path), Some(spreadsheet)) = (google_path, spreadsheet_id) {
-            for table in touched {
-                if table == crate::services::dtr_sync::DTR_TABLE_NAME {
-                    continue;
-                }
-                if let Err(error) = google_format_sheet(path, spreadsheet, &table).await {
-                    eprintln!("[sheets] formatting failed for {table}: {error}");
+            let client = sheets_client();
+            let token_res = match shared_google_token.as_deref() {
+                Some(tok) => Ok(tok.to_string()),
+                None => google_access_token(path).await,
+            };
+            if let Ok(tok) = token_res {
+                for table in touched {
+                    if table == crate::services::dtr_sync::DTR_TABLE_NAME {
+                        continue;
+                    }
+                    if let Err(error) = google_format_sheet_with_token(&client, &tok, spreadsheet, &table).await {
+                        eprintln!("[sheets] formatting failed for {table}: {error}");
+                    }
                 }
             }
         }

@@ -407,7 +407,7 @@ async function runVerification() {
   console.log('----------------------------------------------------');
   console.log(`  Total Passed: ${results.summary.passed} / ${results.summary.total} in ${durationMs}ms\n`);
 
-  if (!results.doctor.passed) {
+  if (!results.doctor.passed || results.summary.failed > 0) {
     process.exit(1);
   }
 }

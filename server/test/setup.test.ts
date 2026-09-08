@@ -82,6 +82,26 @@ describe('card setup service', () => {
     // Regular employee RFID is rejected for setup unlock
     await expect(service.unlock('EEFF00')).rejects.toThrow('invalid');
   });
+
+  it('preserves existing payrollProfileId when updating an existing user', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'EMP1', fullName: 'Jane Doe', rfidUid: 'EEFF00', department: 'Engineering', active: true, employeeType: 'EMPLOYEE', dailyRate: 500, payrollProfileId: 'PRF-001' },
+    ]);
+    const service = new SetupService(sheets, setupConfig);
+    const token = (await service.unlock('2468')).setupToken;
+    const result = await service.upsertUser(token, {
+      userId: 'EMP1',
+      fullName: 'Jane Doe Updated',
+      rfidUid: 'EEFF00',
+      status: 'ACTIVE',
+      employeeType: 'EMPLOYEE',
+      dailyRate: 600,
+    });
+    expect(result.created).toBe(false);
+    expect(result.user.payrollProfileId).toBe('PRF-001');
+    const stored = await sheets.findUserById('EMP1');
+    expect(stored?.payrollProfileId).toBe('PRF-001');
+  });
 });
 
 describe('card setup HTTP API', () => {

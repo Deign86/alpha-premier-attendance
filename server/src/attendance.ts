@@ -48,40 +48,41 @@ export class AttendanceService {
     }
 
     try {
-      return await this.mutex.runExclusive(uid, async () => {
-        const now = this.now();
-        const currentMs = now.getTime();
-        let user: SheetUser | null;
-        try {
-          user = await this.sheets.findUserByUid(uid);
-        } catch {
-          throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
-        }
-        if (!user) throw new ScanError('UNKNOWN_RFID_CARD', 'This RFID card is not registered.', 404);
-        if (!user.active) throw new ScanError('INACTIVE_USER', 'This user is inactive.', 403);
+      const now = this.now();
+      const currentMs = now.getTime();
+      let user: SheetUser | null;
+      try {
+        user = await this.sheets.findUserByUid(uid);
+      } catch {
+        throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
+      }
+      if (!user) throw new ScanError('UNKNOWN_RFID_CARD', 'This RFID card is not registered.', 404);
+      if (!user.active) throw new ScanError('INACTIVE_USER', 'This user is inactive.', 403);
 
-        const timestamp = manilaTimestamp(now, this.config.timezone);
+      const timestamp = manilaTimestamp(now, this.config.timezone);
 
-        const resolved = await this.resolvePrincipal(request, uid, user, timestamp, requestId);
-        if (resolved.kind === 'prompt') {
-          this.lastScans.set(user.userId, currentMs);
-          void this.writeAudit({
-            eventType: 'SCAN_SUCCESS',
-            rfidUid: uid,
-            userId: user.userId,
-            message: 'ADMIN_ASSIST card presented',
-            requestId,
-          });
-          return resolved.response;
-        }
-        const effectiveUser = resolved.scan.subject;
-        const assist = resolved.scan.assist;
-        const adminUser = resolved.scan.adminUser;
-        const isAssist = assist !== null;
-        const recordedBy = assist?.by ?? null;
-        const recordedReason = assist?.reason ?? null;
-        const recordedAt = assist?.at ?? null;
-        const effectiveSource = resolved.scan.source;
+      const resolved = await this.resolvePrincipal(request, uid, user, timestamp, requestId);
+      if (resolved.kind === 'prompt') {
+        this.lastScans.set(user.userId, currentMs);
+        void this.writeAudit({
+          eventType: 'SCAN_SUCCESS',
+          rfidUid: uid,
+          userId: user.userId,
+          message: 'ADMIN_ASSIST card presented',
+          requestId,
+        });
+        return resolved.response;
+      }
+      const effectiveUser = resolved.scan.subject;
+      const assist = resolved.scan.assist;
+      const adminUser = resolved.scan.adminUser;
+      const isAssist = assist !== null;
+      const recordedBy = assist?.by ?? null;
+      const recordedReason = assist?.reason ?? null;
+      const recordedAt = assist?.at ?? null;
+      const effectiveSource = resolved.scan.source;
+
+      return await this.mutex.runExclusive(effectiveUser.userId, async () => {
 
         const previousMs = this.lastScans.get(effectiveUser.userId);
         if (previousMs !== undefined && currentMs - previousMs < this.config.scanCooldownMs) {

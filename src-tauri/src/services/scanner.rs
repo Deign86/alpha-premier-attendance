@@ -8,18 +8,12 @@
 //! as `rfid-scan` events.
 
 use serde::Serialize;
-use std::{
-    collections::VecDeque,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
 use crate::config::{ScannerCharacterSet, ScannerConfig};
 
+#[allow(dead_code)]
 pub const SCAN_EVENT: &str = "rfid-scan";
 pub const STATUS_EVENT: &str = "scanner-status";
 
@@ -53,7 +47,6 @@ pub struct ScannerStatus {
 pub struct ScannerHandle {
     pub config: ScannerConfig,
     status: Mutex<ScannerStatus>,
-    paused: AtomicBool,
 }
 
 impl ScannerHandle {
@@ -67,47 +60,35 @@ impl ScannerHandle {
                 mode: "keyboard".into(),
                 paused: false,
             }),
-            paused: AtomicBool::new(false),
         }
     }
 
     pub fn set_paused(&self, paused: bool) {
-        self.paused.store(paused, Ordering::SeqCst);
+        let mut status = self.status.lock().expect("scanner status lock");
+        status.paused = paused;
     }
 
     pub fn paused(&self) -> bool {
-        self.paused.load(Ordering::SeqCst)
+        self.status.lock().expect("scanner status lock").paused
     }
 
     pub fn status(&self) -> ScannerStatus {
-        let mut status = self.status.lock().expect("scanner status lock").clone();
-        status.paused = self.paused.load(Ordering::SeqCst);
-        status
+        self.status.lock().expect("scanner status lock").clone()
     }
-}
-
-struct Runtime {
-    app: AppHandle,
-    handle: Arc<ScannerHandle>,
-    recent: Mutex<VecDeque<(String, Instant)>>,
 }
 
 /// Initialize the native scanner pipeline.
 pub fn start(app: AppHandle, handle: Arc<ScannerHandle>) {
-    let runtime = Arc::new(Runtime {
-        app,
-        handle,
-        recent: Mutex::new(VecDeque::new()),
-    });
-
     set_status(
-        &runtime,
+        &app,
+        &handle,
         ScannerState::Connected,
         "Keyboard-mode RFID reader ready",
         Some("Keep the attendance window focused before scanning".into()),
     );
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScanParse {
     Valid(String),
@@ -122,6 +103,7 @@ pub enum ScanParse {
 /// so the native layer never accepts something the attendance writer would reject,
 /// and never drops something it would accept. Separators (`:`, `-`, space) are
 /// stripped so formatted UIDs still work.
+#[allow(dead_code)]
 pub fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
     let mut value = String::with_capacity(raw.len());
     let mut saw_content = false;
@@ -157,84 +139,26 @@ pub fn normalize(raw: &str, profile: &ScannerConfig) -> ScanParse {
     ScanParse::Valid(value)
 }
 
-#[allow(dead_code)]
-fn emit_scan(runtime: &Arc<Runtime>, raw: String) {
-    if runtime.handle.paused() {
+fn set_status(
+    app: &AppHandle,
+    handle: &ScannerHandle,
+    state: ScannerState,
+    message: &str,
+    detail: Option<String>,
+) {
+    let mut current = handle.status.lock().expect("scanner status lock");
+    if current.state == state
+        && current.message == message
+        && current.detail == detail
+    {
         return;
     }
-    match normalize(&raw, &runtime.handle.config) {
-        ScanParse::Valid(uid) => {
-            if is_recent(runtime, &uid) {
-                return;
-            }
-            let _ = runtime.app.emit(SCAN_EVENT, uid);
-            set_status(runtime, ScannerState::Connected, "Waiting for card", None);
-        }
-        ScanParse::Invalid(detail) => {
-            set_status(
-                runtime,
-                ScannerState::Error,
-                "Invalid scan format",
-                Some(detail),
-            );
-            let recovery_runtime = Arc::clone(runtime);
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(2500));
-                if recovery_runtime.handle.status().state == ScannerState::Error {
-                    set_status(
-                        &recovery_runtime,
-                        ScannerState::Connected,
-                        "Waiting for card",
-                        None,
-                    );
-                }
-            });
-        }
-        ScanParse::Ignored => {}
-    }
-}
-
-/// Native dedup: identical UIDs within the configured window are swallowed so
-/// one physical tap never produces two scan requests.
-#[allow(dead_code)]
-fn is_recent(runtime: &Arc<Runtime>, uid: &str) -> bool {
-    let window = Duration::from_millis(runtime.handle.config.dedup_ms.max(50));
-    let mut recent = runtime.recent.lock().expect("scanner recent lock");
-    let now = Instant::now();
-    while recent
-        .front()
-        .is_some_and(|(_, at)| now.duration_since(*at) > window)
-    {
-        recent.pop_front();
-    }
-    if recent.iter().any(|(known, _)| known == uid) {
-        return true;
-    }
-    if recent.len() < 64 {
-        recent.push_back((uid.to_string(), now));
-    }
-    false
-}
-
-fn set_status(runtime: &Arc<Runtime>, state: ScannerState, message: &str, detail: Option<String>) {
-    let status = ScannerStatus {
-        state,
-        message: message.to_string(),
-        detail,
-        mode: "keyboard".to_string(),
-        paused: runtime.handle.paused(),
-    };
-    {
-        let mut current = runtime.handle.status.lock().expect("scanner status lock");
-        if current.state == status.state
-            && current.message == status.message
-            && current.detail == status.detail
-        {
-            return;
-        }
-        *current = status.clone();
-    }
-    let _ = runtime.app.emit(STATUS_EVENT, status);
+    current.state = state;
+    current.message = message.to_string();
+    current.detail = detail;
+    let status = current.clone();
+    drop(current);
+    let _ = app.emit(STATUS_EVENT, status);
 }
 
 #[cfg(test)]
@@ -369,5 +293,20 @@ mod tests {
             ),
             ScanParse::Invalid(_)
         ));
+    }
+
+    #[test]
+    fn test_scanner_handle_paused_state() {
+        let handle = super::ScannerHandle::new(ScannerConfig::default());
+        assert!(!handle.paused());
+        assert!(!handle.status().paused);
+
+        handle.set_paused(true);
+        assert!(handle.paused());
+        assert!(handle.status().paused);
+
+        handle.set_paused(false);
+        assert!(!handle.paused());
+        assert!(!handle.status().paused);
     }
 }

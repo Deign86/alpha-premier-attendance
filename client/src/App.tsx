@@ -360,6 +360,7 @@ export default function App() {
     scanInFlightRef.current = false;
     setState("ready");
     setResult(null);
+    setBathroomScanResult(null);
     setUid("");
     setManualUid("");
   }, []);
@@ -644,6 +645,17 @@ export default function App() {
           { rfidUid: normalizedUid, source },
           controller.signal,
         );
+      } catch {
+        if (controller.signal.aborted) return;
+        setState("error");
+        setResult(null);
+        void announceScanError({
+          errorCode: "NETWORK_ERROR",
+          message: "Unable to reach attendance service.",
+        });
+        if (resetTimer.current) clearTimeout(resetTimer.current);
+        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
+        return;
       } finally {
         releaseScanPipeline(controller);
       }
@@ -658,6 +670,8 @@ export default function App() {
       if (response.success && "offlineQueued" in response) {
         setResult(null);
         setState("success");
+        if (resetTimer.current) clearTimeout(resetTimer.current);
+        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
         return;
       }
       setResult(response);
@@ -814,6 +828,11 @@ export default function App() {
           errorCode: "SERVICE_ERROR",
           message: "Bathroom service is temporarily unavailable.",
         });
+        if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
+        bathroomResetTimer.current = setTimeout(() => {
+          setBathroomScanResult(null);
+          setState("ready");
+        }, config.resultResetDelayMs);
       } finally {
         releaseScanPipeline(controller);
       }

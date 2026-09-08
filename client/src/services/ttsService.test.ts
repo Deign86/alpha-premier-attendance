@@ -1326,4 +1326,39 @@ describe('ttsService', () => {
       expect(resolveTtsMode(loaded)).toEqual({ kind: 'disabled' });
     });
   });
+
+  describe('monotonic playback epoch & segments resolution', () => {
+    it('cancels spliced attendance announcement when stopSpeech is called mid-playback', async () => {
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaAudioUrl').mockImplementation((phrase) => `/voices/${phrase}.mp3`);
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaNameAudioUrl').mockReturnValue('/voices/names/Ada.mp3');
+      vi.spyOn(tauriApi, 'ttsStop').mockResolvedValue();
+
+      let resolvePrefixPlay: (val: boolean) => void = () => {};
+      const prefixPromise = new Promise<boolean>((resolve) => {
+        resolvePrefixPlay = resolve;
+      });
+
+      const playClonedBeaAudioSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio')
+        .mockImplementationOnce(() => prefixPromise)
+        .mockResolvedValue(true);
+
+      const announcePromise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Ada Lovelace',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1 },
+      });
+
+      // Call stopSpeech while prefix is awaiting
+      await stopSpeech();
+
+      // Now resolve the prefix playback
+      resolvePrefixPlay(true);
+
+      const result = await announcePromise;
+      // Should have cancelled out early and returned null rather than proceeding to name / suffix
+      expect(result).toBeNull();
+      // Should NOT have attempted to play the suffix
+      expect(playClonedBeaAudioSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });

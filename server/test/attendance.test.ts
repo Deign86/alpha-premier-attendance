@@ -182,4 +182,23 @@ describe('AttendanceService', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error.code).toBe('DUPLICATE_SCAN');
   });
+
+  it('serializes concurrent direct scan and admin assisted scan on target employee userId', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: null, active: true },
+      { userId: 'ADMIN_CARD_AD01', fullName: 'Front Desk Admin', rfidUid: 'AD01', department: 'Admin', active: true, cardType: 'ADMIN_ASSIST' },
+    ]);
+    const service = new AttendanceService(sheets, config, () => new Date('2026-07-28T01:00:00.000Z'));
+
+    const [res1, res2] = await Promise.all([
+      service.scan({ rfidUid: 'AABB', source: 'RFID' }, 'req-1'),
+      service.scan({ rfidUid: 'AD01', source: 'ADMIN_ASSISTED_SCAN', targetUserId: 'u1', reason: 'Forgot card' }, 'req-2'),
+    ]);
+
+    const results = [res1, res2];
+    const successes = results.filter((r) => r.success);
+    const duplicates = results.filter((r) => !r.success && r.error.code === 'DUPLICATE_SCAN');
+    expect(successes).toHaveLength(1);
+    expect(duplicates).toHaveLength(1);
+  });
 });

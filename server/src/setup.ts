@@ -150,6 +150,7 @@ export class SetupService {
       dailyRate,
       photoUrl: isAssist ? null : (value.photoUrl === undefined ? existing?.photoUrl ?? null : isPhotoUrl(value.photoUrl) ? value.photoUrl : null),
       cardType: value.cardType ?? 'EMPLOYEE',
+      payrollProfileId: existing?.payrollProfileId ?? null,
     };
     try {
       const saved = await this.sheets.upsertUser(user);
