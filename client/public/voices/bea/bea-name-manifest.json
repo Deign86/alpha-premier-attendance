@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-09-04T08:14:41.996232Z",
+  "generatedAt": "2026-09-08T04:42:10.171Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -263,6 +263,16 @@
       "audioFile": "/voices/bea/names/APG-2026-115.mp3",
       "generatedAt": "2026-09-04T08:14:41.996232Z",
       "audioHash": "5f53f17a1e69f04190b83d4d80bc1425e9df4689eb44a816ad00f48540506d1c"
+    },
+    "APG-2026-116": {
+      "personId": "APG-2026-116",
+      "displayName": "Maricon C. Danao",
+      "normalizedSpeechText": "Maricon Danao",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-116.mp3",
+      "generatedAt": "2026-09-08T04:42:10.171Z",
+      "audioHash": "05a9bbc86fae6279c0c741e82e0dc8e8172e8045aee8419581871e25c606f21a"
     }
   }
 }

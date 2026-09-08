@@ -353,8 +353,6 @@ def get_voicestudio_bea_profile():
                 data = json.load(f)
                 if data.get("voicestudio_profile_id"):
                     return data["voicestudio_profile_id"]
-                if data.get("voicebox_profile_id"):
-                    return data["voicebox_profile_id"]
         except Exception:
             pass
     return VOICESTUDIO_BEA_PROFILE_ID
@@ -434,7 +432,6 @@ def main():
         "engine": "voicestudio-bea-cloned",
         "voice": "bea",
         "voicestudio_profile_id": profile_id,
-        "voicebox_profile_id": profile_id,
         "segments": {},
         "phrases": {},
     }

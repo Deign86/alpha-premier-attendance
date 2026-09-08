@@ -8,7 +8,7 @@ import urllib.request
 import hashlib
 from pathlib import Path
 
-VOICEBOX_BASE = "http://127.0.0.1:17493"
+VOICESTUDIO_BASE = "http://127.0.0.1:3900"
 BACKUP_PATH = r"C:\Users\Deign\Downloads\attendance-backup-20260831-050918.apbackup"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -51,15 +51,15 @@ def normalize_pronunciation(raw_name: str) -> str:
     return spoken
 
 
-def get_voicebox_bea_profile():
+def get_voicestudio_bea_profile():
     try:
-        req = urllib.request.urlopen(f"{VOICEBOX_BASE}/profiles")
+        req = urllib.request.urlopen(f"{VOICESTUDIO_BASE}/profiles")
         profiles = json.loads(req.read().decode())
         for p in profiles:
             if "bea" in p["name"].lower():
                 return p["id"]
     except Exception as e:
-        print(f"Error connecting to Voicebox: {e}")
+        print(f"Error connecting to VoiceStudio: {e}")
     return None
 
 
@@ -72,7 +72,7 @@ def generate_name_audio(profile_id: str, text: str, out_path: Path) -> bool:
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        f"{VOICEBOX_BASE}/generate",
+        f"{VOICESTUDIO_BASE}/generate",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST"
@@ -88,11 +88,11 @@ def generate_name_audio(profile_id: str, text: str, out_path: Path) -> bool:
     for _ in range(60):
         time.sleep(2)
         try:
-            req = urllib.request.urlopen(f"{VOICEBOX_BASE}/history/{gen_id}")
+            req = urllib.request.urlopen(f"{VOICESTUDIO_BASE}/history/{gen_id}")
             hist = json.loads(req.read().decode())
             status = hist.get("status")
             if status == "completed":
-                audio_url = f"{VOICEBOX_BASE}/audio/{gen_id}"
+                audio_url = f"{VOICESTUDIO_BASE}/audio/{gen_id}"
                 urllib.request.urlretrieve(audio_url, out_path)
                 return out_path.is_file() and out_path.stat().st_size > 100
             elif status == "failed":
@@ -106,17 +106,17 @@ def generate_name_audio(profile_id: str, text: str, out_path: Path) -> bool:
 
 def main():
     print("=" * 80)
-    print(" GENERATING VOICEBOX CLONED NAMES FOR BACKUP USERS & INTERNS")
+    print(" GENERATING VOICESTUDIO CLONED NAMES FOR BACKUP USERS & INTERNS")
     print(" Source: attendance-backup-20260831-050918.apbackup")
-    print(" Engine: Voicebox Qwen-TTS 1.7B (Ma'am Bea Cloned Voice)")
+    print(" Engine: VoiceStudio Qwen-TTS 1.7B (Ma'am Bea Cloned Voice)")
     print("=" * 80)
 
-    profile_id = get_voicebox_bea_profile()
+    profile_id = get_voicestudio_bea_profile()
     if not profile_id:
-        print("Voicebox not running or Ma'am Bea profile not found.", flush=True)
+        print("VoiceStudio not running or Ma'am Bea profile not found.", flush=True)
         return
 
-    print(f"Active Voicebox Profile ID: {profile_id}")
+    print(f"Active VoiceStudio Profile ID: {profile_id}")
 
     CLIENT_NAMES_DIR.mkdir(parents=True, exist_ok=True)
     TAURI_NAMES_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,7 +147,7 @@ def main():
     manifest = {
         "version": "1.0.0",
         "voice": "bea",
-        "engine": "voicebox-qwen-1.7B-cuda-cloned",
+        "engine": "voicestudio-qwen-1.7B-cuda-cloned",
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "profiles": {}
     }
@@ -173,7 +173,7 @@ def main():
         print(f"  Spoken Name:  \"{spoken_name}\"")
 
         if not (out_client.is_file() and out_client.stat().st_size > 1000):
-            print(f"  -> Generating via Voicebox Qwen-TTS 1.7B...")
+            print(f"  -> Generating via VoiceStudio Qwen-TTS 1.7B...")
             success = generate_name_audio(profile_id, spoken_name, out_client)
             if success and out_client.is_file():
                 print(f"  ✓ Successfully generated ({out_client.stat().st_size} bytes)")

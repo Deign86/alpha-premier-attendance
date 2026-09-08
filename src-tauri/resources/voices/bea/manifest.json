@@ -3,7 +3,6 @@
   "engine": "voicestudio-bea-cloned",
   "voice": "bea",
   "voicestudio_profile_id": "1b3e828b",
-  "voicebox_profile_id": "1b3e828b",
   "segments": {
     "good-morning": {
       "phrase": "Good morning,",

@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "alpha-premier-attendance"
-version = "0.1.54"
+version = "0.1.55"
 dependencies = [
  "axum",
  "base64 0.22.1",

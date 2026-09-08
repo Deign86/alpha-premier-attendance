@@ -39,7 +39,7 @@ temp_edge_profile/
 # Private raw reference voice recordings
 resources/voices/
 *.wav.tmp
-test_voicebox_*.wav
+test_voicestudio_*.wav
 
 # Local dev/E2E/build log scratch
 logs/

@@ -4,7 +4,7 @@ import mimetypes
 import uuid
 from pathlib import Path
 
-VOICEBOX_BASE = "http://127.0.0.1:17493"
+VOICESTUDIO_BASE = "http://127.0.0.1:3900"
 REF_DIR = Path("C:/Users/Deign/Downloads/Music")
 
 def post_multipart(url, fields, files):
@@ -39,7 +39,7 @@ def post_multipart(url, fields, files):
         return json.loads(res.read().decode())
 
 def get_or_create_bea_profile():
-    req = urllib.request.urlopen(f"{VOICEBOX_BASE}/profiles")
+    req = urllib.request.urlopen(f"{VOICESTUDIO_BASE}/profiles")
     profiles = json.loads(req.read().decode())
     for p in profiles:
         if "bea" in p["name"].lower():
@@ -48,7 +48,7 @@ def get_or_create_bea_profile():
 
     data = json.dumps({"name": "Ma'am Bea"}).encode()
     req = urllib.request.Request(
-        f"{VOICEBOX_BASE}/profiles",
+        f"{VOICESTUDIO_BASE}/profiles",
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST"
@@ -78,7 +78,7 @@ def upload_samples(profile_id):
             print(f"Uploading sample {filepath.name} with reference text...")
             try:
                 res = post_multipart(
-                    f"{VOICEBOX_BASE}/profiles/{profile_id}/samples",
+                    f"{VOICESTUDIO_BASE}/profiles/{profile_id}/samples",
                     {"reference_text": ref_text},
                     {"file": filepath}
                 )

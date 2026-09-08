@@ -2,7 +2,7 @@
   "name": "rfid-time-in-out",
   "private": true,
   "type": "module",
-  "version": "0.1.54",
+  "version": "0.1.55",
   "workspaces": [
     "client",
     "server",
@@ -34,7 +34,7 @@
     "doctor:mcp": "node scripts/doctor-tauri-mcp.mjs",
     "verify:mcp": "node scripts/verify-tauri-mcp.mjs",
     "generate:voices": "python scripts/generate_cloned_voices.py",
-    "voice:audit": "python scripts/audit_voicebox_results.py",
+    "voice:audit": "python scripts/audit_voicestudio_results.py",
     "voice:generate-existing-names": "npx tsx scripts/generate_existing_intern_names.ts",
     "voice:generate-existing-intern-names": "npx tsx scripts/generate_existing_intern_names.ts",
     "ui:start": "node scripts/ui-skills.mjs start",

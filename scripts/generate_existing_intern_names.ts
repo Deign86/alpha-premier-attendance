@@ -15,14 +15,27 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { GoogleSheetsAdapter, InMemorySheetsService, type GoogleSheetsService, type SheetUser } from '../server/src/sheets.js';
 import { normalizeName } from '../shared/src/api-contracts.js';
+
+export type SheetUser = {
+  userId: string;
+  fullName: string;
+  rfidUid?: string;
+  department?: string | null;
+  status?: string;
+  active?: boolean;
+  employeeType?: 'INTERN' | 'EMPLOYEE';
+  gender?: 'MALE' | 'FEMALE' | null;
+  dailyRate?: number | null;
+  payrollProfileId?: string | null;
+  photoUrl?: string | null;
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
 
-const VOICESTUDIO_BASE = process.env.VOICESTUDIO_BASE_URL || process.env.VOICEBOX_BASE_URL || 'http://127.0.0.1:3900';
+const VOICESTUDIO_BASE = process.env.VOICESTUDIO_BASE_URL || 'http://127.0.0.1:3900';
 const VOICESTUDIO_BEA_PROFILE_ID = '1b3e828b';
 const CLIENT_NAMES_DIR = path.join(REPO_ROOT, 'client', 'public', 'voices', 'bea', 'names');
 const TAURI_NAMES_DIR = path.join(REPO_ROOT, 'src-tauri', 'resources', 'voices', 'bea', 'names');
@@ -55,7 +68,43 @@ export type BatchGeneratorOptions = {
   personId?: string;
   internsOnly?: boolean;
   mockUsers?: SheetUser[];
+  backupPath?: string;
+  dbPath?: string;
 };
+
+export const CUSTOM_PRONUNCIATION_OVERRIDES: Record<string, string> = {
+  // 'PERSON_ID': 'Phonetic Spoken Name'
+};
+
+export function normalizePronunciation(rawName: string, personId?: string): string {
+  if (personId && CUSTOM_PRONUNCIATION_OVERRIDES[personId]) {
+    return CUSTOM_PRONUNCIATION_OVERRIDES[personId];
+  }
+  let clean = rawName.trim();
+  if (clean.startsWith('Admin Rfid')) {
+    return clean;
+  }
+
+  // Expand "Ma." / "Ma " prefix to "Maria "
+  if (clean.startsWith('Ma. ') || clean.startsWith('Ma ')) {
+    clean = 'Maria ' + clean.slice(4);
+  }
+
+  // Clean middle initials like " O. ", " P. ", " C. " -> remove initial for seamless spoken flow
+  const parts = clean.split(/\s+/);
+  const speechParts: string[] = [];
+  for (const p of parts) {
+    if (p.length === 2 && p[1] === '.' && /^[a-zA-Z]$/.test(p[0])) {
+      continue;
+    }
+    speechParts.push(p);
+  }
+
+  let spoken = speechParts.join(' ');
+  // Clean hyphens in first names like "Ar-jee" -> "Arjee"
+  spoken = spoken.replace(/Ar-jee/g, 'Arjee');
+  return normalizeName(spoken);
+}
 
 function sha256File(filePath: string): string {
   const content = fs.readFileSync(filePath);
@@ -177,6 +226,8 @@ export async function runBatchInternNameGeneration(
     personId,
     internsOnly = false,
     mockUsers,
+    backupPath,
+    dbPath,
   } = options;
 
   console.log('='.repeat(75));
@@ -187,10 +238,53 @@ export async function runBatchInternNameGeneration(
   let users: SheetUser[] = [];
   if (mockUsers && mockUsers.length > 0) {
     users = mockUsers;
+  } else if (backupPath) {
+    console.log(`Loading users from backup archive: ${backupPath}`);
+    const pyScript = [
+      'import zipfile, sqlite3, json, tempfile, os, sys',
+      'with zipfile.ZipFile(sys.argv[1], "r") as z:',
+      '    db_data = z.read("database/attendance.db")',
+      'with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:',
+      '    tmp.write(db_data)',
+      '    tmp_path = tmp.name',
+      'try:',
+      '    conn = sqlite3.connect(tmp_path)',
+      '    cur = conn.cursor()',
+      '    cur.execute("SELECT user_id, full_name, employee_type, status, department, photo_url, gender FROM users")',
+      '    out = []',
+      '    for r in cur.fetchall():',
+      '        out.append({"userId": r[0], "fullName": r[1], "employeeType": r[2], "status": r[3], "department": r[4], "photoUrl": r[5], "gender": r[6]})',
+      '    print(json.dumps(out))',
+      'finally:',
+      '    conn.close()',
+      '    if os.path.exists(tmp_path):',
+      '        try: os.unlink(tmp_path)',
+      '        except: pass',
+    ].join('\n');
+    const stdout = execFileSync('python', ['-c', pyScript, backupPath], { encoding: 'utf8' });
+    // SAFETY: Output from Python script matches SheetUser structure
+    users = JSON.parse(stdout) as SheetUser[];
+  } else if (dbPath) {
+    console.log(`Loading users from SQLite database: ${dbPath}`);
+    const pyScript = [
+      'import sqlite3, json, sys',
+      'conn = sqlite3.connect(sys.argv[1])',
+      'cur = conn.cursor()',
+      'cur.execute("SELECT user_id, full_name, employee_type, status, department, photo_url, gender FROM users")',
+      'out = []',
+      'for r in cur.fetchall():',
+      '    out.append({"userId": r[0], "fullName": r[1], "employeeType": r[2], "status": r[3], "department": r[4], "photoUrl": r[5], "gender": r[6]})',
+      'print(json.dumps(out))',
+      'conn.close()',
+    ].join('\n');
+    const stdout = execFileSync('python', ['-c', pyScript, dbPath], { encoding: 'utf8' });
+    // SAFETY: Output from Python script matches SheetUser structure
+    users = JSON.parse(stdout) as SheetUser[];
   } else {
     const keyPath = path.join(REPO_ROOT, 'credentials', 'attendance-sheets-key.json');
     const statePath = path.join(REPO_ROOT, 'credentials', 'google-sheets-state.json');
     if (fs.existsSync(keyPath) && fs.existsSync(statePath)) {
+      const { GoogleSheetsAdapter } = await import('../server/src/sheets.js');
       const key = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
       const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
       const adapter = new GoogleSheetsAdapter({
@@ -201,14 +295,19 @@ export async function runBatchInternNameGeneration(
       });
       users = await adapter.listUsers();
     } else {
-      console.log('Google Sheets credentials not found. Using InMemorySheetsService.');
-      const inMem = new InMemorySheetsService();
-      users = await inMem.listUsers();
+      console.log('Google Sheets credentials not found. Using default mock users.');
+      users = [
+        { userId: 'USR_INT_001', fullName: 'Maria Santos', employeeType: 'INTERN', status: 'ACTIVE' },
+        { userId: 'USR_INT_002', fullName: 'Juan Dela Cruz', employeeType: 'INTERN', status: 'ACTIVE' },
+        { userId: 'USR_EMP_001', fullName: 'Ada Lovelace', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+      ];
     }
   }
 
   // 2. Filter target users
-  let targetUsers = users.filter((u) => u.status === 'ACTIVE');
+  let targetUsers = users.filter(
+    (u) => (u.status === 'ACTIVE' || u.active === true) && !u.userId.startsWith('ADMIN_CARD') && !u.userId.startsWith('ADMIN_'),
+  );
   if (internsOnly) {
     targetUsers = targetUsers.filter((u) => u.employeeType === 'INTERN');
   }
@@ -254,7 +353,7 @@ export async function runBatchInternNameGeneration(
 
   for (const user of targetUsers) {
     const rawName = user.fullName || '';
-    const speechName = normalizeName(rawName);
+    const speechName = normalizePronunciation(rawName, user.userId);
     const audioFileName = `${user.userId}.mp3`;
     const clientAudioPath = path.join(CLIENT_NAMES_DIR, audioFileName);
     const tauriAudioPath = path.join(TAURI_NAMES_DIR, audioFileName);
@@ -352,6 +451,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
   const internsOnly = args.includes('--interns-only');
   const personIdIndex = args.indexOf('--person-id');
   const personId = personIdIndex >= 0 && args[personIdIndex + 1] ? args[personIdIndex + 1] : undefined;
+  const backupIndex = args.indexOf('--backup');
+  const backupPath = backupIndex >= 0 && args[backupIndex + 1] ? args[backupIndex + 1] : undefined;
+  const dbIndex = args.indexOf('--db');
+  const dbPath = dbIndex >= 0 && args[dbIndex + 1] ? args[dbIndex + 1] : undefined;
 
   runBatchInternNameGeneration({
     dryRun,
@@ -359,6 +462,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
     force,
     personId,
     internsOnly,
+    backupPath,
+    dbPath,
   }).catch((err) => {
     console.error('Fatal error during batch name generation:', err);
     process.exit(1);

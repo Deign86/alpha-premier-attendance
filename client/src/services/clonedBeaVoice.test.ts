@@ -46,6 +46,12 @@ describe('clonedBeaVoice', () => {
       expect(url).toBe('/voices/bea/names/APG-2026-102.mp3');
     });
 
+    it('returns mp3 URL for newly registered intern APG-2026-116', () => {
+      expect(getClonedBeaNameAudioUrl('APG-2026-116', null)).toBe('/voices/bea/names/APG-2026-116.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Maricon C. Danao')).toBe('/voices/bea/names/APG-2026-116.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Maricon Danao')).toBe('/voices/bea/names/APG-2026-116.mp3');
+    });
+
     it('returns null for unknown person', () => {
       const url = getClonedBeaNameAudioUrl('UNKNOWN-999', null);
       expect(url).toBeNull();

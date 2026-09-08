@@ -4,11 +4,11 @@
 
 - [x] Piper surface is exhaustively enumerated across repository source, generated files, scripts, docs, evidence, and hidden agent folders.
   EVIDENCE: Enumerated 61 announcement strings/patterns across `client/src/services/ttsService.ts`, `clonedBeaVoice.ts`, `speech.ts`, `scripts/`, `src-tauri/src/tts/`, and feature specs.
-- [x] Ma'am Bea Voicebox assets and manifests are exhaustively enumerated with provenance.
+- [x] Ma'am Bea VoiceStudio assets and manifests are exhaustively enumerated with provenance.
   EVIDENCE: Audited all 91 runtime `.wav` files across `client/public/voices/bea/` and `src-tauri/resources/voices/bea/` and 3 reference WAVs in `resources/voices/bea/`.
 - [x] Every Piper announcement is classified matched, missing, or uncertain using ID/text evidence.
-  EVIDENCE: Classified all items with 1:1 ID and text parity against disk assets; generated missing clips via Voicebox API profile `1ccbe006-2269-4c08-aa85-0167598232a1`.
-- [x] Missing-announcement Voicebox regeneration manifest is complete and contains no invented files or mappings.
+  EVIDENCE: Classified all items with 1:1 ID and text parity against disk assets; generated missing clips via VoiceStudio API profile `1ccbe006-2269-4c08-aa85-0167598232a1`.
+- [x] Missing-announcement VoiceStudio regeneration manifest is complete and contains no invented files or mappings.
   EVIDENCE: Generated 6 missing clips (`USR_INT_001.wav`, `USR_INT_002.wav`, `USR_EMP_001.wav`, `checkout-female-name.wav`, `bathroom-key-in-use-male-by.wav`, `bathroom-key-in-use-female-by.wav`).
 - [x] Final counts are re-measured directly from the completed audit artifacts/report.
   EVIDENCE: Verified 91 runtime audio files on disk; manifests synced and valid; oxlint, typecheck, and 148 Rust tests passed cleanly.
@@ -50,9 +50,9 @@
   EXPECT: command exits 0
   EVIDENCE: Deleted 32 legacy `suffix-*.wav` clips recovering 8.03 MB; master catalog synchronized to 50 clips across client and tauri trees.
 - [x] Voice generation scripts classified and one-off migration tools archived under scripts/archive/.
-  CHECK: node -e "const fs=require('fs'); if(!fs.existsSync('scripts/archive/setup_voicebox_bea.py') || !fs.existsSync('scripts/archive/generate_backup_names.py')) process.exit(1);"
+  CHECK: node -e "const fs=require('fs'); if(!fs.existsSync('scripts/archive/setup_voicestudio_bea.py') || !fs.existsSync('scripts/archive/generate_backup_names.py')) process.exit(1);"
   EXPECT: archived one-off scripts reside in scripts/archive/
-  EVIDENCE: `setup_voicebox_bea.py`, `generate_backup_names.py`, and `verify_backup_cloned_names.py` moved to `scripts/archive/`; `package.json` updated with `voice:audit`.
+  EVIDENCE: `setup_voicestudio_bea.py`, `generate_backup_names.py`, and `verify_backup_cloned_names.py` moved to `scripts/archive/`; `package.json` updated with `voice:audit`.
 - [x] CI/CD workflows and package versions verified consistent across all manifests.
   CHECK: node -e "const p=require('./package.json').version; const c=require('./client/package.json').version; const s=require('./server/package.json').version; const sh=require('./shared/package.json').version; if(p!==c || p!==s || p!==sh) process.exit(1);"
   EXPECT: all workspace versions match exactly.
@@ -131,9 +131,9 @@
   EXPECT: command exits 0
   EVIDENCE: `@media (max-width: 1100px)` stacks `.attendance-filter-top` and `.payroll-toolbar`; parent arbitration raised it from 920px after review showed 920px misses the 125% case.
 - [x] Table/pill/path/voice guards are present with no duplicate declarations.
-  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); if(!s.includes('.filter-pill { white-space: nowrap; }') || !s.includes('.voicebox-names-shell th { white-space: nowrap; }') || !s.includes('.db-backup-list li { overflow-wrap: anywhere; }')) process.exit(1);"
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); if(!s.includes('.filter-pill { white-space: nowrap; }') || !s.includes('.db-backup-list li { overflow-wrap: anywhere; }')) process.exit(1);"
   EXPECT: command exits 0
-  EVIDENCE: pill nowrap, voicebox header nowrap, DB path break-anywhere present; redundant `.table-wrap` scroll line removed (single declaration remains at styles.css:253, verified by grep).
+  EVIDENCE: pill nowrap, DB path break-anywhere present; redundant `.table-wrap` scroll line removed (single declaration remains at styles.css:253, verified by grep).
 - [x] Required repository verification gates pass after the change.
   CHECK: npm run lint:oxlint && npm run typecheck -w client && npm test -w client
   EXPECT: lint, typecheck, and client tests exit 0.
@@ -161,7 +161,7 @@
   EXPECT: command exits 0 (valid JSON, zero `.wav` refs across all 4 manifests)
   EVIDENCE: 150 `.mp3` refs in each `manifest.json`, 26 in each `bea-name-manifest.json`; `diff` client-vs-resources identical.
 - [x] Voice generators emit `.mp3` (ffmpeg transcode in-line), audit probes `.mp3`, server test expects `.mp3`.
-  CHECK: python -m py_compile scripts/generate_cloned_voices.py scripts/generate_missing_cloned_voices.py scripts/audit_voicebox_results.py && python scripts/audit_voicebox_results.py
+  CHECK: python -m py_compile scripts/generate_cloned_voices.py scripts/generate_missing_cloned_voices.py scripts/audit_voicestudio_results.py && python scripts/audit_voicestudio_results.py
   EXPECT: compile clean; audit reports 50/50 valid, 0 issues
   EVIDENCE: `generate_phrase_voicestudio` + `generateVoicestudioClip` write WAV to temp, transcode `libmp3lame 64k mono`, keep only `.mp3`; audit 50/50 OK via ffprobe; `intern-names-generator.test.ts` asserts `.mp3`.
 - [x] Reference clips untouched; deleted WAVs git-restorable.
