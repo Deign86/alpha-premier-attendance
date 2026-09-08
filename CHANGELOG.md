@@ -1,9 +1,24 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.56] - 2026-09-08
+
+### Added
+- **Manual Intern DTR Sync**: Added manual synchronization for active interns onto the human `INTERN DTR 2026` Google Spreadsheet.
+- **Admin Sync UI Controls**:
+  - Added **"Sync Interns to DTR"** bulk button in Admin Panel → Users header toolbar.
+  - Added individual **"Sync DTR"** action button to intern rows in the Users table.
+  - Added **"Sync Intern DTR now"** button in Admin Panel → Data & backup.
+- **Auto-Enqueued DTR Pending**: Automatically enroll newly created or updated active interns into `dtr_pending` when saved through the Admin Panel.
+
+### Fixed
+- **Middle Initial DTR Tab Overlap Collision**: Fixed false-positive overlap matches in `tab_name_overlaps_user` (Rust) and `hasTabOverlap` (TypeScript) caused by single-character name tokens (e.g. `"C."` in `Maricon C. Danao` colliding with `"C."` in existing tab `Raineer C. Rosado`), which prevented tabs from being auto-provisioned.
+
+---
 
 ## [0.1.55] - 2026-09-08
 
