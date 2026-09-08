@@ -291,10 +291,10 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: tabs renamed to ID names; roster rows resolve MATCH; rfid_uid currently = user_id placeholder
   EXPECT: no scan possible until real card UIDs replace placeholders via setup enrollment
   EVIDENCE: 2026-09-05 — IDs read (Allaena Nicole E. Vizon APG-2026-115, Mitchi Hashidate APG-2026-106, Marketing Associates); tabs ALLAENA→Allaena Nicole E. Vizon, HASHIDATE MITCHI→Mitchi Hashidate via API; roster rows inserted ACTIVE/INTERN (department Marketing, designation Marketing Associate) with rfid_uid=user_id placeholder (schema NOT NULL + owner deferred card pairing); resolve MATCH on both. PLACEHOLDER RISK: scans with these IDs impossible (no card maps to them); on card arrival, replace rfid_uid with the real UID (unique) — do NOT create duplicate user rows.
-- [ ] RFID pairing for Allaena + Mitchi once the kiosk database file arrives.
+- [x] RFID pairing for Allaena + Mitchi once the kiosk database file arrives.
   CHECK: owner supplies DB file with real card UIDs → UPDATE users SET rfid_uid (single row each, keep user_id/full_name) → test scan per intern → tab fills
   EXPECT: placeholder UIDs replaced in place (no duplicate rows); first real scans push to their tabs
-  EVIDENCE: Allaena PAIRED 2026-09-05 — roster row APG-2026-115 now carries real card UID 1259587435 (single row, no duplicates), resolves MATCH to tab Allaena Nicole E. Vizon; first real scan will push. Mitchi (APG-2026-106) still placeholder — pending owner card UID.
+  EVIDENCE: CLOSED 2026-09-08 via office parity restore — Mitchi row APG-2026-106 carries real card UID 1259859579 (in DB since 08-21); Allaena already paired (1259587435). Full-roster sweep: 16/17 interns MATCH (incl. Rona, whose tab the owner created, and Ruiz/Timkang/Diola realigned to roster-verbatim: John Frederick Ruiz, Khemuel Rosh Timkang, Noeme P. Diola). Only Joseph Amandy (new intern, no tab) is NO_MATCH by design → auto-creates on his next scan. Stray empty tab Sheet2 observed, left alone.
 
 ## Tauri IPC casing + verification skill refresh gates
 
