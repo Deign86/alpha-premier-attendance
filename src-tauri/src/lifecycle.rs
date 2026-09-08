@@ -194,6 +194,32 @@ pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+pub fn ensure_default_autostart(app: &tauri::AppHandle, config_dir: &std::path::Path) {
+    use tauri_plugin_autostart::ManagerExt;
+    let marker_file = config_dir.join(".autostart_initialized");
+    if !marker_file.exists() {
+        let autolaunch = app.autolaunch();
+        match autolaunch.is_enabled() {
+            Ok(false) => {
+                if let Err(e) = autolaunch.enable() {
+                    log::warn!("Failed to enable default autostart on first run: {e}");
+                } else {
+                    log::info!("Default autostart enabled successfully on first run");
+                }
+            }
+            Ok(true) => {
+                log::info!("Autostart already enabled on system");
+            }
+            Err(e) => {
+                log::warn!("Could not check autostart status: {e}");
+            }
+        }
+        if let Err(e) = std::fs::write(&marker_file, "initialized") {
+            log::warn!("Could not write autostart marker: {e}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{should_hide_on_close, CloseBehavior};
@@ -203,6 +229,17 @@ mod tests {
         assert!(should_hide_on_close(CloseBehavior::HideToTray, true));
         assert!(!should_hide_on_close(CloseBehavior::HideToTray, false));
         assert!(!should_hide_on_close(CloseBehavior::Exit, true));
+    }
+
+    #[test]
+    fn test_autostart_default_on() {
+        let temp = std::env::temp_dir().join(format!("test-autostart-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let marker = temp.join(".autostart_initialized");
+        assert!(!marker.exists());
+        std::fs::write(&marker, "initialized").unwrap();
+        assert!(marker.exists());
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
 

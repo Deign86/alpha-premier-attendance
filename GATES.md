@@ -392,3 +392,46 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: verify ops spreadsheet tabs contain data rows and sync_queue moves to SYNCED
   EXPECT: Users, Attendance, Payroll, InternGrace, PayrollCutoffs tabs populate without 400 invalid argument or 403 errors
   EVIDENCE: verified 2026-09-08 — repaired `fields` query parameter syntax (removed top-level `sheetId` from `sheets(...)`), updated `ensure_tab_header` to automatically repair legacy snake_case empty headers to camelCase on startup, and verified live sync into ops sheet 1YF1YVDB_Kj3AT8T6ZJEVXC5SHH9JZjdkDq5_l9lB1lw across Users, Attendance, Payroll, InternGrace, PayrollCutoffs.
+
+## Friday Intern-DTR Reconciliation + Boot Reliability gates
+
+- [x] Friday 12:00 Manila run & catch-up scheduling.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_scheduling
+  EXPECT: test passes asserting Friday >= 12:00 Manila trigger, persisted once-per-week run marker, and boot catch-up during office hours.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_scheduling` passed (0.00s). Verified Friday >= 12:00 Manila trigger, skip before 12:00, skip non-Fridays, persistent once-per-week marker `last_scheduled_run_week`, and catch-up during Manila office hours.
+
+- [x] Open-cutoff scoping for DTR reconciliation.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_cutoff_scoping
+  EXPECT: test passes asserting reconciliation horizon covers only open cutoff dates and skips finalized cutoffs.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_cutoff_scoping` passed (0.00s). Verified reconciliation horizon covers only dates in open cutoff (e.g. 2026-09-01..=2026-09-15) and skips finalized cutoffs.
+
+- [x] Auto-correct behind default-ON report-only flag.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_report_only_mode
+  EXPECT: test passes verifying report-only mode logs and records discrepancies without mutating sheets, and auto-correct mode applies targeted B:E updates.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_report_only_mode` passed (0.00s). Verified report_only=true records discrepancies in SQLite without generating sheet mutations, while report_only=false emits targeted B:E writes and paint updates.
+
+- [x] Deleted attendance rows clear sheet B:E cells.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_deleted_row_clearing
+  EXPECT: test passes verifying dates absent from SQLite clear sheet B:E cells to blank and repaint white.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml dtr_recon::tests::test_deleted_row_clearing` passed (0.00s). Verified dates present in sheet but absent in SQLite clear B:E to `["", "", "", ""]` and repaint white.
+
+- [x] MANUAL_TEST scan source excluded from DTR enqueue.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml test_manual_test_dtr_guard
+  EXPECT: test passes verifying MANUAL_TEST scans never enqueue InternDtr rows.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml test_manual_test_dtr_guard` passed (0.05s). Verified effective_source check in scan_rfid allows only RFID and ADMIN_ASSISTED_SCAN; MANUAL_TEST enqueues 0 InternDtr rows.
+
+- [x] Quota 429 backoff with 60s base doubling excluded from 5-strikes-to-DEAD.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml test_rate_limited_backoff
+  EXPECT: test passes verifying 429/GOOGLE_RATE_LIMITED applies 60s base doubling, keeps RETRY status, and never marks row DEAD.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml test_rate_limited_backoff` passed (0.00s). Verified 429/GOOGLE_RATE_LIMITED applies 60s base doubling (60, 120, 240, 480, 960s), stays in RETRY status even at attempts >= 5, and never marks row DEAD.
+
+- [x] Quota drain protection pauses pass on rate limit.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml test_drain_protection
+  EXPECT: test passes verifying 429 breaks out of the batch pass immediately to protect remaining queue rows.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml test_drain_protection` passed (0.00s). Verified encountering a rate limit breaks out of the batch loop immediately, protecting subsequent queue items.
+
+- [x] Boot-to-window reliability: autostart default ON with opt-out preserved + explicit window show/focus.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml test_autostart_default_on
+  EXPECT: test passes verifying first run enables autostart and creates .autostart_initialized marker.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml test_autostart_default_on` passed (0.00s). Verified ensure_default_autostart creates .autostart_initialized on first run and preserves opt-out. Main window show, unminimize, and set_focus invoked on Tauri launch.
+

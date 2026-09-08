@@ -3622,6 +3622,32 @@ async fn admin_sync_now(
     Ok(serde_json::json!({"success":true,"processed":processed_total,"remaining":remaining}))
 }
 
+#[tauri::command]
+async fn dtr_recon_get_latest_report(
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    crate::services::dtr_recon::get_latest_report(&state).await
+}
+
+#[tauri::command]
+async fn dtr_recon_run_manual(
+    state: State<'_, AppState>,
+    token: String,
+    report_only: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let is_report_only = report_only.unwrap_or(true);
+    let run_id = crate::services::dtr_recon::run_reconciliation(&state, is_report_only).await?;
+    let report = crate::services::dtr_recon::get_latest_report(&state).await?;
+    Ok(serde_json::json!({
+        "success": true,
+        "runId": run_id,
+        "report": report
+    }))
+}
+
 /// Dev/test utility (hidden admin action): wipes every managed Google Sheets
 /// tab and re-enqueues the current SQLite state for a from-scratch re-export.
 /// Gated behind the admin session and an explicit confirmation flag.
@@ -4192,6 +4218,14 @@ async fn scan_rfid(
     state: State<'_, AppState>,
     request: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    scan_rfid_impl(Some(&app), &state, request).await
+}
+
+async fn scan_rfid_impl(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let uid = request
         .get("rfidUid")
@@ -4459,8 +4493,10 @@ async fn scan_rfid(
         "status": attendance_status,
         "sequence": seq
     });
-    let _ = app.emit("attendance-updated", &event_payload);
-    let _ = app.emit("attendance-changed", &event_payload);
+    if let Some(app) = app {
+        let _ = app.emit("attendance-updated", &event_payload);
+        let _ = app.emit("attendance-changed", &event_payload);
+    }
     let audit_msg = if is_admin_card {
         format!("{} recorded (Assisted by {})", action, recorded_by.as_deref().unwrap_or("Admin"))
     } else {
@@ -4495,6 +4531,7 @@ async fn scan_rfid(
     // never fail the scan. Skipped for non-interns and when explicitly disabled.
     if effective_user.get::<String, _>("employee_type").to_uppercase() == "INTERN"
         && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some()
+        && (effective_source == "RFID" || effective_source == "ADMIN_ASSISTED_SCAN")
     {
         enqueue_sync(
             &state,
@@ -4738,6 +4775,7 @@ pub fn run() {
             log::info!("Application paths resolved: config={:?}, data={:?}", paths.config_dir, paths.data_dir);
             std::fs::create_dir_all(&paths.config_dir)
                 .expect("create application config directory");
+            lifecycle::ensure_default_autostart(app.handle(), &paths.config_dir);
             let (lan, office, scanner_config, database_config, tts_config, updater_config) =
                 config::load_config(&paths.config_dir).expect("valid config.toml");
             let db_path =
@@ -4833,6 +4871,11 @@ pub fn run() {
                         // Log-only: a failed sync pass must never disturb the kiosk.
                         log::warn!("sheets sync pass failed: {error}");
                     }
+                    if let Err(error) =
+                        crate::services::dtr_recon::check_and_run_scheduled(&sync_state).await
+                    {
+                        log::warn!("dtr recon scheduled check failed: {error}");
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
@@ -4848,6 +4891,9 @@ pub fn run() {
             let webview_windows = app.webview_windows();
             log::info!("Registered webview windows at setup: {:?}", webview_windows.keys().collect::<Vec<_>>());
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
                 let handle = app.handle().clone();
                 let config_dir = paths.config_dir.clone();
                 let window_for_events = window.clone();
@@ -4950,6 +4996,8 @@ pub fn run() {
             admin_retry_sync_item,
             admin_sync_now,
             admin_sheets_nuke_resync,
+            dtr_recon_get_latest_report,
+            dtr_recon_run_manual,
             lan_status,
             lan_start,
             lan_stop,
@@ -6108,6 +6156,50 @@ mod tests {
             Some(v) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, v),
             None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
         }
+    }
+
+    #[tokio::test]
+    async fn test_manual_test_dtr_guard() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let temp = std::env::temp_dir().join(format!("alpha-manual-test-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        super::upsert_user_record(
+            &state.db, "INT_TEST_GUARD", "CARD_GUARD_01", "Guard Intern", Some("IT"),
+            "ACTIVE", "INTERN", Some("MALE"), None, Some("BEA_STANDARD"),
+            None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        let scan_input = serde_json::json!({
+            "rfidUid": "CARD_GUARD_01",
+            "source": "MANUAL_TEST"
+        });
+        let res = super::scan_rfid_impl(None, &state, scan_input).await.unwrap();
+        assert_eq!(res["success"], true);
+
+        let intern_dtr_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE table_name='InternDtr'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(intern_dtr_count, 0, "MANUAL_TEST scans must never enqueue InternDtr");
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[tokio::test]

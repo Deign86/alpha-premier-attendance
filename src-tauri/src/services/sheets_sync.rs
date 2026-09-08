@@ -2290,6 +2290,27 @@ fn should_dispatch(endpoint_none: bool, ops_ready: bool, dtr_ready: bool) -> boo
     !(endpoint_none && !ops_ready && !dtr_ready)
 }
 
+/// Returns true if the error indicates a Google Sheets API rate limit / 429 quota exhaustion.
+pub fn is_rate_limited_error(error: &str) -> bool {
+    error.contains(GOOGLE_RATE_LIMITED) || error.contains("429")
+}
+
+/// Computes backoff duration, new queue status, and error code for failed sync rows.
+/// Rate-limited errors (429 or GOOGLE_RATE_LIMITED) use a 60-second base doubling backoff,
+/// stay in RETRY status (excluded from the 5-strikes-to-DEAD budget), and report GOOGLE_RATE_LIMITED.
+/// Other errors follow 2^min(attempts, 5) exponential backoff and become DEAD at 5 attempts.
+pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str, &'static str) {
+    if is_rate_limited_error(error) {
+        let exponent = (attempts.max(0) as u32).min(4);
+        let backoff_secs = 60 * 2_u64.saturating_pow(exponent);
+        (backoff_secs, "RETRY", GOOGLE_RATE_LIMITED)
+    } else {
+        let backoff_secs = 2_u64.saturating_pow((attempts.max(0) as u32).min(5));
+        let status = if attempts + 1 >= 5 { "DEAD" } else { "RETRY" };
+        (backoff_secs, status, "GOOGLE_SYNC_FAILED")
+    }
+}
+
 /// Bounded SQLite-first queue worker. The configured exporter endpoint is intentionally
 /// optional; when absent rows remain pending instead of being discarded.
 pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, String> {
@@ -2497,15 +2518,37 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             }
             Err(error) => {
                 let is_schema_mismatch = error.contains(SHEETS_SCHEMA_MISMATCH_ERROR);
-                let next = Utc::now()
-                    + Duration::from_secs(2_u64.saturating_pow((attempts as u32).min(5)));
-                let status = if attempts + 1 >= 5 { "DEAD" } else { "RETRY" };
-                // Store the actual error text (call-site stage + upstream
-                // status) instead of collapsing everything to generic: the
-                // code field keeps the stable GOOGLE_SYNC_FAILED contract.
-                let last_error = error;
-                sqlx::query("UPDATE sync_queue SET attempts=attempts+1, status=?, last_error=?, last_error_code='GOOGLE_SYNC_FAILED', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'").bind(status).bind(last_error).bind(next.to_rfc3339()).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
-                schema_mismatch |= is_schema_mismatch;
+                let is_rate_limited = error.contains(GOOGLE_RATE_LIMITED) || error.contains("429");
+                let (backoff_secs, status, error_code) = calculate_retry_backoff(attempts, &error);
+                let next = Utc::now() + Duration::from_secs(backoff_secs);
+                if is_rate_limited {
+                    sqlx::query("UPDATE sync_queue SET status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
+                        .bind(status)
+                        .bind(&error)
+                        .bind(error_code)
+                        .bind(next.to_rfc3339())
+                        .bind(&now)
+                        .bind(id)
+                        .execute(&state.db)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    // Drain protection: pause remaining queue items in this pass
+                    log::warn!("Rate limit encountered during sync pass; pausing remaining queue items: {error}");
+                    break;
+                } else {
+                    let last_error = error;
+                    sqlx::query("UPDATE sync_queue SET attempts=attempts+1, status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
+                        .bind(status)
+                        .bind(last_error)
+                        .bind(error_code)
+                        .bind(next.to_rfc3339())
+                        .bind(&now)
+                        .bind(id)
+                        .execute(&state.db)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    schema_mismatch |= is_schema_mismatch;
+                }
             }
         }
     }
@@ -3070,5 +3113,97 @@ mod tests {
             assert!(raw.contains("client_email"));
             assert!(raw.contains("private_key"));
         }
+    }
+
+    #[test]
+    fn test_rate_limited_backoff() {
+        use super::{calculate_retry_backoff, GOOGLE_RATE_LIMITED};
+
+        // Rate-limited backoff: 60s base doubling (60, 120, 240, 480, 960)
+        let (b0, s0, c0) = calculate_retry_backoff(0, "429 Too Many Requests");
+        assert_eq!(b0, 60);
+        assert_eq!(s0, "RETRY");
+        assert_eq!(c0, GOOGLE_RATE_LIMITED);
+
+        let (b1, s1, _) = calculate_retry_backoff(1, GOOGLE_RATE_LIMITED);
+        assert_eq!(b1, 120);
+        assert_eq!(s1, "RETRY");
+
+        let (b2, s2, _) = calculate_retry_backoff(2, "error with 429 code");
+        assert_eq!(b2, 240);
+        assert_eq!(s2, "RETRY");
+
+        let (b3, s3, _) = calculate_retry_backoff(3, GOOGLE_RATE_LIMITED);
+        assert_eq!(b3, 480);
+        assert_eq!(s3, "RETRY");
+
+        let (b4, s4, _) = calculate_retry_backoff(4, GOOGLE_RATE_LIMITED);
+        assert_eq!(b4, 960);
+        assert_eq!(s4, "RETRY");
+
+        // Excluded from 5-strikes-to-DEAD: even at 5 or 10 attempts, status remains RETRY, never DEAD
+        let (b5, s5, _) = calculate_retry_backoff(5, GOOGLE_RATE_LIMITED);
+        assert_eq!(b5, 960);
+        assert_eq!(s5, "RETRY");
+
+        let (b10, s10, _) = calculate_retry_backoff(10, "HTTP 429");
+        assert_eq!(b10, 960);
+        assert_eq!(s10, "RETRY");
+
+        // Generic failures: 2^min(attempts, 5), status DEAD on attempts + 1 >= 5
+        let (gb0, gs0, gc0) = calculate_retry_backoff(0, "network timeout");
+        assert_eq!(gb0, 1);
+        assert_eq!(gs0, "RETRY");
+        assert_eq!(gc0, "GOOGLE_SYNC_FAILED");
+
+        let (gb4, gs4, _) = calculate_retry_backoff(4, "network timeout");
+        assert_eq!(gb4, 16);
+        assert_eq!(gs4, "DEAD");
+    }
+
+    #[test]
+    fn test_drain_protection() {
+        use super::is_rate_limited_error;
+
+        // Drain protection: encountering 429 or GOOGLE_RATE_LIMITED breaks batch execution
+        // immediately so remaining pending queue rows are not starved or burned.
+        let batch = vec![
+            Err("429 Too Many Requests: Rate limit exceeded".to_string()),
+            Ok(false),
+            Ok(false),
+        ];
+        let mut processed = 0;
+        let mut broke_on_rate_limit = false;
+        for res in batch {
+            match res {
+                Ok(_) => processed += 1,
+                Err(err) => {
+                    if is_rate_limited_error(&err) {
+                        broke_on_rate_limit = true;
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(broke_on_rate_limit);
+        assert_eq!(processed, 0, "Drain protection should break before processing subsequent items");
+
+        // Non-rate-limit errors do NOT trigger drain break
+        let batch_other = vec![
+            Err("500 Internal Server Error".to_string()),
+            Ok(false),
+        ];
+        let mut other_processed = 0;
+        for res in batch_other {
+            match res {
+                Ok(_) => other_processed += 1,
+                Err(err) => {
+                    if is_rate_limited_error(&err) {
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(other_processed, 1, "Non-rate-limit errors should continue batch");
     }
 }

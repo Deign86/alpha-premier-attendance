@@ -1,4 +1,5 @@
 pub mod cutoff_payroll;
+pub mod dtr_recon;
 pub mod dtr_sync;
 pub mod employee_payroll;
 pub mod intern_payroll;

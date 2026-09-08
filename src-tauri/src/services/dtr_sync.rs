@@ -192,9 +192,9 @@ pub fn resolve_user_tab(
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct DateParts {
-    y: i32,
-    m: u32,
-    d: u32,
+    pub(crate) y: i32,
+    pub(crate) m: u32,
+    pub(crate) d: u32,
 }
 
 fn to_parts(y: i32, m: u32, d: u32) -> Option<DateParts> {
@@ -1455,8 +1455,10 @@ pub async fn push_dtr_row(
             Ok(false)
         }
         DtrPlanOutcome::Unresolvable(reason) => {
-            log::info!("dtr skip for {full_name} ({user_id}) on {attendance_date}: {reason}");
-            Ok(false)
+            let now = chrono::Utc::now().to_rfc3339();
+            note_dtr_pending(state, &user_id, &full_name, &now).await?;
+            log::warn!("dtr unresolvable for {full_name} ({user_id}) on {attendance_date}: {reason}; noted in dtr_pending");
+            Err(format!("{GOOGLE_REQUEST_FAILED}: Unresolvable({reason})"))
         }
     }
 }
