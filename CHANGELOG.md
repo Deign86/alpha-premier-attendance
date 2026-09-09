@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.58] - 2026-09-09
+
+### Added
+- **Realtime DTR Sync Status**: Admin Panel → Data and backup now shows a live sync-health card (overall Healthy/Syncing/Pending/Attention/Offline/Not synced badge, per-table pending rows, InternDtr waiting-tab names, last sync, dead-letter count, last error) polling every 5s while mounted; `admin_get_sync_status` extended with per-table breakdown, `dtrPending`, `lastSyncedAt`, and `lastError` (no migration).
+- **Autostart Self-Heal**: every startup verifies the Windows Run value points at the current exe and repairs stale/missing/unquoted entries (quoted form); user opt-out via settings/tray always wins; all registry failures are log-only so startup never breaks. Fixes login-time blank-window/`ERR_CONNECTION_REFUSED` caused by stale entries launching old/dev binaries.
+- **File Logging**: Tauri log plugin now writes a capped file target (current + 3 rotated × 5 MB) under the app log dir plus `log:default` capability, so Windows-login failures leave evidence.
+
 ## [0.1.57] - 2026-09-08
 
 ### Fixed
