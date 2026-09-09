@@ -489,3 +489,79 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EXPECT: all checks exit 0.
   EVIDENCE: oxlint 61 files (0 warnings, 0 errors); typecheck passed across shared/client/server; npm test passed 32 files / 382 tests (237 client, 145 server); cargo test passed 231 tests (0 failed).
 
+
+## Realtime DTR sync status in Admin Data and backup (unlazy/anti-slop/ponytail)
+- [x] Admin Data and backup shows live DTR sync health (overall badge + per-table rows + InternDtr tabs + last sync + last error), polling every 5s while mounted, hidden-tab ticks skipped, refresh after manual sync.
+  CHECK: npm run test -w client -- database-panel.test.tsx api.test.ts
+  EXPECT: 2 files, 27 tests pass (10 database-panel incl 3 new + 17 api)
+  EVIDENCE: measured 2026-09-09 — 2 passed, 27 passed (database-panel 10/10, api 17/17).
+- [x] Backend extends admin_get_sync_status with per-table breakdown + dtrPending + lastSyncedAt + lastError, degrading to empty/None on older DBs (no new command, no migration).
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml
+  EXPECT: exit 0 (only 3 pre-existing warnings)
+  EVIDENCE: measured 2026-09-09 — Finished dev profile in 2.16s, 3 warnings (pre-existing dtr_env_test_guard/server-timing), 0 errors.
+- [x] Anti-slop: every new `as T` has a preceding SAFETY comment; no chained casts, no conditional empty-object spread, no new broad dictionaries, no runtime typeof, no any/unknown params.
+  CHECK: npm run lint:oxlint && npm run typecheck
+  EXPECT: both exit 0
+  EVIDENCE: measured 2026-09-09 — oxlint exit 0 (0 errors); typecheck exit 0 (shared/client/server); all 4 new `as` in client/src/api.ts preceded by SAFETY; `Record<string,string>` at api.ts:809 is pre-existing, untouched.
+- [x] Ponytail minimal: no new deps, no new abstraction layer; reuses admin_get_sync_status, existing lan/scanner poll + badge patterns, styles.css tokens, formatWhen; one loadDtrSyncHealth entry point.
+  CHECK: git diff HEAD --stat && git diff HEAD -- package.json client/package.json src-tauri/Cargo.toml
+  EXPECT: 6 files, +401/-10, zero package/manifest diff
+  EVIDENCE: measured 2026-09-09 — App.tsx +125/-?, api.ts +123, database-panel.test.tsx +83, styles.css +13, tauri-api.ts +24, lib.rs +43; package/Cargo diffs empty.
+- [x] Reviewer P2 hardening applied parent-side (refresh sequence guard + try/finally on syncInterns so badge can't stick on Syncing).
+  CHECK: npm run test -w client -- database-panel.test.tsx
+  EXPECT: 10/10 pass after hardening
+  EVIDENCE: measured 2026-09-09 — 10/10 pass; App.tsx carries syncHealthSeq ref guard + try/finally.
+
+## Realtime DTR sync status — full-suite close-out (2026-09-09)
+- [x] Full JS suite green after hardening.
+  CHECK: npm test
+  EXPECT: shared + client + server all pass
+  EVIDENCE: measured 2026-09-09 — shared 3 files 34/34, client 15 files 240/240, server 17 files 145/145 (419 total, 0 failed).
+- [x] Full Rust suite green after hardening.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: 0 failed
+  EVIDENCE: measured 2026-09-09 — 231 passed, 0 failed (lib; bins 0 tests).
+
+## Autostart self-heal + file-target logging (2026-09-09)
+- [x] Self-heal verifies HKCU Run value every startup, repairs stale/missing/unquoted to quoted current_exe; respects `.autostart_disabled` opt-out; all failures LOG-ONLY.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml lifecycle
+  EXPECT: 10 passed, 0 failed (7 lifecycle incl 6 new self-heal/opt-out tests)
+  EVIDENCE: measured 2026-09-09 — 10 passed, 0 failed (stale_dev_path, unquoted_trailing_space, quoted_correct, missing_entry, opt_out x3, compare/normalize, opt_out_marker_roundtrip, close_behavior, autostart_default_on).
+- [x] Pure decision logic covers stale-dev-path, unquoted-with-trailing-space, quoted-correct, missing-entry, opt-out cases (lifecycle.rs decide_autostart_action).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml lifecycle 2>&1 | grep -c "ok$"
+  EXPECT: all listed tests ok
+  EVIDENCE: measured 2026-09-09 — stale_dev_path_needs_repair ok, unquoted_with_trailing_space_needs_repair ok, quoted_correct_value_is_unchanged ok, missing_entry_is_enabled ok, opt_out_is_respected_over_stale_and_missing ok.
+- [x] File-target logging capped for kiosk disk (LogDir + Stdout, KeepSome(3), 5MB max) with `log:default` capability for webview forwarding.
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml
+  EXPECT: exit 0, only 3 pre-existing warnings
+  EVIDENCE: measured 2026-09-09 — Finished dev profile in 19.00s, 3 pre-existing warnings (payroll Timelike import, config DTR_ENV statics), 0 errors.
+- [x] No new external crates: winreg 0.10.1 promoted from transitive (auto-launch 0.5.0) to Windows-only direct dep; frontend/NSIS untouched.
+  CHECK: git diff HEAD --stat -- src-tauri/Cargo.toml src-tauri/Cargo.lock client/ && npm run lint:oxlint && npm run typecheck
+  EXPECT: Cargo.toml +5, Cargo.lock +1 line, client/ untouched by this fix, oxlint 0, typecheck 0
+  EVIDENCE: measured 2026-09-09 — Cargo.toml +5 (target cfg(windows) winreg), Cargo.lock +1 (winreg 0.10.1 in main deps); oxlint exit 0; typecheck exit 0 (shared/client/server).
+- [x] Anti-slop: no `as T` casts added; Windows-only code cfg-gated; crate compiles on all targets' syntax (winreg use confined to cfg(windows) fns).
+  CHECK: grep -n "as [A-Z]" src-tauri/src/lifecycle.rs | head; cargo check --manifest-path src-tauri/Cargo.toml
+  EXPECT: no new casts in lifecycle.rs; check exit 0
+  EVIDENCE: measured 2026-09-09 — grep empty for new casts; cargo check exit 0.
+
+## Autostart self-heal — parent P2 close-out (2026-09-09)
+- [x] Reviewer P2 cleanups applied parent-side (collapsed redundant RepairStale branch + removed dead helper with test reworked through decide_autostart_action, cfg-gated exe/app_name for non-Windows, corrected log-cap comment to current + 3 rotated ≈ 20 MB).
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml && npm run lint:oxlint && npm run typecheck
+  EXPECT: all exit 0; no new warnings
+  EVIDENCE: measured 2026-09-09 — cargo check 0 errors (only 3 pre-existing warnings); cargo test 238/238 lib (231 existing + 7 autostart/close-behavior); oxlint exit 0; typecheck exit 0.
+
+## Live Tauri e2e UI drive (2026-09-09, debug build + vite, bridge 9223)
+- [x] Kiosk home renders (Good morning, RFID waiting, Manual entry/Live attendance/Admin/Admin setup).
+  EVIDENCE: screenshot ui-kiosk-home, all four buttons visible, no console death.
+- [x] Live attendance view renders (Today's timing, LAN viewer Running, facts grid, empty-day copy).
+  EVIDENCE: screenshot ui-live-attendance via kiosk-link-live click.
+- [x] Admin unlock via UI (PIN typed into password input + Unlock admin click) opens Manage attendance, 19 users listed.
+  EVIDENCE: screenshots ui-admin-unlock, ui-admin-home.
+- [x] Data and backup shows live DTR SYNC STATUS card with real backend state (Attention badge, InternDtr tabs 1 pending, waiting tab name, 800 failed items, last error) — sandbox has no Google creds so Attention is the honest state.
+  EVIDENCE: screenshot ui-data-backup-synchealth.
+- [x] Manual Sync Intern DTR now flips badge Attention -> Syncing live; still Syncing after ~90s because 800 dead items + credential-less Google retries grind (env-caused, not stuck UI).
+  EVIDENCE: screenshots ui-dtr-sync-after, ui-dtr-sync-result.
+- [x] Bathroom Key Log renders (Male/Female AVAILABLE, staff lists, date picker).
+  EVIDENCE: screenshot ui-bathroom-tab.
+- [x] App log proves self-heal ran and respected opt-out guard ("user opted out, leaving Run entry untouched"); guard file removed after drive; tauri.conf devUrl reverted to 5173; processes cleaned, bridge closed.
+  EVIDENCE: utility report + post-drive reg/marker state; git status shows only intended files.

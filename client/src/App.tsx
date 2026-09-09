@@ -67,6 +67,7 @@ import {
   loadAdminUsers,
   loadConfig,
   loadDatabaseInfo,
+  loadDtrSyncHealth,
   loadPayrollCutoffs,
   loadPayrollProfiles,
   lockAdmin,
@@ -100,6 +101,7 @@ import {
 } from "./api";
 import { sseUrl, onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
 import type { FileActionResult } from "./api";
+import type { DtrSyncHealth } from "./api";
 import "./styles.css";
 import { BathroomKioskView } from "./bathroom-kiosk-view";
 import type { BathroomScanResponse, BathroomStatusResponse } from "@rfid-attendance/shared";
@@ -3282,6 +3284,39 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   );
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
   const [dismissingRestore, setDismissingRestore] = useState(false);
+  const [syncHealth, setSyncHealth] = useState<DtrSyncHealth | null>(null);
+  const [syncHealthError, setSyncHealthError] = useState("");
+  const [syncingDtr, setSyncingDtr] = useState(false);
+
+  const syncHealthSeq = useRef(0);
+  const refreshSyncHealth = useCallback(async () => {
+    const seq = syncHealthSeq.current + 1;
+    syncHealthSeq.current = seq;
+    const response = await loadDtrSyncHealth();
+    if (syncHealthSeq.current !== seq) return;
+    if (response.success) {
+      setSyncHealth(response.health);
+      setSyncHealthError("");
+    } else {
+      setSyncHealthError(response.error.message);
+    }
+  }, []);
+  useEffect(() => {
+    void refreshSyncHealth();
+    const tick = () => {
+      if (document.hidden) return;
+      void refreshSyncHealth();
+    };
+    const timer = window.setInterval(tick, 5000);
+    const onVisibility = () => {
+      if (!document.hidden) void refreshSyncHealth();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [refreshSyncHealth]);
 
   const refresh = useCallback(async () => {
     const response = await loadDatabaseInfo();
@@ -3296,17 +3331,23 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
 
   const syncInterns = async () => {
     setBusy(true);
+    setSyncingDtr(true);
     setError("");
     setNotice("");
-    const response = await syncInternDtr();
-    setBusy(false);
-    if (response.success) {
-      const createdCount = response.tabsCreated?.length ?? 0;
-      const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
-      setNotice(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
-    } else {
-      setError(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+    try {
+      const response = await syncInternDtr();
+      if (response.success) {
+        const createdCount = response.tabsCreated?.length ?? 0;
+        const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
+        setNotice(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
+      } else {
+        setError(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+      }
+    } finally {
+      setBusy(false);
+      setSyncingDtr(false);
     }
+    void refreshSyncHealth();
   };
 
   const createBackup = async () => {
@@ -3506,6 +3547,74 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           {error}
         </p>
       )}
+      {(() => {
+        const statusLabel = syncingDtr
+          ? "Syncing"
+          : syncHealthError
+            ? "Offline"
+            : !syncHealth
+              ? "Not synced"
+              : syncHealth.deadLetter > 0 || syncHealth.lastError
+                ? "Attention"
+                : syncHealth.pending > 0 || syncHealth.dtrPendingCount > 0
+                  ? "Pending"
+                  : syncHealth.lastSyncedAt
+                    ? "Healthy"
+                    : "Not synced";
+        const statusClass =
+          statusLabel === "Healthy"
+            ? "sync-badge ok"
+            : statusLabel === "Syncing" || statusLabel === "Pending"
+              ? "sync-badge pending"
+              : statusLabel === "Attention"
+                ? "sync-badge attention"
+                : "sync-badge idle";
+        return (
+          <div className="sync-health" aria-label="DTR sync status" role="status">
+            <div className="sync-health-head">
+              <strong>DTR sync status</strong>
+              <span className={statusClass}>{syncingDtr ? "Syncing…" : statusLabel}</span>
+            </div>
+            {syncHealthError && !syncHealth ? (
+              <p className="sync-health-note">Sync status unavailable — {syncHealthError}</p>
+            ) : (
+              <>
+                <ul className="sync-health-rows">
+                  {(syncHealth?.byTable ?? []).map((row) => (
+                    <li key={row.tableName}>
+                      <code>{row.tableName}</code>
+                      <span className={row.pending > 0 ? "sync-badge pending" : "sync-badge ok"}>
+                        {row.pending > 0 ? `${row.pending} pending` : "OK"}
+                      </span>
+                    </li>
+                  ))}
+                  <li>
+                    <code>InternDtr tabs</code>
+                    <span className={(syncHealth?.dtrPendingCount ?? 0) > 0 ? "sync-badge pending" : "sync-badge ok"}>
+                      {(syncHealth?.dtrPendingCount ?? 0) > 0
+                        ? `${syncHealth?.dtrPendingCount} pending`
+                        : "OK"}
+                    </span>
+                  </li>
+                </ul>
+                {(syncHealth?.dtrPendingItems ?? []).length > 0 && (
+                  <p className="sync-health-note">
+                    Waiting for a tab: {(syncHealth?.dtrPendingItems ?? []).slice(0, 5).map((person) => person.fullName).join(", ")}
+                    {(syncHealth?.dtrPendingCount ?? 0) > 5 ? ` (+${(syncHealth?.dtrPendingCount ?? 0) - 5} more)` : ""}
+                  </p>
+                )}
+                <p className="sync-health-note">
+                  Last sync: {formatWhen(syncHealth?.lastSyncedAt ?? null)}
+                  {syncHealth && syncHealth.deadLetter > 0 ? ` · ${syncHealth.deadLetter} failed item(s) need attention` : ""}
+                </p>
+                {syncHealth?.lastError && (
+                  <p className="sync-health-error">Last error: {syncHealth.lastError}</p>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
       <AdminUpdatesCard onManualCheck={props.onManualUpdateCheck ?? (() => {})} />
       <GeneratedFileActions result={backupResult} label="Latest backup" />
       <div className="lan-guidance">

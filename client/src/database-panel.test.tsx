@@ -30,6 +30,7 @@ describe('DatabasePanel', () => {
   let requestDatabaseRestoreSpy: MockInstance;
   let openDatabaseBackupsFolderSpy: MockInstance;
   let pickRestoreBackupFileSpy: MockInstance;
+  let loadDtrSyncHealthSpy: MockInstance;
 
   beforeEach(() => {
     // SAFETY: Setting global Tauri mock interface for test environment
@@ -41,6 +42,18 @@ describe('DatabasePanel', () => {
     requestDatabaseRestoreSpy = vi.spyOn(api, 'requestDatabaseRestore');
     openDatabaseBackupsFolderSpy = vi.spyOn(api, 'openDatabaseBackupsFolder');
     pickRestoreBackupFileSpy = vi.spyOn(api, 'pickRestoreBackupFile');
+    loadDtrSyncHealthSpy = vi.spyOn(api, 'loadDtrSyncHealth').mockResolvedValue({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+      },
+    });
   });
 
   afterEach(() => {
@@ -180,5 +193,75 @@ describe('DatabasePanel', () => {
 
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Maricon C\. Danao\)\./i)).toBeInTheDocument();
+  });
+
+  it('shows live DTR sync health with per-table pending rows', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 2,
+        deadLetter: 0,
+        byTable: [{ tableName: 'attendance', pending: 2 }],
+        dtrPendingCount: 1,
+        dtrPendingItems: [{ userId: 'APG-2026-116', fullName: 'Maricon C. Danao', attempts: 1, lastChecked: null }],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByLabelText('DTR sync status')).toBeInTheDocument();
+    expect(await screen.findByText('Pending')).toBeInTheDocument();
+    expect(screen.getByText('attendance')).toBeInTheDocument();
+    expect(screen.getByText('2 pending')).toBeInTheDocument();
+    expect(screen.getByText('InternDtr tabs')).toBeInTheDocument();
+    expect(screen.getByText('1 pending')).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for a tab: Maricon C\. Danao/)).toBeInTheDocument();
+    expect(loadDtrSyncHealthSpy).toHaveBeenCalled();
+  });
+
+  it('flags failed sync items as Attention with the last error', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 1,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: 'Google Sheets auth failed: expired token',
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText('Attention')).toBeInTheDocument();
+    expect(await screen.findByText(/Last error: Google Sheets auth failed: expired token/)).toBeInTheDocument();
+  });
+
+  it('refreshes sync health after Sync Intern DTR now', async () => {
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
+      success: true,
+      internsChecked: 1,
+      tabsCreated: [],
+      rowsSynced: 2,
+      details: [],
+      errors: [],
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    await screen.findByLabelText('DTR sync status');
+    const callsBefore = loadDtrSyncHealthSpy.mock.calls.length;
+
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+
+    expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(loadDtrSyncHealthSpy.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
   });
 });

@@ -12,6 +12,7 @@
     "autostart:default",
     "updater:default",
     "process:default",
+    "log:default",
     "mcp-bridge:default"
   ]
 }

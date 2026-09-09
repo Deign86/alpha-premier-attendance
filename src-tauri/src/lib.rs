@@ -3636,7 +3636,48 @@ async fn admin_get_sync_status(
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
-    Ok(serde_json::json!({"success":true,"pending":pending,"deadLetter":dead}))
+    // Per-table pending breakdown for the Admin Data-and-backup sync-health card.
+    // All follow-up queries degrade to empty/None so a missing table (older
+    // database) never breaks the status read; no schema migration here.
+    let by_table_rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT table_name, COUNT(*) FROM sync_queue WHERE status IN ('PENDING','RETRY','PROCESSING') GROUP BY table_name ORDER BY table_name ASC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let by_table: Vec<serde_json::Value> = by_table_rows
+        .into_iter()
+        .map(|(table_name, pending_count)| {
+            serde_json::json!({"tableName": table_name, "pending": pending_count})
+        })
+        .collect();
+    let dtr_pending_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    let dtr_pending_rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT user_id, full_name, attempts, last_checked FROM dtr_pending ORDER BY full_name ASC LIMIT 50",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let dtr_pending_items: Vec<serde_json::Value> = dtr_pending_rows
+        .into_iter()
+        .map(|(user_id, full_name, attempts, last_checked)| {
+            serde_json::json!({"userId": user_id, "fullName": full_name, "attempts": attempts, "lastChecked": last_checked})
+        })
+        .collect();
+    let last_synced_at: Option<String> = sqlx::query_scalar("SELECT MAX(last_synced_at) FROM sync_state")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(None);
+    let last_error: Option<String> = sqlx::query_scalar(
+        "SELECT last_error FROM sync_queue WHERE last_error IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(None);
+    Ok(serde_json::json!({"success":true,"pending":pending,"deadLetter":dead,"byTable":by_table,"dtrPending":{"count":dtr_pending_count,"items":dtr_pending_items},"lastSyncedAt":last_synced_at,"lastError":last_error}))
 }
 
 #[tauri::command]
@@ -4808,9 +4849,18 @@ fn autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
     if enabled {
         autolaunch.enable().map_err(|e| e.to_string())?;
         log::info!("Enabled autostart via in-app settings");
+        // Clearing the opt-out must not fail the command; self-heal reads it.
+        match crate::paths::resolve(&app) {
+            Ok(paths) => crate::lifecycle::clear_opt_out(&paths.config_dir),
+            Err(e) => log::warn!("Could not clear autostart opt-out marker: {e}"),
+        }
     } else {
         autolaunch.disable().map_err(|e| e.to_string())?;
         log::info!("Disabled autostart via in-app settings");
+        match crate::paths::resolve(&app) {
+            Ok(paths) => crate::lifecycle::record_opt_out(&paths.config_dir),
+            Err(e) => log::warn!("Could not record autostart opt-out marker: {e}"),
+        }
     }
     autolaunch.is_enabled().map_err(|e| e.to_string())
 }
@@ -4835,7 +4885,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                // Keep stdout plus a capped file target under the app log dir
+                // so Windows-login failures leave evidence; current + 3 rotated
+                // files at 5 MB each bounds total log disk use near 20 MB.
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                .max_file_size(5_000_000)
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())

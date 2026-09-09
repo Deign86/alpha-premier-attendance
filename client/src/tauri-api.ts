@@ -13,6 +13,28 @@ export interface NativeHealthResponse {
   googleSheetsExport: string;
 }
 
+export interface NativeSyncTableStatus {
+  tableName: string;
+  pending: number;
+}
+
+export interface NativeDtrPendingItem {
+  userId: string;
+  fullName: string;
+  attempts: number;
+  lastChecked: string | null;
+}
+
+export interface NativeSyncStatusResponse {
+  success: boolean;
+  pending: number;
+  deadLetter: number;
+  byTable?: NativeSyncTableStatus[] | null;
+  dtrPending?: { count: number; items: NativeDtrPendingItem[] } | null;
+  lastSyncedAt?: string | null;
+  lastError?: string | null;
+}
+
 /** Native command bridge. The existing HTTP API remains available during cutover. */
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
@@ -63,7 +85,7 @@ export const tauriApi = {
   revealGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('reveal_generated_file', { token, filePath }),
   openGeneratedDirectory: (token: string, directoryPath: string) => invoke<{ success: true; message: string }>('open_generated_directory', { token, directoryPath }),
   openGeneratedArtifact: (token: string, artifactId: string) => invoke<{ success: true; artifactId: string }>('open_generated_artifact', { token, artifactId }),
-  syncStatus: (token: string) => invoke('admin_get_sync_status', { token }),
+  syncStatus: (token: string) => invoke<NativeSyncStatusResponse>('admin_get_sync_status', { token }),
   syncNow: (token: string) => invoke('admin_sync_now', { token }),
   syncInternDtr: (token: string, userId?: string) => invoke<AdminSyncDtrResponse>('admin_sync_intern_dtr', { token, userId }),
   sheetsNukeResync: (token: string, confirm: boolean) => invoke('admin_sheets_nuke_resync', { token, confirm }),

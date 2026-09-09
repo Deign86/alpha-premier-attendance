@@ -1,7 +1,7 @@
 [package]
 name = "alpha-premier-attendance"
 default-run = "alpha-premier-attendance"
-version = "0.1.57"
+version = "0.1.58"
 description = "RFID Attendance, Payroll & Office Management Desktop Application"
 authors = ["Alpha Premier"]
 edition = "2021"
@@ -52,6 +52,11 @@ urlencoding = "2"
 zip = "8"
 tauri-plugin-mcp-bridge = "0.13.0"
 rodio = { version = "0.19", default-features = false, features = ["wav", "mp3"] }
+
+[target.'cfg(windows)'.dependencies]
+# Already in Cargo.lock (via auto-launch 0.5.0); direct use keeps the
+# autostart self-heal quoted-value repair registry-local with no new crates.
+winreg = "0.10"
 
 [dev-dependencies]
 # Used only by tests to read back generated XLSX metadata.

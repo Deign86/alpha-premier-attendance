@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "alpha-premier-attendance"
-version = "0.1.57"
+version = "0.1.58"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -129,6 +129,7 @@ dependencies = [
  "toml 0.8.2",
  "urlencoding",
  "uuid",
+ "winreg 0.10.1",
  "zip 8.6.0",
 ]
 

@@ -38,6 +38,7 @@ import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { tauriApi } from './tauri-api';
+import type { NativeDtrPendingItem, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
 import { apiUrl } from './network';
 
 export async function pickRestoreBackupFile(): Promise<string | null> {
@@ -640,6 +641,128 @@ export async function syncInternDtr(userId?: string): Promise<AdminSyncDtrRespon
     errors: ['Google Sheets sync is available in the desktop application.'],
     error: { message: 'Google Sheets sync is available in the desktop application.' },
   };
+}
+
+export interface DtrSyncTableStatus {
+  tableName: string;
+  pending: number;
+}
+
+export interface DtrPendingPerson {
+  userId: string;
+  fullName: string;
+  attempts: number;
+  lastChecked: string | null;
+}
+
+export interface DtrSyncHealth {
+  pending: number;
+  deadLetter: number;
+  byTable: DtrSyncTableStatus[];
+  dtrPendingCount: number;
+  dtrPendingItems: DtrPendingPerson[];
+  lastSyncedAt: string | null;
+  lastError: string | null;
+}
+
+export type DtrSyncHealthResult =
+  | { success: true; health: DtrSyncHealth }
+  | { success: false; error: { message: string } };
+
+function isPlainObject<T>(value: T): boolean {
+  return value !== null && value !== undefined && Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function isMissing<T>(value: T): boolean {
+  return value === null || value === undefined;
+}
+
+function toNonNegativeInt<T>(value: T): number | null {
+  if (!isMissing(value) && Object.prototype.toString.call(value) === '[object Number]') {
+    // SAFETY: Verified that value is a number
+    const num = value as number;
+    if (Number.isFinite(num) && num >= 0) return Math.floor(num);
+  }
+  return null;
+}
+
+function toText<T>(value: T): string | null {
+  if (isMissing(value)) return null;
+  if (Object.prototype.toString.call(value) === '[object String]') {
+    // SAFETY: Verified that value is a string
+    return value as string;
+  }
+  return null;
+}
+
+function parseDtrSyncTable(entry: NativeSyncTableStatus): DtrSyncTableStatus | null {
+  if (!isPlainObject(entry)) return null;
+  const tableName = toText(entry.tableName);
+  if (!tableName) return null;
+  const pending = toNonNegativeInt(entry.pending);
+  if (pending === null) return null;
+  return { tableName, pending };
+}
+
+function parseDtrPendingPerson(entry: NativeDtrPendingItem): DtrPendingPerson | null {
+  if (!isPlainObject(entry)) return null;
+  const userId = toText(entry.userId);
+  const fullName = toText(entry.fullName);
+  if (!userId || !fullName) return null;
+  const attempts = toNonNegativeInt(entry.attempts);
+  if (attempts === null) return null;
+  if (!isMissing(entry.lastChecked) && toText(entry.lastChecked) === null) return null;
+  return { userId, fullName, attempts, lastChecked: toText(entry.lastChecked) };
+}
+
+function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth | null {
+  if (!isPlainObject(raw)) return null;
+  // SAFETY: Presence of the status envelope was verified above
+  const response = raw as NativeSyncStatusResponse;
+  if (response.success !== true) return null;
+  const pending = toNonNegativeInt(response.pending);
+  const deadLetter = toNonNegativeInt(response.deadLetter);
+  if (pending === null || deadLetter === null) return null;
+  const byTable: DtrSyncTableStatus[] = [];
+  if (Array.isArray(response.byTable)) {
+    for (const entry of response.byTable) {
+      const parsed = parseDtrSyncTable(entry);
+      if (parsed) byTable.push(parsed);
+    }
+  }
+  let dtrPendingCount = 0;
+  const dtrPendingItems: DtrPendingPerson[] = [];
+  if (!isMissing(response.dtrPending) && isPlainObject(response.dtrPending)) {
+    // SAFETY: Presence and object shape of dtrPending were verified above
+    const dtr = response.dtrPending as { count: number; items: NativeDtrPendingItem[] };
+    const count = toNonNegativeInt(dtr.count);
+    if (count !== null) dtrPendingCount = count;
+    if (Array.isArray(dtr.items)) {
+      for (const entry of dtr.items) {
+        const parsed = parseDtrPendingPerson(entry);
+        if (parsed) dtrPendingItems.push(parsed);
+      }
+    }
+  }
+  if (!isMissing(response.lastSyncedAt) && toText(response.lastSyncedAt) === null) return null;
+  if (!isMissing(response.lastError) && toText(response.lastError) === null) return null;
+  return { pending, deadLetter, byTable, dtrPendingCount, dtrPendingItems, lastSyncedAt: toText(response.lastSyncedAt), lastError: toText(response.lastError) };
+}
+
+/** Desktop-only: live DTR/sync-queue health for the Data & backup panel. */
+export async function loadDtrSyncHealth(): Promise<DtrSyncHealthResult> {
+  if (!runningInTauri()) {
+    return { success: false, error: { message: 'Sync status is available in the desktop application.' } };
+  }
+  try {
+    const raw = await tauriApi.syncStatus(nativeAdminToken ?? '');
+    const health = parseDtrSyncHealth(raw);
+    if (!health) return { success: false, error: { message: 'Unable to read the sync status.' } };
+    return { success: true, health };
+  } catch (error) {
+    const message = errorString(error) || 'Unable to read the sync status.';
+    return { success: false, error: { message } };
+  }
 }
 
 /** Desktop-only: read the live SQLite database status for the Data & backup panel. */
