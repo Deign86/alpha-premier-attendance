@@ -565,3 +565,33 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EVIDENCE: screenshot ui-bathroom-tab.
 - [x] App log proves self-heal ran and respected opt-out guard ("user opted out, leaving Run entry untouched"); guard file removed after drive; tauri.conf devUrl reverted to 5173; processes cleaned, bridge closed.
   EVIDENCE: utility report + post-drive reg/marker state; git status shows only intended files.
+
+## DTR-vs-payroll decoupling (half-day pay independent of DTR display)
+
+- [x] TS: DTR rows carry actual stamps only while payroll uses a payroll-only effective 08:00–12:00 window.
+  CHECK: npm test -w server -- test/intern-dtr-sync.test.ts
+  EXPECT: `DTR vs payroll independence (half-day decoupling)` block passes (08:00–15:00 actuals + half-day pay, 08:00–17:00 full-day, sub-4h, 12:30 arrival)
+  EVIDENCE: measured 2026-09-11 — 08:00–15:00 `buildDtrRow` → `['8:00:00 AM','','','3:00:00 PM']`, `isHalfDay true`, `halfDayDeduction 40`, `dailyPay 40`, `computedTimeOut 2026-09-05T12:00:00+08:00`; `computedTimeOut` is never pushed back into `planPush`/`buildDtrRow`.
+- [x] Rust: same independence asserted (`build_dtr_row` actuals + `calculate` half-day with effective-noon window).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml dtr_sync::tests
+  EXPECT: `eight_to_three_keeps_actuals_while_payroll_is_half_day`, `eight_to_five_is_full_day_with_actuals`, `sub_four_hour_shift_keeps_actuals_and_half_day_pay`, `afternoon_arrival_keeps_actual_in_with_half_day_pay`, and `early_half_day_uses_effective_noon_window_for_pay` (both payroll modules) pass
+  EVIDENCE: measured 2026-09-11 — `cargo test --manifest-path src-tauri/Cargo.toml`: 249 passed, 0 failed (lib; re-measured after P1 check-ordering fix added 2 tests).
+- [x] Pay amounts/thresholds unchanged; paint cutoffs intentionally untouched.
+  CHECK: npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all suites exit 0; no threshold edits
+  EVIDENCE: measured 2026-09-11 — npm test: shared 34/34 (3 files), client 240/240 (15 files), server 152/152 (17 files); cargo lib: 249/249. `classifyRecordKind`/`classify_record_row` 16:59 paint cutoffs kept, so an 08:00–15:00 row may paint HalfDay while showing actual end-stamps (cosmetic, both stacks).
+
+## Late time-out auto-cap 18:00+ => 17:00 (no-overtime policy, DTR+payroll consistent)
+
+- [x] TS: time-outs at/after 18:00 Manila cap to 17:00:00.000 same-day before DTR render/group + payroll math.
+  CHECK: npm test -w server -- test/intern-dtr-sync.test.ts
+  EXPECT: `late time-out auto-cap` block passes (08:00–19:30 DTR renders 5PM + `full` paint; 18:00:00 caps / 17:59:59 uncapped; 08:00–19:30 payroll full-day with `computedTimeOut` 17:00 and dailyPay 80)
+  EVIDENCE: measured 2026-09-11 — full server suite 17 files, 152/152 passed (incl. 3 new cap tests); `tsc --noEmit -p server/tsconfig.json` clean; oxlint on the 4 touched sources clean. Source: `server/src/lunch-break.ts` (`LATE_TIMEOUT_HOUR=18` + `capLateTimeoutOut`), applied in `intern-dtr-sync.ts` (`buildDtrRow` + `classifyRecordKind` via `capRecordOutIso`), `intern-payroll.ts`, `employee-payroll.ts` (right after `manilaTimestamp`, before worked-hours/half-day math; half-day rules unchanged, apply post-cap).
+- [x] Rust: same cap mirrors TS (`cap_late_timeout_out`, hour >= 18 → 17:00 same-day).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml late_timeout
+  EXPECT: 3/3 new cap tests pass (`late_timeout_caps_to_five_pm` in dtr_sync incl. 18:00:00 caps / 17:59:59 uncapped + DTR/payroll consistency; `late_timeout_caps_to_five_pm_for_pay` in both payroll engines)
+  EVIDENCE: measured 2026-09-11 — `cargo test --manifest-path src-tauri/Cargo.toml`: 249 passed, 0 failed (lib; re-measured after P1 check-ordering fix). Source: `src-tauri/src/services/payroll.rs` + `dtr_sync.rs` (`build_dtr_row`/`classify_record_row`), `intern_payroll.rs`, `employee_payroll.rs` (cap runs above the inverted-log check, matching TS, before worked-hours/half-day math); `dtr_recon.rs` needs no change (calls those two functions); `cutoff_payroll.rs` takes aggregates (no change).
+- [x] Policy + boundaries recorded; no threshold changes.
+  CHECK: npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all suites exit 0; no threshold edits
+  EVIDENCE: measured 2026-09-11 — npm test: shared 34/34 (3 files), client 240/240 (15 files), server 152/152 (17 files); cargo lib: 249/249. Rule: hour-precision (18:00:00 caps, 17:59:59 uncapped); no-overtime policy — 18:00+ renders `5:00:00 PM`, paints full, pays full-day. Open items (unchanged scope): status-flag writers still stamp raw `LATE_TIMEOUT` at scan time (cap applies at DTR-row/payroll-compute time; auto-`COMPLETED` conversion is a separate change if wanted); shared `isLateTimeout` and the cap both trip at 18:00:00 — `isLateTimeout` truncates seconds, the cap truncates minutes — no practical gap.

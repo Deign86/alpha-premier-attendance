@@ -238,31 +238,31 @@ describe('formatSheetTime', () => {
 
 describe('buildDtrRow', () => {
   const date = '2026-09-05';
-  it('completed day has fixed lunch pair', () => {
+  it('completed day keeps actual stamps with no fixed lunch', () => {
     expect(buildDtrRow('2026-09-05T07:24:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
       '7:24:00 AM',
-      '12:00:00 PM',
-      '1:00:00 PM',
+      '',
+      '',
       '5:00:00 PM',
     ]);
   });
-  it('in-only leaves E empty', () => {
+  it('in-only leaves C:D:E empty (no fabricated lunch)', () => {
     expect(buildDtrRow('2026-09-05T07:24:00+08:00', null, date)).toEqual([
       '7:24:00 AM',
-      '12:00:00 PM',
-      '1:00:00 PM',
+      '',
+      '',
       '',
     ]);
   });
   it('no time-in is all empty', () => {
     expect(buildDtrRow(null, null, date)).toEqual(['', '', '', '']);
   });
-  it('half-day timeout renders morning-only (tap-out discarded)', () => {
+  it('half-day timeout keeps actual stamps (no tap-out discard)', () => {
     expect(buildDtrRow('2026-09-05T08:04:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
       '8:04:00 AM',
-      '12:00:00 PM',
       '',
       '',
+      '3:00:00 PM',
     ]);
   });
   it('sub-4h lunch-spanning stint keeps actuals at both ends (never half-day)', () => {
@@ -281,32 +281,37 @@ describe('buildDtrRow', () => {
       { tab: 'T', row1Based: 107, endRow1BasedExcl: 108, startCol0: 4, endCol0Excl: 5, red: false },
     ]);
   });
-  it('4h+ morning span closing early keeps the classic fixed half-day', () => {
+  it('4h+ morning span closing early keeps actual stamps (payroll-only half-day)', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
       '8:00:00 AM',
-      '12:00:00 PM',
       '',
       '',
+      '3:00:00 PM',
     ]);
     expect(isShortStint('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00')).toBe(false);
     expect(isShortStint('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00')).toBe(true);
   });
-  it('cutoff boundary 16:58:59 half, 16:59:00+ full', () => {
-    const half = buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:58:59+08:00', date);
-    expect(half[2]).toBe('');
-    expect(half[3]).toBe('');
+  it('cutoff boundary keeps actual stamps on both sides of 16:59', () => {
+    const early = buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:58:59+08:00', date);
+    expect(early).toEqual(['8:00:00 AM', '', '', '4:58:59 PM']);
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:59:00+08:00', date)).toEqual([
       '8:00:00 AM',
-      '12:00:00 PM',
-      '1:00:00 PM',
+      '',
+      '',
       '4:59:00 PM',
     ]);
   });
-  it('afternoon arrival renders afternoon-only [empty, empty, 1PM, out]', () => {
+  it('afternoon arrival keeps actual stamps in the afternoon pair', () => {
     expect(buildDtrRow('2026-09-05T12:00:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
       '',
       '',
-      '1:00:00 PM',
+      '12:00:00 PM',
+      '5:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T12:30:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
+      '',
+      '',
+      '12:30:00 PM',
       '5:00:00 PM',
     ]);
   });
@@ -335,14 +340,14 @@ describe('planPush', () => {
     expect(plan.skipped).toBe(false);
     expect(plan.tab).toBe('ROSADO RAINEER');
     expect(plan.row1Based).toBe(2);
-    expect(plan.values).toEqual(['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
+    expect(plan.values).toEqual(['7:24:00 AM', '', '', '5:00:00 PM']);
     await executePush(client, plan);
-    expect(client.writes).toEqual([{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM'] }]);
+    expect(client.writes).toEqual([{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '', '', '5:00:00 PM'] }]);
   });
   it('skips identical cells without writing', async () => {
     const synced = [
       baseRows[0],
-      ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
+      ['9/5/2026', '7:24:00 AM', '', '', '5:00:00 PM', '8'],
     ];
     const client = makeClient({ 'ROSADO RAINEER': synced });
     const plan = await planPush(client, DAY, ROSTER);
@@ -550,5 +555,88 @@ describe('auto-create tab alignment', () => {
     const tab = await ensurePersonTab(client, mary, [mary, rival]);
     expect(tab).toBeNull();
     expect(client.created).toEqual([]);
+  });
+});
+
+describe('DTR vs payroll independence (half-day decoupling)', () => {
+  const date = '2026-09-05';
+  it('08:00-15:00 DTR keeps actual stamps while payroll is half-day with 08:00-12:00 window', async () => {
+    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
+      '8:00:00 AM', '', '', '3:00:00 PM',
+    ]);
+    const pay = calculateInternPayroll({
+      attendanceDate: date,
+      actualTimeIn: '2026-09-05T08:00:00+08:00',
+      actualTimeOut: '2026-09-05T15:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(pay.isHalfDay).toBe(true);
+    expect(pay.halfDayDeduction).toBe(40);
+    expect(pay.dailyPay).toBe(40);
+    expect(pay.computedTimeIn).toBe('2026-09-05T08:00:00+08:00');
+    expect(pay.computedTimeOut).toBe('2026-09-05T12:00:00+08:00');
+  });
+  it('08:00-17:00 full day keeps actual stamps and full pay', async () => {
+    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
+      '8:00:00 AM', '', '', '5:00:00 PM',
+    ]);
+    const pay = calculateInternPayroll({
+      attendanceDate: date,
+      actualTimeIn: '2026-09-05T08:00:00+08:00',
+      actualTimeOut: '2026-09-05T17:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(pay.isHalfDay).toBe(false);
+    expect(pay.dailyPay).toBe(80);
+  });
+  it('sub-4h shift keeps actual stamps and stays half-day for pay', async () => {
+    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
+    expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
+      '11:30:00 AM', '', '', '2:30:00 PM',
+    ]);
+    const pay = calculateInternPayroll({
+      attendanceDate: date,
+      actualTimeIn: '2026-09-05T11:30:00+08:00',
+      actualTimeOut: '2026-09-05T14:30:00+08:00',
+      graceAvailable: true,
+    });
+    expect(pay.isHalfDay).toBe(true);
+  });
+  it('12:30 arrival keeps the actual in-time on the DTR', () => {
+    expect(buildDtrRow('2026-09-05T12:30:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
+      '', '', '12:30:00 PM', '5:00:00 PM',
+    ]);
+  });
+});
+
+describe('late time-out auto-cap (18:00+ renders/pays as 17:00)', () => {
+  const date = '2026-09-05';
+  it('08:00-19:30 DTR out shows 17:00 and classifies full', () => {
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toEqual([
+      '8:00:00 AM', '', '', '5:00:00 PM',
+    ]);
+    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toBe('full');
+  });
+  it('18:00:00 boundary caps while 17:59:59 stays actual', () => {
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T18:00:00+08:00', date)).toEqual([
+      '8:00:00 AM', '', '', '5:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:59:59+08:00', date)).toEqual([
+      '8:00:00 AM', '', '', '5:59:59 PM',
+    ]);
+  });
+  it('08:00-19:30 payroll is full-day computed on capped 08:00-17:00', async () => {
+    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
+    const pay = calculateInternPayroll({
+      attendanceDate: date,
+      actualTimeIn: '2026-09-05T08:00:00+08:00',
+      actualTimeOut: '2026-09-05T19:30:00+08:00',
+      graceAvailable: true,
+    });
+    expect(pay.isHalfDay).toBe(false);
+    expect(pay.computedTimeOut).toBe('2026-09-05T17:00:00+08:00');
+    expect(pay.dailyPay).toBe(80);
   });
 });

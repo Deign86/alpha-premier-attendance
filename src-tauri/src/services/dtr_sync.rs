@@ -7,9 +7,10 @@
 //! - Only `B:E` data cells are ever written (`USER_ENTERED`); column `F`
 //!   (`TOTAL HOURS`) and the `H:J` counters are formula territory.
 //! - Writes are idempotent: identical `B:E` cells are skipped (all four
-//!   cells are compared, so a WORKING → half-day timeout rewrites `D`).
-//! - DTR display half-day: time-out before 16:59 Manila renders
-//!   morning-only `[in, 12PM, '', '']`; system payroll is untouched.
+//!   cells are compared, so a WORKING → completed rewrite fills `E`).
+//! - DTR rows carry actual stamps only; payroll half-day (payroll.rs
+//!   `is_half_day`) is derived separately from the same raw punches and
+//!   never feeds this row builder.
 //! - Interns with no tab yet are tracked in `dtr_pending`; the next
 //!   interaction (or 30s loop) re-searches titles and backfills the full
 //!   history once the owner creates the tab.
@@ -44,7 +45,12 @@ use chrono::{Datelike, NaiveDate, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
 
 pub const DTR_TABLE_NAME: &str = "InternDtr";
+// Retained for sheet-contract readability (owner template labels). DTR rows
+// carry actual stamps only since the DTR/payroll decoupling; nothing
+// substitutes these into B:E anymore.
+#[allow(dead_code)]
 pub const DTR_LUNCH_OUT: &str = "12:00:00 PM";
+#[allow(dead_code)]
 pub const DTR_LUNCH_IN: &str = "1:00:00 PM";
 
 /// DTR data-cell paint (B:E only — F TOTAL and H:J counters are formula
@@ -396,23 +402,17 @@ fn is_afternoon_arrival(time_in: &str) -> Result<bool, String> {
     Ok(t.hour() >= AFTERNOON_ARRIVAL_HOUR)
 }
 
-/// Build `[B, C, D, E]` (DTR display rule, not payroll). A worked span
-/// under 4 hours is NEVER a half day — actual stamps land in their
-/// natural columns instead of the fixed-lunch convention:
-/// - still WORKING (no time-out): `[in, 12PM, 1PM, '']` intraday;
-/// - clock-out before 13:00 Manila: morning actuals `[in, out, '', '']`;
-/// - sub-4h span crossing lunch: `[in, '', '', out]` (lunch unknown);
-/// - clock-in at/after 12:00 with an early close: afternoon actuals
-///   `['', '', in, out]`;
-/// - 4h+ morning span closing before 16:59: classic half-day
-///   `[in, 12PM, '', '']`;
-/// - timed out before 16:59 with a morning clock-in: classic half-day
-///   `[in, 12PM, '', '']` — the actual tap-out time is discarded;
-/// - timed in at/after 12:00 noon with an early time-out: afternoon
-///   fragment with actual stamps `['', '', in, out]`;
-/// - timed in at/after 12:00 noon closing at/after 16:59: `['', '', 1PM,
-///   out]` (owner sheet shape);
-/// - otherwise: full `[in, 12PM, 1PM, out]`.
+/// Build `[B, C, D, E]` — DTR SOURCE OF TRUTH (actual stamps only).
+///
+/// Decoupled from payroll half-day logic: this function NEVER fabricates,
+/// truncates, or substitutes fixed-lunch/half-day conventions. Every
+/// completed shift renders actual stamps grouped by morning/afternoon
+/// columns (`[in,out,'','']` if out<13:00, `['','',in,out]` if in>=12:00,
+/// else `[in,'','',out]`); working (no time-out) renders `[in,'','','']`.
+/// Payroll half-day (`is_half_day` in payroll.rs) is derived separately
+/// from the same raw punches and must never feed this row builder.
+/// Late time-out auto-cap only: a clock-out at/after 18:00 Manila renders
+/// as 5:00 PM (overtime forbidden); everything before 18:00 renders actual.
 /// - a time-out earlier than the time-in is rejected (mirrors the P4
 ///   inverted-log rule in payroll): overnight shifts are outside the
 ///   kiosk same-day model, so failing closed beats rendering nonsense.
@@ -428,12 +428,7 @@ pub fn build_dtr_row(
     };
     let started = format_sheet_time(tin)?;
     let Some(tout_raw) = time_out.filter(|s| !s.trim().is_empty()) else {
-        return Ok([
-            started,
-            DTR_LUNCH_OUT.to_string(),
-            DTR_LUNCH_IN.to_string(),
-            String::new(),
-        ]);
+        return Ok([started, String::new(), String::new(), String::new()]);
     };
     let tin_dt = chrono::DateTime::parse_from_rfc3339(tin.trim())
         .map_err(|_| format!("invalid timestamp: {tin}"))?;
@@ -442,59 +437,28 @@ pub fn build_dtr_row(
     if tout_dt < tin_dt {
         return Err(format!("Time-out cannot be earlier than time-in: {tout_raw} < {tin}"));
     }
-    let ended = format_sheet_time(tout_raw)?;
-    // DTR display rule (not payroll): a worked span under 4 hours is
-    // NEVER a half day — render the actual stamps in their natural
-    // columns instead of the fixed-lunch convention, so an accidental
-    // minutes-long tap reads as what it is.
-    let short_stint = tout_dt - tin_dt < chrono::Duration::hours(4);
-    // Clock-out before 13:00 Manila: morning actuals, no afternoon.
-    if is_before_lunch_out(tout_raw)? {
+    // Late time-out auto-cap (overtime forbidden): 18:00+ renders as 5PM.
+    // dtr_recon.rs calls this builder, so recon expected-writes cap too.
+    let capped_tout =
+        crate::services::payroll::cap_late_timeout_out(tout_dt.with_timezone(&Manila));
+    let capped_iso = capped_tout.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let tout_ref: &str = if capped_tout == tout_dt.with_timezone(&Manila) {
+        tout_raw
+    } else {
+        &capped_iso
+    };
+    let ended = format_sheet_time(tout_ref)?;
+    // Actual-stamps only, grouped by morning/afternoon columns:
+    // out before 13:00 -> morning pair; in at/after noon -> afternoon
+    // pair; otherwise the span crosses lunch (unknown split) -> ends only.
+    // Payroll half-day classification must never alter these cells.
+    if is_before_lunch_out(tout_ref)? {
         return Ok([started, ended, String::new(), String::new()]);
     }
     if is_afternoon_arrival(tin)? {
-        // Clock-in at/after noon: afternoon actuals for short stints,
-        // owner-shape 1PM lunch-in only when closing at/after 16:59.
-        if short_stint || is_half_day_timeout(tout_raw)? {
-            return Ok([
-                String::new(),
-                String::new(),
-                started,
-                ended,
-            ]);
-        }
-        return Ok([
-            String::new(),
-            String::new(),
-            DTR_LUNCH_IN.to_string(),
-            ended,
-        ]);
+        return Ok([String::new(), String::new(), started, ended]);
     }
-    // Morning clock-in closing before 16:59: the fixed 12PM half-day
-    // form applies only once 4 hours actually elapsed; shorter spans
-    // that cross lunch keep actual stamps at both ends.
-    if short_stint {
-        return Ok([
-            started,
-            String::new(),
-            String::new(),
-            ended,
-        ]);
-    }
-    if is_half_day_timeout(tout_raw)? {
-        return Ok([
-            started,
-            DTR_LUNCH_OUT.to_string(),
-            String::new(),
-            String::new(),
-        ]);
-    }
-    Ok([
-        started,
-        DTR_LUNCH_OUT.to_string(),
-        DTR_LUNCH_IN.to_string(),
-        format_sheet_time(tout_raw)?,
-    ])
+    Ok([started, String::new(), String::new(), ended])
 }
 
 /// Display kind of one DTR row (DTR rules, not payroll). `Absent` is
@@ -527,8 +491,20 @@ pub fn classify_record_row(
         return Ok(DtrRowKind::Working);
     }
     // SAFETY: has_out guard above ensures Some (possibly blank-checked).
-    let out = time_out.unwrap_or("");
+    let out_raw = time_out.unwrap_or("");
     let tin = time_in.unwrap_or("");
+    let raw_tout_dt = chrono::DateTime::parse_from_rfc3339(out_raw.trim())
+        .map_err(|_| format!("invalid timestamp: {out_raw}"))?;
+    // Late time-out auto-cap (overtime forbidden): classify the capped
+    // value so paint matches the rendered row.
+    let capped_tout =
+        crate::services::payroll::cap_late_timeout_out(raw_tout_dt.with_timezone(&Manila));
+    let capped_iso = capped_tout.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let out: &str = if capped_tout == raw_tout_dt.with_timezone(&Manila) {
+        out_raw
+    } else {
+        &capped_iso
+    };
     // Tier order mirrors build_dtr_row exactly (duration-first).
     if is_before_lunch_out(out)? {
         return Ok(DtrRowKind::MorningFragment);
@@ -1997,6 +1973,8 @@ mod tests {
 
     #[test]
     fn builds_time_in_and_time_out_rows() {
+        // DTR SOURCE OF TRUTH: working (no time-out) renders actuals only,
+        // never the fixed-lunch pair.
         assert_eq!(
             build_dtr_row(
                 Some("2026-09-05T09:46:23+08:00"),
@@ -2005,8 +1983,8 @@ mod tests {
             ),
             Ok([
                 "9:46:23 AM".to_string(),
-                "12:00:00 PM".to_string(),
-                "1:00:00 PM".to_string(),
+                String::new(),
+                String::new(),
                 String::new()
             ])
         );
@@ -2026,8 +2004,9 @@ mod tests {
     }
 
     #[test]
-    fn half_day_timeout_renders_morning_only() {
-        // 15:00 tap-out is discarded; C is always 12:00 PM, D/E empty.
+    fn half_day_timeout_renders_actual_stamps() {
+        // DTR/PAYROLL DECOUPLING: 08:04-15:00 is payroll half-day (out <
+        // 17:00) but the DTR row keeps the actual stamps at both ends.
         assert_eq!(
             build_dtr_row(
                 Some("2026-09-05T08:04:00+08:00"),
@@ -2036,30 +2015,31 @@ mod tests {
             ),
             Ok([
                 "8:04:00 AM".to_string(),
-                "12:00:00 PM".to_string(),
                 String::new(),
-                String::new()
+                String::new(),
+                "3:00:00 PM".to_string()
             ])
         );
     }
 
     #[test]
-    fn half_day_cutoff_boundary() {
+    fn dtr_row_is_identical_across_payroll_cutoff_boundary() {
+        // GUARDRAIL: DTR output is identical regardless of payroll
+        // classification (half-day <17:00 vs full-day >=17:00).
         let tin = Some("2026-09-05T08:00:00+08:00");
-        // 16:58:59 is still before 16:59 → half-day.
+        for tout in [
+            "2026-09-05T16:58:59+08:00",
+            "2026-09-05T16:59:00+08:00",
+            "2026-09-05T17:00:00+08:00",
+        ] {
+            let row = build_dtr_row(tin, Some(tout), "2026-09-05").unwrap();
+            assert_eq!(row[0], "8:00:00 AM".to_string());
+            assert_eq!(row[1], String::new());
+            assert_eq!(row[2], String::new());
+        }
         assert_eq!(
-            build_dtr_row(tin, Some("2026-09-05T16:58:59+08:00"), "2026-09-05").unwrap()[2],
-            String::new()
-        );
-        // 16:59:00 and later → full day.
-        assert_eq!(
-            build_dtr_row(tin, Some("2026-09-05T16:59:00+08:00"), "2026-09-05").unwrap(),
-            [
-                "8:00:00 AM".to_string(),
-                "12:00:00 PM".to_string(),
-                "1:00:00 PM".to_string(),
-                "4:59:00 PM".to_string()
-            ]
+            build_dtr_row(tin, Some("2026-09-05T16:59:00+08:00"), "2026-09-05").unwrap()[3],
+            "4:59:00 PM"
         );
         assert_eq!(
             build_dtr_row(tin, Some("2026-09-05T17:00:00+08:00"), "2026-09-05").unwrap()[3],
@@ -2069,6 +2049,7 @@ mod tests {
 
     #[test]
     fn afternoon_arrival_renders_afternoon_only() {
+        // Actual 12:00 in-stamp (never the fixed 1PM convention).
         assert_eq!(
             build_dtr_row(
                 Some("2026-09-05T12:00:00+08:00"),
@@ -2079,7 +2060,7 @@ mod tests {
             [
                 String::new(),
                 String::new(),
-                "1:00:00 PM".to_string(),
+                "12:00:00 PM".to_string(),
                 "5:00:00 PM".to_string()
             ]
         );
@@ -2098,22 +2079,191 @@ mod tests {
     }
 
     #[test]
-    fn working_to_half_day_rewrite_clears_afternoon_cells() {
-        // Intraday WORKING row carries the lunch pair…
+    fn working_to_completed_rewrite_carries_actual_out() {
+        // WORKING row holds the in-stamp only…
         let working =
             build_dtr_row(Some("2026-09-05T08:00:00+08:00"), None, "2026-09-05").unwrap();
-        assert_eq!(working[2], "1:00:00 PM");
-        // …and the half-day timeout overwrites D/E with empty cells, so
-        // skip-identical (which compares all four) issues the rewrite.
-        let half = build_dtr_row(
+        assert_eq!(
+            working,
+            [
+                "8:00:00 AM".to_string(),
+                String::new(),
+                String::new(),
+                String::new()
+            ]
+        );
+        // …and completion fills the actual out-stamp, so skip-identical
+        // (which compares all four) issues the rewrite.
+        let done = build_dtr_row(
             Some("2026-09-05T08:00:00+08:00"),
             Some("2026-09-05T12:30:00+08:00"),
             "2026-09-05"
         )
         .unwrap();
-        assert_ne!(working, half);
-        assert_eq!(half[2], String::new());
-        assert_eq!(half[3], String::new());
+        assert_ne!(working, done);
+        // 12:30 out is before 13:00 → morning pair [in, out, '', ''].
+        assert_eq!(done[1], "12:30:00 PM".to_string());
+    }
+
+    #[test]
+    fn eight_to_three_keeps_actuals_while_payroll_is_half_day() {
+        // The reported case: 08:00-15:00 renders actual stamps on the DTR…
+        let row = build_dtr_row(
+            Some("2026-09-05T08:00:00+08:00"),
+            Some("2026-09-05T15:00:00+08:00"),
+            "2026-09-05",
+        )
+        .unwrap();
+        assert_eq!(
+            row,
+            [
+                "8:00:00 AM".to_string(),
+                String::new(),
+                String::new(),
+                "3:00:00 PM".to_string()
+            ]
+        );
+        // …while payroll classifies the same punches as half-day with an
+        // effective 08:00-12:00 pay window (pay math only, never DTR).
+        let pay = crate::services::intern_payroll::calculate(
+            "2026-09-05",
+            "2026-09-05T08:00:00+08:00",
+            "2026-09-05T15:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(pay.is_half_day);
+        assert_eq!(pay.half_day_deduction_centavos, 4000);
+        assert_eq!(pay.daily_pay_centavos, 4000);
+        assert!(pay.computed_time_out.contains("T12:00:00+08:00"));
+    }
+
+    #[test]
+    fn eight_to_five_is_full_day_with_actuals() {
+        let row = build_dtr_row(
+            Some("2026-09-05T08:00:00+08:00"),
+            Some("2026-09-05T17:00:00+08:00"),
+            "2026-09-05",
+        )
+        .unwrap();
+        assert_eq!(row[0], "8:00:00 AM".to_string());
+        assert_eq!(row[3], "5:00:00 PM".to_string());
+        let pay = crate::services::intern_payroll::calculate(
+            "2026-09-05",
+            "2026-09-05T08:00:00+08:00",
+            "2026-09-05T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(!pay.is_half_day);
+        assert_eq!(pay.daily_pay_centavos, 8000);
+    }
+
+    #[test]
+    fn late_timeout_caps_to_five_pm() {
+        // Overtime forbidden: 08:00-19:30 renders 5:00 PM, classified full.
+        let row = build_dtr_row(
+            Some("2026-09-05T08:00:00+08:00"),
+            Some("2026-09-05T19:30:00+08:00"),
+            "2026-09-05",
+        )
+        .unwrap();
+        assert_eq!(
+            row,
+            [
+                "8:00:00 AM".to_string(),
+                String::new(),
+                String::new(),
+                "5:00:00 PM".to_string()
+            ]
+        );
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T19:30:00+08:00")
+            ),
+            Ok(DtrRowKind::FullDay)
+        );
+        // Boundary: 18:00:00 caps, 17:59:59 stays actual.
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T18:00:00+08:00"),
+                "2026-09-05",
+            )
+            .unwrap()[3],
+            "5:00:00 PM"
+        );
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T17:59:59+08:00"),
+                "2026-09-05",
+            )
+            .unwrap()[3],
+            "5:59:59 PM"
+        );
+        // DTR+payroll consistent: capped shift pays full-day at 17:00.
+        let pay = crate::services::intern_payroll::calculate(
+            "2026-09-05",
+            "2026-09-05T08:00:00+08:00",
+            "2026-09-05T19:30:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(!pay.is_half_day);
+        assert_eq!(pay.daily_pay_centavos, 8000);
+        assert!(pay.computed_time_out.contains("T17:00:00+08:00"));
+    }
+
+    #[test]
+    fn sub_four_hour_shift_keeps_actuals_and_half_day_pay() {
+        let row = build_dtr_row(
+            Some("2026-09-05T08:00:00+08:00"),
+            Some("2026-09-05T10:30:00+08:00"),
+            "2026-09-05",
+        )
+        .unwrap();
+        assert_eq!(row[0], "8:00:00 AM".to_string());
+        assert_eq!(row[1], "10:30:00 AM".to_string());
+        let pay = crate::services::intern_payroll::calculate(
+            "2026-09-05",
+            "2026-09-05T08:00:00+08:00",
+            "2026-09-05T10:30:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(pay.is_half_day);
+    }
+
+    #[test]
+    fn afternoon_arrival_keeps_actual_in_with_half_day_pay() {
+        let row = build_dtr_row(
+            Some("2026-09-05T12:30:00+08:00"),
+            Some("2026-09-05T17:00:00+08:00"),
+            "2026-09-05",
+        )
+        .unwrap();
+        assert_eq!(
+            row,
+            [
+                String::new(),
+                String::new(),
+                "12:30:00 PM".to_string(),
+                "5:00:00 PM".to_string()
+            ]
+        );
+        let pay = crate::services::intern_payroll::calculate(
+            "2026-09-05",
+            "2026-09-05T12:30:00+08:00",
+            "2026-09-05T17:00:00+08:00",
+            false,
+        )
+        .unwrap();
+        assert!(pay.is_half_day);
+        // Late deduction also applies (12:30 vs 08:00 start), so only assert
+        // the half-day flag + deduction, not the floored net pay.
+        assert_eq!(pay.half_day_deduction_centavos, 4000);
     }
 
     #[test]
@@ -2366,8 +2516,8 @@ mod tests {
             format_sheet_time("2026-09-05T01:46:23Z"),
             Ok("9:46:23 AM".to_string())
         );
-        // P1: 09:30:00Z is 17:30 Manila → FULL day (was misclassified
-        // half-day when the raw UTC hour was compared).
+        // P1: 09:30:00Z is 17:30 Manila → actual stamps at both ends (was
+        // misclassified when the raw UTC hour was compared).
         let full = build_dtr_row(
             Some("2026-09-05T01:00:00Z"),
             Some("2026-09-05T09:30:00Z"),
@@ -2375,9 +2525,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(full[0], "9:00:00 AM");
-        assert_eq!(full[2], "1:00:00 PM");
+        assert_eq!(full[1], String::new());
+        assert_eq!(full[2], String::new());
         assert_eq!(full[3], "5:30:00 PM");
-        // 08:30:00Z is 16:30 Manila → still half-day (morning-only).
+        // 08:30:00Z is 16:30 Manila → actual stamps (payroll half-day does
+        // not alter the DTR row).
         let half = build_dtr_row(
             Some("2026-09-05T00:04:00Z"),
             Some("2026-09-05T08:30:00Z"),
@@ -2385,9 +2537,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(half[0], "8:04:00 AM");
-        assert_eq!(half[1], "12:00:00 PM");
+        assert_eq!(half[1], String::new());
         assert_eq!(half[2], String::new());
-        assert_eq!(half[3], String::new());
+        assert_eq!(half[3], "4:30:00 PM");
     }
 
     #[tokio::test]
@@ -2531,7 +2683,8 @@ mod tests {
             ),
             Ok(DtrRowKind::LunchSpanFragment)
         );
-        // 4h+ morning span closing early: classic fixed half-day.
+        // 4h+ morning span closing early: actual stamps (payroll half-day
+        // does not alter the DTR row).
         assert_eq!(
             build_dtr_row(
                 Some("2026-09-05T08:00:00+08:00"),
@@ -2540,9 +2693,9 @@ mod tests {
             ),
             Ok([
                 "8:00:00 AM".to_string(),
-                "12:00:00 PM".to_string(),
                 String::new(),
-                String::new()
+                String::new(),
+                "3:00:00 PM".to_string()
             ])
         );
         let ops = plan_row_format(7, 107, DtrRowKind::LunchSpanFragment);

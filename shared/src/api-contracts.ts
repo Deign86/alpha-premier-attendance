@@ -222,6 +222,10 @@ export function isLateTimeout(timeOutIso: string): boolean {
  * True when the Manila-local clock time of a time-out timestamp is strictly
  * before 5:00 PM (17:00:00). A time-out before 5:00 PM is automatically considered
  * a half day.
+ *
+ * PAYROLL-ONLY: never feeds DTR row construction. DTR rows always carry
+ * actual stamps (see server `buildDtrRow`); this flag only drives
+ * `isHalfDay` / `halfDayDeduction` pay math.
  */
 export function isBeforeFivePm(timeOutIso: string): boolean {
   const secondsSinceMidnight = manilaSecondsSinceMidnight(timeOutIso, ATTENDANCE_TIMEZONE);
@@ -234,6 +238,8 @@ export function isBeforeFivePm(timeOutIso: string): boolean {
  * True when the Manila-local clock time of a time-in timestamp is at/after
  * 12:00 noon. An afternoon arrival misses the morning and is a half day,
  * even when the time-out reaches 17:00 or later (overtime stays half).
+ *
+ * PAYROLL-ONLY: never feeds DTR row construction (see note above).
  */
 export function isAfternoonHalfDayArrival(timeInIso: string): boolean {
   const secondsSinceMidnight = manilaSecondsSinceMidnight(timeInIso, ATTENDANCE_TIMEZONE);

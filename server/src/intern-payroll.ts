@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { ceilHour, isHalfDayWork, manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, HALF_DAY_LATE_ARRIVAL_HOUR, isHalfDayWork, manilaTimestamp, officeCloseFor, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -26,7 +26,8 @@ const timezone = 'Asia/Manila';
 
 export function calculateInternPayroll(input: InternPayrollInput): InternPayrollResult {
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
-  const actualTimeOut = manilaTimestamp(input.actualTimeOut);
+  // Late time-out auto-cap (overtime forbidden): 18:00+ pays as 17:00.
+  const actualTimeOut = capLateTimeoutOut(manilaTimestamp(input.actualTimeOut));
   // P4: reject inverted logs instead of silently flooring worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
@@ -45,10 +46,19 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const halfDayDeduction = isHalfDay ? basePay / 2 : 0;
+  // DTR DECOUPLING: `computedTimeOut` is a PAYROLL-ONLY effective window.
+  // A morning half-day closed before office close pays as 08:00–12:00 even
+  // though the DTR row keeps the actual 08:00–15:00 stamps. Never push
+  // computed values back into the DTR sheet writer (planPush/buildDtrRow).
+  const earlyHalfDayOut =
+    isHalfDay && actualTimeIn.hour < HALF_DAY_LATE_ARRIVAL_HOUR && actualTimeOut < officeCloseFor(actualTimeOut);
+  const effectiveTimeOut = earlyHalfDayOut
+    ? actualTimeOut.set({ hour: 12, minute: 0, second: 0, millisecond: 0 })
+    : actualTimeOut;
 
   return {
     computedTimeIn: computedTimeIn.toISO({ suppressMilliseconds: true })!,
-    computedTimeOut: actualTimeOut.toISO({ suppressMilliseconds: true })!,
+    computedTimeOut: effectiveTimeOut.toISO({ suppressMilliseconds: true })!,
     lateHours,
     lateDeduction,
     isHalfDay,

@@ -15,6 +15,7 @@
  * H:J counters are formula territory and are never written.
  */
 import { DateTime } from 'luxon';
+import { capLateTimeoutOut } from './lunch-break.js';
 
 export type DtrSyncUser = {
   userId: string;
@@ -371,42 +372,44 @@ export function isShortStint(timeIn: string, timeOut: string): boolean {
 }
 
 /**
- * Build [B, C, D, E] (DTR display rule, not payroll): still WORKING
- * (no time-out) keeps the lunch pair with E empty; a time-out before
- * 13:00 Manila is a morning fragment with ACTUAL stamps [in, out, '', '']
- * (an accidental tap must not read as a half day); a sub-4h span crossing
- * lunch keeps actuals at both ends [in, '', '', out] (lunch unknown); a
- * 4h+ morning span closing before 16:59 renders classic half-day
- * [in, 12PM, '', '']; a clock-in at/after 12:00 noon with a short/early
- * close renders afternoon actuals ['', '', in, out]; a noon arrival
- * closing at/after 16:59 keeps ['', '', 1PM, out] (owner sheet shape);
- * otherwise full [in, 12PM, 1PM, out].
+ * Build [B, C, D, E] — DTR SOURCE OF TRUTH (actual stamps only).
+ *
+ * Decoupled from payroll half-day logic (2026-09): this function NEVER
+ * fabricates, truncates, or substitutes fixed-lunch/half-day conventions.
+ * Every completed shift renders actual stamps at both ends
+ * `[in, '', '', out]`; working (no time-out) renders `[in, '', '', '']`.
+ * Half-day pay (`isHalfDayWork` in lunch-break.ts) is derived separately
+ * from the same raw punches and must never feed this row builder.
+ * Late time-out auto-cap: a clock-out at/after 18:00 Manila is normalized
+ * to 17:00 same-day first (overtime forbidden), so DTR + payroll agree.
+ * Paint-only classification lives in `classifyRecordKind`.
  * A time-out earlier than the time-in is rejected (P4 inverted-log
  * precedent): overnight shifts are outside the kiosk same-day model.
  */
 export function buildDtrRow(
   timeIn: string | null,
   timeOut: string | null,
-  attendanceDate: string,
+  _attendanceDate: string,
 ): [string, string, string, string] {
   if (!timeIn) return ['', '', '', ''];
   const started = formatSheetTime(timeIn);
-  if (!timeOut) return [started, LUNCH_OUT, LUNCH_IN, ''];
+  if (!timeOut) return [started, '', '', ''];
   const tin = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
   const tout = DateTime.fromISO(timeOut, { zone: MANILA_ZONE });
   if (!tin.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
   if (!tout.isValid) throw new Error(`invalid Manila timestamp: ${timeOut}`);
   if (tout < tin) throw new Error(`Time-out cannot be earlier than time-in: ${timeOut} < ${timeIn}`);
-  const ended = formatSheetTime(timeOut);
-  if (isBeforeLunchOut(timeOut)) return [started, ended, '', ''];
-  const shortStint = isShortStint(timeIn, timeOut);
-  if (isAfternoonArrival(timeIn)) {
-    if (shortStint || isHalfDayTimeout(timeOut, attendanceDate)) return ['', '', started, ended];
-    return ['', '', LUNCH_IN, ended];
-  }
-  if (shortStint) return [started, '', '', ended];
-  if (isHalfDayTimeout(timeOut, attendanceDate)) return [started, LUNCH_OUT, '', ''];
-  return [started, LUNCH_OUT, LUNCH_IN, ended];
+  // Late time-out auto-cap (overtime forbidden): 18:00+ renders as 17:00.
+  // Single normalization — DTR + payroll stay consistent.
+  const cappedOut = capLateTimeoutOut(tout);
+  const ended = formatSheetTime(cappedOut.toISO()!);
+  const cappedOutIso = cappedOut.toISO()!;
+  // Actual-stamps only, grouped by morning/afternoon columns:
+  // out before 13:00 → morning pair; in at/after noon → afternoon pair;
+  // otherwise the span crosses lunch (unknown split) → ends only.
+  if (isBeforeLunchOut(cappedOutIso)) return [started, ended, '', ''];
+  if (isAfternoonArrival(timeIn)) return ['', '', started, ended];
+  return [started, '', '', ended];
 }
 
 /**
@@ -489,7 +492,8 @@ export type FormatRequest = {
   };
 };
 
-/** Classify one record for paint (same Manila cutoffs as buildDtrRow). */
+/** Classify one record for paint (same Manila cutoffs as buildDtrRow,
+ * including the 18:00+ → 17:00 late time-out auto-cap). */
 export function classifyRecordKind(
   timeIn: string | null,
   timeOut: string | null,
@@ -497,15 +501,25 @@ export function classifyRecordKind(
 ): DtrRowKind {
   if (!timeIn) return 'absent';
   if (!timeOut) return 'working';
-  if (isBeforeLunchOut(timeOut)) return 'morning-fragment';
+  const cappedIso = capRecordOutIso(timeOut);
+  if (isBeforeLunchOut(cappedIso)) return 'morning-fragment';
   if (isAfternoonArrival(timeIn)) {
-    return isShortStint(timeIn, timeOut) || isHalfDayTimeout(timeOut, attendanceDate)
+    return isShortStint(timeIn, cappedIso) || isHalfDayTimeout(cappedIso, attendanceDate)
       ? 'afternoon-fragment'
       : 'half-pm';
   }
-  if (isShortStint(timeIn, timeOut)) return 'lunch-span-fragment';
-  if (isHalfDayTimeout(timeOut, attendanceDate)) return 'half';
+  if (isShortStint(timeIn, cappedIso)) return 'lunch-span-fragment';
+  if (isHalfDayTimeout(cappedIso, attendanceDate)) return 'half';
   return 'full';
+}
+
+/** Cap a raw time-out ISO at the 18:00 late-timeout cutoff (→ 17:00 same-day),
+ * returning the original string when below the cutoff or unparseable. */
+function capRecordOutIso(timeOut: string): string {
+  const dt = DateTime.fromISO(timeOut, { zone: MANILA_ZONE });
+  if (!dt.isValid) return timeOut;
+  const capped = capLateTimeoutOut(dt);
+  return capped === dt ? timeOut : capped.toISO()!;
 }
 
 /**

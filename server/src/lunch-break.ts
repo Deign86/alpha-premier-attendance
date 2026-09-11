@@ -19,6 +19,11 @@ export const LUNCH_END_HOUR = 13;
 export const LUNCH_DURATION_HOURS = 1;
 /** Official office close (17:00 Manila). Clock-out at exactly this instant counts a full day (T6 decision A). */
 export const OFFICE_CLOSE_HOUR = 17;
+/** Late time-out flag hour (18:00 Manila): overtime is forbidden, so a
+ * clock-out at/after this hour is auto-capped to OFFICE_CLOSE_HOUR (17:00)
+ * BEFORE DTR row building and payroll math (single normalization point).
+ * 17:59:59 stays actual; 18:00:00+ caps. Mirrors shared `LATE_TIMEOUT_THRESHOLD`. */
+export const LATE_TIMEOUT_HOUR = 18;
 /** Clock-in at/after this Manila hour is an afternoon half-day (missed morning). */
 export const HALF_DAY_LATE_ARRIVAL_HOUR = 12;
 /** Paid-hours threshold at or below which a shift is always a half-day. */
@@ -95,6 +100,20 @@ export function ceilHour(value: DateTime): DateTime {
 /** 17:00:00 Manila on the same calendar day as the given clock-out. */
 export function officeCloseFor(clockOut: DateTime): DateTime {
   return clockOut.set({ hour: OFFICE_CLOSE_HOUR, minute: 0, second: 0, millisecond: 0 });
+}
+
+/**
+ * Auto-cap a clock-out at/after 18:00 Manila to 17:00 same-day (overtime
+ * forbidden — avoids manual HR/IT correction). Returns the input unchanged
+ * when before 18:00. Single normalization used by DTR row building
+ * (`buildDtrRow`, `classifyRecordKind`) and payroll compute so both stay
+ * consistent. Not a half-day override: half-day rules apply after capping.
+ */
+export function capLateTimeoutOut(clockOut: DateTime): DateTime {
+  if (clockOut.hour >= LATE_TIMEOUT_HOUR) {
+    return clockOut.set({ hour: OFFICE_CLOSE_HOUR, minute: 0, second: 0, millisecond: 0 });
+  }
+  return clockOut;
 }
 
 /** Shared half-day rule: short shifts, early clock-out, or afternoon arrival (>=12:00 Manila). */
