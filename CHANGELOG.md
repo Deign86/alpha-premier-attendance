@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.59] - 2026-09-11
+
+### Added
+- **Late time-out auto-cap (no-overtime policy)**: time-outs at or after 18:00 Manila are capped to 17:00:00.000 same-day before DTR rendering/grouping and payroll math. 18:00+ renders `5:00:00 PM` on the DTR row, classifies/paints as `full`/`FullDay`, and computes full-day pay with `computedTimeOut` 17:00. Boundary: `18:00:00` caps, `17:59:59` does not cap. Half-day rules unchanged and apply post-cap. Both stacks agree on the hour-precision rule (hour ≥ 18 → 17:00): TS `capLateTimeoutOut` (`server/src/lunch-break.ts`, applied in `intern-dtr-sync.ts` `buildDtrRow`/`classifyRecordKind` via `capRecordOutIso`, `intern-payroll.ts`, `employee-payroll.ts`) and Rust `cap_late_timeout_out` (`src-tauri/src/services/payroll.rs`, applied in `dtr_sync.rs` `build_dtr_row`/`classify_record_row`, `intern_payroll.rs`, `employee_payroll.rs`; `dtr_recon.rs` inherits via those two functions; `cutoff_payroll.rs` takes aggregates, no change). Status-flag writers still stamp raw `LATE_TIMEOUT` at scan time — the cap applies at DTR-row/payroll-compute time. Minute-level note: shared `isLateTimeout` and the cap both trip at 18:00:00 — `isLateTimeout` truncates seconds, the cap truncates minutes — no practical gap. Thresholds unchanged.
+
+### Fixed
+- **Half-day pay fully decoupled from DTR display**: DTR sheet rows now carry actual stamps only (an 08:00–15:00 shift renders `[8:00 AM, '', '', 3:00 PM]`, never a fabricated 12:00 PM lunch pair), while half-day pay is computed from a payroll-only effective 08:00–12:00 window (`computedTimeOut`). Pay amounts and thresholds are unchanged; `classifyRecordKind` paint cutoffs (16:59 half-day) are intentionally untouched, so an 08:00–15:00 row may still paint `HalfDay` while showing actual end-stamps (cosmetic). Applies to both stacks: `server/src/employee-payroll.ts`, `server/src/intern-payroll.ts`, `server/src/intern-dtr-sync.ts` (incl. `isShortStint` parity) and Rust `dtr_sync.rs`, `intern_payroll.rs`, `employee_payroll.rs`, `dtr_recon.rs`.
+
 ## [0.1.58] - 2026-09-09
 
 ### Added
