@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AdminSyncDtrResponse, ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse } from '@rfid-attendance/shared';
+import type { AdminSyncDtrResponse, ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
 
 export interface NativeHealthResponse {
   success: boolean;
@@ -98,6 +98,15 @@ export const tauriApi = {
   ttsSpeak: (text: string, options?: TtsSpeakOptions) => invoke<TtsSpeakResult>('tts_speak', { text, options }),
   ttsStop: () => invoke<void>('tts_stop'),
   ttsStatus: () => invoke<TtsStatusResponse>('tts_status'),
+  getVoicestudioHost: () => invoke<string>('get_voicestudio_host'),
+  setVoicestudioHost: (host: string) => invoke<string>('set_voicestudio_host', { host }),
+  getVoicestudioPin: () => invoke<string>('get_voicestudio_pin'),
+  setVoicestudioPin: (pin: string) => invoke<void>('set_voicestudio_pin', { pin }),
+  checkVoicestudio: (host?: string, pin?: string) => invoke<VoiceStudioConnection>('check_voicestudio', { host, pin }),
+  voiceClipStates: () => invoke<VoiceClipState[]>('voice_clip_states'),
+  voiceWorkerStatus: () => invoke<VoiceWorkerStatus>('voice_worker_status'),
+  voiceRegenerate: (personId: string) => invoke<string>('voice_regenerate', { personId }),
+  voiceNameAudioUrl: (personId: string) => invoke<string | null>('voice_name_audio_url', { personId }),
   autostartStatus: () => invoke<boolean>('autostart_status'),
   autostartSet: (enabled: boolean) => invoke<boolean>('autostart_set', { enabled }),
 };

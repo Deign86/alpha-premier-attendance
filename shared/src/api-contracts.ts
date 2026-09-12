@@ -820,6 +820,28 @@ export type TtsSettings = {
   voiceModel: string;
   rate: number;
   volume: number;
+  voiceStudioBaseUrl?: string;
+  voiceStudioPin?: string;
+};
+
+export type VoiceStudioConnection = {
+  ok: boolean;
+  message: string;
+};
+
+export type VoiceClipState = {
+  personId: string;
+  workerClip: boolean;
+  jobStatus: string | null;
+};
+
+export type VoiceWorkerStatus = {
+  active: number;
+  retry: number;
+  lastPersonId: string | null;
+  lastSpokenText: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
 };
 
 export type TtsSpeakOptions = {
