@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.61] - 2026-09-12
+
+### Added
+- **Embedded VoiceStudio auto-clone**: registration enqueues voice jobs (`voice_jobs`: PENDING → PROCESSING → DONE/RETRY, migration `0017_voice_jobs.sql`); the worker pulls Bea name-clip mp3s from the LAN VoiceStudio host (optional share PIN, backoff) and playback prefers worker clips with Piper fallback. New Tauri commands `voice_clip_states`, `voice_worker_status`, `voice_regenerate`, `voice_name_audio_url`; host/PIN UI with connection probe; roster-gated enqueue; delete cascade drops jobs + clips.
+- **Voice regeneration progress loader**: Admin → Users and RFID Voice column now shows a staged loader (spinner + Queued… → Cloning… indeterminate bar, `role="status"`/`progressbar`) that polls (`pollVoiceClipReady`, 2s cadence, 120s cap, load-failure tolerant) until the new clip reads DONE, then reports `Voice clip ready` as the Bea chip flips live.
+
+### Fixed
+- **Display font weights**: three single-weight Orbitron `@font-face` blocks pointed at one variable font with no weight range, pinning every heading to the 400 instance — replaced with a single variable face (`font-weight: 400 900`); redundant binaries removed (bytes verified genuine via hash match).
+- **Users table payroll column**: `Not applicable` broke mid-word — cell now reuses the single-line `user-status-cell` token like its neighbours.
+- **Payroll grid headers**: 24-column headers wrapped mid-word (`STANDA RD`) with no row identity on scroll — headers are single-line with pinned checkbox/Employee #/name columns.
+- **Voice worker pill**: `.lan-facts span` grid rule stacked the pill dot over its text — pill stays inline; retry copy aligned to `Retrying` (was `Waiting`, contradicting the header chip).
+- **DTR sync dead-letter note**: `N failed item(s) need attention` had no inline remedy — added `Retry sync now` reusing the existing sync path.
+
 ## [0.1.60] - 2026-09-12
 
 ### Fixed
