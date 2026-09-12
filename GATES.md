@@ -646,3 +646,12 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: code path review of sheets_sync run_once + push/backfill/manaul outcomes
   EXPECT: disabled tick skips InternDtr rows BEFORE claim (rows stay PENDING, never SYNCED-unwritten); Stale outcome paints + clears pending like InSync, never writes; DELETE clears also gated while OFF
   EVIDENCE: `dtr_upload_allowed` resolved once per tick, `continue` precedes the claim UPDATE; `DtrPlanOutcome::Stale` shares the InSync arms in push_dtr_row + backfill_user_history; manual_sync + enqueue_intern_dtr + scan-path inline check all refuse while OFF. Timestamp rule: local WORKING never touches stamped rows; sheet stamp at/after local (post-cap) wins; empty sheet always accepts local write.
+
+## Intern-DTR kill switch Tauri MCP e2e (2026-09-12, live dev app + bridge 9223)
+
+- [x] Toggle + gates verified end-to-end on a live dev instance; no regressions.
+  CHECK: driver session on ws://127.0.0.1:9223 against debug build; admin_unlock PIN; get/set/sync IPC; UI drive Admin → Data and backup; screenshots dtr-toggle-off + kiosk-after-toggle-e2e
+  EXPECT: get=false seeded; manual sync refuses while OFF; set(true)→ON persists; unknown-user sync fails closed with no writes; UI checkbox flips label both ways; kiosk + roster render unchanged; device left OFF; installed app restored
+  EVIDENCE: measured live — get returned enabled=false (seed); manual sync refused `disabled on this device` (zero Sheets traffic); set(true)→UI label dropped `(OFF — queuing only)` and a UI checkbox click persisted enabled=1 to SQLite (updated_at 10:25:59Z); unknown-user sync errored `not found` with no tab creation; wrong token → ADMIN_AUTH_REQUIRED. Screenshots captured. Final device state verified in SQLite =0. cargo/server/client suites from the build gate unchanged (285/285, 175/175, 89/89).
+- [x] Pre-existing issues observed, not caused by this change (separate questions).
+  EVIDENCE: ops-sheet sync shows 803 DEAD rows / `Google Sheets sync failed` on this PC (also in the 10:21 deployment log before this change; my diff never touches ops paths); admin sessions are single-slot global — a second login (UI vs IPC) invalidates the first, which raced IPC tokens during the drive (code path untouched by this change).
