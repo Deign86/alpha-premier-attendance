@@ -640,3 +640,61 @@ describe('late time-out auto-cap (18:00+ renders/pays as 17:00)', () => {
     expect(pay.dailyPay).toBe(80);
   });
 });
+
+describe('audit A1: shared normalization validates ordering after the cap', () => {
+  const date = '2026-09-05';
+  it('classifyRecordKind throws when capping inverts the pair (17:30 in, 18:00 out)', () => {
+    expect(() =>
+      classifyRecordKind('2026-09-05T17:30:00+08:00', '2026-09-05T18:00:00+08:00', date),
+    ).toThrow('earlier than time-in');
+  });
+  it('buildDtrRow throws for the same capped-inverted pair', () => {
+    expect(() =>
+      buildDtrRow('2026-09-05T17:30:00+08:00', '2026-09-05T18:00:00+08:00', date),
+    ).toThrow('earlier than time-in');
+  });
+  it('08:00-19:30 caps to 17:00 in both paths (row + full)', () => {
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toEqual([
+      '8:00:00 AM',
+      '',
+      '',
+      '5:00:00 PM',
+    ]);
+    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toBe('full');
+  });
+  it('18:00:00 caps while 17:59:59 stays actual', () => {
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T18:00:00+08:00', date)).toEqual([
+      '8:00:00 AM',
+      '',
+      '',
+      '5:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:59:59+08:00', date)).toEqual([
+      '8:00:00 AM',
+      '',
+      '',
+      '5:59:59 PM',
+    ]);
+  });
+  it('exactly 4 hours is NOT a short stint; just under 4 hours IS', () => {
+    expect(isShortStint('2026-09-05T08:00:00+08:00', '2026-09-05T12:00:00+08:00')).toBe(false);
+    expect(isShortStint('2026-09-05T08:00:00+08:00', '2026-09-05T11:59:59+08:00')).toBe(true);
+  });
+  it('whitespace-only stamps agree across both consumers (Rust parity)', () => {
+    // Independent verification found the two consumers disagreed here:
+    // buildDtrRow threw `invalid Manila timestamp` while classifyRecordKind
+    // returned 'working'. Whitespace-only must read as absent/working in both.
+    expect(buildDtrRow('   ', null, date)).toEqual(['', '', '', '']);
+    expect(classifyRecordKind('   ', null, date)).toBe('absent');
+    expect(buildDtrRow('   ', '2026-09-05T17:00:00+08:00', date)).toEqual(['', '', '', '']);
+    expect(classifyRecordKind('   ', '2026-09-05T17:00:00+08:00', date)).toBe('absent');
+    // Whitespace-only time-out reads as a working record, not invalid.
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '   ', date)).toEqual([
+      '8:00:00 AM',
+      '',
+      '',
+      '',
+    ]);
+    expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '   ', date)).toBe('working');
+  });
+});

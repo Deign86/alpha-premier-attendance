@@ -4845,24 +4845,25 @@ fn autostart_status(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
-    let autolaunch = app.autolaunch();
-    if enabled {
-        autolaunch.enable().map_err(|e| e.to_string())?;
-        log::info!("Enabled autostart via in-app settings");
-        // Clearing the opt-out must not fail the command; self-heal reads it.
-        match crate::paths::resolve(&app) {
-            Ok(paths) => crate::lifecycle::clear_opt_out(&paths.config_dir),
-            Err(e) => log::warn!("Could not clear autostart opt-out marker: {e}"),
+    // Opt-out marker I/O stays log-only: a resolve failure skips the marker
+    // while the registry mutation still runs through the shared helper.
+    let config_dir = match crate::paths::resolve(&app) {
+        Ok(paths) => Some(paths.config_dir),
+        Err(e) => {
+            log::warn!("Could not resolve config dir for autostart marker: {e}");
+            None
         }
-    } else {
-        autolaunch.disable().map_err(|e| e.to_string())?;
-        log::info!("Disabled autostart via in-app settings");
-        match crate::paths::resolve(&app) {
-            Ok(paths) => crate::lifecycle::record_opt_out(&paths.config_dir),
-            Err(e) => log::warn!("Could not record autostart opt-out marker: {e}"),
+    };
+    crate::lifecycle::set_autostart_enabled(&app, config_dir.as_deref(), enabled)?;
+    log::info!(
+        "{}",
+        if enabled {
+            "Enabled autostart via in-app settings"
+        } else {
+            "Disabled autostart via in-app settings"
         }
-    }
-    autolaunch.is_enabled().map_err(|e| e.to_string())
+    );
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
 pub fn run() {

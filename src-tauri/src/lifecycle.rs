@@ -153,34 +153,33 @@ pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
                 }
             }
             "toggle_autostart" => {
-                let autolaunch = app.autolaunch();
                 // Opt-out record lives next to .autostart_initialized so
                 // self-heal never re-enables after the user disables here.
                 // Resolution failure only skips the marker, never the toggle.
                 let config_dir = crate::paths::resolve(app).map(|p| p.config_dir);
-                match autolaunch.is_enabled() {
+                match app.autolaunch().is_enabled() {
                     Ok(true) => {
-                        if let Err(e) = autolaunch.disable() {
-                            log::error!("Failed to disable autostart: {e}");
-                            let _ = autostart_item_clone.set_checked(true);
-                        } else {
-                            log::info!("Disabled start on system startup");
-                            if let Ok(dir) = &config_dir {
-                                record_opt_out(dir);
+                        match set_autostart_enabled(app, config_dir.as_deref().ok(), false) {
+                            Err(e) => {
+                                log::error!("Failed to disable autostart: {e}");
+                                let _ = autostart_item_clone.set_checked(true);
                             }
-                            let _ = autostart_item_clone.set_checked(false);
+                            Ok(()) => {
+                                log::info!("Disabled start on system startup");
+                                let _ = autostart_item_clone.set_checked(false);
+                            }
                         }
                     }
                     Ok(false) => {
-                        if let Err(e) = autolaunch.enable() {
-                            log::error!("Failed to enable autostart: {e}");
-                            let _ = autostart_item_clone.set_checked(false);
-                        } else {
-                            log::info!("Enabled start on system startup");
-                            if let Ok(dir) = &config_dir {
-                                clear_opt_out(dir);
+                        match set_autostart_enabled(app, config_dir.as_deref().ok(), true) {
+                            Err(e) => {
+                                log::error!("Failed to enable autostart: {e}");
+                                let _ = autostart_item_clone.set_checked(false);
                             }
-                            let _ = autostart_item_clone.set_checked(true);
+                            Ok(()) => {
+                                log::info!("Enabled start on system startup");
+                                let _ = autostart_item_clone.set_checked(true);
+                            }
                         }
                     }
                     Err(e) => {
@@ -232,6 +231,39 @@ pub fn clear_opt_out(config_dir: &std::path::Path) {
             log::warn!("Could not clear autostart opt-out marker: {e}");
         }
     }
+}
+
+/// Pure marker side of the autostart mutation rule: enabling clears the
+/// opt-out, disabling records it. Marker I/O stays LOG-ONLY and never fatal.
+pub fn apply_opt_out_marker(config_dir: &std::path::Path, enabled: bool) {
+    if enabled {
+        clear_opt_out(config_dir);
+    } else {
+        record_opt_out(config_dir);
+    }
+}
+
+/// Sole owner of the enable/disable-autostart-plus-opt-out-marker rule.
+/// Applies the registry mutation first; the marker is only touched after a
+/// successful write, so a registry error never mutates the opt-out state.
+/// `config_dir` is `None` when path resolution failed, in which case the
+/// marker is skipped (log-only) while the registry mutation still runs.
+pub fn set_autostart_enabled(
+    app: &tauri::AppHandle,
+    config_dir: Option<&std::path::Path>,
+    enabled: bool,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable().map_err(|e| e.to_string())?;
+    } else {
+        autolaunch.disable().map_err(|e| e.to_string())?;
+    }
+    if let Some(dir) = config_dir {
+        apply_opt_out_marker(dir, enabled);
+    }
+    Ok(())
 }
 
 /// Strip surrounding quotes and whitespace so registry values written by different
@@ -514,6 +546,17 @@ mod tests {
         super::record_opt_out(&temp);
         assert!(super::is_opted_out(&temp));
         super::clear_opt_out(&temp);
+        assert!(!super::is_opted_out(&temp));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn marker_side_tracks_enabled_state() {
+        let temp = std::env::temp_dir().join(format!("test-marker-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        super::apply_opt_out_marker(&temp, false);
+        assert!(super::is_opted_out(&temp));
+        super::apply_opt_out_marker(&temp, true);
         assert!(!super::is_opted_out(&temp));
         let _ = std::fs::remove_dir_all(&temp);
     }

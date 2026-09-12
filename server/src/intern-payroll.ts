@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { capLateTimeoutOut, ceilHour, HALF_DAY_LATE_ARRIVAL_HOUR, isHalfDayWork, manilaTimestamp, officeCloseFor, paidWorkHoursCeiled } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -50,11 +50,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   // A morning half-day closed before office close pays as 08:00–12:00 even
   // though the DTR row keeps the actual 08:00–15:00 stamps. Never push
   // computed values back into the DTR sheet writer (planPush/buildDtrRow).
-  const earlyHalfDayOut =
-    isHalfDay && actualTimeIn.hour < HALF_DAY_LATE_ARRIVAL_HOUR && actualTimeOut < officeCloseFor(actualTimeOut);
-  const effectiveTimeOut = earlyHalfDayOut
-    ? actualTimeOut.set({ hour: 12, minute: 0, second: 0, millisecond: 0 })
-    : actualTimeOut;
+  const effectiveTimeOut = effectiveHalfDayTimeOut(isHalfDay, actualTimeIn, actualTimeOut) ?? actualTimeOut;
 
   return {
     computedTimeIn: computedTimeIn.toISO({ suppressMilliseconds: true })!,

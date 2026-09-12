@@ -123,3 +123,22 @@ export function isHalfDayWork(workedHours: number, clockOut: DateTime, clockIn?:
   if (clockOut < officeCloseFor(clockOut)) return true;
   return clockIn !== undefined && clockIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR;
 }
+
+/**
+ * Shared morning-half-day rule: a half-day shift that clocked in before
+ * 12:00 Manila but left before office close pays as an effective 08:00-12:00
+ * window. Returns 12:00 same-day when that condition holds, otherwise null so
+ * each caller keeps its own else-branch (employee floors to the hour, intern
+ * passes the stamp through) instead of hiding that difference here.
+ *
+ * `timeOut` must already be the capped clock-out (`capLateTimeoutOut` applied),
+ * matching the cap -> half-day -> window order used by both payroll engines.
+ */
+export function effectiveHalfDayTimeOut(
+  isHalfDay: boolean,
+  timeIn: DateTime,
+  timeOut: DateTime,
+): DateTime | null {
+  if (!isHalfDay || timeIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR || timeOut >= officeCloseFor(timeOut)) return null;
+  return timeOut.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+}
