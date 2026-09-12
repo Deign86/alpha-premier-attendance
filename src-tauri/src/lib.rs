@@ -76,6 +76,82 @@ async fn tts_status(
 }
 
 #[tauri::command]
+async fn get_voicestudio_host(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(crate::services::voice_pull::get_host(&state.db).await)
+}
+
+#[tauri::command]
+async fn set_voicestudio_host(state: State<'_, AppState>, host: String) -> Result<String, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    crate::services::voice_pull::set_host(&state.db, &host, &now).await
+}
+
+#[tauri::command]
+async fn get_voicestudio_pin(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(crate::services::voice_pull::get_pin(&state.db).await)
+}
+
+#[tauri::command]
+async fn set_voicestudio_pin(state: State<'_, AppState>, pin: String) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    crate::services::voice_pull::set_pin(&state.db, &pin, &now).await
+}
+
+#[tauri::command]
+async fn check_voicestudio(
+    state: State<'_, AppState>,
+    host: Option<String>,
+    pin: Option<String>,
+) -> Result<crate::services::voice_pull::VoiceConnectionStatus, String> {
+    // Probe exactly what the caller typed (unsaved field values); fall back to
+    // the persisted worker settings when omitted.
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(raw_host) = host.as_deref() {
+        let _ = crate::services::voice_pull::set_host(&state.db, raw_host, &now).await;
+    }
+    if let Some(raw_pin) = pin.as_deref() {
+        let _ = crate::services::voice_pull::set_pin(&state.db, raw_pin, &now).await;
+    }
+    Ok(crate::services::voice_pull::check_connection(&state.db).await)
+}
+
+#[tauri::command]
+async fn voice_clip_states(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::services::voice_pull::VoiceClipState>, String> {
+    crate::services::voice_pull::clip_states(&state.db, &state.data_dir).await
+}
+
+#[tauri::command]
+async fn voice_regenerate(state: State<'_, AppState>, person_id: String) -> Result<String, String> {
+    crate::services::voice_pull::regenerate(&state.db, &person_id).await
+}
+
+#[tauri::command]
+async fn voice_worker_status(
+    state: State<'_, AppState>,
+) -> Result<crate::services::voice_pull::VoiceWorkerStatus, String> {
+    crate::services::voice_pull::worker_status(&state.db).await
+}
+
+#[tauri::command]
+async fn voice_name_audio_url(
+    state: State<'_, AppState>,
+    person_id: String,
+) -> Result<Option<String>, String> {
+    let clean = person_id.trim();
+    if clean.is_empty() || clean.contains('/') || clean.contains('\\') {
+        return Ok(None);
+    }
+    let path = crate::services::voice_pull::clip_path(&state.data_dir, clean);
+    if path.is_file() {
+        Ok(Some(format!("asset://localhost/{}", path.to_string_lossy())))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
 /// Live scanner lifecycle status (state, message, mode) for the kiosk status
 /// pill and admin diagnostics.
 fn scanner_status(state: State<'_, AppState>) -> crate::services::scanner::ScannerStatus {
@@ -169,6 +245,15 @@ async fn admin_list_users(
     token: String,
 ) -> Result<serde_json::Value, String> {
     admin_users(state, token).await
+}
+
+/// Voice auto-clone gate: roster members (active interns/employees) get a name
+/// clip; assist cards, inactive users, and unknown types never enqueue.
+fn should_enqueue_voice_job(card_type: &str, employee_type: &str, status: &str) -> bool {
+    card_type != "ADMIN_ASSIST"
+        && (employee_type.eq_ignore_ascii_case("INTERN")
+            || employee_type.eq_ignore_ascii_case("EMPLOYEE"))
+        && status.eq_ignore_ascii_case("ACTIVE")
 }
 
 /// Normalize a gender payload before it hits the `gender IN ('MALE','FEMALE')`
@@ -394,6 +479,11 @@ async fn admin_upsert_user_inner(
     })?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(&user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     enqueue_sync(state, "Users", &user_id, "UPSERT", &user).await;
+    // Voice auto-clone: queue a Ma'am Bea name-clip pull for roster members.
+    // Fire-and-forget — the worker fills the clip later; Piper covers playback meanwhile.
+    if should_enqueue_voice_job(card_type, employee_type, status) {
+        crate::services::voice_pull::enqueue_voice_job(&state.db, &user_id, &full_name, &now).await;
+    }
     if employee_type.to_uppercase() == "INTERN" && status.to_uppercase() == "ACTIVE" {
         let _ = sqlx::query(
             "INSERT INTO dtr_pending (user_id, full_name, first_seen, last_checked, attempts) VALUES (?, ?, ?, NULL, 0) ON CONFLICT(user_id) DO UPDATE SET full_name = excluded.full_name",
@@ -549,6 +639,17 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
     let photo_path = state.data_dir.join("photos").join(format!("{user_id}.webp"));
     if photo_path.exists() {
         let _ = std::fs::remove_file(&photo_path);
+    }
+
+    // Voice auto-clone cleanup: drop any queued/done job and the worker clip
+    // so a deleted user leaves no stale audio behind.
+    let _ = sqlx::query("DELETE FROM voice_jobs WHERE person_id = ?")
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+    let clip_path = crate::services::voice_pull::clip_path(&state.data_dir, user_id);
+    if clip_path.is_file() {
+        let _ = std::fs::remove_file(&clip_path);
     }
 
     // Enqueue sync deletions
@@ -5023,6 +5124,22 @@ pub fn run() {
                     {
                         log::warn!("dtr recon scheduled check failed: {error}");
                     }
+                    match crate::services::voice_pull::run_once(
+                        &sync_state.db,
+                        &sync_state.data_dir,
+                    )
+                    .await
+                    {
+                        // Log-only: missing clips fall back to Piper speech.
+                        Err(error) => log::warn!("voice pull pass failed: {error}"),
+                        Ok(summary) => {
+                            if let Some(person_id) = summary.attemptedPersonId {
+                                if summary.completed {
+                                    log::info!("voice pull completed clip for {person_id}");
+                                }
+                            }
+                        }
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
@@ -5153,6 +5270,15 @@ pub fn run() {
             tts_speak,
             tts_stop,
             tts_status,
+            get_voicestudio_host,
+            set_voicestudio_host,
+            get_voicestudio_pin,
+            set_voicestudio_pin,
+            check_voicestudio,
+            voice_clip_states,
+            voice_regenerate,
+            voice_worker_status,
+            voice_name_audio_url,
             autostart_status,
             autostart_set,
             bathroom_get_status,
@@ -5169,7 +5295,7 @@ pub fn run() {
 mod tests {
     use super::{
         canonical_exports_path, enrich_cutoff_input, generated_file_metadata, normalize_gender,
-        photo_is_within_limits, php_to_centavos, upsert_user_record,
+        photo_is_within_limits, php_to_centavos, should_enqueue_voice_job, upsert_user_record,
     };
     use crate::config::{LanConfig, OfficeConfig};
     use crate::state::AppState;
@@ -5184,6 +5310,15 @@ mod tests {
         assert!(!super::valid_cutoff_date("2026-13-01"));
         assert!(!super::valid_cutoff_date("2026-99-99"));
         assert!(!super::valid_cutoff_date(""));
+    }
+
+    #[test]
+    fn voice_jobs_enqueue_only_for_active_roster_members() {
+        assert!(should_enqueue_voice_job("EMPLOYEE", "INTERN", "ACTIVE"));
+        assert!(should_enqueue_voice_job("EMPLOYEE", "EMPLOYEE", "active"));
+        assert!(!should_enqueue_voice_job("ADMIN_ASSIST", "INTERN", "ACTIVE"));
+        assert!(!should_enqueue_voice_job("EMPLOYEE", "INTERN", "INACTIVE"));
+        assert!(!should_enqueue_voice_job("EMPLOYEE", "VISITOR", "ACTIVE"));
     }
 
     #[test]

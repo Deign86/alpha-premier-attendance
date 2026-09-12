@@ -98,13 +98,17 @@ import {
   createAdminBackdatedAttendance,
   loadBathroomStatus,
   submitBathroomScan,
+  loadVoiceClipStates,
+  loadVoiceWorkerStatus,
+  pollVoiceClipReady,
+  regenerateVoiceClip,
 } from "./api";
 import { sseUrl, onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
 import type { FileActionResult } from "./api";
 import type { DtrSyncHealth } from "./api";
 import "./styles.css";
 import { BathroomKioskView } from "./bathroom-kiosk-view";
-import type { BathroomScanResponse, BathroomStatusResponse } from "@rfid-attendance/shared";
+import type { BathroomScanResponse, BathroomStatusResponse, VoiceClipState, VoiceWorkerStatus } from "@rfid-attendance/shared";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
@@ -128,7 +132,11 @@ import {
   announceAttendance,
   announceBathroom,
   announceScanError,
+  getClonedBeaNameAudioUrl,
+  getWorkerNameAudioUrl,
   loadNameManifest,
+  previewVoiceClip,
+  resolveVoiceSlot,
   type AnnounceBathroomOptions,
 } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
@@ -3614,7 +3622,14 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
             )}
             <p className="sync-health-note">
               Last sync: {formatWhen(syncHealth?.lastSyncedAt ?? null)}
-              {syncHealth && syncHealth.deadLetter > 0 ? ` · ${syncHealth.deadLetter} failed item(s) need attention` : ""}
+              {syncHealth && syncHealth.deadLetter > 0 ? (
+                <>
+                  {` · ${syncHealth.deadLetter} failed item(s) need attention `}
+                  <button className="text-button" type="button" disabled={busy} onClick={() => void syncInterns()}>
+                    Retry sync now
+                  </button>
+                </>
+              ) : ""}
             </p>
             {syncHealth?.lastError && (
               <p className="sync-health-error">Last error: {syncHealth.lastError}</p>
@@ -3716,6 +3731,24 @@ function UserEditor({
   const [batchDeleteUsersOpen, setBatchDeleteUsersOpen] = useState(false);
   const [batchUpdatingUsers, setBatchUpdatingUsers] = useState(false);
   const [syncingDtrUserId, setSyncingDtrUserId] = useState<string | null>(null);
+  const [voiceClipStates, setVoiceClipStates] = useState<Record<string, VoiceClipState>>({});
+  const [playingVoiceUserId, setPlayingVoiceUserId] = useState<string | null>(null);
+  const [regeneratingVoiceUserId, setRegeneratingVoiceUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadVoiceClipStates()
+      .then((states) => {
+        if (cancelled) return;
+        const mapped: Record<string, VoiceClipState> = {};
+        for (const state of states) mapped[state.personId] = state;
+        setVoiceClipStates(mapped);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [users]);
   const [userSearch, setUserSearch] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
@@ -3733,6 +3766,56 @@ function UserEditor({
       setMessage(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
     } else {
       setMessage(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+    }
+  };
+
+  const handlePlayVoiceClip = async (userId: string, fullName: string) => {
+    setPlayingVoiceUserId(userId);
+    try {
+      const url =
+        (await getWorkerNameAudioUrl(userId)) ?? getClonedBeaNameAudioUrl(userId, fullName);
+      if (url) {
+        await previewVoiceClip(url);
+      }
+    } finally {
+      setPlayingVoiceUserId(null);
+    }
+  };
+
+  const handleRegenerateVoiceClip = async (userId: string) => {
+    setRegeneratingVoiceUserId(userId);
+    setMessage("");
+    try {
+      const result = await regenerateVoiceClip(userId);
+      if (!result.ok) {
+        setMessage(result.error ?? "Voice regeneration failed.");
+        return;
+      }
+      const applySnapshot = (states: VoiceClipState[]): void => {
+        const mapped: Record<string, VoiceClipState> = {};
+        for (const state of states) mapped[state.personId] = state;
+        setVoiceClipStates(mapped);
+      };
+      // The queue call above returns fast; the worker clones in the
+      // background. Keep the row loader up until this person's job reads
+      // DONE so the user watches Queued → Cloning → Ready to the finish.
+      const outcome = await pollVoiceClipReady(userId, {
+        load: loadVoiceClipStates,
+        onSnapshot: applySnapshot,
+      });
+      if (outcome === "aborted") return;
+      try {
+        applySnapshot(await loadVoiceClipStates());
+      } catch {
+        // Keep the previous snapshot on refresh failure.
+      }
+      if (outcome === "ready") {
+        setMessage(`Voice clip ready (${result.spokenText ?? userId}). Plays automatically on the next scan.`);
+      } else {
+        setMessage(`Voice clip queued for regeneration (${result.spokenText ?? userId}). Still working — it plays automatically once pulled.`);
+      }
+    } finally {
+      setRegeneratingVoiceUserId(null);
     }
   };
 
@@ -4352,6 +4435,7 @@ function UserEditor({
             ) : (
               <span>Total users: {users.length}</span>
             )}
+            <VoiceWorkerChip refreshKey={users.length} />
           </div>
           <div className="table-batch-actions">
             {selectedUserIds.size > 0 ? (
@@ -4448,13 +4532,14 @@ function UserEditor({
                 <th>RFID</th>
                 <th>Payroll profile</th>
                 <th>Status</th>
+                <th>Voice</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: "center", padding: "20px 12px" }}>
+                  <td colSpan={7} style={{ textAlign: "center", padding: "20px 12px" }}>
                     No users match &ldquo;{userSearch.trim()}&rdquo;.{" "}
                     <button className="text-button" type="button" onClick={() => setUserSearch("")}>
                       Clear
@@ -4495,8 +4580,8 @@ function UserEditor({
                       </>
                     )}
                   </td>
-                  <td>{user.rfidUid}</td>
-                  <td>
+                  <td className="user-status-cell">{user.rfidUid}</td>
+                  <td className="user-status-cell">
                     {user.cardType === "ADMIN_ASSIST"
                       ? "Not applicable"
                       : user.employeeType === "EMPLOYEE"
@@ -4508,7 +4593,22 @@ function UserEditor({
                           "None")
                         : "Not applicable"}
                   </td>
-                  <td>{user.status}</td>
+                  <td className="user-status-cell">{user.status}</td>
+                  <td>
+                    {user.cardType === "ADMIN_ASSIST" ? (
+                      <span className="form-help">—</span>
+                    ) : (
+                      <VoiceSlotCell
+                        userId={user.userId}
+                        fullName={user.fullName}
+                        clipState={voiceClipStates[user.userId]}
+                        playing={playingVoiceUserId === user.userId}
+                        regenerating={regeneratingVoiceUserId === user.userId}
+                        onPlay={() => void handlePlayVoiceClip(user.userId, user.fullName)}
+                        onRegenerate={() => void handleRegenerateVoiceClip(user.userId)}
+                      />
+                    )}
+                  </td>
                   <td>
                     {user.employeeType === "INTERN" && (
                       <button
@@ -4561,6 +4661,107 @@ function UserEditor({
         onConfirm={() => void removeBatchUsers()}
       />
     </div>
+  );
+}
+
+type VoiceSlotCellProps = {
+  userId: string;
+  fullName: string;
+  clipState?: VoiceClipState;
+  playing: boolean;
+  regenerating: boolean;
+  onPlay: () => void;
+  onRegenerate: () => void;
+};
+
+type VoiceWorkerChipProps = {
+  refreshKey: number;
+};
+
+function VoiceWorkerChip({ refreshKey }: VoiceWorkerChipProps) {
+  const [worker, setWorker] = useState<VoiceWorkerStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = (): void => {
+      void loadVoiceWorkerStatus()
+        .then((status) => {
+          if (!cancelled) setWorker(status);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshKey]);
+  if (!worker) return null;
+  const label =
+    worker.active > 0
+      ? `Cloning ${worker.active}…`
+      : worker.retry > 0
+        ? `Retrying ${worker.retry}…`
+        : 'Voices ready';
+  return (
+    <span
+      className={`lan-state ${worker.active > 0 ? 'lan-state-starting' : worker.retry > 0 ? 'lan-state-disabled' : 'lan-state-running'}`}
+      title={worker.lastSpokenText ? `Last clip: ${worker.lastSpokenText}` : 'Voice clone worker'}
+    >
+      <i />
+      {label}
+    </span>
+  );
+}
+
+function VoiceSlotCell({ userId, fullName, clipState, playing, regenerating, onPlay, onRegenerate }: VoiceSlotCellProps) {
+  const slot = resolveVoiceSlot(
+    clipState?.workerClip ?? false,
+    clipState?.jobStatus,
+    getClonedBeaNameAudioUrl(userId, fullName),
+  );
+  const busy = playing || regenerating;
+  const slotChip = (
+    <span
+      className={`lan-state ${slot === "cloned" ? "lan-state-running" : slot === "queued" ? "lan-state-starting" : "lan-state-disabled"}`}
+      title={slot === "cloned" ? "Cloned name clip ready" : slot === "queued" ? "Clip queued — generating" : "No clip yet — Piper speaks the name live"}
+    >
+      <i />
+      {slot === "cloned" ? "Bea" : slot === "queued" ? "Queued" : "Piper"}
+    </span>
+  );
+  if (regenerating) {
+    const cloning = clipState?.jobStatus === "PROCESSING" || clipState?.jobStatus === "RETRY";
+    const stageLabel = cloning ? "Cloning…" : "Queued…";
+    return (
+      <span className="voice-slot">
+        {slotChip}
+        <span
+          className="voice-regen"
+          role="status"
+          aria-label={`${stageLabel} regenerating voice for ${fullName}`}
+        >
+          <span className="voice-spinner" aria-hidden="true" />
+          <span className="voice-regen-label">{stageLabel}</span>
+          <span className="voice-progress" role="progressbar" aria-label={`Regeneration progress for ${fullName}`}>
+            <i aria-hidden="true" />
+          </span>
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span className="voice-slot">
+      {slotChip}
+      {slot !== "fallback" && (
+        <button className="text-button" type="button" disabled={busy} onClick={onPlay} title={`Play ${fullName}'s cloned name`}>
+          {playing ? "Playing…" : "Play"}
+        </button>
+      )}
+      <button className="text-button" type="button" disabled={busy} onClick={onRegenerate} title="Queue a fresh clone (replaces the current clip)">
+        Regenerate
+      </button>
+    </span>
   );
 }
 

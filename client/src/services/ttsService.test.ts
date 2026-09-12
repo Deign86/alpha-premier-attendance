@@ -14,6 +14,7 @@ import {
   isClonedBeaPhraseAvailable,
   isTtsEngine,
   loadTtsSettings,
+  normalizeVoiceStudioBaseUrl,
   resolveTtsMode,
   sanitizeTextForSpeech,
   saveTtsSettings,
@@ -387,6 +388,12 @@ describe('ttsService', () => {
   });
 
   describe('loadTtsSettings and saveTtsSettings', () => {
+    it('accepts bare host:port and rejects junk for the studio host', () => {
+      expect(normalizeVoiceStudioBaseUrl('192.168.56.2:3901')).toBe('http://192.168.56.2:3901');
+      expect(normalizeVoiceStudioBaseUrl('http://192.168.56.2:3901/')).toBe('http://192.168.56.2:3901');
+      expect(normalizeVoiceStudioBaseUrl('junk')).toBe(DEFAULT_TTS_SETTINGS.voiceStudioBaseUrl);
+      expect(normalizeVoiceStudioBaseUrl('')).toBe(DEFAULT_TTS_SETTINGS.voiceStudioBaseUrl);
+    });
     it('returns default settings when storage is empty', () => {
       expect(loadTtsSettings()).toEqual(DEFAULT_TTS_SETTINGS);
     });
@@ -398,6 +405,8 @@ describe('ttsService', () => {
         voiceModel: 'en_US-amy-medium',
         rate: 1.2,
         volume: 0.8,
+        voiceStudioBaseUrl: 'http://192.168.1.50:3900',
+        voiceStudioPin: '166387',
       };
       saveTtsSettings(custom);
       expect(loadTtsSettings()).toEqual(custom);
@@ -1212,6 +1221,7 @@ describe('ttsService', () => {
           voiceModel: 'en_US-amy-medium',
           rate: 1.0,
           volume: 1.0,
+          voiceStudioBaseUrl: 'http://127.0.0.1:3900',
         },
       });
 
@@ -1275,6 +1285,7 @@ describe('ttsService', () => {
           voiceModel: 'en_US-amy-medium',
           rate: 1.2,
           volume: 0.8,
+          voiceStudioBaseUrl: 'http://127.0.0.1:3900',
         }),
       ).toEqual({
         kind: 'enabled',
@@ -1293,6 +1304,7 @@ describe('ttsService', () => {
           voiceModel: 'en_US-amy-medium',
           rate: 1.0,
           volume: 1.0,
+          voiceStudioBaseUrl: 'http://127.0.0.1:3900',
         }),
       ).toEqual({ kind: 'disabled' });
     });
@@ -1305,6 +1317,7 @@ describe('ttsService', () => {
           voiceModel: 'en_US-amy-medium',
           rate: 1.0,
           volume: 1.0,
+          voiceStudioBaseUrl: 'http://127.0.0.1:3900',
         }),
       ).toEqual({ kind: 'disabled' });
     });
@@ -1345,7 +1358,7 @@ describe('ttsService', () => {
       const announcePromise = announceAttendance({
         attendanceType: 'time_in',
         employeeName: 'Ada Lovelace',
-        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1 },
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
       });
 
       // Call stopSpeech while prefix is awaiting

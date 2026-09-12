@@ -595,3 +595,43 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: npm test && cargo test --manifest-path src-tauri/Cargo.toml
   EXPECT: all suites exit 0; no threshold edits
   EVIDENCE: measured 2026-09-11 — npm test: shared 34/34 (3 files), client 240/240 (15 files), server 152/152 (17 files); cargo lib: 249/249. Rule: hour-precision (18:00:00 caps, 17:59:59 uncapped); no-overtime policy — 18:00+ renders `5:00:00 PM`, paints full, pays full-day. Open items (unchanged scope): status-flag writers still stamp raw `LATE_TIMEOUT` at scan time (cap applies at DTR-row/payroll-compute time; auto-`COMPLETED` conversion is a separate change if wanted); shared `isLateTimeout` and the cap both trip at 18:00:00 — `isLateTimeout` truncates seconds, the cap truncates minutes — no practical gap.
+
+## VoiceStudio auto-clone pull (kiosk pulls, host runs stock VoiceStudio) gates
+- [x] Host address is UI-configurable with a connection probe.
+  CHECK: npm test -w client -- src/voice-settings-panel.test.tsx
+  EXPECT: host field renders, change propagates, Test Connection button present
+  EVIDENCE: measured 2026-09-12 — panel 6/6 pass (incl. new host test); `TtsSettings.voiceStudioBaseUrl?` optional, default `http://127.0.0.1:3900`, `GET <host>/profiles` probe in `ttsService.ts`.
+- [x] Registration enqueues voice jobs; worker pulls mp3s with backoff, playback prefers worker clips.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml voice_pull && cargo test --manifest-path src-tauri/Cargo.toml voice_jobs_enqueue
+  EXPECT: all voice_pull tests + enqueue-gate test pass
+  EVIDENCE: measured 2026-09-12 — 8/8 `voice_pull` (normalizer incl. `Ma `-prefix fix, host normalize, backoff, enqueue upsert, settings round-trip, noop) + `voice_jobs_enqueue_only_for_active_roster_members`; cargo lib 275/275 (incl. loopback pull, wav-reject retry, embedded-migration tests). Migration `0017_voice_jobs.sql`; commands `get/set_voicestudio_host`, `voice_name_audio_url`; 30s loop tick log-only; frontend `getWorkerNameAudioUrl` first at 3 playback sites.
+- [x] Required repository gates pass after the change.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all exit 0; zero new dependencies
+  EVIDENCE: measured 2026-09-12 — oxlint exit 0, typecheck exit 0, `npm test` shared 34 + client 247 + server 170 pass, cargo 275/275; reqwest/serde_json/chrono/tokio-net and `@tauri-apps/api/core` pre-existing.
+- [x] LIVE against real host 2026-09-12 (`http://192.168.1.7:3901`, share PIN): `/profiles` lists Bea `1b3e828b`; `POST /v1/audio/speech` (model `tts-1`, mp3) → 200 `audio/mpeg`, valid 15,528 B / 2.16 s mp3 of the spoken name; missing/wrong PIN → 401 (probe reports the PIN hint).
+  EVIDENCE: curl measured this session; clip verified via ffprobe (`format_name=mp3`), scratch file removed. Finding applied same-session: remote share mode needs `X-OmniVoice-Pin`, so the worker + UI now carry an optional share PIN (native `app_settings`, `get/set_voicestudio_pin`, panel password field, probe 401 hint; 12/12 `voice_pull` tests incl. PIN round-trip).
+- [x] Users-table Voice column (see clip, play it, regenerate it).
+  CHECK: npm test -w client -- src/App.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml voice_pull
+  EXPECT: voice-slot test passes; `clip_states`/`regenerate` tests pass
+  EVIDENCE: measured 2026-09-12 — App 53/53 (incl. new voice-slot test: Bea+Play for manifest user, Piper+Regenerate for unknown); `clip_states_cover_roster_only` + `regenerate_requeues_from_roster_name`; cargo lib 278/278. LIVE drive (fresh dev app): Voice column renders 18 Bea badges + 18 Regenerate buttons; Play click error-free; Regenerate on APG-2026-115 → queued message → worker pulled 15,624 B mp3 within one tick (DONE + worker_clip true). Commands `voice_clip_states`, `voice_regenerate`; `VoiceSlotCell` reuses `lan-state`/`text-button`/`form-help` tokens + new `.voice-slot` flex rule; delete cascade drops job + clip.
+- [x] LIVE UI drive via Tauri MCP 2026-09-12 (dev app + real host `192.168.1.7:3901`): admin unlock → Voice panel shows Server/PIN card → set host + PIN 166387 → Test Connection reports `Connected to VoiceStudio at http://192.168.1.7:3901.`; `setup_upsert_user` INTERN-UI-01 → worker pulled 12,792 B / 1.76 s Bea mp3 to data dir within one 30 s tick; `voice_name_audio_url` resolves the asset URL. Test user + clip removed after.
+  EVIDENCE: IPC transcripts this session. Two findings fixed live: (1) webview fetch is CORS-blocked → probe moved to native `check_voicestudio` command; (2) repo `.input` token styling applied to the new fields (baseline-ui pass, inline style removed). Delete cascade now also drops `voice_jobs` rows + worker clips. Voice panel now surfaces live worker activity (`voice_worker_status` command: queue depth, last clip, last error; 10 s poll, `lan-state` pill + facts row, no new animation). Live fix: new Rust structs used snake_case but IPC/convention is camelCase — renamed to `personId`/`workerClip`/`jobStatus`/`lastSpokenText`/etc.; panel verified showing `Last clip Deign Grey Lazaro`. Field-probe fix: bare `ip:port` now gains `http://` (both stacks, junk still rejected); Test Connection persists the typed values then probes, so it tests exactly what the worker uses. Worker chip added to the Users header (`Voices ready` / `Cloning N…` / `Retrying N…`, 10 s poll, existing tokens). Follow-up fix: Play preview used the native TTS path and read the mp3 URL aloud — new `previewVoiceClip` plays HTML5 Audio only; STATUS/RFID cells got `user-status-cell` nowrap so ACTIVE never wraps.
+
+## Users-table Bea voice regeneration progress loader
+
+- [x] Row shows staged loader (Queued → Cloning → Ready) until the new clip is done.
+  CHECK: npm test -w client -- src/api.test.ts src/App.test.tsx
+  EXPECT: `pollVoiceClipReady` block passes (ready/snapshot/timeout/abort); row-loader test passes (progressbar + Queued… → Cloning… → `Voice clip ready` message, loader unmounts, Bea chip flips live)
+  EVIDENCE: measured — client 258/258 (15 files), incl. 4 new `pollVoiceClipReady` tests + row-loader UI test (mocked Tauri IPC: PENDING → PROCESSING → DONE).
+- [x] Required repository gates pass after the change.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
+  EXPECT: all exit 0; zero new dependencies; transform-only loader animation with prefers-reduced-motion guard
+  EVIDENCE: measured — oxlint exit 0, `npm run typecheck` exit 0 (client+server), client tests 258/258. Loader uses existing `lan-state`/`text-button`/`voice-slot` tokens + new `.voice-regen`/`.voice-spinner`/`.voice-progress` rules (transform/opacity-only keyframes, reduced-motion guard).
+
+## UI audit implementation (plans 01–05, improve-ui + baseline-ui + a11y lens)
+
+- [x] All five `design-plans/` implemented with headful proof per surface.
+  CHECK: npm run typecheck && npm run lint:oxlint && npm test -w client + Tauri screenshots 08, 12–15
+  EXPECT: gates exit 0; each screenshot shows the finding resolved
+  EVIDENCE: measured 2026-09-12 — typecheck 0, oxlint 0, client 258/258 (15 files). 01 font: 3 @font-face → 1 variable face (`font-weight: 400 900`), binaries verified genuine via gstatic hash match, redundant copies deleted (shot 08). 02 users table: one class, cells single-line (shot 12). 03 payroll: nowrap headers + sticky cols 1–3, whole-word headers (shot 13). 04 voice pill: one-line pill + `Retrying` copy (shot 14). 05 sync card: inline `Retry sync now` (shot 15). Incident mid-work: vite dev served empty CSS after the font-file swap (stale HMR graph, file valid — prod build 83KB CSS fine); fixed by touching styles.css to force re-transform, no restart needed.

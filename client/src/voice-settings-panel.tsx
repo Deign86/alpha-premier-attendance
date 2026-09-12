@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { TtsSettings, TtsStatusResponse } from '@rfid-attendance/shared';
+import type { TtsSettings, TtsStatusResponse, VoiceWorkerStatus } from '@rfid-attendance/shared';
 import {
   DEFAULT_TTS_SETTINGS,
+  DEFAULT_VOICESTUDIO_BASE_URL,
+  checkVoiceStudioConnection,
   getTtsStatus,
   loadTtsSettings,
   resolveTtsMode,
@@ -9,6 +11,7 @@ import {
   stopSpeech,
   testVoice,
 } from './services/ttsService';
+import { tauriApi } from './tauri-api';
 
 export interface VoiceSettingsPanelProps {
   onSettingsChange?: (settings: TtsSettings) => void;
@@ -18,9 +21,27 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
   const [settings, setSettings] = useState<TtsSettings>(DEFAULT_TTS_SETTINGS);
   const [status, setStatus] = useState<TtsStatusResponse | null>(null);
   const [testing, setTesting] = useState(false);
+  const [checkingStudio, setCheckingStudio] = useState(false);
+  const [workerStatus, setWorkerStatus] = useState<VoiceWorkerStatus | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [feedbackType, setFeedbackType] = useState<'info' | 'error' | 'success'>('info');
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const persistHostToNative = (host: string): void => {
+    try {
+      void tauriApi.setVoicestudioHost(host).catch(() => undefined);
+    } catch {
+      // Browser dev: localStorage only.
+    }
+  };
+
+  const persistPinToNative = (pin: string): void => {
+    try {
+      void tauriApi.setVoicestudioPin(pin).catch(() => undefined);
+    } catch {
+      // Browser dev: localStorage only.
+    }
+  };
 
   const refreshStatus = useCallback(async () => {
     const liveStatus = await getTtsStatus();
@@ -33,6 +54,44 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     const loaded = loadTtsSettings();
     setSettings(loaded);
     void refreshStatus();
+    // Native host is the worker's source of truth; converge once on mount:
+    // push a local custom value up, otherwise adopt the stored native value.
+    try {
+      void tauriApi
+        .getVoicestudioHost()
+        .then((host) => {
+          setSettings((prev) => {
+            const local = prev.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL;
+            if (host.length > 0 && host !== local) {
+              persistHostToNative(local);
+              return prev;
+            }
+            if (host.length > 0) {
+              return { ...prev, voiceStudioBaseUrl: host };
+            }
+            return prev;
+          });
+        })
+        .catch(() => undefined);
+      void tauriApi
+        .getVoicestudioPin()
+        .then((pin) => {
+          setSettings((prev) => {
+            const local = prev.voiceStudioPin ?? '';
+            if (pin !== local) {
+              if (local.length > 0) {
+                persistPinToNative(local);
+                return prev;
+              }
+              return { ...prev, voiceStudioPin: pin };
+            }
+            return prev;
+          });
+        })
+        .catch(() => undefined);
+    } catch {
+      // Browser dev: localStorage only.
+    }
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
@@ -47,6 +106,28 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
       return updated;
     });
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshWorker = (): void => {
+      try {
+        void tauriApi
+          .voiceWorkerStatus()
+          .then((worker) => {
+            if (!cancelled) setWorkerStatus(worker);
+          })
+          .catch(() => undefined);
+      } catch {
+        // Browser dev: no worker status.
+      }
+    };
+    refreshWorker();
+    const timer = window.setInterval(refreshWorker, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const handleTestVoice = async () => {
     setTesting(true);
@@ -72,6 +153,19 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
       setFeedbackType('error');
     }
     void refreshStatus();
+  };
+
+  const handleCheckVoiceStudio = async () => {
+    setCheckingStudio(true);
+    setFeedback('Contacting VoiceStudio server…');
+    setFeedbackType('info');
+    const result = await checkVoiceStudioConnection(
+      settings.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL,
+      settings.voiceStudioPin ?? '',
+    );
+    setCheckingStudio(false);
+    setFeedback(result.message);
+    setFeedbackType(result.ok ? 'success' : 'error');
   };
 
   const handleStopVoice = async () => {
@@ -147,6 +241,38 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         </span>
       </div>
 
+      {workerStatus && (
+        <div className="lan-facts db-facts" aria-live="polite">
+          <span>
+            Cloning{' '}
+            <strong>
+              {workerStatus.active > 0 ? `Working (${workerStatus.active} queued)` : workerStatus.retry > 0 ? `Retrying (${workerStatus.retry})` : 'Idle'}
+            </strong>
+          </span>
+          {workerStatus.lastSpokenText && (
+            <span>
+              Last clip{' '}
+              <strong>{workerStatus.lastSpokenText}</strong>
+            </span>
+          )}
+          {workerStatus.lastError && workerStatus.active === 0 && (
+            <span>
+              Worker note{' '}
+              <strong>{workerStatus.lastError}</strong>
+            </span>
+          )}
+          <span
+            className={`lan-state ${
+              workerStatus.active > 0 ? 'lan-state-starting' : workerStatus.retry > 0 ? 'lan-state-disabled' : 'lan-state-running'
+            }`}
+            title={workerStatus.active > 0 ? 'Pulling clips from VoiceStudio' : 'Worker idle'}
+          >
+            <i />
+            {workerStatus.active > 0 ? 'Cloning…' : workerStatus.retry > 0 ? 'Retrying' : 'Up to date'}
+          </span>
+        </div>
+      )}
+
       {feedback && (
         <p
           className={`dashboard-alert ${feedbackType === 'error' ? '' : 'db-notice'}`}
@@ -213,6 +339,53 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
             onChange={(e) => updateSetting('volume', parseFloat(e.target.value))}
           />
           <p className="form-help">Adjust audio playback volume for announcements.</p>
+        </div>
+
+        {/* VoiceStudio Server Card */}
+        <div className="voice-control-card">
+          <div className="voice-control-header">
+            <label htmlFor="tts-voicestudio-url" className="voice-control-label">
+              VoiceStudio Server
+            </label>
+            <button
+              type="button"
+              className="text-button"
+              disabled={checkingStudio}
+              onClick={() => void handleCheckVoiceStudio()}
+            >
+              {checkingStudio ? 'Checking…' : 'Test Connection'}
+            </button>
+          </div>
+          <input
+            type="url"
+            id="tts-voicestudio-url"
+            className="input"
+            inputMode="url"
+            placeholder="http://192.168.1.50:3900"
+            value={settings.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL}
+            onChange={(e) => {
+              updateSetting('voiceStudioBaseUrl', e.target.value);
+              persistHostToNative(e.target.value);
+            }}
+          />
+          <p className="form-help">LAN address of the PC running VoiceStudio voice cloning (port 3900).</p>
+          <label htmlFor="tts-voicestudio-pin" className="voice-control-label">
+            Share PIN
+          </label>
+          <input
+            type="password"
+            id="tts-voicestudio-pin"
+            className="input"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="6-digit PIN from the host's Network screen"
+            value={settings.voiceStudioPin ?? ''}
+            onChange={(e) => {
+              updateSetting('voiceStudioPin', e.target.value);
+              persistPinToNative(e.target.value);
+            }}
+          />
+          <p className="form-help">Shown on the host PC while Network sharing is on. Leave empty for PIN-less hosts.</p>
         </div>
       </div>
 

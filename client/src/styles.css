@@ -1,25 +1,9 @@
 @font-face {
   font-family: 'Orbitron';
   font-style: normal;
-  font-weight: 500;
+  font-weight: 400 900;
   font-display: swap;
-  src: url('./fonts/Orbitron-500.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Orbitron';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./fonts/Orbitron-600.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Orbitron';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./fonts/Orbitron-700.woff2') format('woff2');
+  src: url('./fonts/Orbitron-variable.woff2') format('woff2');
 }
 
 @font-face {
@@ -330,6 +314,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .lan-actions .admin-button { min-width: 0; }
 .lan-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
 .lan-facts span { display: grid; gap: 3px; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.lan-facts > span.lan-state { display: inline-flex; align-self: center; justify-self: start; }
 .lan-facts strong { color: var(--ink); font-size: .78rem; font-weight: 600; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .lan-facts { grid-template-columns: 1fr 1fr; } .lan-panel-head { flex-direction: column; } }
 .db-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -656,21 +641,39 @@ td small { font-size: .7rem; }
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line-bright);
   text-align: center;
-  white-space: normal;
+  white-space: nowrap;
   word-break: keep-all;
   overflow-wrap: normal;
   vertical-align: middle;
 }
 
 .payroll-table th.payroll-select-col { width: 38px; min-width: 38px; max-width: 38px; }
-.payroll-table th:nth-child(2) { min-width: 90px; }
-.payroll-table th:nth-child(3) { min-width: 130px; }
+.payroll-table th:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }
+.payroll-table th:nth-child(3) { width: 130px; min-width: 130px; max-width: 130px; }
 .payroll-table th:nth-child(4) { min-width: 95px; }
 .payroll-table th:nth-child(5) { min-width: 95px; }
 .payroll-table th:nth-child(6) { min-width: 75px; }
 .payroll-table th:nth-child(7) { min-width: 65px; }
 .payroll-table th:nth-child(8) { min-width: 65px; }
 .payroll-table th:nth-child(9) { min-width: 60px; }
+
+.payroll-table td:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }
+.payroll-table td:nth-child(3) { width: 130px; min-width: 130px; max-width: 130px; }
+.payroll-table th.payroll-select-col,
+.payroll-table td.payroll-select-cell,
+.payroll-table th:nth-child(2),
+.payroll-table td:nth-child(2),
+.payroll-table th:nth-child(3),
+.payroll-table td:nth-child(3) { position: sticky; z-index: 1; background: var(--surface); }
+.payroll-table th.payroll-select-col,
+.payroll-table th:nth-child(2),
+.payroll-table th:nth-child(3) { background: var(--surface-raised); z-index: 2; }
+.payroll-table th.payroll-select-col,
+.payroll-table td.payroll-select-cell { left: 0; }
+.payroll-table th:nth-child(2),
+.payroll-table td:nth-child(2) { left: 38px; }
+.payroll-table th:nth-child(3),
+.payroll-table td:nth-child(3) { left: 128px; border-right: 1px solid var(--line-bright); }
 
 .payroll-table td {
   padding: 8px 8px;
@@ -1407,6 +1410,69 @@ input[type="checkbox"]:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.voice-slot {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.voice-regen {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gold-bright);
+  font-size: .74rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.voice-spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--line-bright);
+  border-top-color: var(--gold-bright);
+  animation: voice-spin .8s linear infinite;
+}
+
+.voice-progress {
+  display: inline-block;
+  width: 72px;
+  height: 4px;
+  flex: none;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-input);
+}
+
+.voice-progress i {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--gold-bright);
+  animation: voice-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes voice-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(280%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-spinner, .voice-progress i { animation: none; }
+}
+
+.user-status-cell {
+  white-space: nowrap;
 }
 
 .voice-control-label {

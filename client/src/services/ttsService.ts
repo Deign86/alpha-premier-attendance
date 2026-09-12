@@ -6,12 +6,14 @@ import type {
   TtsSpeakOptions,
   TtsSpeakResult,
   TtsStatusResponse,
+  VoiceStudioConnection,
 } from '@rfid-attendance/shared';
 import { ATTENDANCE_TIMEZONE } from '@rfid-attendance/shared';
 import { tauriApi } from '../tauri-api';
 import {
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
+  getWorkerNameAudioUrl,
   playClonedBeaAudio,
   stopClonedBeaAudio,
 } from './clonedBeaVoice';
@@ -20,9 +22,12 @@ export {
   CLONED_BEA_PHRASE_MANIFEST,
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
+  getWorkerNameAudioUrl,
   isClonedBeaPhraseAvailable,
   loadNameManifest,
   playClonedBeaAudio,
+  previewVoiceClip,
+  resolveVoiceSlot,
   setNameManifest,
   stopClonedBeaAudio,
 } from './clonedBeaVoice';
@@ -37,7 +42,52 @@ export const DEFAULT_TTS_SETTINGS: TtsSettings = {
   voiceModel: 'en_US-amy-medium',
   rate: 1.0,
   volume: 1.0,
+  voiceStudioBaseUrl: 'http://127.0.0.1:3900',
 };
+
+export const DEFAULT_VOICESTUDIO_BASE_URL: string = DEFAULT_TTS_SETTINGS.voiceStudioBaseUrl ?? 'http://127.0.0.1:3900';
+
+/** Trim, drop trailing slashes, and accept only http(s) URLs; fall back to default. */
+export function normalizeVoiceStudioBaseUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? '').trim();
+  // Accept bare `host:port` / `host` and assume plain LAN http.
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const cleaned = withScheme.replace(/\/+$/, '');
+  const authority = cleaned.split('://')[1]?.split(/[/?#]/)[0] ?? '';
+  const plausible = authority.includes('.') || authority.includes(':') || authority.toLowerCase() === 'localhost';
+  if (/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(cleaned) && plausible) return cleaned;
+  return DEFAULT_VOICESTUDIO_BASE_URL;
+}
+
+export type { VoiceStudioConnection } from '@rfid-attendance/shared';
+
+const runningInTauri = (): boolean =>
+  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
+
+/** Probe `GET <base>/profiles` to verify a VoiceStudio host is reachable. */
+export async function checkVoiceStudioConnection(baseUrl: string, pin?: string): Promise<VoiceStudioConnection> {
+  // Native probe first: Rust reqwest is exempt from browser CORS rules. The
+  // worker reads the same persisted host/PIN, so this tests the real path.
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.checkVoicestudio(baseUrl, pin ?? '');
+    } catch {
+      // Fall through to direct fetch below.
+    }
+  }
+  const base = normalizeVoiceStudioBaseUrl(baseUrl);
+  const headers: Record<string, string> = {};
+  const cleanPin = (pin ?? '').trim();
+  if (cleanPin.length > 0) headers['X-OmniVoice-Pin'] = cleanPin;
+  try {
+    const response = await fetch(`${base}/profiles`, { headers, signal: AbortSignal.timeout(8000) });
+    if (response.ok) return { ok: true, message: `Connected to VoiceStudio at ${base}.` };
+    if (response.status === 401) return { ok: false, message: `VoiceStudio at ${base} needs its share PIN — enter it below.` };
+    return { ok: false, message: `VoiceStudio at ${base} replied with HTTP ${response.status}.` };
+  } catch {
+    return { ok: false, message: `Cannot reach VoiceStudio at ${base}. Check the address and that VoiceStudio is running.` };
+  }
+}
 
 export const AVAILABLE_VOICE_MODELS = [
   { id: 'en_US-amy-medium', label: 'Amy (Professional & Warm Female Voice)' },
@@ -52,6 +102,8 @@ type SerializedTtsSettings = {
   voiceModel?: string;
   rate?: number;
   volume?: number;
+  voiceStudioBaseUrl?: string;
+  voiceStudioPin?: string;
 };
 
 export function isTtsEngine(value?: string): value is TtsEngine {
@@ -117,8 +169,10 @@ function parseStoredTtsSettings(raw: string): TtsSettings {
     // engine is the same state as `engine: 'disabled'` — canonicalize it so
     // stored settings never encode the contradictory combination.
     const canonicalEngine = enabled ? engine : 'disabled';
+    const voiceStudioBaseUrl = normalizeVoiceStudioBaseUrl(parsed.voiceStudioBaseUrl);
+    const voiceStudioPin = parsed.voiceStudioPin?.trim().slice(0, 32) ?? '';
 
-    return { enabled, engine: canonicalEngine, voiceModel, rate, volume };
+    return { enabled, engine: canonicalEngine, voiceModel, rate, volume, voiceStudioBaseUrl, voiceStudioPin };
   } catch {
     return DEFAULT_TTS_SETTINGS;
   }
@@ -486,7 +540,9 @@ export async function announceAttendance(
     const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
     const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
     const targetPersonId = options.personId || options.userId;
-    const clonedNameUrl = getClonedBeaNameAudioUrl(targetPersonId, cleanName);
+    const clonedNameUrl =
+      (await getWorkerNameAudioUrl(targetPersonId)) ??
+      getClonedBeaNameAudioUrl(targetPersonId, cleanName);
 
     // If both static cloned segments are present in cache, execute sequential playback:
     // Case A (Existing Intern with generated name file): cloned prefix -> cloned name -> cloned suffix (all Ma'am Bea)
@@ -569,7 +625,9 @@ export async function announceBathroom(
     };
 
     if (cleanName.length > 0) {
-      const nameUrl = getClonedBeaNameAudioUrl(targetPersonId, cleanName);
+      const nameUrl =
+        (await getWorkerNameAudioUrl(targetPersonId)) ??
+        getClonedBeaNameAudioUrl(targetPersonId, cleanName);
 
       if (options.action === 'CHECKOUT') {
         const prefixPhrase = `${genderLabel} bathroom key checked out for`;
@@ -718,7 +776,8 @@ export async function announceScanError(
           : 'The bathroom key is currently in use by';
       const holderPrefixUrl = getClonedBeaAudioUrl(holderPrefix);
       const holderId = options.activeHolderId?.trim() ? options.activeHolderId.trim() : null;
-      const holderNameUrl = getClonedBeaNameAudioUrl(holderId, holderName);
+      const holderNameUrl =
+        (await getWorkerNameAudioUrl(holderId)) ?? getClonedBeaNameAudioUrl(holderId, holderName);
       if (holderPrefixUrl) {
         try {
           const prefixPlayed = await playClonedBeaAudio(

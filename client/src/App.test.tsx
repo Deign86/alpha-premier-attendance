@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
+import { unlockAdmin } from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
 import type { BathroomScanResponse, ScannerStatus } from '@rfid-attendance/shared';
@@ -986,6 +987,179 @@ describe('Admin Attendance Corrections', () => {
         expect(deletedUserIds).toContain('u2');
       });
     } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows a Voice slot per user with play and regenerate actions', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock (Ada matches the bundled manifest)
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u2', fullName: 'Zed Nullman', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+
+      expect(await screen.findByText('Total users: 2')).toBeInTheDocument();
+      expect(screen.getByRole('columnheader', { name: 'Voice' })).toBeInTheDocument();
+      // Ada has a bundled manifest clip: Bea badge + Play + Regenerate.
+      const adaRow = (await screen.findByText('Ada Lovelace')).closest('tr');
+      expect(adaRow).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null on the line above
+      expect(within(adaRow as HTMLElement).getByText('Bea')).toBeInTheDocument();
+      // SAFETY: closest('tr') is checked non-null on the line above
+      expect(within(adaRow as HTMLElement).getByRole('button', { name: 'Play' })).toBeInTheDocument();
+      // Unknown name: Piper fallback still offers Regenerate.
+      const zedRow = (await screen.findByText('Zed Nullman')).closest('tr');
+      expect(zedRow).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null on the line above
+      expect(within(zedRow as HTMLElement).getByText('Piper')).toBeInTheDocument();
+      // SAFETY: closest('tr') is checked non-null on the line above
+      expect(within(zedRow as HTMLElement).getByRole('button', { name: 'Regenerate' })).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows regeneration progress in the row until the new clip is ready', { timeout: 25000 }, async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch config mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock (Zed has no clip: Piper fallback)
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u2', fullName: 'Zed Nullman', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    const adminExpiresAt = new Date(Date.now() + 900_000).toISOString();
+    vi.spyOn(tauriApi.tauriApi, 'setupUnlock').mockResolvedValue({
+      success: true,
+      token: 'test-admin-token',
+      expiresAt: adminExpiresAt,
+    });
+    vi.spyOn(tauriApi.tauriApi, 'adminGetSession').mockResolvedValue({
+      success: true,
+      token: 'test-admin-token',
+      expiresAt: adminExpiresAt,
+      role: 'admin',
+    });
+    vi.spyOn(tauriApi.tauriApi, 'adminUsers').mockResolvedValue({
+      success: true,
+      users: [
+        { userId: 'u2', fullName: 'Zed Nullman', rfidUid: 'RFID-2', department: null, status: 'ACTIVE', employeeType: 'INTERN', gender: null, dailyRate: null, photoUrl: null },
+      ],
+    });
+    vi.spyOn(tauriApi.tauriApi, 'adminAttendance').mockResolvedValue({ success: true, date: '2026-09-12', attendance: [], fetchedAt: new Date().toISOString() });
+    vi.spyOn(tauriApi.tauriApi, 'payrollProfiles').mockResolvedValue({ success: true, profiles: [] });
+    vi.spyOn(tauriApi.tauriApi, 'payrollCutoffs').mockResolvedValue({ success: true, payroll: [] });
+    vi.spyOn(tauriApi.tauriApi, 'voiceWorkerStatus').mockResolvedValue({
+      active: 0,
+      retry: 0,
+      lastPersonId: null,
+      lastSpokenText: null,
+      lastCompletedAt: null,
+      lastError: null,
+    });
+    const clipStates: Array<Array<{ personId: string; workerClip: boolean; jobStatus: string | null }>> = [
+      [],
+      [{ personId: 'u2', workerClip: false, jobStatus: 'PENDING' }],
+      [{ personId: 'u2', workerClip: false, jobStatus: 'PROCESSING' }],
+      [{ personId: 'u2', workerClip: true, jobStatus: 'DONE' }],
+    ];
+    vi.spyOn(tauriApi.tauriApi, 'voiceClipStates').mockImplementation(async () => {
+      const next = clipStates.shift();
+      return next ?? [{ personId: 'u2', workerClip: true, jobStatus: 'DONE' }];
+    });
+    vi.spyOn(tauriApi.tauriApi, 'voiceRegenerate').mockResolvedValue('Zed Nullman');
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      // Seed the native admin token (Tauri mode keeps it in module state).
+      await unlockAdmin('293906');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+
+      const zedRow = (await screen.findByText('Zed Nullman')).closest('tr');
+      expect(zedRow).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null on the line above
+      fireEvent.click(within(zedRow as HTMLElement).getByRole('button', { name: 'Regenerate' }));
+
+      // Stage 1: queued loader with an indeterminate progress bar.
+      expect(await screen.findByRole('progressbar', { name: /zed nullman/i })).toBeInTheDocument();
+      expect(await screen.findByText('Queued…')).toBeInTheDocument();
+      // Stage 2: worker picks the job up.
+      expect(await screen.findByText('Cloning…', {}, { timeout: 8000 })).toBeInTheDocument();
+      // Finish: ready message, loader gone, Bea chip live.
+      expect(await screen.findByText(/voice clip ready/i, {}, { timeout: 12000 })).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull());
+      const doneRow = (await screen.findByText('Zed Nullman')).closest('tr');
+      expect(doneRow).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null on the line above
+      expect(within(doneRow as HTMLElement).getByText('Bea')).toBeInTheDocument();
+    } finally {
+      // SAFETY: Removing test mock property from window
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       window.history.pushState({}, '', '/');
     }
   });

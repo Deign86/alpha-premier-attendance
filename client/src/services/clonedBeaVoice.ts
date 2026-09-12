@@ -88,6 +88,7 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
   'Voice announcements are working correctly.': '/voices/bea/general/test-voice.mp3',
 });
 
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { tauriApi } from '../tauri-api';
 
 interface NameProfileEntry {
@@ -234,7 +235,69 @@ export function getClonedBeaNameAudioUrl(
   return null;
 }
 
+const runningInTauri = (): boolean =>
+  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
+
+export type VoiceSlotState = 'cloned' | 'queued' | 'fallback';
+
+/**
+ * Resolve the Users-table voice slot for one person: worker clip wins, then a
+ * live queue row, then the bundled manifest, else Piper fallback.
+ */
+export function resolveVoiceSlot(
+  workerClip: boolean,
+  jobStatus: string | null | undefined,
+  manifestUrl: string | null,
+): VoiceSlotState {
+  if (workerClip || manifestUrl) return 'cloned';
+  if (jobStatus === 'PENDING' || jobStatus === 'RETRY' || jobStatus === 'PROCESSING') return 'queued';
+  return 'fallback';
+}
+
+/**
+ * Worker-generated clip URL for a person, or null.
+ *
+ * The auto-clone worker stores mp3s under the app data dir (outside the
+ * read-only bundle), so these never appear in the bundled manifest. Resolves
+ * to a converted `asset://` URL playable by HTML5 Audio. Null outside Tauri
+ * or when no worker clip exists yet — callers fall back to the manifest.
+ */
+export async function getWorkerNameAudioUrl(personId?: string | null): Promise<string | null> {
+  const clean = personId?.trim() ?? '';
+  if (!clean || !runningInTauri()) return null;
+  try {
+    const assetUrl = await tauriApi.voiceNameAudioUrl(clean);
+    if (!assetUrl) return null;
+    const prefix = 'asset://localhost/';
+    return assetUrl.startsWith(prefix)
+      ? convertFileSrc(decodeURIComponent(assetUrl.slice(prefix.length)))
+      : assetUrl;
+  } catch {
+    return null;
+  }
+}
+
 let activeAudioElement: HTMLAudioElement | null = null;
+
+/**
+ * Preview a name clip exactly as stored (bundled or worker asset URL).
+ *
+ * Unlike `playClonedBeaAudio`, this never routes through native TTS: passing a
+ * URL to the speech engine would read the address aloud. HTML5 Audio only.
+ */
+export async function previewVoiceClip(audioUrl: string): Promise<boolean> {
+  stopClonedBeaAudio();
+  if (!('window' in globalThis) || !('Audio' in globalThis)) return false;
+  try {
+    if (await attemptAudioPlay(audioUrl, 1.0, 1.0)) return true;
+    const wavFallback = resolveWavFallbackUrl(audioUrl);
+    if (wavFallback !== audioUrl) return attemptAudioPlay(wavFallback, 1.0, 1.0);
+    return false;
+  } catch (error) {
+    console.warn('Voice clip preview failed:', error);
+    return false;
+  }
+}
 
 /**
  * Fallback voice URL resolver.

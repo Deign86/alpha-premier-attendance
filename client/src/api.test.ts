@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, exportPayrollCsv, lockAdmin, openGeneratedFile, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, exportPayrollCsv, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -309,6 +310,68 @@ describe('admin session lifecycle', () => {
 
     // SAFETY: Removing test mock property from window
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+});
+
+describe('pollVoiceClipReady', () => {
+  const clip = (jobStatus: string | null, workerClip = false): VoiceClipState => ({
+    personId: 'u-voice',
+    workerClip,
+    jobStatus,
+  });
+
+  it('resolves ready once the job reads DONE and streams snapshots', async () => {
+    const snapshots: Array<VoiceClipState[]> = [];
+    const load = vi.fn()
+      .mockResolvedValueOnce([clip('PENDING')])
+      .mockResolvedValueOnce([clip('PROCESSING')])
+      .mockResolvedValueOnce([clip('DONE', true)]);
+    const outcome = await pollVoiceClipReady('u-voice', {
+      load,
+      onSnapshot: (states) => { snapshots.push(states); },
+      intervalMs: 5,
+      timeoutMs: 500,
+    });
+    expect(outcome).toBe('ready');
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(snapshots).toHaveLength(3);
+  });
+
+  it('ignores other people and stale rows until its own DONE', async () => {
+    const load = vi.fn()
+      .mockResolvedValueOnce([{ personId: 'someone-else', workerClip: true, jobStatus: 'DONE' }])
+      .mockResolvedValue([clip('DONE', true)]);
+    const outcome = await pollVoiceClipReady('u-voice', {
+      load,
+      intervalMs: 5,
+      timeoutMs: 500,
+    });
+    expect(outcome).toBe('ready');
+    expect(load.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('tolerates load failures and times out when DONE never arrives', async () => {
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue([{ personId: 'u-voice', workerClip: false, jobStatus: 'PENDING' }]);
+    const outcome = await pollVoiceClipReady('u-voice', {
+      load,
+      intervalMs: 5,
+      timeoutMs: 25,
+    });
+    expect(outcome).toBe('timeout');
+  });
+
+  it('aborts when cancelled', async () => {
+    const load = vi.fn();
+    const outcome = await pollVoiceClipReady('u-voice', {
+      load,
+      intervalMs: 5,
+      timeoutMs: 500,
+      isCancelled: () => true,
+    });
+    expect(outcome).toBe('aborted');
+    expect(load).not.toHaveBeenCalled();
   });
 });
 

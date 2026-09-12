@@ -33,12 +33,87 @@ import type {
   PayrollPdfGenerateRequest,
   PayrollPdfGenerateResponse,
   PayrollPdfListResponse,
+  VoiceClipState,
+  VoiceWorkerStatus,
 } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { tauriApi } from './tauri-api';
 import type { NativeDtrPendingItem, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
+
+export async function loadVoiceClipStates(): Promise<VoiceClipState[]> {
+  if (!runningInTauri()) return [];
+  try {
+    const states = await tauriApi.voiceClipStates();
+    return Array.isArray(states) ? states : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function loadVoiceWorkerStatus(): Promise<VoiceWorkerStatus | null> {
+  if (!runningInTauri()) return null;
+  try {
+    return await tauriApi.voiceWorkerStatus();
+  } catch {
+    return null;
+  }
+}
+
+export async function regenerateVoiceClip(personId: string): Promise<{ ok: boolean; spokenText?: string; error?: string }> {
+  if (!runningInTauri()) return { ok: false, error: 'Voice regeneration needs the desktop app.' };
+  try {
+    const spokenText = await tauriApi.voiceRegenerate(personId);
+    return { ok: true, spokenText };
+  } catch (error) {
+    return { ok: false, error: errorString(error) || 'Voice regeneration failed.' };
+  }
+}
+
+export type VoiceRegenOutcome = 'ready' | 'timeout' | 'aborted';
+
+export type VoiceRegenPollOptions = {
+  load: () => Promise<VoiceClipState[]>;
+  onSnapshot?: (states: VoiceClipState[]) => void;
+  intervalMs?: number;
+  timeoutMs?: number;
+  isCancelled?: () => boolean;
+};
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
+/**
+ * Poll clip states until one person's regeneration job reaches DONE.
+ * `regenerate` enqueues PENDING synchronously before returning, so DONE
+ * always means this run finished (workerClip alone can't prove that — a
+ * previous clip may already exist). Load failures are tolerated: the loop
+ * keeps polling until the timeout. Returns how the wait ended.
+ */
+export async function pollVoiceClipReady(personId: string, options: VoiceRegenPollOptions): Promise<VoiceRegenOutcome> {
+  const intervalMs = options.intervalMs ?? 2000;
+  const timeoutMs = options.timeoutMs ?? 120000;
+  const maxRounds = Math.max(1, Math.ceil(timeoutMs / intervalMs)) + 1;
+  for (let round = 0; round < maxRounds; round += 1) {
+    if (options.isCancelled?.()) return 'aborted';
+    await sleep(intervalMs);
+    if (options.isCancelled?.()) return 'aborted';
+    let states: VoiceClipState[] = [];
+    try {
+      states = await options.load();
+    } catch {
+      states = [];
+    }
+    if (states.length > 0) options.onSnapshot?.(states);
+    const mine = states.find((state) => state.personId === personId);
+    if (mine?.jobStatus === 'DONE') return 'ready';
+    if (round >= maxRounds - 1) return 'timeout';
+  }
+  return 'timeout';
+}
 import { apiUrl } from './network';
 
 export async function pickRestoreBackupFile(): Promise<string | null> {

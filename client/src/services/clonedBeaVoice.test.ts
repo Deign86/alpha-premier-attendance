@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
+  getWorkerNameAudioUrl,
+  previewVoiceClip,
+  resolveVoiceSlot,
   resolveWavFallbackUrl,
   isClonedBeaPhraseAvailable,
   setNameManifest,
@@ -106,6 +109,35 @@ describe('clonedBeaVoice', () => {
 
     it('returns false for unavailable phrase', () => {
       expect(isClonedBeaPhraseAvailable('Unknown phrase')).toBe(false);
+    });
+  });
+
+  describe('resolveVoiceSlot', () => {
+    it('prefers worker clips, then queue, then manifest', () => {
+      expect(resolveVoiceSlot(true, 'DONE', null)).toBe('cloned');
+      expect(resolveVoiceSlot(false, null, '/voices/bea/names/X.mp3')).toBe('cloned');
+      expect(resolveVoiceSlot(false, 'PENDING', null)).toBe('queued');
+      expect(resolveVoiceSlot(false, 'RETRY', null)).toBe('queued');
+      expect(resolveVoiceSlot(false, 'PROCESSING', null)).toBe('queued');
+      expect(resolveVoiceSlot(false, 'DONE', null)).toBe('fallback');
+      expect(resolveVoiceSlot(false, null, null)).toBe('fallback');
+    });
+  });
+
+  describe('getWorkerNameAudioUrl', () => {
+    it('returns null without a person id', async () => {
+      await expect(getWorkerNameAudioUrl(null)).resolves.toBeNull();
+      await expect(getWorkerNameAudioUrl('   ')).resolves.toBeNull();
+    });
+
+    it('returns null outside Tauri without invoking the backend', async () => {
+      await expect(getWorkerNameAudioUrl('APG-2026-102')).resolves.toBeNull();
+    });
+  });
+
+  describe('previewVoiceClip', () => {
+    it('resolves false without throwing when HTML Audio is unavailable', async () => {
+      await expect(previewVoiceClip('/voices/bea/names/APG-2026-102.mp3')).resolves.toBe(false);
     });
   });
 });

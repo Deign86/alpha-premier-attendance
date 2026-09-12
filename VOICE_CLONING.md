@@ -45,7 +45,10 @@ To deliver studio-quality voice cloning without demanding GPU hardware or high-l
 ## 1. Prerequisites for Voice Generation (Admin / Dev PC Only)
 
 > [!IMPORTANT]
-> Voice generation is performed **exclusively on the admin/developer machine**. The kiosk PC **never runs VoiceStudio or cloning inference**.
+> Batch generation below is now the **backfill path**. Day-to-day, the kiosk
+> pulls name clips automatically (see §5): registration enqueues a job, the
+> kiosk calls the configured VoiceStudio host over LAN, and the mp3 lands
+> without rebuilds or GitHub uploads.
 
 ### Admin Hardware & Software Requirements
 - **OS**: Windows 10/11 x64
@@ -53,6 +56,13 @@ To deliver studio-quality voice cloning without demanding GPU hardware or high-l
 - **VoiceStudio**: Installed and running locally ([`debpalash/VoiceStudio`](https://github.com/debpalash/VoiceStudio))
 - **VoiceStudio API Endpoint**: `http://127.0.0.1:3900`
 - **Active Voice Profile**: `"Ma'am Bea"` (Profile ID: `1b3e828b`)
+
+### VoiceStudio Host Requirements (any capable LAN PC)
+- **OS**: Windows 10/11 x64 with VoiceStudio installed and backend reachable on port `3900`.
+- **LAN bind**: VoiceStudio must listen on the LAN address, not `127.0.0.1` — otherwise the kiosk cannot reach it. Verify from the kiosk with the Voice Announcements → Test Connection button.
+- **Voice profile**: a profile named like `"Ma'am Bea"` must exist (auto-discovered by name; ids differ per PC).
+- **ffmpeg on the host**: required for mp3 output. Without it the host answers wav and the kiosk job stays queued with an explicit error.
+- **Kiosk setting**: Voice Announcements → VoiceStudio Server holds the host URL (default `http://127.0.0.1:3900`). No software is installed on the host beyond stock VoiceStudio.
 
 ### Reference Audio Locations (Admin PC Only)
 - `resources/voices/bea/main.wav` (Neutral/Welcoming greeting tone, $F_0 \approx 130\text{ Hz}$)
@@ -164,16 +174,23 @@ You can update the kiosk's name audio files live while the kiosk is running:
 
 ---
 
-## 5. What Happens for Future Registrations? (Hybrid Fallback)
+## 5. What Happens for Future Registrations? (Automatic Queue + Hybrid Fallback)
 
-Maintainers do **not** need to generate cloned audio immediately for every single newly registered cardholder:
-- If an unknown or future user scans their RFID card, the app checks `bea-name-manifest.json`.
-- When the name is not in the cache, the app immediately plays:
+New registrations need **no manual generation**:
+1. Saving an ACTIVE INTERN/EMPLOYEE enqueues a `voice_jobs` row with the spoken name text.
+2. Every 30s the kiosk worker pulls the oldest due job: `POST <host>/v1/audio/speech`
+   (Bea profile auto-discovered, mp3) → `<data_dir>/voices/bea/names/<personId>.mp3`.
+3. Playback checks the worker clip first (asset URL), then the bundled manifest.
+4. Host offline → job retries with backoff (1m → 6h cap); Piper Tier 2 covers playback meanwhile.
+
+The batch script (`--missing-only`) remains as the backfill tool for cohorts enrolled
+while the host was unreachable.
+
+When the name is not in the cache, the app immediately plays:
   1. Cloned Bea greeting: `"Good morning,"`
   2. Local Piper TTS: `"<Full Name>"` (via fast offline C++ binary)
   3. Cloned Bea status: `"Your time in has been recorded."`
 - The intern/employee is welcomed seamlessly with zero delay.
-- At the start of the next payroll cutoff or semester, the admin can run `npm run voice:generate-existing-names -- --missing-only` to upgrade those users to fully cloned voices.
 
 ---
 
