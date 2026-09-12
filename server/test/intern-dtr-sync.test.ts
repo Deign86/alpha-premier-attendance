@@ -22,6 +22,8 @@ import {
   planPush,
   executePush,
   planRowFormat,
+  dtrStaleReason,
+  sheetTimeSecs,
   resolveUserTab,
   userLastToken,
   type AttendanceDay,
@@ -376,6 +378,58 @@ describe('planPush', () => {
   it('throws on duplicate date rows (fail closed)', async () => {
     const client = makeClient({ 'ROSADO RAINEER': [...baseRows, ['9/5/2026', '', '', '', '', '0']] });
     await expect(planPush(client, DAY, ROSTER)).rejects.toThrow(/duplicate date rows/);
+  });
+  it('stale-skips a local working record over a completed sheet row', async () => {
+    const completed = [
+      baseRows[0],
+      ['9/5/2026', '7:24:00 AM', '', '', '5:00:00 PM', '8'],
+    ];
+    const client = makeClient({ 'ROSADO RAINEER': completed });
+    const working: AttendanceDay = { ...DAY, timeOut: null };
+    const plan = await planPush(client, working, ROSTER);
+    expect(plan.skipped).toBe(true);
+    expect(plan.reason).toMatch(/stale skip/);
+    await executePush(client, plan);
+    expect(client.writes).toEqual([]);
+  });
+  it('stale-skips an older local clock-out over a newer sheet clock-out', async () => {
+    const completed = [
+      baseRows[0],
+      ['9/5/2026', '7:24:00 AM', '', '', '5:00:00 PM', '8'],
+    ];
+    const client = makeClient({ 'ROSADO RAINEER': completed });
+    const older: AttendanceDay = { ...DAY, timeOut: '2026-09-05T16:00:00+08:00' };
+    const plan = await planPush(client, older, ROSTER);
+    expect(plan.skipped).toBe(true);
+    expect(plan.reason).toMatch(/stale skip/);
+    expect(client.writes).toEqual([]);
+  });
+  it('writes a newer local clock-out over an older sheet row', async () => {
+    const older = [
+      baseRows[0],
+      ['9/5/2026', '7:24:00 AM', '', '', '4:00:00 PM', '8'],
+    ];
+    const client = makeClient({ 'ROSADO RAINEER': older });
+    const plan = await planPush(client, DAY, ROSTER);
+    expect(plan.skipped).toBe(false);
+  });
+});
+
+describe('sheetTimeSecs', () => {
+  it('parses sheet wall-clock cells', () => {
+    expect(sheetTimeSecs('9:46:23 AM')).toBe(9 * 3600 + 46 * 60 + 23);
+    expect(sheetTimeSecs('12:00:00 PM')).toBe(12 * 3600);
+    expect(sheetTimeSecs('12:00:00 AM')).toBe(0);
+    expect(sheetTimeSecs('5:00:00 PM')).toBe(17 * 3600);
+    expect(sheetTimeSecs('')).toBeNull();
+    expect(sheetTimeSecs('TOTAL HOURS')).toBeNull();
+    expect(sheetTimeSecs('13:00:00 PM')).toBeNull();
+  });
+  it('rates staleness timestamp-wins', () => {
+    expect(dtrStaleReason(['8:00:00 AM', '', '', '5:00:00 PM'], ['8:00:00 AM', '', '', ''])).not.toBeNull();
+    expect(dtrStaleReason(['8:00:00 AM', '', '', '5:00:00 PM'], ['8:00:00 AM', '', '', '4:00:00 PM'])).not.toBeNull();
+    expect(dtrStaleReason(['8:00:00 AM', '', '', '4:00:00 PM'], ['8:00:00 AM', '', '', '5:00:00 PM'])).toBeNull();
+    expect(dtrStaleReason(['', '', '', ''], ['8:00:00 AM', '', '', '5:00:00 PM'])).toBeNull();
   });
 });
 

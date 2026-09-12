@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Intern-DTR per-device kill switch**: Admin → Data toggle stored in local SQLite (`app_settings.intern_dtr_sync_enabled`, default ON), plus `INTERN_DTR_SYNC_ENABLED` for the server CLI and `ALPHA_PREMIER_DTR_SYNC_ENABLED` env override for the desktop app. While OFF, scans/corrections don't enqueue, manual sync refuses, and queued rows stay PENDING (never dropped) until re-enabled. New Tauri commands `admin_get_intern_dtr_sync` / `admin_set_intern_dtr_sync`.
+- **DTR timestamp-wins guard**: every write path (queue push, history backfill, manual sync, server CLI) now compares live sheet B:E against local stamps — a local record with no clock-out never touches stamped rows, and a sheet stamp at/after the local (post-cap) stamp wins with a `Stale` skip (painted, logged, no write). A stale device can no longer rewind a newer push.
+
 ## [0.1.61] - 2026-09-12
 
 ### Added

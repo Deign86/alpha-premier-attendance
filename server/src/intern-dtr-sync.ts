@@ -357,6 +357,55 @@ export function formatSheetTime(isoManila: string): string {
   return dt.toFormat('h:mm:ss a').toUpperCase();
 }
 
+/** Parse a sheet wall-clock cell (`h:mm:ss AM/PM`) → seconds since
+ *  midnight. Null when blank or non-time text (owner notes, labels)
+ *  so garbage never wins a comparison. Mirrors the Rust
+ *  `sheet_time_secs` (one must change when the other does). */
+export function sheetTimeSecs(cell: string): number | null {
+  const text = cell.trim().toUpperCase();
+  const isAm = text.endsWith(' AM');
+  const isPm = text.endsWith(' PM');
+  if (!isAm && !isPm) return null;
+  const parts = text.slice(0, -3).split(':');
+  if (parts.length !== 3) return null;
+  const h = Number(parts[0]?.trim());
+  const m = Number(parts[1]?.trim());
+  const s = Number(parts[2]?.trim());
+  if (!Number.isInteger(h) || !Number.isInteger(m) || !Number.isInteger(s)) return null;
+  if (h < 1 || h > 12 || m < 0 || m > 59 || s < 0 || s > 59) return null;
+  const h24 = isPm ? (h % 12) + 12 : h % 12;
+  return h24 * 3600 + m * 60 + s;
+}
+
+/** Timestamp-wins: Null = the DB-derived `values` may overwrite the
+ *  live `existing` B:E cells; a string = skip reason (sheet is newer).
+ *  A local record with no clock-out never touches stamped sheet rows;
+ *  a sheet stamp at/after the local (post-cap) stamp wins; an empty
+ *  sheet row always accepts the local write. */
+export function dtrStaleReason(
+  existing: [string, string, string, string],
+  values: [string, string, string, string],
+): string | null {
+  let sheetLatest: number | null = null;
+  for (const cell of existing) {
+    const t = sheetTimeSecs(cell);
+    if (t !== null && (sheetLatest === null || t > sheetLatest)) sheetLatest = t;
+  }
+  const dbDone = values.slice(1).some((c) => c.trim() !== '');
+  if (!dbDone) {
+    return sheetLatest === null ? null : 'sheet newer: local record has no clock-out';
+  }
+  let dbLatest: number | null = null;
+  for (const cell of values) {
+    const t = sheetTimeSecs(cell);
+    if (t !== null && (dbLatest === null || t > dbLatest)) dbLatest = t;
+  }
+  if (sheetLatest !== null && dbLatest !== null && sheetLatest >= dbLatest) {
+    return 'sheet newer: sheet clock-out at/after local';
+  }
+  return null;
+}
+
 /**
  * True when the worked span is under 4 hours — NEVER a half day (DTR
  * display rule, mirrors the Rust side): actual stamps land in their
@@ -698,6 +747,18 @@ export async function planPush(
       values,
       skipped: true,
       reason: 'already in sync',
+    };
+  }
+  // Timestamp-wins: a stale local DB must never rewind a newer sheet.
+  const stale = dtrStaleReason(existing, values);
+  if (stale !== null) {
+    return {
+      record,
+      tab: resolved.tab,
+      row1Based: idx + 1,
+      values,
+      skipped: true,
+      reason: `stale skip: ${stale}`,
     };
   }
   return {

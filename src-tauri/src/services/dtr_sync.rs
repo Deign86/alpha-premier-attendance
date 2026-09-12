@@ -53,6 +53,117 @@ pub const DTR_LUNCH_OUT: &str = "12:00:00 PM";
 #[allow(dead_code)]
 pub const DTR_LUNCH_IN: &str = "1:00:00 PM";
 
+/// Per-device kill switch for intern-DTR pushes, stored in the LOCAL
+/// SQLite `app_settings` table (key below, `"1"`/`"0"`). Local DB =
+/// per-device, so switching one PC off never affects the other.
+/// Default ON (historical behavior); env `ALPHA_PREMIER_DTR_SYNC_ENABLED`
+/// (`0`/`false`/`off` → off, `1`/`true`/`on` → on) wins when set.
+pub const DTR_SYNC_ENABLED_KEY: &str = "intern_dtr_sync_enabled";
+pub const ENV_DTR_SYNC_ENABLED: &str = "ALPHA_PREMIER_DTR_SYNC_ENABLED";
+
+/// True when this device may push to the human DTR sheet. Env override
+/// first, then the local `app_settings` row, defaulting to ON when the
+/// table/row is absent (fresh DBs keep syncing until an admin opts out).
+pub async fn is_dtr_sync_enabled(db: &sqlx::SqlitePool) -> bool {
+    if let Ok(raw) = std::env::var(ENV_DTR_SYNC_ENABLED) {
+        match raw.trim().to_lowercase().as_str() {
+            "0" | "false" | "no" | "off" => return false,
+            "1" | "true" | "yes" | "on" => return true,
+            _ => {}
+        }
+    }
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    )
+    .execute(db)
+    .await;
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
+        .bind(DTR_SYNC_ENABLED_KEY)
+        .fetch_optional(db)
+        .await
+        .unwrap_or(None);
+    !matches!(
+        value.as_deref().map(str::trim),
+        Some("0") | Some("false") | Some("no") | Some("off")
+    )
+}
+
+/// Persist the per-device toggle from the Admin UI. Missing table is
+/// created inline so the very first toggle never fails on older DBs.
+pub async fn set_dtr_sync_enabled(db: &sqlx::SqlitePool, enabled: bool) -> Result<(), String> {
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    )
+    .execute(db)
+    .await;
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    )
+    .bind(DTR_SYNC_ENABLED_KEY)
+    .bind(if enabled { "1" } else { "0" })
+    .bind(&now)
+    .execute(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Parse a sheet wall-clock cell (`h:mm:ss AM/PM`, e.g. `9:46:23 AM`)
+/// → seconds since midnight. None when blank or non-time text
+/// (owner notes, formula labels) so garbage never wins a comparison.
+pub fn sheet_time_secs(cell: &str) -> Option<i64> {
+    let text = cell.trim().to_ascii_uppercase();
+    let (clock, pm) = if let Some(c) = text.strip_suffix(" AM") {
+        (c, false)
+    } else if let Some(c) = text.strip_suffix(" PM") {
+        (c, true)
+    } else {
+        return None;
+    };
+    let mut parts = clock.split(':');
+    let hour: i64 = parts.next()?.trim().parse().ok()?;
+    let minute: i64 = parts.next()?.trim().parse().ok()?;
+    let second: i64 = parts.next()?.trim().parse().ok()?;
+    if parts.next().is_some()
+        || !(1..=12).contains(&hour)
+        || !(0..60).contains(&minute)
+        || !(0..60).contains(&second)
+    {
+        return None;
+    }
+    let hour24 = if pm { hour % 12 + 12 } else { hour % 12 };
+    Some(hour24 * 3600 + minute * 60 + second)
+}
+
+/// Timestamp-wins: decide whether DB-derived `values` may overwrite the
+/// live `existing` B:E cells. Returns a skip reason when the sheet is
+/// newer (another device already pushed further), else None (write may
+/// proceed). Rules: a local record with no clock-out never touches a
+/// sheet row that already has stamps; a sheet stamp at/after the local
+/// (post-cap) stamp wins, so a stale device never rewinds a newer push;
+/// an empty sheet row always accepts the local write. Garbage sheet text
+/// parses to nothing and never wins a comparison on its own.
+pub fn dtr_stale_reason(existing: &[String; 4], values: &[String; 4]) -> Option<&'static str> {
+    let sheet_latest = existing.iter().filter_map(|c| sheet_time_secs(c)).max();
+    let db_done = values[1..].iter().any(|c| !c.trim().is_empty());
+    if !db_done {
+        // Local WORKING record: only safe when the sheet row is empty too.
+        if sheet_latest.is_some() {
+            return Some("sheet newer: local record has no clock-out");
+        }
+        return None;
+    }
+    let db_latest = values.iter().filter_map(|c| sheet_time_secs(c)).max();
+    match (sheet_latest, db_latest) {
+        (Some(sheet), Some(local)) if sheet >= local => {
+            Some("sheet newer: sheet clock-out at/after local")
+        }
+        _ => None,
+    }
+}
+
 /// DTR data-cell paint (B:E only — F TOTAL and H:J counters are formula
 /// territory and never enter a format range).
 /// Measured 2026-09-05 from the live INTERN DTR 2026 sheet via
@@ -1112,6 +1223,9 @@ fn sheet_id_for_tab(meta: &[DtrTabMeta], tab: &str) -> Option<i64> {
 enum DtrPlanOutcome {
     Write(DtrPushPlan),
     InSync { row_1based: usize },
+    /// Sheet already holds equal-or-newer stamps (stale local DB): no
+    /// write, but the day counts as converged (paint + clear pending).
+    Stale { row_1based: usize, reason: &'static str },
     Unresolvable(&'static str),
 }
 
@@ -1179,6 +1293,14 @@ async fn plan_dtr_push_outcome(
     ];
     if existing == values {
         return Ok(DtrPlanOutcome::InSync { row_1based: idx + 1 });
+    }
+    // Timestamp-wins: a stale local DB must never rewind a newer sheet.
+    if let Some(reason) = dtr_stale_reason(&existing, &values) {
+        log::warn!(
+            "dtr stale skip for {full_name} ({user_id}) on {attendance_date} in '{tab}' row {}: {reason}",
+            idx + 1
+        );
+        return Ok(DtrPlanOutcome::Stale { row_1based: idx + 1, reason });
     }
     Ok(DtrPlanOutcome::Write(DtrPushPlan {
         tab,
@@ -1469,7 +1591,7 @@ pub async fn push_dtr_row(
             clear_dtr_pending(state, &user_id).await?;
             Ok(true)
         }
-        DtrPlanOutcome::InSync { row_1based } => {
+        DtrPlanOutcome::InSync { row_1based } | DtrPlanOutcome::Stale { row_1based, .. } => {
             let ops = plan_row_format(sheet_id, row_1based, kind);
             // P1: same log-only rule as the Write branch above.
             if let Err(error) =
@@ -1603,7 +1725,7 @@ async fn backfill_user_history(
                     row_ops.extend(plan_row_format(sheet_id, plan.row_1based, kind));
                     page_results.push(BackfillDayResult::Wrote);
                 }
-                DtrPlanOutcome::InSync { row_1based } => {
+                DtrPlanOutcome::InSync { row_1based } | DtrPlanOutcome::Stale { row_1based, .. } => {
                     row_ops.extend(plan_row_format(sheet_id, row_1based, kind));
                     page_results.push(BackfillDayResult::InSync);
                 }
@@ -1753,6 +1875,9 @@ pub async fn manual_sync_intern_dtr(
     target_user_id: Option<&str>,
 ) -> Result<ManualSyncReport, String> {
     use sqlx::Row;
+    if !is_dtr_sync_enabled(&state.db).await {
+        return Err("Intern DTR sync is disabled on this device (Admin → Data → DTR sync toggle)".to_string());
+    }
     let spreadsheet_id = crate::config::dtr_spreadsheet_id_resolved(&state.lan)
         .ok_or_else(|| "DTR spreadsheet ID is not configured".to_string())?;
     let path = state.lan.google_service_account_json_path.as_deref()
@@ -1978,6 +2103,94 @@ mod tests {
         );
         assert_eq!(parse_sheet_date("TOTAL HOURS"), None);
         assert_eq!(parse_sheet_date("9/2/2026 "), Some(DateParts { y: 2026, m: 9, d: 2 }));
+    }
+
+    #[test]
+    fn parses_sheet_times_to_seconds() {
+        assert_eq!(sheet_time_secs("9:46:23 AM"), Some(9 * 3600 + 46 * 60 + 23));
+        assert_eq!(sheet_time_secs("12:00:00 PM"), Some(12 * 3600));
+        assert_eq!(sheet_time_secs("12:00:00 AM"), Some(0));
+        assert_eq!(sheet_time_secs("5:00:00 PM"), Some(17 * 3600));
+        assert_eq!(sheet_time_secs(" 7:24:00 am "), Some(7 * 3600 + 24 * 60));
+        assert_eq!(sheet_time_secs(""), None);
+        assert_eq!(sheet_time_secs("TOTAL HOURS"), None);
+        assert_eq!(sheet_time_secs("done"), None);
+        assert_eq!(sheet_time_secs("13:00:00 PM"), None);
+        assert_eq!(sheet_time_secs("9:46 AM"), None);
+    }
+
+    #[test]
+    fn stale_guard_blocks_working_over_completed() {
+        // Stale device: local record never clocked out, sheet completed.
+        let existing = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "5:00:00 PM".to_string(),
+        ];
+        let values = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ];
+        assert!(dtr_stale_reason(&existing, &values).is_some());
+    }
+
+    #[test]
+    fn stale_guard_sheet_newer_clock_out_wins() {
+        let existing = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "5:00:00 PM".to_string(),
+        ];
+        let older = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "4:00:00 PM".to_string(),
+        ];
+        assert!(dtr_stale_reason(&existing, &older).is_some());
+    }
+
+    #[test]
+    fn stale_guard_local_newer_clock_out_writes() {
+        let existing = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "4:00:00 PM".to_string(),
+        ];
+        let newer = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "5:00:00 PM".to_string(),
+        ];
+        assert_eq!(dtr_stale_reason(&existing, &newer), None);
+    }
+
+    #[test]
+    fn stale_guard_empty_sheet_accepts_write() {
+        let existing = [String::new(), String::new(), String::new(), String::new()];
+        let values = [
+            "8:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "5:00:00 PM".to_string(),
+        ];
+        assert_eq!(dtr_stale_reason(&existing, &values), None);
+    }
+
+    #[tokio::test]
+    async fn dtr_sync_toggle_defaults_on_and_persists() {
+        let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        assert!(is_dtr_sync_enabled(&db).await);
+        set_dtr_sync_enabled(&db, false).await.unwrap();
+        assert!(!is_dtr_sync_enabled(&db).await);
+        set_dtr_sync_enabled(&db, true).await.unwrap();
+        assert!(is_dtr_sync_enabled(&db).await);
     }
 
     #[test]

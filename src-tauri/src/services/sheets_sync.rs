@@ -2376,11 +2376,16 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         state.lan.google_service_account_json_path.as_deref(),
         dtr_sheet.as_deref(),
     ) {
-        let pending_count: i64 =
+        // Kill switch: while disabled the recheck (which backfills and
+        // writes) is skipped entirely; pending rows keep accumulating.
+        let pending_count: i64 = if crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await {
             sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
                 .fetch_one(&state.db)
                 .await
-                .unwrap_or(0);
+                .unwrap_or(0)
+        } else {
+            0
+        };
         if pending_count > 0 {
             match google_access_token(path).await {
                 Ok(token) => {
@@ -2453,8 +2458,19 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
     let mut completed = 0;
     let mut schema_mismatch = false;
     let mut touched: HashSet<String> = HashSet::new();
+    // Per-device kill switch, resolved once per tick: while disabled,
+    // InternDtr rows are left PENDING (never claimed, never dropped) so
+    // re-enabling resumes exactly where the queue stopped. A stale
+    // device must neither push punches nor clear cells.
+    let dtr_upload_allowed = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
     for row in rows {
         let id: i64 = row.get("id");
+        if !dtr_upload_allowed {
+            let table_name: String = row.get("table_name");
+            if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+                continue;
+            }
+        }
         let claimed = sqlx::query("UPDATE sync_queue SET status='PROCESSING',locked_at=?,updated_at=? WHERE id=? AND status IN ('PENDING','RETRY')").bind(&now).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
         if claimed.rows_affected() != 1 {
             continue;

@@ -718,6 +718,36 @@ export async function syncInternDtr(userId?: string): Promise<AdminSyncDtrRespon
   };
 }
 
+export interface InternDtrSyncToggle {
+  success: boolean;
+  enabled: boolean;
+  error?: { message: string };
+}
+
+/** Per-device DTR kill switch state (local SQLite; OFF here never affects deployment). */
+export async function getInternDtrSync(): Promise<InternDtrSyncToggle> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.getInternDtrSync(nativeAdminToken ?? '');
+    } catch (error) {
+      return { success: false, enabled: true, error: { message: errorString(error) } };
+    }
+  }
+  return { success: false, enabled: true, error: { message: 'DTR sync toggle is available in the desktop application.' } };
+}
+
+/** Persist the per-device toggle. Returns the stored state. */
+export async function setInternDtrSync(enabled: boolean): Promise<InternDtrSyncToggle> {
+  if (runningInTauri()) {
+    try {
+      return await tauriApi.setInternDtrSync(nativeAdminToken ?? '', enabled);
+    } catch (error) {
+      return { success: false, enabled: true, error: { message: errorString(error) } };
+    }
+  }
+  return { success: false, enabled: true, error: { message: 'DTR sync toggle is available in the desktop application.' } };
+}
+
 export interface DtrSyncTableStatus {
   tableName: string;
   pending: number;

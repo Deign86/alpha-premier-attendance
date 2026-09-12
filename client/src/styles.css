@@ -327,6 +327,9 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .sync-badge.pending { color: var(--gold-bright); border-color: var(--gold-soft); }
 .sync-badge.attention { color: var(--danger); border-color: #955e4f; }
 .sync-badge.idle { color: var(--quiet); border-color: var(--line-bright); }
+.sync-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: .72rem; font-weight: 700; color: var(--gold-bright); cursor: pointer; }
+.sync-toggle input { width: 16px; height: 16px; accent-color: var(--gold-bright); cursor: pointer; }
+.sync-toggle:has(input:disabled) { opacity: .55; cursor: wait; }
 .sync-health-rows { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .sync-health-rows li { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .76rem; }
 .sync-health-rows code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--gold-bright); overflow-wrap: anywhere; }

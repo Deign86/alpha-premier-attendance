@@ -72,6 +72,19 @@ function parseArgs(argv: string[]): Args {
   return out;
 }
 
+/** Minimal KEY=VALUE reader for server/.env (INTERN_DTR_SYNC_ENABLED flag). */
+function readEnvFlag(serverDir: string, name: string): string {
+  const direct = (process.env[name] ?? '').trim();
+  if (direct !== '') return direct;
+  const envPath = path.join(serverDir, '.env');
+  if (!fs.existsSync(envPath)) return '';
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const m = new RegExp(`^${name}\\s*=\\s*(.+?)\\s*$`).exec(line.trim());
+    if (m) return (m[1] ?? '').replace(/^["']|["']$/g, '');
+  }
+  return '';
+}
+
 /** Minimal KEY=VALUE parser for server/.env (only INTERN_DTR_SHEET_ID is read). */
 function readEnvSheetId(serverDir: string): string | null {
   const envPath = path.join(serverDir, '.env');
@@ -258,6 +271,14 @@ function describePlan(p: PushPlan): string {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  // Per-device kill switch (local server/.env): OFF here never affects
+  // deployment. Default ON — the CLI is an explicit manual action.
+  const serverDirForFlag = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const syncFlag = readEnvFlag(serverDirForFlag, 'INTERN_DTR_SYNC_ENABLED').toLowerCase();
+  if (['0', 'false', 'no', 'off'].includes(syncFlag)) {
+    console.log('intern DTR sync disabled on this device (INTERN_DTR_SYNC_ENABLED=0) — nothing to do');
+    return;
+  }
   const serverDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const sheetId = args.sheet ?? readEnvSheetId(serverDir);
   if (!sheetId) {

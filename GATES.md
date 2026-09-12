@@ -635,3 +635,14 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: npm run typecheck && npm run lint:oxlint && npm test -w client + Tauri screenshots 08, 12–15
   EXPECT: gates exit 0; each screenshot shows the finding resolved
   EVIDENCE: measured 2026-09-12 — typecheck 0, oxlint 0, client 258/258 (15 files). 01 font: 3 @font-face → 1 variable face (`font-weight: 400 900`), binaries verified genuine via gstatic hash match, redundant copies deleted (shot 08). 02 users table: one class, cells single-line (shot 12). 03 payroll: nowrap headers + sticky cols 1–3, whole-word headers (shot 13). 04 voice pill: one-line pill + `Retrying` copy (shot 14). 05 sync card: inline `Retry sync now` (shot 15). Incident mid-work: vite dev served empty CSS after the font-file swap (stale HMR graph, file valid — prod build 83KB CSS fine); fixed by touching styles.css to force re-transform, no restart needed.
+
+## Intern-DTR per-device kill switch + timestamp-wins (2026-09-12)
+
+- [x] Personal PC can no longer overwrite deployment sheet data: Admin → Data toggle (per-device, local SQLite `app_settings`), server CLI env/file gate, timestamp-wins on every write path.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib && npm test -w server && npm test -w client -- src/App.test.tsx src/database-panel.test.tsx src/api.test.ts && npm run lint:oxlint && npm run typecheck && npm run sync:intern-dtr -w server -- --date 2026-09-05
+  EXPECT: cargo 285/285; server 175/175 (17 files); client 89/89 (3 files); oxlint + typecheck exit 0; CLI prints `disabled on this device` and exits 0
+  EVIDENCE: measured 2026-09-12 — cargo lib 285/285 (incl. 6 new: sheet-time parse, 4 stale-guard cases, toggle default-ON + persist round-trip); server 175/175; client 89/89; CLI on this PC exits early via INTERN_DTR_SYNC_ENABLED=0. This PC seeded OFF in live attendance.db (`intern_dtr_sync_enabled=0`) + server/.env.
+- [x] Works while OFF without data loss, converges when re-enabled.
+  CHECK: code path review of sheets_sync run_once + push/backfill/manaul outcomes
+  EXPECT: disabled tick skips InternDtr rows BEFORE claim (rows stay PENDING, never SYNCED-unwritten); Stale outcome paints + clears pending like InSync, never writes; DELETE clears also gated while OFF
+  EVIDENCE: `dtr_upload_allowed` resolved once per tick, `continue` precedes the claim UPDATE; `DtrPlanOutcome::Stale` shares the InSync arms in push_dtr_row + backfill_user_history; manual_sync + enqueue_intern_dtr + scan-path inline check all refuse while OFF. Timestamp rule: local WORKING never touches stamped rows; sheet stamp at/after local (post-cap) wins; empty sheet always accepts local write.
