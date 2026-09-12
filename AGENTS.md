@@ -45,7 +45,7 @@ Follow the rules in `.agent/rules/` and `.agents/rules/` (`ponytail.md`, `unlazy
 
 ### Output Style (i-have-adhd, Always-On Every Prompt)
 
-Full rules vendored at `.agents/skills/i-have-adhd/SKILL.md` (mirrored in `.agent/skills/`). Shape every response so it can be acted on:
+Full rules live in the global `i-have-adhd` skill (`~/.pi/agent/git/github.com/ayghri/i-have-adhd/skills/i-have-adhd/SKILL.md`). Shape every response so it can be acted on:
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
 3. End with one next action doable in under two minutes.
