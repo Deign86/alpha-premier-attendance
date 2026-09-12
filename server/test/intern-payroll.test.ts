@@ -153,4 +153,72 @@ describe('intern payroll policy', () => {
       graceAvailable: true,
     })).toThrow('earlier than time-in');
   });
+
+  it('A2: morning half-day closed before office close pays an effective 12:00 time-out', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T15:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result.isHalfDay).toBe(true);
+    expect(result.computedTimeOut).toBe('2026-07-28T12:00:00+08:00');
+  });
+
+  it('A2: afternoon arrival at/after 12:00 is not replaced with a 12:00 time-out', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T12:30:00+08:00',
+      actualTimeOut: '2026-07-28T16:30:00+08:00',
+      graceAvailable: false,
+    });
+    expect(result.isHalfDay).toBe(true);
+    expect(result.computedTimeOut).toBe('2026-07-28T16:30:00+08:00');
+  });
+
+  it('A2: a clock-out exactly at 17:00 is not replaced with a 12:00 time-out', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result.isHalfDay).toBe(false);
+    expect(result.computedTimeOut).toBe('2026-07-28T17:00:00+08:00');
+  });
+
+  it('A2: a post-18:00 clock-out caps to 17:00 before the half-day rule runs', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T18:30:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result.isHalfDay).toBe(false);
+    expect(result.computedTimeOut).toBe('2026-07-28T17:00:00+08:00');
+  });
+
+  it('A2: the non-morning-half-day else branch returns the capped stamp unchanged', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T13:30:00+08:00',
+      actualTimeOut: '2026-07-28T16:45:00+08:00',
+      graceAvailable: false,
+    });
+    expect(result.isHalfDay).toBe(true);
+    expect(result.computedTimeOut).toBe('2026-07-28T16:45:00+08:00');
+  });
+
+  it('A2: 17:30 stays 17:30 where the employee engine floors to 17:00', () => {
+    // Locks the intentional intern/employee difference at the exact value the
+    // Rust engines assert, so the two stacks cannot drift apart unnoticed.
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:30:00+08:00',
+      graceAvailable: false,
+    });
+    expect(result.isHalfDay).toBe(false);
+    expect(result.computedTimeOut).toBe('2026-07-28T17:30:00+08:00');
+  });
 });

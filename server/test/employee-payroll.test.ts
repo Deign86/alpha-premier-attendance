@@ -137,4 +137,66 @@ describe('employee payroll policy', () => {
       dailyRate: 600,
     })).toThrow('UTC offset');
   });
+
+  it('A2: morning half-day closed before office close pays an effective 12:00 time-out', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T15:00:00+08:00',
+      dailyRate: 600,
+    });
+    expect(result.isHalfDay).toBe(true);
+    expect(result.computedTimeOut).toBe('2026-07-28T12:00:00+08:00');
+  });
+
+  it('A2: afternoon arrival at/after 12:00 is not replaced with a 12:00 time-out', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T12:30:00+08:00',
+      actualTimeOut: '2026-07-28T16:30:00+08:00',
+      dailyRate: 600,
+    });
+    expect(result.isHalfDay).toBe(true);
+    expect(result.computedTimeOut).toBe('2026-07-28T16:00:00+08:00');
+  });
+
+  it('A2: a clock-out exactly at 17:00 is not replaced with a 12:00 time-out', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
+      dailyRate: 600,
+    });
+    expect(result.isHalfDay).toBe(false);
+    expect(result.computedTimeOut).toBe('2026-07-28T17:00:00+08:00');
+  });
+
+  it('A2: a post-18:00 clock-out caps to 17:00 before the half-day rule runs', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T18:30:00+08:00',
+      dailyRate: 600,
+    });
+    expect(result.isHalfDay).toBe(false);
+    expect(result.computedTimeOut).toBe('2026-07-28T17:00:00+08:00');
+  });
+
+  it('A2: the non-morning-half-day else branch floors the time-out to the hour', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T13:30:00+08:00',
+      actualTimeOut: '2026-07-28T16:45:00+08:00',
+      dailyRate: 600,
+    });
+    expect(result.isHalfDay).toBe(true);
+    expect(result.computedTimeOut).toBe('2026-07-28T16:00:00+08:00');
+  });
+
+  it('A2: 17:30 floors to 17:00 where the intern engine keeps 17:30', () => {
+    // Locks the intentional employee/intern difference at the exact value the
+    // Rust engines assert, so the two stacks cannot drift apart unnoticed.
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:30:00+08:00',
+      dailyRate: 600,
+    });
+    expect(result.isHalfDay).toBe(false);
+    expect(result.computedTimeOut).toBe('2026-07-28T17:00:00+08:00');
+  });
 });

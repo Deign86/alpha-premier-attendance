@@ -1,4 +1,4 @@
-import { capLateTimeoutOut, ceilHour, HALF_DAY_LATE_ARRIVAL_HOUR, isHalfDayWork, manilaTimestamp, officeCloseFor, paidWorkHoursCeiled } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
 
 export type EmployeePayrollInput = { actualTimeIn: string; actualTimeOut: string; dailyRate: number };
 export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; isHalfDay: boolean; halfDayDeduction: number; basePay: number; dailyPay: number; workedHours: number };
@@ -16,11 +16,8 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   // DTR DECOUPLING: computed fields are PAYROLL-ONLY. Morning half-day
   // closed before office close pays as an effective 08:00–12:00 window even
   // though the DTR row keeps actual stamps. Never push these back to DTR.
-  const earlyHalfDayOut =
-    isHalfDay && actualTimeIn.hour < HALF_DAY_LATE_ARRIVAL_HOUR && actualTimeOut < officeCloseFor(actualTimeOut);
-  const noon = actualTimeOut.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
-  const flooredOut = actualTimeOut.startOf('hour');
-  const effectiveTimeOut = earlyHalfDayOut ? noon : flooredOut;
+  const halfDayNoon = effectiveHalfDayTimeOut(isHalfDay, actualTimeIn, actualTimeOut);
+  const effectiveTimeOut = halfDayNoon ?? actualTimeOut.startOf('hour');
 
   // TODO: Employee late rules TBD by client
   return {

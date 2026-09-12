@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DatabasePanel } from './App';
 import * as api from './api';
@@ -241,6 +241,106 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/Last error: Google Sheets auth failed: expired token/)).toBeInTheDocument();
   });
 
+  it('shows stale rows with an explicit offline indication when a refresh fails after a success', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 2,
+        deadLetter: 0,
+        byTable: [{ tableName: 'attendance', pending: 2 }],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+      },
+    });
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: false,
+      error: { message: 'network unreachable' },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText('2 pending')).toBeInTheDocument();
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(await screen.findByText(/showing last known data \(network unreachable\)/i)).toBeInTheDocument();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.getByText('attendance')).toBeInTheDocument();
+    expect(screen.getByText('2 pending')).toBeInTheDocument();
+  });
+
+  it('shows the unavailable message and no rows when the first load fails', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: false,
+      error: { message: 'Sync status is available in the desktop application.' },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(
+      await screen.findByText(/Sync status unavailable — Sync status is available in the desktop application\./),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.queryByText('InternDtr tabs')).not.toBeInTheDocument();
+  });
+
+  it('ignores an older in-flight refresh that resolves after a newer one', async () => {
+    let resolveFirst: (value: Awaited<ReturnType<typeof api.loadDtrSyncHealth>>) => void = () => {};
+    let resolveSecond: (value: Awaited<ReturnType<typeof api.loadDtrSyncHealth>>) => void = () => {};
+    const first = new Promise<Awaited<ReturnType<typeof api.loadDtrSyncHealth>>>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<Awaited<ReturnType<typeof api.loadDtrSyncHealth>>>((resolve) => {
+      resolveSecond = resolve;
+    });
+    loadDtrSyncHealthSpy.mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    render(<DatabasePanel />);
+    await screen.findByLabelText('DTR sync status');
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => {
+      expect(loadDtrSyncHealthSpy).toHaveBeenCalledTimes(2);
+    });
+
+    resolveSecond({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+      },
+    });
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+
+    resolveFirst({
+      success: true,
+      health: {
+        pending: 9,
+        deadLetter: 0,
+        byTable: [{ tableName: 'attendance', pending: 9 }],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-14T00:00:00Z',
+        lastError: null,
+      },
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('9 pending')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Healthy')).toBeInTheDocument();
+  });
+
   it('refreshes sync health after Sync Intern DTR now', async () => {
     const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
       success: true,
@@ -263,5 +363,72 @@ describe('DatabasePanel', () => {
     await waitFor(() => {
       expect(loadDtrSyncHealthSpy.mock.calls.length).toBeGreaterThan(callsBefore);
     });
+  });
+
+  it('keeps the Syncing badge while an overlapping background poll settles', async () => {
+    // Independent verification found refreshSyncHealth downgraded the manual
+    // sync state to loading/refreshing mid-flight, so the badge fell back to
+    // "Not synced" while a sync was still running. A poll must not dislodge it.
+    let resolveManual: (value: Awaited<ReturnType<typeof api.loadDtrSyncHealth>>) => void = () => {};
+    const manual = new Promise<Awaited<ReturnType<typeof api.loadDtrSyncHealth>>>((resolve) => {
+      resolveManual = resolve;
+    });
+    loadDtrSyncHealthSpy
+      .mockResolvedValueOnce({
+        success: true,
+        health: {
+          pending: 0,
+          deadLetter: 0,
+          byTable: [],
+          dtrPendingCount: 0,
+          dtrPendingItems: [],
+          lastSyncedAt: '2026-08-15T00:00:00Z',
+          lastError: null,
+        },
+      })
+      .mockReturnValueOnce(manual);
+
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
+      success: true,
+      internsChecked: 1,
+      tabsCreated: [],
+      rowsSynced: 1,
+      details: [],
+      errors: [],
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    // Initial mount load is the first mock (a resolved healthy payload).
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+
+    // Start the manual sync. It sets the syncing state SYNCHRONOUSLY, then
+    // calls refreshSyncHealth which consumes the pending `manual` promise.
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+    await waitFor(() => {
+      expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // The manual-sync refresh is still unresolved, so the badge must read
+    // Syncing. This is the assertion that fails without the syncing guard.
+    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.queryByText('Not synced')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveManual({
+        success: true,
+        health: {
+          pending: 0,
+          deadLetter: 0,
+          byTable: [],
+          dtrPendingCount: 0,
+          dtrPendingItems: [],
+          lastSyncedAt: '2026-08-15T00:00:00Z',
+          lastError: null,
+        },
+      });
+    });
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
   });
 });

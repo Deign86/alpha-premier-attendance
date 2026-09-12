@@ -45,7 +45,7 @@ pub const HALF_DAY_MAX_HOURS: i64 = 4;
 
 /// 17:00:00 Manila on the same calendar day as the given clock-out.
 pub fn office_close_for(clock_out: chrono::DateTime<chrono_tz::Tz>) -> chrono::DateTime<chrono_tz::Tz> {
-    use chrono::{Datelike, TimeZone, Timelike};
+    use chrono::{Datelike, TimeZone};
     chrono_tz::Asia::Manila
         .with_ymd_and_hms(
             clock_out.year(),
@@ -76,6 +76,32 @@ pub fn is_half_day(
         return true;
     }
     clock_in.hour() >= HALF_DAY_LATE_ARRIVAL_HOUR
+}
+
+/// Shared morning-half-day rule: a half-day shift that clocked in before
+/// 12:00 Manila but left before office close pays as an effective 08:00-12:00
+/// window. Returns 12:00 same-day when that condition holds, otherwise `None`
+/// so each caller keeps its own else-branch (employee floors to the hour,
+/// intern passes the stamp through) instead of hiding that difference here.
+///
+/// `time_out` MUST already be the capped clock-out (`cap_late_timeout_out`
+/// applied), matching the cap -> half-day -> window order used by both
+/// payroll engines.
+pub fn early_half_day_noon_out(
+    is_half_day: bool,
+    time_in: chrono::DateTime<chrono_tz::Tz>,
+    time_out: chrono::DateTime<chrono_tz::Tz>,
+) -> Option<chrono::DateTime<chrono_tz::Tz>> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    if !is_half_day
+        || time_in.hour() >= HALF_DAY_LATE_ARRIVAL_HOUR
+        || time_out >= office_close_for(time_out)
+    {
+        return None;
+    }
+    chrono_tz::Asia::Manila
+        .with_ymd_and_hms(time_out.year(), time_out.month(), time_out.day(), 12, 0, 0)
+        .single()
 }
 
 /// Round a Manila timestamp up to the next whole hour (exact hours stay put).

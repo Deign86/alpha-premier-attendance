@@ -1,5 +1,5 @@
 use super::lunch_break::paid_work_hours_ceiled;
-use super::payroll::{cap_late_timeout_out, ceil_hour, is_half_day, office_close_for, HALF_DAY_LATE_ARRIVAL_HOUR};
+use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, is_half_day};
 use chrono::{DateTime, Datelike, TimeZone, Timelike};
 use chrono_tz::Asia::Manila;
 
@@ -59,17 +59,10 @@ pub fn calculate(
     // A morning half-day closed before office close pays as 08:00-12:00 even
     // though the DTR row keeps the actual stamps. Never push computed values
     // back into the DTR sheet writer (build_dtr_row).
-    let early_half_day_out = is_half_day
-        && time_in.hour() < HALF_DAY_LATE_ARRIVAL_HOUR
-        && time_out < office_close_for(time_out);
-    let effective_out = if early_half_day_out {
-        Manila
-            .with_ymd_and_hms(time_out.year(), time_out.month(), time_out.day(), 12, 0, 0)
-            .single()
-            .unwrap_or(time_out)
-    } else {
-        computed_out
-    };
+    // Employee else-branch floors to the hour (`computed_out`) when the shared
+    // rule does not apply; the intern else-branch keeps the raw capped stamp.
+    let effective_out =
+        early_half_day_noon_out(is_half_day, time_in, time_out).unwrap_or(computed_out);
     let half_day_deduction = if is_half_day {
         daily_rate_centavos / 2
     } else {
@@ -264,5 +257,71 @@ mod tests {
             result,
             Err(message) if message.contains("time_out cannot be earlier than time_in")
         ));
+    }
+
+    #[test]
+    fn morning_half_day_closing_before_office_close_pays_as_noon() {
+        // A2: 08:00 -> 15:00 is a morning half-day closed before 17:00, so the
+        // payroll-only effective window ends at 12:00.
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T15:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(result.is_half_day);
+        assert_eq!(result.computed_time_out, "2026-08-01T12:00:00+08:00");
+    }
+
+    #[test]
+    fn afternoon_arrival_does_not_get_noon_substitution() {
+        let result = calculate(
+            "2026-08-01T12:00:00+08:00",
+            "2026-08-01T15:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(result.is_half_day);
+        assert_eq!(result.computed_time_out, "2026-08-01T15:00:00+08:00");
+    }
+
+    #[test]
+    fn clock_out_exactly_at_office_close_does_not_get_noon_substitution() {
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T17:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(!result.is_half_day);
+        assert_eq!(result.computed_time_out, "2026-08-01T17:00:00+08:00");
+    }
+
+    #[test]
+    fn post_six_cap_is_applied_before_the_noon_rule() {
+        // 19:30 caps to 17:00 first, so the noon rule sees 17:00 (not early).
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T19:30:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(!result.is_half_day);
+        assert_eq!(result.computed_time_out, "2026-08-01T17:00:00+08:00");
+    }
+
+    #[test]
+    fn employee_else_branch_floors_to_the_hour() {
+        // Intentional employee/intern difference: when the noon rule does not
+        // apply the employee engine floors to the whole hour, so 17:30 pays as
+        // 17:00 (the intern engine keeps the raw 17:30 stamp).
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T17:30:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert!(!result.is_half_day);
+        assert_eq!(result.computed_time_out, "2026-08-01T17:00:00+08:00");
     }
 }

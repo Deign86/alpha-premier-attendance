@@ -402,6 +402,71 @@ fn is_afternoon_arrival(time_in: &str) -> Result<bool, String> {
     Ok(t.hour() >= AFTERNOON_ARRIVAL_HOUR)
 }
 
+/// One normalized view of a raw DTR pair — the single source both the
+/// display row (`build_dtr_row`) and the paint classifier
+/// (`classify_record_row`) agree on (audit A1). Mirrors the TS sibling
+/// `NormalizedRecord` / `normalizeRecord` in server/src/intern-dtr-sync.ts.
+enum NormalizedRecord {
+    /// No usable time-in (missing or blank).
+    Empty,
+    /// Time-in present, no usable time-out. Carries the raw time-in string
+    /// (not a parsed instant): callers that render it validate/parse via
+    /// `format_sheet_time`, and the classifier never parses it — matching
+    /// the TS reference, which returns `working` before parsing.
+    Working { time_in: String },
+    /// Both stamps present and ordered after capping; ready to render.
+    Completed {
+        time_in: chrono::DateTime<chrono_tz::Tz>,
+        time_out: chrono::DateTime<chrono_tz::Tz>,
+        time_out_iso: String,
+    },
+}
+
+/// Own parse + Manila conversion + late-cap + ordering validation exactly
+/// once, so both consumers normalize identically (audit A1).
+///
+/// Missing/blank time-in → `Empty`; missing/blank time-out → `Working`.
+/// Invalid stamps keep the `invalid timestamp: <value>` message. The 18:00+
+/// → 17:00 auto-cap is applied to the time-out BEFORE the ordering check, so
+/// a `Completed` record always has its capped time-out at or after the
+/// time-in. A cap that pulls the time-out before the time-in (e.g. in 17:30,
+/// out 18:00 → out 17:00) fails closed with the inverted-time error instead
+/// of rendering/classifying an inverted interval.
+fn normalize_record(
+    time_in: Option<&str>,
+    time_out: Option<&str>,
+) -> Result<NormalizedRecord, String> {
+    let Some(tin) = time_in.filter(|s| !s.trim().is_empty()) else {
+        return Ok(NormalizedRecord::Empty);
+    };
+    let Some(tout_raw) = time_out.filter(|s| !s.trim().is_empty()) else {
+        return Ok(NormalizedRecord::Working {
+            time_in: tin.to_string(),
+        });
+    };
+    let tin_dt = chrono::DateTime::parse_from_rfc3339(tin.trim())
+        .map_err(|_| format!("invalid timestamp: {tin}"))?
+        .with_timezone(&Manila);
+    let tout_dt = chrono::DateTime::parse_from_rfc3339(tout_raw.trim())
+        .map_err(|_| format!("invalid timestamp: {tout_raw}"))?
+        .with_timezone(&Manila);
+    // Late time-out auto-cap (overtime forbidden): 18:00+ → 17:00 same-day.
+    let capped_out = crate::services::payroll::cap_late_timeout_out(tout_dt);
+    if capped_out < tin_dt {
+        // Raw stamp in the message (TS reference parity); the interval that
+        // actually fails is the capped one, which is why this is checked
+        // after the cap.
+        return Err(format!(
+            "Time-out cannot be earlier than time-in: {tout_raw} < {tin}"
+        ));
+    }
+    Ok(NormalizedRecord::Completed {
+        time_in: tin_dt,
+        time_out: capped_out,
+        time_out_iso: capped_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    })
+}
+
 /// Build `[B, C, D, E]` — DTR SOURCE OF TRUTH (actual stamps only).
 ///
 /// Decoupled from payroll half-day logic: this function NEVER fabricates,
@@ -418,47 +483,46 @@ fn is_afternoon_arrival(time_in: &str) -> Result<bool, String> {
 ///   kiosk same-day model, so failing closed beats rendering nonsense.
 /// - records without a time-out (WORKING, MISSED, LATE_TIMEOUT) render
 ///   like WORKING; the DTR assumes nothing about payroll for them.
+///
+/// BEHAVIOR CHANGE (audit A1): the ordering check now runs AFTER the cap
+/// (via `normalize_record`), so a pair whose capped time-out precedes the
+/// time-in (in 17:30 / out 18:00 → capped out 17:00) is REJECTED instead
+/// of rendering an inverted row. This is the fail-closed behavior
+/// `classify_record_row` already had; both now share it.
 pub fn build_dtr_row(
     time_in: Option<&str>,
     time_out: Option<&str>,
     _attendance_date: &str,
 ) -> Result<[String; 4], String> {
-    let Some(tin) = time_in.filter(|s| !s.trim().is_empty()) else {
-        return Ok([String::new(), String::new(), String::new(), String::new()]);
-    };
-    let started = format_sheet_time(tin)?;
-    let Some(tout_raw) = time_out.filter(|s| !s.trim().is_empty()) else {
-        return Ok([started, String::new(), String::new(), String::new()]);
-    };
-    let tin_dt = chrono::DateTime::parse_from_rfc3339(tin.trim())
-        .map_err(|_| format!("invalid timestamp: {tin}"))?;
-    let tout_dt = chrono::DateTime::parse_from_rfc3339(tout_raw.trim())
-        .map_err(|_| format!("invalid timestamp: {tout_raw}"))?;
-    if tout_dt < tin_dt {
-        return Err(format!("Time-out cannot be earlier than time-in: {tout_raw} < {tin}"));
+    match normalize_record(time_in, time_out)? {
+        NormalizedRecord::Empty => Ok([String::new(), String::new(), String::new(), String::new()]),
+        NormalizedRecord::Working { time_in } => {
+            // `format_sheet_time` validates/parses the raw stamp (keeps the
+            // existing invalid-timestamp error for a working record).
+            let started = format_sheet_time(&time_in)?;
+            Ok([started, String::new(), String::new(), String::new()])
+        }
+        NormalizedRecord::Completed {
+            time_in,
+            time_out_iso,
+            ..
+        } => {
+            let tin_iso = time_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let started = format_sheet_time(&tin_iso)?;
+            let ended = format_sheet_time(&time_out_iso)?;
+            // Actual-stamps only, grouped by morning/afternoon columns:
+            // out before 13:00 -> morning pair; in at/after noon -> afternoon
+            // pair; otherwise the span crosses lunch (unknown split) -> ends only.
+            // Payroll half-day classification must never alter these cells.
+            if is_before_lunch_out(&time_out_iso)? {
+                return Ok([started, ended, String::new(), String::new()]);
+            }
+            if is_afternoon_arrival(&tin_iso)? {
+                return Ok([String::new(), String::new(), started, ended]);
+            }
+            Ok([started, String::new(), String::new(), ended])
+        }
     }
-    // Late time-out auto-cap (overtime forbidden): 18:00+ renders as 5PM.
-    // dtr_recon.rs calls this builder, so recon expected-writes cap too.
-    let capped_tout =
-        crate::services::payroll::cap_late_timeout_out(tout_dt.with_timezone(&Manila));
-    let capped_iso = capped_tout.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let tout_ref: &str = if capped_tout == tout_dt.with_timezone(&Manila) {
-        tout_raw
-    } else {
-        &capped_iso
-    };
-    let ended = format_sheet_time(tout_ref)?;
-    // Actual-stamps only, grouped by morning/afternoon columns:
-    // out before 13:00 -> morning pair; in at/after noon -> afternoon
-    // pair; otherwise the span crosses lunch (unknown split) -> ends only.
-    // Payroll half-day classification must never alter these cells.
-    if is_before_lunch_out(tout_ref)? {
-        return Ok([started, ended, String::new(), String::new()]);
-    }
-    if is_afternoon_arrival(tin)? {
-        return Ok([String::new(), String::new(), started, ended]);
-    }
-    Ok([started, String::new(), String::new(), ended])
 }
 
 /// Display kind of one DTR row (DTR rules, not payroll). `Absent` is
@@ -482,54 +546,35 @@ pub fn classify_record_row(
     time_in: Option<&str>,
     time_out: Option<&str>,
 ) -> Result<DtrRowKind, String> {
-    let has_in = time_in.map(|s| !s.trim().is_empty()).unwrap_or(false);
-    if !has_in {
-        return Ok(DtrRowKind::Absent);
-    }
-    let has_out = time_out.map(|s| !s.trim().is_empty()).unwrap_or(false);
-    if !has_out {
-        return Ok(DtrRowKind::Working);
-    }
-    // SAFETY: has_out guard above ensures Some (possibly blank-checked).
-    let out_raw = time_out.unwrap_or("");
-    let tin = time_in.unwrap_or("");
-    let raw_tout_dt = chrono::DateTime::parse_from_rfc3339(out_raw.trim())
-        .map_err(|_| format!("invalid timestamp: {out_raw}"))?;
-    // Late time-out auto-cap (overtime forbidden): classify the capped
-    // value so paint matches the rendered row.
-    let capped_tout =
-        crate::services::payroll::cap_late_timeout_out(raw_tout_dt.with_timezone(&Manila));
-    let capped_iso = capped_tout.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let out: &str = if capped_tout == raw_tout_dt.with_timezone(&Manila) {
-        out_raw
-    } else {
-        &capped_iso
-    };
-    // Tier order mirrors build_dtr_row exactly (duration-first).
-    if is_before_lunch_out(out)? {
-        return Ok(DtrRowKind::MorningFragment);
-    }
-    let tin_dt = chrono::DateTime::parse_from_rfc3339(tin.trim())
-        .map_err(|_| format!("invalid timestamp: {tin}"))?;
-    let tout_dt = chrono::DateTime::parse_from_rfc3339(out.trim())
-        .map_err(|_| format!("invalid timestamp: {out}"))?;
-    if tout_dt < tin_dt {
-        return Err(format!("Time-out cannot be earlier than time-in: {out} < {tin}"));
-    }
-    let short_stint = tout_dt - tin_dt < chrono::Duration::hours(4);
-    if is_afternoon_arrival(tin)? {
-        if short_stint || is_half_day_timeout(out)? {
-            return Ok(DtrRowKind::AfternoonFragment);
+    match normalize_record(time_in, time_out)? {
+        NormalizedRecord::Empty => Ok(DtrRowKind::Absent),
+        NormalizedRecord::Working { .. } => Ok(DtrRowKind::Working),
+        NormalizedRecord::Completed {
+            time_in,
+            time_out,
+            time_out_iso,
+        } => {
+            let tin_iso = time_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            // Tier order mirrors build_dtr_row exactly (duration-first).
+            if is_before_lunch_out(&time_out_iso)? {
+                return Ok(DtrRowKind::MorningFragment);
+            }
+            let short_stint = time_out - time_in < chrono::Duration::hours(4);
+            if is_afternoon_arrival(&tin_iso)? {
+                if short_stint || is_half_day_timeout(&time_out_iso)? {
+                    return Ok(DtrRowKind::AfternoonFragment);
+                }
+                return Ok(DtrRowKind::HalfDayPm);
+            }
+            if short_stint {
+                return Ok(DtrRowKind::LunchSpanFragment);
+            }
+            if is_half_day_timeout(&time_out_iso)? {
+                return Ok(DtrRowKind::HalfDay);
+            }
+            Ok(DtrRowKind::FullDay)
         }
-        return Ok(DtrRowKind::HalfDayPm);
     }
-    if short_stint {
-        return Ok(DtrRowKind::LunchSpanFragment);
-    }
-    if is_half_day_timeout(out)? {
-        return Ok(DtrRowKind::HalfDay);
-    }
-    Ok(DtrRowKind::FullDay)
 }
 
 fn dtr_rgb(color: DtrCellColor) -> (f64, f64, f64) {
@@ -2371,6 +2416,91 @@ mod tests {
             "2026-09-05"
         )
         .is_err());
+    }
+
+    #[test]
+    fn cap_before_ordering_rejects_inverted_pair_in_both_paths() {
+        // AUDIT A1: 18:00 caps to 17:00, which precedes the 17:30 time-in.
+        // Both consumers must fail closed with the same error instead of
+        // build_dtr_row rendering an end stamp earlier than the start.
+        let expected = "Time-out cannot be earlier than time-in: \
+                       2026-09-05T18:00:00+08:00 < 2026-09-05T17:30:00+08:00";
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T17:30:00+08:00"),
+                Some("2026-09-05T18:00:00+08:00"),
+                "2026-09-05"
+            ),
+            Err(expected.to_string())
+        );
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T17:30:00+08:00"),
+                Some("2026-09-05T18:00:00+08:00")
+            ),
+            Err(expected.to_string())
+        );
+    }
+
+    #[test]
+    fn completed_record_cap_and_ordering_agree_across_paths() {
+        // Regression: 19:30 caps to 17:00 (>= 08:00 in), so the pair is
+        // valid in both consumers.
+        assert_eq!(
+            build_dtr_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T19:30:00+08:00"),
+                "2026-09-05"
+            ),
+            Ok([
+                "8:00:00 AM".to_string(),
+                String::new(),
+                String::new(),
+                "5:00:00 PM".to_string()
+            ])
+        );
+        assert_eq!(
+            classify_record_row(
+                Some("2026-09-05T08:00:00+08:00"),
+                Some("2026-09-05T19:30:00+08:00")
+            ),
+            Ok(DtrRowKind::FullDay)
+        );
+    }
+
+    #[test]
+    fn blank_and_missing_stamps_keep_existing_outputs() {
+        let blank_row = Ok([String::new(), String::new(), String::new(), String::new()]);
+        assert_eq!(build_dtr_row(None, None, "2026-09-05"), blank_row);
+        assert_eq!(build_dtr_row(Some("   "), None, "2026-09-05"), blank_row);
+        // Blank time-in is Empty regardless of a present time-out.
+        assert_eq!(
+            build_dtr_row(Some(""), Some("2026-09-05T17:00:00+08:00"), "2026-09-05"),
+            blank_row
+        );
+        assert_eq!(classify_record_row(None, None), Ok(DtrRowKind::Absent));
+        assert_eq!(
+            classify_record_row(Some("   "), Some("2026-09-05T17:00:00+08:00")),
+            Ok(DtrRowKind::Absent)
+        );
+        // Blank/whitespace time-out is Working.
+        assert_eq!(
+            build_dtr_row(Some("2026-09-05T09:00:00+08:00"), Some("  "), "2026-09-05"),
+            Ok([
+                "9:00:00 AM".to_string(),
+                String::new(),
+                String::new(),
+                String::new()
+            ])
+        );
+        assert_eq!(
+            classify_record_row(Some("2026-09-05T09:00:00+08:00"), None),
+            Ok(DtrRowKind::Working)
+        );
+        assert_eq!(
+            classify_record_row(Some("2026-09-05T09:00:00+08:00"), Some("")),
+            Ok(DtrRowKind::Working)
+        );
     }
 
     #[test]
