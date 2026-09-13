@@ -655,3 +655,18 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EVIDENCE: measured live — get returned enabled=false (seed); manual sync refused `disabled on this device` (zero Sheets traffic); set(true)→UI label dropped `(OFF — queuing only)` and a UI checkbox click persisted enabled=1 to SQLite (updated_at 10:25:59Z); unknown-user sync errored `not found` with no tab creation; wrong token → ADMIN_AUTH_REQUIRED. Screenshots captured. Final device state verified in SQLite =0. cargo/server/client suites from the build gate unchanged (285/285, 175/175, 89/89).
 - [x] Pre-existing issues observed, not caused by this change (separate questions).
   EVIDENCE: ops-sheet sync shows 803 DEAD rows / `Google Sheets sync failed` on this PC (also in the 10:21 deployment log before this change; my diff never touches ops paths); admin sessions are single-slot global — a second login (UI vs IPC) invalidates the first, which raced IPC tokens during the drive (code path untouched by this change).
+
+## Ops-sheet sync outage: root cause, fix, and DELETE off-by-one (2026-09-12)
+
+- [x] R1: Provisioning 400 identified and fixed (all 803 DEAD rows explained).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib
+  EXPECT: banding_request unit test fails on any unknown Sheets field; live provisioning pass stops warning
+  EVIDENCE: measured live — replaying the exact generated batchUpdate with a scratch token returned `400 Invalid JSON payload received. Unknown name "headerRowPosition" at 'requests[2].add_banding.banded_range'`. `BandedRange` has no such field; it was added 2026-08-04 (ed46440) and 400d every `reconcile format` pass from 2026-09-08 02:41 UTC, returning provisioning=None so every due row failed generic 5× → DEAD. Field removed, request extracted to pure `banding_request()` with a contract test that asserts the field is absent.
+- [x] R2: Row-never-matched cause proven independent of DB age.
+  EVIDENCE: the replay used NO local data and failed identically, and the DTR queue in the same DB held 0 failed rows — a stale database cannot produce a 400 on a paint request. Cause is the shipped binary, so the kiosk PC fails the same way regardless of DB freshness.
+- [x] R3: Second bug found during fix verification — single-match DELETE off-by-one.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib key_match_indices_are_zero_based_delete_targets
+  EXPECT: key index 2 for sheet row 3; `startIndex` targets the matched row, never its neighbour
+  EVIDENCE: the inline key scan returned `index + 1` while `find_rows_to_delete` (multi-match) returned `index`; both feed `deleteDimension.startIndex`, so every single-match delete removed the row BELOW the target. Extracted `find_key_matches()` (0-based), fixed the multi-match span shell to `hi + 1`, added the regression test. Measured 2026-09-12: cargo lib 287/287.
+- [x] R4: Personal PC stopped from pushing stale ops state; work handed to the authoritative kiosk.
+  EVIDENCE: 800 DEAD rows were requeued to prove the fix (3-row canary first: 3/3 SYNCED, 0 warnings). 115 wrote before I froze the batch; the remaining 688 were returned to DEAD and the queue now has 0 non-terminal rows. DTR flag still `intern_dtr_sync_enabled=0` on this PC. Do NOT reconcile the shared ops sheet from here — this DB is stale; run `admin_sheets_nuke_resync` on the kiosk after deploying the fixed build.
