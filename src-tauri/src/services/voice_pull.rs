@@ -19,6 +19,9 @@ const SETTINGS_PIN_KEY: &str = "voicestudio_pin";
 const PIN_HEADER: &str = "X-OmniVoice-Pin";
 const VOICE_MODEL: &str = "tts-1";
 const MAX_BACKOFF_SECS: i64 = 6 * 3600;
+/// Stale-lease window for a `PROCESSING` row: comfortably above the 180s
+/// `pull_clip` client timeout so a genuinely in-flight pull is never reclaimed.
+const STALE_PROCESSING_MINUTES: i64 = 30;
 
 /// Port of `normalizePronunciation` in `scripts/generate_existing_intern_names.ts`
 /// (minus per-person overrides, which stay a batch-script concern): expand the
@@ -336,7 +339,22 @@ pub async fn run_once(
     db: &SqlitePool,
     data_dir: &std::path::Path,
 ) -> Result<VoicePullSummary, String> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now_dt = chrono::Utc::now();
+    let now = now_dt.to_rfc3339();
+    // N2: reclaim crash-stranded leases. The claim writes `updated_at`, so it
+    // is already the lease instant — no new column. Reclaimed rows become
+    // immediately due via `next_attempt_at = now`.
+    let lease_cutoff =
+        (now_dt - chrono::Duration::minutes(STALE_PROCESSING_MINUTES)).to_rfc3339();
+    sqlx::query(
+        "UPDATE voice_jobs SET status = 'RETRY', next_attempt_at = ?, updated_at = ? WHERE status = 'PROCESSING' AND updated_at < ?",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(&lease_cutoff)
+    .execute(db)
+    .await
+    .map_err(|e| e.to_string())?;
     let row = sqlx::query(
         "SELECT person_id, spoken_text, attempts FROM voice_jobs WHERE status IN ('PENDING','RETRY') AND next_attempt_at <= ? ORDER BY next_attempt_at ASC, person_id ASC LIMIT 1",
     )
@@ -366,20 +384,25 @@ pub async fn run_once(
     match pull_clip(db, data_dir, &person_id, &spoken_text).await {
         Ok(()) => {
             let done_at = chrono::Utc::now().to_rfc3339();
-            sqlx::query(
-                "UPDATE voice_jobs SET status = 'DONE', last_error = NULL, updated_at = ? WHERE person_id = ?",
+            // N3: guarded so a stale completion cannot clobber a newer re-queue
+            // (enqueue resets to PENDING). Zero rows means a newer enqueue won.
+            let done = sqlx::query(
+                "UPDATE voice_jobs SET status = 'DONE', last_error = NULL, updated_at = ? WHERE person_id = ? AND status = 'PROCESSING'",
             )
             .bind(&done_at)
             .bind(&person_id)
             .execute(db)
             .await
             .map_err(|e| e.to_string())?;
+            if done.rows_affected() == 0 {
+                return Ok(VoicePullSummary { attemptedPersonId: None, completed: false });
+            }
             Ok(VoicePullSummary { attemptedPersonId: Some(person_id), completed: true })
         }
         Err(error) => {
             let retry_at = chrono::Utc::now() + chrono::Duration::seconds(backoff_secs(attempts));
             sqlx::query(
-                "UPDATE voice_jobs SET status = 'RETRY', attempts = ?, last_error = ?, next_attempt_at = ?, updated_at = ? WHERE person_id = ?",
+                "UPDATE voice_jobs SET status = 'RETRY', attempts = ?, last_error = ?, next_attempt_at = ?, updated_at = ? WHERE person_id = ? AND status = 'PROCESSING'",
             )
             .bind(attempts + 1)
             .bind(&error)
@@ -731,5 +754,74 @@ mod tests {
         assert!(!dir.join("voices").exists());
         let _ = std::fs::remove_dir_all(&dir);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn run_once_reclaims_stale_processing_and_pulls() {
+        let db = memory_db().await;
+        let (host, server) = loopback_host(vec![0xFFu8; 512]).await;
+        set_host(&db, &host, "2026-09-12T00:00:00Z").await.unwrap();
+        let stale = "2020-01-01T00:00:00Z";
+        sqlx::query("INSERT INTO voice_jobs (person_id, spoken_text, status, attempts, last_error, next_attempt_at, created_at, updated_at) VALUES ('APG-10', 'Ada Lovelace', 'PROCESSING', 0, NULL, ?, ?, ?)")
+            .bind(stale)
+            .bind(stale)
+            .bind(stale)
+            .execute(&db)
+            .await
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("alpha-voice-{}", uuid::Uuid::new_v4()));
+        let summary = run_once(&db, &dir).await.unwrap();
+        assert_eq!(summary.attemptedPersonId.as_deref(), Some("APG-10"));
+        assert!(summary.completed);
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM voice_jobs WHERE person_id = 'APG-10'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(status, "DONE");
+        let saved = std::fs::read(dir.join("voices").join("bea").join("names").join("APG-10.mp3")).unwrap();
+        assert_eq!(saved.len(), 512);
+        let _ = std::fs::remove_dir_all(&dir);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn guarded_terminal_write_loses_to_newer_enqueue() {
+        let db = memory_db().await;
+        let now = "2026-09-12T00:00:00Z";
+        sqlx::query("INSERT INTO voice_jobs (person_id, spoken_text, status, attempts, last_error, next_attempt_at, created_at, updated_at) VALUES ('APG-11', 'Ada Lovelace', 'PROCESSING', 0, NULL, ?, ?, ?)")
+            .bind(now)
+            .bind(now)
+            .bind(now)
+            .execute(&db)
+            .await
+            .unwrap();
+        // Newer enqueue wins: row is back to PENDING.
+        enqueue_voice_job(&db, "APG-11", "Ada Lovelace", now).await;
+        let stale_done = sqlx::query(
+            "UPDATE voice_jobs SET status = 'DONE', last_error = NULL, updated_at = ? WHERE person_id = ? AND status = 'PROCESSING'",
+        )
+        .bind(now)
+        .bind("APG-11")
+        .execute(&db)
+        .await
+        .unwrap();
+        assert_eq!(stale_done.rows_affected(), 0);
+        let stale_retry = sqlx::query(
+            "UPDATE voice_jobs SET status = 'RETRY', attempts = 1, last_error = 'x', next_attempt_at = ?, updated_at = ? WHERE person_id = ? AND status = 'PROCESSING'",
+        )
+        .bind(now)
+        .bind(now)
+        .bind("APG-11")
+        .execute(&db)
+        .await
+        .unwrap();
+        assert_eq!(stale_retry.rows_affected(), 0);
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM voice_jobs WHERE person_id = 'APG-11'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(status, "PENDING");
     }
 }

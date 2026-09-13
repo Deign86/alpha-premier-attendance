@@ -2669,16 +2669,9 @@ async fn payroll_generate_cutoff(
             approved_working_day_overage: true,
         };
         let calculated = crate::services::cutoff_payroll::calculate(&input)?;
-        let gross_amount = if is_intern {
-            calculated.net_pay.max(0)
-        } else {
-            calculated.gross_compensation
-        };
-        let net_amount = if is_intern {
-            calculated.net_pay.max(0)
-        } else {
-            calculated.net_pay
-        };
+        // Engine owns the intern floor; persist its gross/net unchanged.
+        let gross_amount = calculated.gross_compensation;
+        let net_amount = calculated.net_pay;
         let payroll_id = uuid::Uuid::new_v4().to_string();
         let query = format!("INSERT INTO payroll_cutoffs (payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,payroll_frequency,daily_rate_centavos,standard_working_days,actual_working_days,basic_pay_centavos,special_holiday_days,special_holiday_multiplier,special_holiday_pay_centavos,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay_centavos,incentives_allowance_centavos,special_allowance_centavos,total_compensation_centavos,total_allowance_centavos,late_units,late_deduction_centavos,half_day_count,half_day_deduction_centavos,absent_days,absence_deduction_centavos,overtime_hours,overtime_rate_centavos,overtime_pay_centavos,manual_adjustment_centavos,adjustment_reason,gross_compensation_centavos,net_pay_centavos,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,hra_centavos,sss_centavos,phic_centavos,hdmf_centavos,salary_advance_centavos,created_at,updated_at) VALUES ({})", std::iter::repeat("?").take(46).collect::<Vec<_>>().join(","));
         sqlx::query(&query)
@@ -2712,19 +2705,9 @@ async fn payroll_create_cutoff(
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let is_intern =
-        input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
-    // Intern payroll floors at zero for a cutoff (mirrors the daily rule).
-    let gross = if is_intern {
-        result.net_pay.max(0)
-    } else {
-        result.gross_compensation
-    };
-    let net = if is_intern {
-        result.net_pay.max(0)
-    } else {
-        result.net_pay
-    };
+    // Engine owns the intern floor; persist its gross/net unchanged.
+    let gross = result.gross_compensation;
+    let net = result.net_pay;
     // Total late hours are fillable for employees (rate-based deduction) and
     // computed from late units for interns; persist the units on the record.
     let late_units = input
@@ -2818,18 +2801,9 @@ async fn payroll_update_cutoff(
     let parsed = cutoff_input(&input);
     let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let is_intern =
-        input.get("payrollProfileId").and_then(|v| v.as_str()) == Some(INTERN_PAYROLL_PROFILE_ID);
-    let gross = if is_intern {
-        result.net_pay.max(0)
-    } else {
-        result.gross_compensation
-    };
-    let net = if is_intern {
-        result.net_pay.max(0)
-    } else {
-        result.net_pay
-    };
+    // Engine owns the intern floor; persist its gross/net unchanged.
+    let gross = result.gross_compensation;
+    let net = result.net_pay;
     let late_units = input
         .get("lateUnits")
         .and_then(|v| v.as_f64())
@@ -3124,6 +3098,7 @@ async fn apply_intern_rules(
         "payrollProfileId".into(),
         serde_json::json!(INTERN_PAYROLL_PROFILE_ID),
     );
+    object.insert("employeeType".into(), serde_json::json!("INTERN"));
     object.insert("lateUnits".into(), serde_json::json!(late_units));
     // Late deduction is PHP 10.00 per hour, computed from total late hours.
     object.insert(
@@ -3890,15 +3865,17 @@ async fn admin_set_intern_dtr_sync(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     crate::services::dtr_sync::set_dtr_sync_enabled(&state.db, enabled).await?;
+    // Report the effective state: the env override wins over the stored row.
+    let effective = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(chrono::Utc::now().to_rfc3339())
         .bind("ADMIN")
-        .bind(format!("intern DTR sync {} on this device", if enabled { "enabled" } else { "disabled" }))
+        .bind(format!("intern DTR sync {} on this device", if effective { "enabled" } else { "disabled" }))
         .bind(uuid::Uuid::new_v4().to_string())
         .execute(&state.db)
         .await;
-    Ok(serde_json::json!({ "success": true, "enabled": enabled }))
+    Ok(serde_json::json!({ "success": true, "enabled": effective }))
 }
 
 /// Dev/test utility (hidden admin action): wipes every managed Google Sheets
@@ -4415,8 +4392,7 @@ async fn enqueue_sync(
 ) {
     let now = chrono::Utc::now().to_rfc3339();
     let idempotency_key = format!("{table_name}:{row_id}:{operation}");
-    let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
-        .bind(table_name).bind(row_id).bind(operation).bind(payload.to_string()).bind(&now).bind(&now).bind(&now).bind(&idempotency_key).execute(&state.db).await;
+    crate::services::sheets_sync::requeue_sync_row(&state.db, table_name, row_id, operation, &payload.to_string(), &now, &idempotency_key).await;
 }
 
 /// Mirror an attendance mutation to the intern DTR sheet (enqueue-only).
@@ -5552,6 +5528,49 @@ mod tests {
             .expect("employee rules pass through");
         assert_eq!(employee_input["dailyRate"], 500.0);
         assert_eq!(employee_input.get("lateDeduction"), None);
+    }
+
+    #[tokio::test]
+    async fn intern_editor_json_flows_through_one_discriminator_to_floored_gross() {
+        // N1: the editor payload carries no `employeeType`; the single source is
+        // `apply_intern_rules` keyed off the users row. The engine must see INTERN
+        // and floor gross separately from net, matching the TS engine parity case
+        // (grossCompensation 880 / netPay 0) instead of net-as-gross.
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, full_name TEXT NOT NULL, daily_rate_centavos INTEGER, employee_type TEXT NOT NULL)")
+            .execute(&db)
+            .await
+            .expect("users table");
+        sqlx::query("INSERT INTO users (user_id, full_name, daily_rate_centavos, employee_type) VALUES (?, ?, ?, ?)")
+            .bind("INT-1")
+            .bind("Maria Santos")
+            .bind(0_i64)
+            .bind("INTERN")
+            .execute(&db)
+            .await
+            .expect("intern row");
+        let mut input = serde_json::json!({
+            "employeeId": "INT-1", "employeeName": "Maria Santos",
+            "cutoffStart": "2026-09-01", "cutoffEnd": "2026-09-15",
+            "standardWorkingDays": 11.0, "actualWorkingDays": 1.0, "lateUnits": 20.0,
+        });
+        assert_eq!(input.get("employeeType"), None);
+        super::apply_intern_rules(&db, &mut input)
+            .await
+            .expect("intern rules applied");
+        // One derivation, stored where the engine reads it.
+        assert_eq!(input["employeeType"], "INTERN");
+        let parsed = super::cutoff_input(&input);
+        assert_eq!(parsed.employee_type, "INTERN");
+        // basic = 80/day x (1 actual + 10 absent) = 880; absence 800 + late 200
+        // leave net at -120, floored to 0; gross stays 880 (not net).
+        let result = crate::services::cutoff_payroll::calculate(&parsed).expect("engine");
+        assert_eq!(result.gross_compensation, 88_000);
+        assert_eq!(result.net_pay, 0);
     }
 
     #[test]

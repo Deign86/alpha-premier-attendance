@@ -691,3 +691,96 @@ Owner decision (this session): the attendance DB is authoritative for ALL DTR sh
   CHECK: npm run typecheck && npm run lint:oxlint && npm test -w server
   EXPECT: all exit 0
   EVIDENCE: measured 2026-09-12 — typecheck 0, lint 0, server 173/173, client 258/258 (full `npm test`), cargo 282/282. CHANGELOG: new Unreleased/0.1.63 Changed entry supersedes the timestamp-wins guard; the released 0.1.62 bullet restored verbatim (history). Kill-switch gates (`dtr_upload_allowed` / `INTERN_DTR_SYNC_ENABLED`) untouched.
+
+## Run-2 simplification remediation gates (audit 2026-09-13, findings N1-N14)
+
+Scope decisions locked by the owner before implementation:
+- N1: fix the computation only. **No backfill** - existing stored `gross_compensation_centavos`
+  rows are left untouched and self-correct on the next generate/edit. FINALIZED rows untouched.
+- N5: activate the shipped sorry clip for the real code `UNKNOWN_RFID_CARD`; delete the two
+  codes no producer emits.
+- N9/N10: land **behavior-frozen**. No write-range widening, `clear_dtr_row` keeps its
+  skip-on-no-block semantics, B:E cells only (never F TOTAL or H:J), and the existing
+  InSync/no-headers fallbacks must be byte-identical.
+
+- [x] N2+N3 voice queue: `PROCESSING` is a lease, not a stranding state.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib voice_pull
+  EXPECT: all voice_pull tests pass, including two new ones: a stale-`PROCESSING` row is
+  reclaimed to `RETRY` and pulled; a `DONE`/`RETRY` write issued after a newer `enqueue` affects
+  0 rows and leaves status `PENDING`.
+  EVIDENCE: test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 267 filtered out; finished in 0.02s
+
+- [x] N4 voice panel derives through `resolveTtsMode` only.
+  CHECK: npm test -w client -- src/voice-settings-panel.test.tsx
+  EXPECT: new test with `{enabled:false, engine:'cloned-bea'}` shows no "Ma'am Bea Ready" and
+  the pill agrees with the facts row; existing panel tests stay green.
+  EVIDENCE: client tests 263 passed (15 files). Test "shows a disabled pill agreeing with the facts row when unfriendly-enabled pair occurs" passes.
+
+- [x] N5 Bea unknown-card clip fires on the real code.
+  CHECK: npm test -w client -- src/services/ttsService.test.ts
+  EXPECT: `announceScanError({errorCode:'UNKNOWN_RFID_CARD'})` in Bea mode plays
+  `/voices/bea/scan-error/sorry-card-not-recognized.mp3`; `INVALID_UID`/`UNREGISTERED_CARD` no
+  longer appear in `src`.
+  EVIDENCE: ttsService.test.ts retargeted to UNKNOWN_RFID_CARD, asserts sorry-card-not-recognized.mp3; grep confirms dead codes removed from src.
+
+- [x] N6 LiveAttendance one union + sequence guard; N7 regen slot ownership.
+  CHECK: npm test -w client -- src/App.test.tsx src/database-panel.test.tsx
+  EXPECT: out-of-order `loadAttendance` resolutions keep the newest snapshot; starting regen B
+  after A and resolving A first leaves B's loader visible; rendered strings
+  "Showing last successful update" / "Live attendance is temporarily unavailable." unchanged.
+  EVIDENCE: App.test.tsx: "keeps the newest snapshot when overlapping loads resolve out of order" and "resolving A first after starting B keeps B loader and writes no A message" both pass.
+
+- [x] N8 `syncing` guard keeps its exit path.
+  CHECK: npm test -w client -- src/database-panel.test.tsx
+  EXPECT: both new tests pass - a background resolution while `syncing` does not move the badge,
+  AND the manual sync's own resolution does leave `syncing`. A one-branch guard fails the second
+  test; that is exactly the trap this gate exists for.
+  EVIDENCE: database-panel.test.tsx: "does not let a background poll clear the Syncing badge (N8a)" and "lets the manual sync resolution leave the Syncing badge (N8b)" both pass.
+
+- [x] N1 intern gross owned by the engine, not by three command sites.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib cutoff
+  EXPECT: new test - editor-shaped JSON with no `employeeType`, intern user row, non-zero late
+  deduction persists gross = engine gross (floored at 0) and net floored at 0; the three
+  `net_pay.max(0)`-as-gross sites are gone.
+  Also: `npm test -w server -- cutoff` stays green (TS engine untouched).
+  EVIDENCE: cargo test --profile fast --lib intern_editor passes (gross 88_000, net 0); 17 cutoff tests pass; three net_pay.max substitutions deleted.
+
+- [x] N11 kill switch reports effective state.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib dtr_sync
+  EXPECT: with env `ALPHA_PREMIER_DTR_SYNC_ENABLED=0` the set command's response equals a
+  subsequent `is_dtr_sync_enabled` read; default-ON preserved; the env override itself kept.
+  EVIDENCE: test dtr_sync_env_override_wins_over_stored_row passes; dtr_sync_toggle_defaults_on_and_persists passes; 65 dtr tests pass.
+
+- [x] N9 TS `PushPlan` becomes a discriminated union (behavior-frozen).
+  CHECK: npm run typecheck -w server && npm test -w server -- intern-dtr-sync
+  EXPECT: `executePush` accepts only non-skip plans; `sync-intern-dtr.ts` has no
+  `plan.reason.startsWith` / `!== 'already in sync'` string gate left; every existing planPush
+  assertion is retargeted to `kind`+code with no behavior flip; in-sync plans still paint.
+  EVIDENCE: 71 tests in intern-dtr-sync.test.ts pass; server typecheck clean; sync-intern-dtr.ts string gates replaced with kind/reason codes; writes unchanged (`{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '', '', '5:00:00 PM'] }`).
+
+- [x] N10 `month_block_range` tri-state (behavior-frozen).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib dtr_sync
+  EXPECT: headerless gives `NoHeaders`, headers-without-match gives `NoMatch`; push still falls
+  back to whole-tab on `NoHeaders`; `clear_dtr_row` still **skips** when there is no block; the
+  caller's duplicate column-A scan is deleted; no range string changes for any existing fixture.
+  EVIDENCE: test month_block_range_names_absence_per_arm passes; scopes_month_block_and_finds_date_row passes; 65 dtr tests pass.
+
+- [x] N13 opt-out precedence has one owner; N14 updater env rule has one function.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib lifecycle && cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib config
+  EXPECT: `decide_autostart_action` is called with the live `is_opted_out` value (no hardcoded
+  `false`) and `RespectOptOut` is no longer a dead arm; new config test asserts both
+  `load_config` branches agree on `updater.auto_check` under each env var; 11 lifecycle tests and
+  all config tests green.
+  EVIDENCE: 11 lifecycle tests pass; 27 config tests pass (including updater_env_override_agrees_across_both_load_config_branches).
+
+- [x] N12 requeue resets the retry budget; N14 half-note excluded (no change).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib sheets_sync
+  EXPECT: new DB-backed test - seed `DEAD, attempts=5`, requeue, assert
+  `(PENDING, attempts=0, last_error NULL, last_error_code NULL)`; the `WHERE idempotency_key
+  IS NOT NULL` clause and fire-and-forget semantics preserved; both upsert sites call one helper.
+  EVIDENCE: test requeue_resets_retry_budget passes (attempts reset from 5 to 0 on conflict); sheets_sync clean.
+
+- [x] Required repository gates after all lanes land.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all exit 0; zero new dependencies; no test threshold edits; no migration added.
+  EVIDENCE: oxlint exit 0; typecheck exit 0 (shared, client, server); npm test 173 server + 263 client + 34 shared pass; cargo test 289 passed; zero new dependencies; zero migrations.

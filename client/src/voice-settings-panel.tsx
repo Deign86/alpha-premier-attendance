@@ -176,7 +176,9 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     void refreshStatus();
   };
 
-  const isTtsDisabled = resolveTtsMode(settings).kind === 'disabled';
+  const mode = resolveTtsMode(settings);
+  const isTtsDisabled = mode.kind === 'disabled';
+  const isBeaActive = mode.kind === 'enabled' && mode.engine === 'cloned-bea';
 
   return (
     <section className="lan-panel" aria-label="Voice Announcements">
@@ -188,30 +190,36 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         {status && (
           <span
             className={`lan-state ${
-              settings.engine === 'cloned-bea' || status.piperAvailable
-                ? 'lan-state-running'
-                : status.systemSapiAvailable
-                  ? 'lan-state-starting'
-                  : 'lan-state-disabled'
+              isTtsDisabled
+                ? 'lan-state-disabled'
+                : isBeaActive || status.piperAvailable
+                  ? 'lan-state-running'
+                  : status.systemSapiAvailable
+                    ? 'lan-state-starting'
+                    : 'lan-state-disabled'
             }`}
             title={
-              settings.engine === 'cloned-bea'
-                ? "Ma'am Bea cloned voice active (pre-rendered phrases + neural fallback)"
-                : status.piperAvailable
-                  ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
-                  : status.systemSapiAvailable
-                    ? 'Windows SAPI system voice active'
-                    : 'No offline TTS engine detected'
+              isTtsDisabled
+                ? 'Voice announcements disabled'
+                : isBeaActive
+                  ? "Ma'am Bea cloned voice active (pre-rendered phrases + neural fallback)"
+                  : status.piperAvailable
+                    ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
+                    : status.systemSapiAvailable
+                      ? 'Windows SAPI system voice active'
+                      : 'No offline TTS engine detected'
             }
           >
             <i />
-            {settings.engine === 'cloned-bea'
-              ? "Ma'am Bea Ready"
-              : status.piperAvailable
-                ? 'Piper TTS Ready'
-                : status.systemSapiAvailable
-                  ? 'SAPI Ready'
-                  : 'Offline TTS Unavailable'}
+            {isTtsDisabled
+              ? 'Voice Disabled'
+              : isBeaActive
+                ? "Ma'am Bea Ready"
+                : status.piperAvailable
+                  ? 'Piper TTS Ready'
+                  : status.systemSapiAvailable
+                    ? 'SAPI Ready'
+                    : 'Offline TTS Unavailable'}
           </span>
         )}
       </div>
@@ -220,7 +228,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         <span>
           Voice{' '}
           <strong>
-            {!settings.enabled
+            {isTtsDisabled
               ? 'Disabled'
               : "Ma'am Bea (Hybrid Cloned Voice)"}
           </strong>
@@ -228,7 +236,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         <span>
           Status{' '}
           <strong>
-            {!settings.enabled
+            {isTtsDisabled
               ? 'Disabled'
               : 'Ready (Local Offline)'}
           </strong>

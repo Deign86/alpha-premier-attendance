@@ -2353,27 +2353,34 @@ function useOfficeIdentity(): OfficeIdentity {
   return office;
 }
 
+type LiveAttendanceState =
+  | { kind: "loading" }
+  | { kind: "ready"; rows: AttendanceListItem[]; fetchedAt: string }
+  | { kind: "stale"; rows: AttendanceListItem[]; fetchedAt: string; message: string };
+
 function LiveAttendance() {
   useScannerPause(true);
   const office = useOfficeIdentity();
-  const [rows, setRows] = useState<AttendanceListItem[]>([]);
-  const [stale, setStale] = useState(false);
-  const [fetchedAt, setFetchedAt] = useState("");
-  const [error, setError] = useState("");
+  const [attendance, setAttendance] = useState<LiveAttendanceState>({ kind: "loading" });
   const [lan, setLan] = useState<LanStatusResponse | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
+  const liveAttendanceSeq = useRef(0);
   const refresh = useCallback(async () => {
+    const seq = liveAttendanceSeq.current + 1;
+    liveAttendanceSeq.current = seq;
     try {
       const response = await loadAttendance();
+      if (liveAttendanceSeq.current !== seq) return;
       if (response.success) {
-        setRows(response.attendance);
-        setFetchedAt(response.fetchedAt);
-        setStale(false);
-        setError("");
+        setAttendance({ kind: "ready", rows: response.attendance, fetchedAt: response.fetchedAt });
       } else throw new Error("Unable to load attendance");
     } catch {
-      setStale(true);
-      setError("Live attendance is temporarily unavailable.");
+      if (liveAttendanceSeq.current !== seq) return;
+      setAttendance((prev) =>
+        prev.kind === "loading"
+          ? { kind: "stale", rows: [], fetchedAt: "", message: "Live attendance is temporarily unavailable." }
+          : { kind: "stale", rows: prev.rows, fetchedAt: prev.fetchedAt, message: "Live attendance is temporarily unavailable." },
+      );
     }
   }, []);
 
@@ -2459,11 +2466,13 @@ function LiveAttendance() {
           <a href="/admin">Admin</a>
         </nav>
       </header>
-      {error && <p className="dashboard-alert">{error}</p>}
+      {attendance.kind === "stale" && <p className="dashboard-alert">{attendance.message}</p>}
       <div className="dashboard-status">
-        {stale
+        {attendance.kind === "stale"
           ? "Showing last successful update"
-          : `Last updated ${fetchedAt ? formatTime(fetchedAt, "Asia/Manila") : "just now"}`}
+          : attendance.kind === "ready"
+            ? `Last updated ${attendance.fetchedAt ? formatTime(attendance.fetchedAt, "Asia/Manila") : "just now"}`
+            : "Loading live attendance…"}
       </div>
       <LanViewerPanel
         status={lan}
@@ -2472,7 +2481,9 @@ function LiveAttendance() {
         onStop={() => void stopNow()}
         onRefresh={() => void refreshLan()}
       />
-      <AttendanceTable rows={rows} timezone="Asia/Manila" />
+      {attendance.kind === "loading" ? null : (
+        <AttendanceTable rows={attendance.rows} timezone="Asia/Manila" />
+      )}
     </main>
   );
 }
@@ -3321,7 +3332,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   })();
 
   const syncHealthSeq = useRef(0);
-  const refreshSyncHealth = useCallback(async () => {
+  const refreshSyncHealth = useCallback(async (releaseSyncing = false) => {
     setSyncState((prev) =>
       // A manual sync owns the badge while it is in flight: a background poll
       // must not downgrade `syncing` to `loading`/`refreshing` and make the
@@ -3337,6 +3348,10 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     const response = await loadDtrSyncHealth();
     if (syncHealthSeq.current !== seq) return;
     setSyncState((prev) => {
+      // A background poll must not dislodge `syncing`; only the manual sync's
+      // own post-sync refresh (releaseSyncing) may leave it — :3339 is the
+      // sole exit from `syncing`, so a blanket guard would strand the badge.
+      if (prev.kind === "syncing" && !releaseSyncing) return prev;
       if (response.success) return { kind: "ready", health: response.health };
       if (prev.kind === "ready" || prev.kind === "refreshing" || prev.kind === "stale") {
         return { kind: "stale", health: prev.health, message: response.error.message };
@@ -3409,7 +3424,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     } finally {
       setBusy(false);
     }
-    void refreshSyncHealth();
+    void refreshSyncHealth(true);
   };
 
   const createBackup = async () => {
@@ -3769,6 +3784,9 @@ function UserEditor({
   const [voiceClipStates, setVoiceClipStates] = useState<Record<string, VoiceClipState>>({});
   const [playingVoiceUserId, setPlayingVoiceUserId] = useState<string | null>(null);
   const [regeneratingVoiceUserId, setRegeneratingVoiceUserId] = useState<string | null>(null);
+  // Latest-run-wins owner of the single regen loader slot: a superseded run
+  // must write nothing (loader, snapshot, or message).
+  const regeneratingVoiceOwner = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -3818,10 +3836,12 @@ function UserEditor({
   };
 
   const handleRegenerateVoiceClip = async (userId: string) => {
+    regeneratingVoiceOwner.current = userId;
     setRegeneratingVoiceUserId(userId);
     setMessage("");
     try {
       const result = await regenerateVoiceClip(userId);
+      if (regeneratingVoiceOwner.current !== userId) return;
       if (!result.ok) {
         setMessage(result.error ?? "Voice regeneration failed.");
         return;
@@ -3837,8 +3857,10 @@ function UserEditor({
       const outcome = await pollVoiceClipReady(userId, {
         load: loadVoiceClipStates,
         onSnapshot: applySnapshot,
+        isCancelled: () => regeneratingVoiceOwner.current !== userId,
       });
       if (outcome === "aborted") return;
+      if (regeneratingVoiceOwner.current !== userId) return;
       try {
         applySnapshot(await loadVoiceClipStates());
       } catch {
@@ -3850,7 +3872,8 @@ function UserEditor({
         setMessage(`Voice clip queued for regeneration (${result.spokenText ?? userId}). Still working — it plays automatically once pulled.`);
       }
     } finally {
-      setRegeneratingVoiceUserId(null);
+      if (regeneratingVoiceOwner.current === userId) regeneratingVoiceOwner.current = null;
+      setRegeneratingVoiceUserId((cur) => (cur === userId ? null : cur));
     }
   };
 

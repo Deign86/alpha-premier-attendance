@@ -335,12 +335,23 @@ pub fn parse_month_header(cell: &str) -> Option<u32> {
     })
 }
 
-/// 0-based `[start, end)` search bounds for one month block: rows strictly
-/// between this month's header and the next month header (or sheet end).
-/// Returns `None` when the tab carries month headers but none matches
-/// `month`. The caller falls back to the whole tab only when the tab has
-/// no month headers at all (checked separately).
-pub fn month_block_range(rows: &[Vec<String>], month: u32) -> Option<(usize, usize)> {
+/// Where a month block lives on a DTR tab. Three distinct facts, one value:
+/// the previous `Option` return meant both "this tab has no month headers at
+/// all" and "headers exist but none matches", which forced callers to
+/// re-derive the difference and let the two callers read it differently.
+/// The set of cells a caller writes is unchanged by this split.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MonthBlock {
+    /// 0-based exclusive bounds of the matching block.
+    Range(usize, usize),
+    /// The tab carries no month headers anywhere in column A.
+    NoHeaders,
+    /// The tab has month headers, but none matches the requested month.
+    NoMatch,
+}
+
+/// Locate the 0-based exclusive bounds of `month`'s block in column A.
+pub fn month_block_range(rows: &[Vec<String>], month: u32) -> MonthBlock {
     let mut saw_header = false;
     let mut block_start: Option<usize> = None;
     for (i, row) in rows.iter().enumerate() {
@@ -350,16 +361,16 @@ pub fn month_block_range(rows: &[Vec<String>], month: u32) -> Option<(usize, usi
         }
         saw_header = true;
         if block_start.is_some() {
-            return block_start.map(|s| (s, i));
+            return block_start.map(|s| MonthBlock::Range(s, i)).unwrap_or(MonthBlock::NoMatch);
         }
         if parse_month_header(cell) == Some(month) {
             block_start = Some(i + 1);
         }
     }
     if !saw_header {
-        return None;
+        return MonthBlock::NoHeaders;
     }
-    block_start.map(|s| (s, rows.len()))
+    block_start.map(|s| MonthBlock::Range(s, rows.len())).unwrap_or(MonthBlock::NoMatch)
 }
 
 /// Find the 0-based row index of `ymd` (`YYYY-MM-DD`) in column A within
@@ -1210,21 +1221,14 @@ async fn plan_dtr_push_outcome(
         .filter(|m| (1..=12).contains(m))
         .ok_or_else(|| format!("attendanceDate must be YYYY-MM-DD, got {attendance_date}"))?;
     // Scope to the month block; fall back to the whole tab only when the
-    // tab carries no month headers at all.
-    let mut saw_header = false;
-    for row in &rows {
-        if parse_month_header(row.first().map(String::as_str).unwrap_or("")).is_some() {
-            saw_header = true;
-            break;
+    // tab carries no month headers at all — exactly the previous behaviour,
+    // now read off one return value instead of a second column-A scan.
+    let (start, end) = match month_block_range(&rows, want_month) {
+        MonthBlock::Range(start, end) => (start, end),
+        MonthBlock::NoHeaders => (0, rows.len()),
+        MonthBlock::NoMatch => {
+            return Ok(DtrPlanOutcome::Unresolvable("no-month-block"));
         }
-    }
-    let bounds = if saw_header {
-        month_block_range(&rows, want_month)
-    } else {
-        Some((0, rows.len()))
-    };
-    let Some((start, end)) = bounds else {
-        return Ok(DtrPlanOutcome::Unresolvable("no-month-block"));
     };
     let Some(idx) = find_date_row_in(&rows, attendance_date, start, end)? else {
         return Ok(DtrPlanOutcome::Unresolvable("no-date-row"));
@@ -1399,9 +1403,14 @@ pub async fn clear_dtr_row(
     )
     .await?;
     let rows = rows_from_values(&tab_values);
-    let Some((start, end)) = month_block_range(&rows, month) else {
-        log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no month block");
-        return Ok(false);
+    // Both absence arms keep the pre-existing skip: a clear never falls back
+    // to the whole tab.
+    let (start, end) = match month_block_range(&rows, month) {
+        MonthBlock::Range(start, end) => (start, end),
+        MonthBlock::NoHeaders | MonthBlock::NoMatch => {
+            log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no month block");
+            return Ok(false);
+        }
     };
     let Some(idx) = find_date_row_in(&rows, &attendance_date, start, end)? else {
         log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no date row");
@@ -2047,11 +2056,32 @@ mod tests {
 
     #[tokio::test]
     async fn dtr_sync_toggle_defaults_on_and_persists() {
+        // Takes the env-test guard too: env-mutating tests in this process can
+        // otherwise flip `is_dtr_sync_enabled` mid-assert (same class as the
+        // DTR_SHEET_ID leak the shared guard exists for).
+        let _env_guard = crate::config::dtr_env_test_guard();
         let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         assert!(is_dtr_sync_enabled(&db).await);
         set_dtr_sync_enabled(&db, false).await.unwrap();
         assert!(!is_dtr_sync_enabled(&db).await);
         set_dtr_sync_enabled(&db, true).await.unwrap();
+        assert!(is_dtr_sync_enabled(&db).await);
+    }
+
+    #[tokio::test]
+    async fn dtr_sync_env_override_wins_over_stored_row() {
+        // N11: the env override is layered over the DB row, so a set(true) followed
+        // by a read can legitimately return false — which is exactly why the command
+        // must report the effective value, not the requested one.
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        set_dtr_sync_enabled(&db, true).await.unwrap();
+        std::env::set_var(ENV_DTR_SYNC_ENABLED, "0");
+        let effective_while_overridden = is_dtr_sync_enabled(&db).await;
+        // Drop the override BEFORE asserting, so a failure cannot leak it into
+        // other tests sharing this process.
+        std::env::remove_var(ENV_DTR_SYNC_ENABLED);
+        assert!(!effective_while_overridden);
         assert!(is_dtr_sync_enabled(&db).await);
     }
 
@@ -2075,7 +2105,7 @@ mod tests {
             vec!["9/5/2026".to_string()],
             vec!["TOTAL HOURS".to_string()],
         ];
-        assert_eq!(month_block_range(&rows, 9), Some((4, 7)));
+        assert_eq!(month_block_range(&rows, 9), MonthBlock::Range(4, 7));
         assert_eq!(find_date_row_in(&rows, "2026-09-05", 4, 7), Ok(Some(5)));
         // Whole-tab search would also find it, but scoped search must not
         // leak into other months.
@@ -2454,10 +2484,24 @@ mod tests {
             vec!["10/5/2026".to_string()],
             vec!["TOTAL HOURS".to_string()],
         ];
-        assert_eq!(month_block_range(&rows, 9), Some((1, 3)));
+        assert_eq!(month_block_range(&rows, 9), MonthBlock::Range(1, 3));
         assert_eq!(find_date_row_in(&rows, "2026-09-05", 1, 3), Ok(Some(1)));
-        assert_eq!(month_block_range(&rows, 10), Some((4, 7)));
+        assert_eq!(month_block_range(&rows, 10), MonthBlock::Range(4, 7));
         assert_eq!(find_date_row_in(&rows, "2026-10-05", 4, 7), Ok(Some(5)));
+    }
+
+    #[test]
+    fn month_block_range_names_absence_per_arm() {
+        // No month header anywhere in column A -> NoHeaders.
+        let bare = vec![vec!["9/5/2026".to_string()], vec!["TOTAL HOURS".to_string()]];
+        assert_eq!(month_block_range(&bare, 9), MonthBlock::NoHeaders);
+        // Headers exist but none matches -> NoMatch.
+        let headed = vec![
+            vec!["DATE-October".to_string()],
+            vec!["10/5/2026".to_string()],
+            vec!["TOTAL HOURS".to_string()],
+        ];
+        assert_eq!(month_block_range(&headed, 9), MonthBlock::NoMatch);
     }
 
     #[test]

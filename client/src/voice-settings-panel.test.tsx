@@ -125,6 +125,21 @@ describe('VoiceSettingsPanel', () => {
     expect(screen.getByRole('button', { name: 'Test Voice' })).toBeDisabled();
   });
 
+  it('shows a disabled pill agreeing with the facts row when unfriendly-enabled pair occurs', async () => {
+    await act(async () => {
+      render(<VoiceSettingsPanel />);
+    });
+    const toggle = screen.getByLabelText(/Enable Voice Announcements/i);
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(screen.queryByText("Ma'am Bea Ready")).not.toBeInTheDocument();
+    expect(screen.getByText('Voice Disabled')).toBeInTheDocument();
+    expect(screen.getAllByText('Disabled').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('updates speech rate and volume sliders', async () => {
     const onChange = vi.fn();
     await act(async () => {

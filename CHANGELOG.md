@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.65] - 2026-09-13
+
+### Fixed
+- **Intern cutoff gross compensation calculation**: `apply_intern_rules` now sets `employeeType: "INTERN"` so the cutoff engine's floored-at-zero rule applies directly; removed 3 command-layer substitutions (`gross = if is_intern { net.max(0) }`) in cutoff create, update, and generate commands.
+- **Voice worker queue lease & clobber guard**: stranded `PROCESSING` voice jobs are now reclaimed after a 30-minute stale lease timeout; terminal `DONE` and `RETRY` writes now guard with `AND status = 'PROCESSING'` so in-flight pulls never clobber fresh re-queues.
+- **Voice settings panel & error copy**: panel header pill and facts row now consistently derive state through `resolveTtsMode`; `announceScanError` routes real `UNKNOWN_RFID_CARD` and `USER_NOT_FOUND` codes to the shipped Bea sorry-clip (`sorry-card-not-recognized.mp3`), deleting dead codes.
+- **Client live attendance & sync badge**: `LiveAttendance` replaces 4 loose state atoms with a single `LiveAttendanceState` discriminated union guarded against out-of-order responses; `DatabasePanel` distinguishes background poll ticks from manual sync completions so the `Syncing...` badge is not prematurely cleared.
+- **DTR push plans & month block ranges**: TS `PushPlan` converted to a discriminated union (`write | in-sync | skip`), removing fragile string prefix comparisons; Rust `month_block_range` converted to `MonthBlock` tri-state (`Range | NoHeaders | NoMatch`), deleting redundant column A re-scans.
+- **Autostart & sync queue retry**: `self_heal_autostart` feeds live opt-out status into `decide_autostart_action`; `admin_set_intern_dtr_sync` reports effective state; `requeue_sync_row` resets `attempts = 0` so retried dead rows receive a full retry budget.
+
 ## [0.1.64] - 2026-09-13
 
 ### Fixed

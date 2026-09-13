@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
 import { unlockAdmin } from './api';
+import * as api from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
 import type { BathroomScanResponse, ScannerStatus } from '@rfid-attendance/shared';
@@ -2443,5 +2444,142 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByRole('button', { name: /close card setup/i }));
     fireEvent.keyDown(window, { key: '2' });
     expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+  });
+});
+
+describe('N6 LiveAttendance ordering', () => {
+  it('keeps the newest snapshot when overlapping loads resolve out of order', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      const resolvers: Array<(value: Response) => void> = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === '/api/config') {
+          // SAFETY: Fetch returns config Response mock
+          return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+        }
+        if (url === '/api/attendance') {
+          return new Promise<Response>((resolve) => { resolvers.push(resolve); });
+        }
+        // SAFETY: Fetch returns fallback success Response mock
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      });
+      const row = (name: string, id: string) => ({
+        attendanceId: id,
+        attendanceDate: '2026-07-28',
+        userId: id,
+        fullName: name,
+        department: 'Engineering',
+        timeIn: '2026-07-28T08:00:00+08:00',
+        timeOut: null,
+        status: 'WORKING',
+      });
+      render(<App />);
+      // Initial render reads the loading state, not an empty day.
+      expect(screen.getByText('Loading live attendance…')).toBeInTheDocument();
+      expect(screen.queryByText('No attendance has been recorded today.')).not.toBeInTheDocument();
+      await waitFor(() => expect(resolvers.length).toBe(1));
+      // Second overlapping refresh (window focus) starts before the first settles.
+      act(() => { window.dispatchEvent(new Event('focus')); });
+      await waitFor(() => expect(resolvers.length).toBe(2));
+      // Newest resolves first, older resolves second and must be dropped.
+      await act(async () => {
+        // SAFETY: Resolve pending attendance fetch with the newer snapshot
+        resolvers[1]({ ok: true, json: async () => ({ success: true, date: '2026-07-28', fetchedAt: '2026-07-28T10:00:02+08:00', attendance: [row('New Person', 'n1')] }) } as Response);
+      });
+      expect(await screen.findByText('New Person')).toBeInTheDocument();
+      await act(async () => {
+        // SAFETY: Resolve pending attendance fetch with the older snapshot
+        resolvers[0]({ ok: true, json: async () => ({ success: true, date: '2026-07-28', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: [row('Old Person', 'o1')] }) } as Response);
+      });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(screen.getByText('New Person')).toBeInTheDocument();
+      expect(screen.queryByText('Old Person')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('N7 concurrent voice regen ownership', () => {
+  it('resolving A first after starting B keeps B loader and writes no A message', async () => {
+    window.history.pushState({}, '', '/admin');
+    try {
+      vi.restoreAllMocks();
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/api/config')) {
+          // SAFETY: Fetch config mock
+          return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true }) } as Response;
+        }
+        if (url.includes('/api/admin/session')) {
+          // SAFETY: Fetch mock admin session active
+          return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+        }
+        if (url.includes('/api/admin/users')) {
+          // SAFETY: Fetch users list mock with two regen targets
+          return {
+            ok: true,
+            json: async () => ({
+              success: true,
+              users: [
+                { userId: 'uA', fullName: 'Ada Alpha', rfidUid: 'RFID-A', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+                { userId: 'uB', fullName: 'Zed Beta', rfidUid: 'RFID-B', employeeType: 'INTERN', status: 'ACTIVE' },
+              ],
+            }),
+          } as Response;
+        }
+        if (url.includes('/api/admin/payroll/profiles')) {
+          // SAFETY: Fetch mock payroll profiles
+          return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+        }
+        if (url.includes('/api/admin/payroll/cutoffs')) {
+          // SAFETY: Fetch mock payroll cutoffs
+          return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+        }
+        // SAFETY: Fetch fallback
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      });
+      vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+      let resolveRegenA: (value: Awaited<ReturnType<typeof api.regenerateVoiceClip>>) => void = () => {};
+      let resolveRegenB: (value: Awaited<ReturnType<typeof api.regenerateVoiceClip>>) => void = () => {};
+      let resolvePollA: (value: Awaited<ReturnType<typeof api.pollVoiceClipReady>>) => void = () => {};
+      let resolvePollB: (value: Awaited<ReturnType<typeof api.pollVoiceClipReady>>) => void = () => {};
+      const regenA = new Promise<Awaited<ReturnType<typeof api.regenerateVoiceClip>>>((resolve) => { resolveRegenA = resolve; });
+      const regenB = new Promise<Awaited<ReturnType<typeof api.regenerateVoiceClip>>>((resolve) => { resolveRegenB = resolve; });
+      const pollA = new Promise<Awaited<ReturnType<typeof api.pollVoiceClipReady>>>((resolve) => { resolvePollA = resolve; });
+      const pollB = new Promise<Awaited<ReturnType<typeof api.pollVoiceClipReady>>>((resolve) => { resolvePollB = resolve; });
+      vi.spyOn(api, 'regenerateVoiceClip').mockImplementation((personId: string) => (personId === 'uA' ? regenA : regenB));
+      vi.spyOn(api, 'pollVoiceClipReady').mockImplementation((personId: string) => (personId === 'uA' ? pollA : pollB));
+      render(<App />);
+      await screen.findByText('Ada Alpha');
+      await screen.findByText('Zed Beta');
+      const adaRow = (await screen.findByText('Ada Alpha')).closest('tr');
+      const zedRow = (await screen.findByText('Zed Beta')).closest('tr');
+      expect(adaRow).not.toBeNull();
+      expect(zedRow).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null on the lines above
+      fireEvent.click(within(adaRow as HTMLElement).getByRole('button', { name: 'Regenerate' }));
+      expect(await screen.findByRole('progressbar', { name: /ada alpha/i })).toBeInTheDocument();
+      // SAFETY: closest('tr') is checked non-null on the lines above
+      fireEvent.click(within(zedRow as HTMLElement).getByRole('button', { name: 'Regenerate' }));
+      expect(await screen.findByRole('progressbar', { name: /zed beta/i })).toBeInTheDocument();
+      // A finishes first but no longer owns the slot: it must write nothing.
+      await act(async () => { resolveRegenA({ ok: true, spokenText: 'Ada Alpha' }); });
+      await act(async () => { resolvePollA('ready'); });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(screen.getByRole('progressbar', { name: /zed beta/i })).toBeInTheDocument();
+      expect(screen.queryByText(/voice clip ready/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/voice clip queued/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Ada Alpha.*plays automatically/i)).not.toBeInTheDocument();
+      // B still owns the slot: its own completion lands the message.
+      await act(async () => { resolveRegenB({ ok: true, spokenText: 'Zed Beta' }); });
+      await act(async () => { resolvePollB('ready'); });
+      expect(await screen.findByText(/voice clip ready \(zed beta\)/i)).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull());
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
   });
 });

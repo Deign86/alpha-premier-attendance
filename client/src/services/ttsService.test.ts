@@ -770,7 +770,7 @@ describe('ttsService', () => {
       const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
 
       const result = await announceScanError({
-        errorCode: 'UNREGISTERED_CARD',
+        errorCode: 'UNKNOWN_RFID_CARD',
         settings: {
           enabled: true,
           engine: 'cloned-bea',
@@ -1036,7 +1036,7 @@ describe('ttsService', () => {
       });
 
       expect(playSpy).toHaveBeenCalledWith(
-        '/voices/bea/scan-error/card-not-registered.mp3',
+        '/voices/bea/scan-error/sorry-card-not-recognized.mp3',
         1.0,
         1.0,
       );

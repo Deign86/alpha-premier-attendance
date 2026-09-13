@@ -2320,8 +2320,7 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
         let now = chrono::Utc::now().to_rfc3339();
         for (row_id, payload) in rows {
             let idempotency_key = format!("{table_name}:{row_id}:UPSERT");
-            let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
-                .bind(table_name).bind(&row_id).bind("UPSERT").bind(payload.to_string()).bind(&now).bind(&now).bind(&now).bind(&idempotency_key).execute(&state.db).await.map_err(|e| e.to_string())?;
+            requeue_sync_row(&state.db, table_name, &row_id, "UPSERT", &payload.to_string(), &now, &idempotency_key).await;
             queued += 1;
         }
     }
@@ -2353,6 +2352,23 @@ fn should_dispatch(endpoint_none: bool, ops_ready: bool, dtr_ready: bool) -> boo
 /// Returns true if the error indicates a Google Sheets API rate limit / 429 quota exhaustion.
 pub fn is_rate_limited_error(error: &str) -> bool {
     error.contains(GOOGLE_RATE_LIMITED) || error.contains("429")
+}
+
+/// Single owner of the requeue write: an operator edit must restore the
+/// full retry budget, so `attempts` resets to 0 alongside the status flip.
+/// Fire-and-forget by design — a queue bookkeeping failure never fails
+/// the caller.
+pub(crate) async fn requeue_sync_row(
+    db: &sqlx::SqlitePool,
+    table_name: &str,
+    row_id: &str,
+    operation: &str,
+    payload_json: &str,
+    now: &str,
+    idempotency_key: &str,
+) {
+    let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',attempts=0,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
+        .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await;
 }
 
 /// Computes backoff duration, new queue status, and error code for failed sync rows.
@@ -3363,5 +3379,33 @@ mod tests {
             }
         }
         assert_eq!(other_processed, 1, "Non-rate-limit errors should continue batch");
+    }
+
+    #[tokio::test]
+    async fn requeue_resets_retry_budget() {
+        let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::query("CREATE TABLE sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, row_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_error_code TEXT, status TEXT NOT NULL DEFAULT 'PENDING', next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, idempotency_key TEXT)")
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX ux_sync_queue_idempotency ON sync_queue(idempotency_key) WHERE idempotency_key IS NOT NULL")
+            .execute(&db)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,last_error,last_error_code,status,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+            .bind("Users").bind("u1").bind("UPSERT").bind("{}").bind(5_i64).bind("boom").bind("GOOGLE_SYNC_FAILED").bind("DEAD").bind(&now).bind(&now).bind(&now).bind("Users:u1:UPSERT")
+            .execute(&db)
+            .await
+            .unwrap();
+        super::requeue_sync_row(&db, "Users", "u1", "UPSERT", "{\"fixed\":true}", &now, "Users:u1:UPSERT").await;
+        let row = sqlx::query("SELECT status, attempts, last_error, last_error_code FROM sync_queue WHERE idempotency_key='Users:u1:UPSERT'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "PENDING");
+        assert_eq!(row.get::<i64, _>("attempts"), 0);
+        assert_eq!(row.get::<Option<String>, _>("last_error"), None);
+        assert_eq!(row.get::<Option<String>, _>("last_error_code"), None);
     }
 }

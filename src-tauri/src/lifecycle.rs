@@ -362,10 +362,10 @@ fn write_run_value_quoted(app_name: &str, current_exe: &str) -> Result<(), Strin
 /// so startup always survives registry errors. Never re-enables after the
 /// user opted out via settings/tray.
 pub fn self_heal_autostart(app: &tauri::AppHandle, config_dir: &std::path::Path) {
-    if is_opted_out(config_dir) {
-        log::info!("Autostart self-heal: user opted out, leaving Run entry untouched");
-        return;
-    }
+    // N13: read the opt-out marker once and hand it to the pure decision instead
+    // of short-circuiting here, so `decide_autostart_action` is the single owner
+    // of "opt-out always wins" and its `RespectOptOut` arm is reachable.
+    let opted_out = is_opted_out(config_dir);
     #[cfg(windows)]
     let exe = match std::env::current_exe() {
         Ok(path) => path.display().to_string(),
@@ -379,7 +379,7 @@ pub fn self_heal_autostart(app: &tauri::AppHandle, config_dir: &std::path::Path)
     #[cfg(windows)]
     {
         let stored = read_run_value(&app_name);
-        match decide_autostart_action(stored.as_deref(), &exe, false) {
+        match decide_autostart_action(stored.as_deref(), &exe, opted_out) {
             AutostartAction::OkUnchanged => {
                 log::info!("Autostart self-heal: Run value already points at current exe");
             }
@@ -399,12 +399,18 @@ pub fn self_heal_autostart(app: &tauri::AppHandle, config_dir: &std::path::Path)
                     Err(e) => log::warn!("Autostart self-heal: failed to restore Run value: {e}"),
                 }
             }
-            AutostartAction::RespectOptOut => {}
+            AutostartAction::RespectOptOut => {
+                log::info!("Autostart self-heal: user opted out, leaving Run entry untouched");
+            }
         }
         return;
     }
     #[cfg(not(windows))]
     {
+        if opted_out {
+            log::info!("Autostart self-heal: user opted out, leaving Run entry untouched");
+            return;
+        }
         use tauri_plugin_autostart::ManagerExt;
         let autolaunch = app.autolaunch();
         match autolaunch.is_enabled() {

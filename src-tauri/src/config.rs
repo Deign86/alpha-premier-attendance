@@ -128,10 +128,12 @@ pub const ENV_DTR_SHEET_ID: &str = "ALPHA_PREMIER_DTR_SHEET_ID";
 /// `cargo test` runs threads in one process; unsynchronized `set_var`/`remove_var`
 /// lets the blank-env "DTR off" test leak into the "DTR on" backdate test.
 /// Hold the guard for the whole env-mutating critical section.
- pub(crate) static DTR_ENV_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+#[cfg(test)]
+pub(crate) static DTR_ENV_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
     std::sync::OnceLock::new();
 
- pub(crate) fn dtr_env_test_guard() -> std::sync::MutexGuard<'static, ()> {
+#[cfg(test)]
+pub(crate) fn dtr_env_test_guard() -> std::sync::MutexGuard<'static, ()> {
     DTR_ENV_TEST_LOCK
         .get_or_init(|| std::sync::Mutex::new(()))
         .lock()
@@ -539,6 +541,16 @@ impl OfficeConfig {
 
 /// Load the LAN, office, scanner, database, TTS, and updater sections from `config.toml`
 /// (defaults when absent).
+/// One owner for the updater auto-check env override, so the
+/// missing-file and present-file branches of `load_config` cannot drift.
+fn updater_auto_check_env_disabled() -> bool {
+    std::env::var("ALPHA_PREMIER_DISABLE_AUTO_UPDATE").is_ok()
+        || std::env::var("ALPHA_PREMIER_DISABLE_UPDATES").is_ok()
+        || std::env::var("ALPHA_PREMIER_AUTO_UPDATE")
+            .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+}
+
 pub fn load_config(
     config_dir: &Path,
 ) -> Result<
@@ -555,12 +567,7 @@ pub fn load_config(
     let path = config_dir.join("config.toml");
     if !path.exists() {
         let mut updater = UpdaterConfig::default();
-        if std::env::var("ALPHA_PREMIER_DISABLE_AUTO_UPDATE").is_ok()
-            || std::env::var("ALPHA_PREMIER_DISABLE_UPDATES").is_ok()
-            || std::env::var("ALPHA_PREMIER_AUTO_UPDATE")
-                .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
-                .unwrap_or(false)
-        {
+        if updater_auto_check_env_disabled() {
             updater.auto_check = false;
         }
         return Ok((
@@ -670,12 +677,7 @@ pub fn load_config(
         database.path = None;
     }
     let mut updater = root.updater;
-    if std::env::var("ALPHA_PREMIER_DISABLE_AUTO_UPDATE").is_ok()
-        || std::env::var("ALPHA_PREMIER_DISABLE_UPDATES").is_ok()
-        || std::env::var("ALPHA_PREMIER_AUTO_UPDATE")
-            .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
-            .unwrap_or(false)
-    {
+    if updater_auto_check_env_disabled() {
         updater.auto_check = false;
     }
     Ok((
@@ -1032,6 +1034,41 @@ mod tests {
         .unwrap();
         let (_, _, _, database, _, _) = load_config(&temp).expect("load config");
         assert_eq!(database.path.as_deref(), Some("data/attendance.db"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn updater_env_override_agrees_across_both_load_config_branches() {
+        // Serialize against other env-mutating tests; cargo runs threads in one process.
+        let _guard = dtr_env_test_guard();
+        let temp = std::env::temp_dir().join(format!("alpha-config-updater-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let with_file = temp.join("config.toml");
+        let spellings = [
+            ("ALPHA_PREMIER_DISABLE_AUTO_UPDATE", "1"),
+            ("ALPHA_PREMIER_DISABLE_UPDATES", "1"),
+            ("ALPHA_PREMIER_AUTO_UPDATE", "0"),
+            ("ALPHA_PREMIER_AUTO_UPDATE", "false"),
+        ];
+        for (key, value) in spellings {
+            std::env::set_var(key, value);
+            let missing_file_allows = {
+                let _ = std::fs::remove_file(&with_file);
+                load_config(&temp).unwrap().5.auto_check
+            };
+            let present_file_allows = {
+                std::fs::write(&with_file, "[updater]\nenabled = true\nauto_check = true\n").unwrap();
+                load_config(&temp).unwrap().5.auto_check
+            };
+            assert!(!missing_file_allows, "{key}={value} must disable with no config.toml");
+            assert!(!present_file_allows, "{key}={value} must disable with a config.toml");
+            std::env::remove_var(key);
+        }
+        // With no override either branch keeps the default (auto-check on).
+        let _ = std::fs::remove_file(&with_file);
+        assert!(load_config(&temp).unwrap().5.auto_check);
+        std::fs::write(&with_file, "[updater]\nauto_check = false\n").unwrap();
+        assert!(!load_config(&temp).unwrap().5.auto_check);
         let _ = std::fs::remove_dir_all(&temp);
     }
 

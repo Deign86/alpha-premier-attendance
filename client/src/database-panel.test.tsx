@@ -431,4 +431,90 @@ describe('DatabasePanel', () => {
     });
     expect(await screen.findByText('Healthy')).toBeInTheDocument();
   });
+
+  it('does not let a background poll clear the Syncing badge (N8a)', async () => {
+    let resolveSync: (value: Awaited<ReturnType<typeof api.syncInternDtr>>) => void = () => {};
+    const syncPromise = new Promise<Awaited<ReturnType<typeof api.syncInternDtr>>>((resolve) => {
+      resolveSync = resolve;
+    });
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockReturnValueOnce(syncPromise);
+    let resolveBg: (value: Awaited<ReturnType<typeof api.loadDtrSyncHealth>>) => void = () => {};
+    const bgPromise = new Promise<Awaited<ReturnType<typeof api.loadDtrSyncHealth>>>((resolve) => {
+      resolveBg = resolve;
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    // The next loadDtrSyncHealth call after mount is the background poll.
+    loadDtrSyncHealthSpy.mockReturnValueOnce(bgPromise);
+
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+    expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+
+    // A background tick fires mid-sync and resolves healthy: badge must stay.
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => {
+      expect(loadDtrSyncHealthSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    await act(async () => {
+      resolveBg({
+        success: true,
+        health: {
+          pending: 0,
+          deadLetter: 0,
+          byTable: [],
+          dtrPendingCount: 0,
+          dtrPendingItems: [],
+          lastSyncedAt: '2026-08-15T00:00:00Z',
+          lastError: null,
+        },
+      });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+
+    // Finish the manual sync so the component settles: its own post-sync
+    // refresh (releaseSyncing) leaves `syncing` for real.
+    await act(async () => {
+      resolveSync({
+        success: true,
+        internsChecked: 1,
+        tabsCreated: [],
+        rowsSynced: 1,
+        details: [],
+        errors: [],
+      });
+    });
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+  });
+
+  it('lets the manual sync resolution leave the Syncing badge (N8b)', async () => {
+    // A blanket `if (syncing) return prev` completion guard would strand the
+    // badge here: this test pins the exit path the N8 fix must keep.
+    vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
+      success: true,
+      internsChecked: 1,
+      tabsCreated: [],
+      rowsSynced: 1,
+      details: [],
+      errors: [],
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+    expect(await screen.findByText(/DTR sync complete/i)).toBeInTheDocument();
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
+  });
 });

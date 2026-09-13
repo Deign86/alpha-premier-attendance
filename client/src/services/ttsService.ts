@@ -275,6 +275,12 @@ export type AnnounceBathroomOptions = BathroomPhraseOptions & {
   settings?: TtsSettings;
 };
 
+// NOTE: `errorCode` stays `string` at this seam because read-only callers pass
+// codes outside shared `scanErrorCodes` (App.tsx: "NETWORK_ERROR"/"SERVICE_ERROR")
+// and shared itself splits the branched codes across two unions (`scanErrorCodes`
+// holds UNKNOWN_RFID_CARD/INACTIVE_USER; the :964 bathroom union holds
+// BATHROOM_KEY_IN_USE/USER_NOT_FOUND/USER_INACTIVE/ADMIN_CARD_NOT_ALLOWED).
+// Narrowing here is blocked until shared gains one union and App.tsx is retouched.
 export type ScanErrorPhraseOptions = {
   errorCode: string;
   message?: string;
@@ -809,7 +815,7 @@ export async function announceScanError(
   if (currentEpoch !== activePlaybackEpoch) return null;
 
   const phrase = isClonedBea
-    ? (options.errorCode === 'INVALID_UID' || options.errorCode === 'UNREGISTERED_CARD'
+    ? (options.errorCode === 'UNKNOWN_RFID_CARD' || options.errorCode === 'USER_NOT_FOUND'
         ? "Sorry, that card wasn't recognized. Please try scanning again."
         : buildScanErrorPhrase({ ...options, activeHolderName: null }))
     : buildScanErrorPhrase(options);

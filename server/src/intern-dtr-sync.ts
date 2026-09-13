@@ -54,15 +54,42 @@ export type TabResolution =
   | { status: 'MATCH'; tab: string }
   | { status: 'AMBIGUOUS' | 'NO_MATCH' | 'SKIP'; tab: null };
 
-export type PushPlan = {
-  record: AttendanceDay;
-  tab: string;
-  row1Based: number;
-  /** [B, C, D, E] values to write. */
-  values: [string, string, string, string];
-  skipped: boolean;
-  reason: string;
-};
+/** Closed skip codes (mirrors Rust `DtrPlanOutcome::Unresolvable` payloads). */
+export type PushSkipReason =
+  | 'tab-no-match'
+  | 'tab-ambiguous'
+  | 'tab-skip'
+  | 'no-time-in'
+  | 'no-month-block'
+  | 'date-not-found';
+
+/**
+ * Discriminated plan outcome mirroring Rust `DtrPlanOutcome`
+ * (`dtr_sync.rs:1169-1174`): write/in-sync arms carry a real tab + row +
+ * values; skip arms carry a closed reason code plus a human detail string.
+ * `{skipped:false, tab:'', row1Based:-1}` is no longer representable.
+ */
+export type PushPlan =
+  | {
+      kind: 'write';
+      record: AttendanceDay;
+      tab: string;
+      row1Based: number;
+      /** [B, C, D, E] values to write. */
+      values: [string, string, string, string];
+    }
+  | {
+      kind: 'in-sync';
+      record: AttendanceDay;
+      tab: string;
+      row1Based: number;
+      /** [B, C, D, E] values already on the sheet. */
+      values: [string, string, string, string];
+    }
+  | { kind: 'skip'; record: AttendanceDay; reason: PushSkipReason; detail: string };
+
+/** Arms `executePush` accepts (everything but `skip`). */
+export type WritablePushPlan = Extract<PushPlan, { kind: 'write' | 'in-sync' }>;
 
 const TEMPLATE_TITLES = new Set(['copy of template', 'template']);
 
@@ -659,13 +686,11 @@ export async function planPush(
   record: AttendanceDay,
   allUsers: DtrSyncUser[],
 ): Promise<PushPlan> {
-  const fail = (reason: string): PushPlan => ({
+  const fail = (reason: PushSkipReason, detail: string): PushPlan => ({
+    kind: 'skip',
     record,
-    tab: '',
-    row1Based: -1,
-    values: ['', '', '', ''],
-    skipped: true,
     reason,
+    detail,
   });
   const titles = await client.getTabTitles();
   const resolved = resolveUserTab(
@@ -674,47 +699,53 @@ export async function planPush(
     allUsers,
   );
   if (resolved.status !== 'MATCH') {
-    return fail(`tab ${resolved.status} for ${record.fullName}`);
+    const reason: PushSkipReason =
+      resolved.status === 'NO_MATCH'
+        ? 'tab-no-match'
+        : resolved.status === 'AMBIGUOUS'
+          ? 'tab-ambiguous'
+          : 'tab-skip';
+    return fail(reason, `tab ${resolved.status} for ${record.fullName}`);
   }
   const values = buildDtrRow(record.timeIn, record.timeOut, record.attendanceDate);
-  if (values.every((v) => v === '')) return fail('no time-in yet');
+  if (values.every((v) => v === '')) return fail('no-time-in', 'no time-in yet');
   const rows = await client.getTabValues(resolved.tab);
   const wantMonth = Number(record.attendanceDate.slice(5, 7));
   const block = monthBlockRange(rows, wantMonth);
   if (block === null) {
     const monthName = DateTime.fromObject({ month: wantMonth }, { zone: MANILA_ZONE }).toFormat('LLLL');
-    return fail(`no ${monthName} block in tab ${resolved.tab}`);
+    return fail('no-month-block', `no ${monthName} block in tab ${resolved.tab}`);
   }
   const idx = block === 'no-headers'
     ? findDateRow(rows, record.attendanceDate)
     : findDateRowIn(rows, record.attendanceDate, block.start, block.end);
-  if (idx === -1) return fail(`date ${record.attendanceDate} not found in tab ${resolved.tab}`);
+  if (idx === -1) {
+    return fail('date-not-found', `date ${record.attendanceDate} not found in tab ${resolved.tab}`);
+  }
   const existing = rowCells(rows[idx]);
   if (existing.every((v, i) => v === values[i])) {
     return {
+      kind: 'in-sync',
       record,
       tab: resolved.tab,
       row1Based: idx + 1,
       values,
-      skipped: true,
-      reason: 'already in sync',
     };
   }
   // System-is-source-of-truth (owner decision 2026-09-12): any difference
   // from the DB-derived values is written; sheet cells are output, never
   // input. Manual sheet typing is wiped on the next sync for that day.
   return {
+    kind: 'write',
     record,
     tab: resolved.tab,
     row1Based: idx + 1,
     values,
-    skipped: false,
-    reason: 'pending write B:E',
   };
 }
 
-/** Execute a non-skipped plan (single B:E range write). */
-export async function executePush(client: SheetsClient, plan: PushPlan): Promise<void> {
-  if (plan.skipped) return;
+/** Execute a writable plan (single B:E range write; in-sync is a no-op). */
+export async function executePush(client: SheetsClient, plan: WritablePushPlan): Promise<void> {
+  if (plan.kind !== 'write') return;
   await client.updateRow(plan.tab, plan.row1Based, [...plan.values]);
 }

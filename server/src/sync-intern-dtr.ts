@@ -264,7 +264,8 @@ async function loadDay(dbPath: string, date: string, userFilter: string | null):
 
 function describePlan(p: PushPlan): string {
   const who = `${p.record.fullName} (${p.record.userId})`;
-  if (p.skipped) return `SKIP ${who}: ${p.reason}`;
+  if (p.kind === 'skip') return `SKIP ${who}: ${p.detail}`;
+  if (p.kind === 'in-sync') return `IN-SYNC ${who}: '${p.tab}' row ${p.row1Based}`;
   const [b, c, d, e] = p.values;
   return `WRITE ${who} → '${p.tab}' row ${p.row1Based}: B=${b} C=${c} D=${d} E=${e || '(empty)'}`;
 }
@@ -324,7 +325,7 @@ async function main(): Promise<void> {
       // Tabs align to roster names: on a clean miss for an intern,
       // auto-create the tab from the template and re-plan once.
       // Overlaps/invalid names stay skipped for the owner.
-      if (plan.skipped && plan.reason.startsWith('tab NO_MATCH')) {
+      if (plan.kind === 'skip' && plan.reason === 'tab-no-match') {
         const user = users.find((u) => u.userId === record.userId);
         const created = user ? await ensurePersonTab(client, user, users) : null;
         if (created) {
@@ -336,10 +337,10 @@ async function main(): Promise<void> {
           console.log(describePlan(plan));
         }
       }
-      // P1: 'already in sync' carries a real tab+row — its format ops
+      // P1: in-sync plans carry a real tab+row — their format ops
       // (white/clear + absent sweep below) must still ride the paint
       // pass, mirroring the Rust InSync branch. Only true misses skip.
-      if (plan.skipped && plan.reason !== 'already in sync') {
+      if (plan.kind === 'skip') {
         skipped += 1;
         continue;
       }
@@ -348,7 +349,7 @@ async function main(): Promise<void> {
       const list = rowOpsByTab.get(plan.tab) ?? [];
       list.push(...ops);
       rowOpsByTab.set(plan.tab, list);
-      if (plan.skipped) {
+      if (plan.kind !== 'write') {
         skipped += 1;
         continue;
       }

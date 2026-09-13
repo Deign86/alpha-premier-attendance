@@ -337,7 +337,8 @@ describe('planPush', () => {
   it('plans a B:E write at the right 1-based row', async () => {
     const client = makeClient({ 'ROSADO RAINEER': baseRows });
     const plan = await planPush(client, DAY, ROSTER);
-    expect(plan.skipped).toBe(false);
+    expect(plan.kind).toBe('write');
+    if (plan.kind !== 'write') throw new Error('expected write plan');
     expect(plan.tab).toBe('ROSADO RAINEER');
     expect(plan.row1Based).toBe(2);
     expect(plan.values).toEqual(['7:24:00 AM', '', '', '5:00:00 PM']);
@@ -351,12 +352,13 @@ describe('planPush', () => {
     ];
     const client = makeClient({ 'ROSADO RAINEER': synced });
     const plan = await planPush(client, DAY, ROSTER);
-    expect(plan.skipped).toBe(true);
-    expect(plan.reason).toBe('already in sync');
+    expect(plan.kind).toBe('in-sync');
+    if (plan.kind !== 'in-sync') throw new Error('expected in-sync plan');
     // P1-B contract: in-sync plans still carry tab+row so the CLI paint
     // pass can white/clear them (Rust InSync branch parity).
     expect(plan.tab).toBe('ROSADO RAINEER');
     expect(plan.row1Based).toBe(2);
+    expect(plan.values).toEqual(['7:24:00 AM', '', '', '5:00:00 PM']);
     await executePush(client, plan);
     expect(client.writes).toEqual([]);
   });
@@ -364,14 +366,18 @@ describe('planPush', () => {
     const client = makeClient({ 'RUIZ FREDERIK': baseRows });
     const ruiz: AttendanceDay = { ...DAY, userId: 'APG-2026-112', fullName: 'John Frederick Ruiz' };
     const plan = await planPush(client, ruiz, ROSTER);
-    expect(plan.skipped).toBe(true);
-    expect(plan.reason).toMatch(/NO_MATCH/);
+    expect(plan.kind).toBe('skip');
+    if (plan.kind !== 'skip') throw new Error('expected skip plan');
+    expect(plan.reason).toBe('tab-no-match');
+    expect(plan.detail).toMatch(/NO_MATCH/);
   });
   it('skips missing date rows with reason', async () => {
     const client = makeClient({ 'ROSADO RAINEER': [baseRows[0]] });
     const plan = await planPush(client, DAY, ROSTER);
-    expect(plan.skipped).toBe(true);
-    expect(plan.reason).toMatch(/not found/);
+    expect(plan.kind).toBe('skip');
+    if (plan.kind !== 'skip') throw new Error('expected skip plan');
+    expect(plan.reason).toBe('date-not-found');
+    expect(plan.detail).toMatch(/not found/);
   });
   it('throws on duplicate date rows (fail closed)', async () => {
     const client = makeClient({ 'ROSADO RAINEER': [...baseRows, ['9/5/2026', '', '', '', '', '0']] });
@@ -385,7 +391,8 @@ describe('planPush', () => {
     const client = makeClient({ 'ROSADO RAINEER': completed });
     const working: AttendanceDay = { ...DAY, timeOut: null };
     const plan = await planPush(client, working, ROSTER);
-    expect(plan.skipped).toBe(false);
+    expect(plan.kind).toBe('write');
+    if (plan.kind !== 'write') throw new Error('expected write plan');
     await executePush(client, plan);
     expect(client.writes).toHaveLength(1);
   });
@@ -397,7 +404,8 @@ describe('planPush', () => {
     const client = makeClient({ 'ROSADO RAINEER': completed });
     const older: AttendanceDay = { ...DAY, timeOut: '2026-09-05T16:00:00+08:00' };
     const plan = await planPush(client, older, ROSTER);
-    expect(plan.skipped).toBe(false);
+    expect(plan.kind).toBe('write');
+    if (plan.kind !== 'write') throw new Error('expected write plan');
     await executePush(client, plan);
     expect(client.writes).toHaveLength(1);
     expect(client.writes[0].values[3]).toBe('4:00:00 PM');
@@ -409,7 +417,7 @@ describe('planPush', () => {
     ];
     const client = makeClient({ 'ROSADO RAINEER': older });
     const plan = await planPush(client, DAY, ROSTER);
-    expect(plan.skipped).toBe(false);
+    expect(plan.kind).toBe('write');
   });
 });
 
@@ -521,7 +529,8 @@ describe('red paint planner', () => {
     const half: AttendanceDay = { ...DAY, timeOut: '2026-09-05T12:30:00+08:00' };
     const rec: AttendanceDay = { ...half, attendanceDate: '2026-09-01', timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T12:30:00+08:00' };
     const plan = await planPush(client, rec, ROSTER);
-    expect(plan.skipped).toBe(false);
+    expect(plan.kind).toBe('write');
+    if (plan.kind !== 'write') throw new Error('expected write plan');
     expect(plan.values).toEqual(['8:04:00 AM', '12:30:00 PM', '', '']);
     await executePush(client, plan);
     const kind = classifyRecordKind(rec.timeIn, rec.timeOut, rec.attendanceDate);
