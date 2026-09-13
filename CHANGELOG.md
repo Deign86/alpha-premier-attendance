@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.63] - 2026-09-13
 
 ### Changed
 - **DTR: the attendance DB is the single source of truth** (supersedes the 0.1.62 timestamp-wins guard): every write path (queue push, history backfill, manual sync, server CLI) now writes the DB-derived B:E row whenever it differs from the sheet — no stamp comparison, no `Stale` skip. Manual typing inside Intern DTR sheets is overwritten on the next sync for that person/day; when two devices push the same day, last writer wins. The per-device kill switch (0.1.62) still blocks all writes while OFF.
