@@ -670,3 +670,24 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   EVIDENCE: the inline key scan returned `index + 1` while `find_rows_to_delete` (multi-match) returned `index`; both feed `deleteDimension.startIndex`, so every single-match delete removed the row BELOW the target. Extracted `find_key_matches()` (0-based), fixed the multi-match span shell to `hi + 1`, added the regression test. Measured 2026-09-12: cargo lib 287/287.
 - [x] R4: Personal PC stopped from pushing stale ops state; work handed to the authoritative kiosk.
   EVIDENCE: 800 DEAD rows were requeued to prove the fix (3-row canary first: 3/3 SYNCED, 0 warnings). 115 wrote before I froze the batch; the remaining 688 were returned to DEAD and the queue now has 0 non-terminal rows. DTR flag still `intern_dtr_sync_enabled=0` on this PC. Do NOT reconcile the shared ops sheet from here — this DB is stale; run `admin_sheets_nuke_resync` on the kiosk after deploying the fixed build.
+
+## DTR system-is-source-of-truth: timestamp-wins guard removed (2026-09-12)
+
+Owner decision (this session): the attendance DB is authoritative for ALL DTR sheet writes. Sheet cells are output, never input. Supersedes the timestamp-wins rule from the 2026-09-12 kill-switch entry above.
+
+- [x] G1: Rust write path unconditionally overwrites B:E (no sheet-stamp comparison).
+  CHECK: `rg -n "dtr_stale_reason|sheet_time_secs|DtrPlanOutcome::Stale" src-tauri/src` && cargo test --manifest-path src-tauri/Cargo.toml --lib
+  EXPECT: first command exits 1 (zero matches); cargo lib all-pass
+  EVIDENCE: measured 2026-09-12 — rg exit 1 (0 matches); cargo lib 282/282 (287 minus the 5 deleted guard/parse tests). −148 lines in `dtr_sync.rs`.
+- [x] G2: Server CLI planPush unconditionally returns `skipped:false` on differing rows; manual sheet typing is wiped on next sync for that person/day.
+  CHECK: `rg -n "dtrStaleReason|sheetTimeSecs|stale skip" server/src server/test` && npm test -w server
+  EXPECT: rg exits 1; server suite all-pass, incl. rewritten cases asserting a working local record and an older local clock-out both WRITE over a stamped sheet row
+  EVIDENCE: measured 2026-09-12 — rg exit 1; server 173/173 (17 files; 175 minus the 2 deleted sheetTimeSecs tests). Both rewritten planPush cases pass: working-over-completed → skipped=false + 1 write; older clock-out → writes B:E ending `4:00:00 PM` over a `5:00:00 PM` sheet cell.
+- [x] G3: Device-vs-device conflict = last writer wins (no tie-break code remains; queue order decides). Empty-vs-filled = blank local row clears the sheet on next sync.
+  CHECK: code review of remaining plan arms + G1/G2 tests
+  EXPECT: only Write/InSync/Unresolvable arms exist; InSync is byte-equality only
+  EVIDENCE: plan outcome grep shows exactly Write/InSync/Unresolvable at all 3 construction sites + 2 match sites; InSync fires only on `existing == values` (Rust) / element equality (TS). Caveat (pre-existing, unchanged): a record whose row renders fully empty returns `Unresolvable("empty-values")` rather than blanking — clearing filled cells is done by the absent-sweep/DELETE paths, which are untouched.
+- [x] G4: Repo gates green + docs updated (CHANGELOG entry replaced, kill switch unchanged and still honored).
+  CHECK: npm run typecheck && npm run lint:oxlint && npm test -w server
+  EXPECT: all exit 0
+  EVIDENCE: measured 2026-09-12 — typecheck 0, lint 0, server 173/173, client 258/258 (full `npm test`), cargo 282/282. CHANGELOG: new Unreleased/0.1.63 Changed entry supersedes the timestamp-wins guard; the released 0.1.62 bullet restored verbatim (history). Kill-switch gates (`dtr_upload_allowed` / `INTERN_DTR_SYNC_ENABLED`) untouched.
