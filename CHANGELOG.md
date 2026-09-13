@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.64] - 2026-09-13
+
+### Fixed
+- **Packaged app: Users → Play did nothing.** The CSP had no `media-src`, so worker name clips served from `http://asset.localhost` were silently blocked by the webview in release builds (dev instances don't inject the CSP, which is why the same click worked under `tauri dev`). Added `media-src 'self' asset: http://asset.localhost data:`.
+- **"Voices ready" pill touching the user count.** `.table-selection-count` / `.payroll-selection-count` are now flex rows with a 10px gap and wrap, so the chip no longer sits flush against "Total users: N".
+
 ## [0.1.63] - 2026-09-13
 
 ### Changed
