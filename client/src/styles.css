@@ -841,6 +841,10 @@ tr.selected-row td:first-child::before,
 
 .table-selection-count,
 .payroll-selection-count {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   font-size: 0.75rem;
   color: var(--gold-bright);
   font-weight: 500;
