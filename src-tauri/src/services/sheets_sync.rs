@@ -759,9 +759,28 @@ fn find_existing_row_index(
     }
 }
 
-/// Finds every sheet row (1-based value index) whose key column matches
-/// `row_id`, disambiguating multiple hits with payload fields that map to
-/// columns (e.g. `InternGrace` uses `userId` + `attendanceId` + `graceId`).
+/// 0-based indices of the key-column rows (header skipped) whose key cell
+/// equals `row_id`. The caller's read range is a single column anchored at
+/// sheet row 1, so an index is exactly `sheet_row - 1` — i.e. ready to use
+/// as `deleteDimension.startIndex` with no conversion.
+fn find_key_matches(key_rows: &[serde_json::Value], row_id: &str) -> Vec<usize> {
+    key_rows
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(index, row)| {
+            row.as_array()
+                .and_then(|cells| cells.first())
+                .filter(|cell| cell_matches_row_id(cell, row_id))
+                .map(|_| index)
+        })
+        .collect()
+}
+
+/// Finds every sheet row (0-based index, ready for
+/// `deleteDimension.startIndex`) whose key column matches `row_id`,
+/// disambiguating multiple hits with payload fields that map to columns
+/// (e.g. `InternGrace` uses `userId` + `attendanceId` + `graceId`).
 fn find_rows_to_delete(
     table_name: &str,
     rows: &[serde_json::Value],
@@ -1790,26 +1809,21 @@ async fn google_delete_row_with_token(
         put_header_row(&client, &token, spreadsheet_id, table_name).await?;
         return Ok(false);
     }
-    // Key-column positions map 1:1 to sheet rows (range starts at row 1).
-    let mut matches: Vec<usize> = key_rows
-        .iter()
-        .enumerate()
-        .skip(1)
-        .filter_map(|(index, row)| {
-            row.as_array()
-                .and_then(|cells| cells.first())
-                .filter(|cell| cell_matches_row_id(cell, row_id))
-                .map(|_| index + 1)
-        })
-        .collect();
+    // Key-column positions are 0-based deleteDimension indices (see
+    // `find_key_matches`). Sept 2026: a stray `index + 1` here deleted the
+    // row BELOW the target on every single-match delete, silently removing
+    // an unrelated record; the multi-match path was always 0-based, so the
+    // two branches disagreed.
+    let mut matches = find_key_matches(&key_rows, row_id);
     if matches.is_empty() {
         return Ok(false);
     }
     if matches.len() > 1 {
         // Disambiguate with full rows, fetched once from row 1 across the
-        // matched span (values[0] is sheet row 1, so `find_rows_to_delete`
-        // indices stay sheet-row aligned exactly as with full-tab reads).
-        let hi = matches[matches.len() - 1];
+        // matched span. `hi` is 0-based, so the shell is +1 to name a sheet
+        // row in A1 notation; `find_rows_to_delete` returns 0-based indices
+        // that feed deleteDimension unchanged.
+        let hi = matches[matches.len() - 1] + 1;
         let span: Vec<serde_json::Value> = google_stage_json(
             "delete span read",
             client
@@ -1886,6 +1900,36 @@ async fn google_format_sheet(
     let token = google_access_token(path).await?;
     let client = sheets_client();
     google_format_sheet_with_token(&client, &token, spreadsheet_id, table_name).await
+}
+
+/// Build the alternating-row banding request for one ops tab (pure:
+/// no I/O, so the Sheets API field contract is unit-testable).
+/// NOTE: `BandedRange` has NO header-position field — a stale
+/// `"headerRowPosition"` here 400s every provisioning pass (Sept 2026:
+/// 803 rows starved to DEAD). Banding starts below the frozen header
+/// row; header styling is intentionally untouched.
+fn banding_request(
+    sheet_id: i64,
+    col_count: usize,
+    last_data_row_0based: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "addBanding": {
+            "bandedRange": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1,
+                    "endRowIndex": last_data_row_0based + 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": col_count
+                },
+                "rowProperties": {
+                    "firstBandColor": serde_json::json!({"red":1.0,"green":1.0,"blue":1.0}),
+                    "secondBandColor": color_rgb(0xf2f2f2)
+                }
+            }
+        }
+    })
 }
 
 async fn google_format_sheet_with_token(
@@ -2012,24 +2056,7 @@ async fn google_format_sheet_with_token(
         }
     }
     if last_data_row >= 1 {
-        requests.push(serde_json::json!({
-            "addBanding": {
-                "bandedRange": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": 1,
-                        "endRowIndex": last_data_row + 1,
-                        "startColumnIndex": 0,
-                        "endColumnIndex": col_count
-                    },
-                    "rowProperties": {
-                        "firstBandColor": serde_json::json!({"red":1.0,"green":1.0,"blue":1.0}),
-                        "secondBandColor": color_rgb(0xf2f2f2)
-                    },
-                    "headerRowPosition": -1
-                }
-            }
-        }));
+        requests.push(banding_request(sheet_id, col_count, last_data_row));
         for (index, spec) in column_specs(table_name).iter().enumerate() {
             let number_format = match spec.kind {
                 CellKind::Money => Some(serde_json::json!({"type":"NUMBER","pattern":"0.00"})),
@@ -2376,11 +2403,16 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         state.lan.google_service_account_json_path.as_deref(),
         dtr_sheet.as_deref(),
     ) {
-        let pending_count: i64 =
+        // Kill switch: while disabled the recheck (which backfills and
+        // writes) is skipped entirely; pending rows keep accumulating.
+        let pending_count: i64 = if crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await {
             sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
                 .fetch_one(&state.db)
                 .await
-                .unwrap_or(0);
+                .unwrap_or(0)
+        } else {
+            0
+        };
         if pending_count > 0 {
             match google_access_token(path).await {
                 Ok(token) => {
@@ -2453,8 +2485,19 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
     let mut completed = 0;
     let mut schema_mismatch = false;
     let mut touched: HashSet<String> = HashSet::new();
+    // Per-device kill switch, resolved once per tick: while disabled,
+    // InternDtr rows are left PENDING (never claimed, never dropped) so
+    // re-enabling resumes exactly where the queue stopped. A stale
+    // device must neither push punches nor clear cells.
+    let dtr_upload_allowed = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
     for row in rows {
         let id: i64 = row.get("id");
+        if !dtr_upload_allowed {
+            let table_name: String = row.get("table_name");
+            if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+                continue;
+            }
+        }
         let claimed = sqlx::query("UPDATE sync_queue SET status='PROCESSING',locked_at=?,updated_at=? WHERE id=? AND status IN ('PENDING','RETRY')").bind(&now).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
         if claimed.rows_affected() != 1 {
             continue;
@@ -3013,6 +3056,54 @@ mod tests {
             debug.contains("25s"),
             "client must carry a 25s timeout, debug was: {debug}"
         );
+    }
+
+    #[test]
+    fn key_match_indices_are_zero_based_delete_targets() {
+        // Sept 2026 regression: the single-match delete path added +1 to the
+        // key-column index, so `deleteDimension.startIndex` pointed one row
+        // BELOW the matched record and deleted an unrelated user. Pin the
+        // 0-based contract: sheet row N + 1 (1-based) => index N.
+        let key_rows = vec![
+            serde_json::json!(["userId"]),
+            serde_json::json!(["keep-1"]),
+            serde_json::json!(["gone"]),
+            serde_json::json!(["keep-2"]),
+        ];
+        // "gone" is sheet row 3 -> deleteDimension startIndex 2, endIndex 3.
+        assert_eq!(super::find_key_matches(&key_rows, "gone"), vec![2]);
+        // Header row can never match itself.
+        assert!(super::find_key_matches(&key_rows, "userId").is_empty());
+        assert!(super::find_key_matches(&key_rows, "missing").is_empty());
+        // Multi-hit stays in ascending order so the span read + retain pass
+        // keep working on the same 0-based indices.
+        let dupes = vec![
+            serde_json::json!(["userId"]),
+            serde_json::json!(["dup"]),
+            serde_json::json!(["other"]),
+            serde_json::json!(["dup"]),
+        ];
+        assert_eq!(super::find_key_matches(&dupes, "dup"), vec![1, 3]);
+        // Numeric key cells match like their string form.
+        let numeric = vec![serde_json::json!(["userId"]), serde_json::json!([1259859579])];
+        assert_eq!(super::find_key_matches(&numeric, "1259859579"), vec![1]);
+    }
+
+    #[test]
+    fn banding_request_matches_sheets_api_contract() {
+        // Sept 2026 outage: a stale `headerRowPosition` field 400d every
+        // provisioning format batch, starving 803 rows to DEAD. BandedRange
+        // has no header-position field — fail the build if one reappears.
+        let req = super::banding_request(1833326335, 10, 18);
+        let text = serde_json::to_string(&req).unwrap();
+        assert!(!text.contains("headerRowPosition"), "unknown Sheets field: {text}");
+        let band = req.get("addBanding").and_then(|b| b.get("bandedRange")).unwrap();
+        assert_eq!(band.get("range").and_then(|r| r.get("sheetId")).and_then(|v| v.as_i64()), Some(1833326335));
+        assert_eq!(band.get("range").and_then(|r| r.get("startRowIndex")).and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(band.get("range").and_then(|r| r.get("endRowIndex")).and_then(|v| v.as_i64()), Some(19));
+        assert_eq!(band.get("range").and_then(|r| r.get("endColumnIndex")).and_then(|v| v.as_u64()), Some(10));
+        assert!(band.get("rowProperties").and_then(|p| p.get("firstBandColor")).is_some());
+        assert!(band.get("rowProperties").and_then(|p| p.get("secondBandColor")).is_some());
     }
 
     #[test]

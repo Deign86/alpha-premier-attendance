@@ -68,6 +68,8 @@ import {
   loadConfig,
   loadDatabaseInfo,
   loadDtrSyncHealth,
+  getInternDtrSync,
+  setInternDtrSync,
   loadPayrollCutoffs,
   loadPayrollProfiles,
   lockAdmin,
@@ -3301,6 +3303,9 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
   const [dismissingRestore, setDismissingRestore] = useState(false);
   const [syncState, setSyncState] = useState<SyncHealthState>({ kind: "loading" });
+  // Per-device DTR kill switch: null = still loading, boolean = stored state.
+  const [dtrSyncEnabled, setDtrSyncEnabled] = useState<boolean | null>(null);
+  const [dtrToggleBusy, setDtrToggleBusy] = useState(false);
   const syncHealth =
     syncState.kind === "ready" || syncState.kind === "refreshing" || syncState.kind === "stale"
       ? syncState.health
@@ -3339,8 +3344,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       return { kind: "error", message: response.error.message };
     });
   }, []);
+  const refreshDtrSyncToggle = useCallback(async () => {
+    const response = await getInternDtrSync();
+    if (response.success) setDtrSyncEnabled(response.enabled);
+  }, []);
   useEffect(() => {
     void refreshSyncHealth();
+    void refreshDtrSyncToggle();
     const tick = () => {
       if (document.hidden) return;
       void refreshSyncHealth();
@@ -3354,7 +3364,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [refreshSyncHealth]);
+  }, [refreshSyncHealth, refreshDtrSyncToggle]);
 
   const refresh = useCallback(async () => {
     const response = await loadDatabaseInfo();
@@ -3366,6 +3376,21 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const toggleDtrSync = async () => {
+    if (dtrSyncEnabled === null || dtrToggleBusy) return;
+    const next = !dtrSyncEnabled;
+    setDtrToggleBusy(true);
+    setError("");
+    const response = await setInternDtrSync(next);
+    if (response.success) {
+      setDtrSyncEnabled(response.enabled);
+      setNotice(response.enabled ? "Intern DTR sync enabled on this device." : "Intern DTR sync disabled on this device. Queued punches are kept and resume on re-enable.");
+    } else {
+      setError(response.error?.message ?? "DTR sync toggle failed.");
+    }
+    setDtrToggleBusy(false);
+  };
 
   const syncInterns = async () => {
     setBusy(true);
@@ -3565,6 +3590,16 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         >
           Open backups folder
         </button>
+        <label className="sync-toggle" title="Per-device kill switch: OFF on this PC never affects deployment. While OFF, punches queue locally and manual sync refuses.">
+          <input
+            type="checkbox"
+            checked={dtrSyncEnabled ?? true}
+            disabled={dtrSyncEnabled === null || dtrToggleBusy || busy}
+            onChange={() => void toggleDtrSync()}
+            aria-label="Sync intern attendance to the DTR sheet on this device"
+          />
+          Sync interns to DTR sheet on this device{dtrSyncEnabled === false ? " (OFF — queuing only)" : ""}
+        </label>
         <button
           className="admin-button"
           type="button"

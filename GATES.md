@@ -635,3 +635,38 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: npm run typecheck && npm run lint:oxlint && npm test -w client + Tauri screenshots 08, 12–15
   EXPECT: gates exit 0; each screenshot shows the finding resolved
   EVIDENCE: measured 2026-09-12 — typecheck 0, oxlint 0, client 258/258 (15 files). 01 font: 3 @font-face → 1 variable face (`font-weight: 400 900`), binaries verified genuine via gstatic hash match, redundant copies deleted (shot 08). 02 users table: one class, cells single-line (shot 12). 03 payroll: nowrap headers + sticky cols 1–3, whole-word headers (shot 13). 04 voice pill: one-line pill + `Retrying` copy (shot 14). 05 sync card: inline `Retry sync now` (shot 15). Incident mid-work: vite dev served empty CSS after the font-file swap (stale HMR graph, file valid — prod build 83KB CSS fine); fixed by touching styles.css to force re-transform, no restart needed.
+
+## Intern-DTR per-device kill switch + timestamp-wins (2026-09-12)
+
+- [x] Personal PC can no longer overwrite deployment sheet data: Admin → Data toggle (per-device, local SQLite `app_settings`), server CLI env/file gate, timestamp-wins on every write path.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib && npm test -w server && npm test -w client -- src/App.test.tsx src/database-panel.test.tsx src/api.test.ts && npm run lint:oxlint && npm run typecheck && npm run sync:intern-dtr -w server -- --date 2026-09-05
+  EXPECT: cargo 285/285; server 175/175 (17 files); client 89/89 (3 files); oxlint + typecheck exit 0; CLI prints `disabled on this device` and exits 0
+  EVIDENCE: measured 2026-09-12 — cargo lib 285/285 (incl. 6 new: sheet-time parse, 4 stale-guard cases, toggle default-ON + persist round-trip); server 175/175; client 89/89; CLI on this PC exits early via INTERN_DTR_SYNC_ENABLED=0. This PC seeded OFF in live attendance.db (`intern_dtr_sync_enabled=0`) + server/.env.
+- [x] Works while OFF without data loss, converges when re-enabled.
+  CHECK: code path review of sheets_sync run_once + push/backfill/manaul outcomes
+  EXPECT: disabled tick skips InternDtr rows BEFORE claim (rows stay PENDING, never SYNCED-unwritten); Stale outcome paints + clears pending like InSync, never writes; DELETE clears also gated while OFF
+  EVIDENCE: `dtr_upload_allowed` resolved once per tick, `continue` precedes the claim UPDATE; `DtrPlanOutcome::Stale` shares the InSync arms in push_dtr_row + backfill_user_history; manual_sync + enqueue_intern_dtr + scan-path inline check all refuse while OFF. Timestamp rule: local WORKING never touches stamped rows; sheet stamp at/after local (post-cap) wins; empty sheet always accepts local write.
+
+## Intern-DTR kill switch Tauri MCP e2e (2026-09-12, live dev app + bridge 9223)
+
+- [x] Toggle + gates verified end-to-end on a live dev instance; no regressions.
+  CHECK: driver session on ws://127.0.0.1:9223 against debug build; admin_unlock PIN; get/set/sync IPC; UI drive Admin → Data and backup; screenshots dtr-toggle-off + kiosk-after-toggle-e2e
+  EXPECT: get=false seeded; manual sync refuses while OFF; set(true)→ON persists; unknown-user sync fails closed with no writes; UI checkbox flips label both ways; kiosk + roster render unchanged; device left OFF; installed app restored
+  EVIDENCE: measured live — get returned enabled=false (seed); manual sync refused `disabled on this device` (zero Sheets traffic); set(true)→UI label dropped `(OFF — queuing only)` and a UI checkbox click persisted enabled=1 to SQLite (updated_at 10:25:59Z); unknown-user sync errored `not found` with no tab creation; wrong token → ADMIN_AUTH_REQUIRED. Screenshots captured. Final device state verified in SQLite =0. cargo/server/client suites from the build gate unchanged (285/285, 175/175, 89/89).
+- [x] Pre-existing issues observed, not caused by this change (separate questions).
+  EVIDENCE: ops-sheet sync shows 803 DEAD rows / `Google Sheets sync failed` on this PC (also in the 10:21 deployment log before this change; my diff never touches ops paths); admin sessions are single-slot global — a second login (UI vs IPC) invalidates the first, which raced IPC tokens during the drive (code path untouched by this change).
+
+## Ops-sheet sync outage: root cause, fix, and DELETE off-by-one (2026-09-12)
+
+- [x] R1: Provisioning 400 identified and fixed (all 803 DEAD rows explained).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib
+  EXPECT: banding_request unit test fails on any unknown Sheets field; live provisioning pass stops warning
+  EVIDENCE: measured live — replaying the exact generated batchUpdate with a scratch token returned `400 Invalid JSON payload received. Unknown name "headerRowPosition" at 'requests[2].add_banding.banded_range'`. `BandedRange` has no such field; it was added 2026-08-04 (ed46440) and 400d every `reconcile format` pass from 2026-09-08 02:41 UTC, returning provisioning=None so every due row failed generic 5× → DEAD. Field removed, request extracted to pure `banding_request()` with a contract test that asserts the field is absent.
+- [x] R2: Row-never-matched cause proven independent of DB age.
+  EVIDENCE: the replay used NO local data and failed identically, and the DTR queue in the same DB held 0 failed rows — a stale database cannot produce a 400 on a paint request. Cause is the shipped binary, so the kiosk PC fails the same way regardless of DB freshness.
+- [x] R3: Second bug found during fix verification — single-match DELETE off-by-one.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib key_match_indices_are_zero_based_delete_targets
+  EXPECT: key index 2 for sheet row 3; `startIndex` targets the matched row, never its neighbour
+  EVIDENCE: the inline key scan returned `index + 1` while `find_rows_to_delete` (multi-match) returned `index`; both feed `deleteDimension.startIndex`, so every single-match delete removed the row BELOW the target. Extracted `find_key_matches()` (0-based), fixed the multi-match span shell to `hi + 1`, added the regression test. Measured 2026-09-12: cargo lib 287/287.
+- [x] R4: Personal PC stopped from pushing stale ops state; work handed to the authoritative kiosk.
+  EVIDENCE: 800 DEAD rows were requeued to prove the fix (3-row canary first: 3/3 SYNCED, 0 warnings). 115 wrote before I froze the batch; the remaining 688 were returned to DEAD and the queue now has 0 non-terminal rows. DTR flag still `intern_dtr_sync_enabled=0` on this PC. Do NOT reconcile the shared ops sheet from here — this DB is stale; run `admin_sheets_nuke_resync` on the kiosk after deploying the fixed build.

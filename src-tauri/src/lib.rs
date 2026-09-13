@@ -3863,6 +3863,44 @@ async fn admin_sync_intern_dtr(
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
+/// Per-device intern-DTR kill switch state (Admin → Data toggle).
+/// Read is admin-gated like every other admin command so the toggle
+/// state never leaks to unauthenticated viewers.
+#[tauri::command]
+async fn admin_get_intern_dtr_sync(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let enabled = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
+    Ok(serde_json::json!({ "success": true, "enabled": enabled }))
+}
+
+/// Persist the per-device toggle. Stored in LOCAL SQLite, so flipping
+/// one PC never affects the other. Audited like other admin mutations.
+#[tauri::command]
+async fn admin_set_intern_dtr_sync(
+    state: State<'_, AppState>,
+    token: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    crate::services::dtr_sync::set_dtr_sync_enabled(&state.db, enabled).await?;
+    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind("ADMIN")
+        .bind(format!("intern DTR sync {} on this device", if enabled { "enabled" } else { "disabled" }))
+        .bind(uuid::Uuid::new_v4().to_string())
+        .execute(&state.db)
+        .await;
+    Ok(serde_json::json!({ "success": true, "enabled": enabled }))
+}
+
 /// Dev/test utility (hidden admin action): wipes every managed Google Sheets
 /// tab and re-enqueues the current SQLite state for a from-scratch re-export.
 /// Gated behind the admin session and an explicit confirmation flag.
@@ -4399,6 +4437,7 @@ async fn enqueue_intern_dtr(
 ) {
     if employee_type.to_uppercase() != "INTERN"
         || crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_none()
+        || !crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await
     {
         return;
     }
@@ -4737,6 +4776,7 @@ async fn scan_rfid_impl(
     // never fail the scan. Skipped for non-interns and when explicitly disabled.
     if effective_user.get::<String, _>("employee_type").to_uppercase() == "INTERN"
         && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some()
+        && crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await
         && (effective_source == "RFID" || effective_source == "ADMIN_ASSISTED_SCAN")
     {
         enqueue_sync(
@@ -5263,6 +5303,8 @@ pub fn run() {
             dtr_recon_get_latest_report,
             dtr_recon_run_manual,
             admin_sync_intern_dtr,
+            admin_get_intern_dtr_sync,
+            admin_set_intern_dtr_sync,
             lan_status,
             lan_start,
             lan_stop,
