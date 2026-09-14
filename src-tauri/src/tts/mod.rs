@@ -203,6 +203,18 @@ impl TtsManager {
             }
         }
 
+        // Never synthesize raw URLs or audio file paths via Piper or SAPI speech synthesis.
+        // If an audio file or URL was missing or unplayable above, synthesizing the address string
+        // aloud (e.g. "http...", "voices/...") is invalid and breaks dynamic name fallbacks.
+        if is_audio_path_or_url(text) || is_audio_path_or_url(&sanitized) {
+            log::warn!("Skipping Piper/SAPI synthesis for audio URL/path: '{sanitized}'");
+            return Ok(TtsSpeakResult {
+                success: false,
+                engine_used: "none".into(),
+                message: Some(format!("Audio path or URL not found for playback: {sanitized}")),
+            });
+        }
+
         // 2. Attempt Piper TTS
         if plan.includes_piper() {
             let piper_bin = piper::find_piper_binary(app_handle, self.config.piper_path.as_deref());
@@ -311,6 +323,20 @@ impl TtsManager {
             message: Some("No offline TTS engine is available on this system".into()),
         })
     }
+}
+
+pub fn is_audio_path_or_url(text: &str) -> bool {
+    let t = text.trim();
+    let lower = t.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("asset://")
+        || lower.starts_with("file://")
+        || lower.starts_with("/voices/")
+        || lower.starts_with("voices/")
+        || lower.ends_with(".mp3")
+        || lower.ends_with(".wav")
+        || lower.ends_with(".ogg")
 }
 
 fn get_cloned_bea_rel_path(phrase: &str) -> Option<std::path::PathBuf> {
@@ -453,6 +479,20 @@ mod tests {
         let manager = TtsManager::new(TtsConfig::default());
         manager.stop().await;
         assert!(!manager.audio_player.is_playing().await);
+    }
+
+    #[test]
+    fn detects_audio_paths_and_urls_correctly() {
+        assert!(is_audio_path_or_url("http://127.0.0.1:3900/voices/bea/names/1.mp3"));
+        assert!(is_audio_path_or_url("https://example.com/voice.wav"));
+        assert!(is_audio_path_or_url("asset://localhost/path/to/clip.mp3"));
+        assert!(is_audio_path_or_url("/voices/bea/names/APG-2026-102.mp3"));
+        assert!(is_audio_path_or_url("voices/bea/names/APG-2026-102.mp3"));
+        assert!(is_audio_path_or_url("clip.ogg"));
+
+        assert!(!is_audio_path_or_url("Good morning, Ada Lovelace!"));
+        assert!(!is_audio_path_or_url("Ada Lovelace"));
+        assert!(!is_audio_path_or_url("Juan Dela Cruz"));
     }
 }
 

@@ -1,14 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
   getWorkerNameAudioUrl,
+  playClonedBeaAudio,
   previewVoiceClip,
   resolveVoiceSlot,
   resolveWavFallbackUrl,
   isClonedBeaPhraseAvailable,
   setNameManifest,
 } from './clonedBeaVoice';
+import { tauriApi } from '../tauri-api';
 
 describe('clonedBeaVoice', () => {
   describe('getClonedBeaAudioUrl', () => {
@@ -150,6 +152,61 @@ describe('clonedBeaVoice', () => {
   describe('previewVoiceClip', () => {
     it('resolves false without throwing when HTML Audio is unavailable', async () => {
       await expect(previewVoiceClip('/voices/bea/names/APG-2026-102.mp3')).resolves.toBe(false);
+    });
+  });
+
+  describe('playClonedBeaAudio', () => {
+    it('does not invoke tauriApi.ttsSpeak with arbitrary URLs or unmapped name clips', async () => {
+      Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({
+        success: true,
+        engineUsed: 'piper',
+      });
+
+      try {
+        const result = await playClonedBeaAudio('http://127.0.0.1:3900/voices/bea/names/custom.mp3');
+        // Because it is a URL and not a mapped phrase, ttsSpeak must NOT be called with it
+        expect(ttsSpeakSpy).not.toHaveBeenCalled();
+        expect(result).toBe(false);
+      } finally {
+        // SAFETY: Type refinement to delete test mock property on window
+        delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      }
+    });
+
+    it('only accepts ttsSpeak success if engineUsed is cloned-bea', async () => {
+      Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({
+        success: true,
+        engineUsed: 'piper', // Fell back to Piper, not actual cloned audio
+      });
+
+      try {
+        const result = await playClonedBeaAudio('/voices/bea/attendance/good-morning.mp3');
+        expect(ttsSpeakSpy).toHaveBeenCalledWith('Good morning,', expect.objectContaining({ engine: 'cloned-bea' }));
+        // Because engineUsed was 'piper', it must not treat it as cloned audio success
+        expect(result).toBe(false);
+      } finally {
+        // SAFETY: Type refinement to delete test mock property on window
+        delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      }
+    });
+
+    it('returns true when tauriApi.ttsSpeak succeeds with engineUsed cloned-bea', async () => {
+      Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+
+      try {
+        const result = await playClonedBeaAudio('/voices/bea/attendance/good-morning.mp3');
+        expect(ttsSpeakSpy).toHaveBeenCalledWith('Good morning,', expect.objectContaining({ engine: 'cloned-bea' }));
+        expect(result).toBe(true);
+      } finally {
+        // SAFETY: Type refinement to delete test mock property on window
+        delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      }
     });
   });
 });

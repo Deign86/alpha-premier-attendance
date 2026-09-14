@@ -373,16 +373,18 @@ export async function playClonedBeaAudio(
   stopClonedBeaAudio();
 
   // In Tauri desktop environment, prefer native Rodio playback for seamless hardware output
-  if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
+  // ONLY if audioUrl maps to a recognized fixed announcement phrase.
+  // Arbitrary URLs or file paths must never be passed as text to ttsSpeak, because if the file
+  // is missing or uncached natively, fallback speech synthesis (Piper/SAPI) will read the URL aloud.
+  const phrase = getClonedBeaPhraseForAudioUrl(audioUrl);
+  if (phrase && 'window' in globalThis && '__TAURI_INTERNALS__' in window) {
     try {
-      const phrase = getClonedBeaPhraseForAudioUrl(audioUrl);
-      const nativeText = phrase ?? audioUrl;
-      const result = await tauriApi.ttsSpeak(nativeText, {
+      const result = await tauriApi.ttsSpeak(phrase, {
         engine: 'cloned-bea',
         volume,
         rate,
       });
-      if (result && result.success) {
+      if (result && result.success && result.engineUsed === 'cloned-bea') {
         return true;
       }
     } catch (nativeErr) {
@@ -450,7 +452,12 @@ async function attemptAudioPlay(
       audio.onended = () => finish(true);
       audio.onerror = () => finish(false);
 
-      audio.play().catch(() => finish(false));
+      const playPromise = audio.play();
+      if (playPromise instanceof Promise) {
+        playPromise.catch(() => finish(false));
+      } else {
+        finish(false);
+      }
     });
   } catch (error) {
     console.warn('Cloned voice audio playback threw exception:', error);

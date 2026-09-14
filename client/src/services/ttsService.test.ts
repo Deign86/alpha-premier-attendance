@@ -1234,6 +1234,53 @@ describe('ttsService', () => {
       });
     });
 
+    it('synthesizes clean name via Piper and never pronounces http URL when voice clone is missing', async () => {
+      const dummyUrl = 'http://127.0.0.1:3900/voices/bea/names/non_cloned_user.mp3';
+      vi.spyOn(clonedBeaVoice, 'getWorkerNameAudioUrl').mockResolvedValue(dummyUrl);
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaAudioUrl').mockImplementation((phrase) => {
+        if (phrase === 'Good morning,') return '/voices/bea/attendance/good-morning.mp3';
+        if (phrase === 'Your time in has been recorded.') return '/voices/bea/attendance/time-in-standard.mp3';
+        return null;
+      });
+
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio')
+        .mockImplementation(async (url) => {
+          return url !== dummyUrl;
+        });
+
+      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({
+        success: true,
+        engineUsed: 'piper',
+      });
+
+      const result = await announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Juan Dela Cruz',
+        personId: 'usr_non_cloned',
+        settings: {
+          enabled: true,
+          engine: 'cloned-bea',
+          voiceModel: 'en_US-amy-medium',
+          rate: 1.0,
+          volume: 1.0,
+          voiceStudioBaseUrl: 'http://127.0.0.1:3900',
+        },
+      });
+
+      expect(ttsSpeakSpy).toHaveBeenCalledWith(
+        'Juan Dela Cruz',
+        expect.objectContaining({ engine: 'piper' }),
+      );
+      expect(ttsSpeakSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('http'),
+        expect.anything(),
+      );
+      expect(result).toEqual({
+        success: true,
+        engineUsed: 'cloned-bea',
+      });
+    });
+
     it('handles backend failure on fallback without throwing', async () => {
       vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(false);
       vi.spyOn(tauriApi, 'ttsSpeak').mockRejectedValue(new Error('Audio device offline'));

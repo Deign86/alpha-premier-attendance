@@ -5,6 +5,9 @@ use tauri::Manager;
 /// Tauri resource dir variants, exe-dir variants, then dev-relative variants.
 pub fn search_roots(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    if let Ok(data_dir) = app_handle.path().app_data_dir() {
+        roots.push(data_dir);
+    }
     if let Ok(res_dir) = app_handle.path().resource_dir() {
         roots.push(res_dir.clone());
         roots.push(res_dir.join("resources"));
