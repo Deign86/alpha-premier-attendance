@@ -742,6 +742,56 @@ pub fn manila_today_ymd() -> String {
 /// before `today_ymd` (Manila) that falls Mon–Fri and has empty B:E
 /// gets one red op; consecutive rows merge into a single range.
 /// Weekends (owner greens them), today/future, and non-date rows are
+/// Determine the effective start date for absent sweeping directly from tab content.
+///
+/// Tab month headers and punch history represent the true internship period,
+/// whereas local DB `created_at` timestamps only record when the local SQLite
+/// row or RFID card was enrolled.
+/// - If the tab begins with JUNE: effective start is the earliest punch on the tab
+///   (e.g. 2026-06-26 or 2026-06-29), protecting pre-enrollment days (June 1-25)
+///   while allowing July and August absences to paint.
+/// - If the tab begins with AUGUST: effective start is 2026-08-01 (Aug 3 first working day).
+/// - If the tab begins with SEPTEMBER: effective start is 2026-09-01.
+pub fn get_sheet_effective_start_date(rows: &[Vec<String>]) -> Option<NaiveDate> {
+    let mut first_month: Option<u32> = None;
+    let mut earliest_punch: Option<NaiveDate> = None;
+
+    for row in rows {
+        let cell = row.first().map(String::as_str).unwrap_or("");
+        if first_month.is_none() {
+            if let Some(m) = parse_month_header(cell) {
+                first_month = Some(m);
+            }
+        }
+        if let Some(parts) = parse_sheet_date(cell) {
+            if let Some(d) = NaiveDate::from_ymd_opt(parts.y, parts.m, parts.d) {
+                let has_punch = row.iter().skip(1).take(4).any(|c| !c.trim().is_empty());
+                if has_punch && (earliest_punch.is_none() || Some(d) < earliest_punch) {
+                    earliest_punch = Some(d);
+                }
+            }
+        }
+    }
+
+    match first_month {
+        Some(6) => earliest_punch.or_else(|| NaiveDate::from_ymd_opt(2026, 6, 29)),
+        Some(m) => {
+            let month_start = NaiveDate::from_ymd_opt(2026, m, 1);
+            match (earliest_punch, month_start) {
+                (Some(p), Some(ms)) => Some(if p < ms { p } else { ms }),
+                (Some(p), None) => Some(p),
+                (None, Some(ms)) => Some(ms),
+                (None, None) => None,
+            }
+        }
+        None => earliest_punch,
+    }
+}
+
+/// Absent sweep over already-fetched A:F: every date row strictly
+/// before `today_ymd` (Manila) that falls Mon–Fri and has empty B:E
+/// gets one red op; consecutive rows merge into a single range.
+/// Weekends (owner greens them), today/future, and non-date rows are
 /// never touched. F/J formula columns are never in a range.
 /// A Mon–Fri public holiday with no record paints red like an absence;
 /// the owner clears it — the kiosk cannot distinguish holidays.
@@ -759,9 +809,9 @@ pub fn plan_absent_sweep(
     else {
         return Vec::new();
     };
-    let start_date = start_ymd.and_then(|s| {
-        parse_ymd(s).ok().and_then(|p| NaiveDate::from_ymd_opt(p.y, p.m, p.d))
-    });
+    let start_date = start_ymd
+        .and_then(|s| parse_ymd(s).ok().and_then(|p| NaiveDate::from_ymd_opt(p.y, p.m, p.d)))
+        .or_else(|| get_sheet_effective_start_date(rows));
     let mut runs: Vec<(usize, usize)> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let cell = row.first().map(String::as_str).unwrap_or("");
@@ -1410,34 +1460,6 @@ pub async fn execute_dtr_batch_push(
     Err(GOOGLE_RATE_LIMITED.to_string())
 }
 
-/// Compute an intern's start date (the earliest date they should be marked absent).
-/// Resolves as `min(created_at, min(attendance_date))`. Dates before this are ignored.
-async fn get_user_start_date(state: &AppState, user_id: &str) -> Option<String> {
-    use sqlx::Row;
-    let u_res = sqlx::query("SELECT created_at FROM users WHERE user_id = ?")
-        .bind(user_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-    let created_ymd = u_res
-        .and_then(|r| r.get::<Option<String>, _>("created_at"))
-        .and_then(|c| if c.len() >= 10 { Some(c[..10].to_string()) } else { None });
-    let a_res = sqlx::query("SELECT MIN(attendance_date) as min_date FROM attendance WHERE user_id = ?")
-        .bind(user_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-    let min_att_ymd = a_res.and_then(|r| r.get::<Option<String>, _>("min_date"));
-    match (created_ymd, min_att_ymd) {
-        (Some(c), Some(a)) => Some(if a < c { a } else { c }),
-        (Some(c), None) => Some(c),
-        (None, Some(a)) => Some(a),
-        (None, None) => None,
-    }
-}
-
 fn str_field(payload: &serde_json::Value, name: &str) -> Option<String> {
     payload
         .get(name)
@@ -1602,9 +1624,8 @@ pub async fn clear_dtr_row(
         end_col_0_excl: 5,
         color: DtrCellColor::White,
     };
-    let start_ymd = get_user_start_date(state, &user_id).await;
     if let Err(error) =
-        paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, vec![white], start_ymd.as_deref()).await
+        paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, vec![white], None).await
     {
         log::warn!("dtr clear paint failed for {full_name} ({user_id}) on {attendance_date} (values cleared): {error}");
     }
@@ -1663,7 +1684,6 @@ pub async fn push_dtr_row(
     }
     let titles = titles_of(&meta);
     let kind = classify_record_row(time_in.as_deref(), time_out.as_deref())?;
-    let start_ymd = get_user_start_date(state, &user_id).await;
     match plan_dtr_push_outcome(
         client,
         token,
@@ -1684,7 +1704,7 @@ pub async fn push_dtr_row(
             // P1: paint is cosmetic — a batchUpdate 403/429 must not fail
             // a row whose values already landed. Log and continue.
             if let Err(error) =
-                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops, start_ymd.as_deref()).await
+                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops, None).await
             {
                 log::warn!(
                     "dtr paint failed for {full_name} ({user_id}) on {attendance_date} (values written): {error}"
@@ -1697,7 +1717,7 @@ pub async fn push_dtr_row(
             let ops = plan_row_format(sheet_id, row_1based, kind);
             // P1: same log-only rule as the Write branch above.
             if let Err(error) =
-                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops, start_ymd.as_deref()).await
+                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops, None).await
             {
                 log::warn!(
                     "dtr paint failed for {full_name} ({user_id}) on {attendance_date} (row in sync): {error}"
@@ -1799,8 +1819,6 @@ async fn backfill_user_history(
         return Err(format!("DTR tab id missing for resolved tab {tab}"));
     };
 
-    let start_ymd = get_user_start_date(state, user_id).await;
-
     // Fetch A:F ONCE for this intern's tab
     let range = urlencoding::encode(&format!("{}!A:F", quote_tab(&tab))).into_owned();
     let tab_values = dtr_get_json(
@@ -1873,7 +1891,7 @@ async fn backfill_user_history(
         sheet_id,
         &rows,
         row_ops,
-        start_ymd.as_deref(),
+        None,
     )
     .await
     {
@@ -3338,5 +3356,40 @@ mod tests {
                 .unwrap();
             assert!(end <= 5, "format range leaks past column E");
         }
+    }
+
+    #[test]
+    fn sheet_effective_start_date_resolves_accurately() {
+        // June tab with late June punch starts at the punch date (protecting early June)
+        let june_rows = vec![
+            fmt_row(&["JUNE"]),
+            fmt_row(&["6/1/2026", "", "", "", ""]),
+            fmt_row(&["6/29/2026", "8:00:00 AM", "12:00:00 PM", "1:00:00 PM", "5:00:00 PM"]),
+        ];
+        assert_eq!(
+            get_sheet_effective_start_date(&june_rows),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 29).unwrap())
+        );
+
+        // August tab starts at 2026-08-01
+        let aug_rows = vec![
+            fmt_row(&["DATE-AUGUST"]),
+            fmt_row(&["8/1/2026", "", "", "", ""]),
+            fmt_row(&["8/3/2026", "", "", "", ""]),
+        ];
+        assert_eq!(
+            get_sheet_effective_start_date(&aug_rows),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap())
+        );
+
+        // September tab starts at 2026-09-01
+        let sep_rows = vec![
+            fmt_row(&["DATE-September"]),
+            fmt_row(&["9/1/2026", "", "", "", ""]),
+        ];
+        assert_eq!(
+            get_sheet_effective_start_date(&sep_rows),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())
+        );
     }
 }
