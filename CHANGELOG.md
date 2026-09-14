@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.69] - 2026-09-14
+
+### Fixed
+- **Intern DTR Lunch Breaks**: Restored standard lunch out (`12:00:00 PM`) and lunch in (`1:00:00 PM`) entries in DTR columns C and D for working shifts and shifts crossing lunch, fixing hours calculation in Google Sheets template formula (`=MIN(8,((C-B)+(E-D))*24)`).
+- **Repaired Live Spreadsheet**: Audited all 22 tabs on live Google Sheet and repaired all 105 rows missing lunch break timestamps across 18 intern tabs.
+
 ## [0.1.68] - 2026-09-14
 
 ### Fixed
