@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.73] - 2026-09-14
+
+### Added
+- **Cloned Bea Voice for Jhon Yhonan Regaspi (`APG-2026-120`)**: Generated and bundled high-fidelity cloned voice name clip using Ma'am Bea's voice profile with audio denoising (AC and air noise filtered) from attendance backup `attendance-backup-20260914-083751.apbackup`.
+
 ## [0.1.72] - 2026-09-14
 
 ### Changed
