@@ -58,11 +58,22 @@ To deliver studio-quality voice cloning without demanding GPU hardware or high-l
 - **Active Voice Profile**: `"Ma'am Bea"` (Profile ID: `1b3e828b`)
 
 ### VoiceStudio Host Requirements (any capable LAN PC)
-- **OS**: Windows 10/11 x64 with VoiceStudio installed and backend reachable on port `3900`.
-- **LAN bind**: VoiceStudio must listen on the LAN address, not `127.0.0.1` — otherwise the kiosk cannot reach it. Verify from the kiosk with the Voice Announcements → Test Connection button.
+- **OS**: Windows 10/11 x64 with VoiceStudio installed and backend reachable on port `3901` (Network Share) or `3900`.
+- **LAN bind & Sharing**: VoiceStudio must have **Network Sharing** enabled in the UI (or listen on `0.0.0.0`). When enabled, VoiceStudio displays a 6-digit **Share PIN** required for requests.
+- **Recommended Host Address (Permanent / No IP Lookup)**:
+  Use the host PC's computer name:
+  ```text
+  http://<COMPUTERNAME>:3901    (e.g. http://DEIGN-GAMING:3901)
+  ```
+  Windows mDNS automatically resolves the hostname across the local network without breaking when router DHCP leases renew or change.
+- **Virtual Network Adapter Warning**:
+  VoiceStudio's "Shared on your Network" popup lists all network adapters including virtual ones:
+  - ❌ **`192.168.56.x`**: VirtualBox Host-Only adapter. Internal only; unreachable from kiosk.
+  - ❌ **`172.16.x.x` – `172.31.x.x`**: Hyper-V / WSL virtual switches. Unreachable from kiosk.
+  - ✅ **`192.168.1.x` / `192.168.0.x`**: Physical Wi-Fi or Ethernet adapter (matches router subnet).
 - **Voice profile**: a profile named like `"Ma'am Bea"` must exist (auto-discovered by name; ids differ per PC).
 - **ffmpeg on the host**: required for mp3 output. Without it the host answers wav and the kiosk job stays queued with an explicit error.
-- **Kiosk setting**: Voice Announcements → VoiceStudio Server holds the host URL (default `http://127.0.0.1:3900`). No software is installed on the host beyond stock VoiceStudio.
+- **Kiosk setting**: Voice Announcements → VoiceStudio Server holds the host URL (e.g. `http://DEIGN-GAMING:3901`) and Share PIN. No software is installed on the host beyond stock VoiceStudio.
 
 ### Reference Audio Locations (Admin PC Only)
 - `resources/voices/bea/main.wav` (Neutral/Welcoming greeting tone, $F_0 \approx 130\text{ Hz}$)
@@ -223,7 +234,9 @@ If Ma'am Bea or an employee revokes consent to use their cloned voice profile:
 
 | Issue | Root Cause | Solution |
 | :--- | :--- | :--- |
-| `Error connecting to VoiceStudio` | VoiceStudio backend is down | Launch VoiceStudio; verify port `3900` with `curl http://127.0.0.1:3900/profiles` |
+| `Error connecting to VoiceStudio` | VoiceStudio backend is down | Launch VoiceStudio; verify port `3900` or `3901` with `curl http://127.0.0.1:3901/profiles` |
+| `Cannot reach VoiceStudio (... connection timed out)` | Host IP points to VirtualBox (`192.168.56.x`) or Hyper-V (`172.x.x.x`) adapter | Change host URL to `http://<COMPUTERNAME>:3901` (e.g. `http://DEIGN-GAMING:3901`) or physical Wi-Fi IP (`192.168.1.x`) |
+| `VoiceStudio replied with HTTP 401` | Missing or outdated Share PIN | VoiceStudio regenerates a new PIN when sharing restarts; copy the 6-digit PIN from the bottom of VoiceStudio's sharing popup |
 | `Generation failed` | VoiceStudio profile missing or backend error | Confirm the `Ma'am Bea` profile exists in VoiceStudio and retry |
 | `Name pronounced with "dot"` | Middle initial not cleaned | Ensure name is run through `normalizePronunciation()` or add to `CUSTOM_PRONUNCIATION_OVERRIDES` |
 | `Kiosk plays Piper name instead of Bea` | Missing manifest entry or missing MP3 file | Check `bea-name-manifest.json` and ensure `names/<personId>.mp3` exists in resources |
