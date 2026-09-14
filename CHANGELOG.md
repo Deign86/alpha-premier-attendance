@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.68] - 2026-09-14
+
+### Fixed
+- **Google Sheets 429 rate limit pacing & batching**: In-memory push planning with single `values:batchUpdate` write pass per intern tab, increased inter-intern sleep to 1000ms to stay safely under Google's 60 reads/min quota, and exponential backoff retry across all API calls.
+- **Intern start date absent painting**: Absence sweep now checks intern enrollment start date (`min(created_at, earliest_attendance)`), keeping pre-enrollment months clean while properly painting legitimate absent days red.
+- **Persistent real-time DTR sync progress**: Backend emits `dtr-sync-progress` events forwarded to frontend; `DatabasePanel` and `UserEditor` display live percentage, progress bar, and current intern name during sync.
+
 ## [0.1.67] - 2026-09-14
 
 ### Fixed
