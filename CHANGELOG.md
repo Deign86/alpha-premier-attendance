@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.70] - 2026-09-14
+
+### Fixed
+- **DTR Absent Sweep & Start Date Resolution**: Replaced flawed SQLite `created_at` timestamp check with tab-driven effective start date resolution (`get_sheet_effective_start_date`), eliminating false truncation of pre-existing interns whose records predated local database initialization on August 12.
+- **Live Spreadsheet Absent Repair Across All Tabs**: Audited all 22 tabs and repaired all 15 affected intern tabs on the live Google Sheet, painting 376 previously missing absent cells red across all legitimate absence weekdays.
+
 ## [0.1.69] - 2026-09-14
 
 ### Fixed
