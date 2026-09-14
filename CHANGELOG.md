@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.71] - 2026-09-14
+
+### Fixed
+- **Reconciliation test expectation alignment**: Corrected `test_report_only_mode` in `dtr_recon.rs` to assert populated standard lunch columns (`12:00:00 PM` and `1:00:00 PM`) for reconstructed rows spanning the midday break, matching the restored lunch break sync logic and unblocking CI.
+
 ## [0.1.70] - 2026-09-14
 
 ### Fixed
