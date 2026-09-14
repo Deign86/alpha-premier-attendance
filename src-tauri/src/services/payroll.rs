@@ -59,10 +59,10 @@ pub fn office_close_for(clock_out: chrono::DateTime<chrono_tz::Tz>) -> chrono::D
         .expect("17:00 is always a valid Manila time")
 }
 
-/// Shared half-day rule: short shifts, early clock-out, or afternoon arrival (>=12:00 Manila).
+/// Shared half-day rule: short shifts (<=4h) or afternoon arrival (>=12:00 Manila).
 pub fn is_half_day(
     worked_hours: i64,
-    clock_out: chrono::DateTime<chrono_tz::Tz>,
+    _clock_out: chrono::DateTime<chrono_tz::Tz>,
     clock_in: chrono::DateTime<chrono_tz::Tz>,
 ) -> bool {
     use chrono::Timelike;
@@ -70,9 +70,6 @@ pub fn is_half_day(
         return false;
     }
     if worked_hours <= HALF_DAY_MAX_HOURS {
-        return true;
-    }
-    if clock_out < office_close_for(clock_out) {
         return true;
     }
     clock_in.hour() >= HALF_DAY_LATE_ARRIVAL_HOUR

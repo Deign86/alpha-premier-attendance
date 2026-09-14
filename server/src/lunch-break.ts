@@ -116,11 +116,10 @@ export function capLateTimeoutOut(clockOut: DateTime): DateTime {
   return clockOut;
 }
 
-/** Shared half-day rule: short shifts, early clock-out, or afternoon arrival (>=12:00 Manila). */
-export function isHalfDayWork(workedHours: number, clockOut: DateTime, clockIn?: DateTime): boolean {
+/** Shared half-day rule: short shifts (<=4h) or afternoon arrival (>=12:00 Manila). */
+export function isHalfDayWork(workedHours: number, _clockOut?: DateTime, clockIn?: DateTime): boolean {
   if (!(workedHours > 0)) return false;
   if (workedHours <= HALF_DAY_MAX_HOURS) return true;
-  if (clockOut < officeCloseFor(clockOut)) return true;
   return clockIn !== undefined && clockIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR;
 }
 

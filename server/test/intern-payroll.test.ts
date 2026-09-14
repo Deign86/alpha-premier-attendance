@@ -53,8 +53,8 @@ describe('intern payroll policy', () => {
     expect(result.dailyPay).toBe(80);
   });
 
-  it('automatically considers time-outs before 5:00 PM as half day and deducts half daily rate', () => {
-    // 08:00 to 16:00 (4:00 PM): 7 payable hours, timed out before 5:00 PM -> half day.
+  it('deducts unrendered hours for shifts under 8 hours and treats full shift as full day', () => {
+    // 08:00 to 16:00 (4:00 PM): 7 payable hours, timed out before 5:00 PM -> 1h unrendered deducted.
     const early = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
@@ -62,20 +62,21 @@ describe('intern payroll policy', () => {
       graceAvailable: true,
     });
     expect(early.workedHours).toBe(7);
-    expect(early.isHalfDay).toBe(true);
-    expect(early.halfDayDeduction).toBe(40);
-    expect(early.dailyPay).toBe(40);
+    expect(early.isHalfDay).toBe(false);
+    expect(early.halfDayDeduction).toBe(10);
+    expect(early.dailyPay).toBe(70);
 
-    // 08:00 to 16:59:59: before 5:00 PM -> half day.
+    // 08:00 to 16:59:59: ceiled to 8 hours -> full day.
     const justBeforeFive = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T16:59:59+08:00',
       graceAvailable: true,
     });
-    expect(justBeforeFive.isHalfDay).toBe(true);
-    expect(justBeforeFive.halfDayDeduction).toBe(40);
-    expect(justBeforeFive.dailyPay).toBe(40);
+    expect(justBeforeFive.workedHours).toBe(8);
+    expect(justBeforeFive.isHalfDay).toBe(false);
+    expect(justBeforeFive.halfDayDeduction).toBe(0);
+    expect(justBeforeFive.dailyPay).toBe(80);
 
     // 08:00 to 17:00:00: full day.
     const fullDay = calculateInternPayroll({
@@ -158,7 +159,7 @@ describe('intern payroll policy', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
-      actualTimeOut: '2026-07-28T15:00:00+08:00',
+      actualTimeOut: '2026-07-28T11:30:00+08:00',
       graceAvailable: true,
     });
     expect(result.isHalfDay).toBe(true);

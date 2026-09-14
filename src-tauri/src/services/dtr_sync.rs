@@ -2505,7 +2505,7 @@ mod tests {
     }
 
     #[test]
-    fn eight_to_three_keeps_actuals_while_payroll_is_half_day() {
+    fn eight_to_three_keeps_actuals_while_payroll_has_undertime() {
         // The reported case: 08:00-15:00 renders actual stamps and standard lunch on the DTR…
         let row = build_dtr_row(
             Some("2026-09-05T08:00:00+08:00"),
@@ -2522,8 +2522,7 @@ mod tests {
                 "3:00:00 PM".to_string()
             ]
         );
-        // …while payroll classifies the same punches as half-day with an
-        // effective 08:00-12:00 pay window (pay math only, never DTR).
+        // …while payroll classifies the same punches as 6 worked hours with 2h undertime deduction (not half-day).
         let pay = crate::services::intern_payroll::calculate(
             "2026-09-05",
             "2026-09-05T08:00:00+08:00",
@@ -2531,10 +2530,9 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(pay.is_half_day);
-        assert_eq!(pay.half_day_deduction_centavos, 4000);
-        assert_eq!(pay.daily_pay_centavos, 4000);
-        assert!(pay.computed_time_out.contains("T12:00:00+08:00"));
+        assert!(!pay.is_half_day);
+        assert_eq!(pay.half_day_deduction_centavos, 2000);
+        assert_eq!(pay.daily_pay_centavos, 6000);
     }
 
     #[test]

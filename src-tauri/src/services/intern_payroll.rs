@@ -64,7 +64,7 @@ pub fn calculate(
     let in_grace_window = time_in > start && time_in <= grace_end;
     let grace_used = in_grace_window && grace_available;
     let late_hours = if grace_used { 0 } else { raw_late_hours };
-    let deduction = if late_hours > 0 {
+    let late_deduction = if late_hours > 0 {
         late_hours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP * 100
     } else {
         0
@@ -77,7 +77,13 @@ pub fn calculate(
     let base = INTERN_DAILY_RATE_PHP * 100;
     let worked_hours = paid_work_hours_ceiled(time_in, time_out);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
-    let half_day_deduction = if is_half_day { base / 2 } else { 0 };
+    let unrendered_hours = (8 - worked_hours).max(0);
+    let hourly_deduction = INTERN_LATE_DEDUCTION_PER_HOUR_PHP * 100;
+    let deduction = if is_half_day {
+        base / 2
+    } else {
+        unrendered_hours * hourly_deduction
+    };
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even
     // though the DTR row keeps the actual stamps. Never push computed values
@@ -89,12 +95,12 @@ pub fn calculate(
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         computed_time_out: effective_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         late_hours,
-        late_deduction_centavos: deduction,
+        late_deduction_centavos: late_deduction,
         is_half_day,
-        half_day_deduction_centavos: half_day_deduction,
+        half_day_deduction_centavos: deduction,
         grace_used,
         base_pay_centavos: base,
-        daily_pay_centavos: floor_zero(base - deduction - half_day_deduction),
+        daily_pay_centavos: floor_zero(base - late_deduction - deduction),
         worked_hours,
     })
 }
@@ -174,7 +180,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 3);
         assert_eq!(result.late_deduction_centavos, 3000);
-        assert_eq!(result.daily_pay_centavos, 5000);
+        assert_eq!(result.worked_hours, 6);
+        assert_eq!(result.half_day_deduction_centavos, 2000);
+        assert_eq!(result.daily_pay_centavos, 3000);
     }
 
     #[test]
@@ -194,8 +202,8 @@ mod tests {
     }
 
     #[test]
-    fn early_clock_out_before_5pm_is_half_day() {
-        // 08:00–16:00 → 7 paid hours, but clocked out before 17:00 (5:00 PM).
+    fn early_clock_out_before_5pm_is_undertime_not_half_day() {
+        // 08:00–16:00 → 7 paid hours, 1 hour undertime deduction (1,000 centavos), not half-day.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
@@ -204,9 +212,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.worked_hours, 7);
-        assert!(result.is_half_day);
-        assert_eq!(result.half_day_deduction_centavos, 4000);
-        assert_eq!(result.daily_pay_centavos, 4000);
+        assert!(!result.is_half_day);
+        assert_eq!(result.half_day_deduction_centavos, 1000);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
 
     #[test]
@@ -274,7 +282,7 @@ mod tests {
 
     #[test]
     fn close_boundary_is_minute_precise() {
-        // T6 decision A: 16:59:59 is half-day; exactly 17:00:00 and 17:00:01 are full.
+        // Under new policy, timing out before 17:00 does not force half-day; 16:59:59 ceils to 8 worked hours (full day).
         let just_before = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
@@ -282,8 +290,8 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(just_before.is_half_day);
-        assert_eq!(just_before.daily_pay_centavos, 4000);
+        assert!(!just_before.is_half_day);
+        assert_eq!(just_before.daily_pay_centavos, 8000);
         for time_out in [
             "2026-08-01T17:00:00+08:00",
             "2026-08-01T17:00:01+08:00",
@@ -309,12 +317,12 @@ mod tests {
 
     #[test]
     fn early_half_day_uses_effective_noon_window_for_pay() {
-        // DTR/PAYROLL DECOUPLING: 08:00-15:00 actuals pay as an effective
-        // 08:00-12:00 window (pay math only; the DTR row keeps 15:00).
+        // DTR/PAYROLL DECOUPLING: morning half-day (<=4h, e.g. 08:00-11:30)
+        // pays as an effective 08:00-12:00 window (pay math only).
         let half = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
-            "2026-08-01T15:00:00+08:00",
+            "2026-08-01T11:30:00+08:00",
             true,
         )
         .unwrap();
@@ -345,12 +353,11 @@ mod tests {
 
     #[test]
     fn morning_half_day_closing_before_office_close_pays_as_noon() {
-        // A2: 08:00 -> 15:00 is a morning half-day closed before 17:00, so the
-        // payroll-only effective window ends at 12:00.
+        // A morning half-day (<=4h) closed before 17:00 has payroll-only effective window at 12:00.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
-            "2026-08-01T15:00:00+08:00",
+            "2026-08-01T11:30:00+08:00",
             true,
         )
         .unwrap();

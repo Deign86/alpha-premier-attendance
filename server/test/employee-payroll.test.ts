@@ -44,27 +44,28 @@ describe('employee payroll policy', () => {
     expect(partial.dailyPay).toBe(325);
   });
 
-  it('automatically considers time-outs before 5:00 PM as half day and deducts half daily rate', () => {
-    // 08:00 to 16:00 (4:00 PM): 7 payable hours (> 4 hrs), but clocked out before 5:00 PM.
+  it('deducts unrendered hours for shifts under 8 hours and treats full shift as full day', () => {
+    // 08:00 to 16:00 (4:00 PM): 7 payable hours (> 4 hrs), 1 hour unrendered deducted.
     const earlyClockOut = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T16:00:00+08:00',
       dailyRate: 600,
     });
     expect(earlyClockOut.workedHours).toBe(7);
-    expect(earlyClockOut.isHalfDay).toBe(true);
-    expect(earlyClockOut.halfDayDeduction).toBe(300);
-    expect(earlyClockOut.dailyPay).toBe(300);
+    expect(earlyClockOut.isHalfDay).toBe(false);
+    expect(earlyClockOut.halfDayDeduction).toBe(75);
+    expect(earlyClockOut.dailyPay).toBe(525);
 
-    // 08:00 to 16:59:59 (just before 5:00 PM): half day.
+    // 08:00 to 16:59:59 (just before 5:00 PM): 8 ceiled hours -> full day.
     const justBeforeFive = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T16:59:59+08:00',
       dailyRate: 600,
     });
-    expect(justBeforeFive.isHalfDay).toBe(true);
-    expect(justBeforeFive.halfDayDeduction).toBe(300);
-    expect(justBeforeFive.dailyPay).toBe(300);
+    expect(justBeforeFive.workedHours).toBe(8);
+    expect(justBeforeFive.isHalfDay).toBe(false);
+    expect(justBeforeFive.halfDayDeduction).toBe(0);
+    expect(justBeforeFive.dailyPay).toBe(600);
 
     // 08:00 to 17:00:00 (5:00 PM): normal full day shift.
     const fullDay = calculateEmployeePayroll({
@@ -141,7 +142,7 @@ describe('employee payroll policy', () => {
   it('A2: morning half-day closed before office close pays an effective 12:00 time-out', () => {
     const result = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00+08:00',
-      actualTimeOut: '2026-07-28T15:00:00+08:00',
+      actualTimeOut: '2026-07-28T11:30:00+08:00',
       dailyRate: 600,
     });
     expect(result.isHalfDay).toBe(true);

@@ -11,7 +11,12 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
-  const halfDayDeduction = isHalfDay ? input.dailyRate / 2 : 0;
+  const unrenderedHours = Math.max(0, 8 - workedHours);
+  const hourlyRate = input.dailyRate / 8;
+  const halfDayFlatDeduction = input.dailyRate / 2;
+  const undertimeDeduction = isHalfDay ? halfDayFlatDeduction : unrenderedHours * hourlyRate;
+  const dailyPay = Math.max(0, input.dailyRate - undertimeDeduction);
+  const halfDayDeduction = undertimeDeduction;
 
   // DTR DECOUPLING: computed fields are PAYROLL-ONLY. Morning half-day
   // closed before office close pays as an effective 08:00–12:00 window even
@@ -28,7 +33,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
     isHalfDay,
     halfDayDeduction,
     basePay: input.dailyRate,
-    dailyPay: input.dailyRate - halfDayDeduction,
+    dailyPay,
     // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
     workedHours,
   };

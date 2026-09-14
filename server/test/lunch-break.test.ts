@@ -67,8 +67,8 @@ describe('employee payroll worked hours exclude lunch', () => {
   it('reports 7 payable hours for a 09:00–17:00 shift', () => {
     const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T09:00:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', dailyRate: 500 });
     expect(result.workedHours).toBe(7);
-    // Existing flat daily-rate employee rule is untouched.
-    expect(result.dailyPay).toBe(500);
+    // 8-hour standard: 1 unrendered hour deducted (500 - 62.5 = 437.5).
+    expect(result.dailyPay).toBe(437.5);
   });
 
   it('keeps the lunch window out of partial shifts', () => {

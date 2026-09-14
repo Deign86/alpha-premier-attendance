@@ -45,7 +45,9 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const basePay = INTERN_DAILY_RATE_PHP;
   const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
-  const halfDayDeduction = isHalfDay ? basePay / 2 : 0;
+  const unrenderedHours = Math.max(0, 8 - workedHours);
+  const unrenderedDeduction = unrenderedHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
+  const halfDayDeduction = isHalfDay ? basePay / 2 : unrenderedDeduction;
   // DTR DECOUPLING: `computedTimeOut` is a PAYROLL-ONLY effective window.
   // A morning half-day closed before office close pays as 08:00–12:00 even
   // though the DTR row keeps the actual 08:00–15:00 stamps. Never push
