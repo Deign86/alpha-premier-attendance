@@ -911,11 +911,10 @@ pub mod tests {
         );
         assert_eq!(execute_result.writes.len(), 1);
         assert_eq!(execute_result.writes[0].0, 2); // 1-based row 2
-        // DTR/PAYROLL DECOUPLING: 08:00-16:00 is payroll half-day, but the
-        // recon write carries the actual stamps, never the fixed-lunch form.
+        // Shift crossing lunch (08:00 to 16:00) populates standard lunch columns:
         assert_eq!(
             execute_result.writes[0].1,
-            ["8:00:00 AM", "", "", "4:00:00 PM"]
+            ["8:00:00 AM", "12:00:00 PM", "1:00:00 PM", "4:00:00 PM"]
         );
         assert!(!execute_result.format_ops.is_empty());
     }
