@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.66] - 2026-09-14
+
+### Added
+- **Ma'am Bea Cloned Voice Name Clips (APG-2026-117 through 119)**: Pre-rendered zero-latency cloned voice clips and manifest entries for new interns Jennirille Lhoize Cordova, Sophia Marielle Urbano, and Melanie Garcia.
+
+### Fixed
+- **Intern DTR sync error reporting & feedback**: Surfaced detailed error messages and row sync notices in both global database panel and per-user editor; `manual_sync_intern_dtr` reports failure whenever error list is non-empty.
+- **VoiceStudio LAN configuration & connection diagnostics**: Added support for port 3901 network sharing, IP address validation, and explicit connection failure details (refused, timeout, or network error).
+- **Webview CSP allowances**: Permitted localhost, loopback (`127.0.0.1`), LAN subnets (`10.*`, `172.*`, `192.168.*`), and Google APIs (`oauth2.googleapis.com`, `sheets.googleapis.com`).
+
 ## [0.1.65] - 2026-09-13
 
 ### Fixed
