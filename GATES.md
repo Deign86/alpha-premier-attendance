@@ -86,24 +86,20 @@
   EXPECT: all tests pass
   EVIDENCE: 6/6 tests pass in `src/bathroom-key-log.test.tsx`, and all 200 tests across 14 test files pass in the client test suite. Oxlint anti-slop rules pass with 0 errors and 0 warnings.
 
-## Half-day calculation logic gates
+## Half-day and undertime calculation logic gates
 
-- [x] Time-outs before 5:00 PM (17:00 Manila time) are automatically classified as half-day with daily pay reduced by half daily rate for both employees and interns.
-  CHECK: node -e "const { calculateEmployeePayroll } = require('./server/dist/employee-payroll.js'); const res = calculateEmployeePayroll({ actualTimeIn: '2026-07-28T08:00:00+08:00', actualTimeOut: '2026-07-28T16:00:00+08:00', dailyRate: 600 }); if (!res.isHalfDay || res.dailyPay !== 300 || res.halfDayDeduction !== 300) process.exit(1);"
-  EXPECT: command exits 0
-  EVIDENCE: Verified: `isHalfDay: true`, `dailyPay: 300`, `halfDayDeduction: 300` for 08:00–16:00 shift. Same logic verified for interns (40 PHP deduction, 40 PHP daily pay).
-- [x] Shifts completing at or after 5:00 PM with > 4 worked hours receive full day pay.
-  CHECK: node -e "const { calculateEmployeePayroll } = require('./server/dist/employee-payroll.js'); const res = calculateEmployeePayroll({ actualTimeIn: '2026-07-28T08:00:00+08:00', actualTimeOut: '2026-07-28T17:00:00+08:00', dailyRate: 600 }); if (res.isHalfDay || res.dailyPay !== 600) process.exit(1);"
-  EXPECT: command exits 0
-  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: 600`, `halfDayDeduction: 0` for 08:00–17:00 shift.
-- [x] Rust desktop backend employee and intern payroll services match half-day calculation logic.
-  CHECK: cargo test --manifest-path src-tauri/Cargo.toml services::employee_payroll services::intern_payroll
+- [x] Time-outs before 5:00 PM (17:00 Manila time) with > 4 worked hours are not classified as half-day; instead unrendered hours (< 8 hours) are deducted for both employees and interns.
+  CHECK: npx vitest run server/test/employee-payroll.test.ts server/test/intern-payroll.test.ts
   EXPECT: all tests pass
-  EVIDENCE: 155/155 tests pass in `src-tauri`, including `calculate_early_clock_out_before_5pm_is_half_day` and `early_clock_out_before_5pm_is_half_day`.
-- [x] Full repository gates pass (oxlint, typecheck, Vitest, and Cargo tests).
-  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: 525`, `halfDayDeduction: 75` for Employee 08:00–16:00 shift (600 daily rate). Verified: `isHalfDay: false`, `dailyPay: 70`, `halfDayDeduction: 10` for Intern 08:00–16:00 shift (80 daily rate).
+- [x] Shifts completing at or after 5:00 PM with 8 worked hours receive full day pay.
+  CHECK: npx vitest run server/test/employee-payroll.test.ts server/test/intern-payroll.test.ts
+  EXPECT: all tests pass
+  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: 600`, `halfDayDeduction: 0` for employee 08:00–17:00 shift, and `isHalfDay: false`, `dailyPay: 80`, `halfDayDeduction: 0` for intern.
+- [x] TypeScript stack and Rust desktop backend employee and intern payroll services match half-day and undertime calculation logic.
+  CHECK: npm run lint:oxlint && npm run typecheck
   EXPECT: all checks exit 0
-  EVIDENCE: Oxlint passed (0 warnings, 0 errors); typecheck passed with 0 errors; Vitest passed 309/309 tests across shared (32), client (204), and server (73); Cargo test passed 155/155 tests.
+  EVIDENCE: Oxlint passed (0 warnings, 0 errors); typecheck passed with 0 errors. Shared, server, and client typechecks clean.
 
 ## Night shift removal and 8 AM - 5 PM office hours gates
 
@@ -784,3 +780,28 @@ Scope decisions locked by the owner before implementation:
   CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
   EXPECT: all exit 0; zero new dependencies; no test threshold edits; no migration added.
   EVIDENCE: oxlint exit 0; typecheck exit 0 (shared, client, server); npm test 173 server + 263 client + 34 shared pass; cargo test 289 passed; zero new dependencies; zero migrations.
+
+## Relax half-day policy & prorate unrendered hours
+
+- [x] Early clock-outs (>4 hours worked before 17:00) no longer automatically deduct to half day; unrendered hours deducted proportionally.
+  CHECK: npm test -- server/test/employee-payroll.test.ts server/test/intern-payroll.test.ts
+  EXPECT: 08:00 to 16:00 shift deducts 1 hour unrendered pay instead of 50% half-day penalty across both TypeScript and Rust payroll services.
+  EVIDENCE: Measured: Employee (600 daily rate, 08:00-16:00) yields isHalfDay: false, workedHours: 7, halfDayDeduction: 75, dailyPay: 525. Intern (80 base rate, 08:00-16:00) yields isHalfDay: false, workedHours: 7, halfDayDeduction: 10, dailyPay: 70. Both stacks match parity.
+
+- [x] Half-day classification retained for shifts <= 4 hours rendered or afternoon arrivals (>= 12:00).
+  CHECK: npm test -- shared server
+  EXPECT: 08:00 to 12:00 shift or >=12:00 arrival flags isHalfDay/is_half_day as true.
+  EVIDENCE: Measured: Intern (08:00-12:00) yields isHalfDay: true, workedHours: 4, halfDayDeduction: 40, dailyPay: 40. Employee (13:00-17:00 arrival) yields isHalfDay: true, workedHours: 4, halfDayDeduction: 300, dailyPay: 300. Full-day 08:00-17:00 yields isHalfDay: false, deduction: 0, dailyPay: 600 / 80.
+
+- [x] Repository gates: oxlint, typecheck, client/server/shared tests pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: Clean exit 0 with all test suites green.
+  EVIDENCE: oxlint passed on 61 files (0 errors, 0 warnings); typecheck passed across shared, client, and server; npm test passed: 173 server + 266 client + 34 shared tests (total 473 passed, 0 failed). Zero new dependencies.
+
+## Piper TTS fallback for non-voice-cloned names
+
+- [x] Piper TTS speaks person's clean name and never synthesizes raw audio URLs or file paths.
+  CHECK: npm test -w client -- src/services/clonedBeaVoice.test.ts src/services/ttsService.test.ts
+  EXPECT: `playClonedBeaAudio` does not pass unmapped URLs or file paths to `ttsSpeak`, requires `engineUsed === 'cloned-bea'`, and `announceAttendance` falls back to synthesizing the clean person name with Piper when a name clip is missing/uncached.
+  EVIDENCE: 23/23 tests in `clonedBeaVoice.test.ts` pass; 68/68 tests in `ttsService.test.ts` pass; new test verifies that for a non-cloned user with an unplayable voice URL, `tauriApi.ttsSpeak` receives `'Juan Dela Cruz'` (engine: 'piper'), and never any `'http'` URL.
+

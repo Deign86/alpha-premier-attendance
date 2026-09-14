@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.72] - 2026-09-14
+
+### Changed
+- **Relaxed half-day policy & proportional undertimes**: Timing out before 4:59 PM (17:00 Manila) no longer automatically penalizes shifts $>4$ hours to flat half-day pay. Payroll now accurately computes hours rendered and deducts undertime proportionally according to standard 8-hour workday rates across TypeScript and Rust engines.
+- **DTR decoupling**: Attendance punch logs and Google Sheets intern DTR sync continue saving true punch timestamps decoupled from undertime payroll calculations.
+
+### Fixed
+- **Piper TTS URL pronunciation on non-voice-cloned names**: Prevented Piper TTS from synthesizing and reading aloud HTTP URLs, asset URLs, or missing audio file paths when voice cloning is not present for a person. Announcements now cleanly fall back to synthesizing the person's clean name dynamically via Piper.
+
 ## [0.1.71] - 2026-09-14
 
 ### Fixed
