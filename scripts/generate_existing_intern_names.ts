@@ -210,6 +210,25 @@ export async function generateVoicestudioClip(
   return false;
 }
 
+function findPythonBinary(): string {
+  if (process.env.PYTHON && fs.existsSync(process.env.PYTHON)) {
+    return process.env.PYTHON;
+  }
+  const uvPython = path.join(
+    process.env.USERPROFILE || '',
+    'AppData',
+    'Roaming',
+    'uv',
+    'python',
+    'cpython-3.11-windows-x86_64-none',
+    'python.exe',
+  );
+  if (fs.existsSync(uvPython)) {
+    return uvPython;
+  }
+  return 'python';
+}
+
 export async function runBatchInternNameGeneration(
   options: BatchGeneratorOptions = {},
 ): Promise<{
@@ -261,7 +280,7 @@ export async function runBatchInternNameGeneration(
       '        try: os.unlink(tmp_path)',
       '        except: pass',
     ].join('\n');
-    const stdout = execFileSync('python', ['-c', pyScript, backupPath], { encoding: 'utf8' });
+    const stdout = execFileSync(findPythonBinary(), ['-c', pyScript, backupPath], { encoding: 'utf8' });
     // SAFETY: Output from Python script matches SheetUser structure
     users = JSON.parse(stdout) as SheetUser[];
   } else if (dbPath) {
@@ -277,7 +296,7 @@ export async function runBatchInternNameGeneration(
       'print(json.dumps(out))',
       'conn.close()',
     ].join('\n');
-    const stdout = execFileSync('python', ['-c', pyScript, dbPath], { encoding: 'utf8' });
+    const stdout = execFileSync(findPythonBinary(), ['-c', pyScript, dbPath], { encoding: 'utf8' });
     // SAFETY: Output from Python script matches SheetUser structure
     users = JSON.parse(stdout) as SheetUser[];
   } else {

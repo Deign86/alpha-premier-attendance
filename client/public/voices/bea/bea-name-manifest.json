@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-09-14T00:21:15.838Z",
+  "generatedAt": "2026-09-14T14:51:14.879Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -303,6 +303,16 @@
       "audioFile": "/voices/bea/names/APG-2026-118.mp3",
       "generatedAt": "2026-09-14T00:21:15.838Z",
       "audioHash": "b4eb9eca75ec5370b6f9cbe7d34383af0b028b7c6b1e758cadf6f1e704823cf2"
+    },
+    "APG-2026-120": {
+      "personId": "APG-2026-120",
+      "displayName": "Jhon Yhonan D. Regaspi",
+      "normalizedSpeechText": "Jhon Yhonan Regaspi",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-120.mp3",
+      "generatedAt": "2026-09-14T14:51:14.879Z",
+      "audioHash": "2b77a8a2c6cdd1663749ac25ba247be9637c8020a171380dfade54aee8771a18"
     }
   }
 }
