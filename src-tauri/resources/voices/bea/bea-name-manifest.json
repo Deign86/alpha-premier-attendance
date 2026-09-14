@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-09-08T04:42:10.171Z",
+  "generatedAt": "2026-09-14T00:21:15.838Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -273,6 +273,36 @@
       "audioFile": "/voices/bea/names/APG-2026-116.mp3",
       "generatedAt": "2026-09-08T04:42:10.171Z",
       "audioHash": "05a9bbc86fae6279c0c741e82e0dc8e8172e8045aee8419581871e25c606f21a"
+    },
+    "APG-2026-119": {
+      "personId": "APG-2026-119",
+      "displayName": "Melanie P. Garcia",
+      "normalizedSpeechText": "Melanie Garcia",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-119.mp3",
+      "generatedAt": "2026-09-14T00:21:04.775Z",
+      "audioHash": "b86ced6e949b0848459865d9b6ad921957024653f8a07633af783cfe0495419a"
+    },
+    "APG-2026-117": {
+      "personId": "APG-2026-117",
+      "displayName": "Jennirille Lhoize S. Cordova",
+      "normalizedSpeechText": "Jennirille Lhoize Cordova",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-117.mp3",
+      "generatedAt": "2026-09-14T00:21:10.010Z",
+      "audioHash": "bd32f166b43a96e954a6fbc1e1a720732f30888e0014d386dcbe997e7cb63738"
+    },
+    "APG-2026-118": {
+      "personId": "APG-2026-118",
+      "displayName": "Sophia Marielle A. Urbano",
+      "normalizedSpeechText": "Sophia Marielle Urbano",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-118.mp3",
+      "generatedAt": "2026-09-14T00:21:15.838Z",
+      "audioHash": "b4eb9eca75ec5370b6f9cbe7d34383af0b028b7c6b1e758cadf6f1e704823cf2"
     }
   }
 }

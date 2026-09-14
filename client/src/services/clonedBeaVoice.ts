@@ -126,6 +126,9 @@ const DEFAULT_NAME_PROFILES: Readonly<Record<string, NameProfileEntry>> = Object
   'USR_EMP_001': { personId: 'USR_EMP_001', displayName: 'Ada Lovelace', normalizedSpeechText: 'Ada Lovelace', audioFile: '/voices/bea/names/USR_EMP_001.mp3' },
   'APG-2026-115': { personId: 'APG-2026-115', displayName: 'Allaena Nicole E. Vizon', normalizedSpeechText: 'Allaena Nicole Vizon', audioFile: '/voices/bea/names/APG-2026-115.mp3' },
   'APG-2026-116': { personId: 'APG-2026-116', displayName: 'Maricon C. Danao', normalizedSpeechText: 'Maricon Danao', audioFile: '/voices/bea/names/APG-2026-116.mp3' },
+  'APG-2026-117': { personId: 'APG-2026-117', displayName: 'Jennirille Lhoize S. Cordova', normalizedSpeechText: 'Jennirille Lhoize Cordova', audioFile: '/voices/bea/names/APG-2026-117.mp3' },
+  'APG-2026-118': { personId: 'APG-2026-118', displayName: 'Sophia Marielle A. Urbano', normalizedSpeechText: 'Sophia Marielle Urbano', audioFile: '/voices/bea/names/APG-2026-118.mp3' },
+  'APG-2026-119': { personId: 'APG-2026-119', displayName: 'Melanie P. Garcia', normalizedSpeechText: 'Melanie Garcia', audioFile: '/voices/bea/names/APG-2026-119.mp3' },
 });
 
 function normalizeNameForLookup(name: string): string {

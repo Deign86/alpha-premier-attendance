@@ -49,10 +49,22 @@ describe('clonedBeaVoice', () => {
       expect(url).toBe('/voices/bea/names/APG-2026-102.mp3');
     });
 
-    it('returns mp3 URL for newly registered intern APG-2026-116', () => {
+    it('returns mp3 URL for newly registered interns APG-2026-116 to APG-2026-119', () => {
       expect(getClonedBeaNameAudioUrl('APG-2026-116', null)).toBe('/voices/bea/names/APG-2026-116.mp3');
       expect(getClonedBeaNameAudioUrl(null, 'Maricon C. Danao')).toBe('/voices/bea/names/APG-2026-116.mp3');
       expect(getClonedBeaNameAudioUrl(null, 'Maricon Danao')).toBe('/voices/bea/names/APG-2026-116.mp3');
+
+      expect(getClonedBeaNameAudioUrl('APG-2026-117', null)).toBe('/voices/bea/names/APG-2026-117.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Jennirille Lhoize S. Cordova')).toBe('/voices/bea/names/APG-2026-117.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Jennirille Lhoize Cordova')).toBe('/voices/bea/names/APG-2026-117.mp3');
+
+      expect(getClonedBeaNameAudioUrl('APG-2026-118', null)).toBe('/voices/bea/names/APG-2026-118.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Sophia Marielle A. Urbano')).toBe('/voices/bea/names/APG-2026-118.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Sophia Marielle Urbano')).toBe('/voices/bea/names/APG-2026-118.mp3');
+
+      expect(getClonedBeaNameAudioUrl('APG-2026-119', null)).toBe('/voices/bea/names/APG-2026-119.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Melanie P. Garcia')).toBe('/voices/bea/names/APG-2026-119.mp3');
+      expect(getClonedBeaNameAudioUrl(null, 'Melanie Garcia')).toBe('/voices/bea/names/APG-2026-119.mp3');
     });
 
     it('returns null for unknown person', () => {
