@@ -115,6 +115,8 @@ import {
   listenForGlobalRfid,
   listenForScannerStatus,
   listenForAttendanceUpdates,
+  listenForDtrSyncProgress,
+  type DtrSyncProgress,
   getScannerStatus,
   setScannerPaused,
   notifyScanSuccess,
@@ -3314,6 +3316,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
   const [dismissingRestore, setDismissingRestore] = useState(false);
   const [syncState, setSyncState] = useState<SyncHealthState>({ kind: "loading" });
+  const [dtrProgress, setDtrProgress] = useState<DtrSyncProgress | null>(null);
   // Per-device DTR kill switch: null = still loading, boolean = stored state.
   const [dtrSyncEnabled, setDtrSyncEnabled] = useState<boolean | null>(null);
   const [dtrToggleBusy, setDtrToggleBusy] = useState(false);
@@ -3381,6 +3384,22 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     };
   }, [refreshSyncHealth, refreshDtrSyncToggle]);
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenForDtrSyncProgress((progress) => {
+      setDtrProgress(progress);
+    })
+      .then((cleanup) => {
+        unlisten = cleanup;
+      })
+      .catch(() => {
+        /* web mode or mock environment */
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     const response = await loadDatabaseInfo();
     if (response.success) {
@@ -3410,6 +3429,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   const syncInterns = async () => {
     setBusy(true);
     setSyncState({ kind: "syncing" });
+    setDtrProgress(null);
     setError("");
     setNotice("");
     try {
@@ -3430,6 +3450,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       }
     } finally {
       setBusy(false);
+      setDtrProgress(null);
     }
     void refreshSyncHealth(true);
   };
@@ -3646,6 +3667,39 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           <strong>DTR sync status</strong>
           <span className={syncBadge.className}>{syncState.kind === "syncing" ? "Syncing…" : syncBadge.label}</span>
         </div>
+        {syncState.kind === "syncing" && (
+          <div
+            className="sync-progress-wrap"
+            role="progressbar"
+            aria-valuenow={dtrProgress && dtrProgress.total > 0 ? Math.round((dtrProgress.current / dtrProgress.total) * 100) : 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Intern DTR sync progress"
+          >
+            <div className="sync-progress-status">
+              <strong>
+                {dtrProgress
+                  ? dtrProgress.status === "starting"
+                    ? `Starting DTR sync (${dtrProgress.total} interns)…`
+                    : `Syncing intern ${dtrProgress.current} of ${dtrProgress.total}: ${dtrProgress.fullName}`
+                  : "Syncing intern DTR sheets…"}
+              </strong>
+              <span>
+                {dtrProgress && dtrProgress.total > 0
+                  ? `${Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100))}%`
+                  : "…"}
+              </span>
+            </div>
+            <div className="sync-progress-bar">
+              <div
+                className="sync-progress-fill"
+                style={{
+                  width: `${dtrProgress && dtrProgress.total > 0 ? Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100)) : 0}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
         {syncState.kind === "error" ? (
           <p className="sync-health-note">Sync status unavailable — {syncState.message}</p>
         ) : (
@@ -3815,21 +3869,42 @@ function UserEditor({
   const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenForDtrSyncProgress((progress) => {
+      if (progress.status === "syncing") {
+        setMessage(`Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…`);
+      }
+    })
+      .then((cleanup) => {
+        unlisten = cleanup;
+      })
+      .catch(() => {
+        /* web mode or mock environment */
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const handleSyncDtr = async (userId?: string) => {
     setSyncingDtrUserId(userId ?? "ALL");
-    setMessage("");
-    const response = await syncInternDtr(userId);
-    setSyncingDtrUserId(null);
-    const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
-    if (response.success && !hasErrors) {
-      const createdCount = response.tabsCreated?.length ?? 0;
-      const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
-      setMessage(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
-    } else {
-      const errDetail = hasErrors
-        ? response.errors.join("; ")
-        : response.error?.message || "DTR sync failed.";
-      setMessage(`DTR sync error: ${errDetail}`);
+    setMessage(userId ? "Syncing intern DTR sheet…" : "Starting intern DTR sync…");
+    try {
+      const response = await syncInternDtr(userId);
+      const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
+      if (response.success && !hasErrors) {
+        const createdCount = response.tabsCreated?.length ?? 0;
+        const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
+        setMessage(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
+      } else {
+        const errDetail = hasErrors
+          ? response.errors.join("; ")
+          : response.error?.message || "DTR sync failed.";
+        setMessage(`DTR sync error: ${errDetail}`);
+      }
+    } finally {
+      setSyncingDtrUserId(null);
     }
   };
 

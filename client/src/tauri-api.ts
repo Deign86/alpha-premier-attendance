@@ -134,6 +134,18 @@ export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause
 export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
+export interface DtrSyncProgress {
+  current: number;
+  total: number;
+  userId: string;
+  fullName: string;
+  status: string;
+}
+
+/** Listen for real-time intern DTR sync progress events from the Rust backend. */
+export const listenForDtrSyncProgress = (handler: (payload: DtrSyncProgress) => void) =>
+  listen<DtrSyncProgress>('dtr-sync-progress', (event) => handler(event.payload));
+
 /** Listen for tray menu "Check for updates…" trigger. */
 export const listenForCheckForUpdates = async (handler: () => void): Promise<() => void> => {
   if (globalThis.window === undefined || !('__TAURI_INTERNALS__' in globalThis.window)) {

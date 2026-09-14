@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DatabasePanel } from './App';
 import * as api from './api';
+import * as tauriApi from './tauri-api';
 import type { DatabaseInfoResponse } from '@rfid-attendance/shared';
 
 const mockDbInfo: DatabaseInfoResponse = {
@@ -193,6 +194,54 @@ describe('DatabasePanel', () => {
 
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Maricon C\. Danao\)\./i)).toBeInTheDocument();
+  });
+
+  it('displays real-time progress bar when dtr-sync-progress events occur during sync', async () => {
+    let progressHandler: ((payload: tauriApi.DtrSyncProgress) => void) | null = null;
+    vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockImplementation((handler) => {
+      progressHandler = handler;
+      return Promise.resolve(() => {});
+    });
+
+    let resolveSync: (value: Awaited<ReturnType<typeof api.syncInternDtr>>) => void = () => {};
+    const syncPromise = new Promise<Awaited<ReturnType<typeof api.syncInternDtr>>>((resolve) => {
+      resolveSync = resolve;
+    });
+    vi.spyOn(api, 'syncInternDtr').mockReturnValueOnce(syncPromise);
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+
+    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+
+    act(() => {
+      progressHandler?.({
+        current: 3,
+        total: 10,
+        userId: 'APG-2026-103',
+        fullName: 'Juan Dela Cruz',
+        status: 'syncing',
+      });
+    });
+
+    expect(await screen.findByText(/Syncing intern 3 of 10: Juan Dela Cruz/i)).toBeInTheDocument();
+    expect(screen.getByText('30%')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSync({
+        success: true,
+        internsChecked: 10,
+        tabsCreated: [],
+        rowsSynced: 25,
+        details: [],
+        errors: [],
+      });
+    });
+
+    expect(await screen.findByText(/DTR sync complete: checked 10 intern\(s\), synced 25 row\(s\)\./i)).toBeInTheDocument();
   });
 
   it('displays DTR sync error message when sync errors occur', async () => {

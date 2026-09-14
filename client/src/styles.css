@@ -335,6 +335,12 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .sync-health-rows code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--gold-bright); overflow-wrap: anywhere; }
 .sync-health-note { margin: 0; color: var(--quiet); font-size: .74rem; }
 .sync-health-error { margin: 0; color: var(--danger); font-size: .74rem; overflow-wrap: anywhere; }
+.sync-progress-wrap { display: grid; gap: 6px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.sync-progress-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .76rem; }
+.sync-progress-status strong { color: var(--ink); font-weight: 600; }
+.sync-progress-status span { color: var(--gold-bright); font-variant-numeric: tabular-nums; font-weight: 600; }
+.sync-progress-bar { width: 100%; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.sync-progress-fill { height: 100%; background: var(--gold); border-radius: 3px; transition: width .3s ease; }
 .db-steps { margin: 4px 0 8px; padding-left: 18px; display: grid; gap: 6px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
 .db-steps li::marker { color: var(--gold-bright); font-weight: 700; }
 .db-steps strong { color: var(--ink); }

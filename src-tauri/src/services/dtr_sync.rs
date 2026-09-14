@@ -693,10 +693,7 @@ pub fn plan_row_format(
     };
     match kind {
         DtrRowKind::Absent => vec![one(1, 5, DtrCellColor::Red)],
-        DtrRowKind::HalfDay => vec![
-            one(1, 3, DtrCellColor::White),
-            one(3, 5, DtrCellColor::Red),
-        ],
+        DtrRowKind::HalfDay => vec![one(1, 5, DtrCellColor::White)],
         DtrRowKind::HalfDayPm => vec![
             one(1, 3, DtrCellColor::Red),
             one(3, 5, DtrCellColor::White),
@@ -741,6 +738,7 @@ pub fn manila_today_ymd() -> String {
 pub fn plan_absent_sweep(
     sheet_id: i64,
     rows: &[Vec<String>],
+    start_ymd: Option<&str>,
     today_ymd: &str,
 ) -> Vec<DtrFormatOp> {
     let Ok(today_parts) = parse_ymd(today_ymd) else {
@@ -751,6 +749,9 @@ pub fn plan_absent_sweep(
     else {
         return Vec::new();
     };
+    let start_date = start_ymd.and_then(|s| {
+        parse_ymd(s).ok().and_then(|p| NaiveDate::from_ymd_opt(p.y, p.m, p.d))
+    });
     let mut runs: Vec<(usize, usize)> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let cell = row.first().map(String::as_str).unwrap_or("");
@@ -760,6 +761,11 @@ pub fn plan_absent_sweep(
         let Some(date) = NaiveDate::from_ymd_opt(parts.y, parts.m, parts.d) else {
             continue;
         };
+        if let Some(start) = start_date {
+            if date < start {
+                continue;
+            }
+        }
         if date >= today {
             continue;
         }
@@ -826,20 +832,44 @@ pub async fn execute_format_ops(
     if ops.is_empty() {
         return Ok(false);
     }
-    let response = client
-        .post(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
-        ))
-        .bearer_auth(token)
-        .json(&build_format_requests(ops))
-        .send()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-    let status = response.status();
-    if !status.is_success() {
+    let url = format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate");
+    let body = build_format_requests(ops);
+    let mut backoff = std::time::Duration::from_millis(1500);
+    for attempt in 0..3 {
+        let response = client
+            .post(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(true);
+        }
+        if status.as_u16() == 429 && attempt < 2 {
+            tokio::time::sleep(backoff).await;
+            backoff *= 2;
+            continue;
+        }
         return Err(dtr_status_error(status).to_string());
     }
-    Ok(true)
+    Err(GOOGLE_RATE_LIMITED.to_string())
+}
+
+/// Paint format ops using already-fetched `rows` without an extra network GET.
+async fn paint_tab_formats_with_rows(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    sheet_id: i64,
+    rows: &[Vec<String>],
+    mut ops: Vec<DtrFormatOp>,
+    start_ymd: Option<&str>,
+) -> Result<bool, String> {
+    let today = manila_today_ymd();
+    ops.extend(plan_absent_sweep(sheet_id, rows, start_ymd, &today));
+    execute_format_ops(client, token, spreadsheet_id, &ops).await
 }
 
 /// Paint one tab: fetch A:F once, run the absent sweep, merge with the
@@ -851,7 +881,8 @@ async fn paint_tab_formats(
     spreadsheet_id: &str,
     sheet_id: i64,
     tab: &str,
-    mut ops: Vec<DtrFormatOp>,
+    ops: Vec<DtrFormatOp>,
+    start_ymd: Option<&str>,
 ) -> Result<bool, String> {
     let range = urlencoding::encode(&format!("{}!A:F", quote_tab(tab))).into_owned();
     let tab_values = dtr_get_json(
@@ -861,9 +892,7 @@ async fn paint_tab_formats(
     )
     .await?;
     let rows = rows_from_values(&tab_values);
-    let today = manila_today_ymd();
-    ops.extend(plan_absent_sweep(sheet_id, &rows, &today));
-    execute_format_ops(client, token, spreadsheet_id, &ops).await
+    paint_tab_formats_with_rows(client, token, spreadsheet_id, sheet_id, &rows, ops, start_ymd).await
 }
 
 fn quote_tab(tab: &str) -> String {
@@ -885,20 +914,29 @@ async fn dtr_get_json(
     token: &str,
     url: String,
 ) -> Result<serde_json::Value, String> {
-    let response = client
-        .get(url)
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-    let status = response.status();
-    if !status.is_success() {
+    let mut backoff = std::time::Duration::from_millis(1500);
+    for attempt in 0..3 {
+        let response = client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            return response
+                .json()
+                .await
+                .map_err(|_| GOOGLE_REQUEST_FAILED.to_string());
+        }
+        if status.as_u16() == 429 && attempt < 2 {
+            tokio::time::sleep(backoff).await;
+            backoff *= 2;
+            continue;
+        }
         return Err(dtr_status_error(status).to_string());
     }
-    response
-        .json()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())
+    Err(GOOGLE_RATE_LIMITED.to_string())
 }
 
 fn rows_from_values(value: &serde_json::Value) -> Vec<Vec<String>> {
@@ -1178,10 +1216,57 @@ fn sheet_id_for_tab(meta: &[DtrTabMeta], tab: &str) -> Option<i64> {
 /// "can never sync" (missing tab/date row/empty values). `Err` = corrupt
 /// or unreachable state (queue retries, then DEAD).
 #[derive(Debug, PartialEq, Eq)]
-enum DtrPlanOutcome {
+pub(crate) enum DtrPlanOutcome {
     Write(DtrPushPlan),
     InSync { row_1based: usize },
     Unresolvable(&'static str),
+}
+
+/// Plan one attendance day against a known title list. `Err` = corrupt
+/// or unreachable state (queue retries, then DEAD). Tab resolution
+/// happens in the caller so a miss can be recorded in `dtr_pending`
+/// instead of vanishing.
+/// Pure in-memory plan of an attendance day against a pre-fetched `rows` grid.
+pub fn plan_dtr_push_in_rows(
+    tab: &str,
+    rows: &[Vec<String>],
+    attendance_date: &str,
+    time_in: Option<&str>,
+    time_out: Option<&str>,
+) -> Result<DtrPlanOutcome, String> {
+    let values = build_dtr_row(time_in, time_out, attendance_date)?;
+    if values.iter().all(String::is_empty) {
+        return Ok(DtrPlanOutcome::Unresolvable("empty-values"));
+    }
+    let want_month: u32 = attendance_date
+        .get(5..7)
+        .and_then(|m| m.parse::<u32>().ok())
+        .filter(|m| (1..=12).contains(m))
+        .ok_or_else(|| format!("attendanceDate must be YYYY-MM-DD, got {attendance_date}"))?;
+    let (start, end) = match month_block_range(rows, want_month) {
+        MonthBlock::Range(start, end) => (start, end),
+        MonthBlock::NoHeaders => (0, rows.len()),
+        MonthBlock::NoMatch => {
+            return Ok(DtrPlanOutcome::Unresolvable("no-month-block"));
+        }
+    };
+    let Some(idx) = find_date_row_in(rows, attendance_date, start, end)? else {
+        return Ok(DtrPlanOutcome::Unresolvable("no-date-row"));
+    };
+    let existing = [
+        rows[idx].get(1).cloned().unwrap_or_default(),
+        rows[idx].get(2).cloned().unwrap_or_default(),
+        rows[idx].get(3).cloned().unwrap_or_default(),
+        rows[idx].get(4).cloned().unwrap_or_default(),
+    ];
+    if existing == values {
+        return Ok(DtrPlanOutcome::InSync { row_1based: idx + 1 });
+    }
+    Ok(DtrPlanOutcome::Write(DtrPushPlan {
+        tab: tab.to_string(),
+        row_1based: idx + 1,
+        values,
+    }))
 }
 
 /// Plan one attendance day against a known title list. `Err` = corrupt
@@ -1203,10 +1288,6 @@ async fn plan_dtr_push_outcome(
     let Some(tab) = resolve_user_tab(titles, user_id, full_name, all_users) else {
         return Ok(DtrPlanOutcome::Unresolvable("no-tab"));
     };
-    let values = build_dtr_row(time_in, time_out, attendance_date)?;
-    if values.iter().all(String::is_empty) {
-        return Ok(DtrPlanOutcome::Unresolvable("empty-values"));
-    }
     let range = urlencoding::encode(&format!("{}!A:F", quote_tab(&tab))).into_owned();
     let tab_values = dtr_get_json(
         client,
@@ -1215,41 +1296,7 @@ async fn plan_dtr_push_outcome(
     )
     .await?;
     let rows = rows_from_values(&tab_values);
-    let want_month: u32 = attendance_date
-        .get(5..7)
-        .and_then(|m| m.parse::<u32>().ok())
-        .filter(|m| (1..=12).contains(m))
-        .ok_or_else(|| format!("attendanceDate must be YYYY-MM-DD, got {attendance_date}"))?;
-    // Scope to the month block; fall back to the whole tab only when the
-    // tab carries no month headers at all — exactly the previous behaviour,
-    // now read off one return value instead of a second column-A scan.
-    let (start, end) = match month_block_range(&rows, want_month) {
-        MonthBlock::Range(start, end) => (start, end),
-        MonthBlock::NoHeaders => (0, rows.len()),
-        MonthBlock::NoMatch => {
-            return Ok(DtrPlanOutcome::Unresolvable("no-month-block"));
-        }
-    };
-    let Some(idx) = find_date_row_in(&rows, attendance_date, start, end)? else {
-        return Ok(DtrPlanOutcome::Unresolvable("no-date-row"));
-    };
-    let existing = [
-        rows[idx].get(1).cloned().unwrap_or_default(),
-        rows[idx].get(2).cloned().unwrap_or_default(),
-        rows[idx].get(3).cloned().unwrap_or_default(),
-        rows[idx].get(4).cloned().unwrap_or_default(),
-    ];
-    if existing == values {
-        return Ok(DtrPlanOutcome::InSync { row_1based: idx + 1 });
-    }
-    // System-is-source-of-truth (owner decision 2026-09-12): any difference
-    // from the DB-derived values is written; sheet cells are output, never
-    // input. Manual sheet typing is wiped on the next sync for that day.
-    Ok(DtrPlanOutcome::Write(DtrPushPlan {
-        tab,
-        row_1based: idx + 1,
-        values,
-    }))
+    plan_dtr_push_in_rows(&tab, &rows, attendance_date, time_in, time_out)
 }
 
 /// Execute a plan: single `B:E` range write. Returns `false` when the row
@@ -1270,20 +1317,115 @@ pub async fn execute_dtr_push(
     ))
     .into_owned();
     let body = serde_json::json!({ "values": [[plan.values[0], plan.values[1], plan.values[2], plan.values[3]]] });
-    let response = client
-        .put(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
-        ))
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-    let status = response.status();
-    if !status.is_success() {
+    let url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
+    );
+    let mut backoff = std::time::Duration::from_millis(1500);
+    for attempt in 0..3 {
+        let response = client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(true);
+        }
+        if status.as_u16() == 429 && attempt < 2 {
+            tokio::time::sleep(backoff).await;
+            backoff *= 2;
+            continue;
+        }
         return Err(dtr_status_error(status).to_string());
     }
-    Ok(true)
+    Err(GOOGLE_RATE_LIMITED.to_string())
+}
+
+/// Batch-write multiple DTR rows in a single `values:batchUpdate` request.
+pub async fn execute_dtr_batch_push(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    plans: &[DtrPushPlan],
+) -> Result<usize, String> {
+    if plans.is_empty() {
+        return Ok(0);
+    }
+    let data: Vec<serde_json::Value> = plans
+        .iter()
+        .map(|plan| {
+            let range = format!(
+                "{}!B{}:E{}",
+                quote_tab(&plan.tab),
+                plan.row_1based,
+                plan.row_1based
+            );
+            serde_json::json!({
+                "range": range,
+                "values": [[plan.values[0], plan.values[1], plan.values[2], plan.values[3]]]
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({
+        "valueInputOption": "USER_ENTERED",
+        "data": data
+    });
+
+    let url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
+    );
+    let mut backoff = std::time::Duration::from_millis(1500);
+    for attempt in 0..3 {
+        let response = client
+            .post(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(plans.len());
+        }
+        if status.as_u16() == 429 && attempt < 2 {
+            tokio::time::sleep(backoff).await;
+            backoff *= 2;
+            continue;
+        }
+        return Err(dtr_status_error(status).to_string());
+    }
+    Err(GOOGLE_RATE_LIMITED.to_string())
+}
+
+/// Compute an intern's start date (the earliest date they should be marked absent).
+/// Resolves as `min(created_at, min(attendance_date))`. Dates before this are ignored.
+async fn get_user_start_date(state: &AppState, user_id: &str) -> Option<String> {
+    use sqlx::Row;
+    let u_res = sqlx::query("SELECT created_at FROM users WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let created_ymd = u_res
+        .and_then(|r| r.get::<Option<String>, _>("created_at"))
+        .and_then(|c| if c.len() >= 10 { Some(c[..10].to_string()) } else { None });
+    let a_res = sqlx::query("SELECT MIN(attendance_date) as min_date FROM attendance WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let min_att_ymd = a_res.and_then(|r| r.get::<Option<String>, _>("min_date"));
+    match (created_ymd, min_att_ymd) {
+        (Some(c), Some(a)) => Some(if a < c { a } else { c }),
+        (Some(c), None) => Some(c),
+        (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
 }
 
 fn str_field(payload: &serde_json::Value, name: &str) -> Option<String> {
@@ -1450,8 +1592,9 @@ pub async fn clear_dtr_row(
         end_col_0_excl: 5,
         color: DtrCellColor::White,
     };
+    let start_ymd = get_user_start_date(state, &user_id).await;
     if let Err(error) =
-        paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, vec![white]).await
+        paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, vec![white], start_ymd.as_deref()).await
     {
         log::warn!("dtr clear paint failed for {full_name} ({user_id}) on {attendance_date} (values cleared): {error}");
     }
@@ -1510,6 +1653,7 @@ pub async fn push_dtr_row(
     }
     let titles = titles_of(&meta);
     let kind = classify_record_row(time_in.as_deref(), time_out.as_deref())?;
+    let start_ymd = get_user_start_date(state, &user_id).await;
     match plan_dtr_push_outcome(
         client,
         token,
@@ -1530,7 +1674,7 @@ pub async fn push_dtr_row(
             // P1: paint is cosmetic — a batchUpdate 403/429 must not fail
             // a row whose values already landed. Log and continue.
             if let Err(error) =
-                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops).await
+                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops, start_ymd.as_deref()).await
             {
                 log::warn!(
                     "dtr paint failed for {full_name} ({user_id}) on {attendance_date} (values written): {error}"
@@ -1543,7 +1687,7 @@ pub async fn push_dtr_row(
             let ops = plan_row_format(sheet_id, row_1based, kind);
             // P1: same log-only rule as the Write branch above.
             if let Err(error) =
-                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops).await
+                paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, ops, start_ymd.as_deref()).await
             {
                 log::warn!(
                     "dtr paint failed for {full_name} ({user_id}) on {attendance_date} (row in sync): {error}"
@@ -1638,39 +1782,51 @@ async fn backfill_user_history(
     meta: &[DtrTabMeta],
 ) -> Result<(usize, bool), String> {
     let titles = titles_of(meta);
-    let mut wrote_total = 0;
-    let mut complete = true;
-    let mut offset: i64 = 0;
-    let mut row_ops: Vec<DtrFormatOp> = Vec::new();
     let Some(tab) = resolve_user_tab(&titles, user_id, full_name, roster) else {
         return Ok((0, false));
     };
     let Some(sheet_id) = sheet_id_for_tab(meta, &tab) else {
         return Err(format!("DTR tab id missing for resolved tab {tab}"));
     };
+
+    let start_ymd = get_user_start_date(state, user_id).await;
+
+    // Fetch A:F ONCE for this intern's tab
+    let range = urlencoding::encode(&format!("{}!A:F", quote_tab(&tab))).into_owned();
+    let tab_values = dtr_get_json(
+        client,
+        token,
+        format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}"),
+    )
+    .await?;
+    let mut rows = rows_from_values(&tab_values);
+
+    let mut wrote_total = 0;
+    let mut complete = true;
+    let mut offset: i64 = 0;
+    let mut row_ops: Vec<DtrFormatOp> = Vec::new();
+    let mut pending_writes: Vec<DtrPushPlan> = Vec::new();
+
     loop {
         let days = fetch_attendance_page(state, user_id, DTR_BACKFILL_PAGE, offset).await?;
         let full_page = days.len() as i64 == DTR_BACKFILL_PAGE;
         let mut page_results = Vec::with_capacity(days.len());
         for (date, tin, tout) in &days {
             let kind = classify_record_row(tin.as_deref(), tout.as_deref())?;
-            match plan_dtr_push_outcome(
-                client,
-                token,
-                spreadsheet_id,
-                user_id,
-                full_name,
-                date,
-                tin.as_deref(),
-                tout.as_deref(),
-                roster,
-                &titles,
-            )
-            .await?
-            {
+            match plan_dtr_push_in_rows(&tab, &rows, date, tin.as_deref(), tout.as_deref())? {
                 DtrPlanOutcome::Write(plan) => {
-                    execute_dtr_push(client, token, spreadsheet_id, &plan).await?;
+                    let idx = plan.row_1based - 1;
+                    if idx < rows.len() {
+                        if rows[idx].len() < 5 {
+                            rows[idx].resize(5, String::new());
+                        }
+                        rows[idx][1] = plan.values[0].clone();
+                        rows[idx][2] = plan.values[1].clone();
+                        rows[idx][3] = plan.values[2].clone();
+                        rows[idx][4] = plan.values[3].clone();
+                    }
                     row_ops.extend(plan_row_format(sheet_id, plan.row_1based, kind));
+                    pending_writes.push(plan);
                     page_results.push(BackfillDayResult::Wrote);
                 }
                 DtrPlanOutcome::InSync { row_1based } => {
@@ -1693,10 +1849,23 @@ async fn backfill_user_history(
         }
         offset += DTR_BACKFILL_PAGE;
     }
+
+    if !pending_writes.is_empty() {
+        execute_dtr_batch_push(client, token, spreadsheet_id, &pending_writes).await?;
+    }
+
     // P1: final paint is cosmetic — log-only so a batchUpdate failure
     // after successful value writes never drops pending or fails the pass.
-    if let Err(error) =
-        paint_tab_formats(client, token, spreadsheet_id, sheet_id, &tab, row_ops).await
+    if let Err(error) = paint_tab_formats_with_rows(
+        client,
+        token,
+        spreadsheet_id,
+        sheet_id,
+        &rows,
+        row_ops,
+        start_ymd.as_deref(),
+    )
+    .await
     {
         log::warn!("dtr backfill paint failed for {full_name} ({user_id}) (values written): {error}");
     }
@@ -1735,6 +1904,7 @@ pub async fn process_dtr_pending(
     let now = chrono::Utc::now().to_rfc3339();
     let mut backfilled = 0;
     for (user_id, full_name) in &pending {
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         // Deactivated (or deleted) while pending: keep the row, skip the
         // pass. See roster_has docs for the rationale.
         if !roster_has(&roster, user_id) {
@@ -1812,6 +1982,16 @@ pub struct ManualSyncReport {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DtrSyncProgressEvent {
+    pub current: usize,
+    pub total: usize,
+    pub user_id: String,
+    pub full_name: String,
+    pub status: String,
+}
+
 /// Manually synchronize active interns onto the human DTR Google Sheets.
 ///
 /// For each intern (or a specific targeted intern):
@@ -1820,6 +2000,7 @@ pub struct ManualSyncReport {
 /// 3. Clears the intern from `dtr_pending` when completely synced.
 pub async fn manual_sync_intern_dtr(
     state: &AppState,
+    app: Option<&tauri::AppHandle>,
     target_user_id: Option<&str>,
 ) -> Result<ManualSyncReport, String> {
     use sqlx::Row;
@@ -1863,12 +2044,40 @@ pub async fn manual_sync_intern_dtr(
         }
     }
 
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "dtr-sync-progress",
+            &DtrSyncProgressEvent {
+                current: 0,
+                total: interns.len(),
+                user_id: String::new(),
+                full_name: String::new(),
+                status: "starting".to_string(),
+            },
+        );
+    }
+
     let mut tabs_created = Vec::new();
     let mut rows_synced = 0;
     let mut details = Vec::with_capacity(interns.len());
     let mut errors = Vec::new();
 
-    for (user_id, full_name) in &interns {
+    for (idx, (user_id, full_name)) in interns.iter().enumerate() {
+        if let Some(app) = app {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "dtr-sync-progress",
+                &DtrSyncProgressEvent {
+                    current: idx + 1,
+                    total: interns.len(),
+                    user_id: user_id.clone(),
+                    full_name: full_name.clone(),
+                    status: "syncing".to_string(),
+                },
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         let mut tab_created = false;
         let tab_opt = match ensure_person_tab(
             state, &client, &token, &spreadsheet_id, &meta, user_id, full_name, &roster,
@@ -1975,6 +2184,20 @@ pub async fn manual_sync_intern_dtr(
                 });
             }
         }
+    }
+
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "dtr-sync-progress",
+            &DtrSyncProgressEvent {
+                current: interns.len(),
+                total: interns.len(),
+                user_id: String::new(),
+                full_name: String::new(),
+                status: "completed".to_string(),
+            },
+        );
     }
 
     Ok(ManualSyncReport {
@@ -2513,7 +2736,7 @@ mod tests {
             fmt_row(&["2/27/2026", "", "", "", ""]),
             fmt_row(&["2/30/2026", "", "", "", ""]),
         ];
-        let ops = plan_absent_sweep(9, &rows, "2026-09-05");
+        let ops = plan_absent_sweep(9, &rows, None, "2026-09-05");
         assert_eq!(ops.len(), 1);
         assert_eq!((ops[0].start_row_1based, ops[0].end_row_1based_excl), (1, 2));
     }
@@ -2860,13 +3083,11 @@ mod tests {
     }
 
     #[test]
-    fn row_format_half_day_whites_morning_reds_remainder() {
+    fn row_format_half_day_whites_all_stamped_columns() {
         let ops = plan_row_format(7, 107, DtrRowKind::HalfDay);
-        assert_eq!(ops.len(), 2);
-        assert_eq!((ops[0].start_col_0, ops[0].end_col_0_excl), (1, 3));
+        assert_eq!(ops.len(), 1);
+        assert_eq!((ops[0].start_col_0, ops[0].end_col_0_excl), (1, 5));
         assert_eq!(ops[0].color, DtrCellColor::White);
-        assert_eq!((ops[1].start_col_0, ops[1].end_col_0_excl), (3, 5));
-        assert_eq!(ops[1].color, DtrCellColor::Red);
     }
 
     #[test]
@@ -3027,7 +3248,7 @@ mod tests {
             fmt_row(&["8/30/2026", "", "", "", ""]),
             fmt_row(&["TOTAL HOURS"]),
         ];
-        let ops = plan_absent_sweep(9, &rows, "2026-09-05");
+        let ops = plan_absent_sweep(9, &rows, None, "2026-09-05");
         // 9/1 alone (1-based row 2), 9/3+9/4 merged (rows 4-5). 9/2 has
         // values, 9/5 is today, 9/6 future, 8/30 Sunday, header skipped.
         assert_eq!(ops.len(), 2);
@@ -3041,9 +3262,27 @@ mod tests {
     }
 
     #[test]
+    fn absent_sweep_skips_dates_prior_to_start_date() {
+        let rows = vec![
+            fmt_row(&["SEPTEMBER"]),
+            fmt_row(&["9/1/2026", "", "", "", ""]),
+            fmt_row(&["9/2/2026", "", "", "", ""]),
+            fmt_row(&["9/3/2026", "", "", "", ""]),
+            fmt_row(&["9/4/2026", "", "", "", ""]),
+            fmt_row(&["9/5/2026", "", "", "", ""]),
+        ];
+        // Start date is 2026-09-03. 9/1 and 9/2 must be skipped!
+        let ops = plan_absent_sweep(9, &rows, Some("2026-09-03"), "2026-09-05");
+        assert_eq!(ops.len(), 1);
+        // 9/3 (row 4) and 9/4 (row 5) merged: rows 4..6
+        assert_eq!((ops[0].start_row_1based, ops[0].end_row_1based_excl), (4, 6));
+        assert_eq!(ops[0].color, DtrCellColor::Red);
+    }
+
+    #[test]
     fn absent_sweep_never_paints_on_bad_today() {
         let rows = vec![fmt_row(&["9/1/2026", "", "", "", ""])];
-        assert!(plan_absent_sweep(9, &rows, "not-a-date").is_empty());
+        assert!(plan_absent_sweep(9, &rows, None, "not-a-date").is_empty());
     }
 
     #[test]

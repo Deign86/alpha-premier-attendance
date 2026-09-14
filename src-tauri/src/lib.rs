@@ -3827,6 +3827,7 @@ async fn dtr_recon_run_manual(
 
 #[tauri::command]
 async fn admin_sync_intern_dtr(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
     user_id: Option<String>,
@@ -3834,7 +3835,7 @@ async fn admin_sync_intern_dtr(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let report = crate::services::dtr_sync::manual_sync_intern_dtr(&state, user_id.as_deref()).await?;
+    let report = crate::services::dtr_sync::manual_sync_intern_dtr(&state, Some(&app), user_id.as_deref()).await?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
