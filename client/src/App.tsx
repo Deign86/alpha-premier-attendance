@@ -3414,12 +3414,19 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     setNotice("");
     try {
       const response = await syncInternDtr();
-      if (response.success) {
+      const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
+      if (response.success && !hasErrors) {
         const createdCount = response.tabsCreated?.length ?? 0;
         const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
         setNotice(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
       } else {
-        setError(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+        const errDetail = hasErrors
+          ? response.errors.join("; ")
+          : response.error?.message || "DTR sync failed.";
+        setError(errDetail);
+        if (response.rowsSynced > 0) {
+          setNotice(`Synced ${response.rowsSynced} row(s), but encountered errors: ${errDetail}`);
+        }
       }
     } finally {
       setBusy(false);
@@ -3813,12 +3820,16 @@ function UserEditor({
     setMessage("");
     const response = await syncInternDtr(userId);
     setSyncingDtrUserId(null);
-    if (response.success) {
+    const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
+    if (response.success && !hasErrors) {
       const createdCount = response.tabsCreated?.length ?? 0;
       const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
       setMessage(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
     } else {
-      setMessage(response.error?.message || response.errors?.[0] || "DTR sync failed.");
+      const errDetail = hasErrors
+        ? response.errors.join("; ")
+        : response.error?.message || "DTR sync failed.";
+      setMessage(`DTR sync error: ${errDetail}`);
     }
   };
 

@@ -195,6 +195,26 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Maricon C\. Danao\)\./i)).toBeInTheDocument();
   });
 
+  it('displays DTR sync error message when sync errors occur', async () => {
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
+      success: false,
+      internsChecked: 1,
+      tabsCreated: [],
+      rowsSynced: 0,
+      details: [],
+      errors: ['Google Sheets auth failed: connection timed out'],
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    await user.click(syncBtn);
+
+    expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Google Sheets auth failed: connection timed out/i)).toBeInTheDocument();
+  });
+
   it('shows live DTR sync health with per-table pending rows', async () => {
     loadDtrSyncHealthSpy.mockResolvedValueOnce({
       success: true,

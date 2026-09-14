@@ -54,6 +54,13 @@ export function normalizeVoiceStudioBaseUrl(raw: string | undefined): string {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   const cleaned = withScheme.replace(/\/+$/, '');
   const authority = cleaned.split('://')[1]?.split(/[/?#]/)[0] ?? '';
+  const hostOnly = authority.split(':')[0] ?? '';
+  if (/^[\d.]+$/.test(hostOnly) && hostOnly.includes('.')) {
+    const octets = hostOnly.split('.');
+    if (octets.length !== 4 || octets.some((o) => o === '' || Number(o) > 255)) {
+      return DEFAULT_VOICESTUDIO_BASE_URL;
+    }
+  }
   const plausible = authority.includes('.') || authority.includes(':') || authority.toLowerCase() === 'localhost';
   if (/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(cleaned) && plausible) return cleaned;
   return DEFAULT_VOICESTUDIO_BASE_URL;

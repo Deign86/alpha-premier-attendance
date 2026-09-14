@@ -168,4 +168,26 @@ describe('VoiceSettingsPanel', () => {
       }),
     );
   });
+
+  it('adopts native VoiceStudio host and PIN on mount without clobbering', async () => {
+    const setHostSpy = vi.spyOn(tauriApiModule.tauriApi, 'setVoicestudioHost').mockResolvedValue('http://192.168.1.19:3901');
+    const setPinSpy = vi.spyOn(tauriApiModule.tauriApi, 'setVoicestudioPin').mockResolvedValue(undefined);
+    vi.spyOn(tauriApiModule.tauriApi, 'getVoicestudioHost').mockResolvedValue('http://192.168.1.19:3901');
+    vi.spyOn(tauriApiModule.tauriApi, 'getVoicestudioPin').mockResolvedValue('771001');
+
+    await act(async () => {
+      render(<VoiceSettingsPanel />);
+    });
+
+    // SAFETY: Input element resolved by aria label
+    const hostInput = screen.getByLabelText(/VoiceStudio Server/i) as HTMLInputElement;
+    // SAFETY: Input element resolved by aria label
+    const pinInput = screen.getByLabelText(/Share PIN/i) as HTMLInputElement;
+
+    expect(hostInput.value).toBe('http://192.168.1.19:3901');
+    expect(pinInput.value).toBe('771001');
+    // Crucially: it must NOT have pushed the default 127.0.0.1:3900 to native!
+    expect(setHostSpy).not.toHaveBeenCalled();
+    expect(setPinSpy).not.toHaveBeenCalled();
+  });
 });

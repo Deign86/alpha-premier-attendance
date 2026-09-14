@@ -55,19 +55,26 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     setSettings(loaded);
     void refreshStatus();
     // Native host is the worker's source of truth; converge once on mount:
-    // push a local custom value up, otherwise adopt the stored native value.
+    // adopt native host/PIN when present; only push up if native is unconfigured.
     try {
       void tauriApi
         .getVoicestudioHost()
         .then((host) => {
+          const trimmed = host.trim();
           setSettings((prev) => {
             const local = prev.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL;
-            if (host.length > 0 && host !== local) {
+            if (trimmed.length > 0 && trimmed !== DEFAULT_VOICESTUDIO_BASE_URL) {
+              if (prev.voiceStudioBaseUrl === trimmed) return prev;
+              const next = { ...prev, voiceStudioBaseUrl: trimmed };
+              saveTtsSettings(next);
+              return next;
+            }
+            if (trimmed.length === 0 && local.length > 0 && local !== DEFAULT_VOICESTUDIO_BASE_URL) {
               persistHostToNative(local);
               return prev;
             }
-            if (host.length > 0) {
-              return { ...prev, voiceStudioBaseUrl: host };
+            if (trimmed.length > 0) {
+              return { ...prev, voiceStudioBaseUrl: trimmed };
             }
             return prev;
           });
@@ -76,14 +83,18 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
       void tauriApi
         .getVoicestudioPin()
         .then((pin) => {
+          const trimmed = pin.trim();
           setSettings((prev) => {
             const local = prev.voiceStudioPin ?? '';
-            if (pin !== local) {
-              if (local.length > 0) {
-                persistPinToNative(local);
-                return prev;
-              }
-              return { ...prev, voiceStudioPin: pin };
+            if (trimmed.length > 0) {
+              if (prev.voiceStudioPin === trimmed) return prev;
+              const next = { ...prev, voiceStudioPin: trimmed };
+              saveTtsSettings(next);
+              return next;
+            }
+            if (trimmed.length === 0 && local.length > 0) {
+              persistPinToNative(local);
+              return prev;
             }
             return prev;
           });
@@ -369,14 +380,14 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
             id="tts-voicestudio-url"
             className="input"
             inputMode="url"
-            placeholder="http://192.168.1.50:3900"
+            placeholder="http://192.168.1.50:3901"
             value={settings.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL}
             onChange={(e) => {
               updateSetting('voiceStudioBaseUrl', e.target.value);
               persistHostToNative(e.target.value);
             }}
           />
-          <p className="form-help">LAN address of the PC running VoiceStudio voice cloning (port 3900).</p>
+          <p className="form-help">LAN address of the PC hosting VoiceStudio (typically port 3901 for Network Sharing or 3900).</p>
           <label htmlFor="tts-voicestudio-pin" className="voice-control-label">
             Share PIN
           </label>

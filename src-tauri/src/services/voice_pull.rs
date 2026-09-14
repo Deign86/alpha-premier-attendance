@@ -68,6 +68,12 @@ pub fn normalize_host(raw: &str) -> String {
         .split(['/', '?', '#'])
         .next()
         .unwrap_or("");
+    let host_only = authority.split(':').next().unwrap_or("");
+    if host_only.chars().all(|c| c.is_ascii_digit() || c == '.') && host_only.contains('.') {
+        if host_only.parse::<std::net::Ipv4Addr>().is_err() {
+            return DEFAULT_VOICESTUDIO_BASE_URL.to_string();
+        }
+    }
     let plausible =
         authority.contains('.') || authority.contains(':') || authority.eq_ignore_ascii_case("localhost");
     if has_scheme && cleaned.len() > 10 && plausible && !cleaned.chars().any(|c| c.is_whitespace()) {
@@ -235,10 +241,19 @@ pub async fn check_connection(db: &SqlitePool) -> VoiceConnectionStatus {
         request = request.header(PIN_HEADER, pin);
     }
     match request.send().await {
-        Err(_) => VoiceConnectionStatus {
-            ok: false,
-            message: format!("Cannot reach VoiceStudio at {host}. Check the address and that VoiceStudio is running."),
-        },
+        Err(e) => {
+            let detail = if e.is_connect() {
+                "connection refused or host unreachable"
+            } else if e.is_timeout() {
+                "connection timed out"
+            } else {
+                "network error"
+            };
+            VoiceConnectionStatus {
+                ok: false,
+                message: format!("Cannot reach VoiceStudio at {host} ({detail}: {e}). Check the address, port (e.g. 3901 for sharing), and that VoiceStudio is running."),
+            }
+        }
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -496,7 +511,7 @@ mod tests {
     fn host_normalization_accepts_lan_hosts_and_rejects_junk() {
         assert_eq!(normalize_host("http://192.168.1.50:3900"), "http://192.168.1.50:3900");
         assert_eq!(normalize_host("http://192.168.1.50:3900/"), "http://192.168.1.50:3900");
-        assert_eq!(normalize_host("  https://gaming-pc:3900  "), "https://gaming-pc:3900");
+        assert_eq!(normalize_host("http://172.28.20.80.1:3901"), DEFAULT_VOICESTUDIO_BASE_URL);
         assert_eq!(normalize_host(""), DEFAULT_VOICESTUDIO_BASE_URL);
         assert_eq!(normalize_host("not a url"), DEFAULT_VOICESTUDIO_BASE_URL);
         assert_eq!(normalize_host("ftp://host/voices"), DEFAULT_VOICESTUDIO_BASE_URL);

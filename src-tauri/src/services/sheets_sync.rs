@@ -927,12 +927,12 @@ pub(crate) async fn google_access_token(path: &str) -> Result<String, String> {
         ])
         .send()
         .await
-        .map_err(|_| "Google access token request failed".to_string())?
+        .map_err(|e| format!("Google access token request failed: {e}"))?
         .error_for_status()
-        .map_err(|_| "Google access token request failed".to_string())?
+        .map_err(|e| format!("Google access token request failed: {e}"))?
         .json()
         .await
-        .map_err(|_| "Google access token response invalid".to_string())?;
+        .map_err(|e| format!("Google access token response invalid: {e}"))?;
     response
         .get("access_token")
         .and_then(|v| v.as_str())

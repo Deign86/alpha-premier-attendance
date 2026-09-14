@@ -1978,7 +1978,7 @@ pub async fn manual_sync_intern_dtr(
     }
 
     Ok(ManualSyncReport {
-        success: true,
+        success: errors.is_empty(),
         interns_checked: interns.len(),
         tabs_created,
         rows_synced,

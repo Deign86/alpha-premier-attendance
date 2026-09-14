@@ -392,6 +392,7 @@ describe('ttsService', () => {
       expect(normalizeVoiceStudioBaseUrl('192.168.56.2:3901')).toBe('http://192.168.56.2:3901');
       expect(normalizeVoiceStudioBaseUrl('http://192.168.56.2:3901/')).toBe('http://192.168.56.2:3901');
       expect(normalizeVoiceStudioBaseUrl('junk')).toBe(DEFAULT_TTS_SETTINGS.voiceStudioBaseUrl);
+      expect(normalizeVoiceStudioBaseUrl('http://172.28.20.80.1:3901')).toBe(DEFAULT_TTS_SETTINGS.voiceStudioBaseUrl);
       expect(normalizeVoiceStudioBaseUrl('')).toBe(DEFAULT_TTS_SETTINGS.voiceStudioBaseUrl);
     });
     it('returns default settings when storage is empty', () => {
