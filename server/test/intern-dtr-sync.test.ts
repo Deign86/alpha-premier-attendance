@@ -603,15 +603,15 @@ describe('auto-create tab alignment', () => {
 
 describe('DTR vs payroll independence (half-day decoupling)', () => {
   const date = '2026-09-05';
-  it('08:00-16:00 DTR keeps actual stamps while payroll deducts 1 hour unrendered', async () => {
+  it('08:00-15:00 DTR keeps actual stamps while payroll deducts 1 hour unrendered', async () => {
     const { calculateInternPayroll } = await import('../src/intern-payroll.js');
-    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:00:00+08:00', date)).toEqual([
-      '8:00:00 AM', '', '', '4:00:00 PM',
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
+      '8:00:00 AM', '', '', '3:00:00 PM',
     ]);
     const pay = calculateInternPayroll({
       attendanceDate: date,
       actualTimeIn: '2026-09-05T08:00:00+08:00',
-      actualTimeOut: '2026-09-05T16:00:00+08:00',
+      actualTimeOut: '2026-09-05T15:00:00+08:00',
       graceAvailable: true,
     });
     expect(pay.workedHours).toBe(7);
@@ -619,7 +619,7 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
     expect(pay.halfDayDeduction).toBe(10);
     expect(pay.dailyPay).toBe(70);
     expect(pay.computedTimeIn).toBe('2026-09-05T08:00:00+08:00');
-    expect(pay.computedTimeOut).toBe('2026-09-05T16:00:00+08:00');
+    expect(pay.computedTimeOut).toBe('2026-09-05T15:00:00+08:00');
   });
   it('08:00-17:00 full day keeps actual stamps and full pay', async () => {
     const { calculateInternPayroll } = await import('../src/intern-payroll.js');

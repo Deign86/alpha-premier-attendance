@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.74] - 2026-09-15
+
+### Fixed
+- **1:1 DTR Hours Payroll Derivation**: Fixed payroll calculations across TypeScript (`server/src/intern-payroll.ts`, `server/src/employee-payroll.ts`) and Rust (`src-tauri/src/services/intern_payroll.rs`, `src-tauri/src/services/employee_payroll.rs`) engines so daily pay strictly equals `hourly_rate × actual_hours_worked` directly from recorded DTR time-in and time-out for both interns and regular employees. Removed double-deductions, forced midday lunch hour subtractions, and flat 50% half-day floors.
+
 ## [0.1.73] - 2026-09-14
 
 ### Added

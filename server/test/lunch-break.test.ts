@@ -63,21 +63,21 @@ describe('lunch break exclusion (12:00–13:00 Manila)', () => {
   });
 });
 
-describe('employee payroll worked hours exclude lunch', () => {
-  it('reports 7 payable hours for a 09:00–17:00 shift', () => {
+describe('employee payroll calculates hours 1:1 from DTR', () => {
+  it('reports 8 payable hours for a 09:00–17:00 shift', () => {
     const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T09:00:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(7);
-    // 8-hour standard: 1 unrendered hour deducted (500 - 62.5 = 437.5).
-    expect(result.dailyPay).toBe(437.5);
+    expect(result.workedHours).toBe(8);
+    expect(result.dailyPay).toBe(500);
   });
 
-  it('keeps the lunch window out of partial shifts', () => {
+  it('reports 2 ceiled hours for an 11:45-13:15 shift (1.5h elapsed)', () => {
     const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T11:45:00+08:00', actualTimeOut: '2026-08-01T13:15:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(1);
+    expect(result.workedHours).toBe(2);
+    expect(result.dailyPay).toBe(125);
   });
 });
 
-describe('intern payroll worked hours exclude lunch', () => {
+describe('intern payroll calculates hours 1:1 from DTR', () => {
   it('reports 8 payable hours for a 08:00–17:00 shift while keeping PHP 80/day', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T08:00:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: true });
     expect(result.workedHours).toBe(8);
@@ -85,10 +85,11 @@ describe('intern payroll worked hours exclude lunch', () => {
     expect(result.dailyPay).toBe(80);
   });
 
-  it('leaves lateness (measured at the 08:00 start) untouched by lunch', () => {
+  it('reports 8 payable hours for 09:30–17:00 (7.5h elapsed ceiled to 8h)', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T09:30:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: false });
     expect(result.lateHours).toBe(2);
     expect(result.lateDeduction).toBe(20);
-    expect(result.workedHours).toBe(7);
+    expect(result.workedHours).toBe(8);
+    expect(result.dailyPay).toBe(80);
   });
 });

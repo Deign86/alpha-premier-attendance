@@ -1,5 +1,4 @@
-use super::lunch_break::paid_work_hours_ceiled;
-use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_zero, is_half_day};
+use super::payroll::{cap_late_timeout_out, ceil_hour, ceiling_hours, early_half_day_noon_out, floor_zero, is_half_day};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use chrono_tz::Asia::Manila;
 
@@ -75,15 +74,13 @@ pub fn calculate(
         time_in
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
-    let worked_hours = paid_work_hours_ceiled(time_in, time_out);
+    let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
+    let elapsed_seconds = (time_out - time_in).num_seconds().max(0);
+    let worked_hours = ceiling_hours(elapsed_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let unrendered_hours = (8 - worked_hours).max(0);
-    let hourly_deduction = INTERN_LATE_DEDUCTION_PER_HOUR_PHP * 100;
-    let deduction = if is_half_day {
-        base / 2
-    } else {
-        unrendered_hours * hourly_deduction
-    };
+    let deduction = unrendered_hours * hourly_rate_centavos;
+    let daily_pay = worked_hours * hourly_rate_centavos;
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even
     // though the DTR row keeps the actual stamps. Never push computed values
@@ -100,7 +97,7 @@ pub fn calculate(
         half_day_deduction_centavos: deduction,
         grace_used,
         base_pay_centavos: base,
-        daily_pay_centavos: floor_zero(base - late_deduction - deduction),
+        daily_pay_centavos: floor_zero(daily_pay),
         worked_hours,
     })
 }
@@ -165,7 +162,38 @@ mod tests {
         assert!(!result.grace_used);
         assert_eq!(result.late_hours, 1);
         assert_eq!(result.late_deduction_centavos, 1000);
-        assert_eq!(result.daily_pay_centavos, 7000);
+        assert_eq!(result.worked_hours, 8);
+        assert_eq!(result.daily_pay_centavos, 8000);
+    }
+    #[test]
+    fn exact_example_intern_nine_to_three_pays_six_hours() {
+        // ₱80/day intern: 9:00 AM to 3:00 PM (6 hours worked) -> pay = 6 * ₱10 = ₱60 (6000 centavos).
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T09:00:00+08:00",
+            "2026-08-01T15:00:00+08:00",
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 6);
+        assert_eq!(result.daily_pay_centavos, 6000);
+        assert_eq!(result.half_day_deduction_centavos, 2000);
+        assert_eq!(result.base_pay_centavos, 8000);
+    }
+    #[test]
+    fn full_eight_hour_day_pays_full_daily_rate() {
+        // 8:00 AM to 4:00 PM (8 hours worked) -> full daily rate (8000 centavos).
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T16:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 8);
+        assert_eq!(result.daily_pay_centavos, 8000);
+        assert_eq!(result.half_day_deduction_centavos, 0);
+        assert_eq!(result.base_pay_centavos, 8000);
     }
     #[test]
     fn arrivals_are_always_measured_against_08_00_office_start() {
@@ -180,9 +208,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 3);
         assert_eq!(result.late_deduction_centavos, 3000);
-        assert_eq!(result.worked_hours, 6);
-        assert_eq!(result.half_day_deduction_centavos, 2000);
-        assert_eq!(result.daily_pay_centavos, 3000);
+        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.half_day_deduction_centavos, 1000);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
 
     #[test]
@@ -203,11 +231,11 @@ mod tests {
 
     #[test]
     fn early_clock_out_before_5pm_is_undertime_not_half_day() {
-        // 08:00–16:00 → 7 paid hours, 1 hour undertime deduction (1,000 centavos), not half-day.
+        // 08:00–15:00 → 7 paid hours, 1 hour undertime deduction (1,000 centavos), not half-day.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
-            "2026-08-01T16:00:00+08:00",
+            "2026-08-01T15:00:00+08:00",
             true,
         )
         .unwrap();

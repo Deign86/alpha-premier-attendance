@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -43,11 +43,13 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
-  const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
+  const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
+  const elapsedSeconds = Math.max(0, actualTimeOut.diff(actualTimeIn).as('seconds'));
+  const workedHours = Math.min(8, Math.max(0, Math.ceil(elapsedSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
-  const unrenderedDeduction = unrenderedHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
-  const halfDayDeduction = isHalfDay ? basePay / 2 : unrenderedDeduction;
+  const halfDayDeduction = unrenderedHours * hourlyRate;
+  const dailyPay = workedHours * hourlyRate;
   // DTR DECOUPLING: `computedTimeOut` is a PAYROLL-ONLY effective window.
   // A morning half-day closed before office close pays as 08:00–12:00 even
   // though the DTR row keeps the actual 08:00–15:00 stamps. Never push
@@ -63,8 +65,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
     halfDayDeduction,
     graceUsed,
     basePay,
-    dailyPay: Math.max(0, basePay - lateDeduction - halfDayDeduction),
-    // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
+    dailyPay,
     workedHours,
   };
 }

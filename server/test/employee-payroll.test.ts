@@ -19,36 +19,61 @@ describe('employee payroll policy', () => {
       halfDayDeduction: 0,
       basePay: 650,
       dailyPay: 650,
-      // 9h20m clocked minus the 12:00–13:00 lunch hour = 8h20m → ceiled to 9.
-      workedHours: 9,
+      // 07:50 to 17:10 elapsed is ceiled to 10 hours and capped at standard 8 hours.
+      workedHours: 8,
     });
   });
 
-  it('never counts the 12:00–13:00 lunch hour as payable time', () => {
+  it('computes daily pay strictly 1:1 from DTR hours (9:00 AM to 3:00 PM -> 6 hours at ₱800/day -> ₱600)', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T09:00:00+08:00',
+      actualTimeOut: '2026-07-28T15:00:00+08:00',
+      dailyRate: 800,
+    });
+    expect(result.workedHours).toBe(6);
+    expect(result.dailyPay).toBe(600);
+    expect(result.halfDayDeduction).toBe(200);
+    expect(result.basePay).toBe(800);
+  });
+
+  it('computes full daily rate for a full 8-hour day (8:00 AM to 4:00 PM -> 8 hours at ₱800/day -> ₱800)', () => {
+    const result = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T16:00:00+08:00',
+      dailyRate: 800,
+    });
+    expect(result.workedHours).toBe(8);
+    expect(result.dailyPay).toBe(800);
+    expect(result.halfDayDeduction).toBe(0);
+    expect(result.basePay).toBe(800);
+  });
+
+  it('calculates 1:1 hours for standard and partial shifts', () => {
     const result = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T09:00:00+08:00',
       actualTimeOut: '2026-07-28T17:00:00+08:00',
       dailyRate: 650,
     });
-    expect(result.workedHours).toBe(7);
+    expect(result.workedHours).toBe(8);
+    expect(result.dailyPay).toBe(650);
 
-    // Partial window: 11:45–13:15 pays only the working edges (30 minutes).
+    // Partial window: 11:45–13:15 elapsed is 1.5h -> ceiled to 2 hours.
     const partial = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T11:45:00+08:00',
       actualTimeOut: '2026-07-28T13:15:00+08:00',
       dailyRate: 650,
     });
-    expect(partial.workedHours).toBe(1);
+    expect(partial.workedHours).toBe(2);
     expect(partial.isHalfDay).toBe(true);
-    expect(partial.halfDayDeduction).toBe(325);
-    expect(partial.dailyPay).toBe(325);
+    expect(partial.halfDayDeduction).toBe(487.5);
+    expect(partial.dailyPay).toBe(162.5);
   });
 
   it('deducts unrendered hours for shifts under 8 hours and treats full shift as full day', () => {
-    // 08:00 to 16:00 (4:00 PM): 7 payable hours (> 4 hrs), 1 hour unrendered deducted.
+    // 08:00 to 15:00 (3:00 PM): 7 payable hours (> 4 hrs), 1 hour unrendered deducted.
     const earlyClockOut = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00+08:00',
-      actualTimeOut: '2026-07-28T16:00:00+08:00',
+      actualTimeOut: '2026-07-28T15:00:00+08:00',
       dailyRate: 600,
     });
     expect(earlyClockOut.workedHours).toBe(7);
@@ -56,16 +81,16 @@ describe('employee payroll policy', () => {
     expect(earlyClockOut.halfDayDeduction).toBe(75);
     expect(earlyClockOut.dailyPay).toBe(525);
 
-    // 08:00 to 16:59:59 (just before 5:00 PM): 8 ceiled hours -> full day.
-    const justBeforeFive = calculateEmployeePayroll({
+    // 08:00 to 16:00: 8 ceiled hours -> full day.
+    const eightHours = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00+08:00',
-      actualTimeOut: '2026-07-28T16:59:59+08:00',
+      actualTimeOut: '2026-07-28T16:00:00+08:00',
       dailyRate: 600,
     });
-    expect(justBeforeFive.workedHours).toBe(8);
-    expect(justBeforeFive.isHalfDay).toBe(false);
-    expect(justBeforeFive.halfDayDeduction).toBe(0);
-    expect(justBeforeFive.dailyPay).toBe(600);
+    expect(eightHours.workedHours).toBe(8);
+    expect(eightHours.isHalfDay).toBe(false);
+    expect(eightHours.halfDayDeduction).toBe(0);
+    expect(eightHours.dailyPay).toBe(600);
 
     // 08:00 to 17:00:00 (5:00 PM): normal full day shift.
     const fullDay = calculateEmployeePayroll({
@@ -95,9 +120,10 @@ describe('employee payroll policy', () => {
       actualTimeOut: '2026-07-28T17:00:00+08:00',
       dailyRate: 600,
     });
+    expect(noon.workedHours).toBe(5);
     expect(noon.isHalfDay).toBe(true);
-    expect(noon.halfDayDeduction).toBe(300);
-    expect(noon.dailyPay).toBe(300);
+    expect(noon.halfDayDeduction).toBe(225);
+    expect(noon.dailyPay).toBe(375);
     const overtime = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T12:00:00+08:00',
       actualTimeOut: '2026-07-28T18:00:00+08:00',

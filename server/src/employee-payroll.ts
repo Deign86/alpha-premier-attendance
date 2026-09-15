@@ -1,4 +1,4 @@
-import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkHoursCeiled } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp } from './lunch-break.js';
 
 export type EmployeePayrollInput = { actualTimeIn: string; actualTimeOut: string; dailyRate: number };
 export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; isHalfDay: boolean; halfDayDeduction: number; basePay: number; dailyPay: number; workedHours: number };
@@ -9,14 +9,13 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   const actualTimeOut = capLateTimeoutOut(manilaTimestamp(input.actualTimeOut));
   // P4: reject inverted logs instead of silently flooring worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
-  const workedHours = paidWorkHoursCeiled(actualTimeIn, actualTimeOut);
+  const hourlyRate = input.dailyRate / 8;
+  const elapsedSeconds = Math.max(0, actualTimeOut.diff(actualTimeIn).as('seconds'));
+  const workedHours = Math.min(8, Math.max(0, Math.ceil(elapsedSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
-  const hourlyRate = input.dailyRate / 8;
-  const halfDayFlatDeduction = input.dailyRate / 2;
-  const undertimeDeduction = isHalfDay ? halfDayFlatDeduction : unrenderedHours * hourlyRate;
-  const dailyPay = Math.max(0, input.dailyRate - undertimeDeduction);
-  const halfDayDeduction = undertimeDeduction;
+  const halfDayDeduction = unrenderedHours * hourlyRate;
+  const dailyPay = workedHours * hourlyRate;
 
   // DTR DECOUPLING: computed fields are PAYROLL-ONLY. Morning half-day
   // closed before office close pays as an effective 08:00–12:00 window even

@@ -1,5 +1,4 @@
-use super::lunch_break::paid_work_hours_ceiled;
-use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, is_half_day};
+use super::payroll::{cap_late_timeout_out, ceil_hour, ceiling_hours, early_half_day_noon_out, is_half_day};
 use chrono::{DateTime, Datelike, TimeZone, Timelike};
 use chrono_tz::Asia::Manila;
 
@@ -53,7 +52,9 @@ pub fn calculate(
         )
         .single()
         .unwrap();
-    let worked_hours = paid_work_hours_ceiled(time_in, time_out);
+    let hourly_rate_centavos = daily_rate_centavos / 8;
+    let elapsed_seconds = (time_out - time_in).num_seconds().max(0);
+    let worked_hours = ceiling_hours(elapsed_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even
@@ -64,13 +65,8 @@ pub fn calculate(
     let effective_out =
         early_half_day_noon_out(is_half_day, time_in, time_out).unwrap_or(computed_out);
     let unrendered_hours = (8 - worked_hours).max(0);
-    let hourly_rate_centavos = daily_rate_centavos / 8;
-    let deduction = if is_half_day {
-        daily_rate_centavos / 2
-    } else {
-        unrendered_hours * hourly_rate_centavos
-    };
-    let daily_pay_centavos = daily_rate_centavos - deduction;
+    let deduction = unrendered_hours * hourly_rate_centavos;
+    let daily_pay_centavos = worked_hours * hourly_rate_centavos;
     Ok(EmployeePayrollResult {
         computed_time_in: computed_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         computed_time_out: effective_out.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -88,18 +84,45 @@ pub fn calculate(
 mod tests {
     use super::*;
     #[test]
-    fn calculate_reports_lunch_adjusted_worked_hours() {
+    fn calculate_reports_hours_worked_from_dtr() {
         let result = calculate(
             "2026-08-01T09:00:00+08:00",
             "2026-08-01T17:00:00+08:00",
             100_000,
         )
         .unwrap();
-        assert_eq!(result.worked_hours, 7);
-        // 7 worked hours -> 1 hour unrendered deducted (12,500 centavos).
-        assert_eq!(result.daily_pay_centavos, 87_500);
-        assert_eq!(result.half_day_deduction_centavos, 12_500);
+        assert_eq!(result.worked_hours, 8);
+        assert_eq!(result.daily_pay_centavos, 100_000);
+        assert_eq!(result.half_day_deduction_centavos, 0);
         assert!(!result.is_half_day);
+    }
+    #[test]
+    fn exact_example_employee_nine_to_three_pays_six_hours() {
+        // Employee at ₱800/day (80,000 centavos): 9:00 AM to 3:00 PM (6 hours) -> 60,000 centavos (₱600).
+        let result = calculate(
+            "2026-08-01T09:00:00+08:00",
+            "2026-08-01T15:00:00+08:00",
+            80_000,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 6);
+        assert_eq!(result.daily_pay_centavos, 60_000);
+        assert_eq!(result.half_day_deduction_centavos, 20_000);
+        assert_eq!(result.base_pay_centavos, 80_000);
+    }
+    #[test]
+    fn full_eight_hour_day_pays_full_daily_rate() {
+        // Employee at ₱800/day: 8:00 AM to 4:00 PM (8 hours) -> 80,000 centavos (₱800).
+        let result = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T16:00:00+08:00",
+            80_000,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 8);
+        assert_eq!(result.daily_pay_centavos, 80_000);
+        assert_eq!(result.half_day_deduction_centavos, 0);
+        assert_eq!(result.base_pay_centavos, 80_000);
     }
     #[test]
     fn calculate_half_day_deducts_half_daily_rate() {
@@ -117,10 +140,10 @@ mod tests {
 
     #[test]
     fn calculate_early_clock_out_before_5pm_is_undertime_not_half_day() {
-        // 08:00 to 16:00: 7 worked hours, 1 hour unrendered deducted (12,500 centavos, not half-day).
+        // 08:00 to 15:00: 7 worked hours, 1 hour unrendered deducted (12,500 centavos, not half-day).
         let result = calculate(
             "2026-08-01T08:00:00+08:00",
-            "2026-08-01T16:00:00+08:00",
+            "2026-08-01T15:00:00+08:00",
             100_000,
         )
         .unwrap();
@@ -172,7 +195,9 @@ mod tests {
         )
         .unwrap();
         assert!(noon.is_half_day);
-        assert_eq!(noon.half_day_deduction_centavos, 50_000);
+        assert_eq!(noon.worked_hours, 5);
+        assert_eq!(noon.half_day_deduction_centavos, 37_500);
+        assert_eq!(noon.daily_pay_centavos, 62_500);
         let overtime = calculate(
             "2026-08-01T12:00:00+08:00",
             "2026-08-01T18:00:00+08:00",

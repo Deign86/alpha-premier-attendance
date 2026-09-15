@@ -37,11 +37,38 @@ describe('intern payroll policy', () => {
       lateDeduction: 10,
       graceUsed: false,
       basePay: 80,
-      dailyPay: 70,
+      dailyPay: 80,
+      workedHours: 8,
     });
   });
 
-  it('never counts the 12:00–13:00 lunch hour as payable time', () => {
+  it('computes daily pay strictly 1:1 from DTR hours (9:00 AM to 3:00 PM -> 6 hours -> ₱60)', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T09:00:00+08:00',
+      actualTimeOut: '2026-07-28T15:00:00+08:00',
+      graceAvailable: false,
+    });
+    expect(result.workedHours).toBe(6);
+    expect(result.dailyPay).toBe(60);
+    expect(result.halfDayDeduction).toBe(20);
+    expect(result.basePay).toBe(80);
+  });
+
+  it('computes full daily rate for a full 8-hour day (8:00 AM to 4:00 PM -> 8 hours -> ₱80)', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T16:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result.workedHours).toBe(8);
+    expect(result.dailyPay).toBe(80);
+    expect(result.halfDayDeduction).toBe(0);
+    expect(result.basePay).toBe(80);
+  });
+
+  it('never counts unworked time beyond DTR time-in/out and calculates 1:1 hours', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
@@ -54,11 +81,11 @@ describe('intern payroll policy', () => {
   });
 
   it('deducts unrendered hours for shifts under 8 hours and treats full shift as full day', () => {
-    // 08:00 to 16:00 (4:00 PM): 7 payable hours, timed out before 5:00 PM -> 1h unrendered deducted.
+    // 08:00 to 15:00 (3:00 PM): 7 payable hours, timed out before 5:00 PM -> 1h unrendered deducted.
     const early = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
-      actualTimeOut: '2026-07-28T16:00:00+08:00',
+      actualTimeOut: '2026-07-28T15:00:00+08:00',
       graceAvailable: true,
     });
     expect(early.workedHours).toBe(7);
@@ -66,17 +93,17 @@ describe('intern payroll policy', () => {
     expect(early.halfDayDeduction).toBe(10);
     expect(early.dailyPay).toBe(70);
 
-    // 08:00 to 16:59:59: ceiled to 8 hours -> full day.
-    const justBeforeFive = calculateInternPayroll({
+    // 08:00 to 16:00: exactly 8 hours -> full day.
+    const eightHours = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
-      actualTimeOut: '2026-07-28T16:59:59+08:00',
+      actualTimeOut: '2026-07-28T16:00:00+08:00',
       graceAvailable: true,
     });
-    expect(justBeforeFive.workedHours).toBe(8);
-    expect(justBeforeFive.isHalfDay).toBe(false);
-    expect(justBeforeFive.halfDayDeduction).toBe(0);
-    expect(justBeforeFive.dailyPay).toBe(80);
+    expect(eightHours.workedHours).toBe(8);
+    expect(eightHours.isHalfDay).toBe(false);
+    expect(eightHours.halfDayDeduction).toBe(0);
+    expect(eightHours.dailyPay).toBe(80);
 
     // 08:00 to 17:00:00: full day.
     const fullDay = calculateInternPayroll({
@@ -98,8 +125,10 @@ describe('intern payroll policy', () => {
       actualTimeOut: '2026-07-28T17:00:00+08:00',
       graceAvailable: false,
     });
+    expect(noon.workedHours).toBe(5);
     expect(noon.isHalfDay).toBe(true);
-    expect(noon.halfDayDeduction).toBe(40);
+    expect(noon.halfDayDeduction).toBe(30);
+    expect(noon.dailyPay).toBe(50);
   });
 
   it('T6 decision A: one second past 17:00:00 is still a full day', () => {
@@ -122,7 +151,7 @@ describe('intern payroll policy', () => {
       graceAvailable: false,
     });
 
-    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T17:00:00+08:00', lateHours: 9, lateDeduction: 90, graceUsed: false, dailyPay: 0, workedHours: 2 });
+    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T17:00:00+08:00', lateHours: 9, lateDeduction: 90, graceUsed: false, dailyPay: 20, workedHours: 2 });
   });
 
   it('uses Monday as the Manila payroll week boundary', () => {
