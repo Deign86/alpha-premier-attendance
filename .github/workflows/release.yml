@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -17,12 +19,16 @@ concurrency:
 
 jobs:
   build-windows:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,6 +46,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Resolve and bump version
+        id: version_step
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          node scripts/bump-version.mjs --commit
 
       - name: Typecheck
         run: npm run typecheck
@@ -67,7 +81,7 @@ jobs:
           # Fail closed: build.rs panics without an embedded key when this is 1.
           ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
+          tagName: v__VERSION__
+          releaseName: 'Alpha Premier Attendance v__VERSION__'
           releaseDraft: false
           prerelease: false
