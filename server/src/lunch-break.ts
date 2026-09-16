@@ -1,14 +1,24 @@
 import { DateTime } from 'luxon';
 
 /**
- * Fixed unpaid lunch break applied to every paid-hours calculation in the
- * server payroll layer.
+ * Shared payroll clock helpers and the fixed 12:00–13:00 Manila lunch window.
  *
- * Work performed between 12:00 and 13:00 Manila time is never counted as
- * payable time — for employees and interns alike. The window is centralized
- * here so every consumer (daily payroll, worked-hours reporting) stays
- * consistent and the rule can be audited or changed in one place. The desktop
- * app mirrors this in `src-tauri/src/services/lunch_break.rs`.
+ * IMPORTANT (post-0.1.74): the lunch-window helpers (`lunchBreakExcludedSeconds`,
+ * `paidWorkSeconds`, `paidWorkHours`, `paidWorkHoursCeiled`) are NOT part of the
+ * payroll calculation any more. The engines derive paid hours 1:1 from the
+ * recorded DTR time-in/time-out (`Math.ceil(elapsed / 3600)`, no lunch term), so
+ * payroll deliberately does not subtract this window. Those helpers currently
+ * have no non-test consumer in `server/src`; they are kept because
+ * `server/test/lunch-break.test.ts` pins them and because the desktop app still
+ * uses the equivalent helper for the attendance-report TOTAL_HOURS column
+ * (`reporting::elapsed_hours`, lunch-net). Reports and payroll therefore
+ * intentionally disagree on every lunch-spanning shift — do not "reconcile"
+ * them by re-adding the lunch term to payroll.
+ *
+ * The remaining exports here (`capLateTimeoutOut`, `isHalfDayWork`,
+ * `effectiveHalfDayTimeOut`, `ceilHour`, `manilaTimestamp`) ARE live payroll
+ * inputs and must not be removed. `officeCloseFor` and the hour constants have
+ * no external consumer either; they back the helpers above.
  *
  * Overnight/multi-day spans subtract EVERY touched day's window (a 22:00 to
  * next-day 14:00 shift loses one hour per day crossed). Night shifts are

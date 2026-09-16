@@ -106,8 +106,10 @@ pub fn calculate(
 mod tests {
     use super::*;
     #[test]
-    fn worked_hours_exclude_lunch_but_keep_fixed_daily_pay() {
-        // 08:00–17:00 → 8 paid hours after the 12:00–13:00 lunch cut.
+    fn worked_hours_are_gross_elapsed_and_keep_fixed_daily_pay() {
+        // 08:00–17:00 → 8 paid hours (post-0.1.74: pay derives 1:1 from
+        // recorded DTR time-in/time-out; the 12:00–13:00 lunch hour is no
+        // longer subtracted from paid hours).
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
@@ -116,13 +118,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.worked_hours, 8);
-        // The fixed PHP 80.00/day intern rule is untouched by the lunch cut.
+        // The fixed PHP 80.00/day intern base rate is independent of hours worked.
         assert_eq!(result.base_pay_centavos, 8000);
         assert_eq!(result.daily_pay_centavos, 8000);
     }
     #[test]
     fn late_hours_are_not_affected_by_lunch() {
         // Lateness is measured against the 08:00 start, before any lunch window.
+        // Post-0.1.74: paid hours derive 1:1 from recorded DTR stamps with no
+        // 12:00–13:00 subtraction, so 09:30–17:00 (7.5h elapsed, ceiled) pays 8h.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T09:30:00+08:00",
@@ -132,7 +136,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 2);
         assert_eq!(result.late_deduction_centavos, 2000);
-        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.worked_hours, 8);
+        assert_eq!(result.half_day_deduction_centavos, 0);
+        assert_eq!(result.daily_pay_centavos, 8000);
     }
     #[test]
     fn grace_period_applies_within_08_00_to_08_15() {
@@ -332,6 +338,8 @@ mod tests {
 
     #[test]
     fn afternoon_arrival_at_noon_is_half_day() {
+        // Post-0.1.74: 12:00–17:00 (5h elapsed, ceiled) pays 5h with no
+        // 12:00–13:00 subtraction; arrival at/after 12:00 is still half-day.
         let noon = calculate(
             "2026-08-01",
             "2026-08-01T12:00:00+08:00",
@@ -340,7 +348,9 @@ mod tests {
         )
         .unwrap();
         assert!(noon.is_half_day);
-        assert_eq!(noon.half_day_deduction_centavos, 4000);
+        assert_eq!(noon.worked_hours, 5);
+        assert_eq!(noon.half_day_deduction_centavos, 3000);
+        assert_eq!(noon.daily_pay_centavos, 5000);
     }
 
     #[test]

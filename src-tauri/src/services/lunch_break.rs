@@ -1,13 +1,17 @@
 use chrono::{DateTime, Datelike, Duration, TimeZone};
 use chrono_tz::{Asia::Manila, Tz};
 
-/// Fixed unpaid lunch break applied to every paid-hours calculation.
+/// Fixed unpaid lunch break (12:00–13:00 Manila), used by REPORTING only.
 ///
-/// Work performed between 12:00 and 13:00 Manila time is never counted as
-/// payable time — for employees and interns alike. The window is centralized
-/// here so every consumer (daily payroll, worked-hours reports, overtime
-/// inputs) stays consistent and the rule can be audited or changed in one
-/// place.
+/// Post-0.1.74 the payroll engines derive paid hours 1:1 from the recorded DTR
+/// time-in/time-out (`ceiling_hours(elapsed)`, no lunch term), so this window is
+/// deliberately NOT subtracted from payroll. Only `paid_work_hours` is still
+/// live, for the attendance-report "TOTAL HOURS" column
+/// (`reporting::elapsed_hours`), which stays lunch-net; the other helpers here
+/// are currently referenced only by this module's tests. Reports and payroll
+/// therefore intentionally disagree on every lunch-spanning shift — do not
+/// "reconcile" them by re-adding the lunch term to payroll, and do not assume
+/// this window applies to payroll.
 ///
 /// Overnight/multi-day spans subtract EVERY touched day's window (a 22:00 to
 /// next-day 14:00 shift loses one hour per day crossed). Night shifts are

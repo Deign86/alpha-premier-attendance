@@ -797,8 +797,12 @@ fn elapsed_hours(start: &str, end: &str) -> f64 {
         chrono::DateTime::parse_from_rfc3339(end),
     ) {
         (Ok(start), Ok(end)) => {
-            // Rendered hours are net of the fixed 12:00–13:00 lunch break so
-            // reports stay consistent with payroll (shared lunch rule).
+            // NOTE (post-0.1.74): the TOTAL_HOURS export column is net of the
+            // fixed 12:00–13:00 lunch break, while payroll `worked_hours` is
+            // gross elapsed time ceiled to the hour with no lunch subtraction.
+            // The two therefore disagree on every lunch-spanning shift; that
+            // reconciliation is a separate product decision — do not "fix" it
+            // by changing this function as part of a payroll-test fix.
             crate::services::lunch_break::paid_work_hours(
                 start.with_timezone(&chrono_tz::Asia::Manila),
                 end.with_timezone(&chrono_tz::Asia::Manila),

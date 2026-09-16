@@ -33,7 +33,8 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
     halfDayDeduction,
     basePay: input.dailyRate,
     dailyPay,
-    // Payable daily hours exclude the fixed 12:00–13:00 lunch break (shared rule).
+    // Post-0.1.74: payable daily hours are gross elapsed DTR time ceiled to the
+    // hour — the 12:00–13:00 lunch window is NOT subtracted here.
     workedHours,
   };
 }

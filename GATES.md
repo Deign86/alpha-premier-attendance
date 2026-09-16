@@ -805,3 +805,164 @@ Scope decisions locked by the owner before implementation:
   EXPECT: `playClonedBeaAudio` does not pass unmapped URLs or file paths to `ttsSpeak`, requires `engineUsed === 'cloned-bea'`, and `announceAttendance` falls back to synthesizing the clean person name with Piper when a name clip is missing/uncached.
   EVIDENCE: 23/23 tests in `clonedBeaVoice.test.ts` pass; 68/68 tests in `ttsService.test.ts` pass; new test verifies that for a non-cloned user with an unplayable voice URL, `tauriApi.ttsSpeak` receives `'Juan Dela Cruz'` (engine: 'piper'), and never any `'http'` URL.
 
+## CI Rust payroll-test staleness fix (0.1.74 follow-up)
+
+Context: CHANGELOG 0.1.74 made pay strictly `hourly_rate x actual_hours_worked`
+(`worked_hours = min(8, ceil((out-in)/3600))`, no 12:00-13:00 subtraction;
+intern PHP 80/day -> 1000 centavos/hour). Four Rust assertions still encoded the
+pre-0.1.74 lunch-subtracted values while the passing TypeScript twins
+(`server/test/intern-payroll.test.ts`, `server/test/intern-dtr-sync.test.ts`,
+`server/test/lunch-break.test.ts`) already pinned the 1:1 rule. Fix updates only
+stale test expectations/comments plus the now-false `reporting/mod.rs` code
+comment (text only, no behaviour change). No production payroll math touched.
+
+- [x] The four corrected Rust expectations equal what the payroll engine computes.
+  CHECK: save the block below as `parity-check.mjs` in the repo root and run
+  `npm run build -w shared && npm run build -w server && node parity-check.mjs`.
+  It drives the TypeScript engine (which implements the identical 0.1.74 formula) on the
+  four exact inputs and diffs every asserted field against the Rust values.
+  EXPECT: `16 field comparisons, 0 mismatches`, exit 0.
+  EVIDENCE: exit 0, `16 field comparisons, 0 mismatches` — measured:
+  09:30-17:00 grace=false -> lateHours 2 / lateDeduction 2000 / workedHours 8 / halfDayDeduction 0 / dailyPay 8000.
+  12:00-17:00 -> isHalfDay true / workedHours 5 / halfDayDeduction 3000 / dailyPay 5000.
+  08:00-15:00 grace=true -> isHalfDay false / workedHours 7 / halfDayDeduction 1000 / dailyPay 7000.
+  12:30-17:00 -> isHalfDay true / workedHours 5 / halfDayDeduction 3000.
+  The values were derived by hand from the formula first and then confirmed by the engine; they
+  were not copied from the failing CI output.
+
+  ```js
+  const { calculateInternPayroll } = await import('./server/dist/intern-payroll.js');
+  const cases = [
+    ['09:30', '17:00', false, { lateHours: 2, lateDeduction: 2000, workedHours: 8, halfDayDeduction: 0, dailyPay: 8000 }],
+    ['12:00', '17:00', false, { isHalfDay: true, workedHours: 5, halfDayDeduction: 3000, dailyPay: 5000 }],
+    ['08:00', '15:00', true, { isHalfDay: false, workedHours: 7, halfDayDeduction: 1000, dailyPay: 7000 }],
+    ['12:30', '17:00', false, { isHalfDay: true, workedHours: 5, halfDayDeduction: 3000 }],
+  ];
+  let mismatches = 0;
+  let comparisons = 0;
+  for (const [timeIn, timeOut, grace, expected] of cases) {
+    const r = calculateInternPayroll({
+      attendanceDate: '2026-08-01',
+      actualTimeIn: `2026-08-01T${timeIn}:00+08:00`,
+      actualTimeOut: `2026-08-01T${timeOut}:00+08:00`,
+      graceAvailable: grace,
+    });
+    // TS returns PHP; the Rust assertions are in centavos.
+    const measured = {
+      lateHours: r.lateHours,
+      lateDeduction: r.lateDeduction * 100,
+      workedHours: r.workedHours,
+      halfDayDeduction: r.halfDayDeduction * 100,
+      dailyPay: r.dailyPay * 100,
+      isHalfDay: r.isHalfDay,
+    };
+    for (const key of Object.keys(expected)) {
+      comparisons += 1;
+      if (measured[key] !== expected[key]) {
+        console.log('FAIL', timeIn, timeOut, key, 'want', expected[key], 'got', measured[key]);
+        mismatches += 1;
+      }
+    }
+  }
+  console.log(`${comparisons} field comparisons, ${mismatches} mismatches`);
+  process.exit(mismatches ? 1 : 0);
+  ```
+
+- [x] The other CI job (Frontend Quality & Tests) still passes.
+  CHECK: `npm run lint && npm run typecheck && npm test && npm run build`
+  EXPECT: every command exits 0.
+  EVIDENCE: lint exit 0; typecheck exit 0; test exit 0 (3 + 15 + 17 test files, 270 + 177 + shared
+  tests passed, 0 failed); build exit 0.
+
+- [x] Rust test code compiles with the corrected expectations.
+  CHECK: `cargo test --manifest-path src-tauri/Cargo.toml --no-run`
+  EXPECT: `Finished` with 0 errors (warnings allowed; the 8 `non_snake_case` warnings in
+  `voice_pull.rs` are pre-existing and unrelated).
+  EVIDENCE: `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 7m 07s`; 0 error
+  lines; all three test binaries emitted:
+  `alpha_premier_attendance_lib-6ad57938a3bb17f0.exe`,
+  `alpha_premier_attendance-c4a17ea3b190512a.exe`, `migrate_from_sheets-ff51d0dd48267d36.exe`.
+  Note: `npm run build` runs `scripts/auto-clean.mjs`, which runs `cargo clean`, so any
+  `cargo` invocation must not run concurrently with `npm run build`.
+
+- [x] Diff touches no production payroll math.
+  CHECK: `git diff --stat`
+  EXPECT: only test expectations/comments in `intern_payroll.rs` + `dtr_sync.rs`, plus
+  comment-only edits in `reporting/mod.rs`, `lunch_break.rs`, `server/src/lunch-break.ts`,
+  `server/src/employee-payroll.ts`; `fn calculate` in `intern_payroll.rs`/`employee_payroll.rs`
+  and all of `payroll.rs` untouched.
+  EVIDENCE: 7 files — `GATES.md`, `server/src/employee-payroll.ts` (comment), `server/src/lunch-break.ts`
+  (doc comment), `src-tauri/src/reporting/mod.rs` (comment), `src-tauri/src/services/dtr_sync.rs`
+  (tests), `src-tauri/src/services/intern_payroll.rs` (tests + test name), `src-tauri/src/services/lunch_break.rs`
+  (doc comment). `payroll.rs` and `employee_payroll.rs` are absent from the diff entirely, which is the
+  scope evidence; `fn calculate` bodies were line-by-line reviewed and are unchanged.
+
+- [x] No cheating: assertions kept, inputs unchanged, no test disabled.
+  CHECK: inspect the diff for `#[ignore]`, weakened comparisons, or altered inputs.
+  EXPECT: none present; every change is a corrected expected value or a comment.
+  EVIDENCE: no `#[ignore]`, no `assert!(` -> `assert!(... || true)` relaxation, no widened tolerance,
+  no commented-out assertions, and no changed date/time-in/time-out/grace literals. All four tests
+  gained assertions (`worked_hours`, and `daily_pay`/`half_day_deduction` where absent) — the diff
+  strengthens rather than weakens. The two 08:00-15:00 tests were already contradicting each other
+  before this change, which is what exposed the staleness.
+
+- [x] The 08:00-15:00 self-contradiction between the two Rust suites is closed.
+  CHECK: read both suites' expectations for that input.
+  EXPECT: both assert worked 7 / deduction 1000 / pay 7000.
+  EVIDENCE: `intern_payroll::tests::early_clock_out_before_5pm_is_undertime_not_half_day` and
+  `dtr_sync::tests::eight_to_three_keeps_actuals_while_payroll_has_undertime` now assert the
+  same 7/1000/7000. Before the change they disagreed on identical input, which is what exposed
+  the staleness.
+
+- [x] Independent adversarial review could not refute the diagnosis.
+  CHECK: delegated lane `adversarial-refute` (oracle, high thinking, read-only) was instructed to
+  REFUTE "the 4 tests were stale and the engine is right", not to confirm it.
+  EXPECT: no evidence that the engine is wrong.
+  EVIDENCE: verdict **NOT REFUTED**, ~95% confidence. Strongest counter-argument it raised — that
+  0.1.74 itself is questionable because lunch-net consumers still exist (the DTR sheet formula,
+  `reporting::elapsed_hours`) — was examined and rejected as a *product* objection: both engines
+  faithfully implement the released, changelogged spec, and reverting them would break the passing
+  TypeScript twins on both stacks. It also confirmed the old values are *exactly* the pre-0.1.74
+  lunch-net arithmetic (7.5h - 1h lunch = 6.5 -> 7; 7h - 1h = 6 -> 2000/6000; 4.5h - 0.5h = 4 -> 4000).
+
+- [x] Independent diff audit found no cheating, no scope creep, no false comments.
+  CHECK: delegated lane `diff-audit` (reviewer, high thinking, read-only) audited the diff for
+  weakened/deleted/ignored assertions, changed inputs, production-math changes, false claims, and
+  unrequested code. It has no shell tool, so the verbatim `git diff` was supplied to it directly.
+  EXPECT: no blocker findings.
+  EVIDENCE: merge verdict **OK**, `No issues found.` Specifically: no assertion weakened/deleted/
+  commented-out/widened/never-failing; no `#[ignore]`; no input changed; `payroll.rs` and
+  `employee_payroll.rs` not in the diff; `reporting/mod.rs` and the two `lunch-break` files
+  comment-only; all 4 new values independently re-derived by hand as arithmetically right; no false
+  test name or comment; no unrequested code. It raised two honest leftovers, both addressed in this
+  change: the `server/src/lunch-break.ts` header still claimed universal lunch subtraction, and the
+  `lunch_break.rs` header overstated which helpers are still live.
+
+### Known leftovers (deliberately not changed)
+
+- `reporting::elapsed_hours` (TOTAL_HOURS export) is lunch-net while payroll `worked_hours` is gross,
+  so they disagree on every lunch-spanning shift. This is HR-visible product behaviour, not a CI
+  failure; the divergence is now documented in code rather than silently contradicted.
+- `paid_work_hours_ceiled` (Rust) and `paidWorkHoursCeiled`/`paidWorkSeconds` (TS) have no non-test
+  consumer. Dead-ish code retained for the test-pinned parity surface; removal is a separate cleanup.
+
+### Local Rust test execution is not possible in this environment
+
+`cargo test` cannot run the produced binary on this machine. This is pre-existing and
+unrelated to the change; CI (`windows-latest`, MSVC) runs the same 296 tests successfully.
+
+- CHECK: run any lib test binary directly.
+  EXPECT: it starts.
+  EVIDENCE: exit 127 (`0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND`) — reproduced with an older
+  test binary built before this change, so the breakage predates it.
+- GNU (mingw/WinLibs) toolchain: default here; the linked test binary aborts at load with
+  `STATUS_ENTRYPOINT_NOT_FOUND`. Copying the matching `libgcc_s_seh-1.dll` /
+  `libwinpthread-1.dll` / `libstdc++-6.dll` next to the binary does not fix it, so the
+  unresolved import is not one of those three.
+- MSVC toolchain: `rustup show` reports `stable-x86_64-pc-windows-msvc` installed, but there is
+  no Visual Studio / Build Tools installation on this machine, so `link.exe` resolves to GNU
+  coreutils' `link` and every MSVC link fails with `link: extra operand`.
+- Consequence: the Rust suites are verified by (a) `--no-run` compilation, (b) engine-value
+  parity through the TypeScript twin, and (c) CI. Recorded here instead of claiming a local
+  `cargo test` pass that was never observed.
+
