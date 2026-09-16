@@ -553,7 +553,6 @@ export class AdminService {
   async deleteCutoffPayroll(payrollId: string): Promise<void> {
     const record = await this.sheets.findPayrollCutoff(payrollId);
     if (!record) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
-    if (record.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be deleted.');
     await this.sheets.deletePayrollCutoff(payrollId);
   }
 

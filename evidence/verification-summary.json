@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-08T07:40:22.783Z",
+  "timestamp": "2026-09-16T01:26:31.292Z",
   "doctor": {
     "passed": true,
     "checks": [
@@ -12,37 +12,142 @@
   "workflows": {
     "kiosk": {
       "passed": true,
-      "details": "Verified via vitest and IPC contracts"
+      "details": {
+        "config": {
+          "enableAdmin": true,
+          "enableCardSetup": true,
+          "lanEnabled": false,
+          "office": {
+            "companyName": "Alpha Premier Group of Companies OPC.",
+            "officeAddressLine1": "Unit 3104C",
+            "officeBuilding": "Tektite East Tower",
+            "officeCity": "Pasig",
+            "officeCountry": "Philippines",
+            "officeDisplayFull": "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila",
+            "officeDisplayShort": "Tektite East Tower, Ortigas Center, Pasig",
+            "officeDistrict": "Ortigas Center",
+            "officeLabel": "Main Office",
+            "officePostalCode": "",
+            "officeRegion": "Metro Manila"
+          },
+          "resultResetDelayMs": 4000,
+          "rfidAutoSubmitDelayMs": 150,
+          "scanner": {
+            "characterSet": "decimal",
+            "expectedLength": 10,
+            "mode": "keyboard",
+            "paused": false
+          },
+          "success": true,
+          "timezone": "Asia/Manila",
+          "updater": {
+            "autoCheck": true,
+            "checkIntervalHours": 8,
+            "enabled": true
+          }
+        },
+        "health": {
+          "googleSheetsExport": "configured",
+          "lan": {
+            "bindAddress": null,
+            "connectedSseClients": 0,
+            "port": 4173
+          },
+          "lanEnabled": false,
+          "service": "rfid-attendance-api",
+          "sqlite": "connected",
+          "success": true,
+          "timestamp": "2026-09-16T01:26:31.346674500Z",
+          "timezone": "Asia/Manila"
+        }
+      }
     },
     "admin": {
       "passed": true,
-      "details": "Verified via vitest and PIN unlock contracts"
+      "details": {
+        "authenticated": true,
+        "userCount": 24
+      }
     },
     "cardSetup": {
       "passed": true,
-      "details": "Verified via setup modal & lookup contracts"
+      "details": {
+        "lookup": {
+          "rfidUid": "TEST-UNREGISTERED-999",
+          "success": true,
+          "user": null
+        }
+      }
     },
     "payroll": {
       "passed": true,
-      "details": "Verified via centavos calculation tests"
+      "details": {
+        "cutoff": "2026-08-01_2026-08-15",
+        "status": "Calculated"
+      }
     },
     "diagnostics": {
       "passed": true,
-      "details": "Verified via TTS & LAN unit tests"
+      "details": {
+        "tts": {
+          "enabled": true,
+          "engine": "cloned-bea",
+          "isSpeaking": false,
+          "piperAvailable": true,
+          "piperPath": "\\\\?\\C:\\Users\\APG\\Downloads\\alpha-premier-attendance\\src-tauri\\target\\debug\\resources\\piper\\piper.exe",
+          "systemSapiAvailable": true,
+          "voiceModelAvailable": true,
+          "voiceModelPath": "\\\\?\\C:\\Users\\APG\\Downloads\\alpha-premier-attendance\\src-tauri\\target\\debug\\resources\\piper\\models\\en_US-amy-medium.onnx"
+        },
+        "lan": {
+          "activeLanIp": "192.168.1.42",
+          "allowRuntimeStart": true,
+          "allowedSubnets": [],
+          "bindAddress": "0.0.0.0:4173",
+          "configError": null,
+          "configValid": true,
+          "configuredBindPresent": true,
+          "connectedSseClients": 0,
+          "enabled": false,
+          "firewallAllowRule": "unknown",
+          "guidance": [
+            "The viewer service is running but /api/health is not reachable from this laptop. Check Windows Firewall or the network profile.",
+            "No allowed subnets are configured, so any private address on the same office Wi-Fi/LAN can open the viewer.",
+            "If devices still cannot open the link, confirm they are on the same office Wi-Fi/LAN and that this network does not isolate clients from each other."
+          ],
+          "issue": "none",
+          "lanIps": [
+            "192.168.1.42"
+          ],
+          "lastError": null,
+          "localHealthError": "error sending request for url (http://0.0.0.0:4173/api/health)",
+          "localHealthOk": false,
+          "networkProfile": "unknown",
+          "networkScope": "Accessible to devices on the same office Wi-Fi / LAN (private network only).",
+          "port": 4173,
+          "startedAt": 1789521977,
+          "state": "running",
+          "success": true,
+          "viewerUrl": "http://192.168.1.42:4173/attendance"
+        },
+        "warning": null
+      }
     },
     "bathroom": {
       "passed": true,
-      "details": "Verified via vitest, rust lib tests, and IPC contracts"
+      "details": {
+        "status": "Verified live status query"
+      }
     }
   },
   "liveBridge": {
-    "active": false,
-    "details": null
+    "active": true,
+    "details": "raw bridge protocol (tauri-plugin-mcp-bridge 0.13)"
   },
   "summary": {
     "total": 7,
     "passed": 7,
     "failed": 0,
-    "durationMs": 24
+    "durationMs": 2346
   }
 }

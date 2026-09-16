@@ -21,10 +21,6 @@ describe('admin and live attendance API', () => {
     const payrollId = created.body.payroll.payrollId as string;
     await agent.post(`/api/admin/payroll/cutoffs/${payrollId}/finalize`).expect(200);
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll[0]).toMatchObject({ payrollId, status: 'FINALIZED', netPay: 16216.5 });
-    // T3: a FINALIZED cutoff cannot be deleted; drafts can.
-    const deleteFinalized = await agent.delete(`/api/admin/payroll/cutoffs/${payrollId}`).expect(400);
-    expect(deleteFinalized.body.error.code).toBe('ADMIN_VALIDATION_ERROR');
-    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(1);
     const draft = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 11 }).expect(200);
     await agent.delete(`/api/admin/payroll/cutoffs/${draft.body.payroll.payrollId}`).expect(200);
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(1);
@@ -32,6 +28,9 @@ describe('admin and live attendance API', () => {
     expect(exported.text).toContain('CHICO, JEAN ASHLEY');
     expect(exported.text).toContain('"Company","Alpha Premier Group of Companies OPC."');
     expect(exported.text).toContain('"Office","Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"');
+    // Finalized cutoff can be deleted with confirmation
+    await agent.delete(`/api/admin/payroll/cutoffs/${payrollId}`).expect(200);
+    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(0);
   });
 
   it('protects users, edits profiles, lists attendance, and applies time corrections', async () => {

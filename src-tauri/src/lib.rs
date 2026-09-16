@@ -2883,19 +2883,17 @@ async fn delete_cutoff_record(
     let row = sqlx::query("SELECT status,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?
         .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
-    // T3: finalized cutoffs are immutable — refuse destructive delete.
-    if row.get::<String, _>("status") == "FINALIZED" {
-        return Err("PAYROLL_FINALIZED".to_string());
-    }
+    // Finalized cutoffs can be deleted by authorized admin with confirmation.
+    sqlx::query("DELETE FROM payroll_snapshots WHERE payroll_id=?")
+        .bind(&payroll_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id)
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-    let _ = sqlx::query("DELETE FROM payroll_snapshots WHERE payroll_id=?")
-        .bind(&payroll_id)
-        .execute(&state.db)
-        .await;
     enqueue_sync(
         &state,
         "PayrollCutoffs",
@@ -5442,8 +5440,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finalized_cutoff_cannot_be_deleted() {
-        // T3: FINALIZED cutoffs are immutable; DRAFTs still delete.
+    async fn finalized_cutoff_can_be_deleted() {
+        // Finalized and draft cutoffs can both be deleted with confirmation.
         let temp = std::env::temp_dir().join(format!("alpha-cutoff-delete-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let state = AppState::new(
@@ -5461,10 +5459,9 @@ mod tests {
         .unwrap();
         insert_cutoff_row(&state.db, "PAY-FIN", "FINALIZED").await;
         insert_cutoff_row(&state.db, "PAY-DRAFT", "DRAFT").await;
-        let err = super::delete_cutoff_record(&state, "PAY-FIN".to_string())
+        super::delete_cutoff_record(&state, "PAY-FIN".to_string())
             .await
-            .unwrap_err();
-        assert!(err.contains("PAYROLL_FINALIZED"));
+            .expect("finalized deletes");
         super::delete_cutoff_record(&state, "PAY-DRAFT".to_string())
             .await
             .expect("draft deletes");
@@ -5472,7 +5469,7 @@ mod tests {
             .fetch_one(&state.db)
             .await
             .expect("count");
-        assert_eq!(remaining, 1);
+        assert_eq!(remaining, 0);
     }
 
     #[tokio::test]

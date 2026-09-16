@@ -594,30 +594,43 @@ export async function savePayrollCutoff<T extends object>(payroll: T, payrollId?
   return (await response.json()) as { success: boolean };
 }
 export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; error?: { message: string } }> {
-  if (runningInTauri()) {
-    const payload = customization ?? {};
-    // SAFETY: Backend generate cutoff returns success or error response
-    return (await tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, payload)) as { success: boolean; error?: { message: string } };
+  try {
+    if (runningInTauri()) {
+      const payload = customization ?? {};
+      // SAFETY: Backend generate cutoff returns success or error response
+      return (await tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, payload)) as { success: boolean; error?: { message: string } };
+    }
+    return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } };
+  } catch (err) {
+    return { success: false, error: { message: err instanceof Error ? err.message : String(err) } };
   }
-  return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } };
 }
 export async function finalizePayrollCutoff(payrollId: string): Promise<{ success: boolean; error?: { message?: string } }> {
-  if (runningInTauri()) {
-    // SAFETY: Backend finalize cutoff returns success response
-    return (await tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
+  try {
+    if (runningInTauri()) {
+      // SAFETY: Backend finalize cutoff returns success response
+      return (await tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
+    }
+    const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`), { method: 'POST' });
+    // SAFETY: Parsing finalize cutoff response JSON
+    return (await response.json()) as { success: boolean; error?: { message?: string } };
+  } catch (err) {
+    return { success: false, error: { message: err instanceof Error ? err.message : String(err) } };
   }
-  const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`), { method: 'POST' });
-  // SAFETY: Parsing finalize cutoff response JSON
-  return (await response.json()) as { success: boolean; error?: { message?: string } };
 }
 export async function deletePayrollCutoff(payrollId: string): Promise<{ success: boolean; error?: { message?: string } }> {
-  if (runningInTauri()) {
-    // SAFETY: Backend delete cutoff returns success response
-    return (await tauriApi.payrollDeleteCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
+  try {
+    if (runningInTauri()) {
+      // SAFETY: Backend delete cutoff returns success response
+      return (await tauriApi.payrollDeleteCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
+    }
+    const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}`), { method: 'DELETE' });
+    // SAFETY: Parsing delete cutoff response JSON
+    return (await response.json()) as { success: boolean; error?: { message?: string } };
+  } catch (err) {
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    return { success: false, error: { message: rawMessage || 'Unable to delete payroll cutoff.' } };
   }
-  const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}`), { method: 'DELETE' });
-  // SAFETY: Parsing delete cutoff response JSON
-  return (await response.json()) as { success: boolean; error?: { message?: string } };
 }
 export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }
 export async function exportPayrollXlsx(cutoff?: string): Promise<ArtifactExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportPayrollXlsx(nativeAdminToken ?? '', cutoff); } catch { return { success: false, error: { message: 'Unable to generate the payroll workbook.' } }; } } return { success: false, error: { message: 'Payroll workbooks are available in the desktop application.' } }; }

@@ -5148,15 +5148,29 @@ export function PayrollWorkspace({
   const clearCutoffRecords = async () => {
     if (clearingCutoff || existingCutoffRecords.length === 0) return;
     setClearingCutoff(true);
-    let count = 0;
-    for (const r of existingCutoffRecords) {
-      const res = await deletePayrollCutoff(r.payrollId);
-      if (res.success) count++;
+    try {
+      let count = 0;
+      let failCount = 0;
+      for (const r of existingCutoffRecords) {
+        const res = await deletePayrollCutoff(r.payrollId);
+        if (res.success) {
+          count++;
+        } else {
+          failCount++;
+        }
+      }
+      if (failCount > 0) {
+        setMessage(`Deleted ${count} payroll record(s) for cutoff ${form.cutoffStart} to ${form.cutoffEnd}. ${failCount} record(s) could not be deleted.`);
+      } else {
+        setMessage(`Deleted ${count} payroll record(s) for cutoff ${form.cutoffStart} to ${form.cutoffEnd}.`);
+      }
+      onSaved();
+    } catch (error) {
+      setMessage(toErrorMessage(error, "Unable to delete payroll records."));
+    } finally {
+      setClearingCutoff(false);
+      setClearCutoffOpen(false);
     }
-    setClearingCutoff(false);
-    setClearCutoffOpen(false);
-    setMessage(`Deleted ${count} payroll record(s) for cutoff ${form.cutoffStart} to ${form.cutoffEnd}.`);
-    onSaved();
   };
 
   // The selected payroll cutoff drives both generated payroll PDFs: the
@@ -5892,13 +5906,18 @@ function PayrollTable({
     const target = finalizeTarget;
     setFinalizeTarget(null);
     setFinalizing(true);
-    const response = await finalizePayrollCutoff(target.payrollId);
-    setFinalizing(false);
-    if (response.success) {
-      setMessage("Payroll finalized.");
-      onFinalized();
-    } else {
-      setMessage(response.error?.message ?? "Unable to finalize payroll.");
+    try {
+      const response = await finalizePayrollCutoff(target.payrollId);
+      if (response.success) {
+        setMessage("Payroll finalized.");
+        onFinalized();
+      } else {
+        setMessage(response.error?.message ?? "Unable to finalize payroll.");
+      }
+    } catch (error) {
+      setMessage(toErrorMessage(error, "Unable to finalize payroll."));
+    } finally {
+      setFinalizing(false);
     }
   };
 
@@ -5906,17 +5925,21 @@ function PayrollTable({
     if (!deleteTarget) return;
     const target = deleteTarget;
     setDeleteTarget(null);
-    const response = await deletePayrollCutoff(target.payrollId);
-    if (response.success) {
-      setMessage("Payroll deleted.");
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(target.payrollId);
-        return next;
-      });
-      onFinalized();
-    } else {
-      setMessage(response.error?.message ?? "Unable to delete payroll.");
+    try {
+      const response = await deletePayrollCutoff(target.payrollId);
+      if (response.success) {
+        setMessage("Payroll deleted.");
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(target.payrollId);
+          return next;
+        });
+        onFinalized();
+      } else {
+        setMessage(response.error?.message ?? "Unable to delete payroll.");
+      }
+    } catch (error) {
+      setMessage(toErrorMessage(error, "Unable to delete payroll."));
     }
   };
 
@@ -5928,16 +5951,34 @@ function PayrollTable({
     if (selectedIds.size === 0) return;
     setBatchDeleteOpen(false);
     setDeletingBatch(true);
-    const ids = Array.from(selectedIds);
-    let successCount = 0;
-    for (const id of ids) {
-      const response = await deletePayrollCutoff(id);
-      if (response.success) successCount++;
+    try {
+      const ids = Array.from(selectedIds);
+      let successCount = 0;
+      let failureCount = 0;
+      for (const id of ids) {
+        try {
+          const response = await deletePayrollCutoff(id);
+          if (response.success) {
+            successCount++;
+          } else {
+            failureCount++;
+          }
+        } catch {
+          failureCount++;
+        }
+      }
+      setSelectedIds(new Set());
+      if (failureCount > 0) {
+        setMessage(`Deleted ${successCount} payroll record(s). ${failureCount} record(s) could not be deleted.`);
+      } else {
+        setMessage(`Deleted ${successCount} payroll record(s).`);
+      }
+      onFinalized();
+    } catch (error) {
+      setMessage(toErrorMessage(error, "Unable to complete batch deletion."));
+    } finally {
+      setDeletingBatch(false);
     }
-    setDeletingBatch(false);
-    setSelectedIds(new Set());
-    setMessage(`Deleted ${successCount} payroll record(s).`);
-    onFinalized();
   };
 
   const finalizeBatch = async () => {
@@ -5947,15 +5988,24 @@ function PayrollTable({
     if (draftIds.length === 0) return;
     setBatchFinalizeOpen(false);
     setFinalizing(true);
-    let successCount = 0;
-    for (const id of draftIds) {
-      const response = await finalizePayrollCutoff(id);
-      if (response.success) successCount++;
+    try {
+      let successCount = 0;
+      for (const id of draftIds) {
+        try {
+          const response = await finalizePayrollCutoff(id);
+          if (response.success) successCount++;
+        } catch {
+          // Continue with remaining drafts
+        }
+      }
+      setSelectedIds(new Set());
+      setMessage(`Finalized ${successCount} payroll record(s).`);
+      onFinalized();
+    } catch (error) {
+      setMessage(toErrorMessage(error, "Unable to complete batch finalization."));
+    } finally {
+      setFinalizing(false);
     }
-    setFinalizing(false);
-    setSelectedIds(new Set());
-    setMessage(`Finalized ${successCount} payroll record(s).`);
-    onFinalized();
   };
 
   if (!records.length)
