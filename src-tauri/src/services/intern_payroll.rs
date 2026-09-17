@@ -75,9 +75,15 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
-    let payable_in = time_in.max(start);
-    let elapsed_seconds = (time_out - payable_in).num_seconds().max(0);
-    let worked_hours = floor_hours(elapsed_seconds).min(8);
+    let payable_in = if grace_used {
+        start
+    } else if late_hours > 0 {
+        computed_in
+    } else {
+        time_in.max(start)
+    };
+    let paid_seconds = crate::services::lunch_break::paid_work_seconds(payable_in, time_out);
+    let worked_hours = floor_hours(paid_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let unrendered_hours = (8 - worked_hours).max(0);
     let deduction = unrendered_hours * hourly_rate_centavos;
@@ -169,15 +175,15 @@ mod tests {
         assert!(!result.grace_used);
         assert_eq!(result.late_hours, 1);
         assert_eq!(result.late_deduction_centavos, 1000);
-        assert_eq!(result.worked_hours, 8);
-        assert_eq!(result.daily_pay_centavos, 8000);
+        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
     #[test]
-    fn exact_example_intern_nine_to_three_pays_six_hours() {
-        // ₱80/day intern: 9:00 AM to 3:00 PM (6 hours worked) -> pay = 6 * ₱10 = ₱60 (6000 centavos).
+    fn exact_example_intern_eight_to_three_pays_six_hours() {
+        // ₱80/day intern: 8:00 AM to 3:00 PM (7h elapsed - 1h lunch = 6 hours worked) -> pay = 6 * ₱10 = ₱60 (6000 centavos, ₱20 deduction).
         let result = calculate(
             "2026-08-01",
-            "2026-08-01T09:00:00+08:00",
+            "2026-08-01T08:00:00+08:00",
             "2026-08-01T15:00:00+08:00",
             false,
         )
@@ -188,12 +194,27 @@ mod tests {
         assert_eq!(result.base_pay_centavos, 8000);
     }
     #[test]
-    fn full_eight_hour_day_pays_full_daily_rate() {
-        // 8:00 AM to 4:00 PM (8 hours worked) -> full daily rate (8000 centavos).
+    fn four_pm_clock_out_pays_seven_hours() {
+        // 8:00 AM to 4:00 PM (8h elapsed - 1h lunch = 7 hours worked) -> pay = 7 * ₱10 = ₱70 (7000 centavos, ₱10 deduction).
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
             "2026-08-01T16:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.daily_pay_centavos, 7000);
+        assert_eq!(result.half_day_deduction_centavos, 1000);
+        assert_eq!(result.base_pay_centavos, 8000);
+    }
+    #[test]
+    fn full_eight_hour_day_pays_full_daily_rate() {
+        // Office hours: 8:00 AM to 5:00 PM (9h elapsed - 1h lunch = 8 hours worked) -> full daily rate (8000 centavos = ₱80, ₱0 deduction).
+        let result = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T17:00:00+08:00",
             true,
         )
         .unwrap();

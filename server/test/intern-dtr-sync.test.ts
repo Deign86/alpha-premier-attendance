@@ -614,10 +614,10 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
       actualTimeOut: '2026-09-05T15:00:00+08:00',
       graceAvailable: true,
     });
-    expect(pay.workedHours).toBe(7);
+    expect(pay.workedHours).toBe(6);
     expect(pay.isHalfDay).toBe(false);
-    expect(pay.halfDayDeduction).toBe(10);
-    expect(pay.dailyPay).toBe(70);
+    expect(pay.halfDayDeduction).toBe(20);
+    expect(pay.dailyPay).toBe(60);
     expect(pay.computedTimeIn).toBe('2026-09-05T08:00:00+08:00');
     expect(pay.computedTimeOut).toBe('2026-09-05T15:00:00+08:00');
   });

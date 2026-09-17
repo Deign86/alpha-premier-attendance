@@ -1,4 +1,4 @@
-import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkSeconds } from './lunch-break.js';
 
 export type EmployeePayrollInput = { actualTimeIn: string; actualTimeOut: string; dailyRate: number };
 export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; isHalfDay: boolean; halfDayDeduction: number; basePay: number; dailyPay: number; workedHours: number };
@@ -12,8 +12,8 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   const hourlyRate = input.dailyRate / 8;
   const start = actualTimeIn.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
   const payableIn = actualTimeIn < start ? start : actualTimeIn;
-  const elapsedSeconds = Math.max(0, actualTimeOut.diff(payableIn).as('seconds'));
-  const workedHours = Math.min(8, Math.max(0, Math.floor(elapsedSeconds / 3600)));
+  const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
+  const workedHours = Math.min(8, Math.max(0, Math.floor(paidSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
   const halfDayDeduction = unrenderedHours * hourlyRate;

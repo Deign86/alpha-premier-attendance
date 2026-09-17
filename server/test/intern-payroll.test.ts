@@ -37,15 +37,15 @@ describe('intern payroll policy', () => {
       lateDeduction: 10,
       graceUsed: false,
       basePay: 80,
-      dailyPay: 80,
-      workedHours: 8,
+      dailyPay: 70,
+      workedHours: 7,
     });
   });
 
-  it('computes daily pay strictly 1:1 from DTR hours (9:00 AM to 3:00 PM -> 6 hours -> ₱60)', () => {
+  it('computes daily pay strictly 1:1 from DTR hours (8:00 AM to 3:00 PM -> 6 hours -> ₱60)', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
-      actualTimeIn: '2026-07-28T09:00:00+08:00',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T15:00:00+08:00',
       graceAvailable: false,
     });
@@ -55,11 +55,24 @@ describe('intern payroll policy', () => {
     expect(result.basePay).toBe(80);
   });
 
-  it('computes full daily rate for a full 8-hour day (8:00 AM to 4:00 PM -> 8 hours -> ₱80)', () => {
+  it('computes 7 hours for 8:00 AM to 4:00 PM -> ₱70 (₱10 deduction)', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T16:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result.workedHours).toBe(7);
+    expect(result.dailyPay).toBe(70);
+    expect(result.halfDayDeduction).toBe(10);
+    expect(result.basePay).toBe(80);
+  });
+
+  it('computes full daily rate for 8:00 AM to 5:00 PM full day -> 8 hours -> ₱80', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:00:00+08:00',
       graceAvailable: true,
     });
     expect(result.workedHours).toBe(8);
@@ -81,31 +94,31 @@ describe('intern payroll policy', () => {
   });
 
   it('deducts unrendered hours for shifts under 8 hours and treats full shift as full day', () => {
-    // 08:00 to 15:00 (3:00 PM): 7 payable hours, timed out before 5:00 PM -> 1h unrendered deducted.
+    // 08:00 to 15:00 (3:00 PM): 6 payable hours (7h - 1h lunch), 2h unrendered deducted (₱20).
     const early = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T15:00:00+08:00',
       graceAvailable: true,
     });
-    expect(early.workedHours).toBe(7);
+    expect(early.workedHours).toBe(6);
     expect(early.isHalfDay).toBe(false);
-    expect(early.halfDayDeduction).toBe(10);
-    expect(early.dailyPay).toBe(70);
+    expect(early.halfDayDeduction).toBe(20);
+    expect(early.dailyPay).toBe(60);
 
-    // 08:00 to 16:00: exactly 8 hours -> full day.
-    const eightHours = calculateInternPayroll({
+    // 08:00 to 16:00: 7 hours (8h - 1h lunch), 1h unrendered deducted (₱10).
+    const sevenHours = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T16:00:00+08:00',
       graceAvailable: true,
     });
-    expect(eightHours.workedHours).toBe(8);
-    expect(eightHours.isHalfDay).toBe(false);
-    expect(eightHours.halfDayDeduction).toBe(0);
-    expect(eightHours.dailyPay).toBe(80);
+    expect(sevenHours.workedHours).toBe(7);
+    expect(sevenHours.isHalfDay).toBe(false);
+    expect(sevenHours.halfDayDeduction).toBe(10);
+    expect(sevenHours.dailyPay).toBe(70);
 
-    // 08:00 to 17:00:00: full day.
+    // 08:00 to 17:00:00: full day (8 hours).
     const fullDay = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T08:00:00+08:00',
@@ -125,10 +138,10 @@ describe('intern payroll policy', () => {
       actualTimeOut: '2026-07-28T17:00:00+08:00',
       graceAvailable: false,
     });
-    expect(noon.workedHours).toBe(5);
+    expect(noon.workedHours).toBe(4);
     expect(noon.isHalfDay).toBe(true);
-    expect(noon.halfDayDeduction).toBe(30);
-    expect(noon.dailyPay).toBe(50);
+    expect(noon.halfDayDeduction).toBe(40);
+    expect(noon.dailyPay).toBe(40);
   });
 
   it('T6 decision A: one second past 17:00:00 is still a full day', () => {
@@ -151,7 +164,7 @@ describe('intern payroll policy', () => {
       graceAvailable: false,
     });
 
-    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T17:00:00+08:00', lateHours: 9, lateDeduction: 90, graceUsed: false, dailyPay: 10, workedHours: 1 });
+    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T17:00:00+08:00', lateHours: 9, lateDeduction: 90, graceUsed: false, dailyPay: 0, workedHours: 0 });
   });
 
   it('strictly counts whole hours: 08:00-12:30 pays 4 hours (₱40), matching 08:00-12:00', () => {

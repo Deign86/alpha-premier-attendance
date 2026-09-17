@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkSeconds } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -44,9 +44,9 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
-  const payableIn = actualTimeIn < start ? start : actualTimeIn;
-  const elapsedSeconds = Math.max(0, actualTimeOut.diff(payableIn).as('seconds'));
-  const workedHours = Math.min(8, Math.max(0, Math.floor(elapsedSeconds / 3600)));
+  const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));
+  const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
+  const workedHours = Math.min(8, Math.max(0, Math.floor(paidSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
   const halfDayDeduction = unrenderedHours * hourlyRate;
