@@ -75,7 +75,8 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
-    let elapsed_seconds = (time_out - time_in).num_seconds().max(0);
+    let payable_in = time_in.max(start);
+    let elapsed_seconds = (time_out - payable_in).num_seconds().max(0);
     let worked_hours = floor_hours(elapsed_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let unrendered_hours = (8 - worked_hours).max(0);

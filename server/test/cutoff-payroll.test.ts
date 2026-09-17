@@ -101,6 +101,46 @@ describe('cutoff payroll calculator', () => {
     });
   });
 
+  it('uses precomputed halfDayDeduction for intern undertime', () => {
+    const undertimeInternInput = {
+      ...jeanInput,
+      employeeId: 'INT-004', employeeName: 'Melanie Garcia', employeeType: 'INTERN' as const, payrollProfileId: 'INTERN_STANDARD',
+      dailyRate: 80, standardWorkingDays: 11, actualWorkingDays: 2,
+      specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
+      incentivesAllowance: 0, specialAllowance: 0, lateUnits: 0, lateDeduction: 0,
+      halfDayCount: 0.5, halfDayFraction: 0.5, halfDayDeduction: 20, absentDays: 9, overtimeHours: 0, overtimeRate: 0,
+    };
+    const result = calculateCutoffPayroll(undertimeInternInput);
+    expect(result).toMatchObject({
+      dailyRate: 80,
+      basicPay: 880,
+      totalCompensation: 880,
+      halfDayCount: 0.5,
+      halfDayDeduction: 20,
+      absentDays: 9,
+      absenceDeduction: 720,
+      totalDeductions: 740,
+      grossCompensation: 880,
+      netPay: 140,
+      employeeType: 'INTERN',
+    });
+  });
+
+  it('uses precomputed halfDayDeduction for employee undertime', () => {
+    const undertimeEmployeeInput = {
+      ...jeanInput,
+      actualWorkingDays: 2,
+      absentDays: 9,
+      halfDayCount: 0.5,
+      halfDayFraction: 0.5,
+      halfDayDeduction: 176.25,
+    };
+    const result = calculateCutoffPayroll(undertimeEmployeeInput);
+    expect(result.halfDayDeduction).toBe(176.25);
+    expect(result.absenceDeduction).toBe(6345);
+    expect(result.totalDeductions).toBe(6345 + 176.25);
+  });
+
   it('computes employee cutoff with all editable earnings and statutory deductions', () => {
     const editableInput = {
       ...jeanInput,

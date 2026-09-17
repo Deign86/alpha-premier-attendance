@@ -53,7 +53,12 @@ pub fn calculate(
         .single()
         .unwrap();
     let hourly_rate_centavos = daily_rate_centavos / 8;
-    let elapsed_seconds = (time_out - time_in).num_seconds().max(0);
+    let start = Manila
+        .with_ymd_and_hms(time_in.year(), time_in.month(), time_in.day(), 8, 0, 0)
+        .single()
+        .ok_or("Invalid Manila start time")?;
+    let payable_in = time_in.max(start);
+    let elapsed_seconds = (time_out - payable_in).num_seconds().max(0);
     let worked_hours = floor_hours(elapsed_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.

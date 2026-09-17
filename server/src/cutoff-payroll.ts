@@ -4,6 +4,7 @@ export type CutoffInput = Omit<PayrollCutoffRecord, 'payrollId' | 'employeeName'
   employeeName: string;
   halfDayFraction: number;
   lateDeduction: number;
+  halfDayDeduction?: number;
   basicPay?: number;
   specialHolidayPay?: number;
   regularHolidayPay?: number;
@@ -39,7 +40,7 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   const workedZeroDays = input.actualWorkingDays === 0 && input.standardWorkingDays > 0;
   const totalAllowance = workedZeroDays ? 0 : incentivesAllowance + specialAllowance + hra;
   const lateDeduction = cents(input.lateDeduction);
-  const halfDayDeduction = multiply(dailyRate * input.halfDayCount, halfDayFraction);
+  const halfDayDeduction = input.halfDayDeduction != null ? cents(input.halfDayDeduction) : multiply(dailyRate * input.halfDayCount, halfDayFraction);
   const absenceDeduction = input.absenceDeduction != null ? cents(input.absenceDeduction) : dailyRate * input.absentDays;
   const overtimePay = input.overtimePay != null ? cents(input.overtimePay) : multiply(cents(input.overtimeRate) * input.overtimeHours, 1);
   const sss = cents(input.sss ?? 0);
@@ -84,6 +85,7 @@ function validate(input: CutoffInput): void {
   if (input.basicPay != null) nonNegative.push(input.basicPay);
   if (input.specialHolidayPay != null) nonNegative.push(input.specialHolidayPay);
   if (input.regularHolidayPay != null) nonNegative.push(input.regularHolidayPay);
+  if (input.halfDayDeduction != null) nonNegative.push(input.halfDayDeduction);
   if (input.absenceDeduction != null) nonNegative.push(input.absenceDeduction);
   if (input.overtimePay != null) nonNegative.push(input.overtimePay);
   if (nonNegative.some((value) => !Number.isFinite(value) || value < 0)) throw new Error('Payroll values must be valid non-negative numbers.');

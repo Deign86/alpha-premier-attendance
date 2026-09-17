@@ -21,6 +21,7 @@ pub struct CutoffInput {
     pub late_deduction: f64,
     pub half_day_count: f64,
     pub half_day_fraction: f64,
+    pub half_day_deduction: Option<f64>,
     pub absent_days: f64,
     pub absence_deduction: Option<f64>,
     pub overtime_hours: f64,
@@ -106,6 +107,9 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     if let Some(ad) = input.absence_deduction {
         values.push(ad);
     }
+    if let Some(hdd) = input.half_day_deduction {
+        values.push(hdd);
+    }
     if let Some(op) = input.overtime_pay {
         values.push(op);
     }
@@ -159,10 +163,15 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
         1.0
     };
     let allowance = multiply(incentives + special_allowance + hra, allowance_factor);
-    let half = multiply(
-        (daily as f64 * input.half_day_count).round() as i64,
-        input.half_day_fraction,
-    );
+    let half = input
+        .half_day_deduction
+        .map(cents)
+        .unwrap_or_else(|| {
+            multiply(
+                (daily as f64 * input.half_day_count).round() as i64,
+                input.half_day_fraction,
+            )
+        });
     let absence = input
         .absence_deduction
         .map(cents)
@@ -243,6 +252,7 @@ mod tests {
             late_deduction: 50.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -286,6 +296,7 @@ mod tests {
             late_deduction: 100.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 2.0,
@@ -342,6 +353,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 10.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -388,6 +400,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 1.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 8.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -434,6 +447,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -481,6 +495,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -529,6 +544,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 11.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -583,6 +599,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -633,6 +650,7 @@ mod tests {
                 late_deduction: 0.0,
                 half_day_count: 0.0,
                 half_day_fraction: 0.5,
+                half_day_deduction: None,
                 absent_days: 0.0,
                 absence_deduction: None,
                 overtime_hours: 0.0,
@@ -648,6 +666,54 @@ mod tests {
             });
             assert!(result.is_err(), "{start}..{end} must be rejected");
         }
+    }
+
+    #[test]
+    fn intern_undertime_deducts_per_hour() {
+        // Intern who worked 7 hours (left at 3 PM) incurs 10 pesos (1000 centavos) undertime deduction
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-119".into(),
+            employee_name: "Melanie F. Garcia".into(),
+            employee_type: "INTERN".into(),
+            cutoff_start: "2026-09-16".into(),
+            cutoff_end: "2026-09-17".into(),
+            daily_rate: 80.0,
+            standard_working_days: 2.0,
+            actual_working_days: 2.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 0.5,
+            half_day_fraction: 0.5,
+            half_day_deduction: Some(20.0), // 2 days * 10 pesos = 20 pesos
+            absent_days: 0.0,
+            absence_deduction: None,
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+
+        assert_eq!(result.total_compensation, 16_000);
+        assert_eq!(result.half_day_deduction, 2_000); // 20 pesos
+        assert_eq!(result.gross_compensation, 16_000);
+        assert_eq!(result.total_deductions, 2_000);
+        assert_eq!(result.net_pay, 14_000); // 140 pesos
     }
 }
 

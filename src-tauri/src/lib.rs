@@ -2348,6 +2348,7 @@ async fn payroll_intern_report(
         "SELECT u.user_id, u.full_name, \
          COALESCE(COUNT(p.payroll_id), 0) AS actual_days, \
          COALESCE(SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) < 18000 OR substr(p.actual_time_in, 12, 5) >= '12:00')) THEN 1 ELSE 0 END), 0) AS half_day_count, \
+         COALESCE(SUM(p.half_day_deduction_centavos), 0) AS half_day_deduction_centavos, \
          COALESCE(SUM(p.base_pay_centavos), 0) AS basic_pay, \
          COALESCE(SUM(p.late_hours), 0) AS late_units, \
          COALESCE(SUM(p.late_deduction_centavos), 0) AS late_deduction \
@@ -2366,13 +2367,17 @@ async fn payroll_intern_report(
         .into_iter()
         .map(|row| {
             let actual_days = row.get::<i64, _>("actual_days") as f64;
-            let half_day_count = row.get::<i64, _>("half_day_count") as f64;
+            let daily_rate = 80.0;
+            let half_day_deduction = row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0;
+            let half_day_count = if daily_rate * 0.5 > 0.0 {
+                half_day_deduction / (daily_rate * 0.5)
+            } else {
+                row.get::<i64, _>("half_day_count") as f64
+            };
             let standard_days = 11.0;
             let absent_days = (standard_days - actual_days).max(0.0);
-            let daily_rate = 80.0;
             let total_comp = standard_days * daily_rate;
             let absence_deduction = absent_days * daily_rate;
-            let half_day_deduction = half_day_count * (daily_rate * 0.5);
             let late_units = row.get::<i64, _>("late_units") as f64;
             let late_deduction = row.get::<i64, _>("late_deduction") as f64 / 100.0;
             let total_deductions = late_deduction + half_day_deduction + absence_deduction;
@@ -2512,6 +2517,7 @@ async fn payroll_generate_cutoff_impl(
          COALESCE(MAX(u.daily_rate_centavos), MAX(p.base_pay_centavos), 0) AS daily_rate_centavos, \
          COUNT(*) AS actual_days, \
          SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) < 18000 OR substr(p.actual_time_in, 12, 5) >= '12:00')) THEN 1 ELSE 0 END) AS half_day_count, \
+         COALESCE(SUM(p.half_day_deduction_centavos), 0) AS half_day_deduction_centavos, \
          SUM(p.late_hours) AS late_units, \
          SUM(p.late_deduction_centavos) AS late_deduction_centavos, \
          u.payroll_profile_id \
@@ -2637,8 +2643,16 @@ async fn payroll_generate_cutoff_impl(
         } else {
             custom_number("regularHolidayDays").unwrap_or(0.0)
         };
-        let half_day_count = custom_number("halfDayCount")
-            .unwrap_or(row.get::<i64, _>("half_day_count") as f64);
+        let half_day_deduction_from_db = row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0;
+        let half_day_deduction_opt = Some(custom_number("halfDayDeduction").unwrap_or(half_day_deduction_from_db));
+        let half_day_unit = (daily_rate_centavos as f64 / 100.0) * half_day_fraction;
+        let half_day_count = custom_number("halfDayCount").unwrap_or_else(|| {
+            if half_day_unit > 0.0 {
+                half_day_deduction_opt.unwrap_or(0.0) / half_day_unit
+            } else {
+                row.get::<i64, _>("half_day_count") as f64
+            }
+        });
         let overtime_hours = if is_intern {
             0.0
         } else {
@@ -2674,6 +2688,7 @@ async fn payroll_generate_cutoff_impl(
             late_deduction,
             half_day_count,
             half_day_fraction,
+            half_day_deduction: half_day_deduction_opt,
             absent_days,
             absence_deduction: None,
             overtime_hours,
@@ -3216,6 +3231,7 @@ fn cutoff_input(value: &serde_json::Value) -> crate::services::cutoff_payroll::C
         late_deduction: n("lateDeduction"),
         half_day_count: n("halfDayCount"),
         half_day_fraction: n("halfDayFraction"),
+        half_day_deduction: opt_n("halfDayDeduction"),
         absent_days: n("absentDays"),
         absence_deduction: opt_n("absenceDeduction"),
         overtime_hours: n("overtimeHours"),
@@ -5712,6 +5728,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 0.0,
@@ -5751,6 +5768,7 @@ mod tests {
             late_deduction: 0.0,
             half_day_count: 0.0,
             half_day_fraction: 0.5,
+            half_day_deduction: None,
             absent_days: 0.0,
             absence_deduction: None,
             overtime_hours: 0.0,

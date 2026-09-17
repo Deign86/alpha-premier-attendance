@@ -10,7 +10,9 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   // P4: reject inverted logs instead of silently flooring worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const hourlyRate = input.dailyRate / 8;
-  const elapsedSeconds = Math.max(0, actualTimeOut.diff(actualTimeIn).as('seconds'));
+  const start = actualTimeIn.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
+  const payableIn = actualTimeIn < start ? start : actualTimeIn;
+  const elapsedSeconds = Math.max(0, actualTimeOut.diff(payableIn).as('seconds'));
   const workedHours = Math.min(8, Math.max(0, Math.floor(elapsedSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
