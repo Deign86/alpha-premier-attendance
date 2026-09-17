@@ -2522,8 +2522,7 @@ mod tests {
                 "3:00:00 PM".to_string()
             ]
         );
-        // …while payroll classifies the same punches as 7 worked hours with 1h undertime deduction (not half-day).
-        // Post-0.1.74: pay derives 1:1 from recorded DTR stamps; the 12:00–13:00 lunch hour is not subtracted.
+        // …while payroll classifies the same punches as 6 worked hours with 2h undertime deduction (not half-day).
         let pay = crate::services::intern_payroll::calculate(
             "2026-09-05",
             "2026-09-05T08:00:00+08:00",
@@ -2532,9 +2531,9 @@ mod tests {
         )
         .unwrap();
         assert!(!pay.is_half_day);
-        assert_eq!(pay.worked_hours, 7);
-        assert_eq!(pay.half_day_deduction_centavos, 1000);
-        assert_eq!(pay.daily_pay_centavos, 7000);
+        assert_eq!(pay.worked_hours, 6);
+        assert_eq!(pay.half_day_deduction_centavos, 2000);
+        assert_eq!(pay.daily_pay_centavos, 6000);
     }
 
     #[test]

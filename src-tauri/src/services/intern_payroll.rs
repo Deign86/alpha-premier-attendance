@@ -143,9 +143,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 2);
         assert_eq!(result.late_deduction_centavos, 2000);
-        assert_eq!(result.worked_hours, 7);
-        assert_eq!(result.half_day_deduction_centavos, 1000);
-        assert_eq!(result.daily_pay_centavos, 7000);
+        assert_eq!(result.worked_hours, 6);
+        assert_eq!(result.half_day_deduction_centavos, 2000);
+        assert_eq!(result.daily_pay_centavos, 6000);
     }
     #[test]
     fn grace_period_applies_within_08_00_to_08_15() {
@@ -236,9 +236,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 3);
         assert_eq!(result.late_deduction_centavos, 3000);
-        assert_eq!(result.worked_hours, 6);
-        assert_eq!(result.half_day_deduction_centavos, 2000);
-        assert_eq!(result.daily_pay_centavos, 6000);
+        assert_eq!(result.worked_hours, 5);
+        assert_eq!(result.half_day_deduction_centavos, 3000);
+        assert_eq!(result.daily_pay_centavos, 5000);
     }
 
     #[test]
@@ -267,10 +267,10 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.worked_hours, 6);
         assert!(!result.is_half_day);
-        assert_eq!(result.half_day_deduction_centavos, 1000);
-        assert_eq!(result.daily_pay_centavos, 7000);
+        assert_eq!(result.half_day_deduction_centavos, 2000);
+        assert_eq!(result.daily_pay_centavos, 6000);
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn close_boundary_is_minute_precise() {
-        // Under new policy, timing out before 17:00 does not force half-day; 16:59:59 ceils to 8 worked hours (full day).
+        // 16:59:59 is 8h 59m 59s elapsed - 1h lunch = 7h 59m 59s -> 7 worked hours.
         let just_before = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
@@ -347,21 +347,22 @@ mod tests {
         )
         .unwrap();
         assert!(!just_before.is_half_day);
-        assert_eq!(just_before.daily_pay_centavos, 8000);
+        assert_eq!(just_before.worked_hours, 7);
+        assert_eq!(just_before.daily_pay_centavos, 7000);
         for time_out in [
             "2026-08-01T17:00:00+08:00",
             "2026-08-01T17:00:01+08:00",
         ] {
             let result = calculate("2026-08-01", "2026-08-01T08:00:00+08:00", time_out, true).unwrap();
             assert!(!result.is_half_day);
+            assert_eq!(result.worked_hours, 8);
             assert_eq!(result.daily_pay_centavos, 8000);
         }
     }
 
     #[test]
     fn afternoon_arrival_at_noon_is_half_day() {
-        // Post-0.1.74: 12:00–17:00 (5h elapsed, ceiled) pays 5h with no
-        // 12:00–13:00 subtraction; arrival at/after 12:00 is still half-day.
+        // 12:00–17:00 (5h elapsed - 1h lunch = 4h worked) pays 4h; arrival at/after 12:00 is half-day.
         let noon = calculate(
             "2026-08-01",
             "2026-08-01T12:00:00+08:00",
@@ -370,9 +371,9 @@ mod tests {
         )
         .unwrap();
         assert!(noon.is_half_day);
-        assert_eq!(noon.worked_hours, 5);
-        assert_eq!(noon.half_day_deduction_centavos, 3000);
-        assert_eq!(noon.daily_pay_centavos, 5000);
+        assert_eq!(noon.worked_hours, 4);
+        assert_eq!(noon.half_day_deduction_centavos, 4000);
+        assert_eq!(noon.daily_pay_centavos, 4000);
     }
 
     #[test]

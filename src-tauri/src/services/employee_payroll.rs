@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn calculate_reports_hours_worked_from_dtr() {
         let result = calculate(
-            "2026-08-01T09:00:00+08:00",
+            "2026-08-01T08:00:00+08:00",
             "2026-08-01T17:00:00+08:00",
             100_000,
         )
@@ -159,22 +159,22 @@ mod tests {
 
     #[test]
     fn calculate_early_clock_out_before_5pm_is_undertime_not_half_day() {
-        // 08:00 to 15:00: 7 worked hours, 1 hour unrendered deducted (12,500 centavos, not half-day).
+        // 08:00 to 15:00: 6 worked hours (7h - 1h lunch), 2 hours unrendered deducted (25,000 centavos, not half-day).
         let result = calculate(
             "2026-08-01T08:00:00+08:00",
             "2026-08-01T15:00:00+08:00",
             100_000,
         )
         .unwrap();
-        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.worked_hours, 6);
         assert!(!result.is_half_day);
-        assert_eq!(result.half_day_deduction_centavos, 12_500);
-        assert_eq!(result.daily_pay_centavos, 87_500);
+        assert_eq!(result.half_day_deduction_centavos, 25_000);
+        assert_eq!(result.daily_pay_centavos, 75_000);
     }
 
     #[test]
     fn close_boundary_is_minute_precise() {
-        // Under new policy, timing out before 17:00 does not force half-day; 16:59:59 ceils to 8 worked hours (full day).
+        // 16:59:59 is 8h 59m 59s elapsed - 1h lunch = 7h 59m 59s -> 7 worked hours.
         let just_before = calculate(
             "2026-08-01T08:00:00+08:00",
             "2026-08-01T16:59:59+08:00",
@@ -182,13 +182,15 @@ mod tests {
         )
         .unwrap();
         assert!(!just_before.is_half_day);
-        assert_eq!(just_before.daily_pay_centavos, 100_000);
+        assert_eq!(just_before.worked_hours, 7);
+        assert_eq!(just_before.daily_pay_centavos, 87_500);
         for time_out in [
             "2026-08-01T17:00:00+08:00",
             "2026-08-01T17:00:01+08:00",
         ] {
             let result = calculate("2026-08-01T08:00:00+08:00", time_out, 100_000).unwrap();
             assert!(!result.is_half_day);
+            assert_eq!(result.worked_hours, 8);
             assert_eq!(result.daily_pay_centavos, 100_000);
         }
     }
