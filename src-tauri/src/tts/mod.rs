@@ -80,6 +80,7 @@ pub struct TtsManager {
 }
 
 struct TtsManagerInner {
+    epoch: u64,
     active_cancel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -87,6 +88,7 @@ impl TtsManager {
     pub fn new(config: TtsConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TtsManagerInner {
+                epoch: 0,
                 active_cancel: None,
             })),
             audio_player: AudioPlayer::new(),
@@ -98,6 +100,7 @@ impl TtsManager {
     pub async fn stop(&self) {
         self.audio_player.stop().await;
         let mut inner = self.inner.lock().await;
+        inner.epoch = inner.epoch.wrapping_add(1);
         if let Some(cancel) = inner.active_cancel.take() {
             let _ = cancel.send(());
         }
@@ -172,6 +175,10 @@ impl TtsManager {
 
         // Stop any active speech before starting a new one
         self.stop().await;
+        let current_epoch = {
+            let inner = self.inner.lock().await;
+            inner.epoch
+        };
 
         let rate = opts.rate.unwrap_or(self.config.rate);
         let volume = opts.volume.unwrap_or(self.config.volume);
@@ -186,8 +193,22 @@ impl TtsManager {
         // 1. Attempt Cloned Bea audio playback
         if plan.includes_cloned() {
             if let Some(cached_wav) = find_cloned_bea_wav(app_handle, &sanitized) {
+                if self.inner.lock().await.epoch != current_epoch {
+                    return Ok(TtsSpeakResult {
+                        success: false,
+                        engine_used: "none".into(),
+                        message: Some("Playback cancelled by newer speech request".into()),
+                    });
+                }
                 match self.audio_player.play_wav(&cached_wav, volume, rate, None, true).await {
                     Ok(()) => {
+                        if self.inner.lock().await.epoch != current_epoch {
+                            return Ok(TtsSpeakResult {
+                                success: false,
+                                engine_used: "none".into(),
+                                message: Some("Playback cancelled by newer speech request".into()),
+                            });
+                        }
                         return Ok(TtsSpeakResult {
                             success: true,
                             engine_used: "cloned-bea".into(),
@@ -217,6 +238,14 @@ impl TtsManager {
 
         // 2. Attempt Piper TTS
         if plan.includes_piper() {
+            if self.inner.lock().await.epoch != current_epoch {
+                return Ok(TtsSpeakResult {
+                    success: false,
+                    engine_used: "none".into(),
+                    message: Some("Playback cancelled by newer speech request".into()),
+                });
+            }
+
             let piper_bin = piper::find_piper_binary(app_handle, self.config.piper_path.as_deref());
             let model_info = piper::find_voice_model(app_handle, requested_model);
 
@@ -239,12 +268,28 @@ impl TtsManager {
                 .await
                 {
                     Ok(()) => {
+                        if self.inner.lock().await.epoch != current_epoch {
+                            let _ = std::fs::remove_file(&output_wav);
+                            return Ok(TtsSpeakResult {
+                                success: false,
+                                engine_used: "none".into(),
+                                message: Some("Playback cancelled by newer speech request".into()),
+                            });
+                        }
+
                         match self
                             .audio_player
                             .play_wav(&output_wav, volume, rate, Some(output_wav.clone()), true)
                             .await
                         {
                             Ok(()) => {
+                                if self.inner.lock().await.epoch != current_epoch {
+                                    return Ok(TtsSpeakResult {
+                                        success: false,
+                                        engine_used: "none".into(),
+                                        message: Some("Playback cancelled by newer speech request".into()),
+                                    });
+                                }
                                 return Ok(TtsSpeakResult {
                                     success: true,
                                     engine_used: "piper".into(),
@@ -276,6 +321,13 @@ impl TtsManager {
         }
 
         if plan.includes_sapi() && windows_sapi::is_sapi_available() {
+            if self.inner.lock().await.epoch != current_epoch {
+                return Ok(TtsSpeakResult {
+                    success: false,
+                    engine_used: "none".into(),
+                    message: Some("Playback cancelled by newer speech request".into()),
+                });
+            }
             match windows_sapi::spawn_sapi_speech(
                 &sanitized,
                 Some(rate),

@@ -291,10 +291,12 @@ let activeAudioElement: HTMLAudioElement | null = null;
 export async function previewVoiceClip(audioUrl: string): Promise<boolean> {
   stopClonedBeaAudio();
   if (!('window' in globalThis) || !('Audio' in globalThis)) return false;
+  const playEpoch = clonedAudioEpoch;
   try {
-    if (await attemptAudioPlay(audioUrl, 1.0, 1.0)) return true;
+    if (await attemptAudioPlay(audioUrl, 1.0, 1.0, playEpoch)) return true;
+    if (playEpoch !== clonedAudioEpoch) return false;
     const wavFallback = resolveWavFallbackUrl(audioUrl);
-    if (wavFallback !== audioUrl) return attemptAudioPlay(wavFallback, 1.0, 1.0);
+    if (wavFallback !== audioUrl) return attemptAudioPlay(wavFallback, 1.0, 1.0, playEpoch);
     return false;
   } catch (error) {
     console.warn('Voice clip preview failed:', error);
@@ -337,11 +339,21 @@ export function isClonedBeaPhraseAvailable(phrase: string): boolean {
 }
 
 let activeAudioCancel: (() => void) | null = null;
+let clonedAudioEpoch = 0;
+
+/**
+ * Returns true if HTML5 Audio is currently playing a cloned voice clip.
+ */
+export function isClonedBeaAudioPlaying(): boolean {
+  return activeAudioElement !== null && !activeAudioElement.paused;
+}
 
 /**
  * Immediately stops any playing cloned voice audio playback.
+ * Silences volume immediately to eliminate audio popping/transients on cutoff.
  */
 export function stopClonedBeaAudio(): void {
+  clonedAudioEpoch += 1;
   if (activeAudioCancel) {
     try {
       activeAudioCancel();
@@ -352,8 +364,10 @@ export function stopClonedBeaAudio(): void {
   }
   if (activeAudioElement) {
     try {
+      activeAudioElement.volume = 0;
       activeAudioElement.pause();
       activeAudioElement.currentTime = 0;
+      activeAudioElement.src = '';
     } catch {
       // Ignore pause errors
     }
@@ -371,6 +385,7 @@ export async function playClonedBeaAudio(
   rate = 1.0,
 ): Promise<boolean> {
   stopClonedBeaAudio();
+  const playEpoch = clonedAudioEpoch;
 
   // In Tauri desktop environment, prefer native Rodio playback for seamless hardware output
   // ONLY if audioUrl maps to a recognized fixed announcement phrase.
@@ -384,6 +399,7 @@ export async function playClonedBeaAudio(
         volume,
         rate,
       });
+      if (playEpoch !== clonedAudioEpoch) return false;
       if (result && result.success && result.engineUsed === 'cloned-bea') {
         return true;
       }
@@ -392,16 +408,27 @@ export async function playClonedBeaAudio(
     }
   }
 
+  if (playEpoch !== clonedAudioEpoch) return false;
+
   if (!('window' in globalThis) || !('Audio' in globalThis)) {
     return false;
   }
 
+  // Before starting HTML5 Audio playback in desktop Tauri, ensure any active native TTS is stopped
+  // so native Rodio/Piper and HTML5 Audio never overlap.
+  if (runningInTauri()) {
+    void tauriApi.ttsStop().catch(() => undefined);
+  }
+
   try {
-    const attempted = await attemptAudioPlay(audioUrl, volume, rate);
+    const attempted = await attemptAudioPlay(audioUrl, volume, rate, playEpoch);
+    if (playEpoch !== clonedAudioEpoch) return false;
     if (attempted) return true;
     const wavFallback = resolveWavFallbackUrl(audioUrl);
     if (wavFallback !== audioUrl) {
-      return attemptAudioPlay(wavFallback, volume, rate);
+      const fallbackAttempted = await attemptAudioPlay(wavFallback, volume, rate, playEpoch);
+      if (playEpoch !== clonedAudioEpoch) return false;
+      return fallbackAttempted;
     }
     return false;
   } catch (error) {
@@ -417,7 +444,9 @@ async function attemptAudioPlay(
   url: string,
   volume: number,
   rate: number,
+  epoch?: number,
 ): Promise<boolean> {
+  if (epoch !== undefined && epoch !== clonedAudioEpoch) return false;
   try {
     const audio = new Audio(url);
     activeAudioElement = audio;
@@ -443,7 +472,7 @@ async function attemptAudioPlay(
           if (activeAudioElement === audio) {
             activeAudioElement = null;
           }
-          resolve(ok);
+          resolve(epoch !== undefined && epoch !== clonedAudioEpoch ? false : ok);
         }
       };
 

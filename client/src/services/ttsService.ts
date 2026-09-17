@@ -14,6 +14,7 @@ import {
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
   getWorkerNameAudioUrl,
+  isClonedBeaAudioPlaying,
   playClonedBeaAudio,
   stopClonedBeaAudio,
 } from './clonedBeaVoice';
@@ -23,6 +24,7 @@ export {
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
   getWorkerNameAudioUrl,
+  isClonedBeaAudioPlaying,
   isClonedBeaPhraseAvailable,
   loadNameManifest,
   playClonedBeaAudio,
@@ -35,6 +37,7 @@ export {
 const TTS_STORAGE_KEY = 'alpha_premier_tts_settings';
 
 let activePlaybackEpoch = 0;
+let activeAnnouncementCount = 0;
 
 export const DEFAULT_TTS_SETTINGS: TtsSettings = {
   enabled: true,
@@ -500,28 +503,70 @@ export function buildScanErrorPhrase({
 }
 
 /**
+ * Atomically starts a new speech/announcement session by incrementing the
+ * playback epoch, synchronously stopping HTML5 Audio, and requesting Tauri
+ * native TTS audio/speech stop. Returns the allocated epoch.
+ */
+function beginAnnouncement(): number {
+  const epoch = ++activePlaybackEpoch;
+  stopClonedBeaAudio();
+  if (runningInTauri()) {
+    void tauriApi.ttsStop().catch((error) => {
+      console.warn('Failed to stop previous TTS speech:', error);
+    });
+  }
+  return epoch;
+}
+
+const TRANSITION_GAP_MS = 60;
+
+/**
+ * When interrupting an in-flight announcement, inserts a brief micro-pause
+ * to let audio buffers flush and provide a smooth acoustic transition.
+ */
+async function smoothlyTransitionIfInterrupted(
+  wasInterrupted: boolean,
+  currentEpoch: number,
+): Promise<boolean> {
+  if (!wasInterrupted) return true;
+  await new Promise<void>((resolve) => setTimeout(resolve, TRANSITION_GAP_MS));
+  return currentEpoch === activePlaybackEpoch;
+}
+
+/**
  * Shared Step-2 of cloned-voice splicing: play the pre-rendered cloned name
  * clip, falling back to live Piper synthesis of the name. Owns the Bea-first
  * fallback rule (and its single warn path) so the four splice call sites
  * cannot drift apart. Resolves to true when the name was heard in either
  * form. Cloned-clip playback errors propagate (each caller owns its
  * splice-abort fallback); only the Piper fallback is caught here.
+ * If playback was cancelled (epoch changed), returns false immediately
+ * without executing the Piper fallback to prevent audio overlap.
  */
 async function playNameWithPiperFallback(
   nameUrl: string | null,
   cleanName: string,
   settings: Pick<TtsSettings, 'voiceModel' | 'rate' | 'volume'>,
   warnLabel: string,
+  epoch: number,
 ): Promise<boolean> {
-  if (nameUrl && (await playClonedBeaAudio(nameUrl, settings.volume, settings.rate))) return true;
+  if (epoch !== activePlaybackEpoch) return false;
+  if (nameUrl) {
+    const played = await playClonedBeaAudio(nameUrl, settings.volume, settings.rate);
+    if (epoch !== activePlaybackEpoch) return false;
+    if (played) return true;
+  }
+  if (epoch !== activePlaybackEpoch) return false;
   try {
-    await tauriApi.ttsSpeak(cleanName, {
+    stopClonedBeaAudio();
+    const result = await tauriApi.ttsSpeak(cleanName, {
       engine: 'piper',
       voiceModel: settings.voiceModel,
       rate: settings.rate,
       volume: settings.volume,
     });
-    return true;
+    if (epoch !== activePlaybackEpoch) return false;
+    return result?.success ?? true;
   } catch (error) {
     console.warn(warnLabel, error);
     return false;
@@ -540,66 +585,79 @@ export async function announceAttendance(
     return null;
   }
 
-  const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
-  const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
-  const currentEpoch = ++activePlaybackEpoch;
+  const wasInterrupted = activeAnnouncementCount > 0 || isClonedBeaAudioPlaying();
+  activeAnnouncementCount += 1;
+  const currentEpoch = beginAnnouncement();
 
-  // Hybrid Splicing: When using Ma'am Bea cloned voice and a dynamic employee/intern name is present:
-  // 1. Play pre-rendered cloned prefix carrier ("Good morning,", "Goodbye,", etc.)
-  // 2. Synthesize and speak dynamic name via local Piper engine on kiosk
-  // 3. Play pre-rendered cloned suffix carrier ("Your time in has been recorded.", etc.)
-  if (isClonedBea && cleanName.length > 0) {
-    const { prefix: prefixPhrase, suffix: suffixPhrase } = resolveAttendanceSegments(options);
-    const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
-    const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
-    const targetPersonId = options.personId || options.userId;
-    const clonedNameUrl =
-      (await getWorkerNameAudioUrl(targetPersonId)) ??
-      getClonedBeaNameAudioUrl(targetPersonId, cleanName);
+  try {
+    if (wasInterrupted) {
+      const proceed = await smoothlyTransitionIfInterrupted(wasInterrupted, currentEpoch);
+      if (!proceed) return null;
+    }
 
-    // If both static cloned segments are present in cache, execute sequential playback:
-    // Case A (Existing Intern with generated name file): cloned prefix -> cloned name -> cloned suffix (all Ma'am Bea)
-    // Case B (Future Intern/Employee): cloned prefix -> live Piper name -> cloned suffix (hybrid splicing)
-    if (prefixUrl && suffixUrl) {
-      try {
-        // Step 1: Play cloned greeting / prefix
-        const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
-        if (currentEpoch !== activePlaybackEpoch) return null;
-        if (prefixPlayed) {
-          // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
-          await playNameWithPiperFallback(
-            clonedNameUrl,
-            cleanName,
-            activeSettings,
-            'Local Piper synthesis for dynamic name failed:',
-          );
+    const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
+    const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
+
+    // Hybrid Splicing: When using Ma'am Bea cloned voice and a dynamic employee/intern name is present:
+    // 1. Play pre-rendered cloned prefix carrier ("Good morning,", "Goodbye,", etc.)
+    // 2. Synthesize and speak dynamic name via local Piper engine on kiosk
+    // 3. Play pre-rendered cloned suffix carrier ("Your time in has been recorded.", etc.)
+    if (isClonedBea && cleanName.length > 0) {
+      const { prefix: prefixPhrase, suffix: suffixPhrase } = resolveAttendanceSegments(options);
+      const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+      const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
+      if (prefixUrl && suffixUrl) {
+        try {
+          // Step 1: Play cloned greeting / prefix
+          const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
           if (currentEpoch !== activePlaybackEpoch) return null;
+          if (prefixPlayed) {
+            const targetPersonId = options.personId || options.userId;
+            const clonedNameUrl =
+              (await getWorkerNameAudioUrl(targetPersonId)) ??
+              getClonedBeaNameAudioUrl(targetPersonId, cleanName);
+            if (currentEpoch !== activePlaybackEpoch) return null;
 
-          // Step 3: Play cloned carrier suffix segment
-          await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
-          if (currentEpoch !== activePlaybackEpoch) return null;
+            // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+            const namePlayed = await playNameWithPiperFallback(
+              clonedNameUrl,
+              cleanName,
+              activeSettings,
+              'Local Piper synthesis for dynamic name failed:',
+              currentEpoch,
+            );
+            if (currentEpoch !== activePlaybackEpoch) return null;
 
-          return {
-            success: true,
-            engineUsed: 'cloned-bea',
-          };
+            if (namePlayed) {
+              // Step 3: Play cloned carrier suffix segment
+              await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+              if (currentEpoch !== activePlaybackEpoch) return null;
+
+              return {
+                success: true,
+                engineUsed: 'cloned-bea',
+              };
+            }
+          }
+        } catch (spliceErr) {
+          console.warn('Hybrid splicing failed, falling back to full Piper/SAPI synthesis:', spliceErr);
         }
-      } catch (spliceErr) {
-        console.warn('Hybrid splicing failed, falling back to full Piper/SAPI synthesis:', spliceErr);
       }
     }
+
+    if (currentEpoch !== activePlaybackEpoch) return null;
+
+    // Pure static phrase or full fallback phrase
+    const phrase = buildAttendancePhrase(options);
+    return await speakText(phrase, {
+      engine: activeSettings.engine,
+      voiceModel: activeSettings.voiceModel,
+      rate: activeSettings.rate,
+      volume: activeSettings.volume,
+    }, currentEpoch);
+  } finally {
+    activeAnnouncementCount = Math.max(0, activeAnnouncementCount - 1);
   }
-
-  if (currentEpoch !== activePlaybackEpoch) return null;
-
-  // Pure static phrase or full fallback phrase
-  const phrase = buildAttendancePhrase(options);
-  return speakText(phrase, {
-    engine: activeSettings.engine,
-    voiceModel: activeSettings.voiceModel,
-    rate: activeSettings.rate,
-    volume: activeSettings.volume,
-  });
 }
 
 /**
@@ -619,122 +677,141 @@ export async function announceBathroom(
 
   const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
   const cleanName = sanitizeTextForSpeech(options.employeeName ?? '', 100);
-  const currentEpoch = ++activePlaybackEpoch;
+  const wasInterrupted = activeAnnouncementCount > 0 || isClonedBeaAudioPlaying();
+  activeAnnouncementCount += 1;
+  const currentEpoch = beginAnnouncement();
 
-  if (isClonedBea) {
-    const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
-    const targetPersonId = options.personId;
+  try {
+    if (wasInterrupted) {
+      const proceed = await smoothlyTransitionIfInterrupted(wasInterrupted, currentEpoch);
+      if (!proceed) return null;
+    }
 
-    // Bea-first return-window reminder for kiosk self-service checkout.
-    const playReturnReminder = async (): Promise<void> => {
-      if (options.remindReturnWindow !== true) return;
-      const reminderUrl = getClonedBeaAudioUrl(RETURN_REMINDER_PHRASE);
-      if (!reminderUrl) return;
-      try {
-        await playClonedBeaAudio(reminderUrl, activeSettings.volume, activeSettings.rate);
-      } catch (error) {
-        console.warn('Return-window reminder playback failed:', error);
-      }
-    };
+    if (isClonedBea) {
+      const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
+      const targetPersonId = options.personId;
 
-    if (cleanName.length > 0) {
-      const nameUrl =
-        (await getWorkerNameAudioUrl(targetPersonId)) ??
-        getClonedBeaNameAudioUrl(targetPersonId, cleanName);
-
-      if (options.action === 'CHECKOUT') {
-        const prefixPhrase = `${genderLabel} bathroom key checked out for`;
-        const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
-
-        if (prefixUrl) {
-          try {
-            const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
-            if (currentEpoch !== activePlaybackEpoch) return null;
-            if (prefixPlayed) {
-              // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
-              const namePlayed = await playNameWithPiperFallback(
-                nameUrl,
-                cleanName,
-                activeSettings,
-                'Local Piper synthesis for bathroom name failed:',
-              );
-              if (currentEpoch !== activePlaybackEpoch) return null;
-              if (namePlayed) {
-                await playReturnReminder();
-                if (currentEpoch !== activePlaybackEpoch) return null;
-                return { success: true, engineUsed: 'cloned-bea' };
-              }
-            }
-          } catch (error) {
-            console.warn('Bathroom checkout cloned voice splicing failed:', error);
-          }
+      // Bea-first return-window reminder for kiosk self-service checkout.
+      const playReturnReminder = async (): Promise<void> => {
+        if (options.remindReturnWindow !== true) return;
+        const reminderUrl = getClonedBeaAudioUrl(RETURN_REMINDER_PHRASE);
+        if (!reminderUrl) return;
+        try {
+          await playClonedBeaAudio(reminderUrl, activeSettings.volume, activeSettings.rate);
+        } catch (error) {
+          console.warn('Return-window reminder playback failed:', error);
         }
-      } else {
-        // RETURN with dynamic or known employee name: "Thank you, [Name]. Male/Female bathroom key returned."
-        const prefixPhrase = 'Thank you,';
-        const suffixPhrase = `${genderLabel} bathroom key returned.`;
-        const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
-        const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
+      };
 
-        if (prefixUrl && suffixUrl) {
-          try {
-            const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
-            if (currentEpoch !== activePlaybackEpoch) return null;
-            if (prefixPlayed) {
-              // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
-              const namePlayed = await playNameWithPiperFallback(
-                nameUrl,
-                cleanName,
-                activeSettings,
-                'Local Piper synthesis for bathroom name failed:',
-              );
+      if (cleanName.length > 0) {
+        if (options.action === 'CHECKOUT') {
+          const prefixPhrase = `${genderLabel} bathroom key checked out for`;
+          const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+
+          if (prefixUrl) {
+            try {
+              const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
               if (currentEpoch !== activePlaybackEpoch) return null;
-              if (namePlayed) {
-                const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+              if (prefixPlayed) {
+                const nameUrl =
+                  (await getWorkerNameAudioUrl(targetPersonId)) ??
+                  getClonedBeaNameAudioUrl(targetPersonId, cleanName);
                 if (currentEpoch !== activePlaybackEpoch) return null;
-                if (suffixPlayed) {
+
+                // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+                const namePlayed = await playNameWithPiperFallback(
+                  nameUrl,
+                  cleanName,
+                  activeSettings,
+                  'Local Piper synthesis for bathroom name failed:',
+                  currentEpoch,
+                );
+                if (currentEpoch !== activePlaybackEpoch) return null;
+                if (namePlayed) {
+                  await playReturnReminder();
+                  if (currentEpoch !== activePlaybackEpoch) return null;
                   return { success: true, engineUsed: 'cloned-bea' };
                 }
               }
+            } catch (error) {
+              console.warn('Bathroom checkout cloned voice splicing failed:', error);
             }
-          } catch (error) {
-            console.warn('Bathroom return cloned voice splicing failed:', error);
+          }
+        } else {
+          // RETURN with dynamic or known employee name: "Thank you, [Name]. Male/Female bathroom key returned."
+          const prefixPhrase = 'Thank you,';
+          const suffixPhrase = `${genderLabel} bathroom key returned.`;
+          const prefixUrl = getClonedBeaAudioUrl(prefixPhrase);
+          const suffixUrl = getClonedBeaAudioUrl(suffixPhrase);
+
+          if (prefixUrl && suffixUrl) {
+            try {
+              const prefixPlayed = await playClonedBeaAudio(prefixUrl, activeSettings.volume, activeSettings.rate);
+              if (currentEpoch !== activePlaybackEpoch) return null;
+              if (prefixPlayed) {
+                const nameUrl =
+                  (await getWorkerNameAudioUrl(targetPersonId)) ??
+                  getClonedBeaNameAudioUrl(targetPersonId, cleanName);
+                if (currentEpoch !== activePlaybackEpoch) return null;
+
+                // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+                const namePlayed = await playNameWithPiperFallback(
+                  nameUrl,
+                  cleanName,
+                  activeSettings,
+                  'Local Piper synthesis for bathroom name failed:',
+                  currentEpoch,
+                );
+                if (currentEpoch !== activePlaybackEpoch) return null;
+                if (namePlayed) {
+                  const suffixPlayed = await playClonedBeaAudio(suffixUrl, activeSettings.volume, activeSettings.rate);
+                  if (currentEpoch !== activePlaybackEpoch) return null;
+                  if (suffixPlayed) {
+                    return { success: true, engineUsed: 'cloned-bea' };
+                  }
+                }
+              }
+            } catch (error) {
+              console.warn('Bathroom return cloned voice splicing failed:', error);
+            }
           }
         }
-      }
-    } else {
-      // Anonymous bathroom checkout or return (no employee name)
-      const staticPhrase = options.action === 'CHECKOUT'
-        ? `${genderLabel} bathroom key checked out.`
-        : `${genderLabel} bathroom key returned.`;
-      const staticUrl = getClonedBeaAudioUrl(staticPhrase);
-      if (staticUrl) {
-        try {
-          const played = await playClonedBeaAudio(staticUrl, activeSettings.volume, activeSettings.rate);
-          if (currentEpoch !== activePlaybackEpoch) return null;
-          if (played) {
-            if (options.action === 'CHECKOUT') {
-              await playReturnReminder();
-              if (currentEpoch !== activePlaybackEpoch) return null;
+      } else {
+        // Anonymous bathroom checkout or return (no employee name)
+        const staticPhrase = options.action === 'CHECKOUT'
+          ? `${genderLabel} bathroom key checked out.`
+          : `${genderLabel} bathroom key returned.`;
+        const staticUrl = getClonedBeaAudioUrl(staticPhrase);
+        if (staticUrl) {
+          try {
+            const played = await playClonedBeaAudio(staticUrl, activeSettings.volume, activeSettings.rate);
+            if (currentEpoch !== activePlaybackEpoch) return null;
+            if (played) {
+              if (options.action === 'CHECKOUT') {
+                await playReturnReminder();
+                if (currentEpoch !== activePlaybackEpoch) return null;
+              }
+              return { success: true, engineUsed: 'cloned-bea' };
             }
-            return { success: true, engineUsed: 'cloned-bea' };
+          } catch (error) {
+            console.warn('Bathroom static cloned voice playback failed:', error);
           }
-        } catch (error) {
-          console.warn('Bathroom static cloned voice playback failed:', error);
         }
       }
     }
+
+    if (currentEpoch !== activePlaybackEpoch) return null;
+
+    const phrase = buildBathroomPhrase(options);
+    return await speakText(phrase, {
+      engine: activeSettings.engine,
+      voiceModel: activeSettings.voiceModel,
+      rate: activeSettings.rate,
+      volume: activeSettings.volume,
+    }, currentEpoch);
+  } finally {
+    activeAnnouncementCount = Math.max(0, activeAnnouncementCount - 1);
   }
-
-  if (currentEpoch !== activePlaybackEpoch) return null;
-
-  const phrase = buildBathroomPhrase(options);
-  return speakText(phrase, {
-    engine: activeSettings.engine,
-    voiceModel: activeSettings.voiceModel,
-    rate: activeSettings.rate,
-    volume: activeSettings.volume,
-  });
 }
 
 /**
@@ -750,12 +827,25 @@ export async function announceAdminAssist(
     return null;
   }
 
-  return speakText('Admin assist card recognized. Please select an employee.', {
-    engine: activeSettings.engine,
-    voiceModel: activeSettings.voiceModel,
-    rate: activeSettings.rate,
-    volume: activeSettings.volume,
-  });
+  const wasInterrupted = activeAnnouncementCount > 0 || isClonedBeaAudioPlaying();
+  activeAnnouncementCount += 1;
+  const currentEpoch = beginAnnouncement();
+
+  try {
+    if (wasInterrupted) {
+      const proceed = await smoothlyTransitionIfInterrupted(wasInterrupted, currentEpoch);
+      if (!proceed) return null;
+    }
+
+    return await speakText('Admin assist card recognized. Please select an employee.', {
+      engine: activeSettings.engine,
+      voiceModel: activeSettings.voiceModel,
+      rate: activeSettings.rate,
+      volume: activeSettings.volume,
+    }, currentEpoch);
+  } finally {
+    activeAnnouncementCount = Math.max(0, activeAnnouncementCount - 1);
+  }
 }
 
 /**
@@ -772,67 +862,82 @@ export async function announceScanError(
     return null;
   }
 
-  const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
-  const currentEpoch = ++activePlaybackEpoch;
+  const wasInterrupted = activeAnnouncementCount > 0 || isClonedBeaAudioPlaying();
+  activeAnnouncementCount += 1;
+  const currentEpoch = beginAnnouncement();
 
-  // Bea-first: splice the static "-by" carrier with the holder's cloned name clip
-  // so the holder is actually named (previously the name was dropped in Bea mode).
-  // Piper speaks only the holder name when no cloned clip exists for them.
-  if (isClonedBea && options.errorCode === 'BATHROOM_KEY_IN_USE') {
-    const holderName = sanitizeTextForSpeech(options.activeHolderName ?? '', 100);
-    if (holderName.length > 0) {
-      const holderGender =
-        options.genderKey === 'MALE' ? 'male' : options.genderKey === 'FEMALE' ? 'female' : '';
-      const holderPrefix =
-        holderGender.length > 0
-          ? `The ${holderGender} bathroom key is currently in use by`
-          : 'The bathroom key is currently in use by';
-      const holderPrefixUrl = getClonedBeaAudioUrl(holderPrefix);
-      const holderId = options.activeHolderId?.trim() ? options.activeHolderId.trim() : null;
-      const holderNameUrl =
-        (await getWorkerNameAudioUrl(holderId)) ?? getClonedBeaNameAudioUrl(holderId, holderName);
-      if (holderPrefixUrl) {
-        try {
-          const prefixPlayed = await playClonedBeaAudio(
-            holderPrefixUrl,
-            activeSettings.volume,
-            activeSettings.rate,
-          );
-          if (currentEpoch !== activePlaybackEpoch) return null;
-          if (prefixPlayed) {
-            // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
-            const holderPlayed = await playNameWithPiperFallback(
-              holderNameUrl,
-              holderName,
-              activeSettings,
-              'Local Piper synthesis for key-holder name failed:',
+  try {
+    if (wasInterrupted) {
+      const proceed = await smoothlyTransitionIfInterrupted(wasInterrupted, currentEpoch);
+      if (!proceed) return null;
+    }
+
+    const isClonedBea = mode.engine === 'cloned-bea' || mode.engine === 'auto';
+
+    // Bea-first: splice the static "-by" carrier with the holder's cloned name clip
+    // so the holder is actually named (previously the name was dropped in Bea mode).
+    // Piper speaks only the holder name when no cloned clip exists for them.
+    if (isClonedBea && options.errorCode === 'BATHROOM_KEY_IN_USE') {
+      const holderName = sanitizeTextForSpeech(options.activeHolderName ?? '', 100);
+      if (holderName.length > 0) {
+        const holderGender =
+          options.genderKey === 'MALE' ? 'male' : options.genderKey === 'FEMALE' ? 'female' : '';
+        const holderPrefix =
+          holderGender.length > 0
+            ? `The ${holderGender} bathroom key is currently in use by`
+            : 'The bathroom key is currently in use by';
+        const holderPrefixUrl = getClonedBeaAudioUrl(holderPrefix);
+        if (holderPrefixUrl) {
+          try {
+            const prefixPlayed = await playClonedBeaAudio(
+              holderPrefixUrl,
+              activeSettings.volume,
+              activeSettings.rate,
             );
             if (currentEpoch !== activePlaybackEpoch) return null;
-            if (holderPlayed) {
-              return { success: true, engineUsed: 'cloned-bea' };
+            if (prefixPlayed) {
+              const holderId = options.activeHolderId?.trim() ? options.activeHolderId.trim() : null;
+              const holderNameUrl =
+                (await getWorkerNameAudioUrl(holderId)) ?? getClonedBeaNameAudioUrl(holderId, holderName);
+              if (currentEpoch !== activePlaybackEpoch) return null;
+
+              // Step 2: cloned name clip, else live Piper synthesis (shared fallback rule).
+              const holderPlayed = await playNameWithPiperFallback(
+                holderNameUrl,
+                holderName,
+                activeSettings,
+                'Local Piper synthesis for key-holder name failed:',
+                currentEpoch,
+              );
+              if (currentEpoch !== activePlaybackEpoch) return null;
+              if (holderPlayed) {
+                return { success: true, engineUsed: 'cloned-bea' };
+              }
             }
+          } catch (error) {
+            console.warn('Key-in-use cloned voice splicing failed:', error);
           }
-        } catch (error) {
-          console.warn('Key-in-use cloned voice splicing failed:', error);
         }
       }
     }
+
+    if (currentEpoch !== activePlaybackEpoch) return null;
+
+    const phrase = isClonedBea
+      ? (options.errorCode === 'UNKNOWN_RFID_CARD' || options.errorCode === 'USER_NOT_FOUND'
+          ? "Sorry, that card wasn't recognized. Please try scanning again."
+          : buildScanErrorPhrase({ ...options, activeHolderName: null }))
+      : buildScanErrorPhrase(options);
+
+    return await speakText(phrase, {
+      engine: activeSettings.engine,
+      voiceModel: activeSettings.voiceModel,
+      rate: activeSettings.rate,
+      volume: activeSettings.volume,
+    }, currentEpoch);
+  } finally {
+    activeAnnouncementCount = Math.max(0, activeAnnouncementCount - 1);
   }
-
-  if (currentEpoch !== activePlaybackEpoch) return null;
-
-  const phrase = isClonedBea
-    ? (options.errorCode === 'UNKNOWN_RFID_CARD' || options.errorCode === 'USER_NOT_FOUND'
-        ? "Sorry, that card wasn't recognized. Please try scanning again."
-        : buildScanErrorPhrase({ ...options, activeHolderName: null }))
-    : buildScanErrorPhrase(options);
-
-  return speakText(phrase, {
-    engine: activeSettings.engine,
-    voiceModel: activeSettings.voiceModel,
-    rate: activeSettings.rate,
-    volume: activeSettings.volume,
-  });
 }
 
 /**
@@ -841,69 +946,105 @@ export async function announceScanError(
 export async function speakText(
   text: string,
   options?: TtsSpeakOptions,
+  epoch?: number,
 ): Promise<TtsSpeakResult | null> {
-  const sanitized = sanitizeTextForSpeech(text);
-  if (!sanitized) return null;
+  const isParentAnnouncement = epoch !== undefined;
+  const wasInterrupted = !isParentAnnouncement && (activeAnnouncementCount > 0 || isClonedBeaAudioPlaying());
+  if (!isParentAnnouncement) {
+    activeAnnouncementCount += 1;
+  }
+  const currentEpoch = epoch ?? beginAnnouncement();
+  if (currentEpoch !== activePlaybackEpoch) {
+    if (!isParentAnnouncement) {
+      activeAnnouncementCount = Math.max(0, activeAnnouncementCount - 1);
+    }
+    return null;
+  }
 
-  // In Tauri desktop environment, native Tauri TTS handles playback (cloned-bea, piper, SAPI) with native Rodio audio.
-  if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
+  try {
+    if (wasInterrupted) {
+      const proceed = await smoothlyTransitionIfInterrupted(wasInterrupted, currentEpoch);
+      if (!proceed) return null;
+    }
+
+    const sanitized = sanitizeTextForSpeech(text);
+    if (!sanitized) return null;
+
+    // In Tauri desktop environment, native Tauri TTS handles playback (cloned-bea, piper, SAPI) with native Rodio audio.
+    if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
+      try {
+        const result = await tauriApi.ttsSpeak(sanitized, options);
+        if (currentEpoch !== activePlaybackEpoch) return null;
+        return result;
+      } catch (error) {
+        console.warn('Native TTS speech synthesis failed:', error);
+        return {
+          success: false,
+          engineUsed: 'none',
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
+    if (options?.engine === 'cloned-bea' || options?.engine === 'auto') {
+      const cachedUrl = getClonedBeaAudioUrl(sanitized);
+      if (cachedUrl) {
+        try {
+          const played = await playClonedBeaAudio(cachedUrl, options.volume, options.rate);
+          if (currentEpoch !== activePlaybackEpoch) return null;
+          if (played) {
+            return {
+              success: true,
+              engineUsed: 'cloned-bea',
+            };
+          }
+          console.warn(
+            `Cloned voice audio playback failed for phrase: "${sanitized}". Falling back to Piper/SAPI TTS.`,
+          );
+        } catch (audioError) {
+          console.warn('Cloned voice audio playback error, falling back to Piper/SAPI:', audioError);
+        }
+      } else {
+        console.warn(
+          `Cloned voice ("Ma'am Bea") cache miss for phrase: "${sanitized}". Falling back to Piper/SAPI TTS.`,
+        );
+      }
+
+      if (currentEpoch !== activePlaybackEpoch) return null;
+
+      // Fall back gracefully to backend TTS (auto engine)
+      try {
+        const fallbackResult = await tauriApi.ttsSpeak(sanitized, { ...options, engine: 'auto' });
+        if (currentEpoch !== activePlaybackEpoch) return null;
+        return fallbackResult;
+      } catch (fallbackError) {
+        console.warn('Fallback TTS speech synthesis failed:', fallbackError);
+        return {
+          success: false,
+          engineUsed: 'none',
+          message: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        };
+      }
+    }
+
+    if (currentEpoch !== activePlaybackEpoch) return null;
+
     try {
-      return await tauriApi.ttsSpeak(sanitized, options);
+      const result = await tauriApi.ttsSpeak(sanitized, options);
+      if (currentEpoch !== activePlaybackEpoch) return null;
+      return result;
     } catch (error) {
-      console.warn('Native TTS speech synthesis failed:', error);
+      console.warn('Local TTS speech synthesis failed:', error);
       return {
         success: false,
         engineUsed: 'none',
         message: error instanceof Error ? error.message : String(error),
       };
     }
-  }
-
-  if (options?.engine === 'cloned-bea' || options?.engine === 'auto') {
-    const cachedUrl = getClonedBeaAudioUrl(sanitized);
-    if (cachedUrl) {
-      try {
-        const played = await playClonedBeaAudio(cachedUrl, options.volume, options.rate);
-        if (played) {
-          return {
-            success: true,
-            engineUsed: 'cloned-bea',
-          };
-        }
-        console.warn(
-          `Cloned voice audio playback failed for phrase: "${sanitized}". Falling back to Piper/SAPI TTS.`,
-        );
-      } catch (audioError) {
-        console.warn('Cloned voice audio playback error, falling back to Piper/SAPI:', audioError);
-      }
-    } else {
-      console.warn(
-        `Cloned voice ("Ma'am Bea") cache miss for phrase: "${sanitized}". Falling back to Piper/SAPI TTS.`,
-      );
+  } finally {
+    if (!isParentAnnouncement) {
+      activeAnnouncementCount = Math.max(0, activeAnnouncementCount - 1);
     }
-
-    // Fall back gracefully to backend TTS (auto engine)
-    try {
-      return await tauriApi.ttsSpeak(sanitized, { ...options, engine: 'auto' });
-    } catch (fallbackError) {
-      console.warn('Fallback TTS speech synthesis failed:', fallbackError);
-      return {
-        success: false,
-        engineUsed: 'none',
-        message: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
-      };
-    }
-  }
-
-  try {
-    return await tauriApi.ttsSpeak(sanitized, options);
-  } catch (error) {
-    console.warn('Local TTS speech synthesis failed:', error);
-    return {
-      success: false,
-      engineUsed: 'none',
-      message: error instanceof Error ? error.message : String(error),
-    };
   }
 }
 
@@ -911,6 +1052,7 @@ export async function speakText(
  * Immediately stops any currently playing audio or speech process.
  */
 export async function stopSpeech(): Promise<void> {
+  activeAnnouncementCount = 0;
   activePlaybackEpoch++;
   stopClonedBeaAudio();
   try {

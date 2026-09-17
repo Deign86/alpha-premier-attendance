@@ -1421,5 +1421,187 @@ describe('ttsService', () => {
       // Should NOT have attempted to play the suffix
       expect(playClonedBeaAudioSpy).toHaveBeenCalledTimes(1);
     });
+
+    it('does NOT fall back to Piper TTS when cloned name playback is interrupted by a new scan', async () => {
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaAudioUrl').mockImplementation((phrase) => `/voices/${phrase}.mp3`);
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaNameAudioUrl').mockImplementation((id) =>
+        id === 'EMP-CLONED' ? '/voices/names/Ada.mp3' : null,
+      );
+      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      let resolveAdaName: (val: boolean) => void = () => {};
+      const adaNamePromise = new Promise<boolean>((resolve) => {
+        resolveAdaName = resolve;
+      });
+
+      let resolvePerson2CanStart: () => void = () => {};
+      const person2CanStart = new Promise<void>((resolve) => {
+        resolvePerson2CanStart = resolve;
+      });
+
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockImplementation(async (source) => {
+        if (source.includes('Ada.mp3')) {
+          resolvePerson2CanStart();
+          return adaNamePromise;
+        }
+        return true;
+      });
+
+      // 1. Person 1 scans (has Bea cloned name)
+      const person1Promise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Ada Lovelace',
+        userId: 'EMP-CLONED',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
+      });
+
+      // Wait until Person 1 is actively awaiting its cloned name clip
+      await person2CanStart;
+
+      // 2. Person 2 scans while Person 1 is playing cloned name
+      const person2Promise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Bob NonCloned',
+        userId: 'EMP-NON-CLONED',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
+      });
+
+      // Simulate Person 1's name playback being interrupted (returns false)
+      resolveAdaName(false);
+
+      const [res1, res2] = await Promise.all([person1Promise, person2Promise]);
+
+      // Person 1 must abort cleanly and return null
+      expect(res1).toBeNull();
+      // Person 2 must succeed
+      expect(res2).toEqual({ success: true, engineUsed: 'cloned-bea' });
+
+      // Crucial: ttsSpeak must NEVER have been called with Ada Lovelace (no Piper fallback for interrupted cloned clip)
+      const spokenTexts = ttsSpeakSpy.mock.calls.map((call) => call[0]);
+      expect(spokenTexts).not.toContain('Ada Lovelace');
+      expect(spokenTexts).toContain('Bob NonCloned');
+    });
+
+    it('cancels in-flight Piper TTS name and does not play suffix when a new scan arrives', async () => {
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaAudioUrl').mockImplementation((phrase) => `/voices/${phrase}.mp3`);
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaNameAudioUrl').mockReturnValue(null); // All users use Piper dynamic name
+
+      let resolvePerson1Piper: (val: { success: boolean; engineUsed: 'piper' }) => void = () => {};
+      const person1PiperPromise = new Promise<{ success: boolean; engineUsed: 'piper' }>((resolve) => {
+        resolvePerson1Piper = resolve;
+      });
+
+      let resolvePerson2CanStart: () => void = () => {};
+      const person2CanStart = new Promise<void>((resolve) => {
+        resolvePerson2CanStart = resolve;
+      });
+
+      const playAudioSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
+
+      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak')
+        .mockImplementationOnce(() => {
+          resolvePerson2CanStart();
+          return person1PiperPromise;
+        })
+        .mockResolvedValue({ success: true, engineUsed: 'piper' });
+
+      // 1. Person 1 scans (uses Piper TTS for dynamic name)
+      const person1Promise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Person One',
+        userId: 'P1',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
+      });
+
+      // Wait until Person 1's Piper TTS is actively in-flight
+      await person2CanStart;
+
+      // 2. Person 2 scans while Person 1's Piper TTS is in flight
+      const person2Promise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Person Two',
+        userId: 'P2',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
+      });
+
+      // Resolve Person 1's Piper speak
+      resolvePerson1Piper({ success: true, engineUsed: 'piper' });
+
+      const [res1, res2] = await Promise.all([person1Promise, person2Promise]);
+
+      expect(res1).toBeNull();
+      expect(res2).toEqual({ success: true, engineUsed: 'cloned-bea' });
+
+      // Person 1's suffix must NOT have been played; only Person 1 prefix, Person 2 prefix, Person 2 suffix
+      // Total playAudio calls: Person 1 prefix (1), Person 2 prefix (2), Person 2 suffix (3) = 3 calls
+      expect(playAudioSpy).toHaveBeenCalledTimes(3);
+      expect(ttsSpeakSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('cuts the first scan immediately and smoothly transitions to the next scan without overlapping playback', async () => {
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaAudioUrl').mockImplementation((phrase) => `/voices/${phrase}.mp3`);
+      vi.spyOn(clonedBeaVoice, 'getClonedBeaNameAudioUrl').mockImplementation((id) =>
+        id === 'P1' ? '/voices/names/P1.mp3' : id === 'P2' ? '/voices/names/P2.mp3' : null,
+      );
+
+      let resolveP1Name: (val: boolean) => void = () => {};
+      const p1NamePromise = new Promise<boolean>((resolve) => {
+        resolveP1Name = resolve;
+      });
+
+      let resolveP2CanStart: () => void = () => {};
+      const p2CanStart = new Promise<void>((resolve) => {
+        resolveP2CanStart = resolve;
+      });
+
+      const playedUrls: string[] = [];
+      vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockImplementation(async (url) => {
+        playedUrls.push(url);
+        if (url.includes('P1.mp3')) {
+          resolveP2CanStart();
+          return p1NamePromise;
+        }
+        return true;
+      });
+
+      // 1. Person 1 scans
+      const p1Promise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Person One',
+        userId: 'P1',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
+      });
+
+      // Wait until Person 1 is actively playing its name clip
+      await p2CanStart;
+
+      // 2. Person 2 scans right after, cutting Person 1
+      const p2Promise = announceAttendance({
+        attendanceType: 'time_in',
+        employeeName: 'Person Two',
+        userId: 'P2',
+        settings: { enabled: true, engine: 'cloned-bea', voiceModel: 'en_US-amy-medium', rate: 1, volume: 1, voiceStudioBaseUrl: 'http://127.0.0.1:3900' },
+      });
+
+      // Person 1's name is interrupted
+      resolveP1Name(false);
+
+      const [res1, res2] = await Promise.all([p1Promise, p2Promise]);
+
+      // Person 1 was cut and returned null
+      expect(res1).toBeNull();
+      // Person 2 succeeded
+      expect(res2).toEqual({ success: true, engineUsed: 'cloned-bea' });
+
+      // Person 1 suffix must never have been requested
+      // The sequence must be: P1 prefix -> P1 name -> P2 prefix -> P2 name -> P2 suffix
+      expect(playedUrls).toEqual([
+        '/voices/Good morning,.mp3',
+        '/voices/names/P1.mp3',
+        '/voices/Good morning,.mp3',
+        '/voices/names/P2.mp3',
+        '/voices/Your time in has been recorded..mp3',
+      ]);
+    });
   });
 });
