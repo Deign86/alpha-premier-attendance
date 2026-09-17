@@ -966,3 +966,11 @@ unrelated to the change; CI (`windows-latest`, MSVC) runs the same 296 tests suc
   parity through the TypeScript twin, and (c) CI. Recorded here instead of claiming a local
   `cargo test` pass that was never observed.
 
+## Strictly-by-the-hour worked hours fix (anti-rounding bugfix)
+
+- [x] Shifts with fractional hours (e.g. 08:00–12:30, 4.5h) pay strictly for completed whole hours (4h -> ₱40) without ceiling to 5h (₱50).
+  CHECK: `npm test -w server -- test/intern-payroll.test.ts test/employee-payroll.test.ts test/lunch-break.test.ts`
+  EXPECT: all tests pass; 08:00–12:00 and 08:00–12:30 both yield 4 worked hours and ₱40 daily pay.
+  EVIDENCE: All 48 tests across the three payroll suites pass. Parity check across TypeScript and Rust engines passes with 0 mismatches.
+
+

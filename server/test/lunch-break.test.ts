@@ -70,10 +70,10 @@ describe('employee payroll calculates hours 1:1 from DTR', () => {
     expect(result.dailyPay).toBe(500);
   });
 
-  it('reports 2 ceiled hours for an 11:45-13:15 shift (1.5h elapsed)', () => {
+  it('reports 1 worked hour for an 11:45-13:15 shift (1.5h elapsed strictly by the hour)', () => {
     const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T11:45:00+08:00', actualTimeOut: '2026-08-01T13:15:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(2);
-    expect(result.dailyPay).toBe(125);
+    expect(result.workedHours).toBe(1);
+    expect(result.dailyPay).toBe(62.5);
   });
 });
 
@@ -85,11 +85,11 @@ describe('intern payroll calculates hours 1:1 from DTR', () => {
     expect(result.dailyPay).toBe(80);
   });
 
-  it('reports 8 payable hours for 09:30–17:00 (7.5h elapsed ceiled to 8h)', () => {
+  it('reports 7 payable hours for 09:30–17:00 (7.5h elapsed strictly by the hour)', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T09:30:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: false });
     expect(result.lateHours).toBe(2);
     expect(result.lateDeduction).toBe(20);
-    expect(result.workedHours).toBe(8);
-    expect(result.dailyPay).toBe(80);
+    expect(result.workedHours).toBe(7);
+    expect(result.dailyPay).toBe(70);
   });
 });

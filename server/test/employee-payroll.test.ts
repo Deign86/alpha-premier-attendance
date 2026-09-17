@@ -57,16 +57,37 @@ describe('employee payroll policy', () => {
     expect(result.workedHours).toBe(8);
     expect(result.dailyPay).toBe(650);
 
-    // Partial window: 11:45–13:15 elapsed is 1.5h -> ceiled to 2 hours.
+    // Partial window: 11:45–13:15 elapsed is 1.5h -> 1 hour strictly by the hour.
     const partial = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T11:45:00+08:00',
       actualTimeOut: '2026-07-28T13:15:00+08:00',
       dailyRate: 650,
     });
-    expect(partial.workedHours).toBe(2);
+    expect(partial.workedHours).toBe(1);
     expect(partial.isHalfDay).toBe(true);
-    expect(partial.halfDayDeduction).toBe(487.5);
-    expect(partial.dailyPay).toBe(162.5);
+    expect(partial.halfDayDeduction).toBe(568.75);
+    expect(partial.dailyPay).toBe(81.25);
+  });
+
+  it('strictly counts whole hours: 08:00-12:30 pays 4 hours, matching 08:00-12:00', () => {
+    const atNoon = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T12:00:00+08:00',
+      dailyRate: 600,
+    });
+    expect(atNoon.workedHours).toBe(4);
+    expect(atNoon.dailyPay).toBe(300);
+    expect(atNoon.isHalfDay).toBe(true);
+
+    const atTwelveThirty = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T12:30:00+08:00',
+      dailyRate: 600,
+    });
+    expect(atTwelveThirty.workedHours).toBe(4);
+    expect(atTwelveThirty.dailyPay).toBe(300);
+    expect(atTwelveThirty.isHalfDay).toBe(true);
+    expect(atTwelveThirty.halfDayDeduction).toBe(300);
   });
 
   it('deducts unrendered hours for shifts under 8 hours and treats full shift as full day', () => {

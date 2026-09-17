@@ -1,4 +1,4 @@
-use super::payroll::{cap_late_timeout_out, ceil_hour, ceiling_hours, early_half_day_noon_out, is_half_day};
+use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_hours, is_half_day};
 use chrono::{DateTime, Datelike, TimeZone, Timelike};
 use chrono_tz::Asia::Manila;
 
@@ -54,7 +54,7 @@ pub fn calculate(
         .unwrap();
     let hourly_rate_centavos = daily_rate_centavos / 8;
     let elapsed_seconds = (time_out - time_in).num_seconds().max(0);
-    let worked_hours = ceiling_hours(elapsed_seconds).min(8);
+    let worked_hours = floor_hours(elapsed_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even
@@ -225,7 +225,7 @@ mod tests {
         )
         .unwrap();
         assert!(half.is_half_day);
-        assert_eq!(half.daily_pay_centavos, 50_000);
+        assert_eq!(half.daily_pay_centavos, 37_500);
         assert!(half.computed_time_out.contains("T12:00:00+08:00"));
         // Full day keeps the floored actual time-out.
         let full = calculate(
@@ -236,6 +236,31 @@ mod tests {
         .unwrap();
         assert!(!full.is_half_day);
         assert!(full.computed_time_out.contains("T17:00:00+08:00"));
+    }
+
+    #[test]
+    fn morning_half_day_at_twelve_thirty_pays_strictly_by_the_hour() {
+        // 08:00-12:00 (4h) and 08:00-12:30 (4.5h) both pay 4 hours (50,000 centavos on 100k daily rate).
+        let at_noon = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T12:00:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert_eq!(at_noon.worked_hours, 4);
+        assert_eq!(at_noon.daily_pay_centavos, 50_000);
+        assert!(at_noon.is_half_day);
+
+        let at_twelve_thirty = calculate(
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T12:30:00+08:00",
+            100_000,
+        )
+        .unwrap();
+        assert_eq!(at_twelve_thirty.worked_hours, 4);
+        assert_eq!(at_twelve_thirty.daily_pay_centavos, 50_000);
+        assert!(at_twelve_thirty.is_half_day);
+        assert_eq!(at_twelve_thirty.half_day_deduction_centavos, 50_000);
     }
 
     #[test]

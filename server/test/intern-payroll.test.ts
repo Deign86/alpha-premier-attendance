@@ -151,7 +151,31 @@ describe('intern payroll policy', () => {
       graceAvailable: false,
     });
 
-    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T17:00:00+08:00', lateHours: 9, lateDeduction: 90, graceUsed: false, dailyPay: 20, workedHours: 2 });
+    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T17:00:00+08:00', lateHours: 9, lateDeduction: 90, graceUsed: false, dailyPay: 10, workedHours: 1 });
+  });
+
+  it('strictly counts whole hours: 08:00-12:30 pays 4 hours (₱40), matching 08:00-12:00', () => {
+    const atNoon = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T12:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(atNoon.workedHours).toBe(4);
+    expect(atNoon.dailyPay).toBe(40);
+    expect(atNoon.isHalfDay).toBe(true);
+    expect(atNoon.halfDayDeduction).toBe(40);
+
+    const atTwelveThirty = calculateInternPayroll({
+      attendanceDate: '2026-07-28',
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T12:30:00+08:00',
+      graceAvailable: true,
+    });
+    expect(atTwelveThirty.workedHours).toBe(4);
+    expect(atTwelveThirty.dailyPay).toBe(40);
+    expect(atTwelveThirty.isHalfDay).toBe(true);
+    expect(atTwelveThirty.halfDayDeduction).toBe(40);
   });
 
   it('uses Monday as the Manila payroll week boundary', () => {

@@ -11,7 +11,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const hourlyRate = input.dailyRate / 8;
   const elapsedSeconds = Math.max(0, actualTimeOut.diff(actualTimeIn).as('seconds'));
-  const workedHours = Math.min(8, Math.max(0, Math.ceil(elapsedSeconds / 3600)));
+  const workedHours = Math.min(8, Math.max(0, Math.floor(elapsedSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
   const halfDayDeduction = unrenderedHours * hourlyRate;
@@ -33,8 +33,8 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
     halfDayDeduction,
     basePay: input.dailyRate,
     dailyPay,
-    // Post-0.1.74: payable daily hours are gross elapsed DTR time ceiled to the
-    // hour — the 12:00–13:00 lunch window is NOT subtracted here.
+    // Post-0.1.75: payable daily hours are gross elapsed DTR time strictly by the
+    // hour (floored) — the 12:00–13:00 lunch window is NOT subtracted here.
     workedHours,
   };
 }

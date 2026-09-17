@@ -2664,10 +2664,10 @@ mod tests {
         assert!(pay.is_half_day);
         // Late deduction also applies (12:30 vs 08:00 start), so only assert
         // the half-day flag + deduction, not the floored net pay.
-        // Post-0.1.74: 12:30–17:00 (4.5h elapsed, ceiled) pays 5h with no
+        // Post-0.1.75: 12:30–17:00 (4.5h elapsed, floored) pays 4h with no
         // 12:00–13:00 subtraction.
-        assert_eq!(pay.worked_hours, 5);
-        assert_eq!(pay.half_day_deduction_centavos, 3000);
+        assert_eq!(pay.worked_hours, 4);
+        assert_eq!(pay.half_day_deduction_centavos, 4000);
     }
 
     #[test]

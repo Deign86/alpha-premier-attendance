@@ -2,9 +2,15 @@ pub fn floor_zero(value: i64) -> i64 {
     value.max(0)
 }
 
+#[allow(dead_code)]
 pub fn ceiling_hours(seconds: i64) -> i64 {
     ((seconds.max(0) + 3599) / 3600).max(0)
 }
+
+pub fn floor_hours(seconds: i64) -> i64 {
+    (seconds.max(0) / 3600).max(0)
+}
+
 
 /// Official office close (17:00 Manila). Clock-out at exactly this instant counts a full day (T6 decision A).
 pub const OFFICE_CLOSE_HOUR: u32 = 17;

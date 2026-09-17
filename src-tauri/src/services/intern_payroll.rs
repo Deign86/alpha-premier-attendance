@@ -1,4 +1,4 @@
-use super::payroll::{cap_late_timeout_out, ceil_hour, ceiling_hours, early_half_day_noon_out, floor_zero, is_half_day};
+use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_hours, floor_zero, is_half_day};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use chrono_tz::Asia::Manila;
 
@@ -76,7 +76,7 @@ pub fn calculate(
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
     let elapsed_seconds = (time_out - time_in).num_seconds().max(0);
-    let worked_hours = ceiling_hours(elapsed_seconds).min(8);
+    let worked_hours = floor_hours(elapsed_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let unrendered_hours = (8 - worked_hours).max(0);
     let deduction = unrendered_hours * hourly_rate_centavos;
@@ -125,8 +125,8 @@ mod tests {
     #[test]
     fn late_hours_are_not_affected_by_lunch() {
         // Lateness is measured against the 08:00 start, before any lunch window.
-        // Post-0.1.74: paid hours derive 1:1 from recorded DTR stamps with no
-        // 12:00–13:00 subtraction, so 09:30–17:00 (7.5h elapsed, ceiled) pays 8h.
+        // Post-0.1.75: paid hours derive 1:1 from recorded DTR stamps strictly by the
+        // hour (floored), so 09:30–17:00 (7.5h elapsed) pays 7h.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T09:30:00+08:00",
@@ -136,9 +136,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 2);
         assert_eq!(result.late_deduction_centavos, 2000);
-        assert_eq!(result.worked_hours, 8);
-        assert_eq!(result.half_day_deduction_centavos, 0);
-        assert_eq!(result.daily_pay_centavos, 8000);
+        assert_eq!(result.worked_hours, 7);
+        assert_eq!(result.half_day_deduction_centavos, 1000);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
     #[test]
     fn grace_period_applies_within_08_00_to_08_15() {
@@ -214,9 +214,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.late_hours, 3);
         assert_eq!(result.late_deduction_centavos, 3000);
-        assert_eq!(result.worked_hours, 7);
-        assert_eq!(result.half_day_deduction_centavos, 1000);
-        assert_eq!(result.daily_pay_centavos, 7000);
+        assert_eq!(result.worked_hours, 6);
+        assert_eq!(result.half_day_deduction_centavos, 2000);
+        assert_eq!(result.daily_pay_centavos, 6000);
     }
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
         )
         .unwrap();
         assert!(half.is_half_day);
-        assert_eq!(half.daily_pay_centavos, 4000);
+        assert_eq!(half.daily_pay_centavos, 3000);
         assert!(half.computed_time_out.contains("T12:00:00+08:00"));
         // Full day keeps the actual time-out.
         let full = calculate(
@@ -387,6 +387,34 @@ mod tests {
         .unwrap();
         assert!(pm.is_half_day);
         assert!(pm.computed_time_out.contains("T17:00:00+08:00"));
+    }
+
+    #[test]
+    fn morning_half_day_at_twelve_thirty_pays_strictly_by_the_hour() {
+        // 08:00-12:00 (4h) and 08:00-12:30 (4.5h) both pay 4 hours (4000 centavos / ₱40).
+        let at_noon = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T12:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(at_noon.worked_hours, 4);
+        assert_eq!(at_noon.daily_pay_centavos, 4000);
+        assert!(at_noon.is_half_day);
+
+        let at_twelve_thirty = calculate(
+            "2026-08-01",
+            "2026-08-01T08:00:00+08:00",
+            "2026-08-01T12:30:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(at_twelve_thirty.worked_hours, 4);
+        assert_eq!(at_twelve_thirty.daily_pay_centavos, 4000);
+        assert!(at_twelve_thirty.is_half_day);
+        assert_eq!(at_twelve_thirty.half_day_deduction_centavos, 4000);
+        assert!(at_twelve_thirty.computed_time_out.contains("T12:00:00+08:00"));
     }
 
     #[test]

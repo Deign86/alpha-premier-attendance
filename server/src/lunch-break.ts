@@ -6,7 +6,7 @@ import { DateTime } from 'luxon';
  * IMPORTANT (post-0.1.74): the lunch-window helpers (`lunchBreakExcludedSeconds`,
  * `paidWorkSeconds`, `paidWorkHours`, `paidWorkHoursCeiled`) are NOT part of the
  * payroll calculation any more. The engines derive paid hours 1:1 from the
- * recorded DTR time-in/time-out (`Math.ceil(elapsed / 3600)`, no lunch term), so
+ * recorded DTR time-in/time-out (`Math.floor(elapsed / 3600)`, no lunch term), so
  * payroll deliberately does not subtract this window. Those helpers currently
  * have no non-test consumer in `server/src`; they are kept because
  * `server/test/lunch-break.test.ts` pins them and because the desktop app still
