@@ -3021,10 +3021,10 @@ function AdminPanel() {
         loadPayrollProfiles(),
         loadPayrollCutoffs(),
       ]);
-      if (userResponse.success) setUsers(userResponse.users);
-      if (attendanceResponse.success) setRows(attendanceResponse.attendance);
-      if (profileResponse.success) setProfiles(profileResponse.profiles);
-      if (cutoffResponse.success) setCutoffs(cutoffResponse.payroll);
+      if (userResponse.success) setUsers(userResponse.users ?? []);
+      if (attendanceResponse.success) setRows(attendanceResponse.attendance ?? []);
+      if (profileResponse.success) setProfiles(profileResponse.profiles ?? []);
+      if (cutoffResponse.success) setCutoffs(cutoffResponse.payroll ?? []);
     } catch {
       setError("Unable to load administrator data.");
     }
@@ -3810,18 +3810,19 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   );
 }
 function UserEditor({
-  users,
-  profiles,
+  users = [],
+  profiles = [],
   editing,
   setEditing,
   onSaved,
 }: {
-  users: AdminUser[];
-  profiles: PayrollCalculationProfile[];
+  users?: AdminUser[];
+  profiles?: PayrollCalculationProfile[];
   editing: AdminUser | null;
   setEditing: (user: AdminUser | null) => void;
   onSaved: () => void;
 }) {
+  const safeUsers = users ?? [];
   const blankUser: AdminUser = {
     userId: "",
     rfidUid: "",
@@ -3965,18 +3966,18 @@ function UserEditor({
 
   const filteredUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
-    if (!q) return users;
-    return users.filter((u) =>
+    if (!q) return safeUsers;
+    return safeUsers.filter((u) =>
       u.fullName.toLowerCase().includes(q) ||
       u.userId.toLowerCase().includes(q) ||
       u.rfidUid.toLowerCase().includes(q) ||
       (u.department ?? "").toLowerCase().includes(q),
     );
-  }, [users, userSearch]);
+  }, [safeUsers, userSearch]);
   const isUserFiltering = userSearch.trim().length > 0;
 
-  const allUsersSelected = users.length > 0 && selectedUserIds.size === users.length;
-  const someUsersSelected = selectedUserIds.size > 0 && selectedUserIds.size < users.length;
+  const allUsersSelected = safeUsers.length > 0 && selectedUserIds.size === safeUsers.length;
+  const someUsersSelected = selectedUserIds.size > 0 && selectedUserIds.size < safeUsers.length;
 
   useEffect(() => {
     if (masterUserCheckboxRef.current) {
@@ -3986,7 +3987,7 @@ function UserEditor({
 
   useEffect(() => {
     setSelectedUserIds((prev) => {
-      const valid = new Set(users.map((u) => u.userId));
+      const valid = new Set(safeUsers.map((u) => u.userId));
       let changed = false;
       const next = new Set<string>();
       for (const id of prev) {
@@ -3995,13 +3996,13 @@ function UserEditor({
       }
       return changed ? next : prev;
     });
-  }, [users]);
+  }, [safeUsers]);
 
   const toggleSelectAllUsers = () => {
     if (allUsersSelected) {
       setSelectedUserIds(new Set());
     } else {
-      setSelectedUserIds(new Set(users.map((u) => u.userId)));
+      setSelectedUserIds(new Set(safeUsers.map((u) => u.userId)));
     }
   };
 
@@ -4036,7 +4037,7 @@ function UserEditor({
   const setStatusBatchUsers = async (status: "ACTIVE" | "INACTIVE") => {
     if (selectedUserIds.size === 0) return;
     setBatchUpdatingUsers(true);
-    const targetUsers = users.filter((u) => selectedUserIds.has(u.userId));
+    const targetUsers = safeUsers.filter((u) => selectedUserIds.has(u.userId));
     let count = 0;
     for (const u of targetUsers) {
       const res = await saveAdminUser({ ...u, status }, u.userId);
@@ -4573,24 +4574,24 @@ function UserEditor({
         <div className="table-header-bar">
           <div className="table-selection-count">
             {selectedUserIds.size > 0 ? (
-              <span className="table-selection-badge">{selectedUserIds.size} of {users.length} user(s) selected</span>
+              <span className="table-selection-badge">{selectedUserIds.size} of {safeUsers.length} user(s) selected</span>
             ) : isUserFiltering ? (
-              <span>Showing {filteredUsers.length} of {users.length} users</span>
+              <span>Showing {filteredUsers.length} of {safeUsers.length} users</span>
             ) : (
-              <span>Total users: {users.length}</span>
+              <span>Total users: {safeUsers.length}</span>
             )}
-            <VoiceWorkerChip refreshKey={users.length} />
+            <VoiceWorkerChip refreshKey={safeUsers.length} />
           </div>
           <div className="table-batch-actions">
             {selectedUserIds.size > 0 ? (
               <>
-                {selectedUserIds.size < users.length && (
+                {selectedUserIds.size < safeUsers.length && (
                   <button
                     className="text-button"
                     type="button"
-                    onClick={() => setSelectedUserIds(new Set(users.map((u) => u.userId)))}
+                    onClick={() => setSelectedUserIds(new Set(safeUsers.map((u) => u.userId)))}
                   >
-                    Select all ({users.length})
+                    Select all ({safeUsers.length})
                   </button>
                 )}
                 <button
@@ -4630,7 +4631,7 @@ function UserEditor({
                 <button
                   className="text-button"
                   type="button"
-                  onClick={() => setSelectedUserIds(new Set(users.map((u) => u.userId)))}
+                  onClick={() => setSelectedUserIds(new Set(safeUsers.map((u) => u.userId)))}
                 >
                   Select all
                 </button>
