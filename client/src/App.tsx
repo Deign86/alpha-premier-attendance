@@ -7398,7 +7398,14 @@ function AttendanceEditRow({
                 className="time-clear-btn"
                 title="Clear time in"
                 aria-label={`Clear time in for ${row.fullName}`}
-                onClick={() => setTimeIn("")}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setTimeIn("");
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTimeIn("");
+                }}
               >
                 <X size={13} />
               </button>
@@ -7420,7 +7427,14 @@ function AttendanceEditRow({
                 className="time-clear-btn"
                 title="Clear time out"
                 aria-label={`Clear time out for ${row.fullName}`}
-                onClick={() => setTimeOut("")}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setTimeOut("");
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTimeOut("");
+                }}
               >
                 <X size={13} />
               </button>
