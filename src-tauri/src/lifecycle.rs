@@ -85,11 +85,8 @@ pub fn should_hide_on_close(behavior: CloseBehavior, tray_available: bool) -> bo
 }
 
 pub fn request_exit(app: &tauri::AppHandle) {
-    let behavior = CloseBehavior::Exit;
-    if matches!(behavior, CloseBehavior::Exit) {
-        EXIT_REQUESTED.store(true, Ordering::SeqCst);
-        app.exit(0);
-    }
+    EXIT_REQUESTED.store(true, Ordering::SeqCst);
+    app.exit(0);
 }
 
 pub fn install_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
