@@ -119,10 +119,12 @@ import {
   listenForAttendanceUpdates,
   listenForDtrSyncProgress,
   type DtrSyncProgress,
+  type DtrSyncSource,
   getScannerStatus,
   setScannerPaused,
   notifyScanSuccess,
 } from "./tauri-api";
+import { setDtrSyncActive, useDtrSyncActive } from "./dtr-sync-guard";
 
 type ScannerStatus = {
   state: "connected" | "scanning" | "offline" | "error";
@@ -3299,6 +3301,18 @@ function describeRestoreFailure(raw: string): RestoreFailureDetail {
   };
 }
 
+function dtrSyncSourceLabel(source: DtrSyncSource | undefined): string {
+  return source === "queue" ? "Queue" : "Manual";
+}
+
+function applyDtrProgressToGuard(progress: DtrSyncProgress): void {
+  if (progress.status === "starting" || progress.status === "syncing") {
+    setDtrSyncActive(true);
+  } else if (progress.status === "done" || progress.status === "complete" || progress.status === "error") {
+    setDtrSyncActive(false);
+  }
+}
+
 type SyncHealthState =
   | { kind: "loading" }
   | { kind: "ready"; health: DtrSyncHealth }
@@ -3319,6 +3333,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   const [dismissingRestore, setDismissingRestore] = useState(false);
   const [syncState, setSyncState] = useState<SyncHealthState>({ kind: "loading" });
   const [dtrProgress, setDtrProgress] = useState<DtrSyncProgress | null>(null);
+  const dtrSyncActive = useDtrSyncActive();
   // Per-device DTR kill switch: null = still loading, boolean = stored state.
   const [dtrSyncEnabled, setDtrSyncEnabled] = useState<boolean | null>(null);
   const [dtrToggleBusy, setDtrToggleBusy] = useState(false);
@@ -3390,6 +3405,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     let unlisten: (() => void) | undefined;
     void listenForDtrSyncProgress((progress) => {
       setDtrProgress(progress);
+      applyDtrProgressToGuard(progress);
     })
       .then((cleanup) => {
         unlisten = cleanup;
@@ -3431,6 +3447,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   const syncInterns = async () => {
     setBusy(true);
     setSyncState({ kind: "syncing" });
+    setDtrSyncActive(true);
     setDtrProgress(null);
     setError("");
     setNotice("");
@@ -3452,6 +3469,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       }
     } finally {
       setBusy(false);
+      setDtrSyncActive(false);
       setDtrProgress(null);
     }
     void refreshSyncHealth(true);
@@ -3648,7 +3666,8 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         <button
           className="admin-button"
           type="button"
-          disabled={busy}
+          data-testid="dtr-sync-now"
+          disabled={busy || dtrSyncActive}
           onClick={() => void syncInterns()}
         >
           Sync Intern DTR now
@@ -3686,6 +3705,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
                     : `Syncing intern ${dtrProgress.current} of ${dtrProgress.total}: ${dtrProgress.fullName}`
                   : "Syncing intern DTR sheets…"}
               </strong>
+              <span className="sync-badge idle">{dtrSyncSourceLabel(dtrProgress?.source)}</span>
               <span>
                 {dtrProgress && dtrProgress.total > 0
                   ? `${Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100))}%`
@@ -3811,7 +3831,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     </section>
   );
 }
-function UserEditor({
+export function UserEditor({
   users = [],
   profiles = [],
   editing,
@@ -3845,6 +3865,8 @@ function UserEditor({
   const [batchDeleteUsersOpen, setBatchDeleteUsersOpen] = useState(false);
   const [batchUpdatingUsers, setBatchUpdatingUsers] = useState(false);
   const [syncingDtrUserId, setSyncingDtrUserId] = useState<string | null>(null);
+  const [dtrProgress, setDtrProgress] = useState<DtrSyncProgress | null>(null);
+  const dtrSyncActive = useDtrSyncActive();
   const [voiceClipStates, setVoiceClipStates] = useState<Record<string, VoiceClipState>>({});
   const [playingVoiceUserId, setPlayingVoiceUserId] = useState<string | null>(null);
   const [regeneratingVoiceUserId, setRegeneratingVoiceUserId] = useState<string | null>(null);
@@ -3875,6 +3897,8 @@ function UserEditor({
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenForDtrSyncProgress((progress) => {
+      setDtrProgress(progress);
+      applyDtrProgressToGuard(progress);
       if (progress.status === "syncing") {
         setMessage(`Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…`);
       }
@@ -3892,6 +3916,8 @@ function UserEditor({
 
   const handleSyncDtr = async (userId?: string) => {
     setSyncingDtrUserId(userId ?? "ALL");
+    setDtrSyncActive(true);
+    setDtrProgress(null);
     setMessage(userId ? "Syncing intern DTR sheet…" : "Starting intern DTR sync…");
     try {
       const response = await syncInternDtr(userId);
@@ -3908,6 +3934,8 @@ function UserEditor({
       }
     } finally {
       setSyncingDtrUserId(null);
+      setDtrSyncActive(false);
+      setDtrProgress(null);
     }
   };
 
@@ -4640,7 +4668,8 @@ function UserEditor({
                 <button
                   className="admin-button"
                   type="button"
-                  disabled={Boolean(syncingDtrUserId)}
+                  data-testid="dtr-sync-bulk"
+                  disabled={Boolean(syncingDtrUserId) || dtrSyncActive}
                   onClick={() => void handleSyncDtr()}
                 >
                   {syncingDtrUserId === "ALL" ? "Syncing DTR…" : "Sync Interns to DTR"}
@@ -4649,6 +4678,40 @@ function UserEditor({
             )}
           </div>
         </div>
+        {syncingDtrUserId !== null && (
+          <div
+            className="sync-progress-wrap"
+            role="progressbar"
+            aria-valuenow={dtrProgress && dtrProgress.total > 0 ? Math.round((dtrProgress.current / dtrProgress.total) * 100) : 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Intern DTR sync progress"
+          >
+            <div className="sync-progress-status">
+              <strong>
+                {dtrProgress
+                  ? dtrProgress.status === "starting"
+                    ? `Starting DTR sync (${dtrProgress.total} interns)…`
+                    : `Syncing intern ${dtrProgress.current} of ${dtrProgress.total}: ${dtrProgress.fullName}`
+                  : "Syncing intern DTR sheets…"}
+              </strong>
+              <span className="sync-badge idle">{dtrSyncSourceLabel(dtrProgress?.source)}</span>
+              <span>
+                {dtrProgress && dtrProgress.total > 0
+                  ? `${Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100))}%`
+                  : "…"}
+              </span>
+            </div>
+            <div className="sync-progress-bar">
+              <div
+                className="sync-progress-fill"
+                style={{
+                  width: `${dtrProgress && dtrProgress.total > 0 ? Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100)) : 0}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
         <div className="user-search-row" style={{ padding: "8px 14px" }}>
           <div className="search-input-wrap">
             <Search size={15} />
@@ -4761,7 +4824,8 @@ function UserEditor({
                       <button
                         className="text-button"
                         type="button"
-                        disabled={Boolean(syncingDtrUserId)}
+                        data-testid={`dtr-sync-row-${user.userId}`}
+                        disabled={Boolean(syncingDtrUserId) || dtrSyncActive}
                         onClick={() => void handleSyncDtr(user.userId)}
                         title="Synchronize this intern to the Google Sheets DTR tab"
                       >

@@ -134,12 +134,15 @@ export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause
 export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
+export type DtrSyncSource = "queue" | "manual";
+
 export interface DtrSyncProgress {
   current: number;
   total: number;
   userId: string;
   fullName: string;
   status: string;
+  source?: DtrSyncSource;
 }
 
 /** Listen for real-time intern DTR sync progress events from the Rust backend. */
