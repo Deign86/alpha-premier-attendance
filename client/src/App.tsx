@@ -34,6 +34,8 @@ import type {
   AttendanceListItem,
   PayrollCalculationProfile,
   PayrollCutoffRecord,
+  CutoffCalculationBreakdownData,
+  AttendanceDeductionItem,
   OfficeIdentity,
   LanStatusResponse,
   DatabaseInfoResponse,
@@ -6132,6 +6134,8 @@ function PayrollTable({
                   hdmf +
                   advance;
 
+              const parsedBreakdown = parseCalculationBreakdown(row.calculationBreakdown);
+
               return (
                 <Fragment key={row.payrollId}>
                   <tr key={row.payrollId} className={selectedIds.has(row.payrollId) ? "selected-row" : ""}>
@@ -6234,42 +6238,109 @@ function PayrollTable({
                       <details>
                         <summary>Calculation breakdown & payslip detail</summary>
                         {row.employeeType === "INTERN" ? (
-                          <p>
-                            {php(row.totalCompensation || row.basicPay)} cutoff rate ({row.standardWorkingDays} std days at {php(INTERN_DAILY_RATE_PHP)}/day)
-                            {row.absenceDeduction > 0
-                              ? ` - ${php(row.absenceDeduction)} absent deduction (${row.absentDays} day(s))`
-                              : ""}
-                            {row.manualAdjustment !== 0
-                              ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
-                              : ""}{" "}
-                            - {php(row.lateDeduction)} late deduction (
-                            {row.lateUnits} hr(s) at{" "}
-                            {php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)
-                            {row.halfDayDeduction > 0
-                              ? ` - ${php(row.halfDayDeduction)} half-day deduction (${row.halfDayCount} half-day(s))`
-                              : ""} ={" "}
-                            <strong>{php(row.grossCompensation)}</strong>.
-                          </p>
+                          <div className="payroll-breakdown-formula">
+                            <p>
+                              <strong>Cutoff Rate:</strong> {php(row.totalCompensation || row.basicPay)} ({row.standardWorkingDays} std days at {php(INTERN_DAILY_RATE_PHP)}/day)
+                              {row.manualAdjustment !== 0
+                                ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
+                                : ""}
+                              {" = "}
+                              <strong>{php(row.grossCompensation)}</strong> (Gross Earnings).
+                              <br />
+                              <strong>Total Deductions:</strong>{" "}
+                              {php(row.absenceDeduction)} absent ({row.absentDays} day(s))
+                              {row.lateDeduction > 0 ? ` + ${php(row.lateDeduction)} late (${row.lateUnits} hr(s) at ${php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)` : ""}
+                              {row.halfDayDeduction > 0 ? ` + ${php(row.halfDayDeduction)} half-day / undertime (${row.halfDayCount} day(s))` : ""}
+                              {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 ? "None" : ""}
+                              {" = "}
+                              <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>.
+                              <br />
+                              <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+                              <strong style={{ color: "#854d0e", backgroundColor: "#fef08a", padding: "2px 6px", borderRadius: "3px" }}>
+                                {php(row.netPay)}
+                              </strong>
+                            </p>
+                          </div>
                         ) : (
-                          <p>
-                            <strong>Earnings:</strong> {php(row.basicPay)} basic +{" "}
-                            {php(row.hra ?? 0)} HRA +{" "}
-                            {php(row.incentivesAllowance)} incentives +{" "}
-                            {php(row.specialAllowance)} special allow. +{" "}
-                            {php(row.regularHolidayPay)} reg. hol. +{" "}
-                            {php(row.specialHolidayPay)} spec. hol. +{" "}
-                            {php(row.overtimePay)} overtime ={" "}
-                            <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
-                            <br />
-                            <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
-                            <strong>{php(totalDeductions)}</strong> (Total Deductions).
-                            <br />
-                            <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
-                            <strong style={{ color: "#854d0e", backgroundColor: "#fef08a", padding: "2px 6px", borderRadius: "3px" }}>
-                              {php(row.netPay)}
-                            </strong>
-                          </p>
+                          <div className="payroll-breakdown-formula">
+                            <p>
+                              <strong>Earnings:</strong> {php(row.basicPay)} basic +{" "}
+                              {php(row.hra ?? 0)} HRA +{" "}
+                              {php(row.incentivesAllowance)} incentives +{" "}
+                              {php(row.specialAllowance)} special allow. +{" "}
+                              {php(row.regularHolidayPay)} reg. hol. +{" "}
+                              {php(row.specialHolidayPay)} spec. hol. +{" "}
+                              {php(row.overtimePay)} overtime ={" "}
+                              <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
+                              <br />
+                              <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
+                              <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong> (Total Deductions).
+                              <br />
+                              <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+                              <strong style={{ color: "#854d0e", backgroundColor: "#fef08a", padding: "2px 6px", borderRadius: "3px" }}>
+                                {php(row.netPay)}
+                              </strong>
+                            </p>
+                          </div>
                         )}
+
+                        {parsedBreakdown?.deductions && parsedBreakdown.deductions.length > 0 ? (
+                          <div className="payroll-deductions-container">
+                            <h4 className="payroll-deductions-heading">
+                              Transparent Deductions Breakdown ({parsedBreakdown.deductions.length} item{parsedBreakdown.deductions.length === 1 ? "" : "s"}):
+                            </h4>
+                            <div className="payroll-deductions-table-wrap">
+                              <table className="payroll-deductions-table">
+                                <thead>
+                                  <tr>
+                                    <th>Date</th>
+                                    <th>Type</th>
+                                    <th>Attendance Time</th>
+                                    <th>Cause / Details</th>
+                                    <th style={{ textAlign: "right" }}>Deduction</th>
+                                  </tr>
+                                </thead>
+                                  <tbody>
+                                    {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => (
+                                      <tr key={`${item.date}-${item.category}-${idx}`}>
+                                      <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        {formatDeductionDate(item.date)}
+                                      </td>
+                                      <td>
+                                        <span className={`deduction-badge badge-${item.category.toLowerCase()}`}>
+                                          {item.label}
+                                        </span>
+                                      </td>
+                                      <td style={{ whiteSpace: "nowrap" }}>
+                                        {item.timeIn || item.timeOut
+                                          ? `${item.timeIn ?? "—"} – ${item.timeOut ?? "—"}`
+                                          : "—"}
+                                      </td>
+                                      <td>{item.details}</td>
+                                      <td style={{ textAlign: "right", color: "#dc2626", fontWeight: 600 }}>
+                                        {php(item.amount)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ) : (
+                          (row.absenceDeduction > 0 || row.lateDeduction > 0 || row.halfDayDeduction > 0) ? (
+                            <p className="payroll-deductions-note">
+                              Summary of deductions: {row.absenceDeduction > 0 ? `${row.absentDays} day(s) absent (${php(row.absenceDeduction)}). ` : ""}
+                              {row.lateDeduction > 0 ? `${row.lateUnits} hr(s) late (${php(row.lateDeduction)}). ` : ""}
+                              {row.halfDayDeduction > 0 ? `${row.halfDayCount} half-day / undertime day(s) (${php(row.halfDayDeduction)}). ` : ""}
+                              <em>(Full date-by-date breakdown will be shown on next generation from attendance).</em>
+                            </p>
+                          ) : (
+                            <p className="payroll-deductions-none">
+                              ✓ No attendance deductions incurred for this cutoff period.
+                            </p>
+                          )
+                        )}
+
                         <p>
                           Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({row.cutoffStart} to {row.cutoffEnd}).
                         </p>
@@ -6347,6 +6418,32 @@ function php(value: number): string {
   })
     .format(Number.isFinite(value) ? value : 0)
     .replace("₱", "PHP ");
+}
+
+function formatDeductionDate(dateStr: string): string {
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+  const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-PH", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function parseCalculationBreakdown(
+  breakdownStr: string | null | undefined,
+): CutoffCalculationBreakdownData | null {
+  if (!breakdownStr || !breakdownStr.trim()) return null;
+  try {
+    // SAFETY: Input is a verified JSON string produced by payroll calculation stored in SQLite
+    const parsed = JSON.parse(breakdownStr) as CutoffCalculationBreakdownData;
+    return parsed && parsed.deductions ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

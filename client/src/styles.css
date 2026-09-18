@@ -931,6 +931,102 @@ tr.selected-row td:first-child::before,
   font-size: 0.76rem;
 }
 
+.payroll-breakdown-formula {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  border-left: 3px solid var(--gold);
+}
+
+.payroll-deductions-container {
+  margin-top: 12px;
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.payroll-deductions-heading {
+  margin: 0 0 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.payroll-deductions-table-wrap {
+  overflow-x: auto;
+}
+
+.payroll-deductions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.74rem;
+}
+
+.payroll-deductions-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: transparent !important;
+}
+
+.payroll-deductions-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: transparent !important;
+  vertical-align: middle;
+}
+
+.payroll-deductions-table tr:last-child td {
+  border-bottom: none;
+}
+
+.deduction-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge-absence {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.badge-late {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.badge-undertime {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.payroll-deductions-note {
+  margin-top: 8px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.payroll-deductions-none {
+  margin-top: 8px;
+  font-size: 0.74rem;
+  color: #10b981;
+  font-weight: 500;
+}
+
 .payroll-pdf-section {
   margin-top: 32px;
 }

@@ -490,6 +490,30 @@ export type PayrollCalculationProfile = {
   overtimeRate: number;
 };
 
+export type DeductionCategory = 'ABSENCE' | 'LATE' | 'UNDERTIME';
+
+export type AttendanceDeductionItem = {
+  date: string;
+  category: DeductionCategory;
+  label: string;
+  details: string;
+  timeIn?: string | null;
+  timeOut?: string | null;
+  workedHours?: number | null;
+  hoursShort?: number | null;
+  lateHours?: number | null;
+  amount: number;
+};
+
+export type CutoffCalculationBreakdownData = {
+  source?: string;
+  actualWorkingDays?: number;
+  standardWorkingDays?: number;
+  dailyRate?: number;
+  lateUnits?: number;
+  deductions?: AttendanceDeductionItem[];
+};
+
 export type PayrollCutoffRecord = {
   payrollId: string;
   employeeId: string;

@@ -500,4 +500,84 @@ describe("PayrollWorkspace", () => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
     });
   });
+
+  it("displays transparent deductions breakdown table with dates, causes, and amounts when available", async () => {
+    const user = userEvent.setup();
+    const deductionBreakdownJson = JSON.stringify({
+      source: "attendance",
+      actualWorkingDays: 9,
+      standardWorkingDays: 11,
+      dailyRate: 80,
+      deductions: [
+        {
+          date: "2026-09-03",
+          category: "ABSENCE",
+          label: "Absence",
+          details: "No attendance logged for standard workday",
+          amount: 80,
+        },
+        {
+          date: "2026-09-04",
+          category: "UNDERTIME",
+          label: "Half-day",
+          details: "Incomplete hours: 4 hrs worked of 8 hrs (4 hrs short), 08:00 AM – 12:00 PM",
+          timeIn: "08:00 AM",
+          timeOut: "12:00 PM",
+          workedHours: 4,
+          hoursShort: 4,
+          amount: 40,
+        },
+      ],
+    });
+
+    const internWithDeductions = internRecord({
+      standardWorkingDays: 11,
+      actualWorkingDays: 9,
+      dailyRate: 80,
+      basicPay: 880,
+      totalCompensation: 880,
+      absentDays: 1,
+      absenceDeduction: 80,
+      halfDayCount: 1,
+      halfDayDeduction: 40,
+      grossCompensation: 880,
+      netPay: 760,
+      calculationBreakdown: deductionBreakdownJson,
+    });
+
+    renderWorkspace([internWithDeductions]);
+
+    // Expand calculation breakdown
+    const summary = screen.getByText(/Calculation breakdown & payslip detail/i);
+    await user.click(summary);
+
+    // Verify transparent deduction table heading and contents
+    expect(screen.getByText(/Transparent Deductions Breakdown \(2 items\):/i)).toBeInTheDocument();
+    expect(screen.getByText(/Thu, Sep 3, 2026/i)).toBeInTheDocument();
+    expect(screen.getByText(/No attendance logged for standard workday/i)).toBeInTheDocument();
+    expect(screen.getByText(/Fri, Sep 4, 2026/i)).toBeInTheDocument();
+    expect(screen.getByText(/Incomplete hours: 4 hrs worked of 8 hrs \(4 hrs short\), 08:00 AM – 12:00 PM/i)).toBeInTheDocument();
+
+    // Verify formula renders net pay correctly: 880 - 120 = 760 (not = 880)
+    expect(screen.getAllByText(/PHP 760.00/i)).toHaveLength(2);
+  });
+
+  it("shows zero deductions indicator when no attendance deductions exist", async () => {
+    const user = userEvent.setup();
+    const cleanIntern = internRecord({
+      absenceDeduction: 0,
+      lateDeduction: 0,
+      halfDayDeduction: 0,
+      grossCompensation: 880,
+      netPay: 880,
+      calculationBreakdown: JSON.stringify({ source: "attendance", deductions: [] }),
+    });
+
+    renderWorkspace([cleanIntern]);
+
+    const summary = screen.getByText(/Calculation breakdown & payslip detail/i);
+    await user.click(summary);
+
+    expect(screen.getByText(/No attendance deductions incurred for this cutoff period/i)).toBeInTheDocument();
+  });
 });

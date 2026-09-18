@@ -2714,6 +2714,171 @@ async fn payroll_generate_cutoff_impl(
         // Engine owns the intern floor; persist its gross/net unchanged.
         let gross_amount = calculated.gross_compensation;
         let net_amount = calculated.net_pay;
+
+        let daily_records = sqlx::query(
+            "SELECT attendance_date, actual_time_in, actual_time_out, late_hours, late_deduction_centavos, \
+             is_half_day, half_day_deduction_centavos, grace_used \
+             FROM payroll \
+             WHERE user_id=? AND attendance_date >= ? AND attendance_date <= ? \
+             ORDER BY attendance_date ASC"
+        )
+        .bind(&employee_id)
+        .bind(&cutoff_start)
+        .bind(&cutoff_end)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let mut attended_dates = std::collections::HashSet::new();
+        for rec in &daily_records {
+            let date_str: String = rec.get("attendance_date");
+            attended_dates.insert(date_str);
+        }
+
+        let mut deduction_items: Vec<serde_json::Value> = Vec::new();
+
+        // 1. Absences: Weekdays in the cutoff without attendance
+        if let (Ok(start), Ok(end)) = (
+            chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d"),
+            chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d"),
+        ) {
+            let mut current = start;
+            while current <= end {
+                if current.weekday().number_from_monday() <= 5 {
+                    let cur_str = current.format("%Y-%m-%d").to_string();
+                    if !attended_dates.contains(&cur_str) {
+                        deduction_items.push(serde_json::json!({
+                            "date": cur_str,
+                            "category": "ABSENCE",
+                            "label": "Absence",
+                            "details": "No attendance logged for standard workday",
+                            "timeIn": null,
+                            "timeOut": null,
+                            "workedHours": null,
+                            "hoursShort": null,
+                            "lateHours": null,
+                            "amount": daily_rate_centavos as f64 / 100.0,
+                        }));
+                    }
+                }
+                current += chrono::Duration::days(1);
+            }
+        }
+
+        // 2 & 3. Daily records with late or undertime / half-day
+        for rec in &daily_records {
+            let date_str: String = rec.get("attendance_date");
+            let actual_in: Option<String> = rec.get("actual_time_in");
+            let actual_out: Option<String> = rec.get("actual_time_out");
+            let rec_late_hours: i64 = rec.get("late_hours");
+            let rec_late_ded_centavos: i64 = rec.get("late_deduction_centavos");
+            let rec_is_half_day: i64 = rec.get("is_half_day");
+            let rec_half_day_ded_centavos: i64 = rec.get("half_day_deduction_centavos");
+            let rec_grace_used: Option<i64> = rec.get("grace_used");
+
+            let format_time = |iso_str: &Option<String>| -> Option<String> {
+                iso_str.as_ref().and_then(|s| {
+                    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| {
+                        let dt_manila = dt.with_timezone(&Manila);
+                        dt_manila.format("%I:%M %p").to_string()
+                    })
+                })
+            };
+
+            let in_label = format_time(&actual_in);
+            let out_label = format_time(&actual_out);
+
+            // Lateness
+            if rec_late_hours > 0 || rec_late_ded_centavos > 0 || rec_grace_used == Some(1) {
+                let is_grace = rec_grace_used == Some(1);
+                let in_str = in_label.as_deref().unwrap_or("—");
+                let out_str = out_label.as_deref().unwrap_or("—");
+                let details = if is_grace {
+                    format!("Late arrival at {} (Weekly grace applied — PHP 0.00 deduction)", in_str)
+                } else {
+                    format!("Late arrival at {} ({} hr(s) late)", in_str, rec_late_hours)
+                };
+                let amount = if is_intern {
+                    0.0
+                } else {
+                    (rec_late_hours as f64) * late_rate
+                };
+                deduction_items.push(serde_json::json!({
+                    "date": date_str,
+                    "category": "LATE",
+                    "label": "Late",
+                    "details": details,
+                    "timeIn": in_str,
+                    "timeOut": out_str,
+                    "workedHours": null,
+                    "hoursShort": null,
+                    "lateHours": rec_late_hours,
+                    "amount": amount,
+                }));
+            }
+
+            // Incomplete Work Hours / Undertime / Half-Day
+            if rec_half_day_ded_centavos > 0 || rec_is_half_day == 1 {
+                let in_str = in_label.as_deref().unwrap_or("—");
+                let out_str = out_label.as_deref().unwrap_or("—");
+                let (worked_hrs, unrendered_hrs) = if let (Some(t_in_str), Some(t_out_str)) = (&actual_in, &actual_out) {
+                    if let (Ok(t_in), Ok(t_out)) = (
+                        chrono::DateTime::parse_from_rfc3339(t_in_str),
+                        chrono::DateTime::parse_from_rfc3339(t_out_str)
+                    ) {
+                        let in_m = t_in.with_timezone(&Manila);
+                        let out_m = t_out.with_timezone(&Manila);
+                        let capped_out = crate::services::payroll::cap_late_timeout_out(out_m);
+                        let paid_sec = crate::services::lunch_break::paid_work_seconds(in_m, capped_out);
+                        let wh = crate::services::payroll::floor_hours(paid_sec).min(8);
+                        let uh = (8 - wh).max(0);
+                        (wh, uh)
+                    } else {
+                        (0, 4)
+                    }
+                } else {
+                    (0, 4)
+                };
+
+                let details = if unrendered_hrs > 0 {
+                    format!("Incomplete hours: {} worked of 8 hrs ({} short), {} – {}",
+                        if worked_hrs == 1 { "1 hr".to_string() } else { format!("{} hrs", worked_hrs) },
+                        if unrendered_hrs == 1 { "1 hr".to_string() } else { format!("{} hrs", unrendered_hrs) },
+                        in_str, out_str)
+                } else {
+                    format!("Half-day: {} – {}", in_str, out_str)
+                };
+
+                deduction_items.push(serde_json::json!({
+                    "date": date_str,
+                    "category": "UNDERTIME",
+                    "label": if rec_is_half_day == 1 { "Half-day" } else { "Undertime" },
+                    "details": details,
+                    "timeIn": in_str,
+                    "timeOut": out_str,
+                    "workedHours": worked_hrs,
+                    "hoursShort": unrendered_hrs,
+                    "lateHours": null,
+                    "amount": rec_half_day_ded_centavos as f64 / 100.0,
+                }));
+            }
+        }
+
+        deduction_items.sort_by(|a, b| {
+            let d_a = a.get("date").and_then(|v| v.as_str()).unwrap_or("");
+            let d_b = b.get("date").and_then(|v| v.as_str()).unwrap_or("");
+            d_a.cmp(d_b)
+        });
+
+        let calculation_breakdown_json = serde_json::json!({
+            "source": "attendance",
+            "actualWorkingDays": actual_days,
+            "standardWorkingDays": standard_days,
+            "dailyRate": daily_rate_centavos as f64 / 100.0,
+            "lateUnits": late_units,
+            "deductions": deduction_items,
+        }).to_string();
+
         let payroll_id = uuid::Uuid::new_v4().to_string();
         let query = format!("INSERT INTO payroll_cutoffs (payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,payroll_frequency,daily_rate_centavos,standard_working_days,actual_working_days,basic_pay_centavos,special_holiday_days,special_holiday_multiplier,special_holiday_pay_centavos,regular_holiday_days,regular_holiday_multiplier,regular_holiday_pay_centavos,incentives_allowance_centavos,special_allowance_centavos,total_compensation_centavos,total_allowance_centavos,late_units,late_deduction_centavos,half_day_count,half_day_deduction_centavos,absent_days,absence_deduction_centavos,overtime_hours,overtime_rate_centavos,overtime_pay_centavos,manual_adjustment_centavos,adjustment_reason,gross_compensation_centavos,net_pay_centavos,signature_placeholder,calculation_breakdown,approved_working_day_overage,status,hra_centavos,sss_centavos,phic_centavos,hdmf_centavos,salary_advance_centavos,created_at,updated_at) VALUES ({})", std::iter::repeat("?").take(46).collect::<Vec<_>>().join(","));
         sqlx::query(&query)
@@ -2722,7 +2887,7 @@ async fn payroll_generate_cutoff_impl(
             .bind(calculated.incentives_allowance).bind(calculated.special_allowance).bind(calculated.total_compensation).bind(calculated.total_allowance).bind(late_units).bind(calculated.late_deduction)
             .bind(half_day_count).bind(calculated.half_day_deduction).bind(absent_days).bind(calculated.absence_deduction).bind(overtime_hours).bind(overtime_rate_centavos).bind(calculated.overtime_pay)
             .bind(php_to_centavos(manual_adjustment)).bind(input.adjustment_reason.clone()).bind(gross_amount).bind(net_amount).bind("")
-            .bind(serde_json::json!({"source":"attendance","actualWorkingDays":actual_days,"lateUnits":late_units}).to_string()).bind(1_i64).bind("DRAFT")
+            .bind(&calculation_breakdown_json).bind(1_i64).bind("DRAFT")
             .bind(calculated.hra).bind(calculated.sss_employee_share).bind(calculated.phic_employee_share).bind(calculated.hdmf_employee_share).bind(calculated.salary_advance)
             .bind(&now).bind(&now)
             .execute(&state.db).await.map_err(|e| e.to_string())?;

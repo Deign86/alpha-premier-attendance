@@ -973,4 +973,11 @@ unrelated to the change; CI (`windows-latest`, MSVC) runs the same 296 tests suc
   EXPECT: all tests pass; 08:00–12:00 and 08:00–12:30 both yield 4 worked hours and ₱40 daily pay.
   EVIDENCE: All 48 tests across the three payroll suites pass. Parity check across TypeScript and Rust engines passes with 0 mismatches.
 
+## Transparent Attendance Deductions Breakdown & Calculation Parity
+
+- [x] Attendance deductions are itemized by date, type (absence, undertime/half-day, late), timestamps, unrendered hours, and deduction amounts in generated payroll cutoffs and displayed clearly to admin users; intern cutoff calculation display shows `Cutoff Base - Deductions = Net Pay` instead of equating gross earnings.
+  CHECK: `cargo check --manifest-path src-tauri/Cargo.toml && npm run lint:oxlint && npm run typecheck && npm test -w client -- src/payroll.test.tsx`
+  EXPECT: All checks pass, 0 errors, 0 warnings; payroll unit tests verify itemized deductions table with dates and causes and verify correct net pay calculation display.
+  EVIDENCE: `cargo check` passed (dev profile [unoptimized + debuginfo] finished with 0 errors). `npm run lint:oxlint` passed (0 warnings, 0 errors on 61 files). `npm run typecheck` passed cleanly across shared, client, and server workspaces. All 20 tests in `payroll.test.tsx` passed, confirming transparent breakdown rendering and correct net pay equation.
+
 
