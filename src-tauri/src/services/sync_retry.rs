@@ -171,6 +171,41 @@ pub fn per_call_budget_actual(already_slept_ms: u64, want_ms: u64) -> u64 {
     want_ms.min(PER_CALL_SLEEP_BUDGET_MS.saturating_sub(already_slept_ms))
 }
 
+/// DTR values.batchUpdate coalescing budget (plan todo 6 — kept in this
+/// std-only file so the exact-bytes harness can include! it): at most 50
+/// ranges per call, at most 2MB of serialized range payload per call, one
+/// spreadsheet per call. Whichever bound hits first splits the drain.
+/// Paint (spreadsheets.batchUpdate) never rides these values-only calls.
+pub const DTR_BATCH_MAX_RANGES: usize = 50;
+pub const DTR_BATCH_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Chunk `entry_bytes` (serialized bytes of each values-only range entry, in
+/// plan order) into `(start, end)` index pairs, one pair per
+/// values:batchUpdate call. A single oversized entry still gets its own
+/// chunk (one range per call) — it fails closed downstream instead of
+/// wedging the splitter, and an empty drain yields zero chunks.
+pub fn split_dtr_batch(entry_bytes: &[usize]) -> Vec<(usize, usize)> {
+    let mut chunks: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0_usize;
+    let mut bytes = 0_usize;
+    for (index, size) in entry_bytes.iter().enumerate() {
+        let count = index - start;
+        if count > 0
+            && (count >= DTR_BATCH_MAX_RANGES
+                || bytes.saturating_add(*size) > DTR_BATCH_MAX_BYTES)
+        {
+            chunks.push((start, index));
+            start = index;
+            bytes = 0;
+        }
+        bytes = bytes.saturating_add(*size);
+    }
+    if start < entry_bytes.len() {
+        chunks.push((start, entry_bytes.len()));
+    }
+    chunks
+}
+
 /// Queue-row retry backoff policy (pinned by plan todo 4 — keep in sync
 /// with the `run_once` fail arm in `sheets_sync.rs`, which owns the attempts
 /// writes while this function owns the delays):

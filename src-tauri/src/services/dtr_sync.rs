@@ -42,6 +42,7 @@ use crate::services::sheets_sync::{
     classify_403_body, parse_retry_after_secs, per_call_budget_actual, per_call_should_retry,
     per_call_sleep_ms,
 };
+use crate::services::sync_retry::split_dtr_batch;
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
@@ -1504,7 +1505,22 @@ pub async fn execute_dtr_push(
     Err(dtr_error_for_response(response).await)
 }
 
-/// Batch-write multiple DTR rows in a single `values:batchUpdate` request.
+/// Batch-write multiple DTR rows with values-only coalescing: plans are
+/// chunked at 50 ranges OR 2MB serialized payload (whichever first, see
+/// `sync_retry::split_dtr_batch`), one spreadsheet per call, one
+/// values:batchUpdate per chunk. Paint never rides these calls — it stays
+/// in `paint_tab_formats_with_rows`, and the absent sweep is untouched.
+///
+/// Whole-call 400 (data error, deterministic per range) falls back to
+/// per-range isolation: each range of the failed chunk is retried singly,
+/// good ranges apply, bad ones collect into the returned error. Other
+/// failures return immediately: transient codes (429/5xx/403-rateLimit via
+/// `dtr_error_for_response`, todo 5) belong to the todo-1 queue fail arm,
+/// and transport exhaustion replays the chunk wholesale.
+///
+/// Values-overwrite idempotency: every write is a full `B:E` range+values
+/// overwrite, so replaying the same range+values (retry, resume, or
+/// isolation re-probe) converges instead of duplicating — safe to retry.
 pub async fn execute_dtr_batch_push(
     client: &reqwest::Client,
     token: &str,
@@ -1514,39 +1530,132 @@ pub async fn execute_dtr_batch_push(
     if plans.is_empty() {
         return Ok(0);
     }
-    let data: Vec<serde_json::Value> = plans
-        .iter()
-        .map(|plan| {
-            let range = format!(
-                "{}!B{}:E{}",
-                quote_tab(&plan.tab),
-                plan.row_1based,
-                plan.row_1based
-            );
-            serde_json::json!({
-                "range": range,
-                "values": [[plan.values[0], plan.values[1], plan.values[2], plan.values[3]]]
-            })
-        })
-        .collect();
-
-    let body = serde_json::json!({
-        "valueInputOption": "USER_ENTERED",
-        "data": data
-    });
-
     let url = format!(
         "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
     );
-    let response = dtr_call_with_retry(|| {
-        client.post(&url).bearer_auth(token).json(&body)
-    })
-    .await?;
-    let status = response.status();
-    if status.is_success() {
-        return Ok(plans.len());
+    execute_dtr_batch_push_to_url(client, token, &url, plans).await
+}
+
+/// URL-injectable core of `execute_dtr_batch_push` (loopback seam for the
+/// `batch_coalesce` tests; production passes the Google URL above).
+async fn execute_dtr_batch_push_to_url(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    plans: &[DtrPushPlan],
+) -> Result<usize, String> {
+    let sizes: Vec<usize> = plans.iter().map(dtr_batch_entry_bytes).collect();
+    let mut applied_total = 0_usize;
+    let mut bad: Vec<(String, String)> = Vec::new();
+    for (start, end) in split_dtr_batch(&sizes) {
+        let entries: Vec<serde_json::Value> =
+            plans[start..end].iter().map(dtr_batch_entry).collect();
+        let body = dtr_values_batch_body(&entries);
+        match post_dtr_values_batch(client, token, url, &body).await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    applied_total += end - start;
+                } else if status.as_u16() == 400 {
+                    drop(response);
+                    isolate_dtr_chunk(client, token, url, &plans[start..end], &mut applied_total, &mut bad).await;
+                } else {
+                    return Err(dtr_error_for_response(response).await);
+                }
+            }
+            Err(error) => return Err(error),
+        }
     }
-    Err(dtr_error_for_response(response).await)
+    if bad.is_empty() {
+        Ok(applied_total)
+    } else {
+        Err(dtr_isolation_error(applied_total, plans.len(), &bad))
+    }
+}
+
+/// Per-range isolation for one whole-call-400 chunk: retry each range
+/// singly through the same bounded helper (todo 2). Sheets answers 200
+/// with per-range responses and no per-range error field, so a single that
+/// succeeds is a good range applied, and a single that fails is the bad
+/// range isolated with its own error.
+async fn isolate_dtr_chunk(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    chunk: &[DtrPushPlan],
+    applied_total: &mut usize,
+    bad: &mut Vec<(String, String)>,
+) {
+    for plan in chunk {
+        let range = dtr_plan_range(plan);
+        let single = dtr_values_batch_body(&[dtr_batch_entry(plan)]);
+        match post_dtr_values_batch(client, token, url, &single).await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    *applied_total += 1;
+                } else {
+                    bad.push((range, dtr_error_for_response(response).await));
+                }
+            }
+            Err(error) => bad.push((range, error)),
+        }
+    }
+}
+
+/// One values:batchUpdate POST through the shared bounded retry (todo 2:
+/// max 3 attempts, jitter, Retry-After ≤15s). Returns the last response so
+/// the caller maps it (todo 5: 403 reason routing inside
+/// `dtr_error_for_response`); transport exhaustion returns the generic
+/// transient code for the todo-1 queue fail arm.
+async fn post_dtr_values_batch(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<reqwest::Response, String> {
+    dtr_call_with_retry(|| client.post(url).bearer_auth(token).json(body)).await
+}
+
+/// Canonical `B:E` range string for one plan (single source for entries
+/// and isolation errors).
+fn dtr_plan_range(plan: &DtrPushPlan) -> String {
+    format!(
+        "{}!B{}:E{}",
+        quote_tab(&plan.tab),
+        plan.row_1based,
+        plan.row_1based
+    )
+}
+
+/// One values-only range entry for values:batchUpdate.
+fn dtr_batch_entry(plan: &DtrPushPlan) -> serde_json::Value {
+    serde_json::json!({
+        "range": dtr_plan_range(plan),
+        "values": [[plan.values[0], plan.values[1], plan.values[2], plan.values[3]]]
+    })
+}
+
+/// Serialized bytes of one entry — the 2MB payload budget input.
+fn dtr_batch_entry_bytes(plan: &DtrPushPlan) -> usize {
+    serde_json::to_string(&dtr_batch_entry(plan)).map_or(0, |s| s.len())
+}
+
+/// values:batchUpdate body for one chunk (pure: 10 plans in ⇒ 10 ranges).
+fn dtr_values_batch_body(entries: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::json!({
+        "valueInputOption": "USER_ENTERED",
+        "data": entries
+    })
+}
+
+/// Aggregate error after isolation: good ranges applied, bad ones named.
+fn dtr_isolation_error(applied: usize, total: usize, bad: &[(String, String)]) -> String {
+    let detail = bad
+        .iter()
+        .map(|(range, error)| format!("{range}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("dtr batch: applied {applied} of {total}, isolated bad range(s): {detail}")
 }
 
 fn str_field(payload: &serde_json::Value, name: &str) -> Option<String> {
@@ -2677,6 +2786,234 @@ mod tests {
             }
         });
         format!("http://{addr}/values/Fake!A:F")
+    }
+
+    fn batch_plan(tab: &str, row_1based: usize, fill: &str) -> DtrPushPlan {
+        DtrPushPlan {
+            tab: tab.to_string(),
+            row_1based,
+            values: [
+                fill.to_string(),
+                "12:00:00 PM".to_string(),
+                "1:00:00 PM".to_string(),
+                "5:00:00 PM".to_string(),
+            ],
+        }
+    }
+
+    fn ok_batch_response() -> String {
+        let body = "{\"spreadsheetId\":\"scratch\",\"totalUpdatedCells\":4,\"responses\":[{\"spreadsheetId\":\"scratch\",\"updatedRange\":\"'TAB'!B2:E2\"}]}";
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn bad_request_response() -> String {
+        let body =
+            "{\"error\":{\"code\":400,\"message\":\"Invalid values\",\"status\":\"INVALID_ARGUMENT\"}}";
+        format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    /// Loopback fixture for values:batchUpdate: records each POST body so the
+    /// test proves range coalescing, and serves scripted statuses in order.
+    fn serve_batch_scripted(
+        responses: Vec<String>,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> String {
+        use std::io::{Read, Write};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("loopback batch fixture binds");
+        let addr = listener.local_addr().expect("fixture addr").to_string();
+        listener
+            .set_nonblocking(true)
+            .expect("fixture nonblocking");
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+            let mut served = 0_usize;
+            while served < responses.len() && std::time::Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+                };
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut buf = vec![0_u8; 65536];
+                let mut got = 0_usize;
+                let mut header_end = None;
+                while header_end.is_none() && got < buf.len() {
+                    match stream.read(&mut buf[got..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            got += n;
+                            header_end = find_header_end(&buf[..got]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let Some(end) = header_end else {
+                    continue;
+                };
+                let content_len = header_content_length(&buf[..end]);
+                let mut body: Vec<u8> = buf[end..got].to_vec();
+                body.truncate(content_len.min(body.len()));
+                while body.len() < content_len {
+                    let mut chunk = vec![0_u8; content_len - body.len()];
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => body.extend_from_slice(&chunk[..n]),
+                        Err(_) => break,
+                    }
+                }
+                if let Ok(text) = String::from_utf8(body) {
+                    bodies.lock().expect("bodies lock").push(text);
+                }
+                let _ = stream.write_all(responses[served].as_bytes());
+                let _ = stream.flush();
+                drop(stream);
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                served += 1;
+            }
+        });
+        format!("http://{addr}/values:batchUpdate")
+    }
+
+    #[test]
+    fn batch_coalesce_splits_at_50_ranges_or_2mb() {
+        // 10 small plans ride one call; the body carries all 10 ranges.
+        let plans: Vec<DtrPushPlan> = (2..12)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        let sizes: Vec<usize> = plans.iter().map(dtr_batch_entry_bytes).collect();
+        assert_eq!(split_dtr_batch(&sizes), vec![(0, 10)]);
+        let entries: Vec<serde_json::Value> =
+            plans.iter().map(dtr_batch_entry).collect();
+        let body = dtr_values_batch_body(&entries);
+        assert_eq!(
+            body.get("valueInputOption").and_then(|v| v.as_str()),
+            Some("USER_ENTERED")
+        );
+        assert_eq!(
+            body.get("data").and_then(|v| v.as_array()).map(Vec::len),
+            Some(10)
+        );
+
+        // 55 plans split 50 + 5 (single spreadsheet per call preserved).
+        let plans55: Vec<DtrPushPlan> = (2..57)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        let sizes55: Vec<usize> = plans55.iter().map(dtr_batch_entry_bytes).collect();
+        assert_eq!(split_dtr_batch(&sizes55), vec![(0, 50), (50, 55)]);
+
+        // 2MB payload bound splits first: 3 x ~0.8MB entries -> 2 + 1.
+        let big = "x".repeat(800_000);
+        let big_plans: Vec<DtrPushPlan> = (2..5)
+            .map(|row| batch_plan("TAB", row, &big))
+            .collect();
+        let big_sizes: Vec<usize> = big_plans.iter().map(dtr_batch_entry_bytes).collect();
+        assert_eq!(split_dtr_batch(&big_sizes), vec![(0, 2), (2, 3)]);
+
+        // Isolation error names the applied count plus the bad range.
+        let err = dtr_isolation_error(
+            9,
+            10,
+            &[("'TAB'!B4:E4".to_string(), "400 invalid".to_string())],
+        );
+        assert!(err.contains("applied 9 of 10"), "{err}");
+        assert!(err.contains("'TAB'!B4:E4"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn batch_coalesce_happy_coalesces_ten_rows_into_one_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let plans: Vec<DtrPushPlan> = (2..12)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let url = serve_batch_scripted(
+            vec![ok_batch_response()],
+            std::sync::Arc::clone(&hits),
+            std::sync::Arc::clone(&bodies),
+        );
+        let client = test_client();
+        let applied = execute_dtr_batch_push_to_url(&client, "token", &url, &plans)
+            .await
+            .expect("happy batch applies");
+        assert_eq!(applied, 10);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "10 plans drain as 1 values:batchUpdate"
+        );
+        let captured = bodies.lock().expect("bodies lock");
+        assert_eq!(captured.len(), 1);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("batch body is JSON");
+        assert_eq!(
+            parsed.get("data").and_then(|v| v.as_array()).map(Vec::len),
+            Some(10)
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_coalesce_bad_range_isolates_with_good_applied() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let plans: Vec<DtrPushPlan> = (2..12)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        // Whole-call 400, then per-range singles: every row OK except row 4.
+        let mut scripted = vec![bad_request_response()];
+        for row in 2..12 {
+            scripted.push(if row == 4 {
+                bad_request_response()
+            } else {
+                ok_batch_response()
+            });
+        }
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let url = serve_batch_scripted(
+            scripted,
+            std::sync::Arc::clone(&hits),
+            std::sync::Arc::clone(&bodies),
+        );
+        let client = test_client();
+        let err = execute_dtr_batch_push_to_url(&client, "token", &url, &plans)
+            .await
+            .expect_err("bad range isolates with error");
+        assert!(err.contains("applied 9 of 10"), "{err}");
+        assert!(err.contains("'TAB'!B4:E4"), "{err}");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            11,
+            "1 batch + 10 single-range probes"
+        );
+        let captured = bodies.lock().expect("bodies lock");
+        assert_eq!(captured.len(), 11);
+        let first: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("batch body is JSON");
+        assert_eq!(
+            first.get("data").and_then(|v| v.as_array()).map(Vec::len),
+            Some(10)
+        );
+        for single in captured.iter().skip(1) {
+            let parsed: serde_json::Value =
+                serde_json::from_str(single).expect("single body is JSON");
+            assert_eq!(
+                parsed.get("data").and_then(|v| v.as_array()).map(Vec::len),
+                Some(1)
+            );
+        }
     }
 
     #[test]
