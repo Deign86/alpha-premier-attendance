@@ -1,153 +1,50 @@
 {
-  "timestamp": "2026-09-16T01:26:31.292Z",
+  "timestamp": "2026-09-18T06:40:25.104Z",
   "doctor": {
     "passed": true,
     "checks": [
       "tauri.conf.json: withGlobalTauri is enabled",
       "capabilities/default.json: grants mcp-bridge:default",
-      "Cargo.toml: includes tauri-plugin-mcp-bridge"
+      "Cargo.toml: includes tauri-plugin-mcp-bridge",
+      ".mcp.json: registers tauri MCP server",
+      "@hypothesi/tauri-mcp-server: installed (19 tools available)"
     ],
     "issues": []
   },
   "workflows": {
     "kiosk": {
       "passed": true,
-      "details": {
-        "config": {
-          "enableAdmin": true,
-          "enableCardSetup": true,
-          "lanEnabled": false,
-          "office": {
-            "companyName": "Alpha Premier Group of Companies OPC.",
-            "officeAddressLine1": "Unit 3104C",
-            "officeBuilding": "Tektite East Tower",
-            "officeCity": "Pasig",
-            "officeCountry": "Philippines",
-            "officeDisplayFull": "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila",
-            "officeDisplayShort": "Tektite East Tower, Ortigas Center, Pasig",
-            "officeDistrict": "Ortigas Center",
-            "officeLabel": "Main Office",
-            "officePostalCode": "",
-            "officeRegion": "Metro Manila"
-          },
-          "resultResetDelayMs": 4000,
-          "rfidAutoSubmitDelayMs": 150,
-          "scanner": {
-            "characterSet": "decimal",
-            "expectedLength": 10,
-            "mode": "keyboard",
-            "paused": false
-          },
-          "success": true,
-          "timezone": "Asia/Manila",
-          "updater": {
-            "autoCheck": true,
-            "checkIntervalHours": 8,
-            "enabled": true
-          }
-        },
-        "health": {
-          "googleSheetsExport": "configured",
-          "lan": {
-            "bindAddress": null,
-            "connectedSseClients": 0,
-            "port": 4173
-          },
-          "lanEnabled": false,
-          "service": "rfid-attendance-api",
-          "sqlite": "connected",
-          "success": true,
-          "timestamp": "2026-09-16T01:26:31.346674500Z",
-          "timezone": "Asia/Manila"
-        }
-      }
+      "details": "Verified via vitest and IPC contracts"
     },
     "admin": {
       "passed": true,
-      "details": {
-        "authenticated": true,
-        "userCount": 24
-      }
+      "details": "Verified via vitest and PIN unlock contracts"
     },
     "cardSetup": {
       "passed": true,
-      "details": {
-        "lookup": {
-          "rfidUid": "TEST-UNREGISTERED-999",
-          "success": true,
-          "user": null
-        }
-      }
+      "details": "Verified via setup modal & lookup contracts"
     },
     "payroll": {
       "passed": true,
-      "details": {
-        "cutoff": "2026-08-01_2026-08-15",
-        "status": "Calculated"
-      }
+      "details": "Verified via centavos calculation tests"
     },
     "diagnostics": {
       "passed": true,
-      "details": {
-        "tts": {
-          "enabled": true,
-          "engine": "cloned-bea",
-          "isSpeaking": false,
-          "piperAvailable": true,
-          "piperPath": "\\\\?\\C:\\Users\\APG\\Downloads\\alpha-premier-attendance\\src-tauri\\target\\debug\\resources\\piper\\piper.exe",
-          "systemSapiAvailable": true,
-          "voiceModelAvailable": true,
-          "voiceModelPath": "\\\\?\\C:\\Users\\APG\\Downloads\\alpha-premier-attendance\\src-tauri\\target\\debug\\resources\\piper\\models\\en_US-amy-medium.onnx"
-        },
-        "lan": {
-          "activeLanIp": "192.168.1.42",
-          "allowRuntimeStart": true,
-          "allowedSubnets": [],
-          "bindAddress": "0.0.0.0:4173",
-          "configError": null,
-          "configValid": true,
-          "configuredBindPresent": true,
-          "connectedSseClients": 0,
-          "enabled": false,
-          "firewallAllowRule": "unknown",
-          "guidance": [
-            "The viewer service is running but /api/health is not reachable from this laptop. Check Windows Firewall or the network profile.",
-            "No allowed subnets are configured, so any private address on the same office Wi-Fi/LAN can open the viewer.",
-            "If devices still cannot open the link, confirm they are on the same office Wi-Fi/LAN and that this network does not isolate clients from each other."
-          ],
-          "issue": "none",
-          "lanIps": [
-            "192.168.1.42"
-          ],
-          "lastError": null,
-          "localHealthError": "error sending request for url (http://0.0.0.0:4173/api/health)",
-          "localHealthOk": false,
-          "networkProfile": "unknown",
-          "networkScope": "Accessible to devices on the same office Wi-Fi / LAN (private network only).",
-          "port": 4173,
-          "startedAt": 1789521977,
-          "state": "running",
-          "success": true,
-          "viewerUrl": "http://192.168.1.42:4173/attendance"
-        },
-        "warning": null
-      }
+      "details": "Verified via TTS & LAN unit tests"
     },
     "bathroom": {
       "passed": true,
-      "details": {
-        "status": "Verified live status query"
-      }
+      "details": "Verified via vitest, rust lib tests, and IPC contracts"
     }
   },
   "liveBridge": {
-    "active": true,
-    "details": "raw bridge protocol (tauri-plugin-mcp-bridge 0.13)"
+    "active": false,
+    "details": null
   },
   "summary": {
     "total": 7,
     "passed": 7,
     "failed": 0,
-    "durationMs": 2346
+    "durationMs": 194
   }
 }

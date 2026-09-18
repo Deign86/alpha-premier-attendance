@@ -18,7 +18,8 @@
     "lint": "npm run lint -w shared && npm run lint -w client && npm run lint -w server && npm run lint:oxlint",
     "lint:oxlint": "oxlint --config oxlint.config.ts shared/src client/src server/src",
     "typecheck": "npm run build -w shared && npm run typecheck -w client && npm run typecheck -w server",
-    "test": "npm run build -w shared && npm run test -w shared && npm run test -w client && npm run test -w server",
+    "test": "npm run build -w shared && npm run test -w shared && npm run test -w client && npm run test -w server && npm run verify:mcp",
+    "test:mcp": "node scripts/verify-tauri-mcp.mjs",
     "validate:sheets": "npm run validate:sheets -w server",
     "tauri": "tauri",
     "tauri:dev": "node scripts/auto-clean.mjs && npm run build -w shared && npm run build -w client && tauri dev",
@@ -44,6 +45,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@hypothesi/tauri-mcp-server": "^0.13.0",
     "@oxlint/plugins": "^1.78.0",
     "@tauri-apps/cli": "^2.8.0",
     "@typescript-eslint/eslint-plugin": "^8.19.1",

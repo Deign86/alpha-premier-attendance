@@ -85,7 +85,36 @@ async function runDoctor() {
     }
   }
 
-  // 4. Check MCP Bridge port (9223)
+  // 4. Check .mcp.json
+  const mcpConfigPath = resolve(rootDir, '.mcp.json');
+  if (!existsSync(mcpConfigPath)) {
+    issues.push('Missing .mcp.json');
+  } else {
+    try {
+      const mcpConf = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+      if (mcpConf?.mcpServers?.tauri) {
+        checks.push('✓ .mcp.json registers tauri MCP server');
+      } else {
+        issues.push('.mcp.json is missing tauri server registration');
+      }
+    } catch (e) {
+      issues.push(`Failed to parse .mcp.json: ${e.message}`);
+    }
+  }
+
+  // 5. Check @hypothesi/tauri-mcp-server package
+  try {
+    const tauriMcp = await import('@hypothesi/tauri-mcp-server');
+    if (Array.isArray(tauriMcp.TOOLS) && tauriMcp.TOOLS.length > 0) {
+      checks.push(`✓ @hypothesi/tauri-mcp-server installed (${tauriMcp.TOOLS.length} tools available)`);
+    } else {
+      issues.push('@hypothesi/tauri-mcp-server does not export TOOLS array');
+    }
+  } catch (e) {
+    issues.push(`Failed to load @hypothesi/tauri-mcp-server: ${e.message}`);
+  }
+
+  // 6. Check MCP Bridge port (9223)
   const isPortOpen = await checkTcpPort(9223);
   if (isPortOpen) {
     checks.push('✓ Tauri MCP Bridge active on port 9223 (ready to drive)');

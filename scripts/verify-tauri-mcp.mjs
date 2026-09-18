@@ -200,6 +200,33 @@ async function runVerification() {
     }
   }
 
+  const mcpConfigPath = resolve(rootDir, '.mcp.json');
+  if (existsSync(mcpConfigPath)) {
+    try {
+      const mcpConf = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+      if (mcpConf?.mcpServers?.tauri) {
+        results.doctor.checks.push('.mcp.json: registers tauri MCP server');
+      } else {
+        results.doctor.issues.push('.mcp.json missing tauri server registration');
+      }
+    } catch (e) {
+      results.doctor.issues.push(`Failed to parse .mcp.json: ${e.message}`);
+    }
+  } else {
+    results.doctor.issues.push('Missing .mcp.json');
+  }
+
+  try {
+    const tauriMcp = await import('@hypothesi/tauri-mcp-server');
+    if (Array.isArray(tauriMcp.TOOLS) && tauriMcp.TOOLS.length > 0) {
+      results.doctor.checks.push(`@hypothesi/tauri-mcp-server: installed (${tauriMcp.TOOLS.length} tools available)`);
+    } else {
+      results.doctor.issues.push('@hypothesi/tauri-mcp-server does not export TOOLS array');
+    }
+  } catch (e) {
+    results.doctor.issues.push(`Failed to load @hypothesi/tauri-mcp-server: ${e.message}`);
+  }
+
   results.doctor.passed = results.doctor.issues.length === 0;
   for (const c of results.doctor.checks) console.log(`  ✓ ${c}`);
   for (const issue of results.doctor.issues) console.error(`  ✗ ${issue}`);
