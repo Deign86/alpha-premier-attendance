@@ -82,6 +82,83 @@ mod tests {
         assert_eq!(display_timestamp("not-a-timestamp"), "not-a-timestamp");
     }
 
+    #[tokio::test]
+    async fn intern_sheet_row_reports_zero_late_deduction_when_db_raw_is_nonzero() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        sqlx::query("CREATE TABLE users (user_id TEXT PRIMARY KEY, employee_type TEXT NOT NULL)")
+            .execute(&db)
+            .await
+            .expect("users table");
+        sqlx::query(
+            "CREATE TABLE payroll_cutoffs (payroll_id TEXT PRIMARY KEY, employee_id TEXT NOT NULL, \
+             employee_name TEXT NOT NULL, daily_rate_centavos INTEGER NOT NULL, \
+             standard_working_days REAL NOT NULL, actual_working_days REAL NOT NULL, \
+             basic_pay_centavos INTEGER NOT NULL, total_compensation_centavos INTEGER NOT NULL, \
+             late_deduction_centavos INTEGER NOT NULL, half_day_deduction_centavos INTEGER NOT NULL, \
+             absent_days REAL NOT NULL, absence_deduction_centavos INTEGER NOT NULL, \
+             manual_adjustment_centavos INTEGER NOT NULL, gross_compensation_centavos INTEGER NOT NULL, \
+             cutoff_start TEXT NOT NULL, cutoff_end TEXT NOT NULL)",
+        )
+        .execute(&db)
+        .await
+        .expect("payroll_cutoffs table");
+        sqlx::query("INSERT INTO users (user_id, employee_type) VALUES ('INT-1', 'INTERN')")
+            .execute(&db)
+            .await
+            .expect("intern user");
+        sqlx::query("INSERT INTO users (user_id, employee_type) VALUES ('EMP-1', 'EMPLOYEE')")
+            .execute(&db)
+            .await
+            .expect("employee user");
+        for (payroll_id, employee_id, employee_name) in
+            [("P-INT", "INT-1", "Maria Santos"), ("P-EMP", "EMP-1", "Ada Lovelace")]
+        {
+            sqlx::query(
+                "INSERT INTO payroll_cutoffs (payroll_id, employee_id, employee_name, \
+                 daily_rate_centavos, standard_working_days, actual_working_days, \
+                 basic_pay_centavos, total_compensation_centavos, late_deduction_centavos, \
+                 half_day_deduction_centavos, absent_days, absence_deduction_centavos, \
+                 manual_adjustment_centavos, gross_compensation_centavos, cutoff_start, cutoff_end) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(payroll_id)
+            .bind(employee_id)
+            .bind(employee_name)
+            .bind(8_000_i64)
+            .bind(11.0_f64)
+            .bind(11.0_f64)
+            .bind(88_000_i64)
+            .bind(88_000_i64)
+            .bind(1_000_i64)
+            .bind(0_i64)
+            .bind(0.0_f64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(88_000_i64)
+            .bind("2026-08-16")
+            .bind("2026-08-31")
+            .execute(&db)
+            .await
+            .expect("cutoff row");
+        }
+        let intern_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "INTERN")
+            .await
+            .expect("intern sheet rows");
+        assert_eq!(intern_rows.len(), 1);
+        assert_eq!(intern_rows[0].late_deduction_centavos, 0);
+        assert_eq!(intern_rows[0].gross_compensation_centavos, 88_000);
+        let employee_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "EMPLOYEE")
+            .await
+            .expect("employee sheet rows");
+        assert_eq!(employee_rows.len(), 1);
+        assert_eq!(employee_rows[0].late_deduction_centavos, 1_000);
+        assert_eq!(employee_rows[0].gross_compensation_centavos, 87_000);
+    }
+
     #[test]
     fn generates_an_attendance_workbook_with_expected_headers() {
         let path =
@@ -798,9 +875,9 @@ fn elapsed_hours(start: &str, end: &str) -> f64 {
     ) {
         (Ok(start), Ok(end)) => {
             // NOTE (post-0.1.74): the TOTAL_HOURS export column is net of the
-            // fixed 12:00–13:00 lunch break, while payroll `worked_hours` is
-            // gross elapsed time ceiled to the hour with no lunch subtraction.
-            // The two therefore disagree on every lunch-spanning shift; that
+            // fixed 12:00–13:00 lunch break, as is payroll `worked_hours` —
+            // both derive from lunch_break::paid_work_hours (net, not gross).
+            // That alignment aside,
             // reconciliation is a separate product decision — do not "fix" it
             // by changing this function as part of a payroll-test fix.
             crate::services::lunch_break::paid_work_hours(
@@ -2313,7 +2390,7 @@ pub async fn load_payroll_sheet_rows(
                 standard_working_days,
                 basic_pay_centavos: row.get("basic_pay_centavos"),
                 total_compensation_centavos,
-                late_deduction_centavos,
+                late_deduction_centavos: effective_late_deduction,
                 half_day_deduction_centavos,
                 absence_deduction_centavos,
                 gross_compensation_centavos,
