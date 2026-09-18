@@ -3,8 +3,6 @@ import type { ScanRequest } from '@rfid-attendance/shared';
 export type QueuedScan = {
   id: string;
   request: ScanRequest;
-  timestamp: string;
-  retries: number;
 };
 
 const OFFLINE_QUEUE_KEY = 'alpha_premier_offline_scans';
@@ -60,8 +58,6 @@ export function enqueueOfflineScan(request: ScanRequest): QueuedScan {
   const queuedItem: QueuedScan = {
     id: `queue-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     request,
-    timestamp: new Date().toISOString(),
-    retries: 0,
   };
   queue.push(queuedItem);
   try {
