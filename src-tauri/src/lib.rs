@@ -3450,25 +3450,24 @@ fn generated_file_metadata(
 /// Canonicalize a candidate path and require it to live inside the exports
 /// directory. Rejects traversal and arbitrary paths outside the export root.
 fn canonical_exports_path(state: &AppState, candidate: &Path) -> Result<PathBuf, String> {
-    let root = std::fs::canonicalize(&state.exports_dir)
-        .map_err(|_| "EXPORT_DIR_UNAVAILABLE".to_string())?;
-    let canonical = std::fs::canonicalize(candidate).map_err(|_| "FILE_NOT_FOUND".to_string())?;
-    if !canonical.starts_with(&root) {
-        return Err("PATH_OUTSIDE_EXPORTS".into());
-    }
-    Ok(canonical)
+    crate::paths::canonical_within(
+        &state.exports_dir,
+        candidate,
+        "EXPORT_DIR_UNAVAILABLE",
+        "FILE_NOT_FOUND",
+        "PATH_OUTSIDE_EXPORTS",
+    )
 }
 
 /// Canonicalize a directory path inside the application data root.
 fn canonical_data_path(state: &AppState, candidate: &Path) -> Result<PathBuf, String> {
-    let root =
-        std::fs::canonicalize(&state.data_dir).map_err(|_| "DATA_DIR_UNAVAILABLE".to_string())?;
-    let canonical =
-        std::fs::canonicalize(candidate).map_err(|_| "DIRECTORY_NOT_FOUND".to_string())?;
-    if !canonical.starts_with(&root) {
-        return Err("PATH_OUTSIDE_DATA".into());
-    }
-    Ok(canonical)
+    crate::paths::canonical_within(
+        &state.data_dir,
+        candidate,
+        "DATA_DIR_UNAVAILABLE",
+        "DIRECTORY_NOT_FOUND",
+        "PATH_OUTSIDE_DATA",
+    )
 }
 
 #[tauri::command]
@@ -4559,11 +4558,13 @@ async fn open_generated_artifact(
     let relative: String = sqlx::query_scalar("SELECT managed_relative_path FROM generated_artifacts WHERE artifact_id=? AND state='AVAILABLE'").bind(&artifact_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?.ok_or_else(|| "ARTIFACT_NOT_FOUND".to_string())?;
     let root =
         std::fs::canonicalize(&state.data_dir).map_err(|_| "ARTIFACT_PATH_ERROR".to_string())?;
-    let path = root.join(&relative);
-    let canonical = std::fs::canonicalize(&path).map_err(|_| "ARTIFACT_NOT_FOUND".to_string())?;
-    if !canonical.starts_with(&root) {
-        return Err("ARTIFACT_PATH_ERROR".into());
-    }
+    let canonical = crate::paths::canonical_within(
+        &root,
+        &root.join(&relative),
+        "ARTIFACT_PATH_ERROR",
+        "ARTIFACT_NOT_FOUND",
+        "ARTIFACT_PATH_ERROR",
+    )?;
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer.exe")

@@ -119,6 +119,27 @@ pub fn resolve_db_path(config_dir: &Path, data_dir: &Path, database: &DatabaseCo
     }
 }
 
+/// Canonicalize a candidate path and require it to live inside a root directory.
+///
+/// Preserves missing-file-is-error semantics: both `root_dir` and `candidate`
+/// must already exist because `std::fs::canonicalize` fails otherwise.
+/// Rejects traversal and symlinks escaping the root via `starts_with`.
+/// Error codes stay at the call sites as literals (frontend matches on them).
+pub fn canonical_within(
+    root_dir: &Path,
+    candidate: &Path,
+    root_err: &str,
+    missing_err: &str,
+    outside_err: &str,
+) -> Result<PathBuf, String> {
+    let root = std::fs::canonicalize(root_dir).map_err(|_| root_err.to_string())?;
+    let canonical = std::fs::canonicalize(candidate).map_err(|_| missing_err.to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err(outside_err.to_string());
+    }
+    Ok(canonical)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
