@@ -10,9 +10,7 @@ mod services;
 mod state;
 mod tts;
 
-use crate::services::intern_payroll::{
-    INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID,
-};
+use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_PAYROLL_PROFILE_ID};
 use chrono::Datelike;
 use chrono_tz::Asia::Manila;
 use sha2::{Digest, Sha256};
@@ -1635,7 +1633,9 @@ async fn admin_update_attendance_impl(
         )
         .await;
     }
-    if status == "COMPLETED" {
+    // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
+    // (cap_late_timeout_out) before any math, so the day is a full capped shift.
+    if status == "COMPLETED" || status == "LATE_TIMEOUT" {
         if let (Some(actual_in), Some(actual_out)) = (time_in, time_out) {
             if let Some(user_row) = sqlx::query("SELECT user_id,full_name,employee_type,daily_rate_centavos FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
                 ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), user_row.get("employee_type"), user_row.get("daily_rate_centavos"), date, actual_in, actual_out).await?;
@@ -1790,7 +1790,9 @@ async fn admin_create_backdated_attendance_impl(
     .await
     .map_err(|e| e.to_string())?;
 
-    if status == "COMPLETED" {
+    // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
+    // (cap_late_timeout_out) before any math, so the day is a full capped shift.
+    if status == "COMPLETED" || status == "LATE_TIMEOUT" {
         if let Some(actual_out) = time_out {
             let employee_type: String = user.get("employee_type");
             let daily_rate: Option<i64> = user.get("daily_rate_centavos");
@@ -2379,8 +2381,12 @@ async fn payroll_intern_report(
             let total_comp = standard_days * daily_rate;
             let absence_deduction = absent_days * daily_rate;
             let late_units = row.get::<i64, _>("late_units") as f64;
-            let late_deduction = row.get::<i64, _>("late_deduction") as f64 / 100.0;
-            let total_deductions = late_deduction + half_day_deduction + absence_deduction;
+            // An intern's late shortfall is already charged inside
+            // half_day_deduction ((8 - worked_hours) x PHP 10, where worked_hours
+            // already excludes the late hour through payable_in = ceil_hour(time_in)),
+            // so billing a separate late amount would double-count the penalty.
+            // lateUnits stays in the payload for visibility only.
+            let total_deductions = half_day_deduction + absence_deduction;
             let gross = (total_comp - total_deductions).max(0.0);
             let user_id = row.get::<String, _>("user_id");
             serde_json::json!({
@@ -2408,7 +2414,7 @@ async fn payroll_intern_report(
                 "totalCompensation": total_comp,
                 "totalAllowance": 0,
                 "lateUnits": late_units,
-                "lateDeduction": late_deduction,
+                "lateDeduction": 0.0,
                 "halfDayCount": half_day_count,
                 "halfDayDeduction": half_day_deduction,
                 "absentDays": absent_days,
@@ -2519,7 +2525,6 @@ async fn payroll_generate_cutoff_impl(
          SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) < 18000 OR substr(p.actual_time_in, 12, 5) >= '12:00')) THEN 1 ELSE 0 END) AS half_day_count, \
          COALESCE(SUM(p.half_day_deduction_centavos), 0) AS half_day_deduction_centavos, \
          SUM(p.late_hours) AS late_units, \
-         SUM(p.late_deduction_centavos) AS late_deduction_centavos, \
          u.payroll_profile_id \
          FROM payroll p JOIN users u ON u.user_id=p.user_id \
          WHERE p.attendance_date >= ? AND p.attendance_date <= ? \
@@ -2566,11 +2571,6 @@ async fn payroll_generate_cutoff_impl(
         };
         let actual_days = row.get::<i64, _>("actual_days") as f64;
         let late_units = row.get::<i64, _>("late_units") as f64;
-        let late_deduction_centavos = if is_intern {
-            row.get::<i64, _>("late_deduction_centavos")
-        } else {
-            0
-        };
         let incentives_centavos = if is_intern {
             0
         } else {
@@ -2659,8 +2659,13 @@ async fn payroll_generate_cutoff_impl(
             custom_number("overtimeHours").unwrap_or(0.0)
         };
         let late_rate = custom_number("lateDeductionRate").unwrap_or(0.0);
+        // An intern's late hour is already charged inside half_day_deduction:
+        // the per-day rows deduct (8 - worked_hours) x PHP 10 and worked_hours
+        // already excludes the late hour (payable_in = ceil_hour(time_in)).
+        // Charging a separate late amount would double-count the same hour.
+        // lateUnits is still persisted on the record for visibility.
         let late_deduction = if is_intern {
-            late_deduction_centavos as f64 / 100.0
+            0.0
         } else {
             late_units * late_rate
         };
@@ -3135,11 +3140,11 @@ async fn apply_intern_rules(
     );
     object.insert("employeeType".into(), serde_json::json!("INTERN"));
     object.insert("lateUnits".into(), serde_json::json!(late_units));
-    // Late deduction is PHP 10.00 per hour, computed from total late hours.
-    object.insert(
-        "lateDeduction".into(),
-        serde_json::json!(late_units * INTERN_LATE_DEDUCTION_PER_HOUR_PHP as f64),
-    );
+    // The intern late hour is already charged inside halfDayDeduction (the
+    // per-day rows deduct (8 - worked_hours) x PHP 10 and worked_hours already
+    // excludes the late hour), so a separate PHP 10/hour late amount would
+    // double-count the same hour. lateUnits is kept for visibility.
+    object.insert("lateDeduction".into(), serde_json::json!(0.0));
     for field in [
         "hra",
         "incentivesAllowance",
@@ -4694,7 +4699,11 @@ async fn scan_rfid_impl(
             }
         }
     }
-    if action == "TIME_OUT" && attendance_status == "COMPLETED" {
+    // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
+    // (cap_late_timeout_out) before any math, so the day is a full capped shift.
+    if action == "TIME_OUT"
+        && (attendance_status == "COMPLETED" || attendance_status == "LATE_TIMEOUT")
+    {
         if let (Some(actual_in), Some(actual_out)) = (time_in.as_deref(), time_out.as_deref()) {
             let employee_type: String = effective_user.get("employee_type");
             let daily_rate: Option<i64> = effective_user.get("daily_rate_centavos");
@@ -4961,7 +4970,7 @@ async fn reconcile_attendance_payroll_range(
          FROM attendance a \
          LEFT JOIN users u ON u.user_id = a.user_id \
          WHERE a.attendance_date >= ? AND a.attendance_date <= ? \
-           AND a.status = 'COMPLETED' \
+           AND a.status IN ('COMPLETED', 'LATE_TIMEOUT') \
            AND a.time_in IS NOT NULL \
            AND a.time_out IS NOT NULL \
          ORDER BY a.attendance_date ASC, a.time_in ASC",
@@ -5002,7 +5011,7 @@ async fn reconcile_attendance_payroll_range(
            AND attendance_id NOT IN ( \
              SELECT attendance_id FROM attendance \
              WHERE attendance_date >= ? AND attendance_date <= ? \
-               AND status = 'COMPLETED' \
+               AND status IN ('COMPLETED', 'LATE_TIMEOUT') \
                AND time_in IS NOT NULL \
                AND time_out IS NOT NULL \
            )",
@@ -5625,8 +5634,9 @@ mod tests {
             .await
             .expect("intern row");
 
-        // Submitted rate/allowances are ignored; the fixed PHP 80/day and
-        // PHP 10/hour late deduction rules are enforced for interns.
+        // Submitted rate/allowances are ignored; the fixed PHP 80/day rate is
+        // enforced for interns, and the late shortfall is charged through
+        // halfDayDeduction only (never as a separate late amount).
         let mut input = serde_json::json!({
             "employeeId": "INT-1", "dailyRate": 500.0, "lateUnits": 3.0,
             "incentivesAllowance": 100.0, "specialHolidayDays": 1.0,
@@ -5636,7 +5646,8 @@ mod tests {
             .expect("intern rules applied");
 
         assert_eq!(input["dailyRate"], 80.0);
-        assert_eq!(input["lateDeduction"], 30.0);
+        assert_eq!(input["lateUnits"], 3.0);
+        assert_eq!(input["lateDeduction"], 0.0);
         assert_eq!(input["payrollProfileId"], "INTERN_STANDARD");
         assert_eq!(input["incentivesAllowance"], 0.0);
         assert_eq!(input["specialHolidayDays"], 0.0);
@@ -5697,11 +5708,13 @@ mod tests {
         assert_eq!(input["employeeType"], "INTERN");
         let parsed = super::cutoff_input(&input);
         assert_eq!(parsed.employee_type, "INTERN");
-        // basic = 80/day x (1 actual + 10 absent) = 880; absence 800 + late 200
-        // leave net at -120, floored to 0; gross stays 880 (not net).
+        // basic = 80/day x (1 actual + 10 absent) = 880; absence 800 leaves net
+        // at 80 (no separate late amount is charged for interns); gross stays
+        // 880 (not net).
         let result = crate::services::cutoff_payroll::calculate(&parsed).expect("engine");
         assert_eq!(result.gross_compensation, 88_000);
-        assert_eq!(result.net_pay, 0);
+        assert_eq!(result.late_deduction, 0);
+        assert_eq!(result.net_pay, 8_000);
     }
 
     #[test]
@@ -6599,6 +6612,60 @@ mod tests {
         let future_err = super::admin_create_backdated_attendance_impl(None, &state, &token, &future_payload).await.unwrap_err();
         assert_eq!(future_err, "ADMIN_VALIDATION_ERROR");
 
+        // 4. B1: a backdated LATE_TIMEOUT entry (clock-out >= 18:00) must still
+        // produce a payroll row, capped to the 17:00 office close, instead of
+        // silently dropping the day. Same date as EMP_01 above, different user,
+        // so the date-validation path is identical to the proven-success case.
+        super::upsert_user_record(
+            &state.db,
+            "EMP_02",
+            "CARD_02",
+            "Bob Dylan",
+            Some("IT"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            Some(50_000),
+            Some("BEA_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let late_payload = serde_json::json!({
+            "userId": "EMP_02",
+            "attendanceDate": "2026-08-15",
+            "timeIn": "2026-08-15T08:00:00+08:00",
+            "timeOut": "2026-08-15T18:05:00+08:00",
+            "reason": "Late clock-out verified against physical log"
+        });
+        let late_res = super::admin_create_backdated_attendance_impl(None, &state, &token, &late_payload)
+            .await
+            .unwrap();
+        assert_eq!(
+            late_res["attendance"]["status"], "LATE_TIMEOUT",
+            "18:05 clock-out must stay flagged for audit"
+        );
+        let late_payroll = sqlx::query(
+            "SELECT computed_time_out, daily_pay_centavos FROM payroll WHERE attendance_id = ?",
+        )
+        .bind(late_res["attendance"]["attendanceId"].as_str().unwrap())
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+        let late_payroll = late_payroll.expect("a LATE_TIMEOUT day must not be dropped from payroll");
+        assert_eq!(
+            late_payroll.get::<String, _>("computed_time_out"),
+            "2026-08-15T17:00:00+08:00",
+            "A LATE_TIMEOUT clock-out caps to the 17:00 office close"
+        );
+        assert_eq!(
+            late_payroll.get::<i64, _>("daily_pay_centavos"),
+            50_000,
+            "The capped day pays the full 8h at the daily rate"
+        );
+
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -7271,6 +7338,42 @@ mod tests {
         let cutoff_net: i64 = cutoff_row.get("net_pay_centavos");
         assert_eq!(cutoff_half_days, 1.0, "Cutoff must have half_day_count = 1.0");
         assert_eq!(cutoff_net, 4000, "Cutoff net pay must be 40 pesos (4000 centavos)");
+
+        // 7. B1: a LATE_TIMEOUT clock-out (>= 18:00) must still be reconciled
+        // into payroll. The engines cap it to 17:00 (cap_late_timeout_out), so
+        // the day is a full capped shift rather than a silently unpaid absence.
+        sqlx::query(
+            "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) \
+             VALUES ('ATT-TEST-LATE', '2026-08-03', 'INT_TEST_1', 'RFID-INT-1', 'Test Intern', 'IT', '2026-08-03T08:00:00+08:00', '2026-08-03T18:05:00+08:00', 'LATE_TIMEOUT', 'KIOSK', '2026-08-03T18:05:00+08:00', '2026-08-03T18:05:00+08:00')"
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        super::reconcile_attendance_payroll_range(&state, "2026-08-01", "2026-08-15")
+            .await
+            .unwrap();
+
+        let late_payroll = sqlx::query(
+            "SELECT computed_time_out, late_hours, daily_pay_centavos, is_half_day, half_day_deduction_centavos FROM payroll WHERE attendance_id = 'ATT-TEST-LATE'",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+        let late_payroll = late_payroll.expect("reconcile must not drop a LATE_TIMEOUT day");
+        assert_eq!(
+            late_payroll.get::<String, _>("computed_time_out"),
+            "2026-08-03T17:00:00+08:00",
+            "A LATE_TIMEOUT clock-out caps to the 17:00 office close"
+        );
+        assert_eq!(late_payroll.get::<i64, _>("late_hours"), 0);
+        assert_eq!(
+            late_payroll.get::<i64, _>("daily_pay_centavos"),
+            8000,
+            "The capped day pays the intern's full 8h (PHP 80)"
+        );
+        assert_eq!(late_payroll.get::<i64, _>("is_half_day"), 0);
+        assert_eq!(late_payroll.get::<i64, _>("half_day_deduction_centavos"), 0);
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
