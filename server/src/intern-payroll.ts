@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { capLateTimeoutOut, ceilHour, effectiveHalfDayTimeOut, isHalfDayWork, manilaTimestamp, paidWorkSeconds } from './lunch-break.js';
+import { capLateTimeoutOut, ceilHour, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -45,12 +45,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
   const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));
-  const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
-  const workedHours = Math.min(8, Math.max(0, Math.floor(paidSeconds / 3600)));
-  const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
-  const unrenderedHours = Math.max(0, 8 - workedHours);
-  const halfDayDeduction = unrenderedHours * hourlyRate;
-  const dailyPay = workedHours * hourlyRate;
+  const { workedHours, isHalfDay, halfDayDeduction, dailyPay } = computeShiftCore(payableIn, actualTimeOut, actualTimeIn, hourlyRate);
   // DTR DECOUPLING: `computedTimeOut` is a PAYROLL-ONLY effective window.
   // A morning half-day closed before office close pays as 08:00–12:00 even
   // though the DTR row keeps the actual 08:00–15:00 stamps. Never push

@@ -151,3 +151,39 @@ export function effectiveHalfDayTimeOut(
   if (!isHalfDay || timeIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR || timeOut >= officeCloseFor(timeOut)) return null;
   return timeOut.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
 }
+
+/**
+ * Shared shift core: paid seconds -> floored hours -> half-day -> deductions.
+ *
+ * Byte-identical to the former inline blocks in `employee-payroll.ts:15-20`
+ * and `intern-payroll.ts:48-53`. Callers keep their divergences OUTSIDE:
+ * `payableIn` (employee 08:00 floor vs intern grace/late-ceil choice),
+ * `hourlyRate` (employee dailyRate/8 vs intern fixed/8), and the
+ * computed-time-out else-branch (employee startOf-hour floor vs intern
+ * passthrough) all stay in the engines. No lunch term is re-added here:
+ * `paidWorkSeconds` is the DTR-elapsed source and reports-vs-payroll
+ * disagreement on lunch-spanning shifts is intentional.
+ */
+export type ShiftCoreResult = {
+  paidSeconds: number;
+  workedHours: number;
+  isHalfDay: boolean;
+  unrenderedHours: number;
+  halfDayDeduction: number;
+  dailyPay: number;
+};
+
+export function computeShiftCore(
+  payableIn: DateTime,
+  actualTimeOut: DateTime,
+  actualTimeIn: DateTime,
+  hourlyRate: number,
+): ShiftCoreResult {
+  const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
+  const workedHours = Math.min(8, Math.max(0, Math.floor(paidSeconds / 3600)));
+  const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
+  const unrenderedHours = Math.max(0, 8 - workedHours);
+  const halfDayDeduction = unrenderedHours * hourlyRate;
+  const dailyPay = workedHours * hourlyRate;
+  return { paidSeconds, workedHours, isHalfDay, unrenderedHours, halfDayDeduction, dailyPay };
+}
