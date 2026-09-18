@@ -38,7 +38,7 @@
 
 use crate::services::sheets_sync::{
     GOOGLE_AUTH_FAILED, GOOGLE_NOT_FOUND, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED,
-    GOOGLE_REQUEST_FAILED,
+    GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR,
 };
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
@@ -1043,6 +1043,7 @@ fn dtr_status_error(status: reqwest::StatusCode) -> &'static str {
         403 => GOOGLE_PERMISSION_DENIED,
         404 => GOOGLE_NOT_FOUND,
         429 => GOOGLE_RATE_LIMITED,
+        code if (500..=599).contains(&code) => GOOGLE_SERVER_ERROR,
         _ => GOOGLE_REQUEST_FAILED,
     }
 }

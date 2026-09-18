@@ -49,8 +49,10 @@ const SYNC_BATCH_SIZE: i64 = 50;
 pub const GOOGLE_NOT_FOUND: &str = "GOOGLE_NOT_FOUND";
 pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
 pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
-pub const GOOGLE_RATE_LIMITED: &str = "GOOGLE_RATE_LIMITED";
-pub const GOOGLE_REQUEST_FAILED: &str = "GOOGLE_REQUEST_FAILED";
+pub use super::sync_retry::{
+    GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, calculate_retry_backoff,
+    is_rate_limited_error, is_transient_sync_error,
+};
 const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const GOOGLE_SCOPES: &str =
     "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive";
@@ -946,6 +948,7 @@ fn google_status_error(status: reqwest::StatusCode) -> &'static str {
         403 => GOOGLE_PERMISSION_DENIED,
         404 => GOOGLE_NOT_FOUND,
         429 => GOOGLE_RATE_LIMITED,
+        code if (500..=599).contains(&code) => GOOGLE_SERVER_ERROR,
         _ => GOOGLE_REQUEST_FAILED,
     }
 }
@@ -2349,11 +2352,6 @@ fn should_dispatch(endpoint_none: bool, ops_ready: bool, dtr_ready: bool) -> boo
     !(endpoint_none && !ops_ready && !dtr_ready)
 }
 
-/// Returns true if the error indicates a Google Sheets API rate limit / 429 quota exhaustion.
-pub fn is_rate_limited_error(error: &str) -> bool {
-    error.contains(GOOGLE_RATE_LIMITED) || error.contains("429")
-}
-
 /// Single owner of the requeue write: an operator edit must restore the
 /// full retry budget, so `attempts` resets to 0 alongside the status flip.
 /// Fire-and-forget by design — a queue bookkeeping failure never fails
@@ -2369,22 +2367,6 @@ pub(crate) async fn requeue_sync_row(
 ) {
     let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',attempts=0,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
         .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await;
-}
-
-/// Computes backoff duration, new queue status, and error code for failed sync rows.
-/// Rate-limited errors (429 or GOOGLE_RATE_LIMITED) use a 60-second base doubling backoff,
-/// stay in RETRY status (excluded from the 5-strikes-to-DEAD budget), and report GOOGLE_RATE_LIMITED.
-/// Other errors follow 2^min(attempts, 5) exponential backoff and become DEAD at 5 attempts.
-pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str, &'static str) {
-    if is_rate_limited_error(error) {
-        let exponent = (attempts.max(0) as u32).min(4);
-        let backoff_secs = 60 * 2_u64.saturating_pow(exponent);
-        (backoff_secs, "RETRY", GOOGLE_RATE_LIMITED)
-    } else {
-        let backoff_secs = 2_u64.saturating_pow((attempts.max(0) as u32).min(5));
-        let status = if attempts + 1 >= 5 { "DEAD" } else { "RETRY" };
-        (backoff_secs, status, "GOOGLE_SYNC_FAILED")
-    }
 }
 
 /// Bounded SQLite-first queue worker. The configured exporter endpoint is intentionally
@@ -2637,10 +2619,14 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             }
             Err(error) => {
                 let is_schema_mismatch = error.contains(SHEETS_SCHEMA_MISMATCH_ERROR);
-                let is_rate_limited = error.contains(GOOGLE_RATE_LIMITED) || error.contains("429");
+                // Drain-pause trigger stays rate-limit-only: other transient rows
+                // (5xx/timeout) ride RETRY without pausing the rest of the pass.
+                let is_rate_limited = is_rate_limited_error(&error);
                 let (backoff_secs, status, error_code) = calculate_retry_backoff(attempts, &error);
                 let next = Utc::now() + Duration::from_secs(backoff_secs);
-                if is_rate_limited {
+                if is_transient_sync_error(&error) {
+                    // Transient-forever: capped backoff, RETRY status, and NO
+                    // attempts increment, so the row can never age into DEAD.
                     sqlx::query("UPDATE sync_queue SET status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
                         .bind(status)
                         .bind(&error)
@@ -2651,9 +2637,11 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                         .execute(&state.db)
                         .await
                         .map_err(|e| e.to_string())?;
-                    // Drain protection: pause remaining queue items in this pass
-                    log::warn!("Rate limit encountered during sync pass; pausing remaining queue items: {error}");
-                    break;
+                    if is_rate_limited {
+                        // Drain protection: pause remaining queue items in this pass
+                        log::warn!("Rate limit encountered during sync pass; pausing remaining queue items: {error}");
+                        break;
+                    }
                 } else {
                     let last_error = error;
                     sqlx::query("UPDATE sync_queue SET attempts=attempts+1, status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
