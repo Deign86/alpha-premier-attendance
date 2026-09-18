@@ -37,9 +37,10 @@
 //!   same tap converge instead of duplicating.
 
 use crate::services::sheets_sync::{
-    GOOGLE_AUTH_FAILED, GOOGLE_NOT_FOUND, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED,
-    GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, parse_retry_after_secs,
-    per_call_budget_actual, per_call_should_retry, per_call_sleep_ms,
+    GOOGLE_AUTH_FAILED, GOOGLE_DAILY_LIMIT, GOOGLE_NOT_FOUND, GOOGLE_PERMISSION_DENIED,
+    GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS,
+    classify_403_body, parse_retry_after_secs, per_call_budget_actual, per_call_should_retry,
+    per_call_sleep_ms,
 };
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
@@ -1031,7 +1032,7 @@ pub async fn execute_format_ops(
     if status.is_success() {
         return Ok(true);
     }
-    Err(dtr_status_error(status).to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
 /// Paint format ops using already-fetched `rows` without an extra network GET.
@@ -1087,6 +1088,30 @@ fn dtr_status_error(status: reqwest::StatusCode) -> &'static str {
     }
 }
 
+/// 403-aware mapper sharing the Sheets reason classifier: rate/quota 403s
+/// route transient-forever, daily-limit 403s keep their finite DAILY code.
+fn dtr_status_error_with_body(status: reqwest::StatusCode, body: &str) -> String {
+    if status.as_u16() == 403 {
+        let mapped = classify_403_body(body);
+        if mapped.contains(GOOGLE_DAILY_LIMIT) {
+            log::warn!("DTR push hit Google daily quota (operator action required; ~24h block)");
+        }
+        return mapped;
+    }
+    dtr_status_error(status).to_string()
+}
+
+/// Maps a failed DTR response to its queue error string, consuming the
+/// body only on 403 (the one status whose reason changes the verdict).
+async fn dtr_error_for_response(response: reqwest::Response) -> String {
+    let status = response.status();
+    if status.as_u16() == 403 {
+        let body = response.text().await.unwrap_or_default();
+        return dtr_status_error_with_body(status, &body);
+    }
+    dtr_status_error(status).to_string()
+}
+
 async fn dtr_get_json(
     client: &reqwest::Client,
     token: &str,
@@ -1100,7 +1125,7 @@ async fn dtr_get_json(
             .await
             .map_err(|_| GOOGLE_REQUEST_FAILED.to_string());
     }
-    Err(dtr_status_error(status).to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
 fn rows_from_values(value: &serde_json::Value) -> Vec<Vec<String>> {
@@ -1245,7 +1270,7 @@ async fn duplicate_template_tab(
             log::info!("dtr auto-create: tab already exists for {title}; will re-resolve");
             return Ok(None);
         }
-        return Err(dtr_status_error(status).to_string());
+        return Err(dtr_status_error_with_body(status, &body));
     }
     let body: serde_json::Value = response
         .json()
@@ -1476,7 +1501,7 @@ pub async fn execute_dtr_push(
     if status.is_success() {
         return Ok(true);
     }
-    Err(dtr_status_error(status).to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
 /// Batch-write multiple DTR rows in a single `values:batchUpdate` request.
@@ -1521,7 +1546,7 @@ pub async fn execute_dtr_batch_push(
     if status.is_success() {
         return Ok(plans.len());
     }
-    Err(dtr_status_error(status).to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
 fn str_field(payload: &serde_json::Value, name: &str) -> Option<String> {

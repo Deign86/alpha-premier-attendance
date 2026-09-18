@@ -7,6 +7,10 @@
 /// contain no credentials, paths, or response bodies.
 pub const GOOGLE_RATE_LIMITED: &str = "GOOGLE_RATE_LIMITED";
 pub const GOOGLE_REQUEST_FAILED: &str = "GOOGLE_REQUEST_FAILED";
+pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
+/// 403 dailyLimitExceeded: finite 5-strike-to-DEAD with this code (operator
+/// action, ~24h block — retrying within-day clogs the queue). Never transient.
+pub const GOOGLE_DAILY_LIMIT: &str = "GOOGLE_DAILY_LIMIT";
 /// 5xx from Google (server-side; idempotent cell writes are safe to replay).
 /// Preserved end-to-end (status mappers emit it, the queue stores it) so a
 /// 503 can never degrade into an anonymous finite failure.
@@ -39,11 +43,35 @@ pub fn is_transient_google_error(status: u16, reason: &str, io_kind: &str) -> bo
         return true;
     }
     if status == 403
-        && (reason.contains("rateLimitExceeded") || reason.contains("userRateLimitExceeded"))
+        && (reason.contains("rateLimitExceeded")
+            || reason.contains("userRateLimitExceeded")
+            || reason.contains("quotaExceeded"))
     {
         return true;
     }
     io_kind == "timeout-after-connect"
+}
+
+/// Maps a Google 403 response body to its queue error string via the
+/// errors[].reason fragment both Sheets and DTR mappers share. Rate/quota
+/// reasons collapse to GOOGLE_RATE_LIMITED (transient-forever downstream);
+/// dailyLimitExceeded keeps the DAILY_LIMIT code plus the operator note
+/// (stored in last_error, surfaced by health); anything else stays a
+/// finite permission failure. dailyLimit is checked first so a body
+/// carrying both reasons still lands on the operator-action path.
+pub fn classify_403_body(body: &str) -> String {
+    if body.contains("dailyLimitExceeded") {
+        return format!(
+            "{GOOGLE_DAILY_LIMIT}: daily quota exhausted, operator action required (24h block)"
+        );
+    }
+    if body.contains("rateLimitExceeded")
+        || body.contains("userRateLimitExceeded")
+        || body.contains("quotaExceeded")
+    {
+        return GOOGLE_RATE_LIMITED.to_string();
+    }
+    GOOGLE_PERMISSION_DENIED.to_string()
 }
 
 /// Queue-string form of the classifier: recovers the transient verdict from the
@@ -58,6 +86,7 @@ pub fn is_transient_sync_error(error: &str) -> bool {
     if error.contains(GOOGLE_SERVER_ERROR)
         || error.contains("rateLimitExceeded")
         || error.contains("userRateLimitExceeded")
+        || error.contains("quotaExceeded")
         || error.contains("timeout-after-connect")
     {
         return true;
@@ -208,7 +237,14 @@ pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str
         } else {
             "RETRY"
         };
-        (backoff_secs, status, "GOOGLE_SYNC_FAILED")
+        // Daily-limit rows ride the finite ladder but keep their distinct
+        // code so health/operators can tell quota exhaustion apart.
+        let code = if error.contains(GOOGLE_DAILY_LIMIT) {
+            GOOGLE_DAILY_LIMIT
+        } else {
+            "GOOGLE_SYNC_FAILED"
+        };
+        (backoff_secs, status, code)
     }
 }
 

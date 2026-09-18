@@ -47,12 +47,12 @@ const SYNC_BATCH_SIZE: i64 = 50;
 /// Google API error codes surfaced to the sync queue. They intentionally
 /// contain no credentials, paths, or response bodies.
 pub const GOOGLE_NOT_FOUND: &str = "GOOGLE_NOT_FOUND";
-pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
 pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
 pub use super::sync_retry::{
-    GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS,
-    calculate_retry_backoff, is_rate_limited_error, is_transient_sync_error, parse_retry_after_secs,
-    per_call_budget_actual, per_call_should_retry, per_call_sleep_ms,
+    GOOGLE_DAILY_LIMIT, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED,
+    GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, calculate_retry_backoff, classify_403_body,
+    is_rate_limited_error, is_transient_sync_error, parse_retry_after_secs, per_call_budget_actual,
+    per_call_should_retry, per_call_sleep_ms,
 };
 const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const GOOGLE_SCOPES: &str =
@@ -367,7 +367,7 @@ async fn google_stage_json(
         request.map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(stage_err(stage, google_status_error(status).to_string()));
+        return Err(stage_err(stage, google_error_for_response(response).await));
     }
     response
         .json()
@@ -384,7 +384,7 @@ async fn google_stage_status(
         request.map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(stage_err(stage, google_status_error(status).to_string()));
+        return Err(stage_err(stage, google_error_for_response(response).await));
     }
     Ok(())
 }
@@ -954,10 +954,37 @@ fn google_status_error(status: reqwest::StatusCode) -> &'static str {
     }
 }
 
+/// 403-aware mapper: reads the reason body so rate/quota 403s route
+/// transient-forever and daily-limit 403s keep their finite DAILY code.
+/// Non-403 statuses never carry a routable reason and skip the body read.
+fn google_status_error_with_body(status: reqwest::StatusCode, body: &str) -> String {
+    if status.as_u16() == 403 {
+        let mapped = classify_403_body(body);
+        if mapped.contains(GOOGLE_DAILY_LIMIT) {
+            log::warn!(
+                "Google Sheets daily quota exhausted (operator action required; ~24h block)"
+            );
+        }
+        return mapped;
+    }
+    google_status_error(status).to_string()
+}
+
+/// Maps a failed Google response to its queue error string, consuming the
+/// body only on 403 (the one status whose reason changes the verdict).
+async fn google_error_for_response(response: reqwest::Response) -> String {
+    let status = response.status();
+    if status.as_u16() == 403 {
+        let body = response.text().await.unwrap_or_default();
+        return google_status_error_with_body(status, &body);
+    }
+    google_status_error(status).to_string()
+}
+
 async fn google_json_response(response: reqwest::Response) -> Result<serde_json::Value, String> {
     let status = response.status();
     if !status.is_success() {
-        return Err(google_status_error(status).to_string());
+        return Err(google_error_for_response(response).await);
     }
     response
         .json()
@@ -1113,7 +1140,7 @@ async fn drive_add_parent(
         .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
     let status = response.status();
     if !status.is_success() {
-        return Err(google_status_error(status).to_string());
+        return Err(google_error_for_response(response).await);
     }
     Ok(())
 }
@@ -3276,6 +3303,59 @@ mod tests {
             assert!(raw.contains("client_email"));
             assert!(raw.contains("private_key"));
         }
+    }
+
+    #[test]
+    fn forbidden_vs_ratelimit() {
+        use super::{GOOGLE_DAILY_LIMIT, calculate_retry_backoff, google_status_error_with_body};
+        use reqwest::StatusCode;
+
+        // Captured-shape Google 403 fixtures: routing rides errors[].reason.
+        let rate_limit_body = r#"{"error":{"code":403,"message":"Rate Limit Exceeded","errors":[{"domain":"usageLimits","reason":"rateLimitExceeded","message":"Rate Limit Exceeded"}]}}"#;
+        let daily_limit_body = r#"{"error":{"code":403,"message":"Daily Limit Exceeded","errors":[{"domain":"usageLimits","reason":"dailyLimitExceeded","message":"Daily Limit Exceeded"}]}}"#;
+        let forbidden_body = r#"{"error":{"code":403,"message":"The caller does not have permission","errors":[{"domain":"global","reason":"forbidden","message":"The caller does not have permission"}]}}"#;
+
+        // 403 rateLimitExceeded -> transient-forever: RETRY at any attempt via
+        // the todo-1 classifier (fail arm skips the attempts increment).
+        let rate = google_status_error_with_body(StatusCode::FORBIDDEN, rate_limit_body);
+        assert!(rate.contains(GOOGLE_RATE_LIMITED), "unexpected mapping: {rate}");
+        for attempts in [0_i64, 4, 5, 100] {
+            let (_, status, _) = calculate_retry_backoff(attempts, &rate);
+            assert_eq!(status, "RETRY", "attempts={attempts}");
+        }
+        // Sibling quota reasons share the transient path.
+        for body in [
+            rate_limit_body.replace("rateLimitExceeded", "userRateLimitExceeded"),
+            rate_limit_body.replace("rateLimitExceeded", "quotaExceeded"),
+        ] {
+            let mapped = google_status_error_with_body(StatusCode::FORBIDDEN, &body);
+            assert!(mapped.contains(GOOGLE_RATE_LIMITED), "unexpected mapping: {mapped}");
+            let (_, status, _) = calculate_retry_backoff(100, &mapped);
+            assert_eq!(status, "RETRY");
+        }
+
+        // 403 dailyLimitExceeded -> finite DEAD with the DAILY_LIMIT code.
+        let daily = google_status_error_with_body(StatusCode::FORBIDDEN, daily_limit_body);
+        assert!(daily.contains(GOOGLE_DAILY_LIMIT), "unexpected mapping: {daily}");
+        let (_, fresh_status, _) = calculate_retry_backoff(0, &daily);
+        assert_eq!(fresh_status, "RETRY");
+        let (_, dead_status, dead_code) = calculate_retry_backoff(4, &daily);
+        assert_eq!(dead_status, "DEAD");
+        assert_eq!(dead_code, GOOGLE_DAILY_LIMIT);
+
+        // Other 403 (permissions) -> finite on the generic 5-strike path.
+        let denied = google_status_error_with_body(StatusCode::FORBIDDEN, forbidden_body);
+        assert_eq!(denied, GOOGLE_PERMISSION_DENIED);
+        let drive_denied = google_status_error_with_body(
+            StatusCode::FORBIDDEN,
+            &forbidden_body.replace("\"forbidden\"", "\"insufficientFilePermissions\""),
+        );
+        assert_eq!(drive_denied, GOOGLE_PERMISSION_DENIED);
+        let (_, fresh_status, _) = calculate_retry_backoff(0, &denied);
+        assert_eq!(fresh_status, "RETRY");
+        let (_, dead_status, dead_code) = calculate_retry_backoff(4, &denied);
+        assert_eq!(dead_status, "DEAD");
+        assert_eq!(dead_code, "GOOGLE_SYNC_FAILED");
     }
 
     #[test]
