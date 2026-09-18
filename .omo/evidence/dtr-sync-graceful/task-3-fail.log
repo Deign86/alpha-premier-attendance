@@ -1,0 +1,34 @@
+TASK-3 FAIL QA LOG | dtr-sync-graceful todo 3 | 2026-09-18 (UTC)
+GOAL: pre-fix Unresolvable error strings age into DEAD at the 5th strike (bug mechanism); failing-first unresolvable_never_dead FAILs before the fix.
+FILES: src-tauri/src/services/dtr_sync.rs only (skip helper + Unresolvable arm + manual missing-tab note + tab-create rescan + unresolvable_never_dead test). sheets_sync.rs / sync_retry.rs untouched.
+BASELINE (unchanged code): cargo check --manifest-path src-tauri/Cargo.toml --tests -> Finished dev profile, exit 0, 0 errors (10 lib + 8 lib-test pre-existing warnings, same block as todos 1-2).
+FAILING-FIRST: committed test unresolvable_never_dead written before fix -> cargo test --manifest-path src-tauri/Cargo.toml unresolvable_never_dead -> CARGO_EXIT:101, error[E0425]: cannot find function `skip_unresolvable_row` in this scope (dtr_sync.rs:3396), "could not compile `alpha-premier-attendance` (lib test) due to 1 previous error". Then implemented until green.
+EXECUTION NOTE (same env block as todos 1-2, disclosed): lib-linked test binaries cannot start in this env (0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND at OS load; pre-existing gnu-ld .rsrc manifest issue, NOT code -- observed post-fix: test profile links clean then the lib test exe exits 0xC0000139 before running). Runtime proof via out-of-repo harness (C:\Users\APG\AppData\Local\Temp\opencode\task3harness): EXACT shipped sync_retry.rs bytes via include! (std-only, zero deps) driven against the real calculate_retry_backoff / is_transient_sync_error the run_once fail arm consumes. Post-fix skip path returns Ok(false) so the fail arm never runs -- asserted structurally (arm diff quoted below) + committed test (runs on CI msvc runners). Bug-mechanism asserts below use the exact pre-fix strings `GOOGLE_REQUEST_FAILED: Unresolvable(<reason>)`.
+COMMAND: cargo run --manifest-path C:\Users\APG\AppData\Local\Temp\opencode\task3harness\Cargo.toml -- fail
+--- BEGIN FULL FAIL OUTPUT (untruncated, final validation run 1 of 3, exit 0) ---
+PASS F-unresolvable-finite (reason=no-tab not transient)
+PASS F-unresolvable-dead (reason=no-tab status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS F-unresolvable-never-forever (reason=no-tab attempts=0 status=RETRY)
+PASS F-unresolvable-never-forever (reason=no-tab attempts=10 status=DEAD)
+PASS F-unresolvable-never-forever (reason=no-tab attempts=100 status=DEAD)
+PASS F-unresolvable-finite (reason=no-month-block not transient)
+PASS F-unresolvable-dead (reason=no-month-block status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS F-unresolvable-never-forever (reason=no-month-block attempts=0 status=RETRY)
+PASS F-unresolvable-never-forever (reason=no-month-block attempts=10 status=DEAD)
+PASS F-unresolvable-never-forever (reason=no-month-block attempts=100 status=DEAD)
+PASS F-unresolvable-finite (reason=no-date-row not transient)
+PASS F-unresolvable-dead (reason=no-date-row status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS F-unresolvable-never-forever (reason=no-date-row attempts=0 status=RETRY)
+PASS F-unresolvable-never-forever (reason=no-date-row attempts=10 status=DEAD)
+PASS F-unresolvable-never-forever (reason=no-date-row attempts=100 status=DEAD)
+PASS F-unresolvable-finite (reason=empty-values not transient)
+PASS F-unresolvable-dead (reason=empty-values status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS F-unresolvable-never-forever (reason=empty-values attempts=0 status=RETRY)
+PASS F-unresolvable-never-forever (reason=empty-values attempts=10 status=DEAD)
+PASS F-unresolvable-never-forever (reason=empty-values attempts=100 status=DEAD)
+HARNESS FAIL-MODE: ALL PASS (pre-fix strings DEAD at 5th strike)
+--- END FULL FAIL OUTPUT ---
+COMPILE PROOFS (final code): cargo check --manifest-path src-tauri/Cargo.toml --tests -> exit 0, 0 errors, no new warnings on touched file. cargo test unresolvable_never_dead --no-run -> exit 0; lib/main/migrate test executables all linked. (In-env execution env-blocked as baselined; committed test runs on CI msvc runners.)
+ADVERSARIAL PROBES: flaky-rerun fail 3x exit 0/0/0 ALL PASS; full-output shown above (no tail-only); git-status-before (pre-existing dirt only): M evidence/verification-summary.json, M package-lock.json, ?? AGENTS.md.bak, HANDOFF.md, LEAN-CTX.md, evidence/audit-live-session.png, evidence/audit-report.json, scripts/audit-live-system.mjs; git-status-after task files: M src-tauri/src/services/dtr_sync.rs, ?? .omo/evidence/dtr-sync-graceful/task-3-happy.log, task-3-fail.log; ONE-path check: grep Unresolvable arm -> single skip_unresolvable_row call site, no RETRY branch, no attempts touch; paint rule: paint_tab_formats call sites untouched (log-only arms identical); malformed-input: corrupt empty-userId -> Err before any I/O (see happy log contrast); prompt-injection: N/A; cancel/resume: N/A; dirty-worktree: pre-existing dirt untouched, commit stages only task files; hung-commands: none; repeated-interrupts: N/A.
+CLEANUP RECEIPTS: no repo scaffolding created (harness + prefix-fail capture live outside repo at C:\Users\APG\AppData\Local\Temp\opencode\, never committed); no temp files in repo; lsp_diagnostics timed out 1x (daemon busy) -> substituted with cargo check --tests clean (same substitution as todos 1-2).
+DEFERRED (other todos own these): queue backoff caps+jitter -> todo 4; 403 reason-body plumbing -> todo 5; batch coalescer -> todo 6; live scratch-sheet drain -> needs Google creds (unavailable offline); 30s tick interval + 25s client timeout unchanged per MUST-NOT-DO.

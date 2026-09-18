@@ -1696,9 +1696,32 @@ pub async fn clear_dtr_row(
     Ok(true)
 }
 
-/// Handle one `InternDtr` queue row. `Ok(false)` = already in sync or no
-/// tab yet (tracked in `dtr_pending`). Errors propagate to the standard
-/// claim/retry/backoff path in run_once.
+/// Todo 3 -- ONE skip path for unresolvable DTR plans (no-tab,
+/// no-month-block, no-date-row, empty-values): note `dtr_pending` so the
+/// rescan re-drives the row, and return `Ok(false)` so the queue marks it
+/// SYNCED-with-skip. No attempts increment, never `Err`, hence never
+/// RETRY and never DEAD. DEAD stays reserved for corrupt payloads (the
+/// payload-validation `Err`s at the top of `push_dtr_row`).
+async fn skip_unresolvable_row(
+    state: &AppState,
+    user_id: &str,
+    full_name: &str,
+    attendance_date: &str,
+    reason: &'static str,
+) -> Result<bool, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    note_dtr_pending(state, user_id, full_name, &now).await?;
+    log::warn!(
+        "dtr skip: unresolvable for {full_name} ({user_id}) on {attendance_date}: {reason}; SYNCED-with-skip, noted in dtr_pending"
+    );
+    Ok(false)
+}
+
+/// Handle one `InternDtr` queue row. `Ok(false)` = already in sync, no
+/// tab yet, or an unresolvable plan (no-tab/no-month/no-date-row/
+/// empty-values) -- all tracked in `dtr_pending`, never DEAD. Transport
+/// and corrupt-payload errors propagate to the standard claim/retry/
+/// backoff path in run_once (corrupt ages into DEAD, transient never).
 pub async fn push_dtr_row(
     state: &AppState,
     client: &reqwest::Client,
@@ -1791,10 +1814,7 @@ pub async fn push_dtr_row(
             Ok(false)
         }
         DtrPlanOutcome::Unresolvable(reason) => {
-            let now = chrono::Utc::now().to_rfc3339();
-            note_dtr_pending(state, &user_id, &full_name, &now).await?;
-            log::warn!("dtr unresolvable for {full_name} ({user_id}) on {attendance_date}: {reason}; noted in dtr_pending");
-            Err(format!("{GOOGLE_REQUEST_FAILED}: Unresolvable({reason})"))
+            skip_unresolvable_row(state, &user_id, &full_name, &attendance_date, reason).await
         }
     }
 }
@@ -1967,7 +1987,11 @@ async fn backfill_user_history(
 /// Recheck every tracked user against one shared title fetch (one Sheets
 /// metadata GET per run at most, only when pending rows exist). When a
 /// tab has appeared, backfill the user's full history and clear pending.
-/// Per-user failures are logged and skipped; the row stays pending.
+/// Re-drive triggers (todo 3): the 30s tick rescan in run_once while
+/// pending rows exist (covers owner-added month blocks too — planning
+/// re-reads live tabs every pass), plus one immediate rescan after
+/// manual_sync mints tabs. Per-user failures are logged and skipped;
+/// the row stays pending.
 pub async fn process_dtr_pending(
     state: &AppState,
     client: &reqwest::Client,
@@ -2227,6 +2251,11 @@ pub async fn manual_sync_intern_dtr(
         };
 
         let Some(tab) = tab_opt else {
+            // Todo 3: a manually-synced intern with no tab yet stays visible
+            // (MISSING_TAB) AND tracked, so the pending rescan re-drives
+            // them once the owner creates the tab.
+            let now = chrono::Utc::now().to_rfc3339();
+            note_dtr_pending(state, user_id, full_name, &now).await?;
             details.push(InternSyncDetail {
                 user_id: user_id.clone(),
                 full_name: full_name.clone(),
@@ -2275,6 +2304,16 @@ pub async fn manual_sync_intern_dtr(
                     status: "BACKFILL_FAILED".to_string(),
                 });
             }
+        }
+    }
+
+    // Todo 3 re-drive: tabs minted above unblock pending queue rows now --
+    // rescan once instead of waiting for the next 30s tick (which also
+    // covers owner-added month blocks: planning re-reads live tabs every
+    // pass). Log-only: the report below already reflects this pass.
+    if !tabs_created.is_empty() {
+        if let Err(error) = process_dtr_pending(state, &client, &token, &spreadsheet_id).await {
+            log::warn!("dtr pending rescan after tab-create failed: {error}");
         }
     }
 
@@ -3346,6 +3385,83 @@ mod tests {
             (1, false)
         );
         assert_eq!(aggregate_backfill(&[Unresolvable]), (0, false));
+    }
+
+    #[tokio::test]
+    async fn unresolvable_never_dead() {
+        // Todo 3: no-tab / no-month-block / no-date-row / empty-values take
+        // ONE skip path -- Ok(false) = SYNCED-with-skip + dtr_pending note,
+        // never Err, so never RETRY and never DEAD. Corrupt payloads keep
+        // the Err path and still age into DEAD (contrast at the end).
+        let tin = Some("2026-09-05T00:00:00+08:00");
+        let tout = Some("2026-09-05T09:00:00+08:00");
+        // empty-values: a record-less day plans Unresolvable, not Err.
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &[], "2026-09-05", None, None),
+            Ok(DtrPlanOutcome::Unresolvable("empty-values"))
+        );
+        // no-month-block: headers exist but none matches September.
+        let headed = vec![
+            vec!["DATE-October".to_string()],
+            vec!["10/5/2026".to_string()],
+        ];
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &headed, "2026-09-05", tin, tout),
+            Ok(DtrPlanOutcome::Unresolvable("no-month-block"))
+        );
+        // no-date-row: September block without the wanted date.
+        let no_date = vec![
+            vec!["SEPTEMBER".to_string()],
+            vec!["9/4/2026".to_string()],
+            vec!["TOTAL HOURS".to_string()],
+        ];
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &no_date, "2026-09-05", tin, tout),
+            Ok(DtrPlanOutcome::Unresolvable("no-date-row"))
+        );
+        // no-tab: unknown intern resolves to no tab.
+        let titles = vec!["Somebody Else".to_string()];
+        let roster = vec![("u1".to_string(), "New Intern".to_string())];
+        assert_eq!(
+            DtrMatchIndex::build(&titles, &roster).resolve("u1", "New Intern"),
+            None
+        );
+        // ONE skip path: every reason above returns Ok(false) with a
+        // dtr_pending note and creates no queue debt (no attempts anywhere
+        // near the sync_queue DEAD budget).
+        let state = pending_test_state().await;
+        for reason in ["no-tab", "no-month-block", "no-date-row", "empty-values"] {
+            let skipped =
+                skip_unresolvable_row(&state, "u-skip", "Skip Intern", "2026-09-05", reason)
+                    .await
+                    .unwrap();
+            assert!(!skipped, "reason={reason}");
+        }
+        let pending: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending WHERE user_id = 'u-skip'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(pending, 1);
+        let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(queued, 0);
+        // Failure contrast: a corrupt payload (empty userId) still errors
+        // before any I/O, so the queue fail arm ages it toward DEAD.
+        let corrupt = serde_json::json!({
+            "userId": "",
+            "fullName": "Skip Intern",
+            "attendanceDate": "2026-09-05",
+        });
+        let client = crate::services::sheets_sync::sheets_client();
+        let err = push_dtr_row(&state, &client, "tok", "sheet", &corrupt)
+            .await
+            .unwrap_err();
+        assert!(err.contains("userId"), "unexpected error: {err}");
+        let (_, status, _) = crate::services::sync_retry::calculate_retry_backoff(4, &err);
+        assert_eq!(status, "DEAD");
     }
 
     fn fmt_row(cells: &[&str]) -> Vec<String> {
