@@ -124,16 +124,16 @@ impl LanRuntime {
     /// stopped. Idempotent: returns immediately when already running.
     pub async fn start(&self, state: &AppState) -> Result<(), String> {
         {
-            let guard = self.inner.lock().await;
-            if guard.status.phase == LanPhase::Running {
+            let mut guard = self.inner.lock().await;
+            if guard.status.phase == LanPhase::Running
+                || guard.status.phase == LanPhase::Starting
+            {
                 return Ok(());
             }
+            guard.status.phase = LanPhase::Starting;
+            guard.status.last_error = None;
+            guard.status.issue = LanIssue::None;
         }
-        let mut guard = self.inner.lock().await;
-        guard.status.phase = LanPhase::Starting;
-        guard.status.last_error = None;
-        guard.status.issue = LanIssue::None;
-        drop(guard);
 
         match lan_server::bind_and_serve(state.clone()).await {
             Ok((address, task)) => {

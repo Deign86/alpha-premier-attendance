@@ -40,6 +40,9 @@ pub struct LanAttendanceSnapshot {
     pub fetched_at: DateTime<Utc>,
 }
 
+/// Bus event for live attendance mutations. The viewer HTML also listens for
+/// `connection-status` (initial event) and `stale-data` (event-gap refetch);
+/// both are emitted as raw SSE events in `attendance_events`, never via the bus.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LanAttendanceEvent {
@@ -55,28 +58,6 @@ pub enum LanAttendanceEvent {
         cause: String,
         mutation: String,
         attendance: Option<LanAttendanceRow>,
-    },
-    #[serde(rename = "connection-status")]
-    #[allow(dead_code)]
-    // protocol contract: the viewer HTML listens for this event; the server does not currently emit it
-    ConnectionStatus {
-        event_id: String,
-        server_instance_id: String,
-        sequence: u64,
-        occurred_at: DateTime<Utc>,
-        status: String,
-        connection_id: String,
-    },
-    #[serde(rename = "stale-data")]
-    #[allow(dead_code)]
-    // protocol contract: the viewer HTML listens for this event; stream errors emit a raw stale-data SSE event instead
-    StaleData {
-        event_id: String,
-        server_instance_id: String,
-        sequence: u64,
-        occurred_at: DateTime<Utc>,
-        reason: String,
-        should_refetch: bool,
     },
 }
 
@@ -754,21 +735,12 @@ async fn attendance_events(
     let initial = Event::default().id(format!("{}:0", state.server_instance_id)).event("connection-status").retry(Duration::from_millis(2000)).data(serde_json::json!({"type":"connection-status","status":"connected","serverInstanceId":state.server_instance_id,"connectionId":connection_id,"occurredAt":Utc::now()}).to_string());
     let stream = BroadcastStream::new(rx).filter_map(|item| match item {
         Ok(value) => {
-            let event_name = match &value {
-                LanAttendanceEvent::AttendanceUpdated { .. } => "attendance-updated",
-                LanAttendanceEvent::ConnectionStatus { .. } => "connection-status",
-                LanAttendanceEvent::StaleData { .. } => "stale-data",
-            };
-            let event_id = match &value {
-                LanAttendanceEvent::AttendanceUpdated { event_id, .. }
-                | LanAttendanceEvent::ConnectionStatus { event_id, .. }
-                | LanAttendanceEvent::StaleData { event_id, .. } => event_id.clone(),
-            };
+            let LanAttendanceEvent::AttendanceUpdated { event_id, .. } = &value;
             Some(Ok::<Event, Infallible>(
                 Event::default()
-                    .id(event_id)
+                    .id(event_id.clone())
                     .retry(Duration::from_millis(2000))
-                    .event(event_name)
+                    .event("attendance-updated")
                     .data(serde_json::to_string(&value).unwrap_or_default()),
             ))
         }
