@@ -27,10 +27,12 @@ interface ToastState {
   message: string;
 }
 
+type UpdateAvailability =
+  | { status: 'none' }
+  | { status: 'available'; update: Update; info: UpdateInfo };
+
 export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [updateObj, setUpdateObj] = useState<Update | null>(null);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [availability, setAvailability] = useState<UpdateAvailability>({ status: 'none' });
   const [bannerDismissed, setBannerDismissed] = useState(() =>
     sessionStorage.getItem('alpha_dismissed_update') === 'true',
   );
@@ -70,9 +72,7 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
     try {
       const result = await checkForUpdates(manual);
       if (result.state === 'available') {
-        setUpdateAvailable(true);
-        setUpdateObj(result.update);
-        setUpdateInfo(result.info);
+        setAvailability({ status: 'available', update: result.update, info: result.info });
         setBannerDismissed(false);
         if (manual) {
           setModalOpen(true);
@@ -152,12 +152,12 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
   }, [manualCheckTrigger, runCheck]);
 
   const handleStartInstall = async () => {
-    if (!updateObj || isInstalling) return;
+    if (availability.status !== 'available' || isInstalling) return;
     setIsInstalling(true);
     isInstallingRef.current = true;
     setInstallError(null);
 
-    const result = await downloadAndInstallUpdate(updateObj, (p) => {
+    const result = await downloadAndInstallUpdate(availability.update, (p) => {
       setProgress(p);
     });
 
@@ -185,14 +185,14 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
       )}
 
       {/* Floating In-App Update Banner */}
-      {updateAvailable && updateInfo && !bannerDismissed && !modalOpen && (
+      {availability.status === 'available' && !bannerDismissed && !modalOpen && (
         <div className="update-banner" role="alert">
           <div className="update-banner-content">
             <div className="update-banner-icon">
               <ArrowUpCircle size={20} />
             </div>
             <div className="update-banner-text">
-              <strong>Update available: v{updateInfo.version}</strong>
+              <strong>Update available: v{availability.info.version}</strong>
               <span>A new version of Alpha Premier Attendance is ready.</span>
             </div>
           </div>
@@ -221,7 +221,7 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
       )}
 
       {/* Modal Dialog for Update Details & Installation */}
-      {modalOpen && updateInfo && (
+      {modalOpen && availability.status === 'available' && (
         <div className="setup-backdrop" role="dialog" aria-modal="true" aria-labelledby={titleId}>
           <div className="setup-dialog update-dialog">
             <div className="setup-dialog-header">
@@ -250,20 +250,20 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
               <div className="update-version-row">
                 <div className="version-tag current">
                   <small>Current version</small>
-                  <strong>v{updateInfo.currentVersion}</strong>
+                  <strong>v{availability.info.currentVersion}</strong>
                 </div>
                 <div className="version-arrow">→</div>
                 <div className="version-tag new">
                   <small>New release</small>
-                  <strong>v{updateInfo.version}</strong>
+                  <strong>v{availability.info.version}</strong>
                 </div>
               </div>
 
-              {updateInfo.body && (
+              {availability.info.body && (
                 <div className="update-notes-container">
                   <label htmlFor="update-release-notes">Release notes:</label>
                   <div id="update-release-notes" className="update-notes-body">
-                    {updateInfo.body}
+                    {availability.info.body}
                   </div>
                 </div>
               )}
