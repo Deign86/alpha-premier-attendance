@@ -3,6 +3,7 @@ use crate::{
     error::AppError,
     lan_server::{self, LanIssue},
     services::sheets_sync::GoogleSheetsTarget,
+    services::sync_retry::{DtrThrottleBucket, wall_now_ms},
     tts::TtsManager,
 };
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
@@ -199,6 +200,11 @@ pub struct AppState {
     /// of re-provisioning on every pass; the authoritative IDs are persisted
     /// in `data_dir/google-sheets-state.json`.
     pub google_sheets_target: Arc<tokio::sync::RwLock<Option<GoogleSheetsTarget>>>,
+    /// Plan todo 7: DTR-spreadsheet-only dispatch throttle (50 writes/min
+    /// + ≤10 batch calls/min). Lives here so the quota survives across
+    /// 30s ticks; short lock-take-unlock admissions keep it contention-free
+    /// under the single queue loop (concurrency 1, mutex as backstop).
+    pub dtr_throttle: Arc<tokio::sync::Mutex<DtrThrottleBucket>>,
     pub tts: Arc<TtsManager>,
     pub updater: UpdaterConfig,
 }
@@ -273,6 +279,9 @@ impl AppState {
             lan_runtime: Arc::new(LanRuntime::new()),
             scanner: Arc::new(crate::services::scanner::ScannerHandle::new(scanner)),
             google_sheets_target: Arc::new(tokio::sync::RwLock::new(None)),
+            dtr_throttle: Arc::new(tokio::sync::Mutex::new(DtrThrottleBucket::new(
+                wall_now_ms(),
+            ))),
             tts: Arc::new(TtsManager::new(tts)),
             updater,
         })

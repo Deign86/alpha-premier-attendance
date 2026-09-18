@@ -52,7 +52,7 @@ pub use super::sync_retry::{
     GOOGLE_DAILY_LIMIT, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED,
     GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, calculate_retry_backoff, classify_403_body,
     is_rate_limited_error, is_transient_sync_error, parse_retry_after_secs, per_call_budget_actual,
-    per_call_should_retry, per_call_sleep_ms,
+    per_call_should_retry, per_call_sleep_ms, wall_now_ms,
 };
 const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const GOOGLE_SCOPES: &str =
@@ -2397,6 +2397,29 @@ pub(crate) async fn requeue_sync_row(
         .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await;
 }
 
+/// Plan todo 7: queue-path DTR admission against the shared bucket.
+/// Denial defers the row to the next tick (row stays due, no Google call,
+/// no sleep, no busy loop); ops rows never consult this. Short
+/// lock-take-unlock so the mutex is never held across I/O.
+async fn dtr_throttle_admit(
+    state: &AppState,
+    writes: u32,
+    calls: u32,
+) -> bool {
+    let wait_ms = state
+        .dtr_throttle
+        .lock()
+        .await
+        .take(writes, calls, wall_now_ms());
+    if wait_ms > 0 {
+        log::warn!(
+            "DTR throttle: deferring {writes} writes + {calls} calls for {wait_ms}ms (50-writes/min budget spent)"
+        );
+        return false;
+    }
+    true
+}
+
 /// Bounded SQLite-first queue worker. The configured exporter endpoint is intentionally
 /// optional; when absent rows remain pending instead of being discarded.
 pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, String> {
@@ -2444,7 +2467,13 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                 Ok(token) => {
                     let client = sheets_client();
                     if let Err(error) =
-                        crate::services::dtr_sync::process_dtr_pending(state, &client, &token, sheet)
+                        crate::services::dtr_sync::process_dtr_pending(
+                            state,
+                            &client,
+                            &token,
+                            sheet,
+                            Some(state.dtr_throttle.clone()),
+                        )
                             .await
                     {
                         eprintln!("[sheets] dtr pending recheck failed: {error}");
@@ -2541,6 +2570,13 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             Err(SHEETS_ROW_ID_MISSING_ERROR.to_string())
         } else if let Some(payload) = payload.as_ref() {
             if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+                // Plan todo 7: queue-path DTR dispatch is bucket-exclusive —
+                // one admission (1 write + 1 call) per row before claiming.
+                // Denial skips the row for this pass (still due next tick);
+                // later ops rows in the same batch keep draining (bypass).
+                if !dtr_throttle_admit(state, 1, 1).await {
+                    continue;
+                }
                 if is_delete {
                     // Admin-deleted attendance clears that date's B:E cells
                     // (values only — the template row stays; missing tab/row
@@ -2576,7 +2612,12 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                             match token_res {
                                 Ok(token) => {
                                     crate::services::dtr_sync::push_dtr_row(
-                                        state, &client, &token, sheet, payload,
+                                        state,
+                                        &client,
+                                        &token,
+                                        sheet,
+                                        payload,
+                                        Some(state.dtr_throttle.clone()),
                                     )
                                     .await
                                     .map(|_| false)

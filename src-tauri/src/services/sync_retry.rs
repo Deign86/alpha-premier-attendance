@@ -206,7 +206,71 @@ pub fn split_dtr_batch(entry_bytes: &[usize]) -> Vec<(usize, usize)> {
     chunks
 }
 
-/// Queue-row retry backoff policy (pinned by plan todo 4 — keep in sync
+/// DTR-spreadsheet-only dispatcher throttle (plan todo 7 — kept in this
+/// std-only file so the bucket stays dependency-free and virtual-clock
+/// injectable): at most 50 DTR cell-writes AND at most 10 batch calls per
+/// 60s fixed window. Writes/min is the binding quota (60 coalesced rows ≈
+/// 2 calls, so calls/min is the safety rail). DTR-spreadsheet values
+/// writes + values:batchUpdate calls only — ops exports bypass, paint and
+/// metadata reads stay separate, drain-pause on 429 is untouched.
+/// Concurrency 1: one bucket per drain owner (`&mut` / single mutex);
+/// the queue path consults it exclusively, the manual path keeps its own
+/// 1000ms pacing floor and never touches it.
+pub const DTR_THROTTLE_WRITES_PER_MIN: u32 = 50;
+pub const DTR_THROTTLE_CALLS_PER_MIN: u32 = 10;
+pub const DTR_THROTTLE_WINDOW_MS: u64 = 60_000;
+
+/// Wall-clock millisecond source for production admissions. Tests pass
+/// explicit virtual instants instead, so no test ever sleeps.
+pub fn wall_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+/// Fixed-window token bucket over an injected `now_ms` clock.
+#[derive(Debug, Clone)]
+pub struct DtrThrottleBucket {
+    window_start_ms: u64,
+    writes_used: u32,
+    calls_used: u32,
+}
+
+impl DtrThrottleBucket {
+    pub fn new(now_ms: u64) -> Self {
+        Self {
+            window_start_ms: now_ms,
+            writes_used: 0,
+            calls_used: 0,
+        }
+    }
+
+    /// Admits `writes` cell-writes + `calls` batch calls at `now_ms`.
+    /// Returns 0 when admitted (quota consumed), else the bounded wait in
+    /// ms until the window rolls — the caller defers (never sleeps in a
+    /// hot loop). Callers are bounded by construction (queue rows take
+    /// 1+1, backfill chunks take ≤50 ranges + their chunk count), so a
+    /// same-window denial always clears on the next window.
+    pub fn take(&mut self, writes: u32, calls: u32, now_ms: u64) -> u64 {
+        if now_ms.saturating_sub(self.window_start_ms) >= DTR_THROTTLE_WINDOW_MS {
+            self.window_start_ms = now_ms;
+            self.writes_used = 0;
+            self.calls_used = 0;
+        }
+        if self.writes_used.saturating_add(writes) <= DTR_THROTTLE_WRITES_PER_MIN
+            && self.calls_used.saturating_add(calls) <= DTR_THROTTLE_CALLS_PER_MIN
+        {
+            self.writes_used = self.writes_used.saturating_add(writes);
+            self.calls_used = self.calls_used.saturating_add(calls);
+            return 0;
+        }
+        self.window_start_ms
+            .saturating_add(DTR_THROTTLE_WINDOW_MS)
+            .saturating_sub(now_ms)
+            .max(1)
+    }
+}
 /// with the `run_once` fail arm in `sheets_sync.rs`, which owns the attempts
 /// writes while this function owns the delays):
 /// - Transient-forever (429 / 5xx / timeout-after-connect / 403-rateLimit):
@@ -286,9 +350,54 @@ pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str
 #[cfg(test)]
 mod tests {
     use super::{
-        GENERIC_BACKOFF_CAP_SECS, TRANSIENT_BACKOFF_BASE_SECS, TRANSIENT_BACKOFF_CAP_SECS,
-        calculate_retry_backoff, is_transient_google_error,
+        DTR_THROTTLE_CALLS_PER_MIN, DTR_THROTTLE_WINDOW_MS, DTR_THROTTLE_WRITES_PER_MIN,
+        DtrThrottleBucket, GENERIC_BACKOFF_CAP_SECS, TRANSIENT_BACKOFF_BASE_SECS,
+        TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
+        split_dtr_batch,
     };
+
+    #[test]
+    fn dtr_throttle() {
+        // Plan todo 7: 60 queued writes ride the todo-6 coalescer into ~2
+        // values:batchUpdate calls (50 + 10 ranges), inside the ≤10 rail.
+        // Virtual clock only — no wall-clock sleep, no 60s wait.
+        let sizes = vec![128_usize; 60];
+        let chunks = split_dtr_batch(&sizes);
+        assert_eq!(chunks.len(), 2, "60 rows must coalesce into 2 calls");
+        assert!(
+            (chunks.len() as u32) <= DTR_THROTTLE_CALLS_PER_MIN,
+            "2 calls must sit inside the calls/min safety rail"
+        );
+        let mut now_ms = 0_u64;
+        let mut bucket = DtrThrottleBucket::new(now_ms);
+        // First chunk (50 writes + 1 call) fits the fresh window exactly.
+        assert_eq!(bucket.take(50, 1, now_ms), 0);
+        // Second chunk (10 writes + 1 call): budget spent → deferred with a
+        // bounded wait inside one window, never a busy-loop zero.
+        let wait_ms = bucket.take(10, 1, now_ms);
+        assert!(
+            wait_ms > 0 && wait_ms <= DTR_THROTTLE_WINDOW_MS,
+            "deferral must be bounded, got {wait_ms}ms"
+        );
+        now_ms += wait_ms;
+        assert_eq!(bucket.take(10, 1, now_ms), 0);
+        // Whole 60-row burst schedules within ~2 windows of the
+        // 50-writes/min budget (writes/min binding, calls/min rail).
+        assert!(
+            now_ms <= 2 * DTR_THROTTLE_WINDOW_MS,
+            "burst scheduled at {now_ms}ms, outside budget"
+        );
+        assert_eq!(DTR_THROTTLE_WRITES_PER_MIN, 50);
+        // Fail side: a 429 storm never busy-loops — every denial at the
+        // same instant carries the same positive wait pinned to the window
+        // end, and the window rolling re-admits without any sleep call.
+        let mut storm = DtrThrottleBucket::new(0);
+        assert_eq!(storm.take(50, 1, 0), 0);
+        for _ in 0..20 {
+            assert_eq!(storm.take(1, 1, 0), DTR_THROTTLE_WINDOW_MS);
+        }
+        assert_eq!(storm.take(1, 1, DTR_THROTTLE_WINDOW_MS), 0);
+    }
 
     #[test]
     fn backoff_caps() {

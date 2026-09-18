@@ -42,7 +42,7 @@ use crate::services::sheets_sync::{
     classify_403_body, parse_retry_after_secs, per_call_budget_actual, per_call_should_retry,
     per_call_sleep_ms,
 };
-use crate::services::sync_retry::split_dtr_batch;
+use crate::services::sync_retry::{DtrThrottleBucket, split_dtr_batch};
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
@@ -1862,6 +1862,7 @@ pub async fn push_dtr_row(
     token: &str,
     spreadsheet_id: &str,
     payload: &serde_json::Value,
+    throttle: Option<std::sync::Arc<tokio::sync::Mutex<DtrThrottleBucket>>>,
 ) -> Result<bool, String> {
     let user_id = str_field(payload, "userId")
         .filter(|s| !s.trim().is_empty())
@@ -1893,7 +1894,7 @@ pub async fn push_dtr_row(
     // no past day waits for a future scan that may never come.
     if just_created {
         let (wrote, complete) =
-            backfill_user_history(state, client, token, spreadsheet_id, &user_id, &full_name, &roster, &meta)
+            backfill_user_history(state, client, token, spreadsheet_id, &user_id, &full_name, &roster, &meta, throttle)
                 .await?;
         let now = chrono::Utc::now().to_rfc3339();
         if complete {
@@ -2028,6 +2029,7 @@ async fn backfill_user_history(
     full_name: &str,
     roster: &[(String, String)],
     meta: &[DtrTabMeta],
+    throttle: Option<std::sync::Arc<tokio::sync::Mutex<DtrThrottleBucket>>>,
 ) -> Result<(usize, bool), String> {
     let titles = titles_of(meta);
     let Some(tab) = DtrMatchIndex::build(&titles, roster).resolve(user_id, full_name) else {
@@ -2097,6 +2099,26 @@ async fn backfill_user_history(
     }
 
     if !pending_writes.is_empty() {
+        // Plan todo 7: queue path admits the exact batch cost (writes +
+        // todo-6 chunk count) before the values:batchUpdate calls. Denial
+        // writes nothing — (0, false) keeps the user pending for the next
+        // tick instead of sleeping or busy-looping. Manual path (None)
+        // skips the bucket and keeps its 1000ms pacing floor.
+        if let Some(throttle) = throttle.as_ref() {
+            let sizes: Vec<usize> = pending_writes.iter().map(dtr_batch_entry_bytes).collect();
+            let calls = split_dtr_batch(&sizes).len() as u32;
+            let wait_ms = throttle
+                .lock()
+                .await
+                .take(pending_writes.len() as u32, calls, crate::services::sync_retry::wall_now_ms());
+            if wait_ms > 0 {
+                log::warn!(
+                    "DTR throttle: deferring backfill of {} writes + {calls} calls for {full_name} ({user_id}) for {wait_ms}ms",
+                    pending_writes.len()
+                );
+                return Ok((0, false));
+            }
+        }
         execute_dtr_batch_push(client, token, spreadsheet_id, &pending_writes).await?;
     }
 
@@ -2131,6 +2153,7 @@ pub async fn process_dtr_pending(
     client: &reqwest::Client,
     token: &str,
     spreadsheet_id: &str,
+    throttle: Option<std::sync::Arc<tokio::sync::Mutex<DtrThrottleBucket>>>,
 ) -> Result<usize, String> {
     use sqlx::Row;
     let pending: Vec<(String, String)> =
@@ -2154,7 +2177,12 @@ pub async fn process_dtr_pending(
     let now = chrono::Utc::now().to_rfc3339();
     let mut backfilled = 0;
     for (user_id, full_name) in &pending {
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        // Plan todo 7: queue path (throttle present) is bucket-exclusive —
+        // batch admissions inside backfill own the pacing, so no fixed
+        // sleep here. Manual path (None) keeps the 1000ms pacing floor.
+        if throttle.is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
         // Deactivated (or deleted) while pending: keep the row, skip the
         // pass. See roster_has docs for the rationale.
         if !roster_has(&roster, user_id) {
@@ -2183,6 +2211,7 @@ pub async fn process_dtr_pending(
         };
         match backfill_user_history(
             state, client, token, spreadsheet_id, user_id, full_name, &roster, &meta,
+            throttle.clone(),
         )
         .await
         {
@@ -2403,7 +2432,7 @@ pub async fn manual_sync_intern_dtr(
 
         // Backfill history
         match backfill_user_history(
-            state, &client, &token, &spreadsheet_id, user_id, full_name, &roster, &meta,
+            state, &client, &token, &spreadsheet_id, user_id, full_name, &roster, &meta, None,
         )
         .await
         {
@@ -2446,7 +2475,7 @@ pub async fn manual_sync_intern_dtr(
     // covers owner-added month blocks: planning re-reads live tabs every
     // pass). Log-only: the report below already reflects this pass.
     if !tabs_created.is_empty() {
-        if let Err(error) = process_dtr_pending(state, &client, &token, &spreadsheet_id).await {
+        if let Err(error) = process_dtr_pending(state, &client, &token, &spreadsheet_id, None).await {
             log::warn!("dtr pending rescan after tab-create failed: {error}");
         }
     }
@@ -3818,7 +3847,7 @@ mod tests {
             "attendanceDate": "2026-09-05",
         });
         let client = crate::services::sheets_sync::sheets_client();
-        let err = push_dtr_row(&state, &client, "tok", "sheet", &corrupt)
+        let err = push_dtr_row(&state, &client, "tok", "sheet", &corrupt, None)
             .await
             .unwrap_err();
         assert!(err.contains("userId"), "unexpected error: {err}");
