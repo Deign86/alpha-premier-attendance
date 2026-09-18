@@ -305,7 +305,7 @@ export type LanAttendanceSnapshotResponse = {
   serverInstanceId: string;
   snapshotVersion: number;
   date: string;
-  attendance: AttendanceListItem[];
+  attendance: LanAttendanceRow[];
   fetchedAt: string;
 };
 
@@ -320,7 +320,7 @@ export type LanAttendanceUpdatedEvent = {
   attendanceId: string;
   cause: 'TIME_IN' | 'TIME_OUT' | 'ADMIN_CORRECTION' | 'ADMIN_DELETE' | 'PAYROLL_RECONCILIATION';
   mutation: 'upsert' | 'delete' | 'refetch';
-  attendance: AttendanceListItem | null;
+  attendance: LanAttendanceRow | null;
 };
 
 export type LanConnectionStatusEvent = {
@@ -394,14 +394,11 @@ export const lanFirewallRuleStates = ['present', 'missing', 'unknown'] as const;
 export type LanFirewallRuleState = (typeof lanFirewallRuleStates)[number];
 
 /** Safe read-only fields exposed for one attendance row on the LAN viewer. */
-export type LanAttendanceRow = {
-  attendanceId: string;
-  attendanceDate: string;
-  userId: string;
-  fullName: string;
-  department: string | null;
+export type LanAttendanceRow = Pick<
+  AttendanceListItem,
+  'attendanceId' | 'attendanceDate' | 'userId' | 'fullName' | 'department' | 'timeOut'
+> & {
   timeIn: string | null;
-  timeOut: string | null;
   status: string;
 };
 
@@ -892,8 +889,8 @@ export type TtsStatusResponse = {
   isSpeaking: boolean;
 };
 
-export const bathroomGenderKeys = ['MALE', 'FEMALE'] as const;
-export type BathroomGenderKey = (typeof bathroomGenderKeys)[number];
+export const bathroomGenderKeys: typeof userGenders = userGenders;
+export type BathroomGenderKey = UserGender;
 
 export const bathroomLogStatuses = ['OUT', 'RETURNED'] as const;
 export type BathroomLogStatus = (typeof bathroomLogStatuses)[number];
