@@ -102,6 +102,14 @@ export class AttendanceService {
         let saved: SheetAttendance;
         let auditNote: string | null = null;
 
+        const reconcileOwnWrite = async (attendanceId: string, requireCompletedTimeout: boolean): Promise<SheetAttendance | null> => {
+          const reconciled = await this.sheets.findAttendance(effectiveUser.userId, attendanceDate).catch((): null => null);
+          if (reconciled?.attendanceId !== attendanceId) return null;
+          if (!requireCompletedTimeout) return reconciled;
+          if ((reconciled.status === 'COMPLETED' || reconciled.status === 'LATE_TIMEOUT') && reconciled.timeOut) return reconciled;
+          return null;
+        };
+
         if (!attendance) {
           const newAttendance: SheetAttendance = {
             attendanceId: crypto.randomUUID(),
@@ -122,8 +130,8 @@ export class AttendanceService {
           try {
             saved = await this.sheets.createAttendance(newAttendance);
           } catch {
-            const reconciled = await this.sheets.findAttendance(effectiveUser.userId, attendanceDate).catch(() => null);
-            if (reconciled?.attendanceId === newAttendance.attendanceId) saved = reconciled;
+            const reconciled = await reconcileOwnWrite(newAttendance.attendanceId, false);
+            if (reconciled) saved = reconciled;
             else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
           }
           action = 'TIME_IN';
@@ -184,16 +192,16 @@ export class AttendanceService {
             try {
               saved = await this.sheets.updateAttendance(completedRow, { timeIn: attendance.timeIn, timeOut: null });
             } catch {
-              const reconciled = await this.sheets.findAttendance(effectiveUser.userId, attendanceDate).catch(() => null);
-              if (reconciled?.attendanceId === attendance.attendanceId && (reconciled.status === 'COMPLETED' || reconciled.status === 'LATE_TIMEOUT') && reconciled.timeOut) saved = reconciled;
+              const reconciled = await reconcileOwnWrite(attendance.attendanceId, true);
+              if (reconciled) saved = reconciled;
               else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
             }
           } else {
             try {
               saved = await this.sheets.completeAttendance(attendance, timestamp);
             } catch {
-              const reconciled = await this.sheets.findAttendance(effectiveUser.userId, attendanceDate).catch(() => null);
-              if (reconciled?.attendanceId === attendance.attendanceId && (reconciled.status === 'COMPLETED' || reconciled.status === 'LATE_TIMEOUT') && reconciled.timeOut) saved = reconciled;
+              const reconciled = await reconcileOwnWrite(attendance.attendanceId, true);
+              if (reconciled) saved = reconciled;
               else throw new ScanError('GOOGLE_SHEETS_UNAVAILABLE', 'Attendance data is temporarily unavailable.', 503);
             }
           }
