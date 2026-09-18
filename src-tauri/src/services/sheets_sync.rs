@@ -50,8 +50,9 @@ pub const GOOGLE_NOT_FOUND: &str = "GOOGLE_NOT_FOUND";
 pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
 pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
 pub use super::sync_retry::{
-    GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, calculate_retry_backoff,
-    is_rate_limited_error, is_transient_sync_error,
+    GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS,
+    calculate_retry_backoff, is_rate_limited_error, is_transient_sync_error, parse_retry_after_secs,
+    per_call_budget_actual, per_call_should_retry, per_call_sleep_ms,
 };
 const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const GOOGLE_SCOPES: &str =

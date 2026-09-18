@@ -1,0 +1,56 @@
+TASK-2 FAIL QA LOG | dtr-sync-graceful todo 2 | 2026-09-18 (UTC)
+GOAL: persistent 429 / persistent 503 return the transient code after exactly 3 attempts; Retry-After storm (120s every attempt) still sleeps <= 19.5s and never overruns the 30s tick.
+FILES: src-tauri/src/services/sync_retry.rs (shared per-call policy), dtr_sync.rs (dtr_call_with_retry + 4 call sites + per_call_retry_bounded test), sheets_sync.rs (re-export only).
+BASELINE (unchanged code): cargo check --manifest-path src-tauri/Cargo.toml --tests -> Compiling alpha-premier-attendance v0.1.85, exit 0, 0 errors.
+FAILING-FIRST: committed test per_call_retry_bounded written before fix -> cargo test per_call_retry_bounded -> exit 101, error[E0425] x15 (unresolved per-call helpers). Then implemented until green.
+EXECUTION NOTE (same env block as todo 1, disclosed): lib-linked test binaries cannot start in this env (0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND at OS load; pre-existing gnu-ld .rsrc manifest issue, NOT code). Runtime proof via out-of-repo harness (C:\Users\APG\AppData\Local\Temp\opencode\percallharness): EXACT shipped sync_retry.rs bytes via include! + driver loop built ONLY from shipped pure fns against a real loopback HTTP fixture, mirroring dtr_call_with_retry line-for-line. Thin glue (reqwest header read, dtr_status_error mapping, tokio sleep) link-proven via --no-run. Fixture flake found+fixed mid-run: accepted sockets inheriting nonblocking mode caused WouldBlock-abandon -> client RST -> phantom transport error (1 occurrence); fixed with set_nonblocking(false) after accept in BOTH harness and committed test fixture; disclosed, no assert weakened.
+COMMAND: cargo run --manifest-path C:\Users\APG\AppData\Local\Temp\opencode\percallharness\Cargo.toml -- fail
+--- BEGIN FULL FAIL OUTPUT (untruncated, final validation run 1 of 3, exit 0) ---
+PASS P-max-attempts==3
+PASS P-budget==1500+3000+15000
+PASS P-429-retryable
+PASS P-503-retryable
+PASS P-500-retryable
+PASS P-400-final
+PASS P-404-final
+PASS P-403-final-in-call
+PASS P-retry-a0
+PASS P-retry-a1
+PASS P-no-retry-a2
+PASS P-no-retry-400
+PASS P-parse-120
+PASS P-parse-spaces
+PASS P-parse-zero
+PASS P-parse-junk
+PASS P-parse-empty
+PASS P-parse-negative
+PASS P-ra-clamped (120s -> 15000ms)
+PASS P-ra-small (2s -> 2000ms)
+PASS P-ra-zero
+PASS P-jitter-a0-bound (x50 loop, all <= 1500ms)
+PASS P-jitter-a1-bound (x50 loop, all <= 3000ms)
+PASS P-budget-fresh
+PASS P-budget-tail (18000+15000 -> 1500 actual)
+PASS P-budget-spent
+PASS P-budget-caps-giant
+PASS P-storm-total (15000+4500 == 19500)
+PASS F-429x3-status (429)
+PASS F-429x3-attempts==3
+PASS F-429x3-hits==3
+PASS F-429x3-transient-code (GOOGLE_RATE_LIMITED preserved)
+PASS F-429x3-no-tick-overrun (wall < 30s)
+DEBUG 503x3 status=503 attempts=3 slept=0
+PASS F-503x3-status (503)
+PASS F-503x3-attempts==3
+PASS F-503x3-hits==3
+PASS F-503x3-transient-code (GOOGLE_SERVER_ERROR preserved)
+PASS F-503x3-no-tick-overrun (wall < 30s)
+PASS F-storm-attempts==3
+PASS F-storm-sleep<=19500 (storm slept_ms=19500 <= 19500)
+PASS F-storm-wall<30s
+HARNESS FAIL-MODE: ALL PASS (storm slept_ms=19500 <= 19500)
+--- END FULL FAIL OUTPUT ---
+COMPILE PROOFS (final code): cargo check --manifest-path src-tauri/Cargo.toml --tests -> exit 0, 0 errors, no warnings on touched files. cargo test per_call_retry_bounded --no-run -> exit 0; lib/main/migrate test executables all linked. (In-env execution env-blocked as baselined; committed test runs on CI msvc runners.)
+ADVERSARIAL PROBES: flaky-rerun fail 3x exit 0/0/0 ALL PASS (plus 1 earlier WouldBlock-RST flake pre-fix, root-caused and fixed, see execution note); full-output shown above (no tail-only); git-status-before/after: same pre-existing dirt as happy log, task files M dtr_sync.rs/sheets_sync.rs/sync_retry.rs + 2 evidence logs, nothing else staged; malformed-input: covered (junk/empty/negative Retry-After -> jitter fallback); prompt-injection: N/A; cancel/resume: N/A; dirty-worktree: pre-existing dirt untouched; hung-commands: none; repeated-interrupts: N/A.
+CLEANUP RECEIPTS: no repo scaffolding created (harness outside repo, never committed); no temp files in repo; lsp_diagnostics timed out 1x (daemon busy) -> substituted with cargo check --tests clean.
+DEFERRED (other todos own these): 403 reason-body plumbing -> todo 5; queue-level backoff caps+jitter -> todo 4; live scratch-sheet drain -> needs Google creds; 30s tick + 25s client timeout unchanged per MUST-NOT-DO.

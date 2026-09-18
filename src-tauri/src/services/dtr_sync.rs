@@ -38,7 +38,8 @@
 
 use crate::services::sheets_sync::{
     GOOGLE_AUTH_FAILED, GOOGLE_NOT_FOUND, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED,
-    GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR,
+    GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, parse_retry_after_secs,
+    per_call_budget_actual, per_call_should_retry, per_call_sleep_ms,
 };
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
@@ -959,6 +960,56 @@ pub fn build_format_requests(ops: &[DtrFormatOp]) -> serde_json::Value {
     serde_json::json!({ "requests": requests })
 }
 
+fn dtr_retry_after_secs(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after_secs)
+}
+
+/// Sleeps at most the remaining 19.5s budget; returns the new slept total.
+async fn sleep_within_budget(already_slept_ms: u64, want_ms: u64) -> u64 {
+    let actual_ms = per_call_budget_actual(already_slept_ms, want_ms);
+    if actual_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(actual_ms)).await;
+    }
+    already_slept_ms.saturating_add(actual_ms)
+}
+
+/// Runs one Google call with the shared bound above. Returns the last
+/// response (success, non-retryable, or attempts exhausted) so the caller maps
+/// it to the transient code; transport exhaustion returns the generic code.
+async fn dtr_call_with_retry(
+    build: impl Fn() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    let mut slept_ms: u64 = 0;
+    let mut attempt: u32 = 0;
+    loop {
+        match build().send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() || !per_call_should_retry(status.as_u16(), attempt) {
+                    return Ok(response);
+                }
+                let retry_after = dtr_retry_after_secs(&response);
+                drop(response);
+                slept_ms =
+                    sleep_within_budget(slept_ms, per_call_sleep_ms(attempt, retry_after)).await;
+                attempt += 1;
+            }
+            Err(_) => {
+                if attempt + 1 >= PER_CALL_MAX_ATTEMPTS {
+                    return Err(GOOGLE_REQUEST_FAILED.to_string());
+                }
+                slept_ms =
+                    sleep_within_budget(slept_ms, per_call_sleep_ms(attempt, None)).await;
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// Execute paint ops in ONE spreadsheets.batchUpdate. Skips the call
 /// when there is nothing to paint. Returns whether a call was issued.
 pub async fn execute_format_ops(
@@ -972,27 +1023,15 @@ pub async fn execute_format_ops(
     }
     let url = format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate");
     let body = build_format_requests(ops);
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .post(&url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(true);
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+    let response = dtr_call_with_retry(|| {
+        client.post(&url).bearer_auth(token).json(&body)
+    })
+    .await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(true);
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_status_error(status).to_string())
 }
 
 /// Paint format ops using already-fetched `rows` without an extra network GET.
@@ -1053,29 +1092,15 @@ async fn dtr_get_json(
     token: &str,
     url: String,
 ) -> Result<serde_json::Value, String> {
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .get(&url)
-            .bearer_auth(token)
-            .send()
+    let response = dtr_call_with_retry(|| client.get(&url).bearer_auth(token)).await?;
+    let status = response.status();
+    if status.is_success() {
+        return response
+            .json()
             .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return response
-                .json()
-                .await
-                .map_err(|_| GOOGLE_REQUEST_FAILED.to_string());
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string());
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_status_error(status).to_string())
 }
 
 fn rows_from_values(value: &serde_json::Value) -> Vec<Vec<String>> {
@@ -1443,27 +1468,15 @@ pub async fn execute_dtr_push(
     let url = format!(
         "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
     );
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .put(&url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(true);
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+    let response = dtr_call_with_retry(|| {
+        client.put(&url).bearer_auth(token).json(&body)
+    })
+    .await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(true);
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_status_error(status).to_string())
 }
 
 /// Batch-write multiple DTR rows in a single `values:batchUpdate` request.
@@ -1500,27 +1513,15 @@ pub async fn execute_dtr_batch_push(
     let url = format!(
         "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
     );
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .post(&url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(plans.len());
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+    let response = dtr_call_with_retry(|| {
+        client.post(&url).bearer_auth(token).json(&body)
+    })
+    .await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(plans.len());
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_status_error(status).to_string())
 }
 
 fn str_field(payload: &serde_json::Value, name: &str) -> Option<String> {
@@ -2304,6 +2305,7 @@ pub async fn manual_sync_intern_dtr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::sync_retry::{PER_CALL_SLEEP_BUDGET_MS, is_per_call_retryable};
 
     fn users() -> Vec<(String, String)> {
         vec![
@@ -2426,9 +2428,195 @@ mod tests {
         assert_eq!(find_date_row_in(&rows, "2026-08-31", 4, 7), Ok(None));
     }
 
+    #[tokio::test]
+    async fn per_call_retry_bounded() {
+        // Todo 2 acceptance: per-call attempts capped at 3 with full-jitter
+        // backoff (base 1500ms doubling) + Retry-After honored and clamped to
+        // 15s; worst-case added in-call sleep 1.5+3+15 = 19.5s so one row
+        // never overruns the 30s tick. Exhaustion returns the transient code
+        // upward (queue-row infiniteness lives in todo 1's fail arm, never
+        // in an in-call loop).
+        assert_eq!(PER_CALL_MAX_ATTEMPTS, 3);
+        assert!(is_per_call_retryable(429));
+        assert!(is_per_call_retryable(503));
+        assert!(!is_per_call_retryable(400));
+        assert!(!is_per_call_retryable(404));
+        assert!(per_call_should_retry(429, 0));
+        assert!(per_call_should_retry(503, 1));
+        assert!(!per_call_should_retry(429, 2));
+        assert!(!per_call_should_retry(400, 0));
+        assert_eq!(parse_retry_after_secs("120"), Some(120));
+        assert_eq!(parse_retry_after_secs("2"), Some(2));
+        assert_eq!(parse_retry_after_secs("junk"), None);
+        assert_eq!(per_call_sleep_ms(0, Some(120)), 15_000);
+        assert_eq!(per_call_sleep_ms(0, Some(2)), 2_000);
+        assert!(per_call_sleep_ms(0, None) <= 1_500);
+        assert!(per_call_sleep_ms(1, None) <= 3_000);
+        assert_eq!(per_call_budget_actual(18_000, 15_000), 1_500);
+        assert_eq!(
+            PER_CALL_SLEEP_BUDGET_MS,
+            1_500 + 3_000 + 15_000,
+            "worst-case in-call sleep (1.5s jitter + 3s jitter + 15s Retry-After cap) must stay inside the 19.5s budget"
+        );
+        assert_eq!(
+            dtr_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS),
+            GOOGLE_RATE_LIMITED
+        );
+
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Persistent 429 with Retry-After: 0 (zero real sleep): exactly 3
+        // attempts, then the transient code returns upward.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![rate_limited_response(); 3],
+            Arc::clone(&hits),
+        );
+        let client = test_client();
+        let err = dtr_get_json(&client, "token", url).await.unwrap_err();
+        assert_eq!(err, GOOGLE_RATE_LIMITED);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+
+        // Single 429 then 200: success within the bound (2 calls).
+        let hits = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![rate_limited_response(), ok_values_response()],
+            Arc::clone(&hits),
+        );
+        let value = dtr_get_json(&client, "token", url).await.unwrap();
+        assert_eq!(
+            value.get("values").and_then(|v| v.as_array()).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        // Retry-After honored: 429 carrying Retry-After: 1 then 200 sleeps ~1s.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![rate_limited_response_after(1), ok_values_response()],
+            Arc::clone(&hits),
+        );
+        let started = std::time::Instant::now();
+        dtr_get_json(&client, "token", url).await.unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(900));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(25))
+            .build()
+            .expect("loopback test client builds")
+    }
+
+    fn rate_limited_response_after(secs: u64) -> String {
+        format!(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: {secs}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn rate_limited_response() -> String {
+        rate_limited_response_after(0)
+    }
+
+    fn ok_values_response() -> String {
+        let body = "{\"values\":[[\"a\"]]}";
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn find_header_end(buf: &[u8]) -> Option<usize> {
+        buf.windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|pos| pos + 4)
+    }
+
+    fn header_content_length(header: &[u8]) -> usize {
+        String::from_utf8_lossy(header)
+            .to_lowercase()
+            .split("\r\n")
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("content-length:")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Loopback fixture: serves the scripted responses in order on fresh
+    /// connections and counts hits, so the test proves the attempt bound with
+    /// real HTTP and zero real sleep (Retry-After: 0). Returns a URL for
+    /// `dtr_get_json`.
+    fn serve_scripted(
+        responses: Vec<String>,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> String {
+        use std::io::{Read, Write};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("loopback fixture binds");
+        let addr = listener.local_addr().expect("fixture addr").to_string();
+        listener
+            .set_nonblocking(true)
+            .expect("fixture nonblocking");
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+            let mut served = 0_usize;
+            while served < responses.len() && std::time::Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+                };
+                // Accepted sockets may inherit the listener's nonblocking
+                // mode; force blocking reads so a not-yet-arrived request
+                // waits instead of WouldBlock-abandoning the connection.
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut buf = vec![0_u8; 65536];
+                let mut got = 0_usize;
+                let mut header_end = None;
+                while header_end.is_none() && got < buf.len() {
+                    match stream.read(&mut buf[got..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            got += n;
+                            header_end = find_header_end(&buf[..got]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let Some(end) = header_end else {
+                    continue;
+                };
+                let mut body_needed = header_content_length(&buf[..end])
+                    .saturating_sub(got.saturating_sub(end));
+                let mut drain = [0_u8; 4096];
+                while body_needed > 0 {
+                    let want = drain.len().min(body_needed);
+                    match stream.read(&mut drain[..want]) {
+                        Ok(0) => break,
+                        Ok(n) => body_needed = body_needed.saturating_sub(n),
+                        Err(_) => break,
+                    }
+                }
+                let _ = stream.write_all(responses[served].as_bytes());
+                let _ = stream.flush();
+                drop(stream);
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                served += 1;
+            }
+        });
+        format!("http://{addr}/values/Fake!A:F")
+    }
+
     #[test]
-    fn duplicate_date_rows_fail_closed() {
-        let rows = vec![
+    fn duplicate_date_rows_fail_closed() {        let rows = vec![
             vec!["9/5/2026".to_string()],
             vec!["9/5/2026".to_string()],
         ];

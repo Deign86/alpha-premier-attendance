@@ -77,6 +77,71 @@ pub fn is_transient_sync_error(error: &str) -> bool {
     .any(|marker| error.contains(marker))
 }
 
+/// Per-call (single Google HTTP call) retry policy shared by the DTR call
+/// sites. At most 3 attempts with full-jitter backoff (base 1500ms doubling);
+/// a Retry-After header overrides the jittered sleep, clamped to 15s.
+/// Cumulative added sleep never exceeds 19.5s (1.5 + 3 + 15), so one row can
+/// never overrun the 30s tick. Exhaustion returns the transient code upward;
+/// queue-row infiniteness lives in the queue fail arm, never in-call.
+pub const PER_CALL_MAX_ATTEMPTS: u32 = 3;
+pub const PER_CALL_BASE_BACKOFF_MS: u64 = 1500;
+pub const PER_CALL_RETRY_AFTER_CAP_SECS: u64 = 15;
+pub const PER_CALL_SLEEP_BUDGET_MS: u64 = 19_500;
+
+/// In-call retry applies to 429 + 5xx only. 403 reason routing is a later
+/// todo; other 4xx fail fast to their mapped code.
+pub fn is_per_call_retryable(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
+
+/// True when `attempt` (0-based) may sleep-and-retry after `status`: the
+/// status is retryable AND attempts remain. The 3rd attempt never sleeps.
+pub fn per_call_should_retry(status: u16, attempt: u32) -> bool {
+    is_per_call_retryable(status) && attempt + 1 < PER_CALL_MAX_ATTEMPTS
+}
+
+/// Retry-After carries whole seconds; anything else (dates, garbage) is
+/// ignored so the jittered backoff applies instead.
+pub fn parse_retry_after_secs(raw: &str) -> Option<u64> {
+    raw.trim().parse::<u64>().ok()
+}
+
+/// Full-jitter sample in `[0, cap_ms]` without new deps: one xorshift mix over
+/// the current wall-clock nanos is plenty of entropy for backoff spreading.
+fn full_jitter_ms(cap_ms: u64) -> u64 {
+    if cap_ms == 0 {
+        return 0;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| u64::from(elapsed.subsec_nanos()))
+        .unwrap_or(750_000);
+    let mut mixed = nanos
+        .wrapping_add(0x9E3779B97F4A7C15)
+        .wrapping_mul(0xBF58476D1CE4E5B9);
+    mixed ^= mixed >> 29;
+    mixed = mixed.wrapping_mul(0x2806191);
+    mixed % cap_ms.saturating_add(1)
+}
+
+/// Sleep before the next in-call attempt: `min(Retry-After, 15s)` when the
+/// server asked for a delay, else full jitter over base*2^attempt.
+pub fn per_call_sleep_ms(failed_attempt: u32, retry_after_secs: Option<u64>) -> u64 {
+    if let Some(secs) = retry_after_secs {
+        let cap_ms = PER_CALL_RETRY_AFTER_CAP_SECS.saturating_mul(1000);
+        return secs.saturating_mul(1000).min(cap_ms);
+    }
+    let cap_ms = PER_CALL_BASE_BACKOFF_MS.saturating_mul(1_u64 << failed_attempt.min(4));
+    full_jitter_ms(cap_ms)
+}
+
+/// Budget arithmetic behind the async sleep: actual sleep ms for a `want_ms`
+/// request given `already_slept_ms`, so every call holds total added sleep
+/// under 19.5s whatever headers arrive. The caller adds the return value.
+pub fn per_call_budget_actual(already_slept_ms: u64, want_ms: u64) -> u64 {
+    want_ms.min(PER_CALL_SLEEP_BUDGET_MS.saturating_sub(already_slept_ms))
+}
+
 /// Computes backoff duration, new queue status, and error code for failed sync rows.
 /// Transient failures (429 / 5xx / timeout-after-connect / 403-rateLimit via
 /// `is_transient_sync_error`) use a 60-second base doubling backoff capped at
