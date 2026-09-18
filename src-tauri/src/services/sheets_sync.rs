@@ -857,7 +857,7 @@ async fn recover_stale_processing_leases(
         }
 
         let id: i64 = lease.get("id");
-        sqlx::query(
+        let updated = sqlx::query(
             "UPDATE sync_queue SET status='RETRY', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING' AND locked_at=?",
         )
         .bind(&now_text)
@@ -867,6 +867,11 @@ async fn recover_stale_processing_leases(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+        if updated.rows_affected() == 1 {
+            state
+                .lease_recovered
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     Ok(())

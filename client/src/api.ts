@@ -40,7 +40,7 @@ import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { tauriApi } from './tauri-api';
-import type { NativeDtrPendingItem, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
+import type { NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
 
 export async function loadVoiceClipStates(): Promise<VoiceClipState[]> {
   if (!runningInTauri()) return [];
@@ -773,6 +773,11 @@ export interface DtrPendingPerson {
   lastChecked: string | null;
 }
 
+export interface DtrSyncInProgress {
+  owner: string;
+  startedAt: string;
+}
+
 export interface DtrSyncHealth {
   pending: number;
   deadLetter: number;
@@ -781,6 +786,12 @@ export interface DtrSyncHealth {
   dtrPendingItems: DtrPendingPerson[];
   lastSyncedAt: string | null;
   lastError: string | null;
+  throttledUntil: string | null;
+  lastThrottleReason: string | null;
+  inProgress: DtrSyncInProgress | null;
+  leaseRecovered: number;
+  oldestRetryableAgeSec: number | null;
+  pendingAgeAlert: boolean;
 }
 
 export type DtrSyncHealthResult =
@@ -833,6 +844,17 @@ function parseDtrPendingPerson(entry: NativeDtrPendingItem): DtrPendingPerson | 
   return { userId, fullName, attempts, lastChecked: toText(entry.lastChecked) };
 }
 
+function parseDtrSyncInProgress(entry: NativeSyncInProgress | null | undefined): DtrSyncInProgress | null {
+  if (isMissing(entry)) return null;
+  if (!isPlainObject(entry)) return null;
+  // SAFETY: Object shape of the guard holder was verified above
+  const holder = entry as NativeSyncInProgress;
+  const owner = toText(holder.owner);
+  const startedAt = toText(holder.startedAt);
+  if (!owner || !startedAt) return null;
+  return { owner, startedAt };
+}
+
 function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth | null {
   if (!isPlainObject(raw)) return null;
   // SAFETY: Presence of the status envelope was verified above
@@ -864,7 +886,29 @@ function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth
   }
   if (!isMissing(response.lastSyncedAt) && toText(response.lastSyncedAt) === null) return null;
   if (!isMissing(response.lastError) && toText(response.lastError) === null) return null;
-  return { pending, deadLetter, byTable, dtrPendingCount, dtrPendingItems, lastSyncedAt: toText(response.lastSyncedAt), lastError: toText(response.lastError) };
+  if (!isMissing(response.throttledUntil) && toText(response.throttledUntil) === null) return null;
+  if (!isMissing(response.lastThrottleReason) && toText(response.lastThrottleReason) === null) return null;
+  const leaseRecovered = isMissing(response.leaseRecovered) ? 0 : toNonNegativeInt(response.leaseRecovered);
+  if (leaseRecovered === null) return null;
+  const oldestRetryableAgeSec = isMissing(response.oldestRetryableAgeSec) ? null : toNonNegativeInt(response.oldestRetryableAgeSec);
+  if (!isMissing(response.oldestRetryableAgeSec) && oldestRetryableAgeSec === null) return null;
+  if (!isMissing(response.pendingAgeAlert) && Object.prototype.toString.call(response.pendingAgeAlert) !== '[object Boolean]') return null;
+  return {
+    pending,
+    deadLetter,
+    byTable,
+    dtrPendingCount,
+    dtrPendingItems,
+    lastSyncedAt: toText(response.lastSyncedAt),
+    lastError: toText(response.lastError),
+    throttledUntil: toText(response.throttledUntil),
+    lastThrottleReason: toText(response.lastThrottleReason),
+    inProgress: parseDtrSyncInProgress(response.inProgress),
+    leaseRecovered,
+    oldestRetryableAgeSec,
+    // SAFETY: Boolean shape of pendingAgeAlert was verified above
+    pendingAgeAlert: (isMissing(response.pendingAgeAlert) ? false : response.pendingAgeAlert) as boolean,
+  };
 }
 
 /** Desktop-only: live DTR/sync-queue health for the Data & backup panel. */

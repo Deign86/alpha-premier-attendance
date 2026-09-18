@@ -211,6 +211,9 @@ pub struct AppState {
     /// (__sync_guard__/manual_dtr_sync). Fresh false on every boot — a
     /// restart can never inherit a held flag.
     pub sync_in_progress: Arc<AtomicBool>,
+    /// Plan todo 10: cumulative PROCESSING-lease recoveries since boot,
+    /// surfaced as `leaseRecovered` in the admin health contract.
+    pub lease_recovered: Arc<AtomicU64>,
     pub tts: Arc<TtsManager>,
     pub updater: UpdaterConfig,
 }
@@ -294,6 +297,7 @@ impl AppState {
                 wall_now_ms(),
             ))),
             sync_in_progress: Arc::new(AtomicBool::new(false)),
+            lease_recovered: Arc::new(AtomicU64::new(0)),
             tts: Arc::new(TtsManager::new(tts)),
             updater,
         })

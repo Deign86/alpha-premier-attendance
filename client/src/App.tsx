@@ -3753,6 +3753,27 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
                 {(syncHealth?.dtrPendingCount ?? 0) > 5 ? ` (+${(syncHealth?.dtrPendingCount ?? 0) - 5} more)` : ""}
               </p>
             )}
+            {syncHealth?.throttledUntil && (
+              <p className="sync-health-error">
+                Throttled until {formatWhen(syncHealth.throttledUntil)}
+                {syncHealth.lastThrottleReason ? ` — ${syncHealth.lastThrottleReason}` : ""}
+              </p>
+            )}
+            {syncHealth?.inProgress && (
+              <p className="sync-health-note">
+                Sync in progress — {syncHealth.inProgress.owner} since {formatWhen(syncHealth.inProgress.startedAt)}
+              </p>
+            )}
+            {(syncHealth?.leaseRecovered ?? 0) > 0 && (
+              <p className="sync-health-note">Lease recovered: {syncHealth?.leaseRecovered}</p>
+            )}
+            {(syncHealth?.oldestRetryableAgeSec ?? null) !== null && (
+              <p className={syncHealth?.pendingAgeAlert ? "sync-health-error" : "sync-health-note"}>
+                Oldest retryable: {Math.floor((syncHealth?.oldestRetryableAgeSec ?? 0) / 3600)}h{" "}
+                {Math.floor(((syncHealth?.oldestRetryableAgeSec ?? 0) % 3600) / 60)}m old
+                {syncHealth?.pendingAgeAlert ? " — over 6h, queue needs attention" : ""}
+              </p>
+            )}
             <p className="sync-health-note">
               Last sync: {formatWhen(syncHealth?.lastSyncedAt ?? null)}
               {syncHealth && syncHealth.deadLetter > 0 ? (

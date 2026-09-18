@@ -276,6 +276,13 @@ pub struct DtrThrottleBucket {
     calls_used: u32,
 }
 
+/// Operator-facing reason attached to the todo-10 health contract while the
+/// DTR bucket is exhausted. Single constant so the Data card can match it.
+pub const DTR_THROTTLE_REASON: &str = "DTR_THROTTLE: 50-writes/min budget spent";
+/// Retryable rows older than this raise `pendingAgeAlert` in health, bounding
+/// infinite-RETRY queue growth visibility (todo 10).
+pub const PENDING_AGE_ALERT_SECS: i64 = 6 * 3600;
+
 impl DtrThrottleBucket {
     pub fn new(now_ms: u64) -> Self {
         Self {
@@ -304,10 +311,42 @@ impl DtrThrottleBucket {
             self.calls_used = self.calls_used.saturating_add(calls);
             return 0;
         }
-        self.window_start_ms
-            .saturating_add(DTR_THROTTLE_WINDOW_MS)
-            .saturating_sub(now_ms)
-            .max(1)
+        self.window_end_ms(now_ms).saturating_sub(now_ms).max(1)
+    }
+
+    fn effective_used(&self, now_ms: u64) -> (u32, u32) {
+        if now_ms.saturating_sub(self.window_start_ms) >= DTR_THROTTLE_WINDOW_MS {
+            (0, 0)
+        } else {
+            (self.writes_used, self.calls_used)
+        }
+    }
+
+    fn window_end_ms(&self, now_ms: u64) -> u64 {
+        let start_ms = if now_ms.saturating_sub(self.window_start_ms) >= DTR_THROTTLE_WINDOW_MS
+        {
+            now_ms
+        } else {
+            self.window_start_ms
+        };
+        start_ms.saturating_add(DTR_THROTTLE_WINDOW_MS)
+    }
+
+    fn exhausted_at(&self, writes: u32, calls: u32, now_ms: u64) -> bool {
+        let (writes_used, calls_used) = self.effective_used(now_ms);
+        writes_used.saturating_add(writes) > DTR_THROTTLE_WRITES_PER_MIN
+            || calls_used.saturating_add(calls) > DTR_THROTTLE_CALLS_PER_MIN
+    }
+
+    /// Non-mutating throttle probe for the todo-10 health contract: returns
+    /// the window-end instant (epoch ms) when one more DTR write + call would
+    /// be denied right now, else `None`. Never consumes quota.
+    pub fn throttled_until_ms(&self, now_ms: u64) -> Option<u64> {
+        if self.exhausted_at(1, 1, now_ms) {
+            Some(self.window_end_ms(now_ms))
+        } else {
+            None
+        }
     }
 }
 /// with the `run_once` fail arm in `sheets_sync.rs`, which owns the attempts

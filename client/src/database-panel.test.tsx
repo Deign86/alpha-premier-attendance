@@ -54,6 +54,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
   });
@@ -277,6 +283,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [{ userId: 'APG-2026-116', fullName: 'Maricon C. Danao', attempts: 1, lastChecked: null }],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
 
@@ -303,6 +315,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: 'Google Sheets auth failed: expired token',
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
 
@@ -323,6 +341,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
     loadDtrSyncHealthSpy.mockResolvedValueOnce({
@@ -390,6 +414,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
     expect(await screen.findByText('Healthy')).toBeInTheDocument();
@@ -404,6 +434,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-14T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
     await waitFor(() => {
@@ -455,6 +491,12 @@ describe('DatabasePanel', () => {
           dtrPendingItems: [],
           lastSyncedAt: '2026-08-15T00:00:00Z',
           lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
         },
       })
       .mockReturnValueOnce(manual);
@@ -497,6 +539,12 @@ describe('DatabasePanel', () => {
           dtrPendingItems: [],
           lastSyncedAt: '2026-08-15T00:00:00Z',
           lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
         },
       });
     });
@@ -543,6 +591,12 @@ describe('DatabasePanel', () => {
           dtrPendingItems: [],
           lastSyncedAt: '2026-08-15T00:00:00Z',
           lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
         },
       });
     });
@@ -695,5 +749,89 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/DTR sync complete/i)).toBeInTheDocument();
     expect(await screen.findByText('Healthy')).toBeInTheDocument();
     expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
+  });
+
+  it('parses the task-10 health extension fields from the native payload', async () => {
+    loadDtrSyncHealthSpy.mockRestore();
+    const syncStatusSpy = vi.spyOn(tauriApi.tauriApi, 'syncStatus').mockResolvedValueOnce({
+      success: true,
+      pending: 4,
+      deadLetter: 0,
+      byTable: [],
+      dtrPending: { count: 0, items: [] },
+      lastSyncedAt: '2026-08-15T00:00:00Z',
+      lastError: null,
+      throttledUntil: '2026-09-18T01:00:00+00:00',
+      lastThrottleReason: 'DTR_THROTTLE: 50-writes/min budget spent',
+      inProgress: { owner: 'admin_sync_now', startedAt: '2026-09-18T00:59:00+00:00' },
+      leaseRecovered: 2,
+      oldestRetryableAgeSec: 25000,
+      pendingAgeAlert: true,
+    });
+    const result = await api.loadDtrSyncHealth();
+    expect(syncStatusSpy).toHaveBeenCalledTimes(1);
+    if (!result.success) throw new Error('expected health parse to succeed');
+    expect(result.health.throttledUntil).toBe('2026-09-18T01:00:00+00:00');
+    expect(result.health.lastThrottleReason).toBe('DTR_THROTTLE: 50-writes/min budget spent');
+    expect(result.health.inProgress).toEqual({ owner: 'admin_sync_now', startedAt: '2026-09-18T00:59:00+00:00' });
+    expect(result.health.leaseRecovered).toBe(2);
+    expect(result.health.oldestRetryableAgeSec).toBe(25000);
+    expect(result.health.pendingAgeAlert).toBe(true);
+  });
+
+  it('renders throttled + in-progress health states in the Data card', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 4,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+        throttledUntil: '2026-09-18T01:00:00+00:00',
+        lastThrottleReason: 'DTR_THROTTLE: 50-writes/min budget spent',
+        inProgress: { owner: 'admin_sync_now', startedAt: '2026-09-18T00:59:00+00:00' },
+        leaseRecovered: 2,
+        oldestRetryableAgeSec: 25000,
+        pendingAgeAlert: true,
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText(/Throttled until/i)).toBeInTheDocument();
+    expect(screen.getByText(/50-writes\/min budget spent/)).toBeInTheDocument();
+    expect(screen.getByText(/admin_sync_now/)).toBeInTheDocument();
+    expect(screen.getByText(/lease recovered: 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/oldest retryable/i)).toBeInTheDocument();
+  });
+
+  it('renders Ready nulls as idle with no throttle or progress rows', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(screen.queryByText(/Throttled until/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
   });
 });
