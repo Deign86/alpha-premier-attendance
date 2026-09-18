@@ -197,6 +197,130 @@ fn tab_covered_by_user(tab_toks: &[String], user_toks: &[String]) -> bool {
     !tab_toks.is_empty() && tab_toks.iter().all(|t| user_toks.contains(t))
 }
 
+/// Pre-tokenized tab + roster snapshot for one resolve run. Tab titles and
+/// roster names are tokenized ONCE here instead of once per candidate ×
+/// roster comparison inside the match loops. Pure memo: every field
+/// derives from `split_tokens` / `is_skippable_title`, so results are
+/// identical to the uncached path. Never shared across a tab mutation —
+/// rebuild after any `fetch_tab_meta` / duplicate refresh.
+struct DtrMatchIndex {
+    tabs: Vec<DtrTabEntry>,
+    roster: Vec<DtrRosterEntry>,
+}
+
+struct DtrTabEntry {
+    title: String,
+    toks: Vec<String>,
+    skippable: bool,
+}
+
+struct DtrRosterEntry {
+    id: String,
+    toks: Vec<String>,
+}
+
+impl DtrMatchIndex {
+    fn build(tab_titles: &[String], all_users: &[(String, String)]) -> Self {
+        Self {
+            tabs: tab_titles
+                .iter()
+                .map(|title| {
+                    let toks = split_tokens(title);
+                    DtrTabEntry {
+                        skippable: is_skippable_title(title),
+                        title: title.clone(),
+                        toks,
+                    }
+                })
+                .collect(),
+            roster: all_users
+                .iter()
+                .map(|(id, name)| DtrRosterEntry {
+                    id: id.clone(),
+                    toks: split_tokens(name),
+                })
+                .collect(),
+        }
+    }
+
+    /// Indexed resolve: same semantics as `resolve_user_tab` — the target
+    /// name is still tokenized fresh per call (the pending table can hold
+    /// a stale spelling), only tabs + other roster names come from cache.
+    fn resolve(&self, user_id: &str, full_name: &str) -> Option<String> {
+        let user_toks = split_tokens(full_name);
+        // Suffix-stripped core drives last-token and coverage; a name that
+        // is nothing but suffixes cannot resolve.
+        let core_toks: Vec<String> = strip_name_suffix(&user_toks).to_vec();
+        let last = core_toks.last()?.clone();
+        let mut candidates: Vec<String> = Vec::new();
+        for tab in &self.tabs {
+            if tab.skippable {
+                continue;
+            }
+            if tab.toks.len() == 1 {
+                if !user_toks.contains(&tab.toks[0]) {
+                    continue;
+                }
+                let collides = self
+                    .roster
+                    .iter()
+                    .any(|other| other.id != user_id && other.toks.contains(&tab.toks[0]));
+                if collides {
+                    return None;
+                }
+                candidates.push(tab.title.clone());
+                continue;
+            }
+            if !tab.toks.contains(&last) {
+                continue;
+            }
+            if !tab_covered_by_user(&tab.toks, &core_toks) {
+                continue;
+            }
+            let collides = self.roster.iter().any(|other| {
+                if other.id == user_id {
+                    return false;
+                }
+                tab_covered_by_user(&tab.toks, strip_name_suffix(&other.toks))
+            });
+            if collides {
+                return None;
+            }
+            candidates.push(tab.title.clone());
+        }
+        if candidates.len() == 1 {
+            candidates.into_iter().next()
+        } else {
+            None
+        }
+    }
+
+    /// Indexed overlap: same semantics as `tab_name_overlaps_user`.
+    fn overlaps(&self, full_name: &str) -> bool {
+        let user_toks = split_tokens(full_name);
+        let core = strip_name_suffix(&user_toks);
+        let core = if core.is_empty() { &user_toks } else { core };
+        if core.is_empty() {
+            return true;
+        }
+        // Single-character tokens (e.g. middle initials like "C" or "E") are not
+        // distinctive name words and must never trigger a false-positive overlap.
+        let meaningful_core: Vec<&String> = core.iter().filter(|t| t.len() > 1).collect();
+        if meaningful_core.is_empty() {
+            return true;
+        }
+        self.tabs.iter().any(|tab| {
+            if tab.skippable {
+                return false;
+            }
+            tab.toks
+                .iter()
+                .filter(|t| t.len() > 1)
+                .any(|t| meaningful_core.contains(&t))
+        })
+    }
+}
+
 /// Resolve the DTR tab for one roster user. Returns the tab title on a
 /// unique match, `None` on AMBIGUOUS / NO_MATCH / SKIP (caller skips).
 pub fn resolve_user_tab(
@@ -205,53 +329,7 @@ pub fn resolve_user_tab(
     full_name: &str,
     all_users: &[(String, String)],
 ) -> Option<String> {
-    let user_toks = split_tokens(full_name);
-    // Suffix-stripped core drives last-token and coverage; a name that
-    // is nothing but suffixes cannot resolve.
-    let core_toks: Vec<String> = strip_name_suffix(&user_toks).to_vec();
-    let last = core_toks.last()?.clone();
-    let mut candidates: Vec<String> = Vec::new();
-    for title in tab_titles {
-        if is_skippable_title(title) {
-            continue;
-        }
-        let tab_toks = split_tokens(title);
-        if tab_toks.len() == 1 {
-            if !user_toks.contains(&tab_toks[0]) {
-                continue;
-            }
-            let collides = all_users.iter().any(|(id, name)| {
-                id != user_id && split_tokens(name).contains(&tab_toks[0])
-            });
-            if collides {
-                return None;
-            }
-            candidates.push(title.clone());
-            continue;
-        }
-        if !tab_toks.contains(&last) {
-            continue;
-        }
-        if !tab_covered_by_user(&tab_toks, &core_toks) {
-            continue;
-        }
-        let collides = all_users.iter().any(|(id, name)| {
-            if id == user_id {
-                return false;
-            }
-            let other_toks = split_tokens(name);
-            tab_covered_by_user(&tab_toks, strip_name_suffix(&other_toks))
-        });
-        if collides {
-            return None;
-        }
-        candidates.push(title.clone());
-    }
-    if candidates.len() == 1 {
-        candidates.into_iter().next()
-    } else {
-        None
-    }
+    DtrMatchIndex::build(tab_titles, all_users).resolve(user_id, full_name)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -1090,28 +1168,11 @@ fn parse_duplicate_sheet_id(body: &serde_json::Value) -> Option<i64> {
 /// when another tab overlaps the name (that is ambiguity for the owner,
 /// not a second tab). Tabs are aligned to roster names, so a genuinely
 /// new intern never overlaps.
+// Test-only wrapper: production paths resolve through `DtrMatchIndex`
+// (built per run, rebuilt after tab mutations); unit tests pin this name.
+#[allow(dead_code)]
 fn tab_name_overlaps_user(tab_titles: &[String], full_name: &str) -> bool {
-    let user_toks = split_tokens(full_name);
-    let core = strip_name_suffix(&user_toks);
-    let core = if core.is_empty() { &user_toks } else { core };
-    if core.is_empty() {
-        return true;
-    }
-    // Single-character tokens (e.g. middle initials like "C" or "E") are not
-    // distinctive name words and must never trigger a false-positive overlap.
-    let meaningful_core: Vec<&String> = core.iter().filter(|t| t.len() > 1).collect();
-    if meaningful_core.is_empty() {
-        return true;
-    }
-    tab_titles.iter().any(|title| {
-        if is_skippable_title(title) {
-            return false;
-        }
-        split_tokens(title)
-            .iter()
-            .filter(|t| t.len() > 1)
-            .any(|t| meaningful_core.contains(&t))
-    })
+    DtrMatchIndex::build(tab_titles, &[]).overlaps(full_name)
 }
 
 /// True when `user_id` is an ACTIVE INTERN right now. Auto-create must
@@ -1185,13 +1246,14 @@ async fn ensure_person_tab(
     roster: &[(String, String)],
 ) -> Result<Option<(String, i64, Vec<DtrTabMeta>, bool)>, String> {
     let titles = titles_of(meta);
-    if let Some(tab) = resolve_user_tab(&titles, user_id, full_name, roster) {
+    let index = DtrMatchIndex::build(&titles, roster);
+    if let Some(tab) = index.resolve(user_id, full_name) {
         let Some(sheet_id) = sheet_id_for_tab(meta, &tab) else {
             return Err(format!("DTR tab id missing for resolved tab {tab}"));
         };
         return Ok(Some((tab, sheet_id, meta.to_vec(), false)));
     }
-    if tab_name_overlaps_user(&titles, full_name) {
+    if index.overlaps(full_name) {
         return Ok(None);
     }
     if !user_is_active_intern(state, user_id).await? {
@@ -1213,7 +1275,7 @@ async fn ensure_person_tab(
     log::info!("dtr auto-created tab for {full_name} ({user_id})");
     let meta = fetch_tab_meta(client, token, spreadsheet_id).await?;
     let titles = titles_of(&meta);
-    match resolve_user_tab(&titles, user_id, full_name, roster) {
+    match DtrMatchIndex::build(&titles, roster).resolve(user_id, full_name) {
         Some(tab) => match sheet_id_for_tab(&meta, &tab) {
             Some(sheet_id) => Ok(Some((tab, sheet_id, meta, true))),
             None => Err(format!("DTR tab id missing for resolved tab {tab}")),
@@ -1345,7 +1407,7 @@ async fn plan_dtr_push_outcome(
     all_users: &[(String, String)],
     titles: &[String],
 ) -> Result<DtrPlanOutcome, String> {
-    let Some(tab) = resolve_user_tab(titles, user_id, full_name, all_users) else {
+    let Some(tab) = DtrMatchIndex::build(titles, all_users).resolve(user_id, full_name) else {
         return Ok(DtrPlanOutcome::Unresolvable("no-tab"));
     };
     let range = urlencoding::encode(&format!("{}!A:F", quote_tab(&tab))).into_owned();
@@ -1561,7 +1623,7 @@ pub async fn clear_dtr_row(
     let roster = active_roster(state).await?;
     let meta = fetch_tab_meta(client, token, spreadsheet_id).await?;
     let titles = titles_of(&meta);
-    let Some(tab) = resolve_user_tab(&titles, &user_id, &full_name, &roster) else {
+    let Some(tab) = DtrMatchIndex::build(&titles, &roster).resolve(&user_id, &full_name) else {
         log::info!("dtr clear skip for {full_name} ({user_id}) on {attendance_date}: no tab");
         return Ok(false);
     };
@@ -1812,7 +1874,7 @@ async fn backfill_user_history(
     meta: &[DtrTabMeta],
 ) -> Result<(usize, bool), String> {
     let titles = titles_of(meta);
-    let Some(tab) = resolve_user_tab(&titles, user_id, full_name, roster) else {
+    let Some(tab) = DtrMatchIndex::build(&titles, roster).resolve(user_id, full_name) else {
         return Ok((0, false));
     };
     let Some(sheet_id) = sheet_id_for_tab(meta, &tab) else {
@@ -2133,14 +2195,14 @@ pub async fn manual_sync_intern_dtr(
                                     meta = fresh_meta;
                                 }
                                 let titles = titles_of(&meta);
-                                resolve_user_tab(&titles, user_id, full_name, &roster)
+                                DtrMatchIndex::build(&titles, &roster).resolve(user_id, full_name)
                             }
                             Ok(None) => {
                                 if let Ok(fresh_meta) = fetch_tab_meta(&client, &token, &spreadsheet_id).await {
                                     meta = fresh_meta;
                                 }
                                 let titles = titles_of(&meta);
-                                resolve_user_tab(&titles, user_id, full_name, &roster)
+                                DtrMatchIndex::build(&titles, &roster).resolve(user_id, full_name)
                             }
                             Err(e) => {
                                 errors.push(format!("{full_name}: Failed to duplicate template tab: {e}"));
