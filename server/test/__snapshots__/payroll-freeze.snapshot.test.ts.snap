@@ -1,0 +1,27 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`T0 freeze: cross-engine divergence golden > locks 17:30 employee-floor vs intern-passthrough in one sorted golden 1`] = `"{"employee":{},"intern":{}}"`;
+
+exports[`T0 freeze: employee payroll vectors (₱800/day) > 08:00-16:00 pays 7h with exact unrendered-hour deduction 1`] = `"{"basePay":800,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T16:00:00+08:00","dailyPay":700,"halfDayDeduction":100,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":7}"`;
+
+exports[`T0 freeze: employee payroll vectors (₱800/day) > 08:00-17:00 pays a full 8h day 1`] = `"{"basePay":800,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":800,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: employee payroll vectors (₱800/day) > 17:59:59 stays actual-window (floored to 17:00) and full-day 1`] = `"{"basePay":600,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":600,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: employee payroll vectors (₱800/day) > cap first: 18:30 out caps to 17:00 and stays full-day 1`] = `"{"basePay":600,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":600,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: employee payroll vectors (₱800/day) > employee floors 17:30 to 17:00 (diverges from intern passthrough) 1`] = `"{"basePay":600,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":600,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: employee payroll vectors (₱800/day) > rejects inverted stamps and offset-less ISO 1`] = `"{"inverted":{},"offsetLess":{}}"`;
+
+exports[`T0 freeze: intern payroll vectors (₱80/day, ₱10/h late) > 08:00-16:00 pays 7h with exact deduction 1`] = `"{"basePay":80,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T16:00:00+08:00","dailyPay":70,"graceUsed":false,"halfDayDeduction":10,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":7}"`;
+
+exports[`T0 freeze: intern payroll vectors (₱80/day, ₱10/h late) > 08:00-17:00 pays a full 8h day 1`] = `"{"basePay":80,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":80,"graceUsed":false,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: intern payroll vectors (₱80/day, ₱10/h late) > 08:16 arrival is late even with grace available 1`] = `"{"basePay":80,"computedTimeIn":"2026-07-28T09:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":70,"graceUsed":false,"halfDayDeduction":10,"isHalfDay":false,"lateDeduction":10,"lateHours":1,"workedHours":7}"`;
+
+exports[`T0 freeze: intern payroll vectors (₱80/day, ₱10/h late) > cap first: 18:30 out caps to 17:00 and stays full-day 1`] = `"{"basePay":80,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:00:00+08:00","dailyPay":80,"graceUsed":false,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: intern payroll vectors (₱80/day, ₱10/h late) > intern passes 17:30 through (diverges from employee floor) 1`] = `"{"basePay":80,"computedTimeIn":"2026-07-28T08:00:00+08:00","computedTimeOut":"2026-07-28T17:30:00+08:00","dailyPay":80,"graceUsed":false,"halfDayDeduction":0,"isHalfDay":false,"lateDeduction":0,"lateHours":0,"workedHours":8}"`;
+
+exports[`T0 freeze: intern payroll vectors (₱80/day, ₱10/h late) > rejects inverted stamps and offset-less ISO 1`] = `"{"inverted":{},"offsetLess":{}}"`;
