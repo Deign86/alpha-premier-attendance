@@ -4152,4 +4152,155 @@ mod tests {
             Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())
         );
     }
+
+    #[tokio::test]
+    async fn resume_idempotent() {
+        // Todo 11 failing-first: kill-mid-PROCESSING must flip to RETRY on
+        // the next run_once; dtr_pending must survive the restart tick; a
+        // replayed manual batch must write B:E once (overwrite, missing
+        // ranges only). Pre-fix this FAILS: the 5-min prod lease treats a
+        // 3s-old lock as fresh, so the victim row stays stuck in PROCESSING.
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let state = pending_test_state().await;
+        let now = chrono::Utc::now();
+        let now_text = now.to_rfc3339();
+        // 5 PENDING rows: a normal backlog present at crash time.
+        for index in 0..5 {
+            let row_id = format!("resume-u{index}");
+            let payload =
+                format!("{{\"userId\":\"{row_id}\",\"fullName\":\"Resume {index}\"}}");
+            let key = format!("Users:{row_id}:UPSERT");
+            sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users',?,?,?,0,'PENDING',?,?,?,?)")
+                .bind(&row_id).bind("UPSERT").bind(&payload).bind(&now_text).bind(&now_text).bind(&now_text).bind(&key)
+                .execute(&state.db).await.unwrap();
+        }
+        // 1 PROCESSING row locked 3s ago: the crash victim (the claim wrote
+        // locked_at, the process died before the terminal update).
+        let stale_lock = (now - chrono::Duration::seconds(3)).to_rfc3339();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,locked_at,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users','resume-victim','UPSERT','{\"userId\":\"resume-victim\"}',0,'PROCESSING',?,?,?,?,?)")
+            .bind(&stale_lock).bind(&now_text).bind(&now_text).bind(&now_text).bind("Users:resume-victim:UPSERT")
+            .execute(&state.db).await.unwrap();
+        // 1 dtr_pending row: must survive the restart tick untouched.
+        note_dtr_pending(&state, "u-pending", "Pending Intern", &now_text)
+            .await
+            .unwrap();
+        // Restart tick against a dead endpoint: every claim fails finite
+        // (connection refused), so the drain cannot mask the recovery step.
+        let completed =
+            crate::services::sheets_sync::run_once(&state, Some("http://127.0.0.1:9/sync"))
+                .await
+                .unwrap();
+        assert_eq!(completed, 0);
+        // CHECK: the stale PROCESSING row flipped to RETRY (not stuck, not DEAD).
+        let victim: (String, i64) =
+            sqlx::query_as("SELECT status, attempts FROM sync_queue WHERE row_id='resume-victim'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(
+            victim.0, "RETRY",
+            "kill-mid-PROCESSING must resume as RETRY"
+        );
+        // No lease left stuck, nothing synced or dead-lettered by the refused endpoint.
+        let stuck: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='PROCESSING'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        let synced: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='SYNCED'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        let dead: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='DEAD'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!((stuck, synced, dead), (0, 0, 0));
+        // The recovery counter backing health `leaseRecovered` fired exactly once.
+        assert_eq!(
+            state
+                .lease_recovered
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        // dtr_pending survived the restart tick.
+        let pending: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending WHERE user_id='u-pending'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(pending, 1);
+        // --- manual batch replay idempotency (todo-6 overwrite, pure) ---
+        let tab = "LAZARO DEIGN";
+        let rows = vec![
+            vec!["SEPTEMBER".to_string()],
+            vec![
+                "9/4/2026".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
+            vec![
+                "9/5/2026".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
+            vec!["TOTAL HOURS".to_string()],
+        ];
+        let day5_in = Some("2026-09-05T01:00:00Z");
+        let day5_out = Some("2026-09-05T09:30:00Z");
+        let plan = match plan_dtr_push_in_rows(tab, &rows, "2026-09-05", day5_in, day5_out).unwrap()
+        {
+            DtrPlanOutcome::Write(plan) => plan,
+            other => panic!("expected Write for empty day, got {other:?}"),
+        };
+        // Same range+values replays to byte-identical bodies: values
+        // overwrite B:E in place, so a retry can never duplicate cells.
+        let body_a = dtr_values_batch_body(&[dtr_batch_entry(&plan)]);
+        let body_b = dtr_values_batch_body(&[dtr_batch_entry(&plan)]);
+        assert_eq!(body_a, body_b);
+        assert_eq!(
+            body_a
+                .get("valueInputOption")
+                .and_then(|v| v.as_str()),
+            Some("USER_ENTERED")
+        );
+        assert_eq!(
+            body_a
+                .get("data")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(1)
+        );
+        // Kill-mid-batchUpdate: only 9/5 landed. Retry re-plans from live
+        // reads — the landed day is InSync (no second B:E write), the
+        // missing day still Writes (missing ranges only).
+        let mut landed = rows.clone();
+        let idx = plan.row_1based - 1;
+        for (offset, value) in plan.values.iter().enumerate() {
+            landed[idx][1 + offset] = value.clone();
+        }
+        assert_eq!(
+            plan_dtr_push_in_rows(tab, &landed, "2026-09-05", day5_in, day5_out).unwrap(),
+            DtrPlanOutcome::InSync {
+                row_1based: plan.row_1based
+            }
+        );
+        assert!(matches!(
+            plan_dtr_push_in_rows(
+                tab,
+                &landed,
+                "2026-09-04",
+                Some("2026-09-04T01:00:00Z"),
+                Some("2026-09-04T09:30:00Z")
+            )
+            .unwrap(),
+            DtrPlanOutcome::Write(_)
+        ));
+    }
 }

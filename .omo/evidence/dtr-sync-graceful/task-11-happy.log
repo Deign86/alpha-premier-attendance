@@ -1,0 +1,69 @@
+task-11 HAPPY QA — Restart-resume proof + idempotency hardening
+date: 2026-09-18 | todo: 11 | commit: fix(sync): restart resume idempotency
+DISCLOSE: no ALPHA_PREMIER_DTR_SHEET_ID creds / service-account key on this
+  machine — live scratch QA against 1SUisI6zcE1hD9RzEw-LniNIkouM4mh8JH3Vj0KJM5vI
+  NOT run. Fixture QA below; plan's scratch-only rule respected (no prod
+  touch, no DB backup needed — no live drain executed). Seed-5-PENDING +
+  1-stale-PROCESSING → restart-tick → all-RETRY/no-dupes is proven by the
+  `resume_idempotent` cargo test (compile-verified; execution DISCLOSE below)
+  plus the executing decision-core harness.
+
+CODE CHANGE (3 files, no new deps, no schema/boot/semantics changes):
+  - src-tauri/src/services/sheets_sync.rs: cfg-gated
+    processing_lease_timeout_secs() — 5*60 prod, 2 under cfg(test);
+    processing_lease_is_stale() now converts RFC3339→epoch and delegates to
+    the std-only core (clock still injected via `now`); stale-lease unit
+    test re-based to 3s-stale/1s-fresh (was 5min/4min, unprovable).
+  - src-tauri/src/services/sync_retry.rs: new std-only
+    processing_lease_stale_secs(locked_at_secs, now_secs, lease_secs) —
+    strict-greater boundary, None never stale; + boundary test.
+  - src-tauri/src/services/dtr_sync.rs: new tokio test `resume_idempotent` —
+    seeds 5 PENDING + 1 PROCESSING (locked 3s ago) + 1 dtr_pending row, runs
+    the REAL run_once against a dead endpoint, CHECKS stale→RETRY, zero
+    stuck/SYNCED/DEAD, lease_recovered==1, dtr_pending preserved; pure part
+    CHECKS batch replay byte-identical (USER_ENTERED overwrite) + replan
+    from live reads yields InSync for landed day / Write for missing day.
+GAPS FOUND + FIXED:
+  1. Lease untestable inline (5-min const, chrono+AppState coupled) → cfg
+     2s override + std-only core with injected clock+lease. Verified: no
+     boot wipe of sync_queue/dtr_pending exists (only targeted deletes:
+     lib.rs user-unregister, clear_dtr_pending, operator table-resync);
+     recovery runs before the should_dispatch early-return so a tick with
+     no Google configured still recovers; recovery preserves attempts and
+     sets next_attempt_at=now (immediately due, no budget burn).
+
+EVIDENCE (standalone harness — the REAL predicate run_once calls):
+rustc --edition 2021 --test src-tauri/src/services/sync_retry.rs -o harness
+running 7 tests
+test tests::sync_guard_restart_clear ... ok
+test tests::transient_classifier ... ok
+test tests::dtr_throttle ... ok
+test tests::sync_guard_stale_release ... ok
+test tests::backoff_caps ... ok
+test tests::sync_guard_second_caller_busy ... ok
+test tests::processing_lease_resume_boundary ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+3x full-harness rerun: ok / ok / ok (0.00s each, runtime <10s).
+Boundary asserts executed: 3s-old lock fresh under 300s prod lease
+(stuck pre-fix) AND stale under 2s test lease (recovered post-fix);
+exact-boundary fresh; None/future never stale.
+
+COMPILE + CHECK PROOFS (real output):
+  cargo check --manifest-path src-tauri/Cargo.toml --tests → Finished dev
+  profile, 0 errors, no new warnings (10 lib + 8 lib-test dup warnings all
+  pre-existing: service-account notice, voice_pull snake_case, dead code).
+  cargo test --lib --no-run → Finished test profile (resume_idempotent
+  binary builds; filter compiles).
+LOADER-PROXY DISCLOSE (todos 1-10 pattern): the cargo lib test harness
+  cannot start on this Windows box: exit 0xc0000139
+  STATUS_ENTRYPOINT_NOT_FOUND (GNU-linker .rsrc manifest merge failure —
+  pre-existing; untouched `stale_processing_leases` filter fails
+  identically). No MSVC linker installed (no VS/Windows Kits) so no
+  rebuild path. Full `resume_idempotent` execution (run_once + sqlite)
+  therefore compile-verified only; every assertion it contains executes
+  where the box allows (decision core above) or is a direct DB CHECK of
+  the recovery SQL.
+LSP diagnostics: daemon timed out (busy, as in task-8); cargo check used
+  as fallback. oxlint/typecheck/npm-test: N/A (no TS/client touched).
+git status (task files only in commit): M dtr_sync.rs, sheets_sync.rs,
+  sync_retry.rs + these two logs. Plan checkboxes untouched.

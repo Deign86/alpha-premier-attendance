@@ -41,7 +41,17 @@ const SHEETS_ROW_ID_MISSING_ERROR: &str = "Google Sheets row identity is missing
 const SHEETS_ROW_ID_AMBIGUOUS_ERROR: &str = "Google Sheets row identity is ambiguous";
 const SHEETS_INVALID_PAYLOAD_ERROR: &str = "Google Sheets sync payload is invalid";
 const SHEETS_REQUEST_FAILED_ERROR: &str = "Google Sheets sync failed";
-const PROCESSING_LEASE_TIMEOUT_MINUTES: i64 = 5;
+/// Todo 11: PROCESSING-lease horizon. Prod keeps the 5-min crash-release;
+/// cfg(test) shrinks it to 2s so restart-resume proves without a real
+/// 5-min wait. The clock stays injected via the `now` param below.
+#[cfg(not(test))]
+fn processing_lease_timeout_secs() -> u64 {
+    5 * 60
+}
+#[cfg(test)]
+fn processing_lease_timeout_secs() -> u64 {
+    2
+}
 const SYNC_BATCH_SIZE: i64 = 50;
 
 /// Google API error codes surfaced to the sync queue. They intentionally
@@ -828,13 +838,15 @@ fn find_rows_to_delete(
 }
 
 fn processing_lease_is_stale(locked_at: Option<&str>, now: &DateTime<Utc>) -> bool {
-    locked_at
+    let locked_secs = locked_at
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| {
-            value.with_timezone(&Utc)
-                < *now - chrono::Duration::minutes(PROCESSING_LEASE_TIMEOUT_MINUTES)
-        })
-        .unwrap_or(false)
+        .and_then(|value| u64::try_from(value.timestamp()).ok());
+    let now_secs = u64::try_from(now.timestamp()).unwrap_or(0);
+    crate::services::sync_retry::processing_lease_stale_secs(
+        locked_secs,
+        now_secs,
+        processing_lease_timeout_secs(),
+    )
 }
 
 async fn recover_stale_processing_leases(
@@ -2988,8 +3000,9 @@ mod tests {
     #[test]
     fn stale_processing_leases_are_recovered_but_active_leases_are_not() {
         let now = Utc::now();
-        let stale = (now - ChronoDuration::minutes(5) - ChronoDuration::seconds(1)).to_rfc3339();
-        let active = (now - ChronoDuration::minutes(4)).to_rfc3339();
+        // cfg(test) lease is 2s (todo 11): 3s-old is stale, 1s-old fresh.
+        let stale = (now - ChronoDuration::seconds(3)).to_rfc3339();
+        let active = (now - ChronoDuration::seconds(1)).to_rfc3339();
 
         assert!(processing_lease_is_stale(Some(&stale), &now));
         assert!(!processing_lease_is_stale(Some(&active), &now));

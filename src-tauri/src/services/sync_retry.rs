@@ -220,7 +220,7 @@ pub const DTR_SYNC_IN_PROGRESS: &str = "DTR_SYNC_IN_PROGRESS";
 pub const SYNC_GUARD_TABLE: &str = "__sync_guard__";
 pub const SYNC_GUARD_ROW: &str = "manual_dtr_sync";
 pub const SYNC_GUARD_COMPLETED: &str = "completed";
-/// Crash-release horizon, mirroring PROCESSING_LEASE_TIMEOUT_MINUTES (5).
+/// Crash-release horizon, mirroring the 5-min PROCESSING queue lease.
 pub const SYNC_GUARD_STALE_SECS: u64 = 5 * 60;
 
 /// Pure acquire decision over the persisted guard row: releasable when there
@@ -245,6 +245,22 @@ pub fn sync_guard_row_releasable(
 /// DTR_SYNC_IN_PROGRESS is the contract todos 9-10 build UI on — keep it.
 pub fn sync_guard_busy_error(owner: &str, started_at: &str) -> String {
     format!("{DTR_SYNC_IN_PROGRESS}: sync already in progress (owner={owner}, startedAt={started_at})")
+}
+
+/// Todo 11: PROCESSING-lease staleness over epoch seconds. The queue layer
+/// converts RFC3339 `locked_at` (missing/unparseable → None → never stale,
+/// mirroring the old inline check). Strictly greater, so a lock exactly
+/// lease-old still counts as fresh. Clock and lease both injectable, so
+/// restart-resume proves without a real 5-min wait.
+pub fn processing_lease_stale_secs(
+    locked_at_secs: Option<u64>,
+    now_secs: u64,
+    lease_secs: u64,
+) -> bool {
+    match locked_at_secs {
+        None => false,
+        Some(locked) => now_secs.saturating_sub(locked) > lease_secs,
+    }
 }
 /// std-only file so the bucket stays dependency-free and virtual-clock
 /// injectable): at most 50 DTR cell-writes AND at most 10 batch calls per
@@ -432,7 +448,8 @@ mod tests {
         DtrThrottleBucket, GENERIC_BACKOFF_CAP_SECS, SYNC_GUARD_COMPLETED,
         SYNC_GUARD_STALE_SECS, TRANSIENT_BACKOFF_BASE_SECS,
         TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
-        split_dtr_batch, sync_guard_busy_error, sync_guard_row_releasable,
+        processing_lease_stale_secs, split_dtr_batch, sync_guard_busy_error,
+        sync_guard_row_releasable,
     };
 
     #[test]
@@ -490,8 +507,23 @@ mod tests {
     }
 
     #[test]
-    fn sync_guard_restart_clear() {
-        // Plan todo 8 restart path: clean boot marks the row completed, so
+    fn processing_lease_resume_boundary() {
+        // Todo 11: the exact predicate run_once recovery uses. A 3s-old
+        // lock is fresh under the 5-min prod lease (stuck pre-fix) and
+        // stale under the 2s test lease (recovered post-fix).
+        assert!(!processing_lease_stale_secs(Some(1000), 1003, 5 * 60));
+        assert!(processing_lease_stale_secs(Some(1000), 1003, 2));
+        // Fresh locks hold under both horizons; exact-boundary is fresh.
+        assert!(!processing_lease_stale_secs(Some(1000), 1001, 2));
+        assert!(!processing_lease_stale_secs(Some(1000), 1002, 2));
+        assert!(processing_lease_stale_secs(Some(1000), 1003, 2));
+        // Missing lock never reads stale; future lock (skew) never stale.
+        assert!(!processing_lease_stale_secs(None, 1003, 2));
+        assert!(!processing_lease_stale_secs(Some(2000), 1000, 2));
+    }
+
+    #[test]
+    fn sync_guard_restart_clear() {        // Plan todo 8 restart path: clean boot marks the row completed, so
         // the next acquire succeeds even though a sync held it before the
         // kill. A completed row with a fresh timestamp still releases.
         assert!(sync_guard_row_releasable(
