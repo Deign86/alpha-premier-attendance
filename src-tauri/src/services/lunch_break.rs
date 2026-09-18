@@ -1,17 +1,19 @@
 use chrono::{DateTime, Datelike, Duration, TimeZone};
 use chrono_tz::{Asia::Manila, Tz};
 
-/// Fixed unpaid lunch break (12:00–13:00 Manila), used by REPORTING only.
+/// Fixed unpaid lunch break (12:00–13:00 Manila).
 ///
-/// Post-0.1.74 the payroll engines derive paid hours 1:1 from the recorded DTR
-/// time-in/time-out (`ceiling_hours(elapsed)`, no lunch term), so this window is
-/// deliberately NOT subtracted from payroll. Only `paid_work_hours` is still
-/// live, for the attendance-report "TOTAL HOURS" column
-/// (`reporting::elapsed_hours`), which stays lunch-net; the other helpers here
-/// are currently referenced only by this module's tests. Reports and payroll
-/// therefore intentionally disagree on every lunch-spanning shift — do not
-/// "reconcile" them by re-adding the lunch term to payroll, and do not assume
-/// this window applies to payroll.
+/// This window IS subtracted from paid hours. Both payroll engines
+/// (`intern_payroll::calculate`, `employee_payroll::calculate`) derive their
+/// paid seconds from `paid_work_seconds` — elapsed time minus this window — and
+/// the attendance-report "TOTAL HOURS" column (`reporting::elapsed_hours`) uses
+/// the same lunch-net basis, so reports and payroll agree on every
+/// lunch-spanning shift. A 09:00–17:00 stamp pays 7 hours; the intern
+/// 08:00–17:00 day pays 8 hours (9 elapsed - 1 lunch).
+///
+/// Do not add or remove the lunch term on only one side of that pair: both are
+/// already lunch-net. `paid_work_hours_ceiled` is currently referenced only by
+/// this module's tests.
 ///
 /// Overnight/multi-day spans subtract EVERY touched day's window (a 22:00 to
 /// next-day 14:00 shift loses one hour per day crossed). Night shifts are

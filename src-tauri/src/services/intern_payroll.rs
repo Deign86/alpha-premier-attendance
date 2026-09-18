@@ -114,9 +114,7 @@ mod tests {
     use super::*;
     #[test]
     fn worked_hours_are_gross_elapsed_and_keep_fixed_daily_pay() {
-        // 08:00–17:00 → 8 paid hours (post-0.1.74: pay derives 1:1 from
-        // recorded DTR time-in/time-out; the 12:00–13:00 lunch hour is no
-        // longer subtracted from paid hours).
+        // 08:00–17:00 → 8 paid hours (9h elapsed minus 1h lunch 12:00–13:00).
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:00:00+08:00",
