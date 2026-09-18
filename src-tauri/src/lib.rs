@@ -3986,16 +3986,40 @@ async fn admin_sync_now(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
+    // Plan todo 8: shared in-progress guard — the second concurrent manual
+    // caller gets DTR_SYNC_IN_PROGRESS; the flag is released on every exit.
+    if let Err(busy) = crate::state::sync_guard_try_acquire(
+        &state.db,
+        state.sync_in_progress.as_ref(),
+        "admin_sync_now",
+    )
+    .await
+    {
+        return Err(busy);
+    }
     // T10: drain the queue in batches so "Sync now" cannot report partial
     // work as complete; the pass cap backstops against a poison-item loop.
     let mut processed_total: u64 = 0;
+    let mut drain_error: Option<String> = None;
     for _ in 0..20 {
-        let processed = crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
-            .await?;
-        processed_total += processed;
-        if processed == 0 {
-            break;
+        match crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
+            .await
+        {
+            Ok(processed) => {
+                processed_total += processed;
+                if processed == 0 {
+                    break;
+                }
+            }
+            Err(error) => {
+                drain_error = Some(error);
+                break;
+            }
         }
+    }
+    crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    if let Some(error) = drain_error {
+        return Err(error);
     }
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING','RETRY')")
         .fetch_one(&state.db)
@@ -4040,7 +4064,33 @@ async fn admin_sync_intern_dtr(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let report = crate::services::dtr_sync::manual_sync_intern_dtr(&state, Some(&app), user_id.as_deref()).await?;
+    // Plan todo 8: kill-switch still blocks manual entry before the guard
+    // is touched, so a disabled device never holds the guard. Per-row sync
+    // routes through this same command (user_id Some) — one owner per scope.
+    if !crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await {
+        return Err(
+            "Intern DTR sync is disabled on this device (Admin → Data → DTR sync toggle)"
+                .to_string(),
+        );
+    }
+    let owner = match user_id.as_deref() {
+        Some(id) => format!("admin_sync_intern_dtr:user:{id}"),
+        None => "admin_sync_intern_dtr:bulk".to_string(),
+    };
+    if let Err(busy) = crate::state::sync_guard_try_acquire(
+        &state.db,
+        state.sync_in_progress.as_ref(),
+        &owner,
+    )
+    .await
+    {
+        return Err(busy);
+    }
+    let report =
+        crate::services::dtr_sync::manual_sync_intern_dtr(&state, Some(&app), user_id.as_deref())
+            .await;
+    crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    let report = report?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 

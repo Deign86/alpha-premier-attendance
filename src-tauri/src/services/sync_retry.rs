@@ -206,7 +206,46 @@ pub fn split_dtr_batch(entry_bytes: &[usize]) -> Vec<(usize, usize)> {
     chunks
 }
 
-/// DTR-spreadsheet-only dispatcher throttle (plan todo 7 — kept in this
+/// Shared in-progress guard (plan todo 8 — frozen primitive): ONE in-memory
+/// AtomicBool owner (fast mutual exclusion, lives on AppState) + ONE
+/// persisted `sync_state` row owner/startedAt (health + crash detection).
+/// Covers admin_sync_now + admin_sync_intern_dtr + per-row sync (the latter
+/// routes through admin_sync_intern_dtr with a user id); the second
+/// concurrent caller gets DTR_SYNC_IN_PROGRESS. Clean restart always clears
+/// in-memory and marks the persisted row completed; a crash-held row
+/// releases after 5-min stale, mirroring the PROCESSING lease recovery.
+/// Kill-switch (is_dtr_sync_enabled) still blocks manual entry before the
+/// guard is touched. Kiosk scans never consult this guard.
+pub const DTR_SYNC_IN_PROGRESS: &str = "DTR_SYNC_IN_PROGRESS";
+pub const SYNC_GUARD_TABLE: &str = "__sync_guard__";
+pub const SYNC_GUARD_ROW: &str = "manual_dtr_sync";
+pub const SYNC_GUARD_COMPLETED: &str = "completed";
+/// Crash-release horizon, mirroring PROCESSING_LEASE_TIMEOUT_MINUTES (5).
+pub const SYNC_GUARD_STALE_SECS: u64 = 5 * 60;
+
+/// Pure acquire decision over the persisted guard row: releasable when there
+/// is no row, the row is marked completed (clean restart), the start instant
+/// is 5+ min old (crash), or the row is corrupt (missing/garbled timestamp —
+/// a corrupt row must never wedge manual sync forever). Epoch seconds keep
+/// this std-only and virtual-clock injectable; the DB layer converts RFC3339.
+pub fn sync_guard_row_releasable(
+    stored_owner: Option<&str>,
+    stored_started_at_secs: Option<u64>,
+    now_secs: u64,
+) -> bool {
+    match (stored_owner, stored_started_at_secs) {
+        (None, _) => true,
+        (Some(owner), _) if owner == SYNC_GUARD_COMPLETED => true,
+        (Some(_), None) => true,
+        (Some(_), Some(started)) => now_secs.saturating_sub(started) >= SYNC_GUARD_STALE_SECS,
+    }
+}
+
+/// Busy error for the second concurrent caller. The literal code
+/// DTR_SYNC_IN_PROGRESS is the contract todos 9-10 build UI on — keep it.
+pub fn sync_guard_busy_error(owner: &str, started_at: &str) -> String {
+    format!("{DTR_SYNC_IN_PROGRESS}: sync already in progress (owner={owner}, startedAt={started_at})")
+}
 /// std-only file so the bucket stays dependency-free and virtual-clock
 /// injectable): at most 50 DTR cell-writes AND at most 10 batch calls per
 /// 60s fixed window. Writes/min is the binding quota (60 coalesced rows ≈
@@ -351,10 +390,84 @@ pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str
 mod tests {
     use super::{
         DTR_THROTTLE_CALLS_PER_MIN, DTR_THROTTLE_WINDOW_MS, DTR_THROTTLE_WRITES_PER_MIN,
-        DtrThrottleBucket, GENERIC_BACKOFF_CAP_SECS, TRANSIENT_BACKOFF_BASE_SECS,
+        DtrThrottleBucket, GENERIC_BACKOFF_CAP_SECS, SYNC_GUARD_COMPLETED,
+        SYNC_GUARD_STALE_SECS, TRANSIENT_BACKOFF_BASE_SECS,
         TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
-        split_dtr_batch,
+        split_dtr_batch, sync_guard_busy_error, sync_guard_row_releasable,
     };
+
+    #[test]
+    fn sync_guard_second_caller_busy() {
+        // Plan todo 8 happy path: a freshly-held row (10s old) is NOT
+        // releasable, and the busy error carries the frozen code.
+        assert!(!sync_guard_row_releasable(
+            Some("admin_sync_now"),
+            Some(1000),
+            1010
+        ));
+        let busy = sync_guard_busy_error("admin_sync_now", "2026-09-18T00:00:10+00:00");
+        assert!(
+            busy.contains(super::DTR_SYNC_IN_PROGRESS),
+            "second caller must get DTR_SYNC_IN_PROGRESS, got {busy}"
+        );
+        assert!(busy.contains("admin_sync_now"));
+        // Boundary: exactly 300s old releases; 299s still holds.
+        assert!(!sync_guard_row_releasable(
+            Some("admin_sync_intern_dtr:bulk"),
+            Some(1000),
+            1000 + SYNC_GUARD_STALE_SECS - 1
+        ));
+        assert!(sync_guard_row_releasable(
+            Some("admin_sync_intern_dtr:bulk"),
+            Some(1000),
+            1000 + SYNC_GUARD_STALE_SECS
+        ));
+        // Future-dated start (clock skew) never reads as stale.
+        assert!(!sync_guard_row_releasable(
+            Some("admin_sync_now"),
+            Some(2000),
+            1000
+        ));
+    }
+
+    #[test]
+    fn sync_guard_stale_release() {
+        // Plan todo 8 crash path: 6-min-old row releases like a stale lease.
+        assert!(sync_guard_row_releasable(
+            Some("admin_sync_intern_dtr:user:INT-1"),
+            Some(1000),
+            1000 + 6 * 60
+        ));
+        // No row yet, completed row, and corrupt rows (no timestamp) all
+        // release — nothing may wedge manual sync forever.
+        assert!(sync_guard_row_releasable(None, None, 9999));
+        assert!(sync_guard_row_releasable(
+            Some(SYNC_GUARD_COMPLETED),
+            Some(1000),
+            1010
+        ));
+        assert!(sync_guard_row_releasable(Some("admin_sync_now"), None, 1010));
+        assert_eq!(SYNC_GUARD_STALE_SECS, 5 * 60);
+    }
+
+    #[test]
+    fn sync_guard_restart_clear() {
+        // Plan todo 8 restart path: clean boot marks the row completed, so
+        // the next acquire succeeds even though a sync held it before the
+        // kill. A completed row with a fresh timestamp still releases.
+        assert!(sync_guard_row_releasable(
+            Some(SYNC_GUARD_COMPLETED),
+            Some(5000),
+            5001
+        ));
+        // ...while a genuinely fresh active row still blocks (no
+        // clear-then-immediately-busy regression).
+        assert!(!sync_guard_row_releasable(
+            Some("admin_sync_now"),
+            Some(5000),
+            5001
+        ));
+    }
 
     #[test]
     fn dtr_throttle() {

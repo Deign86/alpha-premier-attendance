@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -200,11 +200,17 @@ pub struct AppState {
     /// of re-provisioning on every pass; the authoritative IDs are persisted
     /// in `data_dir/google-sheets-state.json`.
     pub google_sheets_target: Arc<tokio::sync::RwLock<Option<GoogleSheetsTarget>>>,
-    /// Plan todo 7: DTR-spreadsheet-only dispatch throttle (50 writes/min
+    /// Plan todo 8: DTR-spreadsheet-only dispatch throttle (50 writes/min
     /// + ≤10 batch calls/min). Lives here so the quota survives across
     /// 30s ticks; short lock-take-unlock admissions keep it contention-free
     /// under the single queue loop (concurrency 1, mutex as backstop).
     pub dtr_throttle: Arc<tokio::sync::Mutex<DtrThrottleBucket>>,
+    /// Plan todo 8 (frozen): in-memory half of the shared in-progress guard.
+    /// Fast mutual exclusion across admin_sync_now + admin_sync_intern_dtr +
+    /// per-row sync; the persisted half is the sync_state row
+    /// (__sync_guard__/manual_dtr_sync). Fresh false on every boot — a
+    /// restart can never inherit a held flag.
+    pub sync_in_progress: Arc<AtomicBool>,
     pub tts: Arc<TtsManager>,
     pub updater: UpdaterConfig,
 }
@@ -258,6 +264,11 @@ impl AppState {
             .await?;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&db).await?;
         run_migrations(&db).await?;
+        // Plan todo 8: clean restart always marks the persisted guard row
+        // completed (in-memory starts false by construction above). A
+        // kill-mid-sync therefore auto-clears on next boot; only a live
+        // fresh row blocks, and only for its 5-min stale horizon.
+        sync_guard_clear_on_boot(&db).await;
         Ok(Self {
             db,
             db_path,
@@ -282,6 +293,7 @@ impl AppState {
             dtr_throttle: Arc::new(tokio::sync::Mutex::new(DtrThrottleBucket::new(
                 wall_now_ms(),
             ))),
+            sync_in_progress: Arc::new(AtomicBool::new(false)),
             tts: Arc::new(TtsManager::new(tts)),
             updater,
         })
@@ -290,6 +302,132 @@ impl AppState {
     pub fn next_sequence(&self) -> u64 {
         self.bus.sequence.fetch_add(1, Ordering::Relaxed) + 1
     }
+}
+
+/// Plan todo 8 (frozen guard API — todos 9-10 build UI on it): the DB half
+/// of the shared in-progress guard. Owner strings: "admin_sync_now",
+/// "admin_sync_intern_dtr:bulk", "admin_sync_intern_dtr:user:<id>".
+fn sync_guard_epoch_secs(started_at: &str) -> Option<u64> {
+    chrono::DateTime::parse_from_rfc3339(started_at)
+        .ok()
+        .and_then(|value| u64::try_from(value.timestamp()).ok())
+}
+
+fn sync_guard_now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+async fn sync_guard_read_row(db: &SqlitePool) -> (Option<String>, Option<String>) {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT last_synced_hash, last_synced_at FROM sync_state WHERE table_name = ? AND row_id = ?",
+    )
+    .bind(crate::services::sync_retry::SYNC_GUARD_TABLE)
+    .bind(crate::services::sync_retry::SYNC_GUARD_ROW)
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
+    match row {
+        Some((owner, started_at)) => (Some(owner), Some(started_at)),
+        None => (None, None),
+    }
+}
+
+async fn sync_guard_write_row(db: &SqlitePool, owner: &str, started_at: &str) {
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_state (table_name TEXT NOT NULL, row_id TEXT NOT NULL, last_synced_hash TEXT NOT NULL, sheet_row_number INTEGER, last_synced_at TEXT NOT NULL, PRIMARY KEY (table_name, row_id))",
+    )
+    .execute(db)
+    .await;
+    let _ = sqlx::query(
+        "INSERT INTO sync_state (table_name, row_id, last_synced_hash, sheet_row_number, last_synced_at) VALUES (?, ?, ?, NULL, ?) \
+         ON CONFLICT(table_name, row_id) DO UPDATE SET last_synced_hash = excluded.last_synced_hash, last_synced_at = excluded.last_synced_at",
+    )
+    .bind(crate::services::sync_retry::SYNC_GUARD_TABLE)
+    .bind(crate::services::sync_retry::SYNC_GUARD_ROW)
+    .bind(owner)
+    .bind(started_at)
+    .execute(db)
+    .await;
+}
+
+/// Acquire the shared guard. In-memory AtomicBool first (fast path); then
+/// the persisted row with 5-min stale release. The second caller gets
+/// DTR_SYNC_IN_PROGRESS and the flag is rolled back so a denial never
+/// leaves the guard held. Stale/corrupt/completed rows are claimed by
+/// overwriting owner/startedAt.
+pub async fn sync_guard_try_acquire(
+    db: &SqlitePool,
+    flag: &AtomicBool,
+    owner: &str,
+) -> Result<(), String> {
+    use crate::services::sync_retry::{sync_guard_busy_error, sync_guard_row_releasable};
+    if flag
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        let (holder, started) = sync_guard_read_row(db).await;
+        return Err(sync_guard_busy_error(
+            holder.as_deref().unwrap_or("unknown"),
+            started.as_deref().unwrap_or("unknown"),
+        ));
+    }
+    let now_secs = sync_guard_now_epoch_secs();
+    let (stored_owner, stored_started) = sync_guard_read_row(db).await;
+    let stored_secs = stored_started
+        .as_deref()
+        .and_then(sync_guard_epoch_secs);
+    if !sync_guard_row_releasable(stored_owner.as_deref(), stored_secs, now_secs) {
+        flag.store(false, Ordering::SeqCst);
+        return Err(sync_guard_busy_error(
+            stored_owner.as_deref().unwrap_or("unknown"),
+            stored_started.as_deref().unwrap_or("unknown"),
+        ));
+    }
+    sync_guard_write_row(db, owner, &chrono::Utc::now().to_rfc3339()).await;
+    Ok(())
+}
+
+/// Release the guard: persisted row back to completed, then the flag.
+/// DB errors are log-only — the flag must never stay held after release.
+pub async fn sync_guard_release(db: &SqlitePool, flag: &AtomicBool) {
+    sync_guard_write_row(
+        db,
+        crate::services::sync_retry::SYNC_GUARD_COMPLETED,
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    flag.store(false, Ordering::SeqCst);
+}
+
+/// Boot clear: a restart (clean or kill-mid-sync) always marks the row
+/// completed. Log-only by contract — startup must survive DB errors.
+pub async fn sync_guard_clear_on_boot(db: &SqlitePool) {
+    sync_guard_write_row(
+        db,
+        crate::services::sync_retry::SYNC_GUARD_COMPLETED,
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+}
+
+/// Active holder for the todo-10 health contract: Some((owner, startedAt))
+/// only while a fresh (non-stale, non-completed) row is held.
+pub async fn sync_guard_status(db: &SqlitePool) -> Option<(String, String)> {
+    use crate::services::sync_retry::{SYNC_GUARD_COMPLETED, sync_guard_row_releasable};
+    let (owner, started) = sync_guard_read_row(db).await;
+    let owner = owner?;
+    let started_at = started?;
+    if owner == SYNC_GUARD_COMPLETED {
+        return None;
+    }
+    let stored_secs = sync_guard_epoch_secs(&started_at);
+    if sync_guard_row_releasable(Some(&owner), stored_secs, sync_guard_now_epoch_secs()) {
+        return None;
+    }
+    Some((owner, started_at))
 }
 
 #[cfg(test)]
