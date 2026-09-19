@@ -18,44 +18,45 @@ Administrative workspace for managing employee and intern profiles, RFID card ma
 
 ## Driving it with Tauri MCP
 
+> IPC route (live-proved): `tauri_ipc_execute_command` drops command args.
+> Drive backend commands via `tauri_webview_execute_js` wrapping
+> `window.__TAURI__.core.invoke('<command>', { camelCaseArgs })` with arg keys
+> exactly as in `client/src/tauri-api.ts`.
+
 Preconditions:
 - Desktop app is running and responsive on Tauri MCP bridge port 9223.
 - Database contains active system configuration with admin PIN configured.
 
-- **Authenticate Session**: Unlock admin panel with PIN.
-  ```
-  tool: tauri_ipc_execute_command, args: {
-      "command": "setup_unlock",
-      "args": { "pin": "293906" }
-    }
-  ```
-  *Observable result*: Returns `{ "success": true, "token": "<session_token>", "expiresAt": "..." }`.
+- **Authenticate Session**: Unlock admin panel with PIN (`setup_unlock` or the
+  `admin_unlock` alias; args `{ "pin": "293906" }`).
+  *Observable result*: Returns `{ "success": true, "token": "<session_token>",
+  "expiresAt": "..." }` (~15 min fixed expiry, non-sliding). Failures are
+  `INVALID_ADMIN_PIN` / `ADMIN_AUTH_REQUIRED` / `ADMIN_SESSION_EXPIRED` —
+  never `UNAUTHORIZED`. Check liveness anytime with `admin_get_session`.
 
-- **List Users**: Query employee and intern roster.
-  ```
-  tool: tauri_ipc_execute_command, args: {
-      "command": "admin_list_users",
-      "args": { "token": "<session_token>" }
-    }
-  ```
-  *Observable result*: Returns `{ "success": true, "users": [ ... ] }` containing all registered workers.
+- **List Users**: Query employee and intern roster
+  (`admin_list_users`, alias `admin_users`; args `{ "token": ... }`).
+  *Observable result*: Returns `{ "success": true, "users": [ ... ] }` with
+  keys `userId, rfidUid, fullName, employeeType (INTERN|EMPLOYEE — never
+  REGULAR), gender (MALE|FEMALE|null — no OTHER), status, photoUrl`.
 
-- **Create or Update Worker Profile**: Add worker with explicit role and rate.
-  ```
-  tool: tauri_ipc_execute_command, args: {
-      "command": "admin_upsert_user",
-      "args": {
-        "token": "<session_token>",
-        "user": {
-          "employeeId": "EMP-VERIFY-001",
-          "fullName": "Tauri Verification Worker",
-          "workerType": "REGULAR",
-          "rfidUid": "CARD-VERIFY-001"
-        }
-      }
-    }
-  ```
+- **Create or Update Worker Profile**: `admin_upsert_user` with
+  `{ "token": ..., "user": { "userId": "...", "fullName": "...",
+  "rfidUid": "...", "employeeType": "EMPLOYEE", "status": "ACTIVE" } }`
+  (`userId`, not `employeeId`; no `workerType`/`role`/`rate` keys).
+  Delete via `admin_delete_user` (`{ "token", "userId" }`).
   *Observable result*: Worker is stored in SQLite and appears in the roster query.
+
+- **Photos**: `upload_photo` (`{ "token", "userId", "base64Data" }`) stores
+  `{user_id}.webp` (JPEG/PNG/WebP input, 500 KiB / 4096×4096 caps).
+
+- **Attendance**: `admin_attendance` / `admin_list_attendance`
+  (`{ "token", "date": "YYYY-MM-DD" }`); edits via `admin_update_attendance`
+  (`{ "token", "attendanceId", "payload" }`), backfills via
+  `admin_create_backdated_attendance` (`{ "token", "payload" }`), deletes via
+  `admin_delete_attendance` (`{ "token", "attendanceId", "date" }`). Audit rows
+  cover create/update/upsert and user delete — attendance delete writes
+  sync-queue rows only, no audit row.
 
 - **Capture Visual & DOM Proof**:
   ```
@@ -65,6 +66,8 @@ Preconditions:
 
 ## Gotchas
 
-- Session tokens expire automatically after the configured inactivity timeout. Re-authenticate if an `UNAUTHORIZED` error is returned.
-- Gender and worker type values must conform to strict domain enums (`MALE` / `FEMALE` / `OTHER`, `REGULAR` / `INTERN`).
+- Session tokens expire exactly 15 min after unlock (fixed, non-sliding).
+  Re-authenticate on `ADMIN_SESSION_EXPIRED` / `ADMIN_AUTH_REQUIRED`.
+- Gender is `MALE` / `FEMALE` / null only; worker type is `INTERN` /
+  `EMPLOYEE` only. Any other value fails validation.
 

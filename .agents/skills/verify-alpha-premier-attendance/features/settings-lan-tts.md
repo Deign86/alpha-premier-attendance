@@ -4,44 +4,47 @@ Configuration workspace for speech synthesis engine selection, audio volume/rate
 
 ## Sub-features
 
-- `SETTINGS-TTS-ENGINE`: Toggle between native Windows SAPI voice synthesizer and offline Piper neural TTS (`.onnx` models).
-- `SETTINGS-TTS-TEST`: Live speech test with custom announcement strings and volume/pitch controls.
-- `SETTINGS-LAN`: Start, stop, and monitor embedded Axum REST and Server-Sent Events (SSE) server for multi-device sync.
-- `SETTINGS-OFFICE`: Company address and office display name configuration for exported documents.
+- `SETTINGS-TTS-ENGINE`: Offline-first chain cloned-bea → Piper neural TTS (`.onnx` models) → Windows SAPI (engine from `tts.engine` config or per-call `options.engine`; default `cloned-bea`).
+- `SETTINGS-TTS-TEST`: Fixed-sample Test Voice with volume/rate sliders (no engine dropdown, no pitch slider, no custom strings in the native panel).
+- `SETTINGS-LAN`: Read-only Axum REST + SSE viewer (`lan_status`/`lan_start`/`lan_stop`), surfaced in the Admin Data tab's Live Attendance panel. Default port **4173**.
+- `SETTINGS-OFFICE`: Company/office identity from `[office]` config.toml only (read-only in-app via `get_config`).
 
 ## How to get to it (user POV)
 
-- From the Kiosk or Admin workspace, click the "Settings" gear icon in the header.
-- Select the "Voice & Audio" or "Network & Sync" tab.
+- Open `/admin` (PIN unlock) and pick the "Voice announcements" tab for voice,
+  or the "Data and backup" tab's Live Attendance panel for the LAN viewer.
+  There is no Settings gear icon and no "Voice & Audio" / "Network & Sync" tabs.
 
 ## Driving it with Tauri MCP
+
+> IPC route (live-proved): `tauri_ipc_execute_command` drops command args.
+> Drive backend commands via `tauri_webview_execute_js` wrapping
+> `window.__TAURI__.core.invoke('<command>', { camelCaseArgs })` with arg keys
+> exactly as in `client/src/tauri-api.ts`.
 
 Preconditions:
 - Desktop app is running and connected via Tauri MCP Bridge on port 9223.
 
-- **Check TTS Synthesizer Status**:
-  ```
-  tool: tauri_ipc_execute_command, args: { "command": "tts_status" }
-  ```
-  *Observable result*: Returns `{ "success": true, "engine": "piper" | "sapi", "available": true }`.
+- **Check TTS Synthesizer Status**: `tts_status` (no args).
+  *Observable result*: Returns `{ enabled, engine, piperAvailable, piperPath,
+  voiceModelAvailable, voiceModelPath, systemSapiAvailable, isSpeaking }`
+  (no `success`/`available` keys). Live: `enabled:true, engine:"cloned-bea"`.
 
-- **Execute Test Voice Synthesis**:
-  ```
-  tool: tauri_ipc_execute_command, args: {
-      "command": "tts_speak",
-      "args": {
-        "text": "Time in recorded for Test Employee",
-        "options": { "rate": 1.0, "volume": 0.8 }
-      }
-    }
-  ```
-  *Observable result*: Returns `{ "success": true, "played": true }` or status confirmation without crashing audio thread.
+- **Execute Test Voice Synthesis**: `tts_speak` with
+  `{ "text": "...", "options": { "rate": 1.0, "volume": 0.8 } }`
+  (`options` may also carry `engine`/`voiceModel`).
+  *Observable result*: Returns `{ "success": true,
+  "engineUsed": "cloned-bea"|"piper"|"system"|"none" }` (no `played` key).
+  Audible on the machine's speakers.
 
-- **Inspect LAN Server Diagnostics**:
-  ```
-  tool: tauri_ipc_execute_command, args: { "command": "lan_status" }
-  ```
-  *Observable result*: Returns `{ "enabled": boolean, "port": 8080, "bindAddress": "..." }`.
+- **Inspect LAN Server Diagnostics**: `lan_status` (no args).
+  *Observable result*: 20+ keys incl. `success, state, port (4173 — never
+  8080), bindAddress, viewerUrl (http://<lan-ip>:4173/attendance),
+  lanIps, activeLanIp, guidance, connectedSseClients`. Bind is unset by
+  default (wildcard-bind at runtime; shareable URL uses detected LAN IP).
+
+- **Office identity**: `get_config` → `office.companyName` /
+  `officeDisplayFull` (Tektite East Tower). Read-only; no setter exists.
 
 - **Capture Visual Proof**:
   ```
@@ -51,6 +54,10 @@ Preconditions:
 
 ## Gotchas
 
-- If Piper ONNX voice model files are missing or unreadable, the system automatically falls back to Windows SAPI to prevent silent audio failures.
-- LAN server bind address defaults to local subnet (`0.0.0.0` or detected LAN IP) on port 8080.
+- Fallback chain is cloned carrier → worker/name clip → live Piper → configured
+  engine (`auto`/`cloned-bea` falls back; `piper`-only and `system`-only do not).
+  If Piper ONNX models are missing in `auto` mode, the system falls back to SAPI.
+- LAN server bind address is unset by default (auto-detect); wildcard-bind at
+  runtime on port 4173. Phones stuck on "Connecting…" need the Windows Firewall
+  rule for TCP 4173 (the viewer panel prints the exact `netsh` command).
 

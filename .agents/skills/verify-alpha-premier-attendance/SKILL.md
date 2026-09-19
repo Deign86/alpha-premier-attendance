@@ -53,6 +53,24 @@ Rules (live-proved 2026-09-19):
    the parent chain is yours). Plain `taskkill` without `/F` sends WM_CLOSE,
    which only hides the app to the tray — the process keeps running.
 
+## CUA driving notes (live-proved 2026-09-19)
+
+OS-level clicks via `cua-driver` land on WebView2 content with
+`delivery_mode:"foreground"` (background synthetic events are dropped).
+Known boundaries, all verified against the live app:
+- WebView2 content exposes no UIA elements — click by screenshot pixels from
+  the same `get_window_state` capture you act on.
+- Pin geometry first (`set_window_frame`, readback-confirmed); captures change
+  size otherwise and every coordinate goes stale.
+- Re-audit element rects via Tauri immediately before clicking: scroll/reflow
+  between turns moves targets (stale-rect misses confirmed).
+- Keyboard input (keys, `type_text`, paste) does NOT reach web content —
+  focus lands but React state never commits. CUA owns clicks/decisions;
+  text-bearing steps go through `core.invoke`. This is a harness gap, not an
+  app bug: admin panels are unreachable to pure-CUA (PIN entry impossible).
+- Verify every CUA action via Tauri DOM immediately after (effect is always
+  reported `unverifiable`).
+
 ## Doctor
 
 Before driving features or when troubleshooting, run the read-only doctor check:
