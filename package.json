@@ -41,7 +41,9 @@
     "ui:start": "node scripts/ui-skills.mjs start",
     "ui:categories": "node scripts/ui-skills.mjs categories",
     "ui:list": "node scripts/ui-skills.mjs list",
-    "ui:get": "node scripts/ui-skills.mjs get"
+    "ui:get": "node scripts/ui-skills.mjs get",
+    "jev:eval": "npx tsx tools/jev/cli.ts",
+    "jev:test": "node shared/node_modules/vitest/vitest.mjs run tools/jev"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
