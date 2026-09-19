@@ -996,3 +996,39 @@ unrelated to the change; CI (`windows-latest`, MSVC) runs the same 296 tests suc
 
 
 
+
+## CUA-JEV wave gates (contract only, no product code; ses_f483e9013ffewqvkvimhi6TOT7)
+
+Refs (reuse, not duplicate): launch/doctor/cleanup =
+`.agents/skills/verify-alpha-premier-attendance/SKILL.md`
+(`npm run tauri:dev` ready = Vite `127.0.0.1:5173` + bridge `ws://127.0.0.1:9223` +
+window; cleanup = `tauri_driver_session stop` + kill by exact PID);
+scripts = `package.json` (`doctor:mcp`, `verify:mcp`, `jev:eval`, `jev:test`);
+JEV gate = `tools/jev/policy.ts:16` (`JEV_ENABLED === 'true'`) +
+`tools/jev/client.ts:36` / `cli.ts:13` (`TYPESAFE_API_KEY` env-only) + wave
+threshold 0.8 (code default 0.7); target = Tauri main `1280x800`,
+devUrl `127.0.0.1:5173`, bridge `ws://127.0.0.1:9223`, API `:3001`.
+Contract = `tools/cua/scenarios.contract.md`. No product `.ts`/`.mjs`, no new
+deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
+
+- [ ] G1 doctor: bridge pre-flight passes before any drive.
+  CHECK: npm run doctor:mcp
+  EXPECT: exit 0 with bridge port 9223 responsive (or a clear offline report with liveBridge.active false, treated as contract-only, not live proof)
+  EVIDENCE: pending
+- [ ] G2 target: live app pinned to the wave target before scenarios run.
+  CHECK: powershell -NoProfile -Command "Test-NetConnection -ComputerName 127.0.0.1 -Port 5173 | Select-Object TcpTestSucceeded; Test-NetConnection -ComputerName 127.0.0.1 -Port 9223 | Select-Object TcpTestSucceeded"
+  EXPECT: TcpTestSucceeded True on 5173 (Vite devUrl) and 9223 (bridge) with the main window pinned to 1280x800 via set_window_frame readback
+  EVIDENCE: pending
+- [ ] G3 live-assert: CUA drives, JEV asserts text-only per the contract.
+  CHECK: npm run jev:test
+  EXPECT: exit 0 (JEV unit contract green; live run additionally records decision/confidence/status/model/latencyMs per scenario from DOM text + logs tail, never screenshot pixels)
+  EVIDENCE: pending
+- [ ] G4 verdict: all three contract scenarios reach binary PASS.
+  CHECK: node -e "const fs=require('fs');const s=fs.readFileSync('tools/cua/scenarios.contract.md','utf8');for(const id of ['CUA-JEV-01','CUA-JEV-02','CUA-JEV-03','PASS']){if(!s.includes(id))process.exit(1);}console.log('contract ids ok');"
+  EXPECT: prints contract ids ok (live: CUA-JEV-01 success, CUA-JEV-02 unknown + cooldown, CUA-JEV-03 checkout to return, each JEV status ok with confidence >= 0.8)
+  EVIDENCE: pending
+- [ ] G5 evidence: per-scenario artifacts exist under evidence/cua-jev/<id>/.
+  CHECK: powershell -NoProfile -Command "Get-ChildItem evidence/cua-jev/CUA-JEV-01,evidence/cua-jev/CUA-JEV-02,evidence/cua-jev/CUA-JEV-03 | Format-Table Name,Length"
+  EXPECT: each evidence/cua-jev/<id>/ holds a screenshot plus a DOM/IPC capture plus the JEV log tail (bathroom state desktop-only)
+  EVIDENCE: pending
+
