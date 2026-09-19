@@ -1,0 +1,9 @@
+{
+  "testId": "CUA-JEV-01",
+  "choice": "needs_review",
+  "decidedAt": "2026-09-19T04:05:23.723Z",
+  "detail": "skip: bridge 127.0.0.1:9223 closed; contract-only, not live proof",
+  "liveBridge": {
+    "active": false
+  }
+}

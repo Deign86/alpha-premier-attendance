@@ -43,13 +43,16 @@
     "ui:list": "node scripts/ui-skills.mjs list",
     "ui:get": "node scripts/ui-skills.mjs get",
     "jev:eval": "npx tsx tools/jev/cli.ts",
-    "jev:test": "node shared/node_modules/vitest/vitest.mjs run tools/jev"
+    "jev:test": "node shared/node_modules/vitest/vitest.mjs run tools/jev",
+    "cua:doctor": "node scripts/cua-jev-doctor.mjs",
+    "cua:jev": "node scripts/cua-jev-run.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@hypothesi/tauri-mcp-server": "^0.13.0",
     "@oxlint/plugins": "^1.78.0",
     "@tauri-apps/cli": "^2.8.0",
+    "@trycua/cua-driver": "^0.28.2",
     "@typescript-eslint/eslint-plugin": "^8.19.1",
     "@typescript-eslint/parser": "^8.19.1",
     "concurrently": "^9.1.2",
