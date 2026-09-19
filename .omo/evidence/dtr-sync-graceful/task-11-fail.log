@@ -38,3 +38,19 @@ FAIL SCENARIO 2 — kill mid-batchUpdate → retry applies missing ranges only:
   landing, 9/5 re-plans InSync (no duplicate B:E write) while 9/4 still
   Writes. Same execution DISCLOSE as scenario 1; body-shape + boundary
   logic additionally covered by the executing sync_retry harness family.
+
+--- APPENDIX (verifier fix, 2026-09-18): failure-contrast from SQL proxy ---
+Pre-fix contrast (same proxy, prod horizon lease=300 instead of 2):
+  stale_secs(locked 3s-old, now, 300) == false → victim row SKIPPED by the
+  recovery loop → stays PROCESSING (stuck lease = the pre-fix FAIL; HEAD
+  grep resume_idempotent=0, hardcoded 5-min const, no injectable lease).
+Post-fix (lease=2, executed above, EXIT:0): stale_secs == true → verbatim
+  UPDATE flips victim PROCESSING→RETRY, attempts 0 preserved,
+  next_attempt_at=now; 5 PENDING rows byte-untouched; dtr_pending row
+  identical before/after; batch replay sha256 match
+  4e2ea361...c4da1 == 4e2ea361...c4da1; elapsed 36ms.
+Kill-mid-batchUpdate contrast: a replayed batch re-sends the identical
+  USER_ENTERED body (overwrite, keyed by 'TAB'!B:E range) — Sheets cannot
+  duplicate cells; the replan layer (InSync for landed days) then narrows
+  the retry to missing ranges only. Both halves executed (proxy) /
+  compile-verified + mechanism-cited (cargo test).

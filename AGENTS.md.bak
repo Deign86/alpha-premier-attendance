@@ -1,0 +1,93 @@
+# Alpha Premier Attendance — Agent Instructions
+
+## Mandatory Engineering Quartet: Ponytail + Unlazy + Anti-Slop + Grill-Me (Active Every Prompt)
+
+On every user prompt and for every task, all four skills and disciplines are automatically active simultaneously without exception:
+
+### 1. Grill-Me (Relentless Design-Tree Interview & Plan Sharpening)
+Before executing ambiguous or non-trivial design/planning decisions:
+1. **Map the Design Tree**: Treat every requirement and decision as a tree of dependent choices.
+2. **Work the Frontier in Rounds**: Identify unsettled prerequisites and ask structured frontier questions with numbered choices and recommended answers (`❓ **Q1**`, `➡️ Recommended`).
+3. **Fact-Finding Is Agent's Job**: Check code and facts autonomously via tools/sub-agents before asking the user; only ask the user for genuine design decisions and requirements.
+4. **Reach Shared Understanding**: Clarify implicit assumptions and confirm the plan before executing irreversible or wide-reaching changes.
+
+### 2. Ponytail (Minimal Viable Solution Architecture)
+Before writing any code, stop at the first rung that holds:
+1. **YAGNI**: Does this need to exist at all? Skip speculative needs.
+2. **Reuse**: Does it already exist in this codebase? Reuse existing helpers, types, and patterns.
+3. **Stdlib**: Does the standard library do it? Use standard library.
+4. **Native**: Does a platform-native feature cover it? Use native HTML/CSS/DB constraints over libraries.
+5. **Installed Deps**: Does an already-installed dependency solve it? Use it; do not add new packages.
+6. **One-Liner**: Can it be one line? Keep it to one line.
+7. **Minimum Code**: Write only the smallest diff that works once root cause and data flow are understood.
+
+No unrequested abstractions, no speculative boilerplate, deletion over addition. Active in `full` mode by default.
+
+### 3. Unlazy (Exhaustive Execution & Verifiable Evidence)
+Every task is executed under anti-laziness discipline to ensure completion with verified evidence rather than assumptions or premature status reports:
+1. **Root-Cause Understanding**: Trace relevant call paths, state, and boundaries end-to-end before touching code.
+2. **Gates Before Work**: For non-trivial tasks, record acceptance gates in `GATES.md` before implementation with runnable `CHECK:` / `EXPECT:` commands or concrete `EVIDENCE:` requirements.
+3. **Never Stop at 80%**: Implement completely (no placeholders, no TODOs, no simulated work).
+4. **Adversarial Verification**: When feeling done, run checks and actively attempt to refute the result.
+5. **Measured Claims**: Every number, count, and result in final reports must be measured directly from commands, not stated from memory.
+
+### 4. Anti-Slop (Strict Type & Contract Evidence)
+Enforce rigorous compiler-backed TypeScript/JavaScript safety across the entire repository:
+1. **Explicit Safety Comments**: Every non-const type assertion (`as T`) MUST be immediately preceded by `// SAFETY: <explanation>`.
+2. **No Double Casting**: Never use chained assertions (`as unknown as T` or `as any as T`).
+3. **No Conditional Empty Object Spread**: Avoid `...(cond ? { k: v } : {})`.
+4. **No Broad Dictionary Widening**: No open `Record<string, unknown>`. Use schema validation, inference, `satisfies`, or domain interfaces.
+5. **No Low-Evidence Runtime `typeof`**: Validate at I/O boundaries and branch on typed domain models.
+6. **No `unknown` / `any` Parameters or Return Types**: Strict domain contracts on internal functions.
+7. **Verification**: Run `npm run lint:oxlint`, `npm run typecheck`, and `npm test` before declaring done.
+
+Follow the rules in `.agent/rules/` and `.agents/rules/` (`ponytail.md`, `unlazy.md`, `anti-slop.md`, and `grill-me.md`).
+
+### Output Style (i-have-adhd, Always-On Every Prompt)
+
+Full rules live in the global `i-have-adhd` skill (`~/.pi/agent/git/github.com/ayghri/i-have-adhd/skills/i-have-adhd/SKILL.md`). Shape every response so it can be acted on:
+1. Lead with the answer or next action: command, path, or snippet first.
+2. Number multi-step work; one bounded action per step.
+3. End with one next action doable in under two minutes.
+4. Finish the current issue before raising a new one.
+5. Restate progress each turn ("step 3 of 5 done").
+6. Give time estimates in concrete units, never "a bit".
+7. After a change, show what now works.
+8. Errors: state location, cause, and fix. No drama.
+9. Cap lists to 5 items.
+10. No preamble, no recaps, no closers.
+
+Exceptions: explain fully when asked to explain. Confirm before destructive actions. After three failed fixes, stop and name the doubtful assumption. If the request is ambiguous, ask one short question.
+
+---
+
+### UI Skills (Repo-Wide Design System)
+- **When**: any UI/UX work (new screens, polish, layout fixes, scaling-audit follow-ups). Start with `npm run ui:start` routing, then load at most 1–3 skills: `baseline-ui` for fast cleanup, `improve-ui` for audits (writes `design-plans/` only, never product source).
+- **CLI (zero-install, stdlib only)**: `npm run ui:start`, `npm run ui:categories`, `npm run ui:list -- --category <topic>`, `npm run ui:get -- <slug>` (e.g. `npm run ui:get -- baseline-ui`). Backed by `scripts/ui-skills.mjs`, which mirrors `npx ui-skills` against the public registry — use it instead of npx (the published CLI wrapper silently exits 1 under npx on some Windows PCs when its tsx loader fails to resolve).
+- **MCP**: `.mcp.json` registers the `ui-skills` server (`https://www.ui-skills.com/mcp`, tools `list_skills`/`get_skill`) for MCP-capable agents (Claude Code, Cursor, VS Code). For Pi (stdio-only gateway), `scripts/ui-skills-mcp.mjs` bridges stdio ↔ the remote endpoint — registered in the Pi global `mcp.json`, takes effect on next Pi start. This repo uses custom CSS in `client/src/styles.css`, not Tailwind — apply ui-skills principles (spacing, hierarchy, typography, one accent per view) through the existing tokens.
+
+---
+
+### Release Policy (GitHub CI/CD Releases)
+- **Automated releases on push to main**: Pushing to `main` (or pushing a `v*` tag) triggers `.github/workflows/release.yml`. If the current version already has an existing release, CI automatically bumps the patch version, commits back with `[skip ci]`, runs typecheck/lint/test, builds the frontend, and builds/signs the Windows Tauri bundle via `tauri-action`, attaching installers plus updater artifacts (`latest.json`) to the GitHub Release.
+- **Signing**: `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets must stay configured for updater artifacts.
+- **Local builds** (`npm run tauri:build`) remain available for manual verification, but official release bundles come from CI.
+
+---
+
+### Verification Workflow
+Run the narrowest relevant checks first, followed by required repository gates. Review the diff for dead code, unrequested complexity, type assertions without safety comments, and unnecessary dependencies.
+
+### Agent Response Format
+Keep responses concise unless detail is requested:
+
+### Changed
+- What behavior changed and where.
+
+### Verified
+- Commands, tests, or checks run and the result.
+
+### Notes
+- Only concrete risks, limitations, or relevant follow-ups.
+
+Do not provide long plans, chain-of-thought-style reasoning, exhaustive investigation logs, or optional suggestions unless requested.

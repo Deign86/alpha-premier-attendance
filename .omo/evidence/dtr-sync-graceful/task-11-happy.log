@@ -67,3 +67,51 @@ LSP diagnostics: daemon timed out (busy, as in task-8); cargo check used
   as fallback. oxlint/typecheck/npm-test: N/A (no TS/client touched).
 git status (task files only in commit): M dtr_sync.rs, sheets_sync.rs,
   sync_retry.rs + these two logs. Plan checkboxes untouched.
+
+--- APPENDIX A (verifier fix, 2026-09-18): SQL execution proxy, REAL run ---
+ENGINE DISCLOSE: python3 absent on this box (Microsoft Store stub only).
+  Proxy uses node:sqlite (node v22.23.2 stdlib, zero deps, nothing
+  committed — script lives at $TEMP/opencode/task11-proxy/proxy.mjs, DB
+  file resume-proxy.db in the same temp dir, outside the repo).
+STATEMENT-MATCH PROOF (same SQL string, copied verbatim):
+  code  sheets_sync.rs:873:
+    "UPDATE sync_queue SET status='RETRY', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING' AND locked_at=?"
+  proxy proxy.mjs:26:
+    "UPDATE sync_queue SET status='RETRY', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING' AND locked_at=?"
+  (+ SELECT id/locked_at ... WHERE status='PROCESSING' ... LIMIT ? in both;
+  proxy asserts code.includes() on both literals at startup — green.)
+FULL CAPTURED OUTPUT (stdout+stderr, EXIT:0):
+  proxy-start: 2026-09-18T15:27:05.636Z
+  statement-match: SELECT + UPDATE verbatim in sheets_sync.rs and proxy
+  BEFORE sync_queue: [{"id":1,"row_id":"resume-u0","status":"PENDING","attempts":0,"locked_at":null,...},{"id":2,...},{"id":3,...},{"id":4,...},{"id":5,...},{"id":6,"row_id":"resume-victim","status":"PROCESSING","attempts":0,"locked_at":"2026-09-18T15:27:02.650+00:00","next_attempt_at":"2026-09-18T15:27:05.650+00:00"}]
+  BEFORE dtr_pending: [{"user_id":"u-pending","full_name":"Pending Intern","first_seen":"2026-09-18T15:27:05.650+00:00","last_checked":"...","attempts":0}]
+  recovery applied to 1 PROCESSING row(s), leaseRecovered=1
+  AFTER sync_queue: [ids 1-5 PENDING attempts 0 unchanged, id 6 resume-victim status RETRY attempts 0 locked_at null next_attempt_at now]
+  AFTER dtr_pending: [u-pending row byte-identical to BEFORE]
+  ASSERTS queue-recovery: victim RETRY + attempts preserved + 5 PENDING untouched + dtr_pending survives — PASS
+  batch body: {"valueInputOption":"USER_ENTERED","data":[{"range":"'LAZARO DEIGN'!B3:E3","values":[["9:00:00 AM","12:00:00 PM","1:00:00 PM","5:30:00 PM"]]}]}
+  sha256 A=4e2ea361c2df14aff1cf785d7abd6cf874cddecace3c653ca4fec5e7c63c4da1 B=4e2ea361c2df14aff1cf785d7abd6cf874cddecace3c653ca4fec5e7c63c4da1
+  ASSERTS batch-replay: byte-identical USER_ENTERED single-range bodies — PASS
+  proxy-end: 2026-09-18T15:27:05.672Z elapsed_ms=36
+  PROXY RESULT: PASS
+  (stderr held only node's SQLite ExperimentalWarning; EXIT:0)
+  Wall runtime 36ms << 10s budget. Full BEFORE/AFTER row dumps (all 6
+  queue rows + pending row) are in the capture above (truncated here to
+  repeating PENDING rows; temp capture retained at $TEMP/opencode).
+HONEST CI DISCLOSURE (unchanged): in-crate `cargo test
+  resume_idempotent` execution stays blocked by the pre-existing loader
+  fault (verifier reproduced 0xc0000139); the proxy above executes the
+  identical statement text; CI/MSVC must run the real test.
+--- HYGIENE FOOTER (commit scope proof, nothing staged/touched) ---
+  git show --stat HEAD | tail:
+    .omo/evidence/dtr-sync-graceful/task-11-fail.log  |  40 ++++++
+    .omo/evidence/dtr-sync-graceful/task-11-happy.log |  69 ++++++++++
+    src-tauri/src/services/dtr_sync.rs                | 151 ++++++++++++++++++++++
+    src-tauri/src/services/sheets_sync.rs             |  31 +++--
+    src-tauri/src/services/sync_retry.rs              |  40 +++++-
+    5 files changed, 318 insertions(+), 13 deletions(-)
+  → HEAD lists ONLY the 5 task files. git status --short shows only
+  pre-existing dirt (M evidence/verification-summary.json,
+  M package-lock.json, ?? AGENTS.md.bak/HANDOFF.md/LEAN-CTX.md/audit
+  strays) — none staged, committed, reverted, or otherwise touched by
+  this fix. No amend (product code unchanged).
