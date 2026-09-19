@@ -6338,10 +6338,10 @@ function PayrollTable({
                               {row.halfDayDeduction > 0 ? ` + ${php(row.halfDayDeduction)} half-day / undertime (${row.halfDayCount} day(s))` : ""}
                               {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 ? "None" : ""}
                               {" = "}
-                              <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>.
+                              <strong className="payroll-deductions-total">{php(totalDeductions)}</strong>.
                               <br />
                               <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
-                              <strong style={{ color: "#854d0e", backgroundColor: "#fef08a", padding: "2px 6px", borderRadius: "3px" }}>
+                              <strong className="payroll-net-pay-pill">
                                 {php(row.netPay)}
                               </strong>
                             </p>
@@ -6359,10 +6359,10 @@ function PayrollTable({
                               <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
                               <br />
                               <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
-                              <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong> (Total Deductions).
+                              <strong className="payroll-deductions-total">{php(totalDeductions)}</strong> (Total Deductions).
                               <br />
                               <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
-                              <strong style={{ color: "#854d0e", backgroundColor: "#fef08a", padding: "2px 6px", borderRadius: "3px" }}>
+                              <strong className="payroll-net-pay-pill">
                                 {php(row.netPay)}
                               </strong>
                             </p>
@@ -6371,9 +6371,11 @@ function PayrollTable({
 
                         {parsedBreakdown?.deductions && parsedBreakdown.deductions.length > 0 ? (
                           <div className="payroll-deductions-container">
-                            <h4 className="payroll-deductions-heading">
-                              Transparent Deductions Breakdown ({parsedBreakdown.deductions.length} item{parsedBreakdown.deductions.length === 1 ? "" : "s"}):
-                            </h4>
+                            <div className="payroll-deductions-header">
+                              <h4 className="payroll-deductions-heading">
+                                Transparent Deductions Breakdown ({parsedBreakdown.deductions.length} item{parsedBreakdown.deductions.length === 1 ? "" : "s"}):
+                              </h4>
+                            </div>
                             <div className="payroll-deductions-table-wrap">
                               <table className="payroll-deductions-table">
                                 <thead>
@@ -6382,13 +6384,13 @@ function PayrollTable({
                                     <th>Type</th>
                                     <th>Attendance Time</th>
                                     <th>Cause / Details</th>
-                                    <th style={{ textAlign: "right" }}>Deduction</th>
+                                    <th className="payroll-col-amount">Deduction</th>
                                   </tr>
                                 </thead>
-                                  <tbody>
-                                    {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => (
-                                      <tr key={`${item.date}-${item.category}-${idx}`}>
-                                      <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+                                <tbody>
+                                  {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => (
+                                    <tr key={`${item.date}-${item.category}-${idx}`}>
+                                      <td className="payroll-deduction-date">
                                         {formatDeductionDate(item.date)}
                                       </td>
                                       <td>
@@ -6396,13 +6398,13 @@ function PayrollTable({
                                           {item.label}
                                         </span>
                                       </td>
-                                      <td style={{ whiteSpace: "nowrap" }}>
+                                      <td className="payroll-deduction-time">
                                         {item.timeIn || item.timeOut
                                           ? `${item.timeIn ?? "—"} – ${item.timeOut ?? "—"}`
                                           : "—"}
                                       </td>
-                                      <td>{item.details}</td>
-                                      <td style={{ textAlign: "right", color: "#dc2626", fontWeight: 600 }}>
+                                      <td className="payroll-deduction-details">{item.details}</td>
+                                      <td className="payroll-deduction-amount">
                                         {php(item.amount)}
                                       </td>
                                     </tr>
@@ -6421,12 +6423,15 @@ function PayrollTable({
                             </p>
                           ) : (
                             <p className="payroll-deductions-none">
-                              ✓ No attendance deductions incurred for this cutoff period.
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              <span>No attendance deductions incurred for this cutoff period.</span>
                             </p>
                           )
                         )}
 
-                        <p>
+                        <p className="payroll-cutoff-status">
                           Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({row.cutoffStart} to {row.cutoffEnd}).
                         </p>
                       </details>

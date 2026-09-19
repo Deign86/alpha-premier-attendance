@@ -973,11 +973,26 @@ unrelated to the change; CI (`windows-latest`, MSVC) runs the same 296 tests suc
   EXPECT: all tests pass; 08:00–12:00 and 08:00–12:30 both yield 4 worked hours and ₱40 daily pay.
   EVIDENCE: All 48 tests across the three payroll suites pass. Parity check across TypeScript and Rust engines passes with 0 mismatches.
 
-## Transparent Attendance Deductions Breakdown & Calculation Parity
 
-- [x] Attendance deductions are itemized by date, type (absence, undertime/half-day, late), timestamps, unrendered hours, and deduction amounts in generated payroll cutoffs and displayed clearly to admin users; intern cutoff calculation display shows `Cutoff Base - Deductions = Net Pay` instead of equating gross earnings.
-  CHECK: `cargo check --manifest-path src-tauri/Cargo.toml && npm run lint:oxlint && npm run typecheck && npm test -w client -- src/payroll.test.tsx`
-  EXPECT: All checks pass, 0 errors, 0 warnings; payroll unit tests verify itemized deductions table with dates and causes and verify correct net pay calculation display.
-  EVIDENCE: `cargo check` passed (dev profile [unoptimized + debuginfo] finished with 0 errors). `npm run lint:oxlint` passed (0 warnings, 0 errors on 61 files). `npm run typecheck` passed cleanly across shared, client, and server workspaces. All 20 tests in `payroll.test.tsx` passed, confirming transparent breakdown rendering and correct net pay equation.
+## Transparent Deductions UI/UX Alignment & Design System Integration
+
+- [x] Transparent deductions container and table harmonize with Alpha Premier warm obsidian/gold design system (replacing alien Tailwind Slate 900 tint, undefined tokens, and raw Tailwind badges).
+  CHECK: node -e "const css = fs.readFileSync('client/src/styles.css', 'utf8'); if (css.includes('rgba(15, 23, 42') || css.includes('var(--border)') || css.includes('badge-absence {\\n  background: rgba(239, 68, 68')) process.exit(1);"
+  EXPECT: command exits 0 (alien Tailwind palettes and undefined var(--border) eliminated)
+  EVIDENCE: Command exited 0. Slate 900 background replaced with `var(--surface)`, border tokens unified with `var(--line)` and `var(--line-bright)`, and badges re-themed to `--danger` (#efaa92), `--gold-bright` (#e1c477), and muted steel (#8dc5db).
+- [x] Base radius and panel shadow tokens defined in :root.
+  CHECK: node -e "const css = fs.readFileSync('client/src/styles.css', 'utf8'); if (!css.includes('--radius-sm:') || !css.includes('--radius-md:') || !css.includes('--shadow-panel:')) process.exit(1);"
+  EXPECT: command exits 0
+  EVIDENCE: Command exited 0. Added `--radius-sm: 4px;`, `--radius-md: 6px;`, `--radius-lg: 8px;`, `--shadow-panel: 0 10px 30px rgba(0, 0, 0, 0.45);`, and `--border: var(--line);` to `:root`.
+- [x] Transparent deductions and breakdown formula in client/src/App.tsx use semantic design classes instead of inline style attributes.
+  CHECK: node -e "const fs = require('fs'); const tsx = fs.readFileSync('client/src/App.tsx', 'utf8'); const sub = tsx.slice(tsx.indexOf('payroll-deductions-container'), tsx.indexOf('payroll-cutoff-status')); if (sub.includes('style=')) process.exit(1);"
+  EXPECT: command exits 0 (inline slop replaced with semantic CSS classes)
+  EVIDENCE: Command exited 0. Replaced inline styles in transparent deductions table and calculation formula with `.payroll-deduction-date`, `.payroll-deduction-time`, `.payroll-deduction-details`, `.payroll-deduction-amount`, `.payroll-deductions-total`, and `.payroll-net-pay-pill`.
+- [x] Quality gates pass: oxlint, typecheck, and client test suite.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client -- src/payroll.test.tsx
+  EXPECT: All checks exit 0 with 0 errors and 0 warnings.
+  EVIDENCE: `oxlint` passed 0 warnings and 0 errors across 62 files. `typecheck` passed across all workspaces (shared, client, server). Client test suite passed 15/15 files and 282/282 tests, including all 20 tests in `src/payroll.test.tsx`.
+
+
 
 
