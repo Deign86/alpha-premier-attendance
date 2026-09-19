@@ -1,0 +1,36 @@
+TASK-3 HAPPY QA LOG | dtr-sync-graceful todo 3 | 2026-09-18 (UTC)
+GOAL: unresolvable rows (no-tab / no-month-block / no-date-row / empty-values) take ONE skip path -- queue SYNCED-with-skip + dtr_pending noted, never RETRY, never DEAD; corrupt empty-userId still DEADs (contrast).
+FILES: src-tauri/src/services/dtr_sync.rs only. Arm diff (the whole queue-behavior change): `- Err(format!("{GOOGLE_REQUEST_FAILED}: Unresolvable({reason})"))` -> `+ skip_unresolvable_row(state, &user_id, &full_name, &attendance_date, reason).await` where the helper notes dtr_pending + logs + returns Ok(false); run_once Ok arm marks SYNCED with no attempts increment (sheets_sync.rs untouched).
+BASELINE (unchanged code): cargo check --manifest-path src-tauri/Cargo.toml --tests -> Finished dev profile, exit 0, 0 errors.
+HAPPY QA (maps to plan QA): intern-without-tab path -> manual_sync_intern_dtr missing-tab arm now does note_dtr_pending BEFORE pushing the MISSING_TAB InternSyncDetail (MISSING_TAB detail + dtr_pending noted), and queue push_dtr_row no-tab/Unresolvable -> skip_unresolvable_row Ok(false) + pending note; committed test asserts all four reasons return Ok(false) with exactly 1 dtr_pending row and 0 sync_queue rows; live Google sheets calls unavailable offline so Sheets I/O asserts run on CI -- disclosed, same substitution as todos 1-2.
+EXECUTION NOTE (same env block as todos 1-2, disclosed): lib test binary exits 0xC0000139 at OS load here, so runtime proof executes EXACT shipped sync_retry.rs bytes via include! in out-of-repo harness (C:\Users\APG\AppData\Local\Temp\opencode\task3harness): corrupt payload errors still DEAD (contrast), transient still RETRY-forever, skip reasons provably non-transient (could never drain-pause/ride infinite RETRY even if they reached the fail arm -- post-fix they never do). Compile proof: cargo test unresolvable_never_dead --no-run links clean.
+COMMAND: cargo run --manifest-path C:\Users\APG\AppData\Local\Temp\opencode\task3harness\Cargo.toml -- happy
+--- BEGIN FULL HAPPY OUTPUT (untruncated, final validation run 1 of 3, exit 0) ---
+PASS H-corrupt-dead (err="DTR payload missing userId" status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS H-corrupt-finite (err="DTR payload missing userId" not transient)
+PASS H-corrupt-dead (err="DTR payload missing fullName" status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS H-corrupt-finite (err="DTR payload missing fullName" not transient)
+PASS H-corrupt-dead (err="DTR payload missing attendanceDate" status=DEAD backoff=16s code=GOOGLE_SYNC_FAILED)
+PASS H-corrupt-finite (err="DTR payload missing attendanceDate" not transient)
+PASS H-transient-forever (attempts=0 err="429 Too Many Requests" status=RETRY)
+PASS H-transient-forever (attempts=0 err="GOOGLE_SERVER_ERROR: execute push: 503" status=RETRY)
+PASS H-transient-forever (attempts=0 err="timeout-after-connect: deadline exceeded" status=RETRY)
+PASS H-transient-forever (attempts=4 err="429 Too Many Requests" status=RETRY)
+PASS H-transient-forever (attempts=4 err="GOOGLE_SERVER_ERROR: execute push: 503" status=RETRY)
+PASS H-transient-forever (attempts=4 err="timeout-after-connect: deadline exceeded" status=RETRY)
+PASS H-transient-forever (attempts=5 err="429 Too Many Requests" status=RETRY)
+PASS H-transient-forever (attempts=5 err="GOOGLE_SERVER_ERROR: execute push: 503" status=RETRY)
+PASS H-transient-forever (attempts=5 err="timeout-after-connect: deadline exceeded" status=RETRY)
+PASS H-transient-forever (attempts=100 err="429 Too Many Requests" status=RETRY)
+PASS H-transient-forever (attempts=100 err="GOOGLE_SERVER_ERROR: execute push: 503" status=RETRY)
+PASS H-transient-forever (attempts=100 err="timeout-after-connect: deadline exceeded" status=RETRY)
+PASS H-skip-not-transient (reason=no-tab)
+PASS H-skip-not-transient (reason=no-month-block)
+PASS H-skip-not-transient (reason=no-date-row)
+PASS H-skip-not-transient (reason=empty-values)
+HARNESS HAPPY: ALL PASS (corrupt DEAD, transient RETRY-forever, skip non-transient)
+--- END FULL HAPPY OUTPUT ---
+COMPILE PROOFS (final code): cargo check --manifest-path src-tauri/Cargo.toml --tests -> exit 0, 0 errors (grep ^error count 0), no new warnings on touched file. cargo test unresolvable_never_dead --no-run 3x -> exit 0/0/0; Executable unittests src\lib.rs + src\main.rs + src\bin\migrate_from_sheets.rs all linked. (Execution of the lib test binary is env-blocked as baselined; the committed test runs wherever the loader works, e.g. CI msvc runners.)
+ADVERSARIAL PROBES: flaky-rerun happy 3x exit 0/0/0 ALL PASS; full-output shown above (no tail-only); git-status-before (pre-existing dirt only): M evidence/verification-summary.json, M package-lock.json, ?? AGENTS.md.bak, HANDOFF.md, LEAN-CTX.md, evidence/audit-live-session.png, evidence/audit-report.json, scripts/audit-live-system.mjs; git-status-after task files: M src-tauri/src/services/dtr_sync.rs, ?? .omo/evidence/dtr-sync-graceful/task-3-happy.log, task-3-fail.log; malformed-input: empty userId/fullName/attendanceDate all map DEAD (covered above); prompt-injection: N/A; cancel/resume: N/A; dirty-worktree: pre-existing dirt left untouched, commit stages only task files; hung-commands: none; repeated-interrupts: N/A.
+CLEANUP RECEIPTS: no repo scaffolding created (harness lives outside repo at C:\Users\APG\AppData\Local\Temp\opencode\task3harness, never committed); no temp files in repo; lsp_diagnostics timed out 1x (daemon busy) -> substituted with cargo check --tests clean (same substitution as todos 1-2).
+DEFERRED (other todos own these): queue backoff caps+jitter -> todo 4; 403 reason-body plumbing -> todo 5; batch coalescer -> todo 6; live scratch-sheet drain -> needs Google creds; 30s tick + 25s client timeout unchanged per MUST-NOT-DO.

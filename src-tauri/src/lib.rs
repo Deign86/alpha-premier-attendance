@@ -3899,11 +3899,73 @@ async fn admin_lock(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     setup_lock(state).await
 }
 
+#[derive(serde::Serialize)]
+struct SyncHealthTableRow {
+    #[serde(rename = "tableName")]
+    table_name: String,
+    pending: i64,
+}
+
+#[derive(serde::Serialize)]
+struct SyncHealthPendingPerson {
+    #[serde(rename = "userId")]
+    user_id: String,
+    #[serde(rename = "fullName")]
+    full_name: String,
+    attempts: i64,
+    #[serde(rename = "lastChecked")]
+    last_checked: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct SyncHealthDtrPending {
+    count: i64,
+    items: Vec<SyncHealthPendingPerson>,
+}
+
+#[derive(serde::Serialize)]
+struct SyncHealthInProgress {
+    owner: String,
+    #[serde(rename = "startedAt")]
+    started_at: String,
+}
+
+/// Plan todo 10: admin-only sync-health contract. New fields are explicit
+/// serde types (no untyped JSON): throttle state, guard owner, lease
+/// recoveries, and retryable-queue age. Idle reads are all nulls/zero/false.
+#[derive(serde::Serialize)]
+struct SyncHealthResponse {
+    success: bool,
+    pending: i64,
+    #[serde(rename = "deadLetter")]
+    dead_letter: i64,
+    #[serde(rename = "byTable")]
+    by_table: Vec<SyncHealthTableRow>,
+    #[serde(rename = "dtrPending")]
+    dtr_pending: SyncHealthDtrPending,
+    #[serde(rename = "lastSyncedAt")]
+    last_synced_at: Option<String>,
+    #[serde(rename = "lastError")]
+    last_error: Option<String>,
+    #[serde(rename = "throttledUntil")]
+    throttled_until: Option<String>,
+    #[serde(rename = "lastThrottleReason")]
+    last_throttle_reason: Option<String>,
+    #[serde(rename = "inProgress")]
+    in_progress: Option<SyncHealthInProgress>,
+    #[serde(rename = "leaseRecovered")]
+    lease_recovered: u64,
+    #[serde(rename = "oldestRetryableAgeSec")]
+    oldest_retryable_age_sec: Option<i64>,
+    #[serde(rename = "pendingAgeAlert")]
+    pending_age_alert: bool,
+}
+
 #[tauri::command]
 async fn admin_get_sync_status(
     state: State<'_, AppState>,
     token: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<SyncHealthResponse, String> {
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
@@ -3926,10 +3988,11 @@ async fn admin_get_sync_status(
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
-    let by_table: Vec<serde_json::Value> = by_table_rows
+    let by_table: Vec<SyncHealthTableRow> = by_table_rows
         .into_iter()
-        .map(|(table_name, pending_count)| {
-            serde_json::json!({"tableName": table_name, "pending": pending_count})
+        .map(|(table_name, pending)| SyncHealthTableRow {
+            table_name,
+            pending,
         })
         .collect();
     let dtr_pending_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
@@ -3942,11 +4005,16 @@ async fn admin_get_sync_status(
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
-    let dtr_pending_items: Vec<serde_json::Value> = dtr_pending_rows
+    let dtr_pending_items: Vec<SyncHealthPendingPerson> = dtr_pending_rows
         .into_iter()
-        .map(|(user_id, full_name, attempts, last_checked)| {
-            serde_json::json!({"userId": user_id, "fullName": full_name, "attempts": attempts, "lastChecked": last_checked})
-        })
+        .map(
+            |(user_id, full_name, attempts, last_checked)| SyncHealthPendingPerson {
+                user_id,
+                full_name,
+                attempts,
+                last_checked,
+            },
+        )
         .collect();
     let last_synced_at: Option<String> = sqlx::query_scalar("SELECT MAX(last_synced_at) FROM sync_state")
         .fetch_one(&state.db)
@@ -3958,7 +4026,69 @@ async fn admin_get_sync_status(
     .fetch_one(&state.db)
     .await
     .unwrap_or(None);
-    Ok(serde_json::json!({"success":true,"pending":pending,"deadLetter":dead,"byTable":by_table,"dtrPending":{"count":dtr_pending_count,"items":dtr_pending_items},"lastSyncedAt":last_synced_at,"lastError":last_error}))
+    // Plan todo 10: current DTR throttle window. Some(window-end RFC3339) +
+    // reason only while a further write would be denied; idle reads are nulls.
+    let now_throttle_ms = crate::services::sync_retry::wall_now_ms();
+    let throttled_until: Option<String> = state
+        .dtr_throttle
+        .lock()
+        .await
+        .throttled_until_ms(now_throttle_ms)
+        .and_then(|window_end_ms| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+                i64::try_from(window_end_ms).unwrap_or(i64::MAX),
+            )
+        })
+        .map(|instant| instant.to_rfc3339());
+    let last_throttle_reason: Option<String> = throttled_until.as_ref().map(|_| {
+        crate::services::sync_retry::DTR_THROTTLE_REASON.to_string()
+    });
+    // Plan todo 10: live guard holder from the todo-8 persisted sync_state
+    // row; None on idle, completed, stale, or corrupt rows.
+    let in_progress: Option<SyncHealthInProgress> =
+        crate::state::sync_guard_status(&state.db)
+            .await
+            .map(|(owner, started_at)| SyncHealthInProgress { owner, started_at });
+    let lease_recovered: u64 = state
+        .lease_recovered
+        .load(std::sync::atomic::Ordering::Relaxed);
+    // Plan todo 10: age of the oldest PENDING/RETRY row bounds
+    // infinite-RETRY growth visibility; alert past 6h.
+    let oldest_retryable_at: Option<String> = sqlx::query_scalar(
+        "SELECT MIN(created_at) FROM sync_queue WHERE status IN ('PENDING','RETRY')",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(None);
+    let oldest_retryable_age_sec: Option<i64> = oldest_retryable_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|instant| {
+            chrono::Utc::now()
+                .signed_duration_since(instant.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0)
+        });
+    let pending_age_alert: bool = oldest_retryable_age_sec
+        .is_some_and(|age| age > crate::services::sync_retry::PENDING_AGE_ALERT_SECS);
+    Ok(SyncHealthResponse {
+        success: true,
+        pending,
+        dead_letter: dead,
+        by_table,
+        dtr_pending: SyncHealthDtrPending {
+            count: dtr_pending_count,
+            items: dtr_pending_items,
+        },
+        last_synced_at,
+        last_error,
+        throttled_until,
+        last_throttle_reason,
+        in_progress,
+        lease_recovered,
+        oldest_retryable_age_sec,
+        pending_age_alert,
+    })
 }
 
 #[tauri::command]
@@ -3986,16 +4116,40 @@ async fn admin_sync_now(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
+    // Plan todo 8: shared in-progress guard — the second concurrent manual
+    // caller gets DTR_SYNC_IN_PROGRESS; the flag is released on every exit.
+    if let Err(busy) = crate::state::sync_guard_try_acquire(
+        &state.db,
+        state.sync_in_progress.as_ref(),
+        "admin_sync_now",
+    )
+    .await
+    {
+        return Err(busy);
+    }
     // T10: drain the queue in batches so "Sync now" cannot report partial
     // work as complete; the pass cap backstops against a poison-item loop.
     let mut processed_total: u64 = 0;
+    let mut drain_error: Option<String> = None;
     for _ in 0..20 {
-        let processed = crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
-            .await?;
-        processed_total += processed;
-        if processed == 0 {
-            break;
+        match crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
+            .await
+        {
+            Ok(processed) => {
+                processed_total += processed;
+                if processed == 0 {
+                    break;
+                }
+            }
+            Err(error) => {
+                drain_error = Some(error);
+                break;
+            }
         }
+    }
+    crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    if let Some(error) = drain_error {
+        return Err(error);
     }
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING','RETRY')")
         .fetch_one(&state.db)
@@ -4040,7 +4194,33 @@ async fn admin_sync_intern_dtr(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let report = crate::services::dtr_sync::manual_sync_intern_dtr(&state, Some(&app), user_id.as_deref()).await?;
+    // Plan todo 8: kill-switch still blocks manual entry before the guard
+    // is touched, so a disabled device never holds the guard. Per-row sync
+    // routes through this same command (user_id Some) — one owner per scope.
+    if !crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await {
+        return Err(
+            "Intern DTR sync is disabled on this device (Admin → Data → DTR sync toggle)"
+                .to_string(),
+        );
+    }
+    let owner = match user_id.as_deref() {
+        Some(id) => format!("admin_sync_intern_dtr:user:{id}"),
+        None => "admin_sync_intern_dtr:bulk".to_string(),
+    };
+    if let Err(busy) = crate::state::sync_guard_try_acquire(
+        &state.db,
+        state.sync_in_progress.as_ref(),
+        &owner,
+    )
+    .await
+    {
+        return Err(busy);
+    }
+    let report =
+        crate::services::dtr_sync::manual_sync_intern_dtr(&state, Some(&app), user_id.as_deref())
+            .await;
+    crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    let report = report?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 

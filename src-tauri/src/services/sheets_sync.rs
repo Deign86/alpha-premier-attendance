@@ -41,16 +41,29 @@ const SHEETS_ROW_ID_MISSING_ERROR: &str = "Google Sheets row identity is missing
 const SHEETS_ROW_ID_AMBIGUOUS_ERROR: &str = "Google Sheets row identity is ambiguous";
 const SHEETS_INVALID_PAYLOAD_ERROR: &str = "Google Sheets sync payload is invalid";
 const SHEETS_REQUEST_FAILED_ERROR: &str = "Google Sheets sync failed";
-const PROCESSING_LEASE_TIMEOUT_MINUTES: i64 = 5;
+/// Todo 11: PROCESSING-lease horizon. Prod keeps the 5-min crash-release;
+/// cfg(test) shrinks it to 2s so restart-resume proves without a real
+/// 5-min wait. The clock stays injected via the `now` param below.
+#[cfg(not(test))]
+fn processing_lease_timeout_secs() -> u64 {
+    5 * 60
+}
+#[cfg(test)]
+fn processing_lease_timeout_secs() -> u64 {
+    2
+}
 const SYNC_BATCH_SIZE: i64 = 50;
 
 /// Google API error codes surfaced to the sync queue. They intentionally
 /// contain no credentials, paths, or response bodies.
 pub const GOOGLE_NOT_FOUND: &str = "GOOGLE_NOT_FOUND";
-pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
 pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
-pub const GOOGLE_RATE_LIMITED: &str = "GOOGLE_RATE_LIMITED";
-pub const GOOGLE_REQUEST_FAILED: &str = "GOOGLE_REQUEST_FAILED";
+pub use super::sync_retry::{
+    GOOGLE_DAILY_LIMIT, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED,
+    GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, calculate_retry_backoff, classify_403_body,
+    is_rate_limited_error, is_transient_sync_error, parse_retry_after_secs, per_call_budget_actual,
+    per_call_should_retry, per_call_sleep_ms, wall_now_ms,
+};
 const GOOGLE_DRIVE_FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const GOOGLE_SCOPES: &str =
     "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive";
@@ -364,7 +377,7 @@ async fn google_stage_json(
         request.map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(stage_err(stage, google_status_error(status).to_string()));
+        return Err(stage_err(stage, google_error_for_response(response).await));
     }
     response
         .json()
@@ -381,7 +394,7 @@ async fn google_stage_status(
         request.map_err(|_| stage_err(stage, SHEETS_REQUEST_FAILED_ERROR.to_string()))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(stage_err(stage, google_status_error(status).to_string()));
+        return Err(stage_err(stage, google_error_for_response(response).await));
     }
     Ok(())
 }
@@ -825,13 +838,15 @@ fn find_rows_to_delete(
 }
 
 fn processing_lease_is_stale(locked_at: Option<&str>, now: &DateTime<Utc>) -> bool {
-    locked_at
+    let locked_secs = locked_at
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| {
-            value.with_timezone(&Utc)
-                < *now - chrono::Duration::minutes(PROCESSING_LEASE_TIMEOUT_MINUTES)
-        })
-        .unwrap_or(false)
+        .and_then(|value| u64::try_from(value.timestamp()).ok());
+    let now_secs = u64::try_from(now.timestamp()).unwrap_or(0);
+    crate::services::sync_retry::processing_lease_stale_secs(
+        locked_secs,
+        now_secs,
+        processing_lease_timeout_secs(),
+    )
 }
 
 async fn recover_stale_processing_leases(
@@ -854,7 +869,7 @@ async fn recover_stale_processing_leases(
         }
 
         let id: i64 = lease.get("id");
-        sqlx::query(
+        let updated = sqlx::query(
             "UPDATE sync_queue SET status='RETRY', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING' AND locked_at=?",
         )
         .bind(&now_text)
@@ -864,6 +879,11 @@ async fn recover_stale_processing_leases(
         .execute(&state.db)
         .await
         .map_err(|e| e.to_string())?;
+        if updated.rows_affected() == 1 {
+            state
+                .lease_recovered
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     Ok(())
@@ -946,14 +966,42 @@ fn google_status_error(status: reqwest::StatusCode) -> &'static str {
         403 => GOOGLE_PERMISSION_DENIED,
         404 => GOOGLE_NOT_FOUND,
         429 => GOOGLE_RATE_LIMITED,
+        code if (500..=599).contains(&code) => GOOGLE_SERVER_ERROR,
         _ => GOOGLE_REQUEST_FAILED,
     }
+}
+
+/// 403-aware mapper: reads the reason body so rate/quota 403s route
+/// transient-forever and daily-limit 403s keep their finite DAILY code.
+/// Non-403 statuses never carry a routable reason and skip the body read.
+fn google_status_error_with_body(status: reqwest::StatusCode, body: &str) -> String {
+    if status.as_u16() == 403 {
+        let mapped = classify_403_body(body);
+        if mapped.contains(GOOGLE_DAILY_LIMIT) {
+            log::warn!(
+                "Google Sheets daily quota exhausted (operator action required; ~24h block)"
+            );
+        }
+        return mapped;
+    }
+    google_status_error(status).to_string()
+}
+
+/// Maps a failed Google response to its queue error string, consuming the
+/// body only on 403 (the one status whose reason changes the verdict).
+async fn google_error_for_response(response: reqwest::Response) -> String {
+    let status = response.status();
+    if status.as_u16() == 403 {
+        let body = response.text().await.unwrap_or_default();
+        return google_status_error_with_body(status, &body);
+    }
+    google_status_error(status).to_string()
 }
 
 async fn google_json_response(response: reqwest::Response) -> Result<serde_json::Value, String> {
     let status = response.status();
     if !status.is_success() {
-        return Err(google_status_error(status).to_string());
+        return Err(google_error_for_response(response).await);
     }
     response
         .json()
@@ -1109,7 +1157,7 @@ async fn drive_add_parent(
         .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
     let status = response.status();
     if !status.is_success() {
-        return Err(google_status_error(status).to_string());
+        return Err(google_error_for_response(response).await);
     }
     Ok(())
 }
@@ -2349,11 +2397,6 @@ fn should_dispatch(endpoint_none: bool, ops_ready: bool, dtr_ready: bool) -> boo
     !(endpoint_none && !ops_ready && !dtr_ready)
 }
 
-/// Returns true if the error indicates a Google Sheets API rate limit / 429 quota exhaustion.
-pub fn is_rate_limited_error(error: &str) -> bool {
-    error.contains(GOOGLE_RATE_LIMITED) || error.contains("429")
-}
-
 /// Single owner of the requeue write: an operator edit must restore the
 /// full retry budget, so `attempts` resets to 0 alongside the status flip.
 /// Fire-and-forget by design — a queue bookkeeping failure never fails
@@ -2371,20 +2414,27 @@ pub(crate) async fn requeue_sync_row(
         .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await;
 }
 
-/// Computes backoff duration, new queue status, and error code for failed sync rows.
-/// Rate-limited errors (429 or GOOGLE_RATE_LIMITED) use a 60-second base doubling backoff,
-/// stay in RETRY status (excluded from the 5-strikes-to-DEAD budget), and report GOOGLE_RATE_LIMITED.
-/// Other errors follow 2^min(attempts, 5) exponential backoff and become DEAD at 5 attempts.
-pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str, &'static str) {
-    if is_rate_limited_error(error) {
-        let exponent = (attempts.max(0) as u32).min(4);
-        let backoff_secs = 60 * 2_u64.saturating_pow(exponent);
-        (backoff_secs, "RETRY", GOOGLE_RATE_LIMITED)
-    } else {
-        let backoff_secs = 2_u64.saturating_pow((attempts.max(0) as u32).min(5));
-        let status = if attempts + 1 >= 5 { "DEAD" } else { "RETRY" };
-        (backoff_secs, status, "GOOGLE_SYNC_FAILED")
+/// Plan todo 7: queue-path DTR admission against the shared bucket.
+/// Denial defers the row to the next tick (row stays due, no Google call,
+/// no sleep, no busy loop); ops rows never consult this. Short
+/// lock-take-unlock so the mutex is never held across I/O.
+async fn dtr_throttle_admit(
+    state: &AppState,
+    writes: u32,
+    calls: u32,
+) -> bool {
+    let wait_ms = state
+        .dtr_throttle
+        .lock()
+        .await
+        .take(writes, calls, wall_now_ms());
+    if wait_ms > 0 {
+        log::warn!(
+            "DTR throttle: deferring {writes} writes + {calls} calls for {wait_ms}ms (50-writes/min budget spent)"
+        );
+        return false;
     }
+    true
 }
 
 /// Bounded SQLite-first queue worker. The configured exporter endpoint is intentionally
@@ -2434,7 +2484,13 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                 Ok(token) => {
                     let client = sheets_client();
                     if let Err(error) =
-                        crate::services::dtr_sync::process_dtr_pending(state, &client, &token, sheet)
+                        crate::services::dtr_sync::process_dtr_pending(
+                            state,
+                            &client,
+                            &token,
+                            sheet,
+                            Some(state.dtr_throttle.clone()),
+                        )
                             .await
                     {
                         eprintln!("[sheets] dtr pending recheck failed: {error}");
@@ -2531,6 +2587,13 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             Err(SHEETS_ROW_ID_MISSING_ERROR.to_string())
         } else if let Some(payload) = payload.as_ref() {
             if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+                // Plan todo 7: queue-path DTR dispatch is bucket-exclusive —
+                // one admission (1 write + 1 call) per row before claiming.
+                // Denial skips the row for this pass (still due next tick);
+                // later ops rows in the same batch keep draining (bypass).
+                if !dtr_throttle_admit(state, 1, 1).await {
+                    continue;
+                }
                 if is_delete {
                     // Admin-deleted attendance clears that date's B:E cells
                     // (values only — the template row stays; missing tab/row
@@ -2566,7 +2629,12 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                             match token_res {
                                 Ok(token) => {
                                     crate::services::dtr_sync::push_dtr_row(
-                                        state, &client, &token, sheet, payload,
+                                        state,
+                                        &client,
+                                        &token,
+                                        sheet,
+                                        payload,
+                                        Some(state.dtr_throttle.clone()),
                                     )
                                     .await
                                     .map(|_| false)
@@ -2637,10 +2705,14 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             }
             Err(error) => {
                 let is_schema_mismatch = error.contains(SHEETS_SCHEMA_MISMATCH_ERROR);
-                let is_rate_limited = error.contains(GOOGLE_RATE_LIMITED) || error.contains("429");
+                // Drain-pause trigger stays rate-limit-only: other transient rows
+                // (5xx/timeout) ride RETRY without pausing the rest of the pass.
+                let is_rate_limited = is_rate_limited_error(&error);
                 let (backoff_secs, status, error_code) = calculate_retry_backoff(attempts, &error);
                 let next = Utc::now() + Duration::from_secs(backoff_secs);
-                if is_rate_limited {
+                if is_transient_sync_error(&error) {
+                    // Transient-forever: capped backoff, RETRY status, and NO
+                    // attempts increment, so the row can never age into DEAD.
                     sqlx::query("UPDATE sync_queue SET status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
                         .bind(status)
                         .bind(&error)
@@ -2651,9 +2723,11 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                         .execute(&state.db)
                         .await
                         .map_err(|e| e.to_string())?;
-                    // Drain protection: pause remaining queue items in this pass
-                    log::warn!("Rate limit encountered during sync pass; pausing remaining queue items: {error}");
-                    break;
+                    if is_rate_limited {
+                        // Drain protection: pause remaining queue items in this pass
+                        log::warn!("Rate limit encountered during sync pass; pausing remaining queue items: {error}");
+                        break;
+                    }
                 } else {
                     let last_error = error;
                     sqlx::query("UPDATE sync_queue SET attempts=attempts+1, status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
@@ -2926,8 +3000,9 @@ mod tests {
     #[test]
     fn stale_processing_leases_are_recovered_but_active_leases_are_not() {
         let now = Utc::now();
-        let stale = (now - ChronoDuration::minutes(5) - ChronoDuration::seconds(1)).to_rfc3339();
-        let active = (now - ChronoDuration::minutes(4)).to_rfc3339();
+        // cfg(test) lease is 2s (todo 11): 3s-old is stale, 1s-old fresh.
+        let stale = (now - ChronoDuration::seconds(3)).to_rfc3339();
+        let active = (now - ChronoDuration::seconds(1)).to_rfc3339();
 
         assert!(processing_lease_is_stale(Some(&stale), &now));
         assert!(!processing_lease_is_stale(Some(&active), &now));
@@ -3290,38 +3365,107 @@ mod tests {
     }
 
     #[test]
+    fn forbidden_vs_ratelimit() {
+        use super::{GOOGLE_DAILY_LIMIT, calculate_retry_backoff, google_status_error_with_body};
+        use reqwest::StatusCode;
+
+        // Captured-shape Google 403 fixtures: routing rides errors[].reason.
+        let rate_limit_body = r#"{"error":{"code":403,"message":"Rate Limit Exceeded","errors":[{"domain":"usageLimits","reason":"rateLimitExceeded","message":"Rate Limit Exceeded"}]}}"#;
+        let daily_limit_body = r#"{"error":{"code":403,"message":"Daily Limit Exceeded","errors":[{"domain":"usageLimits","reason":"dailyLimitExceeded","message":"Daily Limit Exceeded"}]}}"#;
+        let forbidden_body = r#"{"error":{"code":403,"message":"The caller does not have permission","errors":[{"domain":"global","reason":"forbidden","message":"The caller does not have permission"}]}}"#;
+
+        // 403 rateLimitExceeded -> transient-forever: RETRY at any attempt via
+        // the todo-1 classifier (fail arm skips the attempts increment).
+        let rate = google_status_error_with_body(StatusCode::FORBIDDEN, rate_limit_body);
+        assert!(rate.contains(GOOGLE_RATE_LIMITED), "unexpected mapping: {rate}");
+        for attempts in [0_i64, 4, 5, 100] {
+            let (_, status, _) = calculate_retry_backoff(attempts, &rate);
+            assert_eq!(status, "RETRY", "attempts={attempts}");
+        }
+        // Sibling quota reasons share the transient path.
+        for body in [
+            rate_limit_body.replace("rateLimitExceeded", "userRateLimitExceeded"),
+            rate_limit_body.replace("rateLimitExceeded", "quotaExceeded"),
+        ] {
+            let mapped = google_status_error_with_body(StatusCode::FORBIDDEN, &body);
+            assert!(mapped.contains(GOOGLE_RATE_LIMITED), "unexpected mapping: {mapped}");
+            let (_, status, _) = calculate_retry_backoff(100, &mapped);
+            assert_eq!(status, "RETRY");
+        }
+
+        // 403 dailyLimitExceeded -> finite DEAD with the DAILY_LIMIT code.
+        let daily = google_status_error_with_body(StatusCode::FORBIDDEN, daily_limit_body);
+        assert!(daily.contains(GOOGLE_DAILY_LIMIT), "unexpected mapping: {daily}");
+        let (_, fresh_status, _) = calculate_retry_backoff(0, &daily);
+        assert_eq!(fresh_status, "RETRY");
+        let (_, dead_status, dead_code) = calculate_retry_backoff(4, &daily);
+        assert_eq!(dead_status, "DEAD");
+        assert_eq!(dead_code, GOOGLE_DAILY_LIMIT);
+
+        // Other 403 (permissions) -> finite on the generic 5-strike path.
+        let denied = google_status_error_with_body(StatusCode::FORBIDDEN, forbidden_body);
+        assert_eq!(denied, GOOGLE_PERMISSION_DENIED);
+        let drive_denied = google_status_error_with_body(
+            StatusCode::FORBIDDEN,
+            &forbidden_body.replace("\"forbidden\"", "\"insufficientFilePermissions\""),
+        );
+        assert_eq!(drive_denied, GOOGLE_PERMISSION_DENIED);
+        let (_, fresh_status, _) = calculate_retry_backoff(0, &denied);
+        assert_eq!(fresh_status, "RETRY");
+        let (_, dead_status, dead_code) = calculate_retry_backoff(4, &denied);
+        assert_eq!(dead_status, "DEAD");
+        assert_eq!(dead_code, "GOOGLE_SYNC_FAILED");
+    }
+
+    #[test]
     fn test_rate_limited_backoff() {
         use super::{calculate_retry_backoff, GOOGLE_RATE_LIMITED};
 
-        // Rate-limited backoff: 60s base doubling (60, 120, 240, 480, 960)
-        let (b0, s0, c0) = calculate_retry_backoff(0, "429 Too Many Requests");
-        assert_eq!(b0, 60);
-        assert_eq!(s0, "RETRY");
-        assert_eq!(c0, GOOGLE_RATE_LIMITED);
+        // Rate-limited backoff: 60s base doubling (60, 120, 240, 480, 960
+        // capped) with full-jitter ±50% sampled in [base/2, base + base/2].
+        // Exact values are non-deterministic by design — assert the window.
+        let windows: [(i64, u64, u64); 5] = [
+            (0, 30, 90),
+            (1, 60, 180),
+            (2, 120, 360),
+            (3, 240, 720),
+            (4, 480, 1440),
+        ];
+        for (attempts, floor, ceiling) in windows {
+            let (backoff, status, code) =
+                calculate_retry_backoff(attempts, "429 Too Many Requests");
+            assert!(
+                (floor..=ceiling).contains(&backoff),
+                "attempts={attempts}: transient backoff {backoff}s outside [{floor},{ceiling}]"
+            );
+            assert_eq!(status, "RETRY", "attempts={attempts}");
+            assert_eq!(code, GOOGLE_RATE_LIMITED, "attempts={attempts}");
+        }
 
         let (b1, s1, _) = calculate_retry_backoff(1, GOOGLE_RATE_LIMITED);
-        assert_eq!(b1, 120);
+        assert!((60..=180).contains(&b1));
         assert_eq!(s1, "RETRY");
 
         let (b2, s2, _) = calculate_retry_backoff(2, "error with 429 code");
-        assert_eq!(b2, 240);
+        assert!((120..=360).contains(&b2));
         assert_eq!(s2, "RETRY");
 
         let (b3, s3, _) = calculate_retry_backoff(3, GOOGLE_RATE_LIMITED);
-        assert_eq!(b3, 480);
+        assert!((240..=720).contains(&b3));
         assert_eq!(s3, "RETRY");
 
         let (b4, s4, _) = calculate_retry_backoff(4, GOOGLE_RATE_LIMITED);
-        assert_eq!(b4, 960);
+        assert!((480..=1440).contains(&b4));
         assert_eq!(s4, "RETRY");
 
-        // Excluded from 5-strikes-to-DEAD: even at 5 or 10 attempts, status remains RETRY, never DEAD
+        // Excluded from 5-strikes-to-DEAD: even at 5 or 10 attempts, status remains RETRY, never DEAD.
+        // Attempts clamp at the 960s cap, still jittered in [480, 1440].
         let (b5, s5, _) = calculate_retry_backoff(5, GOOGLE_RATE_LIMITED);
-        assert_eq!(b5, 960);
+        assert!((480..=1440).contains(&b5), "attempts=5: {b5}s outside [480,1440]");
         assert_eq!(s5, "RETRY");
 
         let (b10, s10, _) = calculate_retry_backoff(10, "HTTP 429");
-        assert_eq!(b10, 960);
+        assert!((480..=1440).contains(&b10), "attempts=10: {b10}s outside [480,1440]");
         assert_eq!(s10, "RETRY");
 
         // Generic failures: 2^min(attempts, 5), status DEAD on attempts + 1 >= 5

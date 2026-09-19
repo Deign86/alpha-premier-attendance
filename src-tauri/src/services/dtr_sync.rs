@@ -37,9 +37,12 @@
 //!   same tap converge instead of duplicating.
 
 use crate::services::sheets_sync::{
-    GOOGLE_AUTH_FAILED, GOOGLE_NOT_FOUND, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED,
-    GOOGLE_REQUEST_FAILED,
+    GOOGLE_AUTH_FAILED, GOOGLE_DAILY_LIMIT, GOOGLE_NOT_FOUND, GOOGLE_PERMISSION_DENIED,
+    GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED, GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS,
+    classify_403_body, parse_retry_after_secs, per_call_budget_actual, per_call_should_retry,
+    per_call_sleep_ms,
 };
+use crate::services::sync_retry::{DtrThrottleBucket, split_dtr_batch};
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
@@ -959,6 +962,56 @@ pub fn build_format_requests(ops: &[DtrFormatOp]) -> serde_json::Value {
     serde_json::json!({ "requests": requests })
 }
 
+fn dtr_retry_after_secs(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after_secs)
+}
+
+/// Sleeps at most the remaining 19.5s budget; returns the new slept total.
+async fn sleep_within_budget(already_slept_ms: u64, want_ms: u64) -> u64 {
+    let actual_ms = per_call_budget_actual(already_slept_ms, want_ms);
+    if actual_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(actual_ms)).await;
+    }
+    already_slept_ms.saturating_add(actual_ms)
+}
+
+/// Runs one Google call with the shared bound above. Returns the last
+/// response (success, non-retryable, or attempts exhausted) so the caller maps
+/// it to the transient code; transport exhaustion returns the generic code.
+async fn dtr_call_with_retry(
+    build: impl Fn() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    let mut slept_ms: u64 = 0;
+    let mut attempt: u32 = 0;
+    loop {
+        match build().send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() || !per_call_should_retry(status.as_u16(), attempt) {
+                    return Ok(response);
+                }
+                let retry_after = dtr_retry_after_secs(&response);
+                drop(response);
+                slept_ms =
+                    sleep_within_budget(slept_ms, per_call_sleep_ms(attempt, retry_after)).await;
+                attempt += 1;
+            }
+            Err(_) => {
+                if attempt + 1 >= PER_CALL_MAX_ATTEMPTS {
+                    return Err(GOOGLE_REQUEST_FAILED.to_string());
+                }
+                slept_ms =
+                    sleep_within_budget(slept_ms, per_call_sleep_ms(attempt, None)).await;
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// Execute paint ops in ONE spreadsheets.batchUpdate. Skips the call
 /// when there is nothing to paint. Returns whether a call was issued.
 pub async fn execute_format_ops(
@@ -972,27 +1025,15 @@ pub async fn execute_format_ops(
     }
     let url = format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate");
     let body = build_format_requests(ops);
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .post(&url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(true);
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+    let response = dtr_call_with_retry(|| {
+        client.post(&url).bearer_auth(token).json(&body)
+    })
+    .await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(true);
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
 /// Paint format ops using already-fetched `rows` without an extra network GET.
@@ -1043,8 +1084,33 @@ fn dtr_status_error(status: reqwest::StatusCode) -> &'static str {
         403 => GOOGLE_PERMISSION_DENIED,
         404 => GOOGLE_NOT_FOUND,
         429 => GOOGLE_RATE_LIMITED,
+        code if (500..=599).contains(&code) => GOOGLE_SERVER_ERROR,
         _ => GOOGLE_REQUEST_FAILED,
     }
+}
+
+/// 403-aware mapper sharing the Sheets reason classifier: rate/quota 403s
+/// route transient-forever, daily-limit 403s keep their finite DAILY code.
+fn dtr_status_error_with_body(status: reqwest::StatusCode, body: &str) -> String {
+    if status.as_u16() == 403 {
+        let mapped = classify_403_body(body);
+        if mapped.contains(GOOGLE_DAILY_LIMIT) {
+            log::warn!("DTR push hit Google daily quota (operator action required; ~24h block)");
+        }
+        return mapped;
+    }
+    dtr_status_error(status).to_string()
+}
+
+/// Maps a failed DTR response to its queue error string, consuming the
+/// body only on 403 (the one status whose reason changes the verdict).
+async fn dtr_error_for_response(response: reqwest::Response) -> String {
+    let status = response.status();
+    if status.as_u16() == 403 {
+        let body = response.text().await.unwrap_or_default();
+        return dtr_status_error_with_body(status, &body);
+    }
+    dtr_status_error(status).to_string()
 }
 
 async fn dtr_get_json(
@@ -1052,29 +1118,15 @@ async fn dtr_get_json(
     token: &str,
     url: String,
 ) -> Result<serde_json::Value, String> {
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .get(&url)
-            .bearer_auth(token)
-            .send()
+    let response = dtr_call_with_retry(|| client.get(&url).bearer_auth(token)).await?;
+    let status = response.status();
+    if status.is_success() {
+        return response
+            .json()
             .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return response
-                .json()
-                .await
-                .map_err(|_| GOOGLE_REQUEST_FAILED.to_string());
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string());
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
 fn rows_from_values(value: &serde_json::Value) -> Vec<Vec<String>> {
@@ -1219,7 +1271,7 @@ async fn duplicate_template_tab(
             log::info!("dtr auto-create: tab already exists for {title}; will re-resolve");
             return Ok(None);
         }
-        return Err(dtr_status_error(status).to_string());
+        return Err(dtr_status_error_with_body(status, &body));
     }
     let body: serde_json::Value = response
         .json()
@@ -1442,30 +1494,33 @@ pub async fn execute_dtr_push(
     let url = format!(
         "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
     );
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .put(&url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(true);
-        }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
+    let response = dtr_call_with_retry(|| {
+        client.put(&url).bearer_auth(token).json(&body)
+    })
+    .await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(true);
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    Err(dtr_error_for_response(response).await)
 }
 
-/// Batch-write multiple DTR rows in a single `values:batchUpdate` request.
+/// Batch-write multiple DTR rows with values-only coalescing: plans are
+/// chunked at 50 ranges OR 2MB serialized payload (whichever first, see
+/// `sync_retry::split_dtr_batch`), one spreadsheet per call, one
+/// values:batchUpdate per chunk. Paint never rides these calls — it stays
+/// in `paint_tab_formats_with_rows`, and the absent sweep is untouched.
+///
+/// Whole-call 400 (data error, deterministic per range) falls back to
+/// per-range isolation: each range of the failed chunk is retried singly,
+/// good ranges apply, bad ones collect into the returned error. Other
+/// failures return immediately: transient codes (429/5xx/403-rateLimit via
+/// `dtr_error_for_response`, todo 5) belong to the todo-1 queue fail arm,
+/// and transport exhaustion replays the chunk wholesale.
+///
+/// Values-overwrite idempotency: every write is a full `B:E` range+values
+/// overwrite, so replaying the same range+values (retry, resume, or
+/// isolation re-probe) converges instead of duplicating — safe to retry.
 pub async fn execute_dtr_batch_push(
     client: &reqwest::Client,
     token: &str,
@@ -1475,51 +1530,132 @@ pub async fn execute_dtr_batch_push(
     if plans.is_empty() {
         return Ok(0);
     }
-    let data: Vec<serde_json::Value> = plans
-        .iter()
-        .map(|plan| {
-            let range = format!(
-                "{}!B{}:E{}",
-                quote_tab(&plan.tab),
-                plan.row_1based,
-                plan.row_1based
-            );
-            serde_json::json!({
-                "range": range,
-                "values": [[plan.values[0], plan.values[1], plan.values[2], plan.values[3]]]
-            })
-        })
-        .collect();
-
-    let body = serde_json::json!({
-        "valueInputOption": "USER_ENTERED",
-        "data": data
-    });
-
     let url = format!(
         "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
     );
-    let mut backoff = std::time::Duration::from_millis(1500);
-    for attempt in 0..3 {
-        let response = client
-            .post(&url)
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(plans.len());
+    execute_dtr_batch_push_to_url(client, token, &url, plans).await
+}
+
+/// URL-injectable core of `execute_dtr_batch_push` (loopback seam for the
+/// `batch_coalesce` tests; production passes the Google URL above).
+async fn execute_dtr_batch_push_to_url(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    plans: &[DtrPushPlan],
+) -> Result<usize, String> {
+    let sizes: Vec<usize> = plans.iter().map(dtr_batch_entry_bytes).collect();
+    let mut applied_total = 0_usize;
+    let mut bad: Vec<(String, String)> = Vec::new();
+    for (start, end) in split_dtr_batch(&sizes) {
+        let entries: Vec<serde_json::Value> =
+            plans[start..end].iter().map(dtr_batch_entry).collect();
+        let body = dtr_values_batch_body(&entries);
+        match post_dtr_values_batch(client, token, url, &body).await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    applied_total += end - start;
+                } else if status.as_u16() == 400 {
+                    drop(response);
+                    isolate_dtr_chunk(client, token, url, &plans[start..end], &mut applied_total, &mut bad).await;
+                } else {
+                    return Err(dtr_error_for_response(response).await);
+                }
+            }
+            Err(error) => return Err(error),
         }
-        if status.as_u16() == 429 && attempt < 2 {
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-            continue;
-        }
-        return Err(dtr_status_error(status).to_string());
     }
-    Err(GOOGLE_RATE_LIMITED.to_string())
+    if bad.is_empty() {
+        Ok(applied_total)
+    } else {
+        Err(dtr_isolation_error(applied_total, plans.len(), &bad))
+    }
+}
+
+/// Per-range isolation for one whole-call-400 chunk: retry each range
+/// singly through the same bounded helper (todo 2). Sheets answers 200
+/// with per-range responses and no per-range error field, so a single that
+/// succeeds is a good range applied, and a single that fails is the bad
+/// range isolated with its own error.
+async fn isolate_dtr_chunk(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    chunk: &[DtrPushPlan],
+    applied_total: &mut usize,
+    bad: &mut Vec<(String, String)>,
+) {
+    for plan in chunk {
+        let range = dtr_plan_range(plan);
+        let single = dtr_values_batch_body(&[dtr_batch_entry(plan)]);
+        match post_dtr_values_batch(client, token, url, &single).await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    *applied_total += 1;
+                } else {
+                    bad.push((range, dtr_error_for_response(response).await));
+                }
+            }
+            Err(error) => bad.push((range, error)),
+        }
+    }
+}
+
+/// One values:batchUpdate POST through the shared bounded retry (todo 2:
+/// max 3 attempts, jitter, Retry-After ≤15s). Returns the last response so
+/// the caller maps it (todo 5: 403 reason routing inside
+/// `dtr_error_for_response`); transport exhaustion returns the generic
+/// transient code for the todo-1 queue fail arm.
+async fn post_dtr_values_batch(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<reqwest::Response, String> {
+    dtr_call_with_retry(|| client.post(url).bearer_auth(token).json(body)).await
+}
+
+/// Canonical `B:E` range string for one plan (single source for entries
+/// and isolation errors).
+fn dtr_plan_range(plan: &DtrPushPlan) -> String {
+    format!(
+        "{}!B{}:E{}",
+        quote_tab(&plan.tab),
+        plan.row_1based,
+        plan.row_1based
+    )
+}
+
+/// One values-only range entry for values:batchUpdate.
+fn dtr_batch_entry(plan: &DtrPushPlan) -> serde_json::Value {
+    serde_json::json!({
+        "range": dtr_plan_range(plan),
+        "values": [[plan.values[0], plan.values[1], plan.values[2], plan.values[3]]]
+    })
+}
+
+/// Serialized bytes of one entry — the 2MB payload budget input.
+fn dtr_batch_entry_bytes(plan: &DtrPushPlan) -> usize {
+    serde_json::to_string(&dtr_batch_entry(plan)).map_or(0, |s| s.len())
+}
+
+/// values:batchUpdate body for one chunk (pure: 10 plans in ⇒ 10 ranges).
+fn dtr_values_batch_body(entries: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::json!({
+        "valueInputOption": "USER_ENTERED",
+        "data": entries
+    })
+}
+
+/// Aggregate error after isolation: good ranges applied, bad ones named.
+fn dtr_isolation_error(applied: usize, total: usize, bad: &[(String, String)]) -> String {
+    let detail = bad
+        .iter()
+        .map(|(range, error)| format!("{range}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("dtr batch: applied {applied} of {total}, isolated bad range(s): {detail}")
 }
 
 fn str_field(payload: &serde_json::Value, name: &str) -> Option<String> {
@@ -1694,15 +1830,39 @@ pub async fn clear_dtr_row(
     Ok(true)
 }
 
-/// Handle one `InternDtr` queue row. `Ok(false)` = already in sync or no
-/// tab yet (tracked in `dtr_pending`). Errors propagate to the standard
-/// claim/retry/backoff path in run_once.
+/// Todo 3 -- ONE skip path for unresolvable DTR plans (no-tab,
+/// no-month-block, no-date-row, empty-values): note `dtr_pending` so the
+/// rescan re-drives the row, and return `Ok(false)` so the queue marks it
+/// SYNCED-with-skip. No attempts increment, never `Err`, hence never
+/// RETRY and never DEAD. DEAD stays reserved for corrupt payloads (the
+/// payload-validation `Err`s at the top of `push_dtr_row`).
+async fn skip_unresolvable_row(
+    state: &AppState,
+    user_id: &str,
+    full_name: &str,
+    attendance_date: &str,
+    reason: &'static str,
+) -> Result<bool, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    note_dtr_pending(state, user_id, full_name, &now).await?;
+    log::warn!(
+        "dtr skip: unresolvable for {full_name} ({user_id}) on {attendance_date}: {reason}; SYNCED-with-skip, noted in dtr_pending"
+    );
+    Ok(false)
+}
+
+/// Handle one `InternDtr` queue row. `Ok(false)` = already in sync, no
+/// tab yet, or an unresolvable plan (no-tab/no-month/no-date-row/
+/// empty-values) -- all tracked in `dtr_pending`, never DEAD. Transport
+/// and corrupt-payload errors propagate to the standard claim/retry/
+/// backoff path in run_once (corrupt ages into DEAD, transient never).
 pub async fn push_dtr_row(
     state: &AppState,
     client: &reqwest::Client,
     token: &str,
     spreadsheet_id: &str,
     payload: &serde_json::Value,
+    throttle: Option<std::sync::Arc<tokio::sync::Mutex<DtrThrottleBucket>>>,
 ) -> Result<bool, String> {
     let user_id = str_field(payload, "userId")
         .filter(|s| !s.trim().is_empty())
@@ -1734,7 +1894,7 @@ pub async fn push_dtr_row(
     // no past day waits for a future scan that may never come.
     if just_created {
         let (wrote, complete) =
-            backfill_user_history(state, client, token, spreadsheet_id, &user_id, &full_name, &roster, &meta)
+            backfill_user_history(state, client, token, spreadsheet_id, &user_id, &full_name, &roster, &meta, throttle)
                 .await?;
         let now = chrono::Utc::now().to_rfc3339();
         if complete {
@@ -1789,10 +1949,7 @@ pub async fn push_dtr_row(
             Ok(false)
         }
         DtrPlanOutcome::Unresolvable(reason) => {
-            let now = chrono::Utc::now().to_rfc3339();
-            note_dtr_pending(state, &user_id, &full_name, &now).await?;
-            log::warn!("dtr unresolvable for {full_name} ({user_id}) on {attendance_date}: {reason}; noted in dtr_pending");
-            Err(format!("{GOOGLE_REQUEST_FAILED}: Unresolvable({reason})"))
+            skip_unresolvable_row(state, &user_id, &full_name, &attendance_date, reason).await
         }
     }
 }
@@ -1872,6 +2029,7 @@ async fn backfill_user_history(
     full_name: &str,
     roster: &[(String, String)],
     meta: &[DtrTabMeta],
+    throttle: Option<std::sync::Arc<tokio::sync::Mutex<DtrThrottleBucket>>>,
 ) -> Result<(usize, bool), String> {
     let titles = titles_of(meta);
     let Some(tab) = DtrMatchIndex::build(&titles, roster).resolve(user_id, full_name) else {
@@ -1941,6 +2099,26 @@ async fn backfill_user_history(
     }
 
     if !pending_writes.is_empty() {
+        // Plan todo 7: queue path admits the exact batch cost (writes +
+        // todo-6 chunk count) before the values:batchUpdate calls. Denial
+        // writes nothing — (0, false) keeps the user pending for the next
+        // tick instead of sleeping or busy-looping. Manual path (None)
+        // skips the bucket and keeps its 1000ms pacing floor.
+        if let Some(throttle) = throttle.as_ref() {
+            let sizes: Vec<usize> = pending_writes.iter().map(dtr_batch_entry_bytes).collect();
+            let calls = split_dtr_batch(&sizes).len() as u32;
+            let wait_ms = throttle
+                .lock()
+                .await
+                .take(pending_writes.len() as u32, calls, crate::services::sync_retry::wall_now_ms());
+            if wait_ms > 0 {
+                log::warn!(
+                    "DTR throttle: deferring backfill of {} writes + {calls} calls for {full_name} ({user_id}) for {wait_ms}ms",
+                    pending_writes.len()
+                );
+                return Ok((0, false));
+            }
+        }
         execute_dtr_batch_push(client, token, spreadsheet_id, &pending_writes).await?;
     }
 
@@ -1965,12 +2143,17 @@ async fn backfill_user_history(
 /// Recheck every tracked user against one shared title fetch (one Sheets
 /// metadata GET per run at most, only when pending rows exist). When a
 /// tab has appeared, backfill the user's full history and clear pending.
-/// Per-user failures are logged and skipped; the row stays pending.
+/// Re-drive triggers (todo 3): the 30s tick rescan in run_once while
+/// pending rows exist (covers owner-added month blocks too — planning
+/// re-reads live tabs every pass), plus one immediate rescan after
+/// manual_sync mints tabs. Per-user failures are logged and skipped;
+/// the row stays pending.
 pub async fn process_dtr_pending(
     state: &AppState,
     client: &reqwest::Client,
     token: &str,
     spreadsheet_id: &str,
+    throttle: Option<std::sync::Arc<tokio::sync::Mutex<DtrThrottleBucket>>>,
 ) -> Result<usize, String> {
     use sqlx::Row;
     let pending: Vec<(String, String)> =
@@ -1994,7 +2177,12 @@ pub async fn process_dtr_pending(
     let now = chrono::Utc::now().to_rfc3339();
     let mut backfilled = 0;
     for (user_id, full_name) in &pending {
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        // Plan todo 7: queue path (throttle present) is bucket-exclusive —
+        // batch admissions inside backfill own the pacing, so no fixed
+        // sleep here. Manual path (None) keeps the 1000ms pacing floor.
+        if throttle.is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
         // Deactivated (or deleted) while pending: keep the row, skip the
         // pass. See roster_has docs for the rationale.
         if !roster_has(&roster, user_id) {
@@ -2023,6 +2211,7 @@ pub async fn process_dtr_pending(
         };
         match backfill_user_history(
             state, client, token, spreadsheet_id, user_id, full_name, &roster, &meta,
+            throttle.clone(),
         )
         .await
         {
@@ -2225,6 +2414,11 @@ pub async fn manual_sync_intern_dtr(
         };
 
         let Some(tab) = tab_opt else {
+            // Todo 3: a manually-synced intern with no tab yet stays visible
+            // (MISSING_TAB) AND tracked, so the pending rescan re-drives
+            // them once the owner creates the tab.
+            let now = chrono::Utc::now().to_rfc3339();
+            note_dtr_pending(state, user_id, full_name, &now).await?;
             details.push(InternSyncDetail {
                 user_id: user_id.clone(),
                 full_name: full_name.clone(),
@@ -2238,7 +2432,7 @@ pub async fn manual_sync_intern_dtr(
 
         // Backfill history
         match backfill_user_history(
-            state, &client, &token, &spreadsheet_id, user_id, full_name, &roster, &meta,
+            state, &client, &token, &spreadsheet_id, user_id, full_name, &roster, &meta, None,
         )
         .await
         {
@@ -2276,6 +2470,16 @@ pub async fn manual_sync_intern_dtr(
         }
     }
 
+    // Todo 3 re-drive: tabs minted above unblock pending queue rows now --
+    // rescan once instead of waiting for the next 30s tick (which also
+    // covers owner-added month blocks: planning re-reads live tabs every
+    // pass). Log-only: the report below already reflects this pass.
+    if !tabs_created.is_empty() {
+        if let Err(error) = process_dtr_pending(state, &client, &token, &spreadsheet_id, None).await {
+            log::warn!("dtr pending rescan after tab-create failed: {error}");
+        }
+    }
+
     if let Some(app) = app {
         use tauri::Emitter;
         let _ = app.emit(
@@ -2303,6 +2507,7 @@ pub async fn manual_sync_intern_dtr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::sync_retry::{PER_CALL_SLEEP_BUDGET_MS, is_per_call_retryable};
 
     fn users() -> Vec<(String, String)> {
         vec![
@@ -2425,9 +2630,423 @@ mod tests {
         assert_eq!(find_date_row_in(&rows, "2026-08-31", 4, 7), Ok(None));
     }
 
+    #[tokio::test]
+    async fn per_call_retry_bounded() {
+        // Todo 2 acceptance: per-call attempts capped at 3 with full-jitter
+        // backoff (base 1500ms doubling) + Retry-After honored and clamped to
+        // 15s; worst-case added in-call sleep 1.5+3+15 = 19.5s so one row
+        // never overruns the 30s tick. Exhaustion returns the transient code
+        // upward (queue-row infiniteness lives in todo 1's fail arm, never
+        // in an in-call loop).
+        assert_eq!(PER_CALL_MAX_ATTEMPTS, 3);
+        assert!(is_per_call_retryable(429));
+        assert!(is_per_call_retryable(503));
+        assert!(!is_per_call_retryable(400));
+        assert!(!is_per_call_retryable(404));
+        assert!(per_call_should_retry(429, 0));
+        assert!(per_call_should_retry(503, 1));
+        assert!(!per_call_should_retry(429, 2));
+        assert!(!per_call_should_retry(400, 0));
+        assert_eq!(parse_retry_after_secs("120"), Some(120));
+        assert_eq!(parse_retry_after_secs("2"), Some(2));
+        assert_eq!(parse_retry_after_secs("junk"), None);
+        assert_eq!(per_call_sleep_ms(0, Some(120)), 15_000);
+        assert_eq!(per_call_sleep_ms(0, Some(2)), 2_000);
+        assert!(per_call_sleep_ms(0, None) <= 1_500);
+        assert!(per_call_sleep_ms(1, None) <= 3_000);
+        assert_eq!(per_call_budget_actual(18_000, 15_000), 1_500);
+        assert_eq!(
+            PER_CALL_SLEEP_BUDGET_MS,
+            1_500 + 3_000 + 15_000,
+            "worst-case in-call sleep (1.5s jitter + 3s jitter + 15s Retry-After cap) must stay inside the 19.5s budget"
+        );
+        assert_eq!(
+            dtr_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS),
+            GOOGLE_RATE_LIMITED
+        );
+
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Persistent 429 with Retry-After: 0 (zero real sleep): exactly 3
+        // attempts, then the transient code returns upward.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![rate_limited_response(); 3],
+            Arc::clone(&hits),
+        );
+        let client = test_client();
+        let err = dtr_get_json(&client, "token", url).await.unwrap_err();
+        assert_eq!(err, GOOGLE_RATE_LIMITED);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+
+        // Single 429 then 200: success within the bound (2 calls).
+        let hits = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![rate_limited_response(), ok_values_response()],
+            Arc::clone(&hits),
+        );
+        let value = dtr_get_json(&client, "token", url).await.unwrap();
+        assert_eq!(
+            value.get("values").and_then(|v| v.as_array()).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        // Retry-After honored: 429 carrying Retry-After: 1 then 200 sleeps ~1s.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let url = serve_scripted(
+            vec![rate_limited_response_after(1), ok_values_response()],
+            Arc::clone(&hits),
+        );
+        let started = std::time::Instant::now();
+        dtr_get_json(&client, "token", url).await.unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(900));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(25))
+            .build()
+            .expect("loopback test client builds")
+    }
+
+    fn rate_limited_response_after(secs: u64) -> String {
+        format!(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: {secs}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn rate_limited_response() -> String {
+        rate_limited_response_after(0)
+    }
+
+    fn ok_values_response() -> String {
+        let body = "{\"values\":[[\"a\"]]}";
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn find_header_end(buf: &[u8]) -> Option<usize> {
+        buf.windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|pos| pos + 4)
+    }
+
+    fn header_content_length(header: &[u8]) -> usize {
+        String::from_utf8_lossy(header)
+            .to_lowercase()
+            .split("\r\n")
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("content-length:")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Loopback fixture: serves the scripted responses in order on fresh
+    /// connections and counts hits, so the test proves the attempt bound with
+    /// real HTTP and zero real sleep (Retry-After: 0). Returns a URL for
+    /// `dtr_get_json`.
+    fn serve_scripted(
+        responses: Vec<String>,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> String {
+        use std::io::{Read, Write};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("loopback fixture binds");
+        let addr = listener.local_addr().expect("fixture addr").to_string();
+        listener
+            .set_nonblocking(true)
+            .expect("fixture nonblocking");
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+            let mut served = 0_usize;
+            while served < responses.len() && std::time::Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+                };
+                // Accepted sockets may inherit the listener's nonblocking
+                // mode; force blocking reads so a not-yet-arrived request
+                // waits instead of WouldBlock-abandoning the connection.
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut buf = vec![0_u8; 65536];
+                let mut got = 0_usize;
+                let mut header_end = None;
+                while header_end.is_none() && got < buf.len() {
+                    match stream.read(&mut buf[got..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            got += n;
+                            header_end = find_header_end(&buf[..got]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let Some(end) = header_end else {
+                    continue;
+                };
+                let mut body_needed = header_content_length(&buf[..end])
+                    .saturating_sub(got.saturating_sub(end));
+                let mut drain = [0_u8; 4096];
+                while body_needed > 0 {
+                    let want = drain.len().min(body_needed);
+                    match stream.read(&mut drain[..want]) {
+                        Ok(0) => break,
+                        Ok(n) => body_needed = body_needed.saturating_sub(n),
+                        Err(_) => break,
+                    }
+                }
+                let _ = stream.write_all(responses[served].as_bytes());
+                let _ = stream.flush();
+                drop(stream);
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                served += 1;
+            }
+        });
+        format!("http://{addr}/values/Fake!A:F")
+    }
+
+    fn batch_plan(tab: &str, row_1based: usize, fill: &str) -> DtrPushPlan {
+        DtrPushPlan {
+            tab: tab.to_string(),
+            row_1based,
+            values: [
+                fill.to_string(),
+                "12:00:00 PM".to_string(),
+                "1:00:00 PM".to_string(),
+                "5:00:00 PM".to_string(),
+            ],
+        }
+    }
+
+    fn ok_batch_response() -> String {
+        let body = "{\"spreadsheetId\":\"scratch\",\"totalUpdatedCells\":4,\"responses\":[{\"spreadsheetId\":\"scratch\",\"updatedRange\":\"'TAB'!B2:E2\"}]}";
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn bad_request_response() -> String {
+        let body =
+            "{\"error\":{\"code\":400,\"message\":\"Invalid values\",\"status\":\"INVALID_ARGUMENT\"}}";
+        format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    /// Loopback fixture for values:batchUpdate: records each POST body so the
+    /// test proves range coalescing, and serves scripted statuses in order.
+    fn serve_batch_scripted(
+        responses: Vec<String>,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> String {
+        use std::io::{Read, Write};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("loopback batch fixture binds");
+        let addr = listener.local_addr().expect("fixture addr").to_string();
+        listener
+            .set_nonblocking(true)
+            .expect("fixture nonblocking");
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+            let mut served = 0_usize;
+            while served < responses.len() && std::time::Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+                };
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let mut buf = vec![0_u8; 65536];
+                let mut got = 0_usize;
+                let mut header_end = None;
+                while header_end.is_none() && got < buf.len() {
+                    match stream.read(&mut buf[got..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            got += n;
+                            header_end = find_header_end(&buf[..got]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let Some(end) = header_end else {
+                    continue;
+                };
+                let content_len = header_content_length(&buf[..end]);
+                let mut body: Vec<u8> = buf[end..got].to_vec();
+                body.truncate(content_len.min(body.len()));
+                while body.len() < content_len {
+                    let mut chunk = vec![0_u8; content_len - body.len()];
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => body.extend_from_slice(&chunk[..n]),
+                        Err(_) => break,
+                    }
+                }
+                if let Ok(text) = String::from_utf8(body) {
+                    bodies.lock().expect("bodies lock").push(text);
+                }
+                let _ = stream.write_all(responses[served].as_bytes());
+                let _ = stream.flush();
+                drop(stream);
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                served += 1;
+            }
+        });
+        format!("http://{addr}/values:batchUpdate")
+    }
+
     #[test]
-    fn duplicate_date_rows_fail_closed() {
-        let rows = vec![
+    fn batch_coalesce_splits_at_50_ranges_or_2mb() {
+        // 10 small plans ride one call; the body carries all 10 ranges.
+        let plans: Vec<DtrPushPlan> = (2..12)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        let sizes: Vec<usize> = plans.iter().map(dtr_batch_entry_bytes).collect();
+        assert_eq!(split_dtr_batch(&sizes), vec![(0, 10)]);
+        let entries: Vec<serde_json::Value> =
+            plans.iter().map(dtr_batch_entry).collect();
+        let body = dtr_values_batch_body(&entries);
+        assert_eq!(
+            body.get("valueInputOption").and_then(|v| v.as_str()),
+            Some("USER_ENTERED")
+        );
+        assert_eq!(
+            body.get("data").and_then(|v| v.as_array()).map(Vec::len),
+            Some(10)
+        );
+
+        // 55 plans split 50 + 5 (single spreadsheet per call preserved).
+        let plans55: Vec<DtrPushPlan> = (2..57)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        let sizes55: Vec<usize> = plans55.iter().map(dtr_batch_entry_bytes).collect();
+        assert_eq!(split_dtr_batch(&sizes55), vec![(0, 50), (50, 55)]);
+
+        // 2MB payload bound splits first: 3 x ~0.8MB entries -> 2 + 1.
+        let big = "x".repeat(800_000);
+        let big_plans: Vec<DtrPushPlan> = (2..5)
+            .map(|row| batch_plan("TAB", row, &big))
+            .collect();
+        let big_sizes: Vec<usize> = big_plans.iter().map(dtr_batch_entry_bytes).collect();
+        assert_eq!(split_dtr_batch(&big_sizes), vec![(0, 2), (2, 3)]);
+
+        // Isolation error names the applied count plus the bad range.
+        let err = dtr_isolation_error(
+            9,
+            10,
+            &[("'TAB'!B4:E4".to_string(), "400 invalid".to_string())],
+        );
+        assert!(err.contains("applied 9 of 10"), "{err}");
+        assert!(err.contains("'TAB'!B4:E4"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn batch_coalesce_happy_coalesces_ten_rows_into_one_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let plans: Vec<DtrPushPlan> = (2..12)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let url = serve_batch_scripted(
+            vec![ok_batch_response()],
+            std::sync::Arc::clone(&hits),
+            std::sync::Arc::clone(&bodies),
+        );
+        let client = test_client();
+        let applied = execute_dtr_batch_push_to_url(&client, "token", &url, &plans)
+            .await
+            .expect("happy batch applies");
+        assert_eq!(applied, 10);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "10 plans drain as 1 values:batchUpdate"
+        );
+        let captured = bodies.lock().expect("bodies lock");
+        assert_eq!(captured.len(), 1);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("batch body is JSON");
+        assert_eq!(
+            parsed.get("data").and_then(|v| v.as_array()).map(Vec::len),
+            Some(10)
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_coalesce_bad_range_isolates_with_good_applied() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let plans: Vec<DtrPushPlan> = (2..12)
+            .map(|row| batch_plan("TAB", row, "9:46:23 AM"))
+            .collect();
+        // Whole-call 400, then per-range singles: every row OK except row 4.
+        let mut scripted = vec![bad_request_response()];
+        for row in 2..12 {
+            scripted.push(if row == 4 {
+                bad_request_response()
+            } else {
+                ok_batch_response()
+            });
+        }
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let url = serve_batch_scripted(
+            scripted,
+            std::sync::Arc::clone(&hits),
+            std::sync::Arc::clone(&bodies),
+        );
+        let client = test_client();
+        let err = execute_dtr_batch_push_to_url(&client, "token", &url, &plans)
+            .await
+            .expect_err("bad range isolates with error");
+        assert!(err.contains("applied 9 of 10"), "{err}");
+        assert!(err.contains("'TAB'!B4:E4"), "{err}");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            11,
+            "1 batch + 10 single-range probes"
+        );
+        let captured = bodies.lock().expect("bodies lock");
+        assert_eq!(captured.len(), 11);
+        let first: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("batch body is JSON");
+        assert_eq!(
+            first.get("data").and_then(|v| v.as_array()).map(Vec::len),
+            Some(10)
+        );
+        for single in captured.iter().skip(1) {
+            let parsed: serde_json::Value =
+                serde_json::from_str(single).expect("single body is JSON");
+            assert_eq!(
+                parsed.get("data").and_then(|v| v.as_array()).map(Vec::len),
+                Some(1)
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_date_rows_fail_closed() {        let rows = vec![
             vec!["9/5/2026".to_string()],
             vec!["9/5/2026".to_string()],
         ];
@@ -3159,6 +3778,83 @@ mod tests {
         assert_eq!(aggregate_backfill(&[Unresolvable]), (0, false));
     }
 
+    #[tokio::test]
+    async fn unresolvable_never_dead() {
+        // Todo 3: no-tab / no-month-block / no-date-row / empty-values take
+        // ONE skip path -- Ok(false) = SYNCED-with-skip + dtr_pending note,
+        // never Err, so never RETRY and never DEAD. Corrupt payloads keep
+        // the Err path and still age into DEAD (contrast at the end).
+        let tin = Some("2026-09-05T00:00:00+08:00");
+        let tout = Some("2026-09-05T09:00:00+08:00");
+        // empty-values: a record-less day plans Unresolvable, not Err.
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &[], "2026-09-05", None, None),
+            Ok(DtrPlanOutcome::Unresolvable("empty-values"))
+        );
+        // no-month-block: headers exist but none matches September.
+        let headed = vec![
+            vec!["DATE-October".to_string()],
+            vec!["10/5/2026".to_string()],
+        ];
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &headed, "2026-09-05", tin, tout),
+            Ok(DtrPlanOutcome::Unresolvable("no-month-block"))
+        );
+        // no-date-row: September block without the wanted date.
+        let no_date = vec![
+            vec!["SEPTEMBER".to_string()],
+            vec!["9/4/2026".to_string()],
+            vec!["TOTAL HOURS".to_string()],
+        ];
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &no_date, "2026-09-05", tin, tout),
+            Ok(DtrPlanOutcome::Unresolvable("no-date-row"))
+        );
+        // no-tab: unknown intern resolves to no tab.
+        let titles = vec!["Somebody Else".to_string()];
+        let roster = vec![("u1".to_string(), "New Intern".to_string())];
+        assert_eq!(
+            DtrMatchIndex::build(&titles, &roster).resolve("u1", "New Intern"),
+            None
+        );
+        // ONE skip path: every reason above returns Ok(false) with a
+        // dtr_pending note and creates no queue debt (no attempts anywhere
+        // near the sync_queue DEAD budget).
+        let state = pending_test_state().await;
+        for reason in ["no-tab", "no-month-block", "no-date-row", "empty-values"] {
+            let skipped =
+                skip_unresolvable_row(&state, "u-skip", "Skip Intern", "2026-09-05", reason)
+                    .await
+                    .unwrap();
+            assert!(!skipped, "reason={reason}");
+        }
+        let pending: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending WHERE user_id = 'u-skip'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(pending, 1);
+        let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(queued, 0);
+        // Failure contrast: a corrupt payload (empty userId) still errors
+        // before any I/O, so the queue fail arm ages it toward DEAD.
+        let corrupt = serde_json::json!({
+            "userId": "",
+            "fullName": "Skip Intern",
+            "attendanceDate": "2026-09-05",
+        });
+        let client = crate::services::sheets_sync::sheets_client();
+        let err = push_dtr_row(&state, &client, "tok", "sheet", &corrupt, None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("userId"), "unexpected error: {err}");
+        let (_, status, _) = crate::services::sync_retry::calculate_retry_backoff(4, &err);
+        assert_eq!(status, "DEAD");
+    }
+
     fn fmt_row(cells: &[&str]) -> Vec<String> {
         cells.iter().map(|s| s.to_string()).collect()
     }
@@ -3455,5 +4151,156 @@ mod tests {
             get_sheet_effective_start_date(&sep_rows),
             Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())
         );
+    }
+
+    #[tokio::test]
+    async fn resume_idempotent() {
+        // Todo 11 failing-first: kill-mid-PROCESSING must flip to RETRY on
+        // the next run_once; dtr_pending must survive the restart tick; a
+        // replayed manual batch must write B:E once (overwrite, missing
+        // ranges only). Pre-fix this FAILS: the 5-min prod lease treats a
+        // 3s-old lock as fresh, so the victim row stays stuck in PROCESSING.
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let state = pending_test_state().await;
+        let now = chrono::Utc::now();
+        let now_text = now.to_rfc3339();
+        // 5 PENDING rows: a normal backlog present at crash time.
+        for index in 0..5 {
+            let row_id = format!("resume-u{index}");
+            let payload =
+                format!("{{\"userId\":\"{row_id}\",\"fullName\":\"Resume {index}\"}}");
+            let key = format!("Users:{row_id}:UPSERT");
+            sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users',?,?,?,0,'PENDING',?,?,?,?)")
+                .bind(&row_id).bind("UPSERT").bind(&payload).bind(&now_text).bind(&now_text).bind(&now_text).bind(&key)
+                .execute(&state.db).await.unwrap();
+        }
+        // 1 PROCESSING row locked 3s ago: the crash victim (the claim wrote
+        // locked_at, the process died before the terminal update).
+        let stale_lock = (now - chrono::Duration::seconds(3)).to_rfc3339();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,locked_at,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users','resume-victim','UPSERT','{\"userId\":\"resume-victim\"}',0,'PROCESSING',?,?,?,?,?)")
+            .bind(&stale_lock).bind(&now_text).bind(&now_text).bind(&now_text).bind("Users:resume-victim:UPSERT")
+            .execute(&state.db).await.unwrap();
+        // 1 dtr_pending row: must survive the restart tick untouched.
+        note_dtr_pending(&state, "u-pending", "Pending Intern", &now_text)
+            .await
+            .unwrap();
+        // Restart tick against a dead endpoint: every claim fails finite
+        // (connection refused), so the drain cannot mask the recovery step.
+        let completed =
+            crate::services::sheets_sync::run_once(&state, Some("http://127.0.0.1:9/sync"))
+                .await
+                .unwrap();
+        assert_eq!(completed, 0);
+        // CHECK: the stale PROCESSING row flipped to RETRY (not stuck, not DEAD).
+        let victim: (String, i64) =
+            sqlx::query_as("SELECT status, attempts FROM sync_queue WHERE row_id='resume-victim'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(
+            victim.0, "RETRY",
+            "kill-mid-PROCESSING must resume as RETRY"
+        );
+        // No lease left stuck, nothing synced or dead-lettered by the refused endpoint.
+        let stuck: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='PROCESSING'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        let synced: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='SYNCED'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        let dead: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='DEAD'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!((stuck, synced, dead), (0, 0, 0));
+        // The recovery counter backing health `leaseRecovered` fired exactly once.
+        assert_eq!(
+            state
+                .lease_recovered
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        // dtr_pending survived the restart tick.
+        let pending: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending WHERE user_id='u-pending'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(pending, 1);
+        // --- manual batch replay idempotency (todo-6 overwrite, pure) ---
+        let tab = "LAZARO DEIGN";
+        let rows = vec![
+            vec!["SEPTEMBER".to_string()],
+            vec![
+                "9/4/2026".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
+            vec![
+                "9/5/2026".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
+            vec!["TOTAL HOURS".to_string()],
+        ];
+        let day5_in = Some("2026-09-05T01:00:00Z");
+        let day5_out = Some("2026-09-05T09:30:00Z");
+        let plan = match plan_dtr_push_in_rows(tab, &rows, "2026-09-05", day5_in, day5_out).unwrap()
+        {
+            DtrPlanOutcome::Write(plan) => plan,
+            other => panic!("expected Write for empty day, got {other:?}"),
+        };
+        // Same range+values replays to byte-identical bodies: values
+        // overwrite B:E in place, so a retry can never duplicate cells.
+        let body_a = dtr_values_batch_body(&[dtr_batch_entry(&plan)]);
+        let body_b = dtr_values_batch_body(&[dtr_batch_entry(&plan)]);
+        assert_eq!(body_a, body_b);
+        assert_eq!(
+            body_a
+                .get("valueInputOption")
+                .and_then(|v| v.as_str()),
+            Some("USER_ENTERED")
+        );
+        assert_eq!(
+            body_a
+                .get("data")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(1)
+        );
+        // Kill-mid-batchUpdate: only 9/5 landed. Retry re-plans from live
+        // reads — the landed day is InSync (no second B:E write), the
+        // missing day still Writes (missing ranges only).
+        let mut landed = rows.clone();
+        let idx = plan.row_1based - 1;
+        for (offset, value) in plan.values.iter().enumerate() {
+            landed[idx][1 + offset] = value.clone();
+        }
+        assert_eq!(
+            plan_dtr_push_in_rows(tab, &landed, "2026-09-05", day5_in, day5_out).unwrap(),
+            DtrPlanOutcome::InSync {
+                row_1based: plan.row_1based
+            }
+        );
+        assert!(matches!(
+            plan_dtr_push_in_rows(
+                tab,
+                &landed,
+                "2026-09-04",
+                Some("2026-09-04T01:00:00Z"),
+                Some("2026-09-04T09:30:00Z")
+            )
+            .unwrap(),
+            DtrPlanOutcome::Write(_)
+        ));
     }
 }

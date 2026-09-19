@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-09-18T02:06:28.801Z",
+  "passes": [
+    "Admin PIN authentication succeeded.",
+    "Identified/configured active intern (APG-2026-115) and regular employee (APG-2026-019).",
+    "LATE_TIMEOUT status correctly set for clock-out >= 18:00.",
+    "B1 Verified: LATE_TIMEOUT day is included in actual working days (2) and gross compensation (6500 PHP).",
+    "B2 Verified: Intern late deduction is 0 PHP (shortfall collected in half_day_deduction: 10 PHP).",
+    "B2 Verified: payroll_intern_report outputs lateDeduction = 0.",
+    "Cutoff generation with employeeId filter generated exactly 1 draft record.",
+    "Attendance XLSX export successfully created: AlphaPremier_Attendance_20260810_ad3b52e0.xlsx (7621 bytes)",
+    "Payroll XLSX export successfully created: AlphaPremier_Payroll_August-1-15-2026_7a853a0d.xlsx (112312 bytes)",
+    "Payroll Register PDF successfully created: AlphaPremier_Payroll_Register_August-1-15-2026_17d578bd.pdf (90732 bytes)",
+    "Webview JavaScript context responsive with no recorded uncaught exceptions.",
+    "Native screenshot saved: C:\\Users\\APG\\Downloads\\alpha-premier-attendance\\evidence\\audit-live-session.png"
+  ],
+  "findings": []
+}

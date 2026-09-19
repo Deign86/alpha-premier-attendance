@@ -16,6 +16,11 @@ The default full-screen kiosk view where employees and interns scan their RFID c
 
 ## Driving it with Tauri MCP
 
+> IPC route (live-proved): `tauri_ipc_execute_command` drops command args.
+> Drive backend commands via `tauri_webview_execute_js` wrapping
+> `window.__TAURI__.core.invoke('<command>', { camelCaseArgs })` with arg keys
+> exactly as in `client/src/tauri-api.ts`.
+
 Preconditions:
 - App is running with debug assertions enabled (`npm run tauri:dev`).
 - Tauri MCP Bridge WebSocket is listening on `ws://127.0.0.1:9223`.
@@ -23,30 +28,35 @@ Preconditions:
 
 - **Verify Ready State**: Inspect scan status pill on the kiosk.
   ```
-  tool: tauri_webview_find_element, args: { "selector": "[aria-label='Scanner card ID'], .status-pill" }
+  tool: tauri_webview_find_element, args: { "selector": "[data-testid=\"scanner-uid\"]" }
   ```
-  *Observable result*: Scanner status pill shows "Ready for scan" or "Listening" and input is locked against arbitrary keyboard spam.
+  *Observable result*: Scanner pill (`.scanner-pill`) shows "Ready" (also
+  "Scanning"/"Offline"/"Error"/"Connecting…") and the input is `readOnly`
+  until Manual mode. There is no `.status-pill` selector.
 
-- **Execute Hardware RFID Scan**: Trigger a simulated hardware scan event.
-  ```
-  tool: tauri_ipc_execute_command, args: {
-      "command": "scan_rfid",
-      "args": {
-        "request": { "rfidUid": "EMP-001", "source": "RFID" }
-      }
-    }
-  ```
-  *Observable result*: Returns `{ "success": true, "action": "TIME_IN" | "TIME_OUT", "employee": { "fullName": "..." } }`.
+- **Execute Hardware RFID Scan**: Trigger a simulated hardware scan event
+  via `tauri_webview_execute_js` +
+  `window.__TAURI__.core.invoke('scan_rfid', { request: { rfidUid, source } })`.
+  Non-`MANUAL_TEST` UIDs must be 4–64 ASCII-hex chars (`src-tauri/src/lib.rs`
+  scan validation) — `EMP-001` is rejected; use a seeded hex UID with
+  `source: "RFID"`, or any ID with `source: "MANUAL_TEST"`.
+  *Observable result*: Returns `{ "success": true, "action": "TIME_IN" |
+  "TIME_OUT", "user": { "fullName": "..." }, "attendance": { ... } }`
+  (field is `user`, not `employee`). Unknown UID returns
+  `{ "success": false, "error": { "code": "UNKNOWN_RFID_CARD", ... } }`
+  with no DB write (live-proved with `DEADBEEF01`).
 
 - **Drive Manual UID Entry**: Toggle manual mode and enter UID.
   ```
-  tool: tauri_webview_interact, args: { "selector": "button:has-text('Manual entry')", "action": "click" }
+  tool: tauri_webview_interact, args: { "selector": "[data-testid=\"kiosk-manual-toggle\"]", "action": "click" }
   ```
-  Followed by typing:
-  ```
-  tool: tauri_webview_interact, args: { "selector": "[aria-label='Manual card ID']", "action": "type", "value": "EMP-001\n" }
-  ```
-  *Observable result*: Input field accepts keystrokes and submits upon Enter keypress, recording attendance.
+  Then type into `input#scanner-uid[aria-label="Manual card ID"]` and submit
+  via `[data-testid="kiosk-record-submit"]` ("Record").
+  *Observable result*: Input accepts keystrokes, submit records attendance and
+  renders `[data-testid="kiosk-result-success"]` (or `kiosk-result-error`).
+  Spoken phrase is `"[Greeting], [Name]. Your time in/out has been recorded…"`
+  (grace/late/first-arrival variants in `client/src/services/ttsService.ts`),
+  not `"Time in recorded for [Name]"`.
 
 - **Capture Visual & DOM Proof**:
   ```
@@ -57,6 +67,10 @@ Preconditions:
 ## Gotchas
 
 - Manual keyboard entry is disabled on the main scanner input to prevent accidental keystrokes from corrupting hardware card scans. Use the explicit manual entry mode toggle before typing.
-- The scanner status automatically pauses while dialogs or admin panels are active.
+- The scanner pauses in manual mode and on `/attendance` and admin screens (`scanner_pause`), not only while dialogs are open.
 - `scan_rfid` takes a single `request` JSON value whose inner fields are camelCase (`request.rfidUid`), consistent with the camelCase wire convention — keep `{ "request": { "rfidUid": "..." } }` as-is.
+- CUA boundary (live-proved 2026-09-19): OS-level clicks land on kiosk controls
+  (foreground delivery), but keystrokes/typing do NOT reach WebView2 content —
+  React state never commits, so CUA cannot complete text entry or PIN entry.
+  Drive text-bearing steps via `core.invoke`; reserve CUA for clicks/decisions.
 

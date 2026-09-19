@@ -8,4 +8,5 @@ pub mod office_hours;
 pub mod payroll;
 pub mod scanner;
 pub mod sheets_sync;
+pub(crate) mod sync_retry;
 pub mod voice_pull;

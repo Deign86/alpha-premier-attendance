@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DatabasePanel } from './App';
+import { DatabasePanel, UserEditor } from './App';
 import * as api from './api';
 import * as tauriApi from './tauri-api';
+import { resetDtrSyncGuardForTests } from './dtr-sync-guard';
 import type { DatabaseInfoResponse } from '@rfid-attendance/shared';
 
 const mockDbInfo: DatabaseInfoResponse = {
@@ -53,12 +54,19 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetDtrSyncGuardForTests();
     // SAFETY: Cleaning up mock property from window
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
@@ -275,6 +283,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [{ userId: 'APG-2026-116', fullName: 'Maricon C. Danao', attempts: 1, lastChecked: null }],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
 
@@ -301,6 +315,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: 'Google Sheets auth failed: expired token',
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
 
@@ -321,6 +341,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
     loadDtrSyncHealthSpy.mockResolvedValueOnce({
@@ -388,6 +414,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
     expect(await screen.findByText('Healthy')).toBeInTheDocument();
@@ -402,6 +434,12 @@ describe('DatabasePanel', () => {
         dtrPendingItems: [],
         lastSyncedAt: '2026-08-14T00:00:00Z',
         lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
       },
     });
     await waitFor(() => {
@@ -453,6 +491,12 @@ describe('DatabasePanel', () => {
           dtrPendingItems: [],
           lastSyncedAt: '2026-08-15T00:00:00Z',
           lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
         },
       })
       .mockReturnValueOnce(manual);
@@ -495,6 +539,12 @@ describe('DatabasePanel', () => {
           dtrPendingItems: [],
           lastSyncedAt: '2026-08-15T00:00:00Z',
           lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
         },
       });
     });
@@ -541,6 +591,12 @@ describe('DatabasePanel', () => {
           dtrPendingItems: [],
           lastSyncedAt: '2026-08-15T00:00:00Z',
           lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
         },
       });
     });
@@ -564,6 +620,114 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText('Healthy')).toBeInTheDocument();
   });
 
+  it('shared guard disables Data Sync-now, Users bulk and per-row buttons while progress advances (task 9)', async () => {
+    const handlers: Array<(payload: tauriApi.DtrSyncProgress) => void> = [];
+    vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockImplementation((handler) => {
+      handlers.push(handler);
+      return Promise.resolve(() => {});
+    });
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    let resolveSync: (value: Awaited<ReturnType<typeof api.syncInternDtr>>) => void = () => {};
+    const syncPromise = new Promise<Awaited<ReturnType<typeof api.syncInternDtr>>>((resolve) => {
+      resolveSync = resolve;
+    });
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockReturnValueOnce(syncPromise);
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    render(
+      <UserEditor
+        users={[
+          {
+            userId: 'APG-2026-103',
+            rfidUid: 'ABCDEF1234',
+            fullName: 'Juan Dela Cruz',
+            department: null,
+            status: 'ACTIVE',
+            employeeType: 'INTERN',
+            gender: null,
+            dailyRate: null,
+          },
+        ]}
+        editing={null}
+        setEditing={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+
+    const dataSyncBtn = await screen.findByTestId('dtr-sync-now');
+    const bulkBtn = await screen.findByTestId('dtr-sync-bulk');
+    const rowBtn = await screen.findByTestId('dtr-sync-row-APG-2026-103');
+    expect(dataSyncBtn).toBeEnabled();
+    expect(bulkBtn).toBeEnabled();
+    expect(rowBtn).toBeEnabled();
+
+    await user.click(dataSyncBtn);
+    expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
+
+    // Single shared guard disables all three surfaces mid-sync.
+    await waitFor(() => {
+      expect(screen.getByTestId('dtr-sync-now')).toBeDisabled();
+      expect(screen.getByTestId('dtr-sync-bulk')).toBeDisabled();
+      expect(screen.getByTestId('dtr-sync-row-APG-2026-103')).toBeDisabled();
+    });
+
+    act(() => {
+      for (const handler of handlers) {
+        handler({
+          current: 0,
+          total: 10,
+          userId: '',
+          fullName: '',
+          status: 'starting',
+          source: 'manual',
+        });
+      }
+    });
+    const bars = await screen.findAllByRole('progressbar', { name: /intern dtr sync progress/i });
+    expect(bars.length).toBeGreaterThan(0);
+    for (const bar of bars) {
+      expect(bar).toHaveAttribute('aria-valuenow', '0');
+    }
+    expect(await screen.findAllByText('Manual')).not.toHaveLength(0);
+
+    act(() => {
+      for (const handler of handlers) {
+        handler({
+          current: 3,
+          total: 10,
+          userId: 'APG-2026-103',
+          fullName: 'Juan Dela Cruz',
+          status: 'syncing',
+          source: 'queue',
+        });
+      }
+    });
+    await waitFor(() => {
+      const updated = screen.getAllByRole('progressbar', { name: /intern dtr sync progress/i });
+      for (const bar of updated) {
+        expect(bar).toHaveAttribute('aria-valuenow', '30');
+      }
+    });
+    expect(await screen.findAllByText('Queue')).not.toHaveLength(0);
+
+    await act(async () => {
+      resolveSync({
+        success: true,
+        internsChecked: 10,
+        tabsCreated: [],
+        rowsSynced: 25,
+        details: [],
+        errors: [],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dtr-sync-now')).toBeEnabled();
+      expect(screen.getByTestId('dtr-sync-bulk')).toBeEnabled();
+      expect(screen.getByTestId('dtr-sync-row-APG-2026-103')).toBeEnabled();
+    });
+  });
   it('lets the manual sync resolution leave the Syncing badge (N8b)', async () => {
     // A blanket `if (syncing) return prev` completion guard would strand the
     // badge here: this test pins the exit path the N8 fix must keep.
@@ -585,5 +749,89 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/DTR sync complete/i)).toBeInTheDocument();
     expect(await screen.findByText('Healthy')).toBeInTheDocument();
     expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
+  });
+
+  it('parses the task-10 health extension fields from the native payload', async () => {
+    loadDtrSyncHealthSpy.mockRestore();
+    const syncStatusSpy = vi.spyOn(tauriApi.tauriApi, 'syncStatus').mockResolvedValueOnce({
+      success: true,
+      pending: 4,
+      deadLetter: 0,
+      byTable: [],
+      dtrPending: { count: 0, items: [] },
+      lastSyncedAt: '2026-08-15T00:00:00Z',
+      lastError: null,
+      throttledUntil: '2026-09-18T01:00:00+00:00',
+      lastThrottleReason: 'DTR_THROTTLE: 50-writes/min budget spent',
+      inProgress: { owner: 'admin_sync_now', startedAt: '2026-09-18T00:59:00+00:00' },
+      leaseRecovered: 2,
+      oldestRetryableAgeSec: 25000,
+      pendingAgeAlert: true,
+    });
+    const result = await api.loadDtrSyncHealth();
+    expect(syncStatusSpy).toHaveBeenCalledTimes(1);
+    if (!result.success) throw new Error('expected health parse to succeed');
+    expect(result.health.throttledUntil).toBe('2026-09-18T01:00:00+00:00');
+    expect(result.health.lastThrottleReason).toBe('DTR_THROTTLE: 50-writes/min budget spent');
+    expect(result.health.inProgress).toEqual({ owner: 'admin_sync_now', startedAt: '2026-09-18T00:59:00+00:00' });
+    expect(result.health.leaseRecovered).toBe(2);
+    expect(result.health.oldestRetryableAgeSec).toBe(25000);
+    expect(result.health.pendingAgeAlert).toBe(true);
+  });
+
+  it('renders throttled + in-progress health states in the Data card', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 4,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+        throttledUntil: '2026-09-18T01:00:00+00:00',
+        lastThrottleReason: 'DTR_THROTTLE: 50-writes/min budget spent',
+        inProgress: { owner: 'admin_sync_now', startedAt: '2026-09-18T00:59:00+00:00' },
+        leaseRecovered: 2,
+        oldestRetryableAgeSec: 25000,
+        pendingAgeAlert: true,
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText(/Throttled until/i)).toBeInTheDocument();
+    expect(screen.getByText(/50-writes\/min budget spent/)).toBeInTheDocument();
+    expect(screen.getByText(/admin_sync_now/)).toBeInTheDocument();
+    expect(screen.getByText(/lease recovered: 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/oldest retryable/i)).toBeInTheDocument();
+  });
+
+  it('renders Ready nulls as idle with no throttle or progress rows', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: '2026-08-15T00:00:00Z',
+        lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(screen.queryByText(/Throttled until/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
   });
 });

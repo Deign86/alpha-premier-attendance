@@ -25,6 +25,11 @@ export interface NativeDtrPendingItem {
   lastChecked: string | null;
 }
 
+export interface NativeSyncInProgress {
+  owner: string;
+  startedAt: string;
+}
+
 export interface NativeSyncStatusResponse {
   success: boolean;
   pending: number;
@@ -33,6 +38,12 @@ export interface NativeSyncStatusResponse {
   dtrPending?: { count: number; items: NativeDtrPendingItem[] } | null;
   lastSyncedAt?: string | null;
   lastError?: string | null;
+  throttledUntil?: string | null;
+  lastThrottleReason?: string | null;
+  inProgress?: NativeSyncInProgress | null;
+  leaseRecovered?: number | null;
+  oldestRetryableAgeSec?: number | null;
+  pendingAgeAlert?: boolean | null;
 }
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
@@ -134,12 +145,15 @@ export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause
 export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
+export type DtrSyncSource = "queue" | "manual";
+
 export interface DtrSyncProgress {
   current: number;
   total: number;
   userId: string;
   fullName: string;
   status: string;
+  source?: DtrSyncSource;
 }
 
 /** Listen for real-time intern DTR sync progress events from the Rust backend. */

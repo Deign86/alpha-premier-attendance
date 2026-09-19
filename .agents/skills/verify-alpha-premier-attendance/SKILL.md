@@ -26,6 +26,51 @@ For headful driving, start a session via Tauri MCP tool `tauri_driver_session`:
 tool: tauri_driver_session, args: { "action": "start" }
 ```
 
+## Launch windows (hang-prone commands)
+
+`npm run dev` and `npm run tauri:dev[:fast]` never exit — NEVER run them in
+the agent's blocking shell. Open each in its own visible `cmd` window so the
+user can see output and the agent never blocks:
+
+```powershell
+Start-Process cmd.exe -ArgumentList '/k', 'cd /d <repo> && set FOO=bar && echo FOO=%FOO% && npm run dev'
+```
+
+Rules (live-proved 2026-09-19):
+1. One window per command, one instance of each. Two `npm run dev` trees =
+   the second vite shifts to `:5174` while `tauri dev` waits on `:5173`,
+   then dies after 180s. Free `5173/5174/3001` first and confirm no
+   `vite`/`tauri` procs from your runs before launching.
+2. Env vars MUST be set inside the `/k` command line (child inherits them);
+   echo each var from the launching shell as proof.
+3. Poll readiness with quick bounded probes only (`Get-NetTCPConnection` on
+   `:5173`/`:9223`, single status invokes). No long sleeps, no blocking
+   wait loops.
+4. Verify port `9223` is owned by YOUR `target\debug\...exe` (check the
+   process command line). If it belongs to the installed app: report it,
+   never kill or drive it.
+5. Kill by exact PID only (`taskkill /PID <pid> [/T] /F`, after confirming
+   the parent chain is yours). Plain `taskkill` without `/F` sends WM_CLOSE,
+   which only hides the app to the tray — the process keeps running.
+
+## CUA driving notes (live-proved 2026-09-19)
+
+OS-level clicks via `cua-driver` land on WebView2 content with
+`delivery_mode:"foreground"` (background synthetic events are dropped).
+Known boundaries, all verified against the live app:
+- WebView2 content exposes no UIA elements — click by screenshot pixels from
+  the same `get_window_state` capture you act on.
+- Pin geometry first (`set_window_frame`, readback-confirmed); captures change
+  size otherwise and every coordinate goes stale.
+- Re-audit element rects via Tauri immediately before clicking: scroll/reflow
+  between turns moves targets (stale-rect misses confirmed).
+- Keyboard input (keys, `type_text`, paste) does NOT reach web content —
+  focus lands but React state never commits. CUA owns clicks/decisions;
+  text-bearing steps go through `core.invoke`. This is a harness gap, not an
+  app bug: admin panels are unreachable to pure-CUA (PIN entry impossible).
+- Verify every CUA action via Tauri DOM immediately after (effect is always
+  reported `unverifiable`).
+
 ## Doctor
 
 Before driving features or when troubleshooting, run the read-only doctor check:
@@ -121,7 +166,8 @@ webview only.
    tool: tauri_driver_session, args: { "action": "stop" }
    ```
 
-2. Terminate the spawned Tauri dev background process (kill by TaskId / process ID, not by global process kill).
+2. Stop your launched app/dev processes by exact PID (see rule 5 above). Leave the
+   `cmd` windows themselves open for the user unless asked to close them.
 3. Preserve captured screenshots and evidence logs in the task artifact directory.
 
 ## Helpers
