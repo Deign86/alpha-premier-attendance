@@ -3458,13 +3458,14 @@ mod tests {
         assert!((480..=1440).contains(&b4));
         assert_eq!(s4, "RETRY");
 
-        // Excluded from 5-strikes-to-DEAD: even at 5 or 10 attempts, status remains RETRY, never DEAD
+        // Excluded from 5-strikes-to-DEAD: even at 5 or 10 attempts, status remains RETRY, never DEAD.
+        // Attempts clamp at the 960s cap, still jittered in [480, 1440].
         let (b5, s5, _) = calculate_retry_backoff(5, GOOGLE_RATE_LIMITED);
-        assert_eq!(b5, 960);
+        assert!((480..=1440).contains(&b5), "attempts=5: {b5}s outside [480,1440]");
         assert_eq!(s5, "RETRY");
 
         let (b10, s10, _) = calculate_retry_backoff(10, "HTTP 429");
-        assert_eq!(b10, 960);
+        assert!((480..=1440).contains(&b10), "attempts=10: {b10}s outside [480,1440]");
         assert_eq!(s10, "RETRY");
 
         // Generic failures: 2^min(attempts, 5), status DEAD on attempts + 1 >= 5
