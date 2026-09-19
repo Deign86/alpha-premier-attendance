@@ -3421,26 +3421,41 @@ mod tests {
     fn test_rate_limited_backoff() {
         use super::{calculate_retry_backoff, GOOGLE_RATE_LIMITED};
 
-        // Rate-limited backoff: 60s base doubling (60, 120, 240, 480, 960)
-        let (b0, s0, c0) = calculate_retry_backoff(0, "429 Too Many Requests");
-        assert_eq!(b0, 60);
-        assert_eq!(s0, "RETRY");
-        assert_eq!(c0, GOOGLE_RATE_LIMITED);
+        // Rate-limited backoff: 60s base doubling (60, 120, 240, 480, 960
+        // capped) with full-jitter ±50% sampled in [base/2, base + base/2].
+        // Exact values are non-deterministic by design — assert the window.
+        let windows: [(i64, u64, u64); 5] = [
+            (0, 30, 90),
+            (1, 60, 180),
+            (2, 120, 360),
+            (3, 240, 720),
+            (4, 480, 1440),
+        ];
+        for (attempts, floor, ceiling) in windows {
+            let (backoff, status, code) =
+                calculate_retry_backoff(attempts, "429 Too Many Requests");
+            assert!(
+                (floor..=ceiling).contains(&backoff),
+                "attempts={attempts}: transient backoff {backoff}s outside [{floor},{ceiling}]"
+            );
+            assert_eq!(status, "RETRY", "attempts={attempts}");
+            assert_eq!(code, GOOGLE_RATE_LIMITED, "attempts={attempts}");
+        }
 
         let (b1, s1, _) = calculate_retry_backoff(1, GOOGLE_RATE_LIMITED);
-        assert_eq!(b1, 120);
+        assert!((60..=180).contains(&b1));
         assert_eq!(s1, "RETRY");
 
         let (b2, s2, _) = calculate_retry_backoff(2, "error with 429 code");
-        assert_eq!(b2, 240);
+        assert!((120..=360).contains(&b2));
         assert_eq!(s2, "RETRY");
 
         let (b3, s3, _) = calculate_retry_backoff(3, GOOGLE_RATE_LIMITED);
-        assert_eq!(b3, 480);
+        assert!((240..=720).contains(&b3));
         assert_eq!(s3, "RETRY");
 
         let (b4, s4, _) = calculate_retry_backoff(4, GOOGLE_RATE_LIMITED);
-        assert_eq!(b4, 960);
+        assert!((480..=1440).contains(&b4));
         assert_eq!(s4, "RETRY");
 
         // Excluded from 5-strikes-to-DEAD: even at 5 or 10 attempts, status remains RETRY, never DEAD

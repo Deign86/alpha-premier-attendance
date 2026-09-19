@@ -1368,11 +1368,25 @@ mod tests {
             .unwrap();
         assert_eq!(queue_count, 1);
 
-        let sync_state_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_state")
-            .fetch_one(&target_state.db)
-            .await
-            .unwrap();
-        assert_eq!(sync_state_count, 1);
+        // Seeded row survives the roundtrip; AppState::new additionally upserts
+        // the completed sync-guard row on boot, so the total is 2 by design.
+        let seeded_state_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sync_state WHERE table_name = 'users' AND row_id = 'INTERN-PORT-001'",
+        )
+        .fetch_one(&target_state.db)
+        .await
+        .unwrap();
+        assert_eq!(seeded_state_count, 1);
+
+        let guard_state_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sync_state WHERE table_name = ? AND row_id = ?",
+        )
+        .bind(crate::services::sync_retry::SYNC_GUARD_TABLE)
+        .bind(crate::services::sync_retry::SYNC_GUARD_ROW)
+        .fetch_one(&target_state.db)
+        .await
+        .unwrap();
+        assert_eq!(guard_state_count, 1);
 
         // 6. Test post-restore write capability
         let now_str = chrono::Utc::now().to_rfc3339();
