@@ -5636,6 +5636,9 @@ function EditPayrollDialog({
         absenceDeduction,
         halfDayCount: record.halfDayCount,
         halfDayDeduction: record.halfDayDeduction,
+        // Backend defaults a missing fraction to 0.0, which zeroes the
+        // EMPLOYEE half-day recompute (daily * count * fraction).
+        halfDayFraction: 0.5,
         lateUnits: record.lateUnits,
         lateDeduction: record.lateDeduction,
         manualAdjustment: nAdj,

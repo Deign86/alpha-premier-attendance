@@ -562,6 +562,35 @@ describe("PayrollWorkspace", () => {
     expect(screen.getAllByText(/PHP 760.00/i)).toHaveLength(2);
   });
 
+  it("sends halfDayFraction alongside halfDayCount and halfDayDeduction when EditPayrollDialog saves cutoff changes", async () => {
+    const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([
+      record({
+        status: "DRAFT",
+        standardWorkingDays: 11,
+        halfDayCount: 1,
+        halfDayDeduction: 40,
+      }),
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: /Edit Payroll — Ada Lovelace/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Save Changes/i }));
+    await waitFor(() => {
+      expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payrollId: "P-001",
+          halfDayCount: 1,
+          halfDayDeduction: 40,
+          halfDayFraction: 0.5,
+        }),
+        "P-001",
+      );
+    });
+  });
+
   it("shows zero deductions indicator when no attendance deductions exist", async () => {
     const user = userEvent.setup();
     const cleanIntern = internRecord({
