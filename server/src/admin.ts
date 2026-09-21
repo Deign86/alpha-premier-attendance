@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { AdminUser, AttendanceListItem, BathroomActiveHolder, BathroomLogItem, BathroomScanResponse, BathroomStatusResponse, PayrollCalculationProfile } from '@rfid-attendance/shared';
-import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
+import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
@@ -582,7 +582,7 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
     hra: number('hra', 0),
     incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance),
     lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
-    halfDayCount: number('halfDayCount', 0), halfDayFraction: profile.halfDayFraction, absentDays,
+    halfDayCount: number('halfDayCount', 0), halfDayFraction: number('halfDayFraction', profile.halfDayFraction || 0.5) || profile.halfDayFraction || 0.5, absentDays,
     absenceDeduction: value.absenceDeduction != null ? number('absenceDeduction', 0) : undefined,
     overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
     overtimePay: value.overtimePay != null ? number('overtimePay', 0) : undefined,
@@ -594,9 +594,9 @@ function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel,
 
 /**
  * Builds the shared cutoff input for an intern record using the fixed intern
- * policy: PHP 80.00 per day and PHP 10.00 per hour of lateness. No holiday
- * premium, allowances, or overtime apply to interns. Absence days are derived
- * from standard less actual working days, while half-days remain inputtable.
+ * policy: PHP 80.00 per day. No holiday premium, allowances, or overtime apply
+ * to interns. Absence days are derived from standard less actual working days,
+ * while half-days remain inputtable.
  */
 function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: CutoffInputBuilder): CutoffInput {
   const lateUnits = Math.max(0, number('lateUnits', 0));
@@ -614,8 +614,9 @@ function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: 
     specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
     incentivesAllowance: 0, specialAllowance: 0,
     lateUnits,
-    // Late deduction is PHP 10.00 per hour, computed from the total late hours.
-    lateDeduction: Math.round(lateUnits * INTERN_LATE_DEDUCTION_PER_HOUR_PHP),
+    // Rust forces intern lateDeduction to zero: lateness is already included
+    // in the half-day amount, so charging PHP 10/hour here double-counts it.
+    lateDeduction: 0,
     halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
     absentDays: Math.max(0, standardWorkingDays - actualWorkingDays),
     overtimeHours: 0, overtimeRate: 0,

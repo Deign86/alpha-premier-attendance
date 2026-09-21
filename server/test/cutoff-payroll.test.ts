@@ -141,6 +141,22 @@ describe('cutoff payroll calculator', () => {
     expect(result.totalDeductions).toBe(6345 + 176.25);
   });
 
+  it('keeps the calculation breakdown deduction shape in parity with payroll consumers', () => {
+    const result = calculateCutoffPayroll({
+      ...jeanInput,
+      halfDayCount: 1,
+      halfDayFraction: 0.5,
+      absentDays: 0,
+    });
+    const breakdown: unknown = JSON.parse(result.calculationBreakdown);
+
+    expect(breakdown).toMatchObject({
+      deductions: expect.arrayContaining([
+        expect.objectContaining({ category: 'UNDERTIME', amount: 352.5 }),
+      ]),
+    });
+  });
+
   it('computes employee cutoff with all editable earnings and statutory deductions', () => {
     const editableInput = {
       ...jeanInput,

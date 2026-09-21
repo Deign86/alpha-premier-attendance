@@ -56,6 +56,18 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   const grossCompensation = input.employeeType === 'INTERN' ? Math.max(0, grossEarnings) : grossEarnings;
   const netBeforeFloor = grossEarnings - totalDeductions;
   const netPay = input.employeeType === 'INTERN' ? Math.max(0, netBeforeFloor) : netBeforeFloor;
+  const deductions = halfDayDeduction > 0 || input.halfDayCount > 0 ? [{
+    date: null,
+    category: 'UNDERTIME',
+    label: 'Half-day',
+    details: null,
+    timeIn: null,
+    timeOut: null,
+    workedHours: null,
+    hoursShort: null,
+    lateHours: null,
+    amount: pesos(halfDayDeduction),
+  }] : [];
   const record = {
     ...recordInput,
     dailyRate: pesos(dailyRate),
@@ -68,7 +80,7 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
     totalDeductions: pesos(totalDeductions),
     manualAdjustment: pesos(manualAdjustment),
     grossCompensation: pesos(grossCompensation), netPay: pesos(netPay),
-    calculationBreakdown: JSON.stringify({ basicPay: pesos(basicPay), specialHolidayPay: pesos(specialHolidayPay), regularHolidayPay: pesos(regularHolidayPay), totalCompensation: pesos(totalCompensation), totalAllowance: pesos(totalAllowance), overtimePay: pesos(overtimePay), manualAdjustment: pesos(manualAdjustment), totalDeductions: pesos(totalDeductions), grossCompensation: pesos(grossCompensation), netPay: pesos(netPay) }),
+    calculationBreakdown: JSON.stringify({ basicPay: pesos(basicPay), specialHolidayPay: pesos(specialHolidayPay), regularHolidayPay: pesos(regularHolidayPay), totalCompensation: pesos(totalCompensation), totalAllowance: pesos(totalAllowance), overtimePay: pesos(overtimePay), manualAdjustment: pesos(manualAdjustment), totalDeductions: pesos(totalDeductions), grossCompensation: pesos(grossCompensation), netPay: pesos(netPay), deductions, halfDayCentavos: halfDayDeduction }),
   };
   return record;
 }

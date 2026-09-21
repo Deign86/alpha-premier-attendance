@@ -70,21 +70,44 @@ describe('admin and live attendance API', () => {
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(0);
   });
 
-  it('creates intern cutoff payroll with the fixed PHP 80/day and PHP 10/hour late rules', async () => {
+  it('creates intern cutoff payroll with the fixed PHP 80/day rule and zero separate late deduction', async () => {
     const sheets = new InMemorySheetsService([{ userId: 'INT-001', fullName: 'Maria Santos', rfidUid: 'CCDD', department: null, active: true, employeeType: 'INTERN' }]);
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
     // Interns are accepted without a daily rate; a submitted rate must be ignored.
     // July 16-31, 2026 has 12 standard workdays (12 x 80 = 960 basic pay, 2 absent days = 160 deduction).
+    // Lateness stays folded into the half-day amount (Rust parity): no separate PHP 10/hour charge.
     const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'INT-001', dailyRate: 500, cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 10, lateUnits: 3 }).expect(200);
     expect(created.body.payroll).toMatchObject({
       employeeId: 'INT-001', employeeName: 'Maria Santos', employeeType: 'INTERN', dailyRate: 80,
       standardWorkingDays: 12, actualWorkingDays: 10, basicPay: 960, totalCompensation: 960, totalAllowance: 0,
-      lateUnits: 3, lateDeduction: 30, absenceDeduction: 160, totalDeductions: 190, grossCompensation: 960, netPay: 770, status: 'DRAFT',
+      lateUnits: 3, lateDeduction: 0, absenceDeduction: 160, totalDeductions: 160, grossCompensation: 960, netPay: 800, status: 'DRAFT',
     });
     // The payroll list derives intern classification from the Users register.
     const payroll = await agent.get('/api/admin/payroll/cutoffs').expect(200);
     expect(payroll.body.payroll[0]).toMatchObject({ employeeId: 'INT-001', employeeType: 'INTERN', dailyRate: 80 });
+  });
+
+  it('builds the intern cutoff with halfDayFraction 0.5 and Rust-parity zero late deduction', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'INT-S4', fullName: 'S4 Intern', rfidUid: 'CCEE', department: null, active: true, employeeType: 'INTERN' }]);
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({
+      employeeId: 'INT-S4', cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 12, halfDayCount: 1, lateUnits: 3,
+    }).expect(200);
+
+    expect(created.body.payroll).toMatchObject({
+      halfDayCount: 1,
+      halfDayDeduction: 40,
+      lateUnits: 3,
+      // Rust cutoff_payroll::calculate forces intern lateDeduction to zero.
+      // Keep this parity expectation explicit: admin.ts currently charges
+      // lateUnits * PHP 10 here, risking a double count when lateness is also
+      // represented in the attendance deductions breakdown.
+      lateDeduction: 0,
+      totalDeductions: 40,
+    });
   });
 
   it('calculates intern cutoff with custom standardWorkingDays', async () => {
