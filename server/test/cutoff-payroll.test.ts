@@ -183,6 +183,40 @@ describe('cutoff payroll calculator', () => {
     expect(result.netPay).toBe(13566.5);
   });
 
+  it('computes intern half-day deductions when halfDayCount is positive even if halfDayDeduction was passed as zero', () => {
+    const internResult = calculateCutoffPayroll({
+      employeeId: 'APG-2026-115',
+      employeeName: 'Allaena Nicole E. Vizon',
+      employeeType: 'INTERN',
+      payrollProfileId: 'INTERN_STANDARD',
+      cutoffStart: '2026-09-16',
+      cutoffEnd: '2026-09-21',
+      dailyRate: 80,
+      standardWorkingDays: 4,
+      actualWorkingDays: 3,
+      absentDays: 1,
+      halfDayCount: 2,
+      halfDayFraction: 0.5,
+      halfDayDeduction: 0,
+      lateUnits: 0,
+      lateDeduction: 0,
+      specialHolidayDays: 0,
+      specialHolidayMultiplier: 0,
+      regularHolidayDays: 0,
+      regularHolidayMultiplier: 0,
+      incentivesAllowance: 0,
+      specialAllowance: 0,
+      overtimeHours: 0,
+      overtimeRate: 0,
+      manualAdjustment: 0,
+    });
+    expect(internResult.halfDayDeduction).toBe(80);
+    expect(internResult.absenceDeduction).toBe(80);
+    expect(internResult.totalDeductions).toBe(160);
+    expect(internResult.grossCompensation).toBe(320);
+    expect(internResult.netPay).toBe(160);
+  });
+
   it('T2: zeroes allowances on a zero-day cutoff instead of paying the flat sum', () => {
     const zeroDay = calculateCutoffPayroll({
       ...jeanInput,

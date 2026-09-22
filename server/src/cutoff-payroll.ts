@@ -40,8 +40,8 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   const workedZeroDays = input.actualWorkingDays === 0 && input.standardWorkingDays > 0;
   const totalAllowance = workedZeroDays ? 0 : incentivesAllowance + specialAllowance + hra;
   const lateDeduction = cents(input.lateDeduction);
-  const halfDayDeduction = input.halfDayDeduction != null ? cents(input.halfDayDeduction) : multiply(dailyRate * input.halfDayCount, halfDayFraction);
-  const absenceDeduction = input.absenceDeduction != null ? cents(input.absenceDeduction) : dailyRate * input.absentDays;
+  const halfDayDeduction = (input.halfDayDeduction != null && input.halfDayDeduction > 0) ? cents(input.halfDayDeduction) : multiply(dailyRate * input.halfDayCount, halfDayFraction);
+  const absenceDeduction = (input.absenceDeduction != null && input.absenceDeduction > 0) ? cents(input.absenceDeduction) : dailyRate * input.absentDays;
   const overtimePay = input.overtimePay != null ? cents(input.overtimePay) : multiply(cents(input.overtimeRate) * input.overtimeHours, 1);
   const sss = cents(input.sss ?? 0);
   const phic = cents(input.phic ?? 0);

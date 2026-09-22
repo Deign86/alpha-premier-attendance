@@ -5588,8 +5588,11 @@ function EditPayrollDialog({
   const nHdmf = isIntern ? 0 : Number(hdmf) || 0;
   const nAdvance = isIntern ? 0 : Number(salaryAdvance) || 0;
 
+  const halfDayDeduction = record.halfDayDeduction > 0
+    ? record.halfDayDeduction
+    : record.halfDayCount * dailyRate * 0.5;
   const autoEarnings = basicPay + (isIntern ? 0 : record.regularHolidayPay + record.specialHolidayPay);
-  const autoDeductions = record.lateDeduction + absenceDeduction + record.halfDayDeduction;
+  const autoDeductions = record.lateDeduction + absenceDeduction + halfDayDeduction;
 
   const totalAllowance = isIntern ? 0 : nInc + nSpecAllow + nHra;
   const totalEarnings = isIntern
@@ -5635,7 +5638,7 @@ function EditPayrollDialog({
         absentDays,
         absenceDeduction,
         halfDayCount: record.halfDayCount,
-        halfDayDeduction: record.halfDayDeduction,
+        halfDayDeduction,
         // Backend defaults a missing fraction to 0.0, which zeroes the
         // EMPLOYEE half-day recompute (daily * count * fraction).
         halfDayFraction: 0.5,

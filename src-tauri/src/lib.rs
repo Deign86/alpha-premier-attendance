@@ -11,7 +11,7 @@ mod state;
 mod tts;
 
 use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_PAYROLL_PROFILE_ID};
-use chrono::Datelike;
+use chrono::{Datelike, TimeZone};
 use chrono_tz::Asia::Manila;
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqliteRow, Row};
@@ -2629,15 +2629,17 @@ async fn payroll_generate_cutoff_impl(
             custom_number("regularHolidayDays").unwrap_or(0.0)
         };
         let half_day_deduction_from_db = row.get::<i64, _>("half_day_deduction_centavos") as f64 / 100.0;
-        let half_day_deduction_opt = Some(custom_number("halfDayDeduction").unwrap_or(half_day_deduction_from_db));
-        let half_day_unit = (daily_rate_centavos as f64 / 100.0) * half_day_fraction;
-        let half_day_count = custom_number("halfDayCount").unwrap_or_else(|| {
-            if half_day_unit > 0.0 {
-                half_day_deduction_opt.unwrap_or(0.0) / half_day_unit
-            } else {
-                row.get::<i64, _>("half_day_count") as f64
-            }
-        });
+        let half_day_count = custom_number("halfDayCount")
+            .unwrap_or_else(|| row.get::<i64, _>("half_day_count") as f64);
+        let half_day_deduction_opt = custom_number("halfDayDeduction")
+            .filter(|&d| d > 0.0)
+            .or_else(|| {
+                if half_day_deduction_from_db > 0.0 {
+                    Some(half_day_deduction_from_db)
+                } else {
+                    None
+                }
+            });
         let overtime_hours = if is_intern {
             0.0
         } else {
@@ -2814,7 +2816,18 @@ async fn payroll_generate_cutoff_impl(
                         let in_m = t_in.with_timezone(&Manila);
                         let out_m = t_out.with_timezone(&Manila);
                         let capped_out = crate::services::payroll::cap_late_timeout_out(out_m);
-                        let paid_sec = crate::services::lunch_break::paid_work_seconds(in_m, capped_out);
+                        let day_start = Manila
+                            .with_ymd_and_hms(in_m.year(), in_m.month(), in_m.day(), 8, 0, 0)
+                            .single()
+                            .unwrap_or(in_m);
+                        let in_effective = if rec_grace_used == Some(1) {
+                            day_start
+                        } else if rec_late_hours > 0 {
+                            crate::services::payroll::ceil_hour(in_m)
+                        } else {
+                            in_m.max(day_start)
+                        };
+                        let paid_sec = crate::services::lunch_break::paid_work_seconds(in_effective, capped_out);
                         let wh = crate::services::payroll::floor_hours(paid_sec).min(8);
                         let uh = (8 - wh).max(0);
                         (wh, uh)
@@ -2834,6 +2847,12 @@ async fn payroll_generate_cutoff_impl(
                     format!("Half-day: {} – {}", in_str, out_str)
                 };
 
+                let amount = if rec_half_day_ded_centavos > 0 {
+                    rec_half_day_ded_centavos as f64 / 100.0
+                } else {
+                    (unrendered_hrs as f64) * (daily_rate_centavos as f64 / 100.0 / 8.0)
+                };
+
                 deduction_items.push(serde_json::json!({
                     "date": date_str,
                     "category": "UNDERTIME",
@@ -2844,7 +2863,7 @@ async fn payroll_generate_cutoff_impl(
                     "workedHours": worked_hrs,
                     "hoursShort": unrendered_hrs,
                     "lateHours": null,
-                    "amount": rec_half_day_ded_centavos as f64 / 100.0,
+                    "amount": amount,
                 }));
             }
         }

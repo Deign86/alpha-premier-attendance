@@ -618,6 +618,7 @@ function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: 
     // in the half-day amount, so charging PHP 10/hour here double-counts it.
     lateDeduction: 0,
     halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
+    halfDayDeduction: value.halfDayDeduction != null ? number('halfDayDeduction', 0) : undefined,
     absentDays: Math.max(0, standardWorkingDays - actualWorkingDays),
     overtimeHours: 0, overtimeRate: 0,
     manualAdjustment: number('manualAdjustment', 0), adjustmentReason: cutoffAdjustmentReason(value.adjustmentReason),
@@ -642,7 +643,7 @@ type AdminUserInput = {
 type AttendanceInput = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null; attendanceDate: string };
 type PayrollProfileInput = PayrollCalculationProfile;
 type CutoffValue = string | number | null;
-type CutoffNumberField = 'dailyRate' | 'standardWorkingDays' | 'actualWorkingDays' | 'basicPay' | 'specialHolidayDays' | 'specialHolidayMultiplier' | 'specialHolidayPay' | 'regularHolidayDays' | 'regularHolidayMultiplier' | 'regularHolidayPay' | 'hra' | 'incentivesAllowance' | 'specialAllowance' | 'lateUnits' | 'lateDeduction' | 'halfDayCount' | 'halfDayFraction' | 'absentDays' | 'absenceDeduction' | 'overtimeHours' | 'overtimeRate' | 'overtimePay' | 'sss' | 'phic' | 'hdmf' | 'salaryAdvance' | 'manualAdjustment';
+type CutoffNumberField = 'dailyRate' | 'standardWorkingDays' | 'actualWorkingDays' | 'basicPay' | 'specialHolidayDays' | 'specialHolidayMultiplier' | 'specialHolidayPay' | 'regularHolidayDays' | 'regularHolidayMultiplier' | 'regularHolidayPay' | 'hra' | 'incentivesAllowance' | 'specialAllowance' | 'lateUnits' | 'lateDeduction' | 'halfDayCount' | 'halfDayFraction' | 'halfDayDeduction' | 'absentDays' | 'absenceDeduction' | 'overtimeHours' | 'overtimeRate' | 'overtimePay' | 'sss' | 'phic' | 'hdmf' | 'salaryAdvance' | 'manualAdjustment';
 interface CutoffFormInput {
   employeeId?: CutoffValue;
   employeeName?: CutoffValue;
@@ -669,6 +670,7 @@ interface CutoffFormInput {
   lateDeduction?: CutoffValue;
   halfDayCount?: CutoffValue;
   halfDayFraction?: CutoffValue;
+  halfDayDeduction?: CutoffValue;
   absentDays?: CutoffValue;
   absenceDeduction?: CutoffValue;
   overtimeHours?: CutoffValue;

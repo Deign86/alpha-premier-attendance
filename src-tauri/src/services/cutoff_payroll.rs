@@ -170,6 +170,7 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     };
     let half = input
         .half_day_deduction
+        .filter(|&d| d > 0.0)
         .map(cents)
         .unwrap_or_else(|| {
             multiply(
@@ -179,6 +180,7 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
         });
     let absence = input
         .absence_deduction
+        .filter(|&d| d > 0.0)
         .map(cents)
         .unwrap_or_else(|| (daily as f64 * input.absent_days).round() as i64);
     let overtime = input
@@ -762,6 +764,53 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.half_day_deduction, 50_000);
+    }
+
+    #[test]
+    fn intern_half_day_deduction_computed_when_passed_as_zero() {
+        let result = calculate(&CutoffInput {
+            employee_id: "APG-2026-115".into(),
+            employee_name: "Allaena Nicole E. Vizon".into(),
+            employee_type: "INTERN".into(),
+            cutoff_start: "2026-09-16".into(),
+            cutoff_end: "2026-09-21".into(),
+            daily_rate: 80.0,
+            standard_working_days: 4.0,
+            actual_working_days: 3.0,
+            basic_pay: None,
+            special_holiday_days: 0.0,
+            special_holiday_multiplier: 0.0,
+            special_holiday_pay: None,
+            regular_holiday_days: 0.0,
+            regular_holiday_multiplier: 0.0,
+            regular_holiday_pay: None,
+            hra: 0.0,
+            incentives_allowance: 0.0,
+            special_allowance: 0.0,
+            late_deduction: 0.0,
+            half_day_count: 2.0,
+            half_day_fraction: 0.5,
+            half_day_deduction: Some(0.0),
+            absent_days: 1.0,
+            absence_deduction: Some(0.0),
+            overtime_hours: 0.0,
+            overtime_rate: 0.0,
+            overtime_pay: None,
+            sss_employee_share: 0.0,
+            phic_employee_share: 0.0,
+            hdmf_employee_share: 0.0,
+            salary_advance: 0.0,
+            manual_adjustment: 0.0,
+            adjustment_reason: None,
+            approved_working_day_overage: false,
+        })
+        .unwrap();
+
+        assert_eq!(result.half_day_deduction, 8_000);
+        assert_eq!(result.absence_deduction, 8_000);
+        assert_eq!(result.total_deductions, 16_000);
+        assert_eq!(result.gross_compensation, 32_000);
+        assert_eq!(result.net_pay, 16_000);
     }
 }
 

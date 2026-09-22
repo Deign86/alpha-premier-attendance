@@ -1,6 +1,11 @@
 fn main() {
     if std::env::var("PROFILE").as_deref() == Ok("release") {
-        println!("cargo:rustc-link-arg-bin=alpha-premier-attendance=/SUBSYSTEM:WINDOWS");
+        let target = std::env::var("TARGET").unwrap_or_default();
+        if target.contains("msvc") {
+            println!("cargo:rustc-link-arg-bin=alpha-premier-attendance=/SUBSYSTEM:WINDOWS");
+        } else {
+            println!("cargo:rustc-link-arg-bin=alpha-premier-attendance=-Wl,--subsystem,windows");
+        }
     }
     embed_service_account_key();
     tauri_build::build()
