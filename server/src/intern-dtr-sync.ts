@@ -48,6 +48,8 @@ export interface SheetsClient {
    *  `sourceSheetId` is the template tab id. Returns the new tab meta, or
    *  null when the name was taken concurrently (caller re-resolves). */
   duplicateTemplate(sourceSheetId: number, newTitle: string): Promise<DtrTabMeta | null>;
+  /** Auto-provision a missing month block on the tab. */
+  ensureMonthBlock?(tab: string, attendanceDate: string): Promise<void>;
 }
 
 export type TabResolution =
@@ -348,6 +350,245 @@ export function monthBlockRange(rows: string[][], m: number): RowRange | 'no-hea
   if (!sawHeader) return 'no-headers';
   if (blockStart === -1) return null;
   return { start: blockStart, end: rows.length };
+}
+
+/** Return number of days in month (1-based month). */
+export function daysInMonth(year: number, month: number): number {
+  switch (month) {
+    case 1: case 3: case 5: case 7: case 8: case 10: case 12:
+      return 31;
+    case 4: case 6: case 9: case 11:
+      return 30;
+    case 2:
+      return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+    default:
+      return 30;
+  }
+}
+
+/** Standard English month name. */
+export function monthName(month: number): string {
+  const names = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  return names[month - 1] ?? 'Unknown';
+}
+
+/**
+ * Append a cell (e.g. `F100`) to an existing `COMPLETED HOURS` formula (cell `J3`).
+ * Idempotent: if `newCell` already exists in the formula, returns unchanged.
+ */
+export function appendCellToSumFormula(existing: string, newCell: string): string {
+  const trimmed = existing.trim();
+  if (!trimmed) {
+    return `=SUM(${newCell})`;
+  }
+
+  const cellUpper = newCell.toUpperCase();
+  const hasCell = trimmed
+    .split(/[^a-zA-Z0-9]/)
+    .some((tok) => tok.toUpperCase() === cellUpper);
+  if (hasCell) {
+    return trimmed;
+  }
+
+  if (/^=sum\(/i.test(trimmed) && trimmed.endsWith(')')) {
+    const inner = trimmed.slice(5, -1).trim();
+    if (!inner) {
+      return `=SUM(${newCell})`;
+    }
+    if (inner.endsWith(',')) {
+      return `=SUM(${inner}${newCell},)`;
+    }
+    if (inner.includes('+')) {
+      return `=SUM(${inner}+${newCell})`;
+    }
+    return `=SUM(${inner},${newCell})`;
+  }
+
+  if (trimmed.startsWith('=')) {
+    return `${trimmed}+${newCell}`;
+  }
+
+  return `=SUM(${newCell})`;
+}
+
+export interface MonthBlockRequestsOutcome {
+  requests: object[];
+  headerRow1Based: number;
+  dataStart1Based: number;
+  totalRow1Based: number;
+}
+
+/**
+ * Build batchUpdate requests to append a standard month block to a DTR tab.
+ */
+export function buildNewMonthBlockRequests(
+  sheetId: number,
+  rows: string[][],
+  year: number,
+  month: number,
+  existingJ3Formula?: string,
+): MonthBlockRequestsOutcome {
+  let lastNonEmptyIdx = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i]?.some((c) => c.trim() !== '')) {
+      lastNonEmptyIdx = i + 1;
+      break;
+    }
+  }
+  const headerRow1Based = lastNonEmptyIdx === -1 ? 2 : lastNonEmptyIdx + 2;
+  const days = daysInMonth(year, month);
+  const dataStart1Based = headerRow1Based + 1;
+  const dataEnd1Based = headerRow1Based + days;
+  const totalRow1Based = dataEnd1Based + 1;
+
+  const headerLabel = `DATE-${monthName(month)}`;
+  const rowsData: object[] = [];
+
+  // Header row
+  rowsData.push({
+    values: [
+      { userEnteredValue: { stringValue: headerLabel } },
+      { userEnteredValue: { stringValue: 'TIME IN MORNING' } },
+      { userEnteredValue: { stringValue: 'OUT LUNCH' } },
+      { userEnteredValue: { stringValue: 'TIME IN AFTERNOON' } },
+      { userEnteredValue: { stringValue: 'TIME OUT' } },
+      { userEnteredValue: { stringValue: 'TOTAL HOURS' } },
+    ],
+  });
+
+  // Daily date rows
+  for (let d = 1; d <= days; d++) {
+    const r = headerRow1Based + d;
+    rowsData.push({
+      values: [
+        { userEnteredValue: { stringValue: `${month}/${d}/${year}` } },
+        { userEnteredValue: { stringValue: '' } },
+        { userEnteredValue: { stringValue: '' } },
+        { userEnteredValue: { stringValue: '' } },
+        { userEnteredValue: { stringValue: '' } },
+        { userEnteredValue: { formulaValue: `=MIN(8,((C${r}-B${r})+(E${r}-D${r}))*24)` } },
+      ],
+    });
+  }
+
+  // Monthly total row
+  rowsData.push({
+    values: [
+      { userEnteredValue: { stringValue: '' } },
+      { userEnteredValue: { stringValue: '' } },
+      { userEnteredValue: { stringValue: '' } },
+      { userEnteredValue: { stringValue: '' } },
+      { userEnteredValue: { stringValue: 'TOTAL HOURS' } },
+      { userEnteredValue: { formulaValue: `=SUM(F${dataStart1Based}:F${dataEnd1Based})` } },
+    ],
+  });
+
+  const requests: object[] = [
+    {
+      updateCells: {
+        rows: rowsData,
+        fields: 'userEnteredValue',
+        start: {
+          sheetId,
+          rowIndex: headerRow1Based - 1,
+          columnIndex: 0,
+        },
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: headerRow1Based - 1,
+          endRowIndex: headerRow1Based,
+          startColumnIndex: 0,
+          endColumnIndex: 6,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0.20784314, green: 0.40784314, blue: 0.32941177 },
+            textFormat: {
+              bold: true,
+              foregroundColor: { red: 1, green: 1, blue: 1 },
+            },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat.bold,textFormat.foregroundColor)',
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: totalRow1Based - 1,
+          endRowIndex: totalRow1Based,
+          startColumnIndex: 4,
+          endColumnIndex: 6,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0.8784314, green: 0.4, blue: 0.4 },
+            textFormat: { bold: true },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat.bold)',
+      },
+    },
+    {
+      addConditionalFormatRule: {
+        rule: {
+          ranges: [
+            {
+              sheetId,
+              startRowIndex: dataStart1Based - 1,
+              endRowIndex: dataEnd1Based,
+              startColumnIndex: 0,
+              endColumnIndex: 6,
+            },
+          ],
+          booleanRule: {
+            condition: {
+              type: 'CUSTOM_FORMULA',
+              values: [{ userEnteredValue: `=WEEKDAY($A${dataStart1Based},2)>5` }],
+            },
+            format: {
+              backgroundColor: { red: 0.7176471, green: 0.88235295, blue: 0.8039216 },
+            },
+          },
+        },
+        index: 0,
+      },
+    },
+  ];
+
+  if (existingJ3Formula !== undefined) {
+    const newJ3 = appendCellToSumFormula(existingJ3Formula, `F${totalRow1Based}`);
+    requests.push({
+      updateCells: {
+        rows: [
+          {
+            values: [{ userEnteredValue: { formulaValue: newJ3 } }],
+          },
+        ],
+        fields: 'userEnteredValue',
+        start: {
+          sheetId,
+          rowIndex: 2,
+          columnIndex: 9,
+        },
+      },
+    });
+  }
+
+  return {
+    requests,
+    headerRow1Based,
+    dataStart1Based,
+    totalRow1Based,
+  };
 }
 
 /**
@@ -711,18 +952,26 @@ export async function planPush(
   if (values.every((v) => v === '')) return fail('no-time-in', 'no time-in yet');
   const rows = await client.getTabValues(resolved.tab);
   const wantMonth = Number(record.attendanceDate.slice(5, 7));
-  const block = monthBlockRange(rows, wantMonth);
+  let block = monthBlockRange(rows, wantMonth);
+  let effectiveRows = rows;
   if (block === null) {
-    const monthName = DateTime.fromObject({ month: wantMonth }, { zone: MANILA_ZONE }).toFormat('LLLL');
-    return fail('no-month-block', `no ${monthName} block in tab ${resolved.tab}`);
+    if (client.ensureMonthBlock) {
+      await client.ensureMonthBlock(resolved.tab, record.attendanceDate);
+      effectiveRows = await client.getTabValues(resolved.tab);
+      block = monthBlockRange(effectiveRows, wantMonth);
+    }
+  }
+  if (block === null) {
+    const monthNameStr = DateTime.fromObject({ month: wantMonth }, { zone: MANILA_ZONE }).toFormat('LLLL');
+    return fail('no-month-block', `no ${monthNameStr} block in tab ${resolved.tab}`);
   }
   const idx = block === 'no-headers'
-    ? findDateRow(rows, record.attendanceDate)
-    : findDateRowIn(rows, record.attendanceDate, block.start, block.end);
+    ? findDateRow(effectiveRows, record.attendanceDate)
+    : findDateRowIn(effectiveRows, record.attendanceDate, block.start, block.end);
   if (idx === -1) {
     return fail('date-not-found', `date ${record.attendanceDate} not found in tab ${resolved.tab}`);
   }
-  const existing = rowCells(rows[idx]);
+  const existing = rowCells(effectiveRows[idx]);
   if (existing.every((v, i) => v === values[i])) {
     return {
       kind: 'in-sync',

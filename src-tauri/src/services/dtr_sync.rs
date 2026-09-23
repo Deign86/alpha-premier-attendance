@@ -454,6 +454,268 @@ pub fn month_block_range(rows: &[Vec<String>], month: u32) -> MonthBlock {
     block_start.map(|s| MonthBlock::Range(s, rows.len())).unwrap_or(MonthBlock::NoMatch)
 }
 
+/// Return the number of days in a month for a given year (1-based month).
+pub fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+/// Standard full English month name.
+pub fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "Unknown",
+    }
+}
+
+/// Append a cell (e.g. `F100`) to an existing `COMPLETED HOURS` formula (e.g. cell `J3`).
+/// Idempotent: if `new_cell` is already part of the formula, returns unchanged.
+pub fn append_cell_to_sum_formula(existing: &str, new_cell: &str) -> String {
+    let trimmed = existing.trim();
+    if trimmed.is_empty() {
+        return format!("=SUM({new_cell})");
+    }
+
+    // Check if new_cell is already in the formula
+    let cell_upper = new_cell.to_uppercase();
+    let has_cell = trimmed
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|tok| tok.eq_ignore_ascii_case(&cell_upper));
+    if has_cell {
+        return trimmed.to_string();
+    }
+
+    if (trimmed.starts_with("=SUM(") || trimmed.starts_with("=sum(")) && trimmed.ends_with(')') {
+        let inner = trimmed[5..trimmed.len() - 1].trim();
+        if inner.is_empty() {
+            return format!("=SUM({new_cell})");
+        }
+        if inner.ends_with(',') {
+            return format!("=SUM({inner}{new_cell},)");
+        }
+        if inner.contains('+') {
+            return format!("=SUM({inner}+{new_cell})");
+        }
+        return format!("=SUM({inner},{new_cell})");
+    }
+
+    if trimmed.starts_with('=') {
+        return format!("{trimmed}+{new_cell}");
+    }
+
+    format!("=SUM({new_cell})")
+}
+
+/// Build batchUpdate requests to append a standard month block to a DTR tab.
+/// Returns `(requests_json, header_row_1based, data_start_1based, total_row_1based)`.
+pub fn build_new_month_block_requests(
+    sheet_id: i64,
+    rows: &[Vec<String>],
+    year: i32,
+    month: u32,
+    existing_j3_formula: Option<&str>,
+) -> (serde_json::Value, usize, usize, usize) {
+    let last_non_empty_idx = rows
+        .iter()
+        .rposition(|r| r.iter().any(|c| !c.trim().is_empty()))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let header_row_1based = if last_non_empty_idx == 0 {
+        2
+    } else {
+        last_non_empty_idx + 2
+    };
+
+    let days = days_in_month(year, month);
+    let data_start_1based = header_row_1based + 1;
+    let data_end_1based = header_row_1based + days as usize;
+    let total_row_1based = data_end_1based + 1;
+
+    let header_name = format!("DATE-{}", month_name(month));
+    let mut rows_data = Vec::with_capacity(days as usize + 2);
+
+    // 1. Header row
+    rows_data.push(serde_json::json!({
+        "values": [
+            { "userEnteredValue": { "stringValue": header_name } },
+            { "userEnteredValue": { "stringValue": "TIME IN MORNING" } },
+            { "userEnteredValue": { "stringValue": "OUT LUNCH" } },
+            { "userEnteredValue": { "stringValue": "TIME IN AFTERNOON" } },
+            { "userEnteredValue": { "stringValue": "TIME OUT" } },
+            { "userEnteredValue": { "stringValue": "TOTAL HOURS" } },
+        ]
+    }));
+
+    // 2. Daily date rows
+    for d in 1..=days {
+        let r = header_row_1based + d as usize;
+        rows_data.push(serde_json::json!({
+            "values": [
+                { "userEnteredValue": { "stringValue": format!("{month}/{d}/{year}") } },
+                { "userEnteredValue": { "stringValue": "" } },
+                { "userEnteredValue": { "stringValue": "" } },
+                { "userEnteredValue": { "stringValue": "" } },
+                { "userEnteredValue": { "stringValue": "" } },
+                { "userEnteredValue": { "formulaValue": format!("=MIN(8,((C{r}-B{r})+(E{r}-D{r}))*24)") } },
+            ]
+        }));
+    }
+
+    // 3. Monthly total row
+    rows_data.push(serde_json::json!({
+        "values": [
+            { "userEnteredValue": { "stringValue": "" } },
+            { "userEnteredValue": { "stringValue": "" } },
+            { "userEnteredValue": { "stringValue": "" } },
+            { "userEnteredValue": { "stringValue": "" } },
+            { "userEnteredValue": { "stringValue": "TOTAL HOURS" } },
+            { "userEnteredValue": { "formulaValue": format!("=SUM(F{data_start_1based}:F{data_end_1based})") } },
+        ]
+    }));
+
+    let mut requests = vec![
+        // Write values & formulas
+        serde_json::json!({
+            "updateCells": {
+                "rows": rows_data,
+                "fields": "userEnteredValue",
+                "start": {
+                    "sheetId": sheet_id,
+                    "rowIndex": header_row_1based - 1,
+                    "columnIndex": 0,
+                }
+            }
+        }),
+        // Format header row: #356854, bold, white text
+        serde_json::json!({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": header_row_1based - 1,
+                    "endRowIndex": header_row_1based,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 6,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {
+                            "red": 0.20784314,
+                            "green": 0.40784314,
+                            "blue": 0.32941177
+                        },
+                        "textFormat": {
+                            "bold": true,
+                            "foregroundColor": { "red": 1.0, "green": 1.0, "blue": 1.0 },
+                        },
+                    }
+                },
+                "fields": "userEnteredFormat(backgroundColor,textFormat.bold,textFormat.foregroundColor)",
+            }
+        }),
+        // Format total row: salmon #E06666, bold
+        serde_json::json!({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": total_row_1based - 1,
+                    "endRowIndex": total_row_1based,
+                    "startColumnIndex": 4,
+                    "endColumnIndex": 6,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": { "red": 0.8784314, "green": 0.4, "blue": 0.4 },
+                        "textFormat": { "bold": true },
+                    }
+                },
+                "fields": "userEnteredFormat(backgroundColor,textFormat.bold)",
+            }
+        }),
+        // Weekend conditional format rule
+        serde_json::json!({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [
+                        {
+                            "sheetId": sheet_id,
+                            "startRowIndex": data_start_1based - 1,
+                            "endRowIndex": data_end_1based,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 6,
+                        }
+                    ],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "CUSTOM_FORMULA",
+                            "values": [
+                                { "userEnteredValue": format!("=WEEKDAY($A{data_start_1based},2)>5") }
+                            ]
+                        },
+                        "format": {
+                            "backgroundColor": {
+                                "red": 0.7176471,
+                                "green": 0.88235295,
+                                "blue": 0.8039216
+                            }
+                        }
+                    }
+                },
+                "index": 0,
+            }
+        }),
+    ];
+
+    if let Some(existing_j3) = existing_j3_formula {
+        let new_j3 = append_cell_to_sum_formula(existing_j3, &format!("F{total_row_1based}"));
+        requests.push(serde_json::json!({
+            "updateCells": {
+                "rows": [
+                    {
+                        "values": [
+                            { "userEnteredValue": { "formulaValue": new_j3 } }
+                        ]
+                    }
+                ],
+                "fields": "userEnteredValue",
+                "start": {
+                    "sheetId": sheet_id,
+                    "rowIndex": 2,
+                    "columnIndex": 9,
+                }
+            }
+        }));
+    }
+
+    (
+        serde_json::Value::Array(requests),
+        header_row_1based,
+        data_start_1based,
+        total_row_1based,
+    )
+}
+
+
 /// Find the 0-based row index of `ymd` (`YYYY-MM-DD`) in column A within
 /// `rows[start, end)`. Returns `None` when absent; `Err` on duplicates.
 pub fn find_date_row_in(
@@ -1336,6 +1598,81 @@ async fn ensure_person_tab(
     }
 }
 
+/// Ensure a month block exists on a DTR tab. If absent, appends the month
+/// block (header, date rows with formulas, total row, and conditional
+/// formatting) and updates the summary box J3 formula.
+pub async fn ensure_month_block(
+    client: &reqwest::Client,
+    token: &str,
+    spreadsheet_id: &str,
+    sheet_id: i64,
+    tab: &str,
+    attendance_date: &str,
+) -> Result<(), String> {
+    let year: i32 = attendance_date
+        .get(0..4)
+        .and_then(|y| y.parse::<i32>().ok())
+        .ok_or_else(|| format!("invalid attendanceDate year: {attendance_date}"))?;
+    let month: u32 = attendance_date
+        .get(5..7)
+        .and_then(|m| m.parse::<u32>().ok())
+        .filter(|m| (1..=12).contains(m))
+        .ok_or_else(|| format!("invalid attendanceDate month: {attendance_date}"))?;
+
+    // 1. Fetch current tab values A:F
+    let range = urlencoding::encode(&format!("{}!A:F", quote_tab(tab))).into_owned();
+    let tab_values = dtr_get_json(
+        client,
+        token,
+        format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}"),
+    )
+    .await?;
+    let rows = rows_from_values(&tab_values);
+
+    // 2. If month block already exists, nothing to do
+    if let MonthBlock::Range(_, _) = month_block_range(&rows, month) {
+        return Ok(());
+    }
+
+    // 3. Fetch J3 formula if possible
+    let j3_range = urlencoding::encode(&format!("{}!J3", quote_tab(tab))).into_owned();
+    let j3_res = dtr_get_json(
+        client,
+        token,
+        format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{j3_range}?valueRenderOption=FORMULA"),
+    )
+    .await;
+    let existing_j3 = j3_res.ok().and_then(|v| {
+        v.get("values")
+            .and_then(|arr| arr.get(0))
+            .and_then(|row| row.get(0))
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
+    });
+
+    // 4. Build requests
+    let (requests, _header_row, _data_start, _total_row) = build_new_month_block_requests(
+        sheet_id,
+        &rows,
+        year,
+        month,
+        existing_j3.as_deref().or(Some("")),
+    );
+
+    // 5. Send batchUpdate
+    let body = serde_json::json!({ "requests": requests });
+    let url = format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate");
+    let response = dtr_call_with_retry(|| {
+        client.post(&url).bearer_auth(token).json(&body)
+    })
+    .await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    Err(dtr_error_for_response(response).await)
+}
+
 /// Live tab metadata for the human DTR spreadsheet. `sheet_id` is the
 /// numeric id the Sheets API needs for GridRange format requests.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1906,7 +2243,7 @@ pub async fn push_dtr_row(
     }
     let titles = titles_of(&meta);
     let kind = classify_record_row(time_in.as_deref(), time_out.as_deref())?;
-    match plan_dtr_push_outcome(
+    let outcome = match plan_dtr_push_outcome(
         client,
         token,
         spreadsheet_id,
@@ -1920,6 +2257,26 @@ pub async fn push_dtr_row(
     )
     .await?
     {
+        DtrPlanOutcome::Unresolvable("no-month-block") => {
+            log::info!("dtr auto-provisioning month block for {full_name} ({user_id}) on {attendance_date}");
+            ensure_month_block(client, token, spreadsheet_id, sheet_id, &tab, &attendance_date).await?;
+            plan_dtr_push_outcome(
+                client,
+                token,
+                spreadsheet_id,
+                &user_id,
+                &full_name,
+                &attendance_date,
+                time_in.as_deref(),
+                time_out.as_deref(),
+                &roster,
+                &titles,
+            )
+            .await?
+        }
+        other => other,
+    };
+    match outcome {
         DtrPlanOutcome::Write(plan) => {
             execute_dtr_push(client, token, spreadsheet_id, &plan).await?;
             let ops = plan_row_format(sheet_id, plan.row_1based, kind);
@@ -2061,7 +2418,20 @@ async fn backfill_user_history(
         let mut page_results = Vec::with_capacity(days.len());
         for (date, tin, tout) in &days {
             let kind = classify_record_row(tin.as_deref(), tout.as_deref())?;
-            match plan_dtr_push_in_rows(&tab, &rows, date, tin.as_deref(), tout.as_deref())? {
+            let mut outcome = plan_dtr_push_in_rows(&tab, &rows, date, tin.as_deref(), tout.as_deref())?;
+            if let DtrPlanOutcome::Unresolvable("no-month-block") = outcome {
+                log::info!("dtr backfill auto-provisioning month block for {full_name} ({user_id}) on {date}");
+                ensure_month_block(client, token, spreadsheet_id, sheet_id, &tab, date).await?;
+                let tab_values = dtr_get_json(
+                    client,
+                    token,
+                    format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}"),
+                )
+                .await?;
+                rows = rows_from_values(&tab_values);
+                outcome = plan_dtr_push_in_rows(&tab, &rows, date, tin.as_deref(), tout.as_deref())?;
+            }
+            match outcome {
                 DtrPlanOutcome::Write(plan) => {
                     let idx = plan.row_1based - 1;
                     if idx < rows.len() {
@@ -4302,5 +4672,192 @@ mod tests {
             .unwrap(),
             DtrPlanOutcome::Write(_)
         ));
+    }
+
+    #[test]
+    fn test_summary_box_update() {
+        assert_eq!(
+            append_cell_to_sum_formula("=SUM(F33,F67,)", "F100"),
+            "=SUM(F33,F67,F100,)"
+        );
+        assert_eq!(
+            append_cell_to_sum_formula("=SUM(F33,F67)", "F100"),
+            "=SUM(F33,F67,F100)"
+        );
+        assert_eq!(
+            append_cell_to_sum_formula("=SUM(F33+F67)", "F100"),
+            "=SUM(F33+F67+F100)"
+        );
+        assert_eq!(append_cell_to_sum_formula("", "F100"), "=SUM(F100)");
+        assert_eq!(
+            append_cell_to_sum_formula("=SUM(F33,F67,F100,)", "F100"),
+            "=SUM(F33,F67,F100,)"
+        );
+    }
+
+    #[test]
+    fn test_month_block_payload() {
+        let sheet_id: i64 = 1417402751;
+        // Mock existing rows ending at row 67 (October total)
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        for _ in 0..67 {
+            rows.push(vec!["dummy".to_string()]);
+        }
+
+        let (requests_val, header_row, data_start, total_row) = build_new_month_block_requests(
+            sheet_id,
+            &rows,
+            2026,
+            11,
+            Some("=SUM(F33,F67,)"),
+        );
+
+        assert_eq!(header_row, 69);
+        assert_eq!(data_start, 70);
+        assert_eq!(total_row, 100);
+
+        let requests = requests_val.as_array().expect("requests array");
+        assert_eq!(requests.len(), 5);
+
+        // 1. updateCells for values
+        let update_cells = &requests[0]["updateCells"];
+        assert_eq!(update_cells["start"]["sheetId"], sheet_id);
+        assert_eq!(update_cells["start"]["rowIndex"], 68);
+        assert_eq!(update_cells["start"]["columnIndex"], 0);
+        let cell_rows = update_cells["rows"].as_array().expect("rows array");
+        assert_eq!(cell_rows.len(), 32); // 1 header + 30 days + 1 total
+
+        // Header row
+        assert_eq!(cell_rows[0]["values"][0]["userEnteredValue"]["stringValue"], "DATE-November");
+        assert_eq!(cell_rows[0]["values"][5]["userEnteredValue"]["stringValue"], "TOTAL HOURS");
+
+        // Day 1
+        assert_eq!(cell_rows[1]["values"][0]["userEnteredValue"]["stringValue"], "11/1/2026");
+        assert_eq!(
+            cell_rows[1]["values"][5]["userEnteredValue"]["formulaValue"],
+            "=MIN(8,((C70-B70)+(E70-D70))*24)"
+        );
+
+        // Day 30
+        assert_eq!(cell_rows[30]["values"][0]["userEnteredValue"]["stringValue"], "11/30/2026");
+        assert_eq!(
+            cell_rows[30]["values"][5]["userEnteredValue"]["formulaValue"],
+            "=MIN(8,((C99-B99)+(E99-D99))*24)"
+        );
+
+        // Total row
+        assert_eq!(cell_rows[31]["values"][4]["userEnteredValue"]["stringValue"], "TOTAL HOURS");
+        assert_eq!(
+            cell_rows[31]["values"][5]["userEnteredValue"]["formulaValue"],
+            "=SUM(F70:F99)"
+        );
+
+        // 2. repeatCell for header
+        let header_fmt = &requests[1]["repeatCell"];
+        assert_eq!(header_fmt["range"]["startRowIndex"], 68);
+        assert_eq!(header_fmt["range"]["endRowIndex"], 69);
+        assert_eq!(header_fmt["cell"]["userEnteredFormat"]["textFormat"]["bold"], true);
+
+        // 3. repeatCell for total
+        let total_fmt = &requests[2]["repeatCell"];
+        assert_eq!(total_fmt["range"]["startRowIndex"], 99);
+        assert_eq!(total_fmt["range"]["endRowIndex"], 100);
+        assert_eq!(total_fmt["cell"]["userEnteredFormat"]["textFormat"]["bold"], true);
+
+        // 4. addConditionalFormatRule
+        let cf = &requests[3]["addConditionalFormatRule"]["rule"];
+        assert_eq!(cf["ranges"][0]["startRowIndex"], 69);
+        assert_eq!(cf["ranges"][0]["endRowIndex"], 99);
+        assert_eq!(
+            cf["booleanRule"]["condition"]["values"][0]["userEnteredValue"],
+            "=WEEKDAY($A70,2)>5"
+        );
+
+        // 5. updateCells for J3 formula
+        let j3_update = &requests[4]["updateCells"];
+        assert_eq!(j3_update["start"]["rowIndex"], 2);
+        assert_eq!(j3_update["start"]["columnIndex"], 9);
+        assert_eq!(
+            j3_update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"],
+            "=SUM(F33,F67,F100,)"
+        );
+    }
+
+    #[test]
+    fn test_auto_provision_month_block() {
+        assert_eq!(days_in_month(2026, 1), 31);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2000, 2), 29);
+        assert_eq!(days_in_month(1900, 2), 28);
+        assert_eq!(days_in_month(2026, 11), 30);
+        assert_eq!(days_in_month(2026, 12), 31);
+
+        // Empty sheet: header should land at row 2
+        let empty_rows: Vec<Vec<String>> = Vec::new();
+        let (_, h, s, t) = build_new_month_block_requests(1, &empty_rows, 2026, 9, None);
+        assert_eq!(h, 2);
+        assert_eq!(s, 3);
+        assert_eq!(t, 33);
+
+        // Simulate existing September + October tab rows
+        let mut rows: Vec<Vec<String>> = vec![
+            vec!["".to_string()], // row 1
+            vec!["DATE-September".to_string()], // row 2
+        ];
+        for d in 1..=30 {
+            rows.push(vec![format!("9/{d}/2026"), "".to_string(), "".to_string(), "".to_string(), "".to_string(), "0".to_string()]);
+        }
+        rows.push(vec!["".to_string(), "".to_string(), "".to_string(), "".to_string(), "TOTAL HOURS".to_string(), "0".to_string()]); // row 33
+        rows.push(vec!["".to_string()]); // row 34 spacer
+        rows.push(vec!["DATE-October".to_string()]); // row 35
+        for d in 1..=31 {
+            rows.push(vec![format!("10/{d}/2026"), "".to_string(), "".to_string(), "".to_string(), "".to_string(), "0".to_string()]);
+        }
+        rows.push(vec!["".to_string(), "".to_string(), "".to_string(), "".to_string(), "TOTAL HOURS".to_string(), "0".to_string()]); // row 67
+
+        assert_eq!(month_block_range(&rows, 11), MonthBlock::NoMatch);
+
+        // Auto-provision November block
+        let (_, header_row, data_start, total_row) = build_new_month_block_requests(
+            1,
+            &rows,
+            2026,
+            11,
+            Some("=SUM(F33,F67,)"),
+        );
+        assert_eq!(header_row, 69);
+        assert_eq!(data_start, 70);
+        assert_eq!(total_row, 100);
+
+        // Append generated rows to simulate after-batchUpdate sheet state
+        rows.push(vec!["".to_string()]); // row 68 spacer
+        rows.push(vec!["DATE-November".to_string()]); // row 69
+        for d in 1..=30 {
+            rows.push(vec![format!("11/{d}/2026"), "".to_string(), "".to_string(), "".to_string(), "".to_string(), "0".to_string()]);
+        }
+        rows.push(vec!["".to_string(), "".to_string(), "".to_string(), "".to_string(), "TOTAL HOURS".to_string(), "0".to_string()]); // row 100
+
+        // Re-evaluating month block now returns Range(69, 100)
+        assert_eq!(month_block_range(&rows, 11), MonthBlock::Range(69, 100));
+
+        // And planning a punch on 2026-11-05 resolves to row 74
+        let plan = plan_dtr_push_in_rows(
+            "TEST TAB",
+            &rows,
+            "2026-11-05",
+            Some("2026-11-05T08:00:00+08:00"),
+            Some("2026-11-05T17:00:00+08:00"),
+        )
+        .expect("plan successful");
+
+        match plan {
+            DtrPlanOutcome::Write(p) => {
+                assert_eq!(p.row_1based, 74);
+                assert_eq!(p.values[0], "8:00:00 AM");
+                assert_eq!(p.values[3], "5:00:00 PM");
+            }
+            other => panic!("expected Write, got {other:?}"),
+        }
     }
 }

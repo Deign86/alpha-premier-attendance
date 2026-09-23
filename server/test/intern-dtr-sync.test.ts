@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendCellToSumFormula,
   buildDtrRow,
   buildFormatRequests,
+  buildNewMonthBlockRequests,
   classifyRecordKind,
+  daysInMonth,
   dtrTokens,
+  monthName,
   DTR_TEMPLATE_SHEET_ID,
   ensurePersonTab,
   findDateRow,
@@ -742,3 +746,91 @@ describe('audit A1: shared normalization validates ordering after the cap', () =
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '   ', date)).toBe('working');
   });
 });
+
+describe('auto-provision upcoming month blocks', () => {
+  it('daysInMonth handles standard and leap years', () => {
+    expect(daysInMonth(2026, 1)).toBe(31);
+    expect(daysInMonth(2026, 2)).toBe(28);
+    expect(daysInMonth(2024, 2)).toBe(29);
+    expect(daysInMonth(2000, 2)).toBe(29);
+    expect(daysInMonth(1900, 2)).toBe(28);
+    expect(daysInMonth(2026, 11)).toBe(30);
+    expect(daysInMonth(2026, 12)).toBe(31);
+  });
+
+  it('appendCellToSumFormula updates formula and is idempotent', () => {
+    expect(appendCellToSumFormula('=SUM(F33,F67,)', 'F100')).toBe('=SUM(F33,F67,F100,)');
+    expect(appendCellToSumFormula('=SUM(F33,F67)', 'F100')).toBe('=SUM(F33,F67,F100)');
+    expect(appendCellToSumFormula('=SUM(F33+F67)', 'F100')).toBe('=SUM(F33+F67+F100)');
+    expect(appendCellToSumFormula('', 'F100')).toBe('=SUM(F100)');
+    expect(appendCellToSumFormula('=SUM(F33,F67,F100,)', 'F100')).toBe('=SUM(F33,F67,F100,)');
+  });
+
+  it('buildNewMonthBlockRequests builds expected payload and ranges', () => {
+    const sheetId = 1417402751;
+    const dummyRows = Array.from({ length: 67 }, () => ['dummy']);
+    const res = buildNewMonthBlockRequests(sheetId, dummyRows, 2026, 11, '=SUM(F33,F67,)');
+
+    expect(res.headerRow1Based).toBe(69);
+    expect(res.dataStart1Based).toBe(70);
+    expect(res.totalRow1Based).toBe(100);
+    expect(res.requests.length).toBe(5);
+
+    // 1. updateCells
+    // SAFETY: verified request structure by test construction
+    const updateCells = (res.requests[0] as { updateCells: { rows: { values: { userEnteredValue?: { stringValue?: string; formulaValue?: string } }[] }[] } }).updateCells;
+    expect(updateCells.rows.length).toBe(32);
+    expect(updateCells.rows[0]?.values[0]?.userEnteredValue?.stringValue).toBe('DATE-November');
+    expect(updateCells.rows[1]?.values[0]?.userEnteredValue?.stringValue).toBe('11/1/2026');
+    expect(updateCells.rows[1]?.values[5]?.userEnteredValue?.formulaValue).toBe('=MIN(8,((C70-B70)+(E70-D70))*24)');
+    expect(updateCells.rows[31]?.values[4]?.userEnteredValue?.stringValue).toBe('TOTAL HOURS');
+    expect(updateCells.rows[31]?.values[5]?.userEnteredValue?.formulaValue).toBe('=SUM(F70:F99)');
+
+    // 5. J3 formula update
+    // SAFETY: verified request structure by test construction
+    const j3Update = (res.requests[4] as { updateCells: { rows: { values: { userEnteredValue?: { formulaValue?: string } }[] }[] } }).updateCells;
+    expect(j3Update.rows[0]?.values[0]?.userEnteredValue?.formulaValue).toBe('=SUM(F33,F67,F100,)');
+  });
+
+  it('planPush triggers client.ensureMonthBlock when month block is missing', async () => {
+    const tabs: Record<string, string[][]> = {
+      'ROSADO RAINEER': [
+        ['DATE-September', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
+        ['9/5/2026', '', '', '', '', '0'],
+        ['', '', '', '', 'TOTAL HOURS', '0'],
+      ],
+    };
+    const client = makeClient(tabs);
+    let provisioned = false;
+    client.ensureMonthBlock = async (tab, date) => {
+      provisioned = true;
+      expect(tab).toBe('ROSADO RAINEER');
+      expect(date).toBe('2026-11-05');
+      // Simulate appending November block
+      tabs[tab]?.push(
+        [''],
+        ['DATE-November', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
+        ['11/5/2026', '', '', '', '', '0'],
+        ['', '', '', '', 'TOTAL HOURS', '0'],
+      );
+    };
+
+    const novDay: AttendanceDay = {
+      userId: 'APG-2026-108',
+      fullName: 'Raineer C. Rosado',
+      attendanceDate: '2026-11-05',
+      timeIn: '2026-11-05T08:00:00+08:00',
+      timeOut: '2026-11-05T17:00:00+08:00',
+      status: 'COMPLETED',
+    };
+
+    const plan = await planPush(client, novDay, ROSTER);
+    expect(provisioned).toBe(true);
+    expect(plan.kind).toBe('write');
+    if (plan.kind === 'write') {
+      expect(plan.values[0]).toBe('8:00:00 AM');
+      expect(plan.values[3]).toBe('5:00:00 PM');
+    }
+  });
+});
+

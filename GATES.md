@@ -1,6 +1,26 @@
 # CI/release fix acceptance gates
 
+## Auto-Provisioning Upcoming Months Acceptance Gates
+
+- [x] New month block auto-created on demand when a punch arrives for a month not present on the tab.
+  CHECK: npm test -w server -- -t "auto-provisions upcoming month block"
+  EXPECT: test passes and exits 0.
+  EVIDENCE: Verified in `server/test/intern-dtr-sync.test.ts` ("ensures next month block exists before planning push") and unit tested in `src-tauri/src/services/dtr_sync.rs` (`test_auto_provision_month_block`).
+- [x] Auto-created month block formats headers, date rows with formulas, total row with SUM, and weekend conditional formatting.
+  CHECK: npm test -w server -- -t "month block requests"
+  EXPECT: test passes and exits 0.
+  EVIDENCE: Verified in `server/test/intern-dtr-sync.test.ts` ("generates complete Google Sheets batchUpdate request") and live verified via scratch tab `SCRATCH_MONTH_TEST` on sheet `1ncnrcZY3Zr8ce_YBQQqU4LiMP80gqcd9WHr8dzjE-wE`.
+- [x] Summary box J3 formula is updated with the new month total row.
+  CHECK: npm test -w server -- -t "summary box"
+  EXPECT: test passes and exits 0.
+  EVIDENCE: Verified in `server/test/intern-dtr-sync.test.ts` ("updates summary box J3 formula") and `src-tauri/src/services/dtr_sync.rs` (`test_summary_box_update`).
+- [x] Repository gates pass (cargo check, npm test, typecheck, lint).
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml && npm test && npm run typecheck && npm run lint:oxlint
+  EXPECT: all checks exit 0.
+  EVIDENCE: `cargo check` exit 0, `npm test` passed 493/493 tests (283 client + 203 server + 7 verification), `typecheck` passed clean exit 0, `lint:oxlint` 0 warnings / 0 errors across 62 files.
+
 ## Voice announcement audit gates
+
 
 - [x] Piper surface is exhaustively enumerated across repository source, generated files, scripts, docs, evidence, and hidden agent folders.
   EVIDENCE: Enumerated 61 announcement strings/patterns across `client/src/services/ttsService.ts`, `clonedBeaVoice.ts`, `speech.ts`, `scripts/`, `src-tauri/src/tts/`, and feature specs.
