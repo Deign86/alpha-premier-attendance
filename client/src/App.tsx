@@ -52,6 +52,7 @@ import {
   normalizeName,
   evaluateArrivalFromTimestamp,
   evaluateAttendanceArrivals,
+  getManilaWeekStart,
   countWorkdays,
 } from "@rfid-attendance/shared";
 import {
@@ -161,6 +162,42 @@ function toErrorMessage(cause: unknown, fallback: string): string {
     return cause as string;
   }
   return fallback;
+}
+
+async function evaluateKioskArrival(
+  attendance: { attendanceId: string; attendanceDate: string; timeIn: string },
+  userId: string,
+  timezone: string,
+): Promise<ArrivalStatus> {
+  const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone);
+  try {
+    const weekStart = getManilaWeekStart(attendance.attendanceDate);
+    const start = new Date(`${weekStart}T00:00:00Z`);
+    const end = new Date(`${attendance.attendanceDate}T00:00:00Z`);
+    const dates: string[] = [];
+    for (const date = new Date(start); date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
+      dates.push(date.toISOString().slice(0, 10));
+    }
+    const responses = await Promise.all(dates.map((date) => loadAttendance(date)));
+    const history = responses.flatMap((response) =>
+      response.success
+        ? response.attendance
+            .filter((row) => row.userId === userId)
+            .map((row) => ({
+              attendanceId: row.attendanceId,
+              userId: row.userId,
+              attendanceDate: row.attendanceDate,
+              timeIn: row.timeIn,
+            }))
+        : [],
+    );
+    if (!history.some((row) => row.attendanceId === attendance.attendanceId)) {
+      history.push({ ...attendance, userId });
+    }
+    return evaluateAttendanceArrivals(history).get(attendance.attendanceId)?.arrivalStatus ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 type KioskState = "ready" | "processing" | "success" | "error";
@@ -700,7 +737,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
+          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
@@ -750,7 +787,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? evaluateArrivalFromTimestamp(response.attendance.timeIn, config.timezone)
+          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({

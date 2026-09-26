@@ -314,6 +314,43 @@ describe('RFID kiosk', () => {
     });
   });
 
+  it('marks the second grace-window arrival in the same week as late', async () => {
+    const currentResponse = {
+      ...successResponse,
+      attendance: {
+        ...successResponse.attendance,
+        attendanceDate: '2026-07-28',
+        attendanceId: 'att-tuesday',
+        timeIn: '2026-07-28T08:08:00+08:00',
+      },
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Config response matches the shape consumed by loadConfig.
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url === '/api/attendance/scan') {
+        // SAFETY: Scan response matches the typed success fixture.
+        return { ok: true, json: async () => currentResponse } as Response;
+      }
+      const date = new URL(url, window.location.origin).searchParams.get('date');
+      const attendance = date === '2026-07-27'
+        ? [{ attendanceId: 'att-monday', attendanceDate: '2026-07-27', userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' }]
+        : [{ attendanceId: 'att-tuesday', attendanceDate: '2026-07-28', userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:08:00+08:00', timeOut: null, status: 'WORKING' }];
+      // SAFETY: Attendance response matches the list contract for weekly evaluation.
+      return { ok: true, json: async () => ({ success: true, date, attendance, fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    await screen.findByText('Ada Lovelace');
+    await waitFor(() => expect(ttsService.announceAttendance).toHaveBeenCalledWith(expect.objectContaining({
+      attendanceType: 'time_in',
+      arrivalStatus: 'LATE',
+      timeInIso: '2026-07-28T08:08:00+08:00',
+    })));
+  });
+
   it('announces a late time-in in TTS announcement', async () => {
     mockFetch({
       ...successResponse,

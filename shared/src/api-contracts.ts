@@ -44,6 +44,28 @@ export const WORKDAY_END = OFFICE_HOURS_END;
 
 export type ArrivalStatus = 'ON_TIME' | 'GRACE_PERIOD' | 'LATE' | 'NONE';
 
+export type ArrivalEvaluation = { arrivalStatus: ArrivalStatus; minutesLate: number };
+
+/** Evaluates one arrival with the user's weekly grace-period budget. */
+export function evaluateArrivalWithBudget(
+  timeInIso: string,
+  graceAlreadyUsed: boolean,
+  timezone = ATTENDANCE_TIMEZONE,
+): ArrivalEvaluation {
+  const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
+  if (seconds === null) return { arrivalStatus: 'NONE', minutesLate: 0 };
+  const startSeconds = 8 * 3600;
+  const graceEndSeconds = 8 * 3600 + 15 * 60;
+  if (seconds <= startSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
+  if (seconds <= graceEndSeconds && !graceAlreadyUsed) {
+    return { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 };
+  }
+  return {
+    arrivalStatus: 'LATE',
+    minutesLate: Math.ceil((seconds - startSeconds) / 60),
+  };
+}
+
 /**
  * Returns Monday (YYYY-MM-DD) of the work week for a given Manila date string.
  * Throws on invalid input instead of echoing it back: a bad week key would
@@ -150,32 +172,9 @@ export function evaluateAttendanceArrivals(
     let graceUsedThisWeek = false;
 
     for (const item of list) {
-      const seconds = manilaSecondsSinceMidnight(item.timeIn, ATTENDANCE_TIMEZONE);
-      if (seconds === null) {
-        result.set(item.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
-        continue;
-      }
-      const startSeconds = 8 * 3600; // 08:00:00
-      const graceEndSeconds = 8 * 3600 + 15 * 60; // 08:15:00
-
-      if (seconds <= startSeconds) {
-        // <= 08:00:00
-        result.set(item.attendanceId, { arrivalStatus: 'ON_TIME', minutesLate: 0 });
-      } else if (seconds <= graceEndSeconds) {
-        // 08:00:01 - 08:15:00
-        if (!graceUsedThisWeek) {
-          graceUsedThisWeek = true;
-          result.set(item.attendanceId, { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 });
-        } else {
-          // Already used 1 weekly GP -> Late!
-          const mins = Math.ceil((seconds - startSeconds) / 60);
-          result.set(item.attendanceId, { arrivalStatus: 'LATE', minutesLate: mins });
-        }
-      } else {
-        // > 08:15:00 -> Strictly Late
-        const mins = Math.ceil((seconds - startSeconds) / 60);
-        result.set(item.attendanceId, { arrivalStatus: 'LATE', minutesLate: mins });
-      }
+      const evaluation = evaluateArrivalWithBudget(item.timeIn, graceUsedThisWeek);
+      if (evaluation.arrivalStatus === 'GRACE_PERIOD') graceUsedThisWeek = true;
+      result.set(item.attendanceId, evaluation);
     }
   }
 

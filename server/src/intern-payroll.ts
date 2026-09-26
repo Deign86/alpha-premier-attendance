@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
+import { evaluateArrivalWithBudget, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
 import { capLateTimeoutOut, ceilHour, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
 
 export type InternPayrollInput = {
@@ -36,9 +36,8 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
 
   const lateMilliseconds = actualTimeIn.toMillis() - start.toMillis();
   const rawLateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
-  const inGraceWindow = actualTimeIn > start && actualTimeIn <= graceEnd;
-
-  const graceUsed = inGraceWindow && input.graceAvailable;
+  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !input.graceAvailable);
+  const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
   const lateHours = graceUsed ? 0 : rawLateHours;
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
   const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;

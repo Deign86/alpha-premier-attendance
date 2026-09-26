@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateAttendanceArrivals, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateArrivalWithBudget, evaluateAttendanceArrivals, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -180,6 +180,27 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
     expect(results.get('2')?.arrivalStatus).toBe('LATE');
     expect(results.get('2')?.minutesLate).toBe(8);
     expect(results.get('3')?.arrivalStatus).toBe('GRACE_PERIOD');
+  });
+
+  it('allows only one grace period across three 08:05 arrivals in the same Manila week', () => {
+    const rows = [
+      { attendanceId: '1', userId: 'MARICON', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:05:00+08:00' },
+      { attendanceId: '2', userId: 'MARICON', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:05:00+08:00' },
+      { attendanceId: '3', userId: 'MARICON', attendanceDate: '2026-08-26', timeIn: '2026-08-26T08:05:00+08:00' },
+    ];
+    const results = evaluateAttendanceArrivals(rows);
+    expect(rows.map(({ attendanceId }) => results.get(attendanceId)?.arrivalStatus)).toEqual([
+      'GRACE_PERIOD', 'LATE', 'LATE',
+    ]);
+    expect(results.get('2')?.minutesLate).toBe(5);
+    expect(results.get('3')?.minutesLate).toBe(5);
+  });
+
+  it('returns late minutes when the weekly grace budget is already used', () => {
+    expect(evaluateArrivalWithBudget('2026-08-25T08:05:00+08:00', true)).toEqual({
+      arrivalStatus: 'LATE',
+      minutesLate: 5,
+    });
   });
 
   it('treats arrivals strictly beyond 08:15 as LATE regardless of grace period availability', () => {

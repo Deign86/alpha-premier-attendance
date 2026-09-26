@@ -160,6 +160,33 @@ mod tests {
         assert_eq!(result.late_deduction_centavos, 0);
         assert_eq!(result.daily_pay_centavos, 8000);
     }
+
+    #[test]
+    fn only_first_08_05_arrival_in_a_week_uses_grace() {
+        let mut grace_available = true;
+        let mut grace_count = 0;
+
+        for date in ["2026-08-03", "2026-08-04", "2026-08-05"] {
+            let result = calculate(
+                date,
+                &format!("{date}T08:05:00+08:00"),
+                &format!("{date}T17:00:00+08:00"),
+                grace_available,
+            )
+            .unwrap();
+
+            if result.grace_used {
+                grace_count += 1;
+                grace_available = false;
+                assert_eq!(result.late_hours, 0);
+            } else {
+                assert_eq!(result.late_hours, 1);
+            }
+        }
+
+        assert_eq!(grace_count, 1);
+    }
+
     #[test]
     fn arrival_beyond_08_15_is_late() {
         // 08:16 is beyond grace period
