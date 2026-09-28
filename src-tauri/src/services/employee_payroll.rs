@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn close_boundary_is_minute_precise() {
-        // 16:59:59 is 8h 59m 59s elapsed - 1h lunch = 7h 59m 59s -> 7 worked hours.
+        // 16:59:59 is 8h 59m 59s elapsed - 1h lunch = 7h 59m 59s -> rounds to 8 worked hours.
         let just_before = calculate(
             "2026-08-01T08:00:00+08:00",
             "2026-08-01T16:59:59+08:00",
@@ -182,8 +182,8 @@ mod tests {
         )
         .unwrap();
         assert!(!just_before.is_half_day);
-        assert_eq!(just_before.worked_hours, 7);
-        assert_eq!(just_before.daily_pay_centavos, 87_500);
+        assert_eq!(just_before.worked_hours, 8);
+        assert_eq!(just_before.daily_pay_centavos, 100_000);
         for time_out in [
             "2026-08-01T17:00:00+08:00",
             "2026-08-01T17:00:01+08:00",
@@ -247,7 +247,7 @@ mod tests {
         )
         .unwrap();
         assert!(half.is_half_day);
-        assert_eq!(half.daily_pay_centavos, 37_500);
+        assert_eq!(half.daily_pay_centavos, 50_000);
         assert!(half.computed_time_out.contains("T12:00:00+08:00"));
         // Full day keeps the floored actual time-out.
         let full = calculate(

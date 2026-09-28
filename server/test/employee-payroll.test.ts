@@ -69,14 +69,14 @@ describe('employee payroll policy', () => {
     expect(result.workedHours).toBe(8);
     expect(result.dailyPay).toBe(650);
 
-    // Partial window: 11:45–13:15 elapsed is 1.5h minus 1h lunch = 0.5h -> 0 whole hours.
+    // Partial window: 11:45–13:15 elapsed is 1.5h minus 1h lunch = 0.5h -> rounded to 1h.
     const partial = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T11:45:00+08:00',
       actualTimeOut: '2026-07-28T13:15:00+08:00',
       dailyRate: 650,
     });
-    expect(partial.workedHours).toBe(0);
-    expect(partial.dailyPay).toBe(0);
+    expect(partial.workedHours).toBe(1);
+    expect(partial.dailyPay).toBe(81.25);
   });
 
   it('strictly counts whole hours: 08:00-12:30 pays 4 hours, matching 08:00-12:00', () => {

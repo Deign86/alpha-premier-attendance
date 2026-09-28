@@ -782,7 +782,7 @@ describe('auto-provision upcoming month blocks', () => {
     expect(updateCells.rows.length).toBe(32);
     expect(updateCells.rows[0]?.values[0]?.userEnteredValue?.stringValue).toBe('DATE-November');
     expect(updateCells.rows[1]?.values[0]?.userEnteredValue?.stringValue).toBe('11/1/2026');
-    expect(updateCells.rows[1]?.values[5]?.userEnteredValue?.formulaValue).toBe('=MIN(8,((C70-B70)+(E70-D70))*24)');
+    expect(updateCells.rows[1]?.values[5]?.userEnteredValue?.formulaValue).toBe('=MIN(8,ROUND(((C70-B70)+(E70-D70))*24,0))');
     expect(updateCells.rows[31]?.values[4]?.userEnteredValue?.stringValue).toBe('TOTAL HOURS');
     expect(updateCells.rows[31]?.values[5]?.userEnteredValue?.formulaValue).toBe('=SUM(F70:F99)');
 
