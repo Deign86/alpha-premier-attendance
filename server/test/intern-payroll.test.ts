@@ -40,6 +40,30 @@ function fixtureTimestamp(date: string, time: string): string {
 }
 
 describe('intern payroll policy', () => {
+  it('prices 08:15-to-15:00 grace and adjacent boundaries without double-charging', () => {
+    const cases = [
+      { label: 'first grace, exact 08:15', attendanceDate: '2026-09-21', timeIn: '08:15:00', timeOut: '15:00:00', graceAvailable: true, expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 20, dailyPay: 60, workedHours: 6 } },
+      { label: 'same-week grace exhausted, exact 08:15', attendanceDate: '2026-09-22', timeIn: '08:15:00', timeOut: '15:00:00', graceAvailable: false, expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 20, dailyPay: 50, workedHours: 5 } },
+      { label: 'one second beyond grace', attendanceDate: '2026-09-23', timeIn: '08:15:01', timeOut: '15:00:00', graceAvailable: true, expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 20, dailyPay: 50, workedHours: 5 } },
+      { label: '08:16 arrival to 17:00', attendanceDate: '2026-09-24', timeIn: '08:16:00', timeOut: '17:00:00', graceAvailable: true, expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70, workedHours: 7 } },
+      { label: '08:00:01 arrival to 17:00', attendanceDate: '2026-09-25', timeIn: '08:00:01', timeOut: '17:00:00', graceAvailable: true, expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80, workedHours: 8 } },
+    ];
+
+    expect(getManilaWeekStart(cases[0].attendanceDate)).toBe(getManilaWeekStart(cases[1].attendanceDate));
+
+    for (const testCase of cases) {
+      const result = calculateInternPayroll({
+        attendanceDate: testCase.attendanceDate,
+        actualTimeIn: fixtureTimestamp(testCase.attendanceDate, testCase.timeIn),
+        actualTimeOut: fixtureTimestamp(testCase.attendanceDate, testCase.timeOut),
+        graceAvailable: testCase.graceAvailable,
+      });
+
+      expect(result, testCase.label).toMatchObject({ basePay: 80, ...testCase.expected });
+      expect(result.lateDeduction + result.halfDayDeduction, testCase.label).toBe(80 - result.dailyPay);
+    }
+  });
+
   it('September 2026 seeded attendance proves global rates, weekly grace, and non-overlapping deductions', () => {
     const graceUsedByUserWeek = new Set<string>();
     const sortedAttendance = [...SEPTEMBER_ATTENDANCE].sort((left, right) =>

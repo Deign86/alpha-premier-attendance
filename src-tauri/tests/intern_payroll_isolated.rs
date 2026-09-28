@@ -19,6 +19,63 @@ mod services {
 }
 
 #[test]
+fn named_0815_to_1500_edge_and_boundary_cases_match_daily_rule() {
+    use services::intern_payroll::calculate;
+
+    struct EdgeCase {
+        date: &'static str,
+        time_in: &'static str,
+        time_out: &'static str,
+        grace_available: bool,
+        expected_grace_used: bool,
+        expected_late_hours: i64,
+        expected_late_centavos: i64,
+        expected_undertime_centavos: i64,
+        expected_net_centavos: i64,
+    }
+
+    // Sep 1–6 is the Manila Mon-week starting Aug 31: row 2 exhausts row 1's grace.
+    // The remaining rows cover the seconds boundary and next-week Monday reset.
+    let cases = [
+        EdgeCase { date: "2026-09-01", time_in: "08:15:00", time_out: "15:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 2_000, expected_net_centavos: 6_000 },
+        EdgeCase { date: "2026-09-02", time_in: "08:15:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
+        EdgeCase { date: "2026-09-03", time_in: "08:15:01", time_out: "15:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
+        EdgeCase { date: "2026-09-04", time_in: "08:16:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0, expected_net_centavos: 7_000 },
+        EdgeCase { date: "2026-09-07", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0, expected_net_centavos: 8_000 },
+    ];
+
+    for case in cases {
+        let result = calculate(
+            case.date,
+            &format!("{}T{}+08:00", case.date, case.time_in),
+            &format!("{}T{}+08:00", case.date, case.time_out),
+            case.grace_available,
+        )
+        .unwrap();
+
+        assert_eq!(result.grace_used, case.expected_grace_used, "{} {}", case.date, case.time_in);
+        assert_eq!(result.base_pay_centavos, 8_000, "{} {}", case.date, case.time_in);
+        assert_eq!(result.late_hours, case.expected_late_hours, "{} {}", case.date, case.time_in);
+        assert_eq!(result.late_deduction_centavos, case.expected_late_centavos, "{} {}", case.date, case.time_in);
+        assert_eq!(result.half_day_deduction_centavos, case.expected_undertime_centavos, "{} {}", case.date, case.time_in);
+        assert_eq!(
+            result.daily_pay_centavos,
+            case.expected_net_centavos,
+            "{} {}",
+            case.date,
+            case.time_in
+        );
+        assert_eq!(
+            result.daily_pay_centavos,
+            8_000 - result.late_deduction_centavos - result.half_day_deduction_centavos,
+            "late and undertime must not double-charge {} {}",
+            case.date,
+            case.time_in
+        );
+    }
+}
+
+#[test]
 fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
     use services::intern_payroll::calculate;
 

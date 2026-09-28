@@ -32,4 +32,21 @@ describe('payroll service integration', () => {
     expect(first).toMatchObject({ graceUsed: true, lateHours: 0, lateDeduction: 0, dailyPay: 80 });
     expect(second).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10, dailyPay: 70 });
   });
+
+  it('claims exact 08:15 grace once and charges second same-week 08:15 arrival plus separate undertime', async () => {
+    const user: SheetUser = { userId: 'I-815-WEEK', fullName: 'Quarter Past Intern', rfidUid: 'C3D5', department: null, active: true, employeeType: 'INTERN' };
+    const sheets = new InMemorySheetsService([user]);
+    const service = new PayrollService(sheets);
+    const attendanceFor = (attendanceId: string, attendanceDate: string): SheetAttendance => ({
+      attendanceId, attendanceDate, userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: null,
+      timeIn: `${attendanceDate}T08:15:00+08:00`, timeOut: `${attendanceDate}T15:00:00+08:00`, status: 'COMPLETED', source: 'RFID', notes: '',
+    });
+
+    const first = await service.ensureForCompletedAttendance(attendanceFor('I-815-WEEK-1', '2026-09-21'), user);
+    const second = await service.ensureForCompletedAttendance(attendanceFor('I-815-WEEK-2', '2026-09-22'), user);
+
+    expect(first).toMatchObject({ graceUsed: true, lateHours: 0, lateDeduction: 0, basePay: 80, dailyPay: 60 });
+    expect(second).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10, basePay: 80, dailyPay: 50 });
+    expect(second.dailyPay).toBe(second.basePay - second.lateDeduction - 20);
+  });
 });
