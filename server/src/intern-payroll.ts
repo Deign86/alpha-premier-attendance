@@ -36,6 +36,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
 
   const lateMilliseconds = actualTimeIn.toMillis() - start.toMillis();
   const rawLateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
+  // Grace is one per Manila Monday-week; payable-in rounding must not decide grace eligibility.
   const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !input.graceAvailable);
   const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
   const lateHours = graceUsed ? 0 : rawLateHours;
@@ -44,7 +45,10 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
   const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));
-  const { workedHours, isHalfDay, halfDayDeduction, dailyPay } = computeShiftCore(payableIn, actualTimeOut, actualTimeIn, hourlyRate);
+  const { workedHours, isHalfDay, halfDayDeduction: grossShortfall } = computeShiftCore(payableIn, actualTimeOut, actualTimeIn, hourlyRate);
+  // payableIn already removes late hours; exclude those hours from undertime to avoid duplicate charging.
+  const halfDayDeduction = Math.max(0, grossShortfall - lateHours * hourlyRate);
+  const totalDailyDeduction = lateDeduction + halfDayDeduction;
   // DTR DECOUPLING: `computedTimeOut` is a PAYROLL-ONLY effective window.
   // A morning half-day closed before office close pays as 08:00–12:00 even
   // though the DTR row keeps the actual 08:00–15:00 stamps. Never push
@@ -60,7 +64,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
     halfDayDeduction,
     graceUsed,
     basePay,
-    dailyPay,
+    dailyPay: Math.max(0, basePay - totalDailyDeduction),
     workedHours,
   };
 }

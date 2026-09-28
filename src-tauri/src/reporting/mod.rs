@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn intern_sheet_row_reports_zero_late_deduction_when_db_raw_is_nonzero() {
+    async fn intern_sheet_row_includes_late_deduction_in_display_and_gross() {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -149,8 +149,8 @@ mod tests {
             .await
             .expect("intern sheet rows");
         assert_eq!(intern_rows.len(), 1);
-        assert_eq!(intern_rows[0].late_deduction_centavos, 0);
-        assert_eq!(intern_rows[0].gross_compensation_centavos, 88_000);
+        assert_eq!(intern_rows[0].late_deduction_centavos, 1_000);
+        assert_eq!(intern_rows[0].gross_compensation_centavos, 87_000);
         let employee_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "EMPLOYEE")
             .await
             .expect("employee sheet rows");
@@ -2343,16 +2343,7 @@ pub async fn load_payroll_sheet_rows(
             let cutoff_rate_centavos = (daily_rate_centavos as f64 * standard_working_days).round()
                 as i64;
             let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
-            // Interns charge the late hour inside half_day_deduction
-            // ((8 - worked_hours) x PHP 10, where worked_hours already excludes the
-            // late hour through payable_in = ceil_hour(time_in)), so subtracting the
-            // late deduction again would double-count the same shortfall hour.
-            let effective_late_deduction =
-                if row.get::<String, _>("employee_type") == "INTERN" {
-                    0
-                } else {
-                    late_deduction_centavos
-                };
+            let effective_late_deduction = late_deduction_centavos;
             let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
             let db_absent_days = row.get::<f64, _>("absent_days");
             let db_absence_deduction = row.get::<i64, _>("absence_deduction_centavos");

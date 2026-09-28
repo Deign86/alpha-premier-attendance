@@ -1,5 +1,47 @@
 # CI/release fix acceptance gates
 
+## September 2026 intern attendance edge fixtures
+
+- [x] Attendance fixtures cover exact/on-boundary and one-second-late arrivals across the Aug 31–Sep 6 Manila week.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "September 2026 seeded attendance"
+  EXPECT: data rows for APG-2026-116 through APG-2026-119 prove 08:00:00 is on time and first arrivals at 08:00:01/08:08 receive the sole weekly grace.
+  EVIDENCE: One data-driven test processes 14 Sept 1–15 rows across all four named IDs; exact-time and grace cases pass.
+- [x] Grace boundary/exhaustion and Monday reset are verified in each represented Manila week.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "September 2026 seeded attendance"
+  EXPECT: first 08:08 is free, second same-week 08:08 charges ₱10, 08:15:00 is eligible only while grace remains, 08:15:01/08:16/08:30 charge ₱10 (08:30+ is ceil-hour), and Monday Sep 7 / Sep 14 start new budgets.
+  EVIDENCE: Focused gate passed: 1 test passed, 26 unrelated intern-payroll cases skipped; first/second grace and Sept 7/14 resets pass.
+- [x] Late-hour ceiling and non-overlapping undertime are covered through Sep 15.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "September 2026 seeded attendance"
+  EXPECT: 09:00:01 charges two late hours; 16:00 and 15:00 outs deduct ₱10/₱20; late+early deductions exclude already charged late hours and daily pay stays at/above zero.
+  EVIDENCE: Focused fixture passed assertions for ₱80 base, ₱10/₱20 undertime, 2-hour late ceiling, combined ₱20 deduction without overlap.
+- [x] Required repo lint, typecheck, and server test suite pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w server
+  EXPECT: all commands exit 0.
+  EVIDENCE: lint:oxlint and typecheck exited 0; server Vitest suite passed 18 files / 214 tests.
+
+## Authoritative intern payroll policy gates (2026-09-28)
+
+- [x] Late hours ceil to the next hour; with weekly grace exhausted, 08:08 computes to 09:00 and charges exactly ₱10 late.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "weekly grace exhausted 08:08 rounds to 09:00"
+  EXPECT: computedTimeIn is 09:00, lateDeduction is ₱10, and late is not counted again as undertime.
+  EVIDENCE: TypeScript and Rust late-ceil regressions pass: computed-in 09:00, one late unit, ₱10 late, zero undertime on a 17:00 clock-out.
+- [x] Only one 08:00–08:15 grace is allowed per intern per Manila Monday-week; second same-week grace-window arrival is late.
+  CHECK: npm test -w server -- payroll.test.ts -t "one grace per Manila week"
+  EXPECT: first qualifying arrival is free; second is LATE and charged after ceil-hour rounding.
+  EVIDENCE: `PayrollService` integration verifies consecutive Sept 21/22 grace-window arrivals; Rust tests one grace across three weekly arrivals.
+- [x] Undertime is charged at ₱10 per short hour, excluding late hours already charged through lateDeduction.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "undertime excludes late hours"
+  EXPECT: late and undertime components are non-overlapping and sum to the actual payroll deduction.
+  EVIDENCE: TypeScript asserts one late hour alone is ₱10; a separate short hour adds exactly ₱10; Rust uses the same overlap subtraction.
+- [x] TS/Rust daily payroll and cutoff breakdown use the same late + non-overlapping undertime components.
+  CHECK: npm test -w server -- intern-payroll.test.ts cutoff-payroll.test.ts && cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated
+  EXPECT: deductions and net pay agree across both engines; no late hour is subtracted twice.
+  EVIDENCE: Full JS suite passed: shared 36, client 284, server 213; focused Rust isolated suite passed 35 tests.
+- [x] Reinterpret Maricon's Sept 24/25 note under the authoritative one-grace-per-week rule.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "Maricon second weekly grace is late"
+  EXPECT: Sept 24 and 25 map to week starting Sept 21; first grace is free, second charges ₱10 (not two free grace days).
+  EVIDENCE: Rule 3 overrides QA's ₱520/two-free-graces total: one free grace and one ₱10 late charge means ₱510 on the same baseline. Tests confirm first grace free, second late by one hour; full `npm test`, lint, typecheck, and MCP 7/7 pass.
+
 ## Auto-Provisioning Upcoming Months Acceptance Gates
 
 - [x] New month block auto-created on demand when a punch arrives for a month not present on the tab.
@@ -1066,4 +1108,8 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   CHECK: npx tsc --noEmit --strict --skipLibCheck --types node --target es2022 --module nodenext --moduleResolution nodenext tools/cua/*.ts tools/cua/cases/*.ts && npx oxlint --config oxlint.config.ts scripts/cua-jev-run.mjs scripts/cua-jev-doctor.mjs
   EXPECT: tsc exits 0; oxlint on both scripts exits 0; evidence.ts keeps its pre-existing violations only
   EVIDENCE: measured 2026-09-19 — tsc clean (TS2345 at evidence.ts:81 gone via SAFETY-commented `as JsonRecord`; Array.isArray handles all runtime arrays); oxlint clean on both scripts; repo `npm run lint:oxlint` + `npm run typecheck` exit 0; evidence.ts shows only its 5 pre-existing anti-slop findings, zero introduced.
+
+- [ ] Rust parity lane fix-2: September attendance and cutoff assertions.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated -- --nocapture
+  EXPECT: 49 passed; 0 failed; September attendance and cutoff assertions pass.
 

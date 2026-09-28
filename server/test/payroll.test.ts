@@ -18,4 +18,18 @@ describe('payroll service integration', () => {
     expect(first.actualTimeIn).toBe(attendance.timeIn);
     expect(first.computedTimeIn).toBe(attendance.timeIn);
   });
+
+  it('one grace per Manila week', async () => {
+    const user: SheetUser = { userId: 'I-WEEK', fullName: 'Weekly Intern', rfidUid: 'C3D4', department: null, active: true, employeeType: 'INTERN' };
+    const sheets = new InMemorySheetsService([user]);
+    const service = new PayrollService(sheets);
+    const attendanceFor = (attendanceId: string, attendanceDate: string): SheetAttendance => ({
+      attendanceId, attendanceDate, userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: null,
+      timeIn: `${attendanceDate}T08:08:00+08:00`, timeOut: `${attendanceDate}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID', notes: '',
+    });
+    const first = await service.ensureForCompletedAttendance(attendanceFor('I-WEEK-1', '2026-09-21'), user);
+    const second = await service.ensureForCompletedAttendance(attendanceFor('I-WEEK-2', '2026-09-22'), user);
+    expect(first).toMatchObject({ graceUsed: true, lateHours: 0, lateDeduction: 0, dailyPay: 80 });
+    expect(second).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10, dailyPay: 70 });
+  });
 });

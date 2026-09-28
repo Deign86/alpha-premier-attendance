@@ -1,4 +1,5 @@
 import type { PayrollCalculationProfile, PayrollCutoffRecord } from '@rfid-attendance/shared';
+import { INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
 
 export type CutoffInput = Omit<PayrollCutoffRecord, 'payrollId' | 'employeeName' | 'basicPay' | 'specialHolidayPay' | 'regularHolidayPay' | 'totalCompensation' | 'totalAllowance' | 'halfDayDeduction' | 'absenceDeduction' | 'overtimePay' | 'totalDeductions' | 'grossCompensation' | 'netPay' | 'calculationBreakdown' | 'finalizedAt'> & {
   employeeName: string;
@@ -39,7 +40,9 @@ export function calculateCutoffPayroll(input: CutoffInput): Omit<PayrollCutoffRe
   // worked 0 days must not receive the full flat allowance sum.
   const workedZeroDays = input.actualWorkingDays === 0 && input.standardWorkingDays > 0;
   const totalAllowance = workedZeroDays ? 0 : incentivesAllowance + specialAllowance + hra;
-  const lateDeduction = cents(input.lateDeduction);
+  const lateDeduction = cents(input.employeeType === 'INTERN'
+    ? input.lateUnits * INTERN_LATE_DEDUCTION_PER_HOUR_PHP
+    : input.lateDeduction);
   const halfDayDeduction = (input.halfDayDeduction != null && input.halfDayDeduction > 0)
     ? cents(input.halfDayDeduction)
     : (input.halfDayCount % 1 === 0

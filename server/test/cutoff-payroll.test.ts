@@ -54,6 +54,11 @@ describe('cutoff payroll calculator', () => {
     expect(zeroed.netPay).toBe(0);
   });
 
+  it('derives intern late deductions from late units even when the caller supplied zero', () => {
+    const result = calculateCutoffPayroll({ ...jeanInput, employeeType: 'INTERN', dailyRate: 80, lateUnits: 2, lateDeduction: 0 });
+    expect(result).toMatchObject({ lateDeduction: 20, totalDeductions: 20, netPay: result.grossCompensation - 20 });
+  });
+
   it('computes partial intern cutoff with 1 day actual attendance and 10 absent days correctly', () => {
     const partialInternInput = {
       ...jeanInput,

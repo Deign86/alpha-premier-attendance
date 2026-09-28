@@ -2,9 +2,12 @@ import crypto from 'node:crypto';
 import { getManilaWeekStart } from '@rfid-attendance/shared';
 import { calculateEmployeePayroll } from './employee-payroll.js';
 import { calculateInternPayroll } from './intern-payroll.js';
+import { KeyedMutex } from './mutex.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayroll, SheetUser } from './sheets.js';
 
 export class PayrollService {
+  private readonly graceClaims = new KeyedMutex();
+
   constructor(private readonly sheets: GoogleSheetsService) {}
 
   async ensureForCompletedAttendance(attendance: SheetAttendance, user: SheetUser): Promise<SheetPayroll> {
@@ -24,22 +27,27 @@ export class PayrollService {
     }
 
     const weekStart = getManilaWeekStart(attendance.attendanceDate);
-    const [existing, grace] = await Promise.all([
-      this.sheets.findPayrollByAttendanceId(attendance.attendanceId),
-      this.sheets.findInternGrace(user.userId, weekStart),
-    ]);
-    if (existing) return existing;
+    const actualTimeIn = attendance.timeIn;
+    const actualTimeOut = attendance.timeOut;
+    const graceKey = JSON.stringify([user.userId, weekStart]);
+    return this.graceClaims.runExclusive(graceKey, async () => {
+      const [existing, grace] = await Promise.all([
+        this.sheets.findPayrollByAttendanceId(attendance.attendanceId),
+        this.sheets.findInternGrace(user.userId, weekStart),
+      ]);
+      if (existing) return existing;
 
-    const graceAvailable = !grace || grace.attendanceId === attendance.attendanceId;
-    const calculation = calculateInternPayroll({ attendanceDate: attendance.attendanceDate, actualTimeIn: attendance.timeIn, actualTimeOut: attendance.timeOut, graceAvailable });
-    if (calculation.graceUsed && !grace) {
-      await this.sheets.claimInternGrace({ graceId: crypto.randomUUID(), userId: user.userId, weekStart, attendanceId: attendance.attendanceId, usedAt: attendance.timeIn });
-    }
-    return this.sheets.createPayroll({
-      payrollId: crypto.randomUUID(), attendanceId: attendance.attendanceId, userId: user.userId, fullName: user.fullName, employeeType: 'INTERN', attendanceDate: attendance.attendanceDate,
-      actualTimeIn: attendance.timeIn, actualTimeOut: attendance.timeOut, computedTimeIn: calculation.computedTimeIn, computedTimeOut: calculation.computedTimeOut,
-      graceUsed: calculation.graceUsed, lateHours: calculation.lateHours, lateDeduction: calculation.lateDeduction, basePay: calculation.basePay, dailyPay: calculation.dailyPay,
-      notes: calculation.graceUsed ? 'First weekly late grace applied' : calculation.lateHours ? 'Late deduction applied' : '',
+      const graceAvailable = !grace || grace.attendanceId === attendance.attendanceId;
+      const calculation = calculateInternPayroll({ attendanceDate: attendance.attendanceDate, actualTimeIn, actualTimeOut, graceAvailable });
+      if (calculation.graceUsed && !grace) {
+        await this.sheets.claimInternGrace({ graceId: crypto.randomUUID(), userId: user.userId, weekStart, attendanceId: attendance.attendanceId, usedAt: attendance.timeIn });
+      }
+      return this.sheets.createPayroll({
+        payrollId: crypto.randomUUID(), attendanceId: attendance.attendanceId, userId: user.userId, fullName: user.fullName, employeeType: 'INTERN', attendanceDate: attendance.attendanceDate,
+        actualTimeIn, actualTimeOut, computedTimeIn: calculation.computedTimeIn, computedTimeOut: calculation.computedTimeOut,
+        graceUsed: calculation.graceUsed, lateHours: calculation.lateHours, lateDeduction: calculation.lateDeduction, basePay: calculation.basePay, dailyPay: calculation.dailyPay,
+        notes: calculation.graceUsed ? 'First weekly late grace applied' : calculation.lateHours ? 'Late deduction applied' : '',
+      });
     });
   }
 }

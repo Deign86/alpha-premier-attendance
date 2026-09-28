@@ -2418,12 +2418,8 @@ async fn payroll_intern_report(
             let total_comp = standard_days * daily_rate;
             let absence_deduction = absent_days * daily_rate;
             let late_units = row.get::<i64, _>("late_units") as f64;
-            // An intern's late shortfall is already charged inside
-            // half_day_deduction ((8 - worked_hours) x PHP 10, where worked_hours
-            // already excludes the late hour through payable_in = ceil_hour(time_in)),
-            // so billing a separate late amount would double-count the penalty.
-            // lateUnits stays in the payload for visibility only.
-            let total_deductions = half_day_deduction + absence_deduction;
+            let late_deduction = row.get::<i64, _>("late_deduction") as f64 / 100.0;
+            let total_deductions = late_deduction + half_day_deduction + absence_deduction;
             let gross = (total_comp - total_deductions).max(0.0);
             let user_id = row.get::<String, _>("user_id");
             serde_json::json!({
@@ -2451,7 +2447,7 @@ async fn payroll_intern_report(
                 "totalCompensation": total_comp,
                 "totalAllowance": 0,
                 "lateUnits": late_units,
-                "lateDeduction": 0.0,
+                "lateDeduction": late_deduction,
                 "halfDayCount": half_day_count,
                 "halfDayDeduction": half_day_deduction,
                 "absentDays": absent_days,
@@ -2698,13 +2694,8 @@ async fn payroll_generate_cutoff_impl(
             custom_number("overtimeHours").unwrap_or(0.0)
         };
         let late_rate = custom_number("lateDeductionRate").unwrap_or(0.0);
-        // An intern's late hour is already charged inside half_day_deduction:
-        // the per-day rows deduct (8 - worked_hours) x PHP 10 and worked_hours
-        // already excludes the late hour (payable_in = ceil_hour(time_in)).
-        // Charging a separate late amount would double-count the same hour.
-        // lateUnits is still persisted on the record for visibility.
         let late_deduction = if is_intern {
-            0.0
+            late_units * (crate::services::intern_payroll::INTERN_DAILY_RATE_PHP as f64 / 8.0)
         } else {
             late_units * late_rate
         };
@@ -2749,10 +2740,9 @@ async fn payroll_generate_cutoff_impl(
                 .map(String::from),
             approved_working_day_overage: true,
         };
-        let calculated = crate::services::cutoff_payroll::calculate(&input)?;
-        // Engine owns the intern floor; persist its gross/net unchanged.
+        let mut calculated = crate::services::cutoff_payroll::calculate(&input)?;
+        // Keep engine gross; net is reconciled to the visible deduction items below.
         let gross_amount = calculated.gross_compensation;
-        let net_amount = calculated.net_pay;
 
         let daily_records = sqlx::query(
             "SELECT attendance_date, actual_time_in, actual_time_out, late_hours, late_deduction_centavos, \
@@ -2838,7 +2828,8 @@ async fn payroll_generate_cutoff_impl(
                     format!("Late arrival at {} ({} hr(s) late)", in_str, rec_late_hours)
                 };
                 let amount = if is_intern {
-                    0.0
+                    (rec_late_hours as f64)
+                        * (crate::services::intern_payroll::INTERN_DAILY_RATE_PHP as f64 / 8.0)
                 } else {
                     (rec_late_hours as f64) * late_rate
                 };
@@ -2880,8 +2871,9 @@ async fn payroll_generate_cutoff_impl(
                             in_m.max(day_start)
                         };
                         let paid_sec = crate::services::lunch_break::paid_work_seconds(in_effective, capped_out);
-                        let wh = crate::services::payroll::floor_hours(paid_sec).min(8);
-                        let uh = (8 - wh).max(0);
+                        let wh = crate::services::payroll::round_hours(paid_sec).min(8);
+                        let late_hours_already_removed = if is_intern { rec_late_hours } else { 0 };
+                        let uh = (8 - wh - late_hours_already_removed).max(0);
                         (wh, uh)
                     } else {
                         (0, 4)
@@ -2925,6 +2917,11 @@ async fn payroll_generate_cutoff_impl(
             let d_b = b.get("date").and_then(|v| v.as_str()).unwrap_or("");
             d_a.cmp(d_b)
         });
+
+        calculated.total_deductions = deduction_items_total_centavos(&deduction_items);
+        let net_before_floor = gross_amount - calculated.total_deductions;
+        calculated.net_pay = if is_intern { net_before_floor.max(0) } else { net_before_floor };
+        let net_amount = calculated.net_pay;
 
         let calculation_breakdown_json = transparent_cutoff_breakdown(
             &input,
@@ -3061,11 +3058,9 @@ async fn payroll_update_cutoff(
     let mut input = enrich_cutoff_input(&state.db, &input).await?;
     apply_intern_rules(&state.db, &mut input).await?;
     let parsed = cutoff_input(&input);
-    let result = crate::services::cutoff_payroll::calculate(&parsed)?;
+    let mut result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let now = chrono::Utc::now().to_rfc3339();
-    // Engine owns the intern floor; persist its gross/net unchanged.
-    let gross = result.gross_compensation;
-    let net = result.net_pay;
+    // Keep engine gross; net is reconciled to the preserved deduction items below.
     let late_units = input
         .get("lateUnits")
         .and_then(|v| v.as_f64())
@@ -3077,7 +3072,17 @@ async fn payroll_update_cutoff(
         .await
         .map_err(|e| e.to_string())?
         .flatten();
-    let breakdown = transparent_cutoff_breakdown(&parsed, &result, late_units, preserved_deduction_items(previous_breakdown)).to_string();
+    let deduction_items = preserved_deduction_items(previous_breakdown);
+    result.total_deductions = deduction_items_total_centavos(&deduction_items);
+    let net_before_floor = result.gross_compensation - result.total_deductions;
+    result.net_pay = if parsed.employee_type == "INTERN" {
+        net_before_floor.max(0)
+    } else {
+        net_before_floor
+    };
+    let gross = result.gross_compensation;
+    let net = result.net_pay;
+    let breakdown = transparent_cutoff_breakdown(&parsed, &result, late_units, deduction_items).to_string();
     let updated = sqlx::query("UPDATE payroll_cutoffs SET employee_id=?,employee_name=?,payroll_profile_id=?,payroll_cutoff_label=?,cutoff_start=?,cutoff_end=?,daily_rate_centavos=?,standard_working_days=?,actual_working_days=?,basic_pay_centavos=?,special_holiday_days=?,special_holiday_multiplier=?,special_holiday_pay_centavos=?,regular_holiday_days=?,regular_holiday_multiplier=?,regular_holiday_pay_centavos=?,incentives_allowance_centavos=?,special_allowance_centavos=?,total_compensation_centavos=?,total_allowance_centavos=?,late_units=?,late_deduction_centavos=?,half_day_count=?,half_day_deduction_centavos=?,absent_days=?,absence_deduction_centavos=?,overtime_hours=?,overtime_rate_centavos=?,overtime_pay_centavos=?,manual_adjustment_centavos=?,adjustment_reason=?,gross_compensation_centavos=?,net_pay_centavos=?,hra_centavos=?,sss_centavos=?,phic_centavos=?,hdmf_centavos=?,salary_advance_centavos=?,calculation_breakdown=?,revision=revision+1,updated_at=? WHERE payroll_id=? AND status != 'FINALIZED'")
         .bind(&parsed.employee_id).bind(&parsed.employee_name).bind(input.get("payrollProfileId").and_then(|v| v.as_str()).unwrap_or("BEA_STANDARD")).bind(input.get("payrollCutoffLabel").and_then(|v| v.as_str()).unwrap_or(""))
         .bind(&parsed.cutoff_start).bind(&parsed.cutoff_end).bind((parsed.daily_rate * 100.0).round() as i64).bind(parsed.standard_working_days).bind(parsed.actual_working_days).bind(result.basic_pay)
@@ -3386,11 +3391,12 @@ async fn apply_intern_rules(
     );
     object.insert("employeeType".into(), serde_json::json!("INTERN"));
     object.insert("lateUnits".into(), serde_json::json!(late_units));
-    // The intern late hour is already charged inside halfDayDeduction (the
-    // per-day rows deduct (8 - worked_hours) x PHP 10 and worked_hours already
-    // excludes the late hour), so a separate PHP 10/hour late amount would
-    // double-count the same hour. lateUnits is kept for visibility.
-    object.insert("lateDeduction".into(), serde_json::json!(0.0));
+    // QA payroll rules charge the late-hour rate separately from the recorded
+    // worked-hour shortfall; preserve both components in cutoff totals.
+    object.insert(
+        "lateDeduction".into(),
+        serde_json::json!(late_units * (INTERN_DAILY_RATE_PHP as f64 / 8.0)),
+    );
     for field in [
         "hra",
         "incentivesAllowance",
@@ -3513,6 +3519,14 @@ fn preserved_deduction_items(existing_breakdown: Option<String>) -> Vec<serde_js
         .and_then(|json| json.get("deductions").cloned())
         .and_then(|deductions| deductions.as_array().cloned())
         .unwrap_or_default()
+}
+
+fn deduction_items_total_centavos(deductions: &[serde_json::Value]) -> i64 {
+    deductions
+        .iter()
+        .filter_map(|item| item.get("amount").and_then(serde_json::Value::as_f64))
+        .map(php_to_centavos)
+        .sum()
 }
 
 fn transparent_cutoff_breakdown(
@@ -5372,7 +5386,7 @@ async fn ensure_payroll(
             .await
             .map_err(|e| e.to_string())?
                 == 0;
-            let result = crate::services::intern_payroll::calculate(
+            let mut result = crate::services::intern_payroll::calculate(
                 date,
                 actual_in,
                 actual_out,
@@ -5381,8 +5395,28 @@ async fn ensure_payroll(
             if result.grace_used {
                 let grace_id = uuid::Uuid::new_v4().to_string();
                 let used_at = chrono::Utc::now().to_rfc3339();
-                sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&state.db).await.map_err(|e| e.to_string())?;
-                enqueue_sync(state, "InternGrace", &grace_id, "UPSERT", &serde_json::json!({"graceId":grace_id,"userId":user_id,"weekStart":week_start.to_string(),"attendanceId":attendance_id,"usedAt":used_at})).await;
+                let inserted = sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&state.db).await.map_err(|e| e.to_string())?.rows_affected() == 1;
+                if inserted {
+                    enqueue_sync(state, "InternGrace", &grace_id, "UPSERT", &serde_json::json!({"graceId":grace_id,"userId":user_id,"weekStart":week_start.to_string(),"attendanceId":attendance_id,"usedAt":used_at})).await;
+                } else {
+                    let own_claim: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id=?",
+                    )
+                    .bind(user_id)
+                    .bind(week_start.to_string())
+                    .bind(attendance_id)
+                    .fetch_one(&state.db)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    if own_claim == 0 {
+                        result = crate::services::intern_payroll::calculate(
+                            date,
+                            actual_in,
+                            actual_out,
+                            false,
+                        )?;
+                    }
+                }
             } else {
                 let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
                     .bind(attendance_id)
@@ -6118,7 +6152,7 @@ mod tests {
 
         // Submitted rate/allowances are ignored; the fixed PHP 80/day rate is
         // enforced for interns, and the late shortfall is charged through
-        // halfDayDeduction only (never as a separate late amount).
+        // late-hours amount is separate from the shortfall amount.
         let mut input = serde_json::json!({
             "employeeId": "INT-1", "dailyRate": 500.0, "lateUnits": 3.0,
             "incentivesAllowance": 100.0, "specialHolidayDays": 1.0,
@@ -6129,7 +6163,7 @@ mod tests {
 
         assert_eq!(input["dailyRate"], 80.0);
         assert_eq!(input["lateUnits"], 3.0);
-        assert_eq!(input["lateDeduction"], 0.0);
+        assert_eq!(input["lateDeduction"], 30.0);
         assert_eq!(input["payrollProfileId"], "INTERN_STANDARD");
         assert_eq!(input["incentivesAllowance"], 0.0);
         assert_eq!(input["specialHolidayDays"], 0.0);
@@ -6155,7 +6189,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn intern_late_deduction_stays_zero_for_any_late_units() {
+    async fn intern_late_deduction_uses_fixed_hourly_rate() {
         let db = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -6184,7 +6218,7 @@ mod tests {
             .expect("intern rules applied");
 
         assert_eq!(input["lateUnits"], 99.0);
-        assert_eq!(input["lateDeduction"], 0.0);
+        assert_eq!(input["lateDeduction"], 990.0);
     }
 
     #[test]
@@ -6261,13 +6295,12 @@ mod tests {
         assert_eq!(input["employeeType"], "INTERN");
         let parsed = super::cutoff_input(&input);
         assert_eq!(parsed.employee_type, "INTERN");
-        // basic = 80/day x (1 actual + 10 absent) = 880; absence 800 leaves net
-        // at 80 (no separate late amount is charged for interns); gross stays
-        // 880 (not net).
+        // basic = 80/day x (1 actual + 10 absent) = 880; late=200 and absence=800
+        // are separate deductions, while gross stays 880 (not net).
         let result = crate::services::cutoff_payroll::calculate(&parsed).expect("engine");
         assert_eq!(result.gross_compensation, 88_000);
-        assert_eq!(result.late_deduction, 0);
-        assert_eq!(result.net_pay, 8_000);
+        assert_eq!(result.late_deduction, 20_000);
+        assert_eq!(result.net_pay, 0);
     }
 
     #[test]

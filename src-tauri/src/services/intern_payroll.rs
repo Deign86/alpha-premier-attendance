@@ -3,10 +3,9 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use chrono_tz::Asia::Manila;
 
 /// Intern payroll policy shared with the admin payroll commands and the
-/// printable payroll worksheet: a fixed PHP 80.00 daily rate and a PHP 10.00
-/// deduction per full hour of lateness (after the weekly grace).
+/// printable payroll worksheet: a fixed PHP 80.00 daily rate. Late-hour and
+/// recorded-hour shortfalls are separate deductions per the QA policy.
 pub const INTERN_DAILY_RATE_PHP: i64 = 80;
-pub const INTERN_LATE_DEDUCTION_PER_HOUR_PHP: i64 = 10;
 /// Payroll profile id stored on intern cutoff records (not a payroll_profiles row).
 pub const INTERN_PAYROLL_PROFILE_ID: &str = "INTERN_STANDARD";
 
@@ -63,11 +62,6 @@ pub fn calculate(
     let in_grace_window = time_in > start && time_in <= grace_end;
     let grace_used = in_grace_window && grace_available;
     let late_hours = if grace_used { 0 } else { raw_late_hours };
-    let late_deduction = if late_hours > 0 {
-        late_hours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP * 100
-    } else {
-        0
-    };
     let computed_in = if late_hours > 0 {
         ceil_hour(time_in)
     } else {
@@ -75,6 +69,7 @@ pub fn calculate(
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
+    let late_deduction = late_hours * hourly_rate_centavos;
     let payable_in = if grace_used {
         start
     } else if late_hours > 0 {
@@ -86,8 +81,9 @@ pub fn calculate(
     let worked_hours = round_hours(paid_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let unrendered_hours = (8 - worked_hours).max(0);
-    let deduction = unrendered_hours * hourly_rate_centavos;
-    let daily_pay = worked_hours * hourly_rate_centavos;
+    // payable_in already excludes late hours; only the remaining shortfall is undertime.
+    let deduction = (unrendered_hours - late_hours).max(0) * hourly_rate_centavos;
+    let daily_pay = base - late_deduction - deduction;
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even
     // though the DTR row keeps the actual stamps. Never push computed values
@@ -130,8 +126,7 @@ mod tests {
     #[test]
     fn late_hours_are_not_affected_by_lunch() {
         // Lateness is measured against the 08:00 start, before any lunch window.
-        // Post-0.1.75: paid hours derive 1:1 from recorded DTR stamps strictly by the
-        // hour (floored), so 09:30–17:00 (7.5h elapsed) pays 7h.
+        // Late hours are removed from the worked window and deducted once as late.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T09:30:00+08:00",
@@ -142,7 +137,7 @@ mod tests {
         assert_eq!(result.late_hours, 2);
         assert_eq!(result.late_deduction_centavos, 2000);
         assert_eq!(result.worked_hours, 6);
-        assert_eq!(result.half_day_deduction_centavos, 2000);
+        assert_eq!(result.half_day_deduction_centavos, 0);
         assert_eq!(result.daily_pay_centavos, 6000);
     }
     #[test]
@@ -163,28 +158,62 @@ mod tests {
 
     #[test]
     fn only_first_08_05_arrival_in_a_week_uses_grace() {
-        let mut grace_available = true;
         let mut grace_count = 0;
 
-        for date in ["2026-08-03", "2026-08-04", "2026-08-05"] {
+        for (index, date) in ["2026-08-03", "2026-08-04", "2026-08-05"].iter().enumerate() {
             let result = calculate(
                 date,
                 &format!("{date}T08:05:00+08:00"),
                 &format!("{date}T17:00:00+08:00"),
-                grace_available,
+                index == 0,
             )
             .unwrap();
 
             if result.grace_used {
                 grace_count += 1;
-                grace_available = false;
                 assert_eq!(result.late_hours, 0);
             } else {
                 assert_eq!(result.late_hours, 1);
+                assert_eq!(result.late_deduction_centavos, 1_000);
+                assert_eq!(result.half_day_deduction_centavos, 0);
             }
         }
 
         assert_eq!(grace_count, 1);
+    }
+
+    #[test]
+    fn late_attendance_with_one_additional_short_hour_totals_php_20() {
+        for date in ["2026-09-24", "2026-09-22"] {
+            let result = calculate(
+                date,
+                &format!("{date}T08:30:00+08:00"),
+                &format!("{date}T16:00:00+08:00"),
+                false,
+            )
+            .unwrap();
+            assert_eq!(result.late_deduction_centavos, 1_000);
+            assert_eq!(result.half_day_deduction_centavos, 1_000);
+            assert_eq!(result.late_deduction_centavos + result.half_day_deduction_centavos, 2_000);
+        }
+    }
+
+    #[test]
+    fn maricon_second_weekly_grace_is_late() {
+        for (index, date) in ["2026-09-24", "2026-09-25"].iter().enumerate() {
+            let result = calculate(
+                date,
+                &format!("{date}T08:10:00+08:00"),
+                &format!("{date}T17:00:00+08:00"),
+                index == 0,
+            )
+            .unwrap();
+            assert_eq!(result.grace_used, index == 0);
+            assert_eq!(result.late_hours, if index == 0 { 0 } else { 1 });
+            assert_eq!(result.late_deduction_centavos, if index == 0 { 0 } else { 1_000 });
+            assert_eq!(result.half_day_deduction_centavos, 0);
+            assert_eq!(result.daily_pay_centavos, if index == 0 { 8_000 } else { 7_000 });
+        }
     }
 
     #[test]
@@ -203,6 +232,23 @@ mod tests {
         assert_eq!(result.worked_hours, 7);
         assert_eq!(result.daily_pay_centavos, 7000);
     }
+
+    #[test]
+    fn weekly_grace_exhausted_08_08_rounds_to_09_and_charges_once() {
+        let result = calculate(
+            "2026-09-22",
+            "2026-09-22T08:08:00+08:00",
+            "2026-09-22T17:00:00+08:00",
+            false,
+        )
+        .unwrap();
+        assert!(result.computed_time_in.contains("T09:00:00+08:00"));
+        assert_eq!(result.late_hours, 1);
+        assert_eq!(result.late_deduction_centavos, 1_000);
+        assert_eq!(result.half_day_deduction_centavos, 0);
+        assert_eq!(result.daily_pay_centavos, 7_000);
+    }
+
     #[test]
     fn exact_example_intern_eight_to_three_pays_six_hours() {
         // ₱80/day intern: 8:00 AM to 3:00 PM (7h elapsed - 1h lunch = 6 hours worked) -> pay = 6 * ₱10 = ₱60 (6000 centavos, ₱20 deduction).
@@ -262,7 +308,7 @@ mod tests {
         assert_eq!(result.late_hours, 3);
         assert_eq!(result.late_deduction_centavos, 3000);
         assert_eq!(result.worked_hours, 5);
-        assert_eq!(result.half_day_deduction_centavos, 3000);
+        assert_eq!(result.half_day_deduction_centavos, 0);
         assert_eq!(result.daily_pay_centavos, 5000);
     }
 
@@ -397,7 +443,7 @@ mod tests {
         .unwrap();
         assert!(noon.is_half_day);
         assert_eq!(noon.worked_hours, 4);
-        assert_eq!(noon.half_day_deduction_centavos, 4000);
+        assert_eq!(noon.half_day_deduction_centavos, 0);
         assert_eq!(noon.daily_pay_centavos, 4000);
     }
 

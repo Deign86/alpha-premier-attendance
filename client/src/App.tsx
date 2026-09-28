@@ -6363,17 +6363,22 @@ function PayrollTable({
               const phic = row.phic ?? 0;
               const hdmf = row.hdmf ?? 0;
               const advance = row.salaryAdvance ?? 0;
-              const totalDeductions =
-                row.totalDeductions ??
-                row.lateDeduction +
-                  row.halfDayDeduction +
-                  row.absenceDeduction +
-                  sss +
-                  phic +
-                  hdmf +
-                  advance;
-
               const parsedBreakdown = parseCalculationBreakdown(row.calculationBreakdown);
+              const datedDeductions = parsedBreakdown?.deductions ?? [];
+              const hasDatedDeductions = datedDeductions.length > 0;
+              const totalDeductions = hasDatedDeductions
+                ? datedDeductions.reduce((total, item) => total + item.amount, 0)
+                : row.totalDeductions ??
+                  row.lateDeduction +
+                    row.halfDayDeduction +
+                    row.absenceDeduction +
+                    sss +
+                    phic +
+                    hdmf +
+                    advance;
+              const netPay = hasDatedDeductions
+                ? row.grossCompensation - totalDeductions
+                : row.netPay;
 
               return (
                 <Fragment key={row.payrollId}>
@@ -6430,7 +6435,7 @@ function PayrollTable({
                       <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>
                     </td>
                     <td style={{ backgroundColor: "#fef08a" }}>
-                      <strong style={{ color: "#854d0e" }}>{php(row.netPay)}</strong>
+                      <strong style={{ color: "#854d0e" }}>{php(netPay)}</strong>
                     </td>
                     <td className="payroll-actions-cell">
                       {row.status === "DRAFT" ? (
@@ -6496,7 +6501,7 @@ function PayrollTable({
                               <br />
                               <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
                               <strong className="payroll-net-pay-pill">
-                                {php(row.netPay)}
+                                {php(netPay)}
                               </strong>
                             </p>
                           </div>
@@ -6517,7 +6522,7 @@ function PayrollTable({
                               <br />
                               <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
                               <strong className="payroll-net-pay-pill">
-                                {php(row.netPay)}
+                                {php(netPay)}
                               </strong>
                             </p>
                           </div>

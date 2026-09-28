@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { AdminUser, AttendanceListItem, BathroomActiveHolder, BathroomLogItem, BathroomScanResponse, BathroomStatusResponse, PayrollCalculationProfile } from '@rfid-attendance/shared';
-import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
+import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
@@ -623,9 +623,7 @@ function internCutoffInput({ value, employee, profileId, cutoffLabel, number }: 
     specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
     incentivesAllowance: 0, specialAllowance: 0,
     lateUnits,
-    // Rust forces intern lateDeduction to zero: lateness is already included
-    // in the half-day amount, so charging PHP 10/hour here double-counts it.
-    lateDeduction: 0,
+    lateDeduction: lateUnits * INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
     halfDayCount: number('halfDayCount', 0), halfDayFraction: 0.5,
     halfDayDeduction: value.halfDayDeduction != null ? number('halfDayDeduction', 0) : undefined,
     absentDays: Math.max(0, standardWorkingDays - actualWorkingDays),
