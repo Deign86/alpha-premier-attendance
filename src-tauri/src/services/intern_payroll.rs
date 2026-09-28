@@ -1,4 +1,4 @@
-use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_hours, floor_zero, is_half_day};
+use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_zero, is_half_day, round_hours};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use chrono_tz::Asia::Manila;
 
@@ -83,7 +83,7 @@ pub fn calculate(
         time_in.max(start)
     };
     let paid_seconds = crate::services::lunch_break::paid_work_seconds(payable_in, time_out);
-    let worked_hours = floor_hours(paid_seconds).min(8);
+    let worked_hours = round_hours(paid_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     let unrendered_hours = (8 - worked_hours).max(0);
     let deduction = unrendered_hours * hourly_rate_centavos;

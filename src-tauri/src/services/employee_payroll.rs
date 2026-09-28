@@ -1,4 +1,4 @@
-use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_hours, is_half_day};
+use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, is_half_day, round_hours};
 use chrono::{DateTime, Datelike, TimeZone, Timelike};
 use chrono_tz::Asia::Manila;
 
@@ -59,7 +59,7 @@ pub fn calculate(
         .ok_or("Invalid Manila start time")?;
     let payable_in = time_in.max(start);
     let paid_seconds = crate::services::lunch_break::paid_work_seconds(payable_in, time_out);
-    let worked_hours = floor_hours(paid_seconds).min(8);
+    let worked_hours = round_hours(paid_seconds).min(8);
     let is_half_day = is_half_day(worked_hours, time_out, time_in);
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even

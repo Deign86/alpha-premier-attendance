@@ -577,7 +577,7 @@ pub fn build_new_month_block_requests(
                 { "userEnteredValue": { "stringValue": "" } },
                 { "userEnteredValue": { "stringValue": "" } },
                 { "userEnteredValue": { "stringValue": "" } },
-                { "userEnteredValue": { "formulaValue": format!("=MIN(8,((C{r}-B{r})+(E{r}-D{r}))*24)") } },
+                { "userEnteredValue": { "formulaValue": format!("=MIN(8,ROUND(((C{r}-B{r})+(E{r}-D{r}))*24,0))") } },
             ]
         }));
     }
@@ -4735,14 +4735,14 @@ mod tests {
         assert_eq!(cell_rows[1]["values"][0]["userEnteredValue"]["stringValue"], "11/1/2026");
         assert_eq!(
             cell_rows[1]["values"][5]["userEnteredValue"]["formulaValue"],
-            "=MIN(8,((C70-B70)+(E70-D70))*24)"
+            "=MIN(8,ROUND(((C70-B70)+(E70-D70))*24,0))"
         );
 
         // Day 30
         assert_eq!(cell_rows[30]["values"][0]["userEnteredValue"]["stringValue"], "11/30/2026");
         assert_eq!(
             cell_rows[30]["values"][5]["userEnteredValue"]["formulaValue"],
-            "=MIN(8,((C99-B99)+(E99-D99))*24)"
+            "=MIN(8,ROUND(((C99-B99)+(E99-D99))*24,0))"
         );
 
         // Total row

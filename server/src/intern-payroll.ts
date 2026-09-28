@@ -28,7 +28,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   // Late time-out auto-cap (overtime forbidden): 18:00+ pays as 17:00.
   const actualTimeOut = capLateTimeoutOut(manilaTimestamp(input.actualTimeOut));
-  // P4: reject inverted logs instead of silently flooring worked hours to zero.
+  // P4: reject inverted logs instead of silently setting worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
   const graceEnd = DateTime.fromISO(`${input.attendanceDate}T08:15:00`, { zone: timezone });

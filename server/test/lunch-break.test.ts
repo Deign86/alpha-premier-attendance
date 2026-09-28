@@ -46,9 +46,9 @@ describe('lunch break exclusion (12:00–13:00 Manila)', () => {
   });
 
   it('sums only the working edges for partial hours around lunch', () => {
-    // 11:45–13:15 → 15 min before + 15 min after = 30 min paid.
+    // 11:45–13:15 → 15 min before + 15 min after = 30 min paid -> rounded to 1 whole hour.
     expect(paidWorkSeconds(at(11, 45), at(13, 15))).toBe(1800);
-    expect(paidWorkHours(at(11, 45), at(13, 15))).toBeCloseTo(0.5);
+    expect(paidWorkHours(at(11, 45), at(13, 15))).toBe(1);
   });
 
   it('handles overnight spans by checking each touched day', () => {
@@ -57,7 +57,7 @@ describe('lunch break exclusion (12:00–13:00 Manila)', () => {
     expect(paidWorkSeconds(at(22, 0, 1), at(14, 0, 2))).toBe(seconds(15));
   });
 
-  it('floors inverted or zero intervals at zero paid time', () => {
+  it('clamps inverted or zero intervals at zero paid time', () => {
     expect(paidWorkSeconds(at(17, 0), at(9, 0))).toBe(0);
     expect(paidWorkSeconds(at(9, 0), at(9, 0))).toBe(0);
   });
@@ -70,10 +70,15 @@ describe('employee payroll calculates hours 1:1 from DTR', () => {
     expect(result.dailyPay).toBe(500);
   });
 
-  it('reports 0 worked hours for an 11:45-13:15 shift (1.5h elapsed minus 1h lunch = 0.5h -> 0 whole hours)', () => {
+  it('reports 1 worked hour for an 11:45-13:15 shift (0.5h paid -> rounded to 1h)', () => {
     const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T11:45:00+08:00', actualTimeOut: '2026-08-01T13:15:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(0);
-    expect(result.dailyPay).toBe(0);
+    expect(result.workedHours).toBe(1);
+    expect(result.dailyPay).toBe(62.5);
+  });
+
+  it('rounds 6.5 paid hours to 7 worked hours', () => {
+    const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T09:00:00+08:00', actualTimeOut: '2026-08-01T16:30:00+08:00', dailyRate: 500 });
+    expect(result.workedHours).toBe(7);
   });
 });
 
@@ -85,7 +90,7 @@ describe('intern payroll calculates hours 1:1 from DTR', () => {
     expect(result.dailyPay).toBe(80);
   });
 
-  it('reports 6 payable hours for 09:30–17:00 (7.5h elapsed - 1h lunch = 6.5h -> 6h)', () => {
+  it('reports 6 payable hours for 09:30–17:00 (late penalty moves payable-in to 10:00; 6h paid -> rounded to 6h)', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T09:30:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: false });
     expect(result.lateHours).toBe(2);
     expect(result.lateDeduction).toBe(20);

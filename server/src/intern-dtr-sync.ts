@@ -469,7 +469,7 @@ export function buildNewMonthBlockRequests(
         { userEnteredValue: { stringValue: '' } },
         { userEnteredValue: { stringValue: '' } },
         { userEnteredValue: { stringValue: '' } },
-        { userEnteredValue: { formulaValue: `=MIN(8,((C${r}-B${r})+(E${r}-D${r}))*24)` } },
+        { userEnteredValue: { formulaValue: `=MIN(8,ROUND(((C${r}-B${r})+(E${r}-D${r}))*24,0))` } },
       ],
     });
   }

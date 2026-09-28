@@ -54,18 +54,16 @@ pub fn paid_work_seconds(start: DateTime<Tz>, end: DateTime<Tz>) -> i64 {
     (elapsed - lunch_excluded_seconds(start, end)).max(0)
 }
 
-/// Paid work hours (fractional, e.g. 7.5) between two timestamps, excluding lunch.
+/// Paid work hours rounded to the nearest whole hour (capped at 8), excluding lunch.
 pub fn paid_work_hours(start: DateTime<Tz>, end: DateTime<Tz>) -> f64 {
-    paid_work_seconds(start, end) as f64 / 3600.0
+    super::payroll::round_hours(paid_work_seconds(start, end)).min(8) as f64
 }
 
-/// Paid work hours rounded up to the next whole hour, excluding lunch.
+/// Paid work hours rounded to the nearest whole hour, excluding lunch.
 ///
-/// Mirrors the existing payroll convention of ceiling fractional hours
-/// (see `payroll::ceiling_hours`) so a 07:30–16:30 shift (8.0 paid hours
-/// after the lunch cut) still reports 8 hours, never 9.
+/// Half hours round up, and the result is capped at 8.
 pub fn paid_work_hours_ceiled(start: DateTime<Tz>, end: DateTime<Tz>) -> i64 {
-    super::payroll::ceiling_hours(paid_work_seconds(start, end))
+    super::payroll::round_hours(paid_work_seconds(start, end)).min(8)
 }
 
 #[cfg(test)]

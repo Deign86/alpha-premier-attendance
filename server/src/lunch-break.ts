@@ -6,7 +6,7 @@ import { DateTime } from 'luxon';
  * IMPORTANT (post-0.1.74): the lunch-window helpers (`lunchBreakExcludedSeconds`,
  * `paidWorkSeconds`, `paidWorkHours`, `paidWorkHoursCeiled`) are NOT part of the
  * payroll calculation any more. The engines derive paid hours 1:1 from the
- * recorded DTR time-in/time-out (`Math.floor(elapsed / 3600)`, no lunch term), so
+ * recorded DTR time-in/time-out (rounded whole hours, no lunch term), so
  * payroll deliberately does not subtract this window. Those helpers currently
  * have no non-test consumer in `server/src`; they are kept because
  * `server/test/lunch-break.test.ts` pins them and because the desktop app still
@@ -72,9 +72,9 @@ export function paidWorkSeconds(start: DateTime, end: DateTime): number {
   return Math.max(0, elapsed - lunchBreakExcludedSeconds(start, end));
 }
 
-/** Paid work hours (fractional, e.g. 7.5) between two timestamps, excluding lunch. */
+/** Paid work hours rounded to the nearest whole hour, capped at 8, excluding lunch. */
 export function paidWorkHours(start: DateTime, end: DateTime): number {
-  return paidWorkSeconds(start, end) / 3600;
+  return Math.min(8, Math.round(paidWorkSeconds(start, end) / 3600));
 }
 
 /**
@@ -153,7 +153,7 @@ export function effectiveHalfDayTimeOut(
 }
 
 /**
- * Shared shift core: paid seconds -> floored hours -> half-day -> deductions.
+ * Shared shift core: paid seconds -> rounded hours -> half-day -> deductions.
  *
  * Byte-identical to the former inline blocks in `employee-payroll.ts:15-20`
  * and `intern-payroll.ts:48-53`. Callers keep their divergences OUTSIDE:
@@ -180,7 +180,7 @@ export function computeShiftCore(
   hourlyRate: number,
 ): ShiftCoreResult {
   const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
-  const workedHours = Math.min(8, Math.max(0, Math.floor(paidSeconds / 3600)));
+  const workedHours = Math.min(8, Math.max(0, Math.round(paidSeconds / 3600)));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
   const halfDayDeduction = unrenderedHours * hourlyRate;

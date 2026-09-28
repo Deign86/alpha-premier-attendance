@@ -7418,7 +7418,9 @@ function exportAttendanceCsv(
     const hours =
       (new Date(row.timeOut).getTime() - new Date(row.timeIn).getTime()) /
       3_600_000;
-    return Number.isFinite(hours) && hours >= 0 ? hours.toFixed(2) : "";
+    return Number.isFinite(hours) && hours >= 0
+      ? Math.min(8, Math.round(hours)).toString()
+      : "";
   };
   const getArrivalText = (row: AttendanceListItem) => {
     const info = arrivalMap.get(row.attendanceId);

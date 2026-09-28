@@ -7,7 +7,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   // Late time-out auto-cap (overtime forbidden): 18:00+ pays as 17:00.
   const actualTimeOut = capLateTimeoutOut(manilaTimestamp(input.actualTimeOut));
-  // P4: reject inverted logs instead of silently flooring worked hours to zero.
+  // P4: reject inverted logs instead of silently setting worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const hourlyRate = input.dailyRate / 8;
   const start = actualTimeIn.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
@@ -31,7 +31,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
     basePay: input.dailyRate,
     dailyPay,
     // Post-0.1.75: payable daily hours are gross elapsed DTR time strictly by the
-    // hour (floored) — the 12:00–13:00 lunch window is NOT subtracted here.
+    // hour (rounded) — the 12:00–13:00 lunch window is NOT subtracted here.
     workedHours,
   };
 }

@@ -7,6 +7,10 @@ pub fn ceiling_hours(seconds: i64) -> i64 {
     ((seconds.max(0) + 3599) / 3600).max(0)
 }
 
+pub fn round_hours(seconds: i64) -> i64 {
+    (seconds.max(0) as f64 / 3600.0).round() as i64
+}
+
 pub fn floor_hours(seconds: i64) -> i64 {
     (seconds.max(0) / 3600).max(0)
 }
