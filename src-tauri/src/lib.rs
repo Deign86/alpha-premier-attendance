@@ -2046,6 +2046,25 @@ async fn payroll_upsert_profile(
     if id.is_empty() || label.is_empty() {
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
+    let numeric_fields = [
+        "standardWorkingDaysPerCutoff",
+        "incentivesAllowance",
+        "specialAllowance",
+        "specialHolidayMultiplier",
+        "regularHolidayMultiplier",
+        "halfDayFraction",
+        "overtimeRate",
+    ];
+    if profile.get("payrollFrequency").and_then(|value| value.as_str()) != Some("SEMI_MONTHLY")
+        || numeric_fields.iter().any(|field| {
+            profile
+                .get(*field)
+                .and_then(|value| value.as_f64())
+                .is_none_or(|value| !value.is_finite() || value < 0.0)
+        })
+    {
+        return Err("ADMIN_VALIDATION_ERROR".into());
+    }
     let incentives_allowance = profile
         .get("incentivesAllowance")
         .and_then(|v| v.as_f64())
@@ -2066,6 +2085,39 @@ async fn payroll_upsert_profile(
         .bind(id).bind(label).bind("SEMI_MONTHLY").bind(profile.get("standardWorkingDaysPerCutoff").and_then(|v| v.as_f64()).unwrap_or(11.0)).bind(incentives_allowance).bind(special_allowance).bind(profile.get("specialHolidayMultiplier").and_then(|v| v.as_f64()).unwrap_or(0.3)).bind(profile.get("regularHolidayMultiplier").and_then(|v| v.as_f64()).unwrap_or(1.0)).bind(profile.get("halfDayFraction").and_then(|v| v.as_f64()).unwrap_or(0.5)).bind(overtime_rate).bind(&now).bind(&now).execute(&state.db).await.map_err(|e| e.to_string())?;
     enqueue_sync(&state, "PayrollProfiles", id, "UPSERT", &profile).await;
     Ok(serde_json::json!({"success":true,"profileId":id}))
+}
+
+#[tauri::command]
+async fn payroll_delete_profile(
+    state: State<'_, AppState>,
+    token: String,
+    profile_id: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let profile_id = profile_id.trim();
+    if profile_id.is_empty() {
+        return Err("ADMIN_VALIDATION_ERROR".into());
+    }
+    let assigned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE payroll_profile_id = ?")
+        .bind(profile_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| error.to_string())?;
+    if assigned > 0 {
+        return Err("PAYROLL_PROFILE_ASSIGNED".into());
+    }
+    let result = sqlx::query("DELETE FROM payroll_profiles WHERE profile_id = ?")
+        .bind(profile_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| error.to_string())?;
+    if result.rows_affected() == 0 {
+        return Err("PAYROLL_PROFILE_NOT_FOUND".into());
+    }
+    enqueue_sync(&state, "PayrollProfiles", profile_id, "DELETE", &serde_json::json!({"profileId": profile_id})).await;
+    Ok(serde_json::json!({"success":true}))
 }
 
 #[tauri::command]
@@ -5812,6 +5864,7 @@ pub fn run() {
             payroll_calculate_cutoff,
             payroll_list_profiles,
             payroll_upsert_profile,
+            payroll_delete_profile,
             payroll_list_cutoffs,
             payroll_intern_report,
             payroll_generate_cutoff,

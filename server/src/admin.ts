@@ -503,6 +503,15 @@ export class AdminService {
     return this.sheets.upsertPayrollProfile({ ...profile, profileId: profile.profileId.trim(), label: profile.label.trim() });
   }
 
+  async deletePayrollProfile(profileId: string): Promise<void> {
+    const id = profileId.trim();
+    if (!id) throw new AdminError('ADMIN_VALIDATION_ERROR', 'A payroll profile id is required.');
+    const [users, profiles] = await Promise.all([this.sheets.listUsers(), this.sheets.listPayrollProfiles()]);
+    if (!profiles.some((profile) => profile.profileId === id)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll profile was not found.', 404);
+    if (users.some((user) => user.payrollProfileId === id)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll profile is assigned to an employee.');
+    await this.sheets.deletePayrollProfile(id);
+  }
+
   async cutoffPayroll(): Promise<SheetPayrollCutoff[]> {
     const [records, users] = await Promise.all([this.sheets.listPayrollCutoffs(), this.sheets.listUsers()]);
     // The PayrollCutoffs register does not store an employee type column; derive

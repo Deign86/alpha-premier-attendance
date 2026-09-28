@@ -75,6 +75,7 @@ export interface GoogleSheetsService {
   deletePayrollByAttendanceId(attendanceId: string): Promise<void>;
   listPayrollProfiles(): Promise<SheetPayrollProfile[]>;
   upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile>;
+  deletePayrollProfile(profileId: string): Promise<void>;
   listPayrollCutoffs(): Promise<SheetPayrollCutoff[]>;
   findPayrollCutoff(payrollId: string): Promise<SheetPayrollCutoff | null>;
   upsertPayrollCutoff(payroll: SheetPayrollCutoff): Promise<SheetPayrollCutoff>;
@@ -252,6 +253,7 @@ export class InMemorySheetsService implements GoogleSheetsService {
   async deletePayrollByAttendanceId(attendanceId: string): Promise<void> { const index = this.payroll.findIndex((row) => row.attendanceId === attendanceId); if (index < 0) return; const [removed] = this.payroll.splice(index, 1); this.payrollByAttendanceId.remove(removed.attendanceId, removed); }
   async listPayrollProfiles(): Promise<SheetPayrollProfile[]> { return this.payrollProfiles.map((row) => ({ ...row })); }
   async upsertPayrollProfile(profile: SheetPayrollProfile): Promise<SheetPayrollProfile> { const existing = this.payrollProfiles.find((row) => row.profileId === profile.profileId); if (existing) Object.assign(existing, profile); else this.payrollProfiles.push({ ...profile }); return { ...(existing ?? this.payrollProfiles[this.payrollProfiles.length - 1]) }; }
+  async deletePayrollProfile(profileId: string): Promise<void> { const index = this.payrollProfiles.findIndex((row) => row.profileId === profileId); if (index >= 0) this.payrollProfiles.splice(index, 1); }
   async listPayrollCutoffs(): Promise<SheetPayrollCutoff[]> { return this.payrollCutoffs.map((row) => ({ ...row })); }
   async findPayrollCutoff(payrollId: string): Promise<SheetPayrollCutoff | null> { const row = this.payrollCutoffs.find((item) => item.payrollId === payrollId); return row ? { ...row } : null; }
   async upsertPayrollCutoff(payroll: SheetPayrollCutoff): Promise<SheetPayrollCutoff> { const existing = this.payrollCutoffs.find((row) => row.payrollId === payroll.payrollId); if (existing) Object.assign(existing, payroll); else this.payrollCutoffs.push({ ...payroll }); return { ...(existing ?? this.payrollCutoffs[this.payrollCutoffs.length - 1]) }; }
@@ -924,6 +926,14 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     if (matches[0]) await this.api.spreadsheets.values.update({ spreadsheetId: this.options.spreadsheetId, range: `${quoteA1SheetTitle(sheetName(this.options.payrollProfilesRange))}!A${matches[0]}:${columnName(headers.length - 1)}${matches[0]}`, valueInputOption: 'RAW', requestBody: { values: [values] } });
     else await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.payrollProfilesRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [values] } });
     return profile;
+  }
+
+  async deletePayrollProfile(profileId: string): Promise<void> {
+    const { headers, rows } = await this.table(this.options.payrollProfilesRange, 'PayrollProfiles');
+    const index = indexMap(headers);
+    const matches = rows.flatMap((row, offset) => row[index.profileid] === profileId ? [offset + 2] : []);
+    if (matches.length > 1) throw new Error('Duplicate payroll profile');
+    if (matches[0] !== undefined) await this.deleteRow(this.options.payrollProfilesRange, matches[0]);
   }
 
   async listPayrollCutoffs(): Promise<SheetPayrollCutoff[]> {

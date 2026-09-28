@@ -193,6 +193,15 @@ export function createApp(options: CreateAppOptions): express.Express {
     } catch (error) { sendAdminError(req, res, error); }
   });
   app.get('/api/admin/payroll/profiles', async (req, res) => { try { requireAdmin(req); res.json({ success: true, profiles: await admin.payrollProfiles() }); } catch (error) { sendAdminError(req, res, error); } });
+  app.post('/api/admin/payroll/profiles', async (req, res) => { try { requireAdmin(req); res.status(201).json({ success: true, profile: await admin.savePayrollProfile(req.body) }); } catch (error) { sendAdminError(req, res, error); } });
+  app.patch('/api/admin/payroll/profiles/:profileId', async (req, res) => {
+    try {
+      requireAdmin(req);
+      // SAFETY: The JSON parser accepts only object bodies here; non-object bodies are replaced with an empty object.
+      const profileBody = req.body && Object.prototype.toString.call(req.body) === '[object Object]' ? (req.body as object) : {};
+      res.json({ success: true, profile: await admin.savePayrollProfile({ ...profileBody, profileId: req.params.profileId }) });
+    } catch (error) { sendAdminError(req, res, error); }
+  });
   app.put('/api/admin/payroll/profiles/:profileId', async (req, res) => {
     try {
       requireAdmin(req);
@@ -201,6 +210,7 @@ export function createApp(options: CreateAppOptions): express.Express {
       res.json({ success: true, profile: await admin.savePayrollProfile({ ...profileBody, profileId: req.params.profileId }) });
     } catch (error) { sendAdminError(req, res, error); }
   });
+  app.delete('/api/admin/payroll/profiles/:profileId', async (req, res) => { try { requireAdmin(req); await admin.deletePayrollProfile(req.params.profileId); res.json({ success: true }); } catch (error) { sendAdminError(req, res, error); } });
   app.get('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.cutoffPayroll() }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/payroll/cutoffs', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body) }); } catch (error) { sendAdminError(req, res, error); } });
   app.patch('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body, req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });

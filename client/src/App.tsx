@@ -60,6 +60,7 @@ import {
   checkAdminSession,
   createDatabaseBackup,
   deletePayrollCutoff,
+  deletePayrollProfile,
   deleteAdminAttendance,
   deleteAdminUser,
   dismissRestoreFailure,
@@ -87,6 +88,7 @@ import {
   saveAdminAttendance,
   saveAdminUser,
   savePayrollCutoff,
+  savePayrollProfile,
   generatePayrollCutoff,
   generatePayrollPdf,
   loadPayrollPdfs,
@@ -3917,6 +3919,22 @@ export function UserEditor({
   };
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
   const [message, setMessage] = useState("");
+  const blankProfile: PayrollCalculationProfile = {
+    profileId: "",
+    label: "",
+    payrollFrequency: "SEMI_MONTHLY",
+    standardWorkingDaysPerCutoff: 11,
+    incentivesAllowance: 0,
+    specialAllowance: 0,
+    specialHolidayMultiplier: 0.3,
+    regularHolidayMultiplier: 1,
+    halfDayFraction: 0.5,
+    overtimeRate: 0,
+  };
+  const [profileForm, setProfileForm] = useState<PayrollCalculationProfile>(blankProfile);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [profileMessage, setProfileMessage] = useState("");
+  const [profileBusy, setProfileBusy] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState("");
   const [deleteUserTarget, setDeleteUserTarget] = useState<AdminUser | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
@@ -3951,6 +3969,53 @@ export function UserEditor({
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const saveProfile = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const profile = { ...profileForm, profileId: profileForm.profileId.trim(), label: profileForm.label.trim() };
+    if (!profile.profileId || !profile.label) {
+      setProfileMessage("Profile ID and name are required.");
+      return;
+    }
+    setProfileBusy(true);
+    try {
+      const response = await savePayrollProfile(profile);
+      if (!response.success) {
+        setProfileMessage("Unable to save payroll profile.");
+        return;
+      }
+      setProfileMessage("Payroll profile saved.");
+      setEditingProfileId(null);
+      setProfileForm(blankProfile);
+      onSaved();
+    } catch (error) {
+      setProfileMessage(toErrorMessage(error, "Unable to save payroll profile."));
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const removeProfile = async (profile: PayrollCalculationProfile) => {
+    if (!window.confirm(`Delete payroll profile “${profile.label}”?`)) return;
+    setProfileBusy(true);
+    try {
+      const response = await deletePayrollProfile(profile.profileId);
+      if (!response.success) {
+        setProfileMessage(response.error?.message ?? "Unable to delete payroll profile.");
+        return;
+      }
+      if (editingProfileId === profile.profileId) {
+        setEditingProfileId(null);
+        setProfileForm(blankProfile);
+      }
+      setProfileMessage("Payroll profile deleted.");
+      onSaved();
+    } catch (error) {
+      setProfileMessage(toErrorMessage(error, "Unable to delete payroll profile."));
+    } finally {
+      setProfileBusy(false);
+    }
+  };
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -4442,7 +4507,7 @@ export function UserEditor({
                         e.target.value === "INTERN" ? null : form.dailyRate,
                       payrollProfileId:
                         e.target.value === "INTERN"
-                          ? (form.payrollProfileId ?? "BEA_STANDARD")
+                          ? (form.payrollProfileId ?? profiles[0]?.profileId ?? null)
                           : null,
                     })
                   }
@@ -4488,11 +4553,12 @@ export function UserEditor({
                   <label>
                     Payroll calculation
                     <select
-                      value={form.payrollProfileId ?? "BEA_STANDARD"}
+                      value={form.payrollProfileId ?? profiles[0]?.profileId ?? ""}
                       onChange={(e) =>
                         setForm({ ...form, payrollProfileId: e.target.value })
                       }
                     >
+                      {profiles.length === 0 && <option value="">No payroll profiles</option>}
                       {profiles.map((profile) => (
                         <option key={profile.profileId} value={profile.profileId}>
                           {profile.label}
@@ -4909,6 +4975,51 @@ export function UserEditor({
                 </tr>
                 ))
               )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="admin-form">
+        <h2>{editingProfileId ? "Edit payroll profile" : "Add payroll profile"}</h2>
+        <form onSubmit={(event) => void saveProfile(event)}>
+          <label>
+            Profile ID
+            <input
+              required
+              disabled={Boolean(editingProfileId)}
+              value={profileForm.profileId}
+              onChange={(event) => setProfileForm({ ...profileForm, profileId: event.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "_") })}
+            />
+          </label>
+          <label>
+            Profile name
+            <input required value={profileForm.label} onChange={(event) => setProfileForm({ ...profileForm, label: event.target.value })} />
+          </label>
+          <label>Standard working days per cutoff<input required type="number" min="0" step="0.01" value={profileForm.standardWorkingDaysPerCutoff} onChange={(event) => setProfileForm({ ...profileForm, standardWorkingDaysPerCutoff: Number(event.target.value) })} /></label>
+          <label>Incentives allowance (PHP)<input required type="number" min="0" step="0.01" value={profileForm.incentivesAllowance} onChange={(event) => setProfileForm({ ...profileForm, incentivesAllowance: Number(event.target.value) })} /></label>
+          <label>Special allowance (PHP)<input required type="number" min="0" step="0.01" value={profileForm.specialAllowance} onChange={(event) => setProfileForm({ ...profileForm, specialAllowance: Number(event.target.value) })} /></label>
+          <label>Special holiday multiplier<input required type="number" min="0" step="0.01" value={profileForm.specialHolidayMultiplier} onChange={(event) => setProfileForm({ ...profileForm, specialHolidayMultiplier: Number(event.target.value) })} /></label>
+          <label>Regular holiday multiplier<input required type="number" min="0" step="0.01" value={profileForm.regularHolidayMultiplier} onChange={(event) => setProfileForm({ ...profileForm, regularHolidayMultiplier: Number(event.target.value) })} /></label>
+          <label>Half-day fraction<input required type="number" min="0" step="0.01" value={profileForm.halfDayFraction} onChange={(event) => setProfileForm({ ...profileForm, halfDayFraction: Number(event.target.value) })} /></label>
+          <label>Overtime rate (PHP/hour)<input required type="number" min="0" step="0.01" value={profileForm.overtimeRate} onChange={(event) => setProfileForm({ ...profileForm, overtimeRate: Number(event.target.value) })} /></label>
+          {profileMessage && <p className="dashboard-alert" role="status">{profileMessage}</p>}
+          <button className="submit-button" type="submit" disabled={profileBusy}>{profileBusy ? "Saving…" : "Save payroll profile"}</button>
+          {editingProfileId && <button className="text-button" type="button" onClick={() => { setEditingProfileId(null); setProfileForm(blankProfile); setProfileMessage(""); }}>Cancel edit</button>}
+        </form>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Profile</th><th>Actions</th></tr></thead>
+            <tbody>
+              {profiles.map((profile) => (
+                <tr key={profile.profileId}>
+                  <td><strong>{profile.label}</strong><small>{profile.profileId}</small></td>
+                  <td>
+                    <button className="text-button" type="button" onClick={() => { setEditingProfileId(profile.profileId); setProfileForm(profile); setProfileMessage(""); }}>Edit</button>
+                    <button className="text-button danger-button" type="button" disabled={profileBusy} onClick={() => void removeProfile(profile)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+              {profiles.length === 0 && <tr><td colSpan={2}>No payroll profiles configured.</td></tr>}
             </tbody>
           </table>
         </div>

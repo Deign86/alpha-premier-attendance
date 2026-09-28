@@ -79,6 +79,7 @@ export const tauriApi = {
   adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke('admin_delete_attendance', { token, attendanceId, date }),
   payrollProfiles: (token: string) => invoke('payroll_list_profiles', { token }),
   payrollUpsertProfile: <T extends object>(token: string, profile: T) => invoke('payroll_upsert_profile', { token, profile }),
+  payrollDeleteProfile: (token: string, profileId: string) => invoke<{ success: boolean }>('payroll_delete_profile', { token, profileId }),
   payrollCutoffs: (token: string) => invoke('payroll_list_cutoffs', { token }),
   internPayrollReport: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string) =>
     invoke('payroll_intern_report', { token, cutoffStart, cutoffEnd, payrollCutoffLabel }),

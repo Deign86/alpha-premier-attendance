@@ -141,6 +141,17 @@ describe('cutoff payroll calculator', () => {
     expect(result.totalDeductions).toBe(6345 + 176.25);
   });
 
+  it('deducts two undertime hours at the full hourly rate', () => {
+    const result = calculateCutoffPayroll({
+      ...jeanInput,
+      employeeId: 'APG-UNDERTIME-2H',
+      dailyRate: 80,
+      halfDayCount: 0.25,
+      halfDayFraction: 0.5,
+    });
+    expect(result.halfDayDeduction).toBe(20);
+  });
+
   it('keeps the calculation breakdown deduction shape in parity with payroll consumers', () => {
     const result = calculateCutoffPayroll({
       ...jeanInput,
@@ -189,8 +200,10 @@ describe('cutoff payroll calculator', () => {
       employeeName: 'Allaena Nicole E. Vizon',
       employeeType: 'INTERN',
       payrollProfileId: 'INTERN_STANDARD',
+      payrollCutoffLabel: 'September 16-21, 2026',
       cutoffStart: '2026-09-16',
       cutoffEnd: '2026-09-21',
+      payrollFrequency: 'SEMI_MONTHLY',
       dailyRate: 80,
       standardWorkingDays: 4,
       actualWorkingDays: 3,
@@ -209,6 +222,9 @@ describe('cutoff payroll calculator', () => {
       overtimeHours: 0,
       overtimeRate: 0,
       manualAdjustment: 0,
+      adjustmentReason: null,
+      approvedWorkingDayOverage: false,
+      status: 'DRAFT',
     });
     expect(internResult.halfDayDeduction).toBe(80);
     expect(internResult.absenceDeduction).toBe(80);

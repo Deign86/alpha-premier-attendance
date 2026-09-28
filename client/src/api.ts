@@ -549,6 +549,20 @@ export async function savePayrollProfile(profile: PayrollCalculationProfile): Pr
   // SAFETY: Parsing admin save profile response JSON
   return (await response.json()) as { success: boolean };
 }
+export async function deletePayrollProfile(profileId: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  try {
+    if (runningInTauri()) {
+      // SAFETY: Backend delete profile returns a success response.
+      return await tauriApi.payrollDeleteProfile(nativeAdminToken ?? '', profileId);
+    }
+    const response = await fetch(apiUrl(`/api/admin/payroll/profiles/${encodeURIComponent(profileId)}`), { method: 'DELETE' });
+    // SAFETY: Parsing admin delete profile response JSON.
+    return (await response.json()) as { success: boolean; error?: { message?: string } };
+  } catch (error) {
+    const message = errorString(error);
+    return { success: false, error: { message: message === 'PAYROLL_PROFILE_ASSIGNED' ? 'Reassign employees before deleting this profile.' : message || 'Unable to delete payroll profile.' } };
+  }
+}
 export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> {
   if (runningInTauri()) {
     // SAFETY: Backend list cutoffs returns PayrollCutoffsResponse
