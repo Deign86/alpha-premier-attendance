@@ -44,7 +44,7 @@ use crate::services::sheets_sync::{
 };
 use crate::services::sync_retry::{DtrThrottleBucket, split_dtr_batch};
 use crate::state::AppState;
-use chrono::{Datelike, NaiveDate, Timelike, Weekday};
+use chrono::{Datelike, NaiveDate, NaiveTime, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
 use std::collections::{HashMap, HashSet};
 
@@ -773,6 +773,28 @@ pub fn format_sheet_time(iso: &str) -> Result<String, String> {
     Ok(local.format("%-I:%M:%S %p").to_string().to_uppercase())
 }
 
+fn parse_sheet_clock(value: &str) -> Option<NaiveTime> {
+    let value = value.trim().to_ascii_uppercase();
+    ["%I:%M:%S %p", "%I:%M %p", "%H:%M:%S", "%H:%M"]
+        .iter()
+        .find_map(|format| NaiveTime::parse_from_str(&value, format).ok())
+}
+
+/// Compare B:E values by Manila wall-clock time while preserving non-time
+/// cells exactly; emitted rows continue using the canonical formatter.
+pub(crate) fn dtr_values_match(actual: &[String; 4], expected: &[String; 4]) -> bool {
+    actual.iter().zip(expected).all(|(actual, expected)| {
+        if actual.trim().is_empty() || expected.trim().is_empty() {
+            return actual.trim().is_empty() && expected.trim().is_empty();
+        }
+        actual.trim() == expected.trim()
+            || matches!(
+                (parse_sheet_clock(actual), parse_sheet_clock(expected)),
+                (Some(actual), Some(expected)) if actual == expected
+            )
+    })
+}
+
 /// Half-day cutoffs (Manila wall clock), DTR display only — system
 /// payroll keeps its own half-day logic:
 /// - time-out strictly before 16:59:00 with a morning clock-in renders
@@ -846,6 +868,43 @@ fn manila_week_start(attendance_date: &str) -> Result<String, String> {
         .checked_sub_signed(chrono::Duration::days(i64::from(date.weekday().num_days_from_monday())))
         .ok_or_else(|| format!("attendanceDate out of range: {attendance_date}"))?;
     Ok(monday.format("%Y-%m-%d").to_string())
+}
+
+/// Fetch later attendance rows in the changed date's Manila Monday-week so
+/// admin mutations can re-enqueue them for history-based DTR replanning.
+pub(crate) async fn later_attendance_in_manila_week(
+    db: &sqlx::SqlitePool,
+    user_id: &str,
+    attendance_date: &str,
+) -> Result<Vec<(String, String, Option<String>, Option<String>)>, String> {
+    use sqlx::Row;
+    let week_start = manila_week_start(attendance_date)?;
+    let week_end = NaiveDate::parse_from_str(&week_start, "%Y-%m-%d")
+        .map_err(|error| error.to_string())?
+        .checked_add_signed(chrono::Duration::days(7))
+        .ok_or_else(|| format!("attendanceDate out of range: {attendance_date}"))?
+        .format("%Y-%m-%d")
+        .to_string();
+    let rows = sqlx::query(
+        "SELECT attendance_id, attendance_date, time_in, time_out FROM attendance WHERE user_id = ? AND attendance_date > ? AND attendance_date < ? ORDER BY attendance_date",
+    )
+    .bind(user_id)
+    .bind(attendance_date)
+    .bind(week_end)
+    .fetch_all(db)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            (
+                row.get("attendance_id"),
+                row.get("attendance_date"),
+                row.get("time_in"),
+                row.get("time_out"),
+            )
+        })
+        .collect())
 }
 
 pub(crate) fn grace_exhausted_from_history(
@@ -1892,7 +1951,7 @@ pub fn plan_dtr_push_in_rows_with_clamp(
         rows[idx].get(3).cloned().unwrap_or_default(),
         rows[idx].get(4).cloned().unwrap_or_default(),
     ];
-    if existing == values {
+    if dtr_values_match(&existing, &values) {
         return Ok(DtrPlanOutcome::InSync { row_1based: idx + 1 });
     }
     Ok(DtrPlanOutcome::Write(DtrPushPlan {
@@ -3706,6 +3765,61 @@ mod tests {
     }
 
     #[test]
+    fn backdated_first_grace_replans_later_day_and_removal_unclamps() {
+        let later_time_in = Some("2026-09-10T08:05:00+08:00");
+        let rows = vec![vec!["9/10/2026".to_string()]];
+        let mut history = HashMap::new();
+
+        let unclamped = grace_exhausted_from_history("2026-09-10", &history).unwrap();
+        let plan = plan_dtr_push_in_rows_with_clamp(
+            "Tab",
+            &rows,
+            "2026-09-10",
+            later_time_in,
+            None,
+            unclamped,
+        )
+        .unwrap();
+        let DtrPlanOutcome::Write(plan) = plan else {
+            panic!("expected initial unclamped row write");
+        };
+        assert_eq!(plan.values[0], "8:05:00 AM");
+
+        history.insert(
+            "2026-09-08".to_string(),
+            (Some("2026-09-08T08:05:00+08:00".to_string()), None),
+        );
+        let replanned = plan_dtr_push_in_rows_with_clamp(
+            "Tab",
+            &rows,
+            "2026-09-10",
+            later_time_in,
+            None,
+            grace_exhausted_from_history("2026-09-10", &history).unwrap(),
+        )
+        .unwrap();
+        let DtrPlanOutcome::Write(plan) = replanned else {
+            panic!("earlier first-late backdate must re-clamp the later date");
+        };
+        assert_eq!(plan.values[0], "9:00:00 AM");
+
+        history.remove("2026-09-08");
+        let unclamped_again = plan_dtr_push_in_rows_with_clamp(
+            "Tab",
+            &rows,
+            "2026-09-10",
+            later_time_in,
+            None,
+            grace_exhausted_from_history("2026-09-10", &history).unwrap(),
+        )
+        .unwrap();
+        let DtrPlanOutcome::Write(plan) = unclamped_again else {
+            panic!("removing first-late must replan the later date without clamp");
+        };
+        assert_eq!(plan.values[0], "8:05:00 AM");
+    }
+
+    #[test]
     fn dtr_clamp_is_limited_to_nine_and_prior_grace_counts_only_window_lates() {
         let mut history = HashMap::new();
         let row = build_dtr_row_with_clamp(
@@ -4012,6 +4126,65 @@ mod tests {
         )
         .unwrap();
         assert!(pay.is_half_day);
+    }
+
+    #[test]
+    fn time_format_variants_are_in_sync_but_lunch_split_legacy_row_rewrites_once() {
+        let rows = vec![vec![
+            "9/5/2026".to_string(),
+            "09:00 AM".to_string(),
+            "12:00 PM".to_string(),
+            "01:00 PM".to_string(),
+            "05:00 PM".to_string(),
+        ]];
+        assert_eq!(
+            plan_dtr_push_in_rows(
+                "Tab",
+                &rows,
+                "2026-09-05",
+                Some("2026-09-05T09:00:00+08:00"),
+                Some("2026-09-05T17:00:00+08:00"),
+            ),
+            Ok(DtrPlanOutcome::InSync { row_1based: 1 })
+        );
+
+        // Legacy TS left C/D blank for a <4h shift spanning lunch; Rust's
+        // canonical contract explicitly records the lunch split.
+        let legacy = vec![vec![
+            "9/5/2026".to_string(),
+            "10:00:00 AM".to_string(),
+            String::new(),
+            String::new(),
+            "1:30:00 PM".to_string(),
+        ]];
+        let input_in = Some("2026-09-05T10:00:00+08:00");
+        let input_out = Some("2026-09-05T13:30:00+08:00");
+        let plan = match plan_dtr_push_in_rows("Tab", &legacy, "2026-09-05", input_in, input_out)
+            .unwrap()
+        {
+            DtrPlanOutcome::Write(plan) => plan,
+            other => panic!("expected canonical lunch-split write, got {other:?}"),
+        };
+        assert_eq!(
+            plan.values,
+            [
+                "10:00:00 AM",
+                "12:00:00 PM",
+                "1:00:00 PM",
+                "1:30:00 PM",
+            ]
+        );
+        let canonical = vec![vec![
+            "9/5/2026".to_string(),
+            plan.values[0].clone(),
+            plan.values[1].clone(),
+            plan.values[2].clone(),
+            plan.values[3].clone(),
+        ]];
+        assert_eq!(
+            plan_dtr_push_in_rows("Tab", &canonical, "2026-09-05", input_in, input_out),
+            Ok(DtrPlanOutcome::InSync { row_1based: 1 })
+        );
     }
 
     #[test]

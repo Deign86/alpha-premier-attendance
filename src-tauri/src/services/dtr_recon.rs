@@ -15,7 +15,7 @@
 //! - Cutoff end is today.
 
 use crate::services::dtr_sync::{
-    build_dtr_row, build_dtr_row_with_clamp, classify_record_row, execute_format_ops,
+    build_dtr_row, build_dtr_row_with_clamp, classify_record_row, dtr_values_match, execute_format_ops,
     fetch_tab_meta, grace_exhausted_from_history, parse_sheet_date, plan_row_format,
     resolve_user_tab, DtrCellColor, DtrFormatOp,
 };
@@ -196,7 +196,7 @@ pub fn reconcile_intern_tab(
                 });
             match expected {
                 Ok(expected) => {
-                    if sheet_values != expected {
+                    if !dtr_values_match(&sheet_values, &expected) {
                         let action = if report_only {
                             ReconAction::Reported
                         } else {
@@ -935,6 +935,41 @@ pub mod tests {
             ["8:00:00 AM", "12:00:00 PM", "1:00:00 PM", "4:00:00 PM"]
         );
         assert!(!execute_result.format_ops.is_empty());
+    }
+
+    #[test]
+    pub fn recon_treats_equivalent_clock_formats_as_in_sync() {
+        let rows = vec![
+            vec!["SEPTEMBER".to_string()],
+            vec![
+                "9/2/2026".to_string(),
+                "09:00 AM".to_string(),
+                "12:00 PM".to_string(),
+                "01:00 PM".to_string(),
+                "05:00 PM".to_string(),
+            ],
+        ];
+        let mut db_attendance = HashMap::new();
+        db_attendance.insert(
+            "2026-09-02".to_string(),
+            (
+                Some("2026-09-02T09:00:00+08:00".to_string()),
+                Some("2026-09-02T17:00:00+08:00".to_string()),
+            ),
+        );
+
+        let result = reconcile_intern_tab(
+            "test-u1",
+            "Deign Lazaro",
+            12345,
+            &rows,
+            &db_attendance,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
+            false,
+        );
+        assert!(result.discrepancies.is_empty());
+        assert!(result.writes.is_empty());
     }
 
     #[test]

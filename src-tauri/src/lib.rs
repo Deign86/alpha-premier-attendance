@@ -1649,6 +1649,7 @@ async fn admin_update_attendance_impl(
     // admin ops never fail because of DTR.
     if let Ok(Some(user_row)) = sqlx::query("SELECT user_id, full_name, employee_type FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(attendance_id).fetch_optional(&state.db).await {
         enqueue_intern_dtr(state, attendance_id, &user_row.get::<String, _>("user_id"), &user_row.get::<String, _>("full_name"), &user_row.get::<String, _>("employee_type"), date, time_in, time_out).await;
+        enqueue_later_weekly_intern_dtr(state, &user_row.get::<String, _>("user_id"), &user_row.get::<String, _>("full_name"), &user_row.get::<String, _>("employee_type"), date).await;
     }
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'ADMIN_ATTENDANCE_UPDATED',?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(format!("Attendance {attendance_id} corrected")).bind(format!("admin-{}",uuid::Uuid::new_v4())).execute(&state.db).await;
     Ok(
@@ -1851,7 +1852,9 @@ async fn admin_create_backdated_attendance_impl(
     enqueue_sync(state, "Attendance", &attendance_id, "UPSERT", &sync_payload).await;
     // Mirror the entry to the intern DTR sheet (interns only, when
     // configured). Same fire-and-forget contract as the scan path.
-    enqueue_intern_dtr(state, &attendance_id, user_id, &full_name, &user.get::<String, _>("employee_type"), attendance_date, Some(time_in), time_out).await;
+    let employee_type: String = user.get("employee_type");
+    enqueue_intern_dtr(state, &attendance_id, user_id, &full_name, &employee_type, attendance_date, Some(time_in), time_out).await;
+    enqueue_later_weekly_intern_dtr(state, user_id, &full_name, &employee_type, attendance_date).await;
 
     Ok(serde_json::json!({
         "success": true,
@@ -1905,8 +1908,8 @@ async fn admin_delete_attendance_impl(
     // NOTE: deletions clear the date's B:E cells on the intern DTR sheet
     // (values only — rows are never removed, so the template grid
     // survives); only the ops-mirror rows below are deleted outright.
-    let dtr_owner: Option<(String, String)> = sqlx::query_as(
-        "SELECT user_id, full_name FROM attendance WHERE attendance_id=?",
+    let dtr_owner: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT attendance.user_id, attendance.full_name, users.employee_type FROM attendance JOIN users ON users.user_id = attendance.user_id WHERE attendance.attendance_id=?",
     )
     .bind(attendance_id)
     .fetch_optional(&state.db)
@@ -1962,7 +1965,7 @@ async fn admin_delete_attendance_impl(
     .await;
     // Intern-DTR auto-clear for the deleted day (values emptied, row kept).
     // Missing tab/row downstream is a silent no-op; failures never fail admin.
-    if let Some((dtr_user_id, dtr_full_name)) = dtr_owner {
+    if let Some((dtr_user_id, dtr_full_name, employee_type)) = dtr_owner {
         enqueue_sync(
             state,
             crate::services::dtr_sync::DTR_TABLE_NAME,
@@ -1971,6 +1974,7 @@ async fn admin_delete_attendance_impl(
             &serde_json::json!({"userId": dtr_user_id, "fullName": dtr_full_name, "attendanceDate": date}),
         )
         .await;
+        enqueue_later_weekly_intern_dtr(state, &dtr_user_id, &dtr_full_name, &employee_type, date).await;
     }
     for payroll_id in payroll_ids {
         enqueue_sync(
@@ -4968,6 +4972,37 @@ async fn enqueue_intern_dtr(
         }),
     )
     .await;
+}
+
+async fn enqueue_later_weekly_intern_dtr(
+    state: &AppState,
+    user_id: &str,
+    full_name: &str,
+    employee_type: &str,
+    changed_date: &str,
+) {
+    let Ok(rows) = crate::services::dtr_sync::later_attendance_in_manila_week(
+        &state.db,
+        user_id,
+        changed_date,
+    )
+    .await
+    else {
+        return;
+    };
+    for (attendance_id, date, time_in, time_out) in rows {
+        enqueue_intern_dtr(
+            state,
+            &attendance_id,
+            user_id,
+            full_name,
+            employee_type,
+            &date,
+            time_in.as_deref(),
+            time_out.as_deref(),
+        )
+        .await;
+    }
 }
 
 #[tauri::command]

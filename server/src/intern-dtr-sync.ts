@@ -626,6 +626,31 @@ export function formatSheetTime(isoManila: string): string {
   return dt.toFormat('h:mm:ss a').toUpperCase();
 }
 
+function sheetTimeMillis(date: string, value: string): number | null {
+  for (const format of ['yyyy-MM-dd h:mm:ss a', 'yyyy-MM-dd h:mm a']) {
+    const parsed = DateTime.fromFormat(`${date} ${value.trim()}`, format, {
+      zone: MANILA_ZONE,
+      locale: 'en-US',
+    });
+    if (parsed.isValid) return parsed.toMillis();
+  }
+  return null;
+}
+
+function sameSheetTimes(
+  existing: [string, string, string, string],
+  desired: [string, string, string, string],
+  date: string,
+): boolean {
+  return existing.every((cell, index) => {
+    const wanted = desired[index];
+    if (!cell.trim() || !wanted.trim()) return !cell.trim() && !wanted.trim();
+    const existingMillis = sheetTimeMillis(date, cell);
+    const wantedMillis = sheetTimeMillis(date, wanted);
+    return existingMillis !== null && existingMillis === wantedMillis;
+  });
+}
+
 /**
  * True when the worked span is under 4 hours — NEVER a half day (DTR
  * display rule, mirrors the Rust side): actual stamps land in their
@@ -703,12 +728,12 @@ function isClampDisplayArrival(timeIn: string): boolean {
 }
 
 /**
- * Build [B, C, D, E] — DTR SOURCE OF TRUTH (actual stamps only).
+ * Build [B, C, D, E] using actual punches except the weekly-late 09:00
+ * display clamp; lunch-spanning morning shifts use the fixed Rust split.
  *
  * Decoupled from payroll half-day logic (2026-09): this function NEVER
  * fabricates, truncates, or substitutes fixed-lunch/half-day conventions.
- * Every completed shift renders actual stamps at both ends
- * `[in, '', '', out]`; working (no time-out) renders `[in, '', '', '']`.
+ * Working (no time-out) renders `[in, '', '', '']`.
  * Half-day pay (`isHalfDayWork` in lunch-break.ts) is derived separately
  * from the same raw punches and must never feed this row builder.
  * Late time-out auto-cap: a clock-out at/after 18:00 Manila is normalized
@@ -741,7 +766,7 @@ export function buildDtrRow(
   // the fixed lunch split shared with the Rust DTR writer.
   if (isBeforeLunchOut(record.timeOutIso)) return [started, ended, '', ''];
   if (isAfternoonArrival(inIso) && !clampDisplayIn) return ['', '', started, ended];
-  if (!isShortStint(inIso, record.timeOutIso) && !isAfternoonArrival(inIso)) {
+  if (!isAfternoonArrival(inIso)) {
     return [started, LUNCH_OUT, LUNCH_IN, ended];
   }
   return [started, '', '', ended];
@@ -1018,7 +1043,7 @@ export async function planPush(
     return fail('date-not-found', `date ${record.attendanceDate} not found in tab ${resolved.tab}`);
   }
   const existing = rowCells(effectiveRows[idx]);
-  if (existing.every((v, i) => v === values[i])) {
+  if (sameSheetTimes(existing, values, record.attendanceDate)) {
     return {
       kind: 'in-sync',
       record,

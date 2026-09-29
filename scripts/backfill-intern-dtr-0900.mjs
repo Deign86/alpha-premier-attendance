@@ -4,9 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { google } from 'googleapis';
 
 const SPREADSHEET_ID = '1ncnrcZY3Zr8ce_YBQQqU4LiMP80gqcd9WHr8dzjE-wE';
-const SHEET_ID = 1860454512;
-const REVERT_TAB = 'Khemuel Rosh Timkang';
-const REVERT_RANGE = "'Khemuel Rosh Timkang'!B110";
+const SHEET_ID = 1880677918;
 const KEY_NAME = 'attendance-sheets-key.json';
 
 function getSheetsClient() {
@@ -55,6 +53,7 @@ async function main() {
   const valuesByRange = data.data.valueRanges ?? [];
   let rowsScanned = 0;
   const edits = [];
+  const actualsKept = [];
   const tabsScanned = [];
 
   for (const [index, rangeData] of valuesByRange.entries()) {
@@ -75,14 +74,26 @@ async function main() {
     datedRows.sort((left, right) => dateValue(left.date) - dateValue(right.date));
     for (const { cells, rowNumber, date } of datedRows) {
       const timeIn = parseTime(cells[1]);
-      if (timeIn === null || timeIn <= 8 * 60 || timeIn > 9 * 60) continue;
+      if (timeIn === null) continue;
+      if (timeIn > 9 * 60 * 60) {
+        actualsKept.push({
+          tab: title,
+          date: `${date.month}/${date.day}/${date.year}`,
+          cell: `B${rowNumber}`,
+          range: `'${title.replaceAll("'", "''")}'!B${rowNumber}`,
+          value: cells[1],
+        });
+        continue;
+      }
+      if (timeIn <= 8 * 60 * 60) continue;
       const week = weekStart(date);
-      const isInWindowLate = timeIn <= 8 * 60 + 15;
-      const priorLate = inWindowLateByWeek.get(week) ?? 0;
-      if (isInWindowLate) inWindowLateByWeek.set(week, priorLate + 1);
-      if (priorLate === 0) continue;
-      if (title === REVERT_TAB && rowNumber === 110) continue;
-      if (timeIn === 9 * 60) continue;
+      const isInWindowLate = timeIn <= 8 * 60 * 60 + 15 * 60;
+      const graceUsed = inWindowLateByWeek.get(week) ?? false;
+      if (isInWindowLate && !graceUsed) {
+        inWindowLateByWeek.set(week, true);
+        continue;
+      }
+      if (timeIn === 9 * 60 * 60) continue;
       edits.push({
         tab: title,
         date: `${date.month}/${date.day}/${date.year}`,
@@ -96,38 +107,25 @@ async function main() {
   }
 
   const isWrite = process.argv.includes('--write');
-  let revertBatchUpdateResponse = null;
-  let revertReadBack = null;
   let batchUpdateResponse = null;
-  if (isWrite) {
-    const revertTab = sheetTabs.find(({ properties }) => properties?.title === REVERT_TAB);
-    if (!revertTab) throw new Error(`No tab found for ${REVERT_TAB}`);
-    const current = await sheets.spreadsheets.values.get({
+  let readBack = [];
+  let actualsKeptReadBack = [];
+  if (actualsKept.length > 0 && (!isWrite || edits.length === 0)) {
+    const verified = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SPREADSHEET_ID,
-      range: REVERT_RANGE,
+      ranges: actualsKept.map(({ range }) => range),
       valueRenderOption: 'FORMATTED_VALUE',
     });
-    const currentValue = current.data.values?.[0]?.[0];
-    if (currentValue === '09:00 AM' || currentValue === '9:00:00 AM') {
-      const response = await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: {
-          valueInputOption: 'RAW',
-          data: [{ range: REVERT_RANGE, values: [['10:00:00 AM']] }],
-        },
-      });
-      revertBatchUpdateResponse = response.data;
-    } else if (currentValue !== '10:00:00 AM') {
-      throw new Error(`Unexpected value at ${REVERT_RANGE}: ${String(currentValue)}`);
-    }
-    const verify = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: REVERT_RANGE,
-      valueRenderOption: 'FORMATTED_VALUE',
-    });
-    revertReadBack = verify.data.values?.[0]?.[0] ?? null;
-    if (revertReadBack !== '10:00:00 AM') {
-      throw new Error(`Revert verification failed at ${REVERT_RANGE}: ${String(revertReadBack)}`);
+    actualsKeptReadBack = actualsKept.map((actual, index) => ({
+      tab: actual.tab,
+      date: actual.date,
+      cell: actual.cell,
+      value: verified.data.valueRanges?.[index]?.values?.[0]?.[0] ?? null,
+    }));
+    for (const [index, actual] of actualsKeptReadBack.entries()) {
+      if (actual.value !== actualsKept[index].value) {
+        throw new Error(`Actual-time verification failed at ${actual.tab}!${actual.cell}: ${String(actual.value)}`);
+      }
     }
   }
   if (isWrite && edits.length > 0) {
@@ -139,16 +137,46 @@ async function main() {
       },
     });
     batchUpdateResponse = response.data;
+    const verified = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges: [...edits.map(({ range }) => range), ...actualsKept.map(({ range }) => range)],
+      valueRenderOption: 'FORMATTED_VALUE',
+    });
+    const values = verified.data.valueRanges ?? [];
+    readBack = edits.map((edit, index) => ({
+      tab: edit.tab,
+      date: edit.date,
+      cell: edit.cell,
+      value: values[index]?.values?.[0]?.[0] ?? null,
+    }));
+    for (const cell of readBack) {
+      if (cell.value !== '09:00 AM' && cell.value !== '9:00:00 AM') {
+        throw new Error(`Write verification failed at ${cell.tab}!${cell.cell}: ${String(cell.value)}`);
+      }
+    }
+    actualsKeptReadBack = actualsKept.map((actual, index) => ({
+      tab: actual.tab,
+      date: actual.date,
+      cell: actual.cell,
+      value: values[edits.length + index]?.values?.[0]?.[0] ?? null,
+    }));
+    for (const [index, actual] of actualsKeptReadBack.entries()) {
+      if (actual.value !== actualsKept[index].value) {
+        throw new Error(`Actual-time verification failed at ${actual.tab}!${actual.cell}: ${String(actual.value)}`);
+      }
+    }
   }
 
   console.log(JSON.stringify({
     tabTitleForGid: focus.properties.title,
+    focusedTabRowsScanned: tabsScanned.find(({ tab }) => tab === focus.properties.title)?.rows ?? 0,
     tabsScanned,
     tabsScannedCount: tabsScanned.length,
     rowsScanned,
-    revertedCell: isWrite ? { range: REVERT_RANGE, value: revertReadBack, batchUpdateResponse: revertBatchUpdateResponse } : null,
     editCount: edits.length,
     edits,
+    readBack,
+    actualsKept: actualsKeptReadBack,
     mode: isWrite ? 'write' : 'dry-run',
     batchUpdateResponse,
   }, null, 2));
@@ -164,11 +192,11 @@ function parseDate(value) {
 
 function parseTime(value) {
   if (typeof value !== 'string') return null;
-  const match = value.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)$/i);
+  const match = value.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
   if (!match) return null;
   let hour = Number(match[1]) % 12;
-  if (match[3].toUpperCase() === 'PM') hour += 12;
-  return hour * 60 + Number(match[2]);
+  if (match[4].toUpperCase() === 'PM') hour += 12;
+  return hour * 60 * 60 + Number(match[2]) * 60 + Number(match[3] ?? 0);
 }
 
 function weekStart(date) {

@@ -283,11 +283,11 @@ describe('buildDtrRow', () => {
       '9:30:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
   });
-  it('sub-4h lunch-spanning stint keeps actuals at both ends (never half-day)', () => {
+  it('sub-4h lunch-spanning stint uses the Rust fixed-lunch split', () => {
     expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
       '11:30:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '2:30:00 PM',
     ]);
     expect(classifyRecordKind('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toBe(
@@ -466,6 +466,23 @@ describe('planPush', () => {
     expect(plan.row1Based).toBe(2);
     expect(plan.values).toEqual(['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
     await executePush(client, plan);
+    expect(client.writes).toEqual([]);
+  });
+  it('converges string variants of identical Manila times without rewriting', async () => {
+    const variant = [
+      baseRows[0],
+      ['9/5/2026', '09:00 AM', '12:00 PM', '01:00 PM', '05:00 PM', '8'],
+    ];
+    const client = makeClient({ 'ROSADO RAINEER': variant });
+    const arrival: AttendanceDay = {
+      ...DAY,
+      timeIn: '2026-09-05T09:00:00+08:00',
+    };
+    const plan = await planPush(client, arrival, ROSTER);
+    expect(plan).toMatchObject({
+      kind: 'in-sync',
+      values: ['9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM'],
+    });
     expect(client.writes).toEqual([]);
   });
   it('skips NO_MATCH tabs with reason', async () => {
@@ -744,7 +761,7 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
   it('sub-4h first late arrival keeps DTR stamps and uses flat ungraced payroll', async () => {
     const { calculateInternPayroll } = await import('../src/intern-payroll.js');
     expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
-      '11:30:00 AM', '', '', '2:30:00 PM',
+      '11:30:00 AM', '12:00:00 PM', '1:00:00 PM', '2:30:00 PM',
     ]);
     const pay = calculateInternPayroll({
       attendanceDate: date,
