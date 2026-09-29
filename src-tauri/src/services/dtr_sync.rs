@@ -3848,6 +3848,7 @@ mod tests {
             "2026-09-09".to_string(),
             (Some("2026-09-09T08:30:00+08:00".to_string()), None),
         );
+        history.remove("2026-09-08");
         assert!(!grace_exhausted_from_history("2026-09-10", &history).unwrap());
 
         for (time_in, expected) in [
@@ -4214,10 +4215,12 @@ mod tests {
         assert!(pay.is_half_day);
         // Late deduction also applies (12:30 vs 08:00 start), so only assert
         // the half-day flag + deduction, not the floored net pay.
-        // Post-0.1.75: 12:30–17:00 (4.5h elapsed, floored) pays 4h with no
-        // 12:00–13:00 subtraction.
-        assert_eq!(pay.worked_hours, 4);
-        assert_eq!(pay.half_day_deduction_centavos, 4000);
+        // Payroll parity (TS intern-payroll, Rust intern_payroll): an ungraced
+        // late arrival pays from the 09:00 clamp, so the payable span is
+        // 09:00-17:00 (7 net hours); the 1 late hour is the only deduction, so
+        // the half-day shortfall is 0.
+        assert_eq!(pay.worked_hours, 7);
+        assert_eq!(pay.half_day_deduction_centavos, 0);
     }
 
     #[test]

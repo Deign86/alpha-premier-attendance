@@ -7917,13 +7917,14 @@ mod tests {
         .await
         .unwrap();
 
-        // 4. Generate cutoff from attendance for 2026-08-01 to 2026-08-15
+        // 4. Generate a one-day cutoff for this fixture so unrelated weekdays
+        // do not add absences to the expected half-day net pay.
         let gen_result = super::payroll_generate_cutoff_impl(
             &state,
             token.clone(),
             "2026-08-01".to_string(),
-            "2026-08-15".to_string(),
-            "August 1-15, 2026".to_string(),
+            "2026-08-01".to_string(),
+            "August 1, 2026".to_string(),
             serde_json::json!({ "standardWorkingDays": 1.0 }),
         )
         .await

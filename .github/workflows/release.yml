@@ -59,13 +59,18 @@ jobs:
         run: npm run typecheck
 
       - name: Lint
-        run: npm run lint:oxlint
+        run: npm run lint
 
       - name: Test
         run: npm test
 
       - name: Build frontend
         run: npm run build
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+        env:
+          ALPHA_PREMIER_REQUIRE_EMBED_KEY: "0"
 
       - name: Check embedded sheets-key secret
         shell: bash
