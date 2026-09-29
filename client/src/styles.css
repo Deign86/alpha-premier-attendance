@@ -265,6 +265,14 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .time-clear-btn svg { pointer-events: none; }
 .time-clear-btn:hover { color: var(--danger); background: rgba(239, 170, 146, .18); }
 .time-clear-btn:active { transform: translateY(-50%) scale(0.92); }
+/* Display-only weekly-grace clamp chip: sits over the real time-in input
+   (which keeps the actual scan underneath) and matches the input's frame. */
+.clamped-time-in-chip { position: absolute; inset: 0; z-index: 4; display: inline-flex; align-items: center; padding: 0 32px 0 10px; color: var(--gold-bright); background: var(--surface-input); border: 1px solid var(--line-bright); box-shadow: inset 3px 0 0 var(--gold); font-size: .78rem; font-variant-numeric: tabular-nums; text-align: left; cursor: help; }
+.clamped-time-in-chip:hover { border-color: var(--gold-soft); }
+.clamped-time-in-chip:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+/* Static variant for plain table cells (live attendance, payroll) that have
+   no input to overlay: same gold clamp identity, inline flow instead. */
+.clamped-time-in-static { position: static; padding: 4px 10px; }
 .admin-tabs { display: flex; gap: 8px; margin: 24px 0; border-bottom: 1px solid var(--line); }
 .admin-tabs button { padding: 13px 14px; color: var(--muted); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: .75rem; }
 .admin-tabs button.is-active { color: var(--gold-bright); border-color: var(--gold); }

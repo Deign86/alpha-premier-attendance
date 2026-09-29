@@ -1,12 +1,14 @@
 import crypto from 'node:crypto';
+import { DateTime } from 'luxon';
 import type { AdminUser, AttendanceListItem, BathroomActiveHolder, BathroomLogItem, BathroomScanResponse, BathroomStatusResponse, PayrollCalculationProfile } from '@rfid-attendance/shared';
-import { countWorkdays, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
+import { countWorkdays, getManilaWeekStart, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, INTERN_PAYROLL_PROFILE_ID, isLateTimeout, normalizeName } from '@rfid-attendance/shared';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
 import { PayrollService } from './payroll.js';
 import { calculateCutoffPayroll, defaultPayrollProfiles, type CutoffInput } from './cutoff-payroll.js';
 import { resolveAdminAuth } from './config.js';
+import { executePush, planPush, type AttendanceDay, type DtrSyncUser, type SheetsClient } from './intern-dtr-sync.js';
 
 export type AdminConfig = { enableAdmin?: boolean; adminPin?: string; adminSessionSecret?: string; adminSessionMinutes?: number; timezone: string };
 export class AdminError extends Error {
@@ -19,7 +21,65 @@ export interface AdminUnlockResult {
 }
 
 export class AdminService {
-  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AdminConfig, private readonly payroll = new PayrollService(sheets)) {}
+  constructor(
+    private readonly sheets: GoogleSheetsService,
+    private readonly config: AdminConfig,
+    private readonly payroll = new PayrollService(sheets),
+    private readonly dtr: { client: SheetsClient; users: DtrSyncUser[] } | null = null,
+  ) {}
+
+  /** Best-effort DTR push for an intern's backdated/corrected row. Each
+   *  correction re-plans the corrected date and later dates in its Manila
+   *  week so grace use is deterministic after backdated edits. */
+  private async pushDtrForIntern(record: SheetAttendance, user: SheetUser): Promise<void> {
+    if (!this.dtr) return;
+    if ((user.employeeType ?? 'INTERN') !== 'INTERN') return;
+    try {
+      const weekStart = getManilaWeekStart(record.attendanceDate);
+      // Pull the intern's attendance for the current Manila Monday-week only.
+      const weekRows: SheetAttendance[] = [];
+      for (let offset = 0; offset < 7; offset += 1) {
+        const date = DateTime.fromISO(weekStart, { zone: this.config.timezone })
+          .plus({ days: offset }).toISODate();
+        if (!date) continue;
+        weekRows.push(...(await this.sheets.listAttendance(date)));
+      }
+      const internHistory: AttendanceDay[] = weekRows
+        .filter((r) => r.userId === record.userId)
+        .map((r) => ({
+          userId: r.userId,
+          fullName: r.fullName,
+          attendanceDate: r.attendanceDate,
+          timeIn: r.timeIn || null,
+          timeOut: r.timeOut || null,
+          status: r.status,
+        }));
+      const corrected: AttendanceDay = {
+        userId: record.userId,
+        fullName: record.fullName,
+        attendanceDate: record.attendanceDate,
+        timeIn: record.timeIn || null,
+        timeOut: record.timeOut || null,
+        status: record.status,
+      };
+      const history = [...internHistory.filter((entry) => entry.attendanceDate !== record.attendanceDate), corrected];
+      const targets = history
+        .filter((entry) => entry.attendanceDate >= record.attendanceDate)
+        .sort((left, right) => left.attendanceDate.localeCompare(right.attendanceDate));
+      for (const target of targets) {
+        const users = this.dtr.users.length > 0
+          ? this.dtr.users
+          : (await this.sheets.listUsers())
+            .filter((item) => (item.employeeType ?? 'INTERN') === 'INTERN')
+            .map((item) => ({ userId: item.userId, fullName: item.fullName }));
+        const plan = await planPush(this.dtr.client, target, users, history);
+        if (plan.kind === 'write') await executePush(this.dtr.client, plan);
+      }
+    } catch {
+      // Best-effort DTR push: a DTR-sheet hitch must never fail an admin
+      // attendance correction that already succeeded on the attendance tab.
+    }
+  }
 
   async unlock<T>(pin: T): Promise<AdminUnlockResult> {
     this.assertEnabled();
@@ -134,6 +194,7 @@ export class AdminService {
       const user = await this.sheets.findUserById(row.userId);
       if (saved.status === 'COMPLETED' && saved.timeOut && user) await this.payroll.ensureForCompletedAttendance(saved, user);
       if (saved.status !== 'COMPLETED') await this.sheets.deletePayrollByAttendanceId(saved.attendanceId);
+      if (user) await this.pushDtrForIntern(saved, user);
       await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_UPDATED', userId: row.userId, message: `Attendance ${attendanceId} corrected by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
       return toAttendance(saved);
     } catch { throw new AdminError('ATTENDANCE_CONFLICT', 'Attendance changed before it could be saved.', 409); }
@@ -195,6 +256,7 @@ export class AdminService {
       if (saved.status === 'COMPLETED' && saved.timeOut) {
         await this.payroll.ensureForCompletedAttendance(saved, user);
       }
+      await this.pushDtrForIntern(saved, user);
       await this.sheets.writeAudit({
         eventType: 'ADMIN_BACKDATED_ATTENDANCE',
         userId: user.userId,

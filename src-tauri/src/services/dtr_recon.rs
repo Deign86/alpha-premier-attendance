@@ -15,8 +15,9 @@
 //! - Cutoff end is today.
 
 use crate::services::dtr_sync::{
-    build_dtr_row, classify_record_row, execute_format_ops, fetch_tab_meta, parse_sheet_date,
-    plan_row_format, resolve_user_tab, DtrCellColor, DtrFormatOp,
+    build_dtr_row, build_dtr_row_with_clamp, classify_record_row, execute_format_ops,
+    fetch_tab_meta, grace_exhausted_from_history, parse_sheet_date, plan_row_format,
+    resolve_user_tab, DtrCellColor, DtrFormatOp,
 };
 use crate::services::sheets_sync::{google_access_token, sheets_client};
 use crate::state::AppState;
@@ -180,7 +181,20 @@ pub fn reconcile_intern_tab(
         ];
 
         if let Some((db_in, db_out)) = db_attendance.get(&date_str) {
-            match build_dtr_row(db_in.as_deref(), db_out.as_deref(), &date_str) {
+            let expected = grace_exhausted_from_history(&date_str, db_attendance)
+                .and_then(|grace_exhausted| {
+                    if grace_exhausted {
+                        build_dtr_row_with_clamp(
+                            db_in.as_deref(),
+                            db_out.as_deref(),
+                            &date_str,
+                            true,
+                        )
+                    } else {
+                        build_dtr_row(db_in.as_deref(), db_out.as_deref(), &date_str)
+                    }
+                });
+            match expected {
                 Ok(expected) => {
                     if sheet_values != expected {
                         let action = if report_only {
@@ -533,10 +547,14 @@ pub async fn run_reconciliation(state: &AppState, report_only: bool) -> Result<S
 
         let rows = rows_from_values(&tab_values);
 
-        // Fetch DB attendance records in open cutoff
+        // Include the preceding Manila Monday-week so a prior late arrival can consume this week's grace.
+        let history_start = cutoff_start
+            .checked_sub_signed(chrono::Duration::days(i64::from(cutoff_start.weekday().num_days_from_monday())))
+            .ok_or_else(|| "cutoff start out of date range".to_string())?;
+        let history_start_str = history_start.format("%Y-%m-%d").to_string();
         let att_rows = sqlx::query("SELECT attendance_date, time_in, time_out FROM attendance WHERE user_id = ? AND attendance_date >= ? AND attendance_date <= ?")
             .bind(&user_id)
-            .bind(&start_str)
+            .bind(&history_start_str)
             .bind(&end_str)
             .fetch_all(&state.db)
             .await

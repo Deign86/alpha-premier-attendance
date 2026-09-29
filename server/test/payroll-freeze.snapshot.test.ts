@@ -93,7 +93,7 @@ describe('T0 freeze: intern payroll vectors (₱80/day, ₱10/h late)', () => {
     expect(sortedJson(result)).toMatchSnapshot();
   });
 
-  it('08:16 arrival is late even with grace available', () => {
+  it('08:16 late arrival is ungraced outside the allowed window', () => {
     const result = calculateInternPayroll({ attendanceDate: DAY, actualTimeIn: stamp('08:16:00'), actualTimeOut: stamp('17:00:00'), graceAvailable: true });
     expect(result.graceUsed).toBe(false);
     expect(result.lateHours).toBe(1);

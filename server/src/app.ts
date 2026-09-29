@@ -5,6 +5,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import { google } from 'googleapis';
 import type { ScanRequest } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { AttendanceService } from './attendance.js';
@@ -14,9 +15,49 @@ import type { GoogleSheetsService } from './sheets.js';
 import { manilaTimestamp } from './time.js';
 import { SetupError, SetupService, setupTokenFromRequest } from './setup.js';
 import { AdminError, AdminService } from './admin.js';
+import type { SheetsClient } from './intern-dtr-sync.js';
 import { uploadPhotoDataUrl } from './photo-storage.js';
 
-export type CreateAppOptions = { sheets: GoogleSheetsService; config: AppConfig; logger?: boolean; staticDir?: string };
+export type CreateAppOptions = { sheets: GoogleSheetsService; config: AppConfig; logger?: boolean; staticDir?: string; internDtrClient?: SheetsClient };
+
+function createInternDtrClient(options: CreateAppOptions): SheetsClient | null {
+  if (options.internDtrClient) return options.internDtrClient;
+  const spreadsheetId = process.env.INTERN_DTR_SHEET_ID?.trim();
+  const email = options.config.googleServiceAccountEmail;
+  const key = options.config.googlePrivateKey;
+  if (!spreadsheetId || !email || !key) return null;
+  const auth = new google.auth.JWT({ email, key, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+  const sheets = google.sheets({ version: 'v4', auth });
+  const quoteTab = (tab: string): string => `'${tab.replace(/'/g, "''")}'`;
+  return {
+    async getTabTitles() {
+      const response = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(title)' });
+      return (response.data.sheets ?? []).flatMap((sheet) => sheet.properties?.title ? [sheet.properties.title] : []);
+    },
+    async getTabMeta() {
+      const response = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(title,sheetId)' });
+      return (response.data.sheets ?? []).flatMap((sheet) => {
+        const title = sheet.properties?.title;
+        const sheetId = sheet.properties?.sheetId;
+        return title != null && sheetId != null ? [{ title, sheetId }] : [];
+      });
+    },
+    async getTabValues(tab) {
+      const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quoteTab(tab)}!A:F` });
+      return (response.data.values ?? []).map((row) => row.map((cell) => String(cell ?? '')));
+    },
+    async updateRow(tab, row1Based, values) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${quoteTab(tab)}!B${row1Based}:E${row1Based}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [values] },
+      });
+    },
+    async applyFormats() {},
+    async duplicateTemplate() { return null; },
+  };
+}
 
 function requestId(req: Request): string {
   const existing = req.header('x-request-id');
@@ -27,7 +68,8 @@ export function createApp(options: CreateAppOptions): express.Express {
   const app = express();
   const attendance = new AttendanceService(options.sheets, options.config);
   const setup = new SetupService(options.sheets, options.config);
-  const admin = new AdminService(options.sheets, options.config);
+  const dtrClient = createInternDtrClient(options);
+  const admin = new AdminService(options.sheets, options.config, undefined, dtrClient ? { client: dtrClient, users: [] } : null);
 
   app.disable('x-powered-by');
   app.use(helmet());

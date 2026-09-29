@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics } from './App';
+import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics, PayrollWorkspace } from './App';
 import { unlockAdmin } from './api';
 import * as api from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
-import type { BathroomScanResponse, ScannerStatus } from '@rfid-attendance/shared';
+import type { BathroomScanResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
 
 let rfidHandlers: Array<(uid: string) => void> = [];
 let scannerStatusHandlers: Array<(status: ScannerStatus) => void> = [];
@@ -949,6 +949,220 @@ describe('Admin Attendance Corrections', () => {
       }));
     } finally {
       window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('clamps a repeat late intern time-in to 09:00 AM while keeping the actual scan reachable and saved', async () => {
+    vi.restoreAllMocks();
+    let patchedBody: { timeIn?: string | null; expectedTimeIn?: string | null } | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+              { userId: 'u3', fullName: 'Grace Hopper', rfidUid: 'RFID-3', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance/c2') && init?.method === 'PATCH') {
+        // SAFETY: Parse the patched request body
+        patchedBody = JSON.parse(String(init.body)) as { timeIn?: string | null; expectedTimeIn?: string | null };
+        // SAFETY: Return the patched row
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            attendance: { attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Monday-week attendance: intern grace then repeat late, one late employee, one on-time intern
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'c1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'e1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T09:00:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'g1', attendanceDate: '2026-07-28', userId: 'u3', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T07:55:00+08:00', timeOut: null, status: 'WORKING' },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true, profiles: [], cutoffs: [] }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      // Only the intern's repeat late row is clamped; grace-first, employee, and on-time rows render as before.
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('09:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      expect(screen.getAllByTestId('clamped-time-in')).toHaveLength(1);
+
+      // The actual scan stays underneath in the real input.
+      expect(screen.getByDisplayValue('08:30')).toBeInTheDocument();
+
+      // Capture the clamped row before the chip unmounts on reveal.
+      const row = chip.closest('tr');
+      expect(row).not.toBeNull();
+
+      // Clicking the chip reveals the actual value for editing.
+      await user.click(chip);
+      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+      expect(screen.getByDisplayValue('08:30')).toHaveFocus();
+
+      // Save posts the actual time-in, never the displayed 09:00 clamp.
+      // SAFETY: closest('tr') is checked non-null above
+      await user.click(within(row as HTMLElement).getByRole('button', { name: /^save$/i }));
+      await waitFor(() => expect(patchedBody).toMatchObject({
+        timeIn: '2026-07-28T08:30:00+08:00',
+        expectedTimeIn: '2026-07-28T08:30:00+08:00',
+      }));
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('exports the clamped 09:00 time-in with the actual scan preserved in a sibling audit column', async () => {
+    vi.restoreAllMocks();
+    const exportedBlobs: Blob[] = [];
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: (blob: Blob) => {
+        exportedBlobs.push(blob);
+        return 'blob:attendance-export';
+      },
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+    const linkClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance: intern grace day then repeat-late day
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'c1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'e1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T07:55:00+08:00', timeOut: null, status: 'WORKING' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/payroll/profiles')) {
+        // SAFETY: Fetch mock payroll profiles
+        return { ok: true, json: async () => ({ success: true, profiles: [] }) } as Response;
+      }
+      if (url.includes('/api/admin/payroll/cutoffs')) {
+        // SAFETY: Fetch mock payroll cutoffs
+        return { ok: true, json: async () => ({ success: true, payroll: [] }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      await user.click(await screen.findByRole('button', { name: /export csv/i }));
+
+      await waitFor(() => expect(exportedBlobs.length).toBeGreaterThan(0));
+      await screen.findByText(/Generated attendance-export.*\(3 rows\)/);
+      const raw = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(exportedBlobs[0]);
+      });
+      const content = raw.replace(/^\uFEFF/, '');
+      const lines = content.split('\r\n').filter(Boolean);
+      // Every cell is quoted, so split on the quoted separator for positional checks.
+      const cells = (line: string) => line.replace(/^"|"$/g, '').split('","');
+      // Pre-existing column indexes are stable; the audit column is appended last.
+      expect(cells(lines[0])).toEqual([
+        'Employee name',
+        'Employee ID',
+        'Department',
+        'Date',
+        'Time in',
+        'Arrival',
+        'Time out',
+        'Status',
+        'Total hours',
+        'Source',
+        'Recorded By',
+        'Recorded Reason',
+        'Recorded At',
+        'Actual time-in',
+      ]);
+      const clampedLine = lines.find((line) => line.includes('Charles Babbage') && line.includes('2026-07-28'));
+      const graceLine = lines.find((line) => line.includes('Charles Babbage') && line.includes('2026-07-27'));
+      expect(clampedLine).toBeDefined();
+      expect(graceLine).toBeDefined();
+      // Repeat-late row: payable 09:00 stays in Time in (index 4), real scan moves to index 13.
+      // SAFETY: clampedLine/graceLine checked defined by expect above
+      expect(cells(clampedLine as string)[4]).toBe('2026-07-28T09:00:00+08:00');
+      // SAFETY: clampedLine checked defined by expect above
+      expect(cells(clampedLine as string)[13]).toBe('2026-07-28T08:30:00+08:00');
+      // Grace-first row: both columns carry the actual time.
+      // SAFETY: graceLine checked defined by expect above
+      expect(cells(graceLine as string)[4]).toBe('2026-07-27T08:06:00+08:00');
+      // SAFETY: graceLine checked defined by expect above
+      expect(cells(graceLine as string)[13]).toBe('2026-07-27T08:06:00+08:00');
+      expect(linkClick).toHaveBeenCalled();
+    } finally {
+      window.history.pushState({}, '', '/');
+      linkClick.mockRestore();
     }
   });
 
@@ -2619,5 +2833,438 @@ describe('N7 concurrent voice regen ownership', () => {
     } finally {
       window.history.pushState({}, '', '/');
     }
+  });
+});
+
+describe('Weekly-grace clamp display extension', () => {
+  const clampWeekRows = [
+    // Intern grace-first late row (Mon) — never clamped.
+    { attendanceId: 'i1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: '2026-07-27T17:00:00+08:00', status: 'COMPLETED' },
+    // Same intern repeat-late row (Tue) — clamped to 09:00 AM.
+    { attendanceId: 'i2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+    // Employee with the same late pattern — employees are never clamped.
+    { attendanceId: 'e2', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T09:01:00+08:00', timeOut: null, status: 'WORKING' },
+  ];
+  // Realistic single-day snapshot: only today's rows, so the intern's row is
+  // his week's first late arrival in this file and clamps only once earlier
+  // week history is grouped in.
+  const todayOnlyRows = clampWeekRows.filter((row) => row.attendanceDate === '2026-07-28');
+  const mondayGraceRow = clampWeekRows.filter((row) => row.attendanceId === 'i1');
+
+  const mockLiveFetch = (options: {
+    todayRows?: typeof clampWeekRows;
+    historyRows?: typeof clampWeekRows;
+    failHistory?: boolean;
+  } = {}) => {
+    const { todayRows = clampWeekRows, historyRows = clampWeekRows, failHistory = false } = options;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users roster mock (one intern, one employee)
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/attendance?date=')) {
+        // Week-history probe for the clamp grouping; failure must degrade silently.
+        if (failHistory) throw new Error('attendance history unavailable');
+        // SAFETY: Fetch mock dated attendance history
+        return {
+          ok: true,
+          json: async () => ({ success: true, date: 'history', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: historyRows }),
+        } as Response;
+      }
+      if (url.includes('/api/attendance')) {
+        // SAFETY: Fetch mock live attendance snapshot (today only)
+        return {
+          ok: true,
+          json: async () => ({ success: true, date: '2026-07-28', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: todayRows }),
+        } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+  };
+
+  it('shows the 09:00 AM clamp chip with the actual scan in the tooltip on the Live Attendance table', async () => {
+    window.history.pushState({}, '', '/attendance');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'));
+    try {
+      vi.restoreAllMocks();
+      // Live snapshot carries only today's rows; Monday's grace row arrives
+      // through the best-effort week-history fetch.
+      mockLiveFetch({ todayRows: todayOnlyRows, historyRows: mondayGraceRow });
+      render(<App />);
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('09:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      expect(screen.getAllByTestId('clamped-time-in')).toHaveLength(1);
+      // The employee row keeps its actual time.
+      expect(screen.getByText('9:01 AM')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('degrades to actual-only times on the live table when the week-history fetch fails', async () => {
+    window.history.pushState({}, '', '/attendance');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'));
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch({ todayRows: todayOnlyRows, failHistory: true });
+      render(<App />);
+      // Tuesday's row is the intern's first known late arrival: actual time, no chip.
+      expect(await screen.findByText('8:30 AM')).toBeInTheDocument();
+      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+      expect(screen.getByText('9:01 AM')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('falls back to actual times on the live table when no roster is reachable', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      vi.spyOn(api, 'loadAdminUsers').mockRejectedValue(new Error('admin session required'));
+      render(<App />);
+      expect(await screen.findByText('8:30 AM')).toBeInTheDocument();
+      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows the clamped 09:00 AM payable time with the actual scan in the tooltip in payroll deduction details', async () => {
+    try {
+      vi.restoreAllMocks();
+      vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
+      const breakdown = {
+        deductions: [
+          { date: '2026-08-03', category: 'LATE', label: 'Late', details: 'Late arrival at 8:06 AM (Weekly grace applied — PHP 0.00 deduction)', timeIn: '8:06 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 0, amount: 0 },
+          { date: '2026-08-04', category: 'LATE', label: 'Late', details: 'Late arrival at 8:30 AM (1 hr(s) late)', timeIn: '8:30 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 1, amount: 10 },
+        ],
+      };
+      const internRecord: PayrollCutoffRecord = {
+        payrollId: 'P-INT-CLAMP', employeeId: 'INT-CLAMP', employeeName: 'Charles Babbage', employeeType: 'INTERN',
+        payrollProfileId: 'INTERN_STANDARD', payrollCutoffLabel: 'August 1-15, 2026', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15',
+        payrollFrequency: 'SEMI_MONTHLY', dailyRate: 80, standardWorkingDays: 10, actualWorkingDays: 10, basicPay: 800,
+        specialHolidayDays: 0, specialHolidayMultiplier: 0, specialHolidayPay: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0, regularHolidayPay: 0,
+        incentivesAllowance: 0, specialAllowance: 0, totalCompensation: 800, totalAllowance: 0, lateUnits: 1, lateDeduction: 10,
+        halfDayCount: 0, halfDayDeduction: 0, absentDays: 0, absenceDeduction: 0, overtimeHours: 0, overtimeRate: 0, overtimePay: 0,
+        manualAdjustment: 0, adjustmentReason: null, grossCompensation: 800, netPay: 790,
+        calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
+      };
+      render(<PayrollWorkspace users={[]} profiles={[]} records={[internRecord]} onSaved={vi.fn()} />);
+      const chip = await screen.findByTestId('clamped-payroll-time-in');
+      expect(chip).toHaveTextContent('09:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      // Only the deducted late day clamps; the grace-applied day keeps its actual time.
+      expect(screen.getAllByTestId('clamped-payroll-time-in')).toHaveLength(1);
+      expect(screen.getByText('8:06 AM – 5:00 PM')).toBeInTheDocument();
+      // SAFETY: the single clamped chip is located above
+      const clampedCell = (screen.getByTestId('clamped-payroll-time-in') as HTMLElement).closest('td');
+      expect(clampedCell?.textContent).toBe('09:00 AM – 5:00 PM');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
+  // One intern roster; v3 chips only ungraced lates at or before 09:00, so a
+  // 09:30 repeat late keeps its actual time-in in every surface.
+  const v3Users = [
+    { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+    { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+    { userId: 'u3', fullName: 'Grace Hopper', rfidUid: 'RFID-3', employeeType: 'INTERN', status: 'ACTIVE' },
+  ];
+
+  type V3FixtureRow = {
+    attendanceId: string;
+    attendanceDate: string;
+    userId: string;
+    fullName: string;
+    department: string;
+    timeIn: string;
+    timeOut: null;
+    status: string;
+  };
+
+  const mockAdminFetch = (attendance: V3FixtureRow[]) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock
+        return { ok: true, json: async () => ({ success: true, users: v3Users }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance for the requested week
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance }) } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true, profiles: [], cutoffs: [] }) } as Response;
+    });
+  };
+
+  const row = (
+    attendanceId: string,
+    attendanceDate: string,
+    timeIn: string,
+  ) => ({
+    attendanceId,
+    attendanceDate,
+    userId: 'u2',
+    fullName: 'Charles Babbage',
+    department: 'Math',
+    timeIn: `${attendanceDate}T${timeIn}+08:00`,
+    timeOut: null,
+    status: 'WORKING',
+  });
+
+  it('shows a 09:30 repeat late its actual time-in in the admin table and CSV (no chip)', async () => {
+    vi.restoreAllMocks();
+    const exportedBlobs: Blob[] = [];
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: (blob: Blob) => {
+        exportedBlobs.push(blob);
+        return 'blob:attendance-export';
+      },
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+    const linkClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    // Monday 08:06 spends the week's grace; Tuesday 09:30 is a repeat late
+    // past the 09:00 payable ceiling, so it must never clamp.
+    mockAdminFetch([
+      row('v3r1', '2026-07-27', '08:06:00'),
+      row('v3r2', '2026-07-28', '09:30:00'),
+    ]);
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+      expect(screen.getByDisplayValue('09:30')).toBeInTheDocument();
+
+      await user.click(await screen.findByRole('button', { name: /export csv/i }));
+      await waitFor(() => expect(exportedBlobs.length).toBeGreaterThan(0));
+      const raw = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(exportedBlobs[0]);
+      });
+      const lines = raw.replace(/^\uFEFF/, '').split('\r\n').filter(Boolean);
+      const cells = (line: string) => line.replace(/^"|"$/g, '').split('","');
+      const lateLine = lines.find((line) => line.includes('2026-07-28'));
+      expect(lateLine).toBeDefined();
+      // SAFETY: lateLine checked defined above
+      expect(cells(lateLine as string)[4]).toBe('2026-07-28T09:30:00+08:00');
+      // SAFETY: lateLine checked defined above
+      expect(cells(lateLine as string)[13]).toBe('2026-07-28T09:30:00+08:00');
+      // The graced Monday row is untouched, and the actual audit column stays last.
+      // SAFETY: lateLine checked defined above
+      expect(cells(lines[0]).at(-1)).toBe('Actual time-in');
+      expect(linkClick).toHaveBeenCalled();
+    } finally {
+      window.history.pushState({}, '', '/');
+      linkClick.mockRestore();
+    }
+  });
+
+  it('chips an 08:30 repeat late while a 09:30 first late leaves the grace intact', async () => {
+    vi.restoreAllMocks();
+    // u2: Tue 08:30 follows Monday's graced 08:06 and must chip.
+    // u3: Mon 09:30 is a past-ceiling first late; Tue 08:10 still graces and
+    // nothing chips for u3.
+    mockAdminFetch([
+      row('v3a1', '2026-07-27', '08:06:00'),
+      row('v3a2', '2026-07-28', '08:30:00'),
+      { ...row('v3b1', '2026-07-27', '09:30:00'), userId: 'u3', fullName: 'Grace Hopper' },
+      { ...row('v3b2', '2026-07-28', '08:10:00'), userId: 'u3', fullName: 'Grace Hopper' },
+    ]);
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      const chips = await screen.findAllByTestId('clamped-time-in');
+      expect(chips).toHaveLength(1);
+      expect(chips[0].getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      // SAFETY: the chip renders inside its attendance row
+      expect((chips[0] as HTMLElement).closest('tr')).toHaveTextContent('Charles Babbage');
+      // u3's 09:30 and 08:10 both stay on their actual times.
+      expect(screen.getByDisplayValue('09:30')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('resets the clamp and the grace at the Manila Monday week boundary', async () => {
+    vi.restoreAllMocks();
+    // Week 1: 08:06 graced, 08:30 chipped. Week 2 (from Mon 2026-08-03):
+    // 08:10 graces fresh (no chip) and 08:20 is the new week's repeat late.
+    mockAdminFetch([
+      row('v3w1a', '2026-07-27', '08:06:00'),
+      row('v3w1b', '2026-07-28', '08:30:00'),
+      row('v3w2a', '2026-08-03', '08:10:00'),
+      row('v3w2b', '2026-08-04', '08:20:00'),
+    ]);
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      const chips = await screen.findAllByTestId('clamped-time-in');
+      expect(chips).toHaveLength(2);
+      const dates = chips.map((chip) => {
+        // SAFETY: the chip renders inside its attendance row
+        const rowElement = chip.closest('tr') as HTMLTableRowElement;
+        return within(rowElement).getAllByRole('cell')[1].textContent;
+      });
+      expect(dates).toEqual(expect.arrayContaining(['2026-07-28', '2026-08-04']));
+      // New week's graced first late keeps its actual time.
+      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps a past-09:00 late on its actual time in the live table and payroll details', async () => {
+    window.history.pushState({}, '', '/attendance');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'));
+    try {
+      vi.restoreAllMocks();
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/api/config')) {
+          // SAFETY: Fetch mock config
+          return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+        }
+        if (url.includes('/api/admin/users')) {
+          // SAFETY: Fetch users list mock (one intern)
+          return { ok: true, json: async () => ({ success: true, users: v3Users }) } as Response;
+        }
+        if (url.includes('/api/attendance?date=')) {
+          // SAFETY: Fetch mock graced Monday history row
+          return { ok: true, json: async () => ({ success: true, date: 'history', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: [row('v3l1', '2026-07-27', '08:06:00')] }) } as Response;
+        }
+        if (url.includes('/api/attendance')) {
+          // SAFETY: Fetch mock live snapshot with the 09:30 repeat late
+          return { ok: true, json: async () => ({ success: true, date: '2026-07-28', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: [row('v3l2', '2026-07-28', '09:30:00')] }) } as Response;
+        }
+        // SAFETY: Fetch fallback
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      });
+      render(<App />);
+      // Grace was consumed Monday, yet the past-ceiling row still shows actual.
+      expect(await screen.findByText('9:30 AM')).toBeInTheDocument();
+      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+
+    try {
+      vi.restoreAllMocks();
+      vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
+      const breakdown = {
+        deductions: [
+          { date: '2026-08-04', category: 'LATE', label: 'Late', details: 'Late arrival at 9:30 AM (1 hr(s) late)', timeIn: '9:30 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 1, amount: 10 },
+        ],
+      };
+      const internRecord: PayrollCutoffRecord = {
+        payrollId: 'P-INT-CEIL', employeeId: 'INT-CEIL', employeeName: 'Charles Babbage', employeeType: 'INTERN',
+        payrollProfileId: 'INTERN_STANDARD', payrollCutoffLabel: 'August 1-15, 2026', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15',
+        payrollFrequency: 'SEMI_MONTHLY', dailyRate: 80, standardWorkingDays: 10, actualWorkingDays: 10, basicPay: 800,
+        specialHolidayDays: 0, specialHolidayMultiplier: 0, specialHolidayPay: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0, regularHolidayPay: 0,
+        incentivesAllowance: 0, specialAllowance: 0, totalCompensation: 800, totalAllowance: 0, lateUnits: 1, lateDeduction: 10,
+        halfDayCount: 0, halfDayDeduction: 0, absentDays: 0, absenceDeduction: 0, overtimeHours: 0, overtimeRate: 0, overtimePay: 0,
+        manualAdjustment: 0, adjustmentReason: null, grossCompensation: 800, netPay: 790,
+        calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
+      };
+      render(<PayrollWorkspace users={[]} profiles={[]} records={[internRecord]} onSaved={vi.fn()} />);
+      // Pay still deducts (₱10.00 shown), but the past-ceiling time stays actual.
+      expect(await screen.findByText('9:30 AM – 5:00 PM')).toBeInTheDocument();
+      expect(screen.queryByTestId('clamped-payroll-time-in')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Payroll total-deductions fallback', () => {
+  function cutoffRecord(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {
+    return {
+      payrollId: 'P-FALLBACK', employeeId: 'EMP-FB', employeeName: 'Ada Lovelace', employeeType: 'EMPLOYEE',
+      payrollProfileId: 'BEA_STANDARD', payrollCutoffLabel: 'August 1-15, 2026', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15',
+      payrollFrequency: 'SEMI_MONTHLY', dailyRate: 500, standardWorkingDays: 11, actualWorkingDays: 10, basicPay: 5500,
+      specialHolidayDays: 0, specialHolidayMultiplier: 0.3, specialHolidayPay: 0, regularHolidayDays: 0, regularHolidayMultiplier: 1, regularHolidayPay: 0,
+      incentivesAllowance: 0, specialAllowance: 0, totalCompensation: 5500, totalAllowance: 0, lateUnits: 1, lateDeduction: 10,
+      halfDayCount: 0, halfDayDeduction: 0, absentDays: 1, absenceDeduction: 80, overtimeHours: 0, overtimeRate: 0, overtimePay: 0,
+      manualAdjustment: 0, adjustmentReason: null, grossCompensation: 5500, netPay: 5410,
+      calculationBreakdown: 'PHP 5,500.00 basic', approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
+      sss: 0, phic: 0, hdmf: 0, salaryAdvance: 0,
+      ...overrides,
+    };
+  }
+
+  function renderRecords(records: PayrollCutoffRecord[]) {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
+    return render(<PayrollWorkspace users={[]} profiles={[]} records={records} onSaved={vi.fn()} />);
+  }
+
+  it('derives total deductions from components when a legacy cutoff row omits the field', () => {
+    const legacy = cutoffRecord({ employeeId: 'EMP-LEGACY', employeeName: 'Legacy Row' });
+    delete legacy.totalDeductions;
+    renderRecords([legacy]);
+    const row = screen.getByRole('row', { name: /Legacy Row/ });
+    // 10 late + 80 absent + 0 statutory = 90, not PHP 0.00 beside a reduced net.
+    expect(within(row).getByText('PHP 90.00')).toBeInTheDocument();
+    // SAFETY: the single derived total sits in the Total Deductions cell (index 25)
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[25]?.textContent).toBe('PHP 90.00');
+  });
+
+  it('keeps the backend-authoritative total deductions when present', () => {
+    renderRecords([cutoffRecord({ employeeId: 'EMP-BACKEND', employeeName: 'Backend Row', totalDeductions: 420 })]);
+    const row = screen.getByRole('row', { name: /Backend Row/ });
+    expect(within(row).getByText('PHP 420.00')).toBeInTheDocument();
+    expect(within(row).queryByText('PHP 90.00')).not.toBeInTheDocument();
   });
 });

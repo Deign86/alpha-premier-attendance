@@ -1,5 +1,5 @@
-use super::payroll::{cap_late_timeout_out, ceil_hour, early_half_day_noon_out, floor_zero, is_half_day, round_hours};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
+use super::payroll::{cap_late_timeout_out, early_half_day_noon_out, floor_zero, is_half_day, round_hours};
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone};
 use chrono_tz::Asia::Manila;
 
 /// Intern payroll policy shared with the admin payroll commands and the
@@ -51,29 +51,39 @@ pub fn calculate(
         .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
         .single()
         .ok_or("Invalid Manila start time")?;
-    let grace_end = start + Duration::minutes(15);
-
     let late_seconds = time_in.signed_duration_since(start).num_seconds();
     let raw_late_hours = if late_seconds > 0 {
         (late_seconds + 3599) / 3600
     } else {
         0
     };
-    let in_grace_window = time_in > start && time_in <= grace_end;
-    let grace_used = in_grace_window && grace_available;
-    let late_hours = if grace_used { 0 } else { raw_late_hours };
-    let computed_in = if late_hours > 0 {
-        ceil_hour(time_in)
+    let in_grace_window = late_seconds > 0 && late_seconds <= 15 * 60;
+    let grace_used = grace_available && in_grace_window;
+    let late_hours = if grace_used {
+        0
+    } else if raw_late_hours > 0 {
+        1
     } else {
+        0
+    };
+    let late_clamp = Manila
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 9, 0, 0)
+        .single()
+        .ok_or("Invalid Manila late clamp time")?;
+    // Every ungraced late arrival is capped to 09:00 for payroll, even when
+    // the recorded time-in is later than 09:00.
+    let computed_in = if grace_used || raw_late_hours == 0 || time_in > late_clamp {
         time_in
+    } else {
+        late_clamp
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
     let late_deduction = late_hours * hourly_rate_centavos;
     let payable_in = if grace_used {
         start
-    } else if late_hours > 0 {
-        computed_in
+    } else if raw_late_hours > 0 {
+        late_clamp
     } else {
         time_in.max(start)
     };
@@ -124,9 +134,8 @@ mod tests {
         assert_eq!(result.daily_pay_centavos, 8000);
     }
     #[test]
-    fn late_hours_are_not_affected_by_lunch() {
-        // Lateness is measured against the 08:00 start, before any lunch window.
-        // Late hours are removed from the worked window and deducted once as late.
+    fn late_arrival_is_capped_to_one_hour_before_pay_math() {
+        // Any post-grace late arrival is clamped to 09:00 and deducted once.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T09:30:00+08:00",
@@ -134,11 +143,12 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(result.late_hours, 2);
-        assert_eq!(result.late_deduction_centavos, 2000);
-        assert_eq!(result.worked_hours, 6);
+        assert_eq!(result.late_hours, 1);
+        assert_eq!(result.late_deduction_centavos, 1000);
+        assert!(result.computed_time_in.contains("T09:30:00+08:00"));
+        assert_eq!(result.worked_hours, 7);
         assert_eq!(result.half_day_deduction_centavos, 0);
-        assert_eq!(result.daily_pay_centavos, 6000);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
     #[test]
     fn grace_period_applies_within_08_00_to_08_15() {
@@ -217,8 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn arrival_beyond_08_15_is_late() {
-        // 08:16 is beyond grace period
+    fn arrivals_after_0815_do_not_consume_grace() {
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:16:00+08:00",
@@ -229,8 +238,37 @@ mod tests {
         assert!(!result.grace_used);
         assert_eq!(result.late_hours, 1);
         assert_eq!(result.late_deduction_centavos, 1000);
+        assert_eq!(result.computed_time_in, "2026-08-01T09:00:00+08:00");
         assert_eq!(result.worked_hours, 7);
         assert_eq!(result.daily_pay_centavos, 7000);
+    }
+
+    #[test]
+    fn grace_window_edges_and_late_display_boundary_match_policy() {
+        for (time_in, grace_available, expected_grace) in [
+            ("08:00:00", true, false),
+            ("08:00:01", true, true),
+            ("08:15:00", true, true),
+            ("08:15:01", true, false),
+            ("08:30:00", true, false),
+            ("09:30:00", true, false),
+        ] {
+            let result = calculate(
+                "2026-08-03",
+                &format!("2026-08-03T{time_in}+08:00"),
+                "2026-08-03T17:00:00+08:00",
+                grace_available,
+            )
+            .unwrap();
+            assert_eq!(result.grace_used, expected_grace, "{time_in}");
+            assert_eq!(result.late_hours, i64::from(!expected_grace && time_in != "08:00:00"));
+            assert_eq!(result.daily_pay_centavos, if expected_grace || time_in == "08:00:00" { 8_000 } else { 7_000 });
+            if time_in > "08:15:00" && time_in <= "09:00:00" {
+                assert!(result.computed_time_in.ends_with("T09:00:00+08:00"), "{time_in}");
+            } else if time_in > "09:00:00" {
+                assert!(result.computed_time_in.ends_with(&format!("T{time_in}+08:00")), "{time_in}");
+            }
+        }
     }
 
     #[test]
@@ -247,6 +285,31 @@ mod tests {
         assert_eq!(result.late_deduction_centavos, 1_000);
         assert_eq!(result.half_day_deduction_centavos, 0);
         assert_eq!(result.daily_pay_centavos, 7_000);
+    }
+
+    #[test]
+    fn v3_grace_and_post_grace_cases_match_ts_parity() {
+        let cases = [
+            ("2026-09-07", "08:08:00", true, 8_000, "08:08:00", true),
+            ("2026-09-08", "08:08:00", false, 7_000, "09:00:00", false),
+            ("2026-09-09", "08:16:00", true, 7_000, "09:00:00", false),
+            ("2026-09-10", "09:30:00", true, 7_000, "09:30:00", false),
+            ("2026-09-11", "09:30:00", false, 7_000, "09:30:00", false),
+            ("2026-09-14", "08:08:00", true, 8_000, "08:08:00", true),
+        ];
+        for (date, time_in, grace_available, pay, computed_in, expected_grace_used) in cases {
+            let result = calculate(
+                date,
+                &format!("{date}T{time_in}+08:00"),
+                &format!("{date}T17:00:00+08:00"),
+                grace_available,
+            )
+            .unwrap();
+            assert_eq!(result.daily_pay_centavos, pay, "{date} {time_in}");
+            assert_eq!(result.grace_used, expected_grace_used, "{date} {time_in}");
+            assert!(result.computed_time_in.contains(computed_in), "{date}: {}", result.computed_time_in);
+            assert_eq!(result.late_hours, i64::from(pay == 7_000), "{date} {time_in}");
+        }
     }
 
     #[test]
@@ -295,9 +358,8 @@ mod tests {
         assert_eq!(result.base_pay_centavos, 8000);
     }
     #[test]
-    fn arrivals_are_always_measured_against_08_00_office_start() {
-        // There are no night shifts: office hours are 8 am to 5 pm.
-        // An arrival at 10:30 is measured against 08:00 (2.5 hours late -> 3 late hours).
+    fn subsequent_late_arrival_is_clamped_to_one_hour_late() {
+        // A subsequent 10:30 arrival is capped to 09:00 for payroll math.
         let result = calculate(
             "2026-08-10",
             "2026-08-10T10:30:00+08:00",
@@ -305,11 +367,12 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(result.late_hours, 3);
-        assert_eq!(result.late_deduction_centavos, 3000);
-        assert_eq!(result.worked_hours, 5);
+        assert_eq!(result.late_hours, 1);
+        assert_eq!(result.late_deduction_centavos, 1000);
+        assert_eq!(result.computed_time_in, "2026-08-10T10:30:00+08:00");
+        assert_eq!(result.worked_hours, 7);
         assert_eq!(result.half_day_deduction_centavos, 0);
-        assert_eq!(result.daily_pay_centavos, 5000);
+        assert_eq!(result.daily_pay_centavos, 7000);
     }
 
     #[test]
@@ -432,8 +495,8 @@ mod tests {
     }
 
     #[test]
-    fn afternoon_arrival_at_noon_is_half_day() {
-        // 12:00–17:00 (5h elapsed - 1h lunch = 4h worked) pays 4h; arrival at/after 12:00 is half-day.
+    fn afternoon_late_arrival_is_clamped_before_undertime_math() {
+        // Once grace is unavailable, even a noon arrival is capped at 09:00.
         let noon = calculate(
             "2026-08-01",
             "2026-08-01T12:00:00+08:00",
@@ -442,9 +505,11 @@ mod tests {
         )
         .unwrap();
         assert!(noon.is_half_day);
-        assert_eq!(noon.worked_hours, 4);
+        assert_eq!(noon.computed_time_in, "2026-08-01T12:00:00+08:00");
+        assert_eq!(noon.late_hours, 1);
+        assert_eq!(noon.worked_hours, 7);
         assert_eq!(noon.half_day_deduction_centavos, 0);
-        assert_eq!(noon.daily_pay_centavos, 4000);
+        assert_eq!(noon.daily_pay_centavos, 7000);
     }
 
     #[test]

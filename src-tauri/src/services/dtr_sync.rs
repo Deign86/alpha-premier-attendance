@@ -46,6 +46,7 @@ use crate::services::sync_retry::{DtrThrottleBucket, split_dtr_batch};
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
+use std::collections::{HashMap, HashSet};
 
 pub const DTR_TABLE_NAME: &str = "InternDtr";
 // Retained for sheet-contract readability (owner template labels). DTR rows
@@ -814,6 +815,87 @@ fn is_afternoon_arrival(time_in: &str) -> Result<bool, String> {
     Ok(t.hour() >= AFTERNOON_ARRIVAL_HOUR)
 }
 
+fn is_after_eight(time_in: &str) -> Result<bool, String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
+        .map_err(|_| format!("invalid timestamp: {time_in}"))?;
+    let t = dt.with_timezone(&Manila).time();
+    Ok(t.hour() > 8
+        || (t.hour() == 8 && (t.minute() > 0 || t.second() > 0 || t.nanosecond() > 0)))
+}
+
+fn is_in_grace_window(time_in: &str) -> Result<bool, String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
+        .map_err(|_| format!("invalid timestamp: {time_in}"))?;
+    let t = dt.with_timezone(&Manila).time();
+    Ok(t.hour() == 8
+        && (t.minute() > 0 || t.second() > 0 || t.nanosecond() > 0)
+        && (t.minute() < 15 || (t.minute() == 15 && t.second() == 0 && t.nanosecond() == 0)))
+}
+
+fn is_at_or_before_nine(time_in: &str) -> Result<bool, String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
+        .map_err(|_| format!("invalid timestamp: {time_in}"))?;
+    let t = dt.with_timezone(&Manila).time();
+    Ok(t.hour() < 9 || (t.hour() == 9 && t.minute() == 0 && t.second() == 0 && t.nanosecond() == 0))
+}
+
+fn manila_week_start(attendance_date: &str) -> Result<String, String> {
+    let date = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
+        .map_err(|_| format!("attendanceDate must be YYYY-MM-DD, got {attendance_date}"))?;
+    let monday = date
+        .checked_sub_signed(chrono::Duration::days(i64::from(date.weekday().num_days_from_monday())))
+        .ok_or_else(|| format!("attendanceDate out of range: {attendance_date}"))?;
+    Ok(monday.format("%Y-%m-%d").to_string())
+}
+
+pub(crate) fn grace_exhausted_from_history(
+    attendance_date: &str,
+    history: &HashMap<String, (Option<String>, Option<String>)>,
+) -> Result<bool, String> {
+    let week_start = manila_week_start(attendance_date)?;
+    for (date, (time_in, _)) in history {
+        if date >= &week_start && date.as_str() < attendance_date {
+            if let Some(time_in) = time_in.as_deref() {
+                if is_in_grace_window(time_in)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+async fn grace_exhausted_from_database(
+    db: &sqlx::SqlitePool,
+    user_id: &str,
+    attendance_date: &str,
+) -> Result<bool, String> {
+    use sqlx::Row;
+    let week_start = manila_week_start(attendance_date)?;
+    let rows = sqlx::query(
+        "SELECT attendance_date, time_in, time_out FROM attendance WHERE user_id = ? AND attendance_date >= ? AND attendance_date < ?",
+    )
+    .bind(user_id)
+    .bind(week_start)
+    .bind(attendance_date)
+    .fetch_all(db)
+    .await
+    .map_err(|error| error.to_string())?;
+    let history: HashMap<String, (Option<String>, Option<String>)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("attendance_date"),
+                (
+                    row.get::<Option<String>, _>("time_in"),
+                    row.get::<Option<String>, _>("time_out"),
+                ),
+            )
+        })
+        .collect();
+    grace_exhausted_from_history(attendance_date, &history)
+}
+
 /// One normalized view of a raw DTR pair — the single source both the
 /// display row (`build_dtr_row`) and the paint classifier
 /// (`classify_record_row`) agree on (audit A1). Mirrors the TS sibling
@@ -904,7 +986,16 @@ fn normalize_record(
 pub fn build_dtr_row(
     time_in: Option<&str>,
     time_out: Option<&str>,
+    attendance_date: &str,
+) -> Result<[String; 4], String> {
+    build_dtr_row_with_clamp(time_in, time_out, attendance_date, false)
+}
+
+pub(crate) fn build_dtr_row_with_clamp(
+    time_in: Option<&str>,
+    time_out: Option<&str>,
     _attendance_date: &str,
+    clamp_late_in: bool,
 ) -> Result<[String; 4], String> {
     match normalize_record(time_in, time_out)? {
         NormalizedRecord::Empty => Ok([String::new(), String::new(), String::new(), String::new()]),
@@ -912,6 +1003,14 @@ pub fn build_dtr_row(
             // `format_sheet_time` validates/parses the raw stamp (keeps the
             // existing invalid-timestamp error for a working record).
             let started = format_sheet_time(&time_in)?;
+            let started = if (clamp_late_in || !is_in_grace_window(&time_in)?)
+                && is_after_eight(&time_in)?
+                && is_at_or_before_nine(&time_in)?
+            {
+                "9:00:00 AM".to_string()
+            } else {
+                started
+            };
             Ok([
                 started,
                 DTR_LUNCH_OUT.to_string(),
@@ -924,8 +1023,16 @@ pub fn build_dtr_row(
             time_out_iso,
             ..
         } => {
-            let tin_iso = time_in.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let tin_iso = time_in.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
             let started = format_sheet_time(&tin_iso)?;
+            let clamped_late_in = (clamp_late_in || !is_in_grace_window(&tin_iso)?)
+                && is_after_eight(&tin_iso)?
+                && is_at_or_before_nine(&tin_iso)?;
+            let started = if clamped_late_in {
+                "9:00:00 AM".to_string()
+            } else {
+                started
+            };
             let ended = format_sheet_time(&time_out_iso)?;
             // Actual-stamps grouped by morning/afternoon columns:
             // out before 13:00 -> morning pair only
@@ -933,7 +1040,7 @@ pub fn build_dtr_row(
                 return Ok([started, ended, String::new(), String::new()]);
             }
             // in at/after noon -> afternoon pair only
-            if is_afternoon_arrival(&tin_iso)? {
+            if is_afternoon_arrival(&tin_iso)? && !clamped_late_in {
                 return Ok([String::new(), String::new(), started, ended]);
             }
             // shift crosses lunch -> populate standard lunch out/in
@@ -1745,7 +1852,22 @@ pub fn plan_dtr_push_in_rows(
     time_in: Option<&str>,
     time_out: Option<&str>,
 ) -> Result<DtrPlanOutcome, String> {
-    let values = build_dtr_row(time_in, time_out, attendance_date)?;
+    plan_dtr_push_in_rows_with_clamp(tab, rows, attendance_date, time_in, time_out, false)
+}
+
+pub fn plan_dtr_push_in_rows_with_clamp(
+    tab: &str,
+    rows: &[Vec<String>],
+    attendance_date: &str,
+    time_in: Option<&str>,
+    time_out: Option<&str>,
+    clamp_late_in: bool,
+) -> Result<DtrPlanOutcome, String> {
+    let values = if clamp_late_in {
+        build_dtr_row_with_clamp(time_in, time_out, attendance_date, true)?
+    } else {
+        build_dtr_row(time_in, time_out, attendance_date)?
+    };
     if values.iter().all(String::is_empty) {
         return Ok(DtrPlanOutcome::Unresolvable("empty-values"));
     }
@@ -1795,6 +1917,7 @@ async fn plan_dtr_push_outcome(
     time_out: Option<&str>,
     all_users: &[(String, String)],
     titles: &[String],
+    clamp_late_in: bool,
 ) -> Result<DtrPlanOutcome, String> {
     let Some(tab) = DtrMatchIndex::build(titles, all_users).resolve(user_id, full_name) else {
         return Ok(DtrPlanOutcome::Unresolvable("no-tab"));
@@ -1807,7 +1930,18 @@ async fn plan_dtr_push_outcome(
     )
     .await?;
     let rows = rows_from_values(&tab_values);
-    plan_dtr_push_in_rows(&tab, &rows, attendance_date, time_in, time_out)
+    if clamp_late_in {
+        plan_dtr_push_in_rows_with_clamp(
+            &tab,
+            &rows,
+            attendance_date,
+            time_in,
+            time_out,
+            true,
+        )
+    } else {
+        plan_dtr_push_in_rows(&tab, &rows, attendance_date, time_in, time_out)
+    }
 }
 
 /// Execute a plan: single `B:E` range write. Returns `false` when the row
@@ -2242,6 +2376,7 @@ pub async fn push_dtr_row(
         return Ok(wrote > 0);
     }
     let titles = titles_of(&meta);
+    let clamp_late_in = grace_exhausted_from_database(&state.db, &user_id, &attendance_date).await?;
     let kind = classify_record_row(time_in.as_deref(), time_out.as_deref())?;
     let outcome = match plan_dtr_push_outcome(
         client,
@@ -2254,6 +2389,7 @@ pub async fn push_dtr_row(
         time_out.as_deref(),
         &roster,
         &titles,
+        clamp_late_in,
     )
     .await?
     {
@@ -2271,6 +2407,7 @@ pub async fn push_dtr_row(
                 time_out.as_deref(),
                 &roster,
                 &titles,
+                clamp_late_in,
             )
             .await?
         }
@@ -2411,14 +2548,29 @@ async fn backfill_user_history(
     let mut offset: i64 = 0;
     let mut row_ops: Vec<DtrFormatOp> = Vec::new();
     let mut pending_writes: Vec<DtrPushPlan> = Vec::new();
+    let mut late_weeks = HashSet::new();
 
     loop {
         let days = fetch_attendance_page(state, user_id, DTR_BACKFILL_PAGE, offset).await?;
         let full_page = days.len() as i64 == DTR_BACKFILL_PAGE;
         let mut page_results = Vec::with_capacity(days.len());
         for (date, tin, tout) in &days {
+            let week_start = manila_week_start(date)?;
+            let grace_exhausted = late_weeks.contains(&week_start);
+            if let Some(time_in) = tin.as_deref() {
+                if is_in_grace_window(time_in)? {
+                    late_weeks.insert(week_start.clone());
+                }
+            }
             let kind = classify_record_row(tin.as_deref(), tout.as_deref())?;
-            let mut outcome = plan_dtr_push_in_rows(&tab, &rows, date, tin.as_deref(), tout.as_deref())?;
+            let mut outcome = plan_dtr_push_in_rows_with_clamp(
+                &tab,
+                &rows,
+                date,
+                tin.as_deref(),
+                tout.as_deref(),
+                grace_exhausted,
+            )?;
             if let DtrPlanOutcome::Unresolvable("no-month-block") = outcome {
                 log::info!("dtr backfill auto-provisioning month block for {full_name} ({user_id}) on {date}");
                 ensure_month_block(client, token, spreadsheet_id, sheet_id, &tab, date).await?;
@@ -2429,7 +2581,14 @@ async fn backfill_user_history(
                 )
                 .await?;
                 rows = rows_from_values(&tab_values);
-                outcome = plan_dtr_push_in_rows(&tab, &rows, date, tin.as_deref(), tout.as_deref())?;
+                outcome = plan_dtr_push_in_rows_with_clamp(
+                    &tab,
+                    &rows,
+                    date,
+                    tin.as_deref(),
+                    tout.as_deref(),
+                    grace_exhausted,
+                )?;
             }
             match outcome {
                 DtrPlanOutcome::Write(plan) => {
@@ -3451,6 +3610,174 @@ mod tests {
             build_dtr_row(None, None, "2026-09-05"),
             Ok([String::new(), String::new(), String::new(), String::new()])
         );
+    }
+
+    #[test]
+    fn admin_backdated_entries_use_weekly_grace_history() {
+        // ADMIN_BACKDATED_ENTRY is queued through push_dtr_row; source does
+        // not change the date-bounded SQLite history rule.
+        let mut history = HashMap::new();
+        history.insert(
+            "2026-09-08".to_string(),
+            (Some("2026-09-08T08:05:00+08:00".to_string()), None),
+        );
+        let on_time = build_dtr_row_with_clamp(
+            Some("2026-09-07T08:00:00+08:00"),
+            None,
+            "2026-09-07",
+            false,
+        )
+        .unwrap();
+        assert_eq!(on_time[0], "8:00:00 AM");
+
+        let first_late_grace = grace_exhausted_from_history("2026-09-08", &history).unwrap();
+        assert!(!first_late_grace, "current backdated row is excluded from its own history");
+        let first_late = build_dtr_row_with_clamp(
+            Some("2026-09-08T08:05:00+08:00"),
+            None,
+            "2026-09-08",
+            first_late_grace,
+        )
+        .unwrap();
+        assert_eq!(first_late[0], "8:05:00 AM");
+
+        let week_one_exhausted = grace_exhausted_from_history("2026-09-10", &history).unwrap();
+        assert!(week_one_exhausted);
+        let second_late_same_week = build_dtr_row_with_clamp(
+            Some("2026-09-10T08:05:00+08:00"),
+            None,
+            "2026-09-10",
+            week_one_exhausted,
+        )
+        .unwrap();
+        assert_eq!(second_late_same_week[0], "9:00:00 AM");
+        let late_afternoon = build_dtr_row_with_clamp(
+            Some("2026-09-10T12:05:00+08:00"),
+            Some("2026-09-10T17:00:00+08:00"),
+            "2026-09-10",
+            true,
+        )
+        .unwrap();
+        assert_eq!(late_afternoon, ["", "", "12:05:00 PM", "5:00:00 PM"]);
+        let rows = vec![vec!["9/10/2026".to_string()]];
+        let plan = match plan_dtr_push_in_rows_with_clamp(
+            "Tab",
+            &rows,
+            "2026-09-10",
+            Some("2026-09-10T08:05:00+08:00"),
+            None,
+            week_one_exhausted,
+        )
+        .unwrap()
+        {
+            DtrPlanOutcome::Write(plan) => plan,
+            other => panic!("expected first push write, got {other:?}"),
+        };
+        assert_eq!(plan.values[0], "9:00:00 AM");
+        let landed = vec![vec![
+            "9/10/2026".to_string(),
+            plan.values[0].clone(),
+            plan.values[1].clone(),
+            plan.values[2].clone(),
+            plan.values[3].clone(),
+        ]];
+        assert_eq!(
+            plan_dtr_push_in_rows_with_clamp(
+                "Tab",
+                &landed,
+                "2026-09-10",
+                Some("2026-09-10T08:05:00+08:00"),
+                None,
+                grace_exhausted_from_history("2026-09-10", &history).unwrap(),
+            ),
+            Ok(DtrPlanOutcome::InSync { row_1based: 1 })
+        );
+
+        let week_two_fresh = grace_exhausted_from_history("2026-09-14", &history).unwrap();
+        assert!(!week_two_fresh);
+        let monday_reset = build_dtr_row_with_clamp(
+            Some("2026-09-14T08:05:00+08:00"),
+            None,
+            "2026-09-14",
+            week_two_fresh,
+        )
+        .unwrap();
+        assert_eq!(monday_reset[0], "8:05:00 AM");
+    }
+
+    #[test]
+    fn dtr_clamp_is_limited_to_nine_and_prior_grace_counts_only_window_lates() {
+        let mut history = HashMap::new();
+        let row = build_dtr_row_with_clamp(
+            Some("2026-09-08T08:08:00+08:00"),
+            Some("2026-09-08T17:00:00+08:00"),
+            "2026-09-08",
+            false,
+        )
+        .unwrap();
+        assert_eq!(row[0], "8:08:00 AM");
+        history.insert(
+            "2026-09-08".to_string(),
+            (Some("2026-09-08T08:08:00+08:00".to_string()), None),
+        );
+        let exhausted = grace_exhausted_from_history("2026-09-09", &history).unwrap();
+        assert!(exhausted);
+        let row = build_dtr_row_with_clamp(
+            Some("2026-09-09T08:08:00+08:00"),
+            Some("2026-09-09T17:00:00+08:00"),
+            "2026-09-09",
+            exhausted,
+        )
+        .unwrap();
+        assert_eq!(row[0], "9:00:00 AM");
+        history.insert(
+            "2026-09-09".to_string(),
+            (Some("2026-09-09T08:30:00+08:00".to_string()), None),
+        );
+        assert!(!grace_exhausted_from_history("2026-09-10", &history).unwrap());
+
+        for (time_in, expected) in [
+            ("08:08:00", "9:00:00 AM"),
+            ("08:16:00", "9:00:00 AM"),
+            ("08:30:00", "9:00:00 AM"),
+            ("09:00:00", "9:00:00 AM"),
+            ("09:30:00", "9:30:00 AM"),
+        ] {
+            let row = build_dtr_row_with_clamp(
+                Some(&format!("2026-09-09T{time_in}+08:00")),
+                Some("2026-09-09T17:00:00+08:00"),
+                "2026-09-09",
+                true,
+            )
+            .unwrap();
+            assert_eq!(row[0], expected, "{time_in}");
+        }
+        let first_post_grace_late = build_dtr_row_with_clamp(
+            Some("2026-09-10T08:16:00+08:00"),
+            Some("2026-09-10T17:00:00+08:00"),
+            "2026-09-10",
+            false,
+        )
+        .unwrap();
+        assert_eq!(first_post_grace_late[0], "9:00:00 AM");
+        let after_nine = build_dtr_row_with_clamp(
+            Some("2026-09-10T09:30:00+08:00"),
+            Some("2026-09-10T17:00:00+08:00"),
+            "2026-09-10",
+            false,
+        )
+        .unwrap();
+        assert_eq!(after_nine[0], "9:30:00 AM");
+        history.insert(
+            "2026-09-09".to_string(),
+            (Some("2026-09-09T08:15:01+08:00".to_string()), None),
+        );
+        assert!(!grace_exhausted_from_history("2026-09-10", &history).unwrap());
+        history.insert(
+            "2026-09-09".to_string(),
+            (Some("2026-09-09T08:15:00+08:00".to_string()), None),
+        );
+        assert!(grace_exhausted_from_history("2026-09-10", &history).unwrap());
     }
 
     #[test]

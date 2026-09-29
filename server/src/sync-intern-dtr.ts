@@ -203,6 +203,7 @@ type DbRow = Record<string, string | number | null>;
 async function loadDay(dbPath: string, date: string, userFilter: string | null): Promise<{
   users: DtrSyncUser[];
   records: AttendanceDay[];
+  history: AttendanceDay[];
 }> {
   let sqlite: typeof import('node:sqlite');
   try {
@@ -243,10 +244,10 @@ async function loadDay(dbPath: string, date: string, userFilter: string | null):
     // SAFETY: same node:sqlite row-object contract as above; String()-coerced at use.
     const rows = db
       .prepare(
-        'select user_id, full_name, attendance_date, time_in, time_out, status from attendance where attendance_date = ?',
+        'select user_id, full_name, attendance_date, time_in, time_out, status from attendance',
       )
-      .all(date) as DbRow[];
-    const records: AttendanceDay[] = rows
+      .all() as DbRow[];
+    const history: AttendanceDay[] = rows
       .filter((r) => ids.has(String(r.user_id ?? '')))
       .map((r) => ({
         userId: String(r.user_id ?? ''),
@@ -256,7 +257,8 @@ async function loadDay(dbPath: string, date: string, userFilter: string | null):
         timeOut: r.time_out ? String(r.time_out) : null,
         status: String(r.status ?? ''),
       }));
-    return { users: allUsers, records };
+    const records = history.filter((r) => r.attendanceDate === date);
+    return { users: allUsers, records, history };
   } finally {
     db.close();
   }
@@ -299,7 +301,7 @@ async function main(): Promise<void> {
   }
   // SAFETY: both fields verified as strings above.
   const key = keyRaw as { client_email: string; private_key: string };
-  const { users, records } = await loadDay(args.db, args.date, args.user);
+  const { users, records, history } = await loadDay(args.db, args.date, args.user);
   console.log(`date=${args.date} interns=${users.length} records=${records.length} mode=${args.execute ? 'EXECUTE' : 'DRY-RUN'}`);
   if (records.length === 0) {
     console.log('nothing to sync — no attendance rows for this date/filter');
@@ -320,7 +322,7 @@ async function main(): Promise<void> {
   const failures: string[] = [];
   for (const record of records) {
     try {
-      let plan = await planPush(client, record, users);
+      let plan = await planPush(client, record, users, history);
       console.log(describePlan(plan));
       // Tabs align to roster names: on a clean miss for an intern,
       // auto-create the tab from the template and re-plan once.
@@ -333,7 +335,7 @@ async function main(): Promise<void> {
           // The tab is new since the meta snapshot: refresh so the paint
           // pass below resolves its sheet id (else first-run paint fails).
           meta = await client.getTabMeta();
-          plan = await planPush(client, record, users);
+          plan = await planPush(client, record, users, history);
           console.log(describePlan(plan));
         }
       }

@@ -90,11 +90,12 @@ describe('intern payroll calculates hours 1:1 from DTR', () => {
     expect(result.dailyPay).toBe(80);
   });
 
-  it('reports 6 payable hours for 09:30–17:00 (late penalty moves payable-in to 10:00; 6h paid -> rounded to 6h)', () => {
+  it('clamps a subsequent 09:30 late arrival to 09:00 and charges one late hour', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T09:30:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: false });
-    expect(result.lateHours).toBe(2);
-    expect(result.lateDeduction).toBe(20);
-    expect(result.workedHours).toBe(6);
-    expect(result.dailyPay).toBe(60);
+    expect(result.computedTimeIn).toBe('2026-08-01T09:00:00+08:00');
+    expect(result.lateHours).toBe(1);
+    expect(result.lateDeduction).toBe(10);
+    expect(result.workedHours).toBe(7);
+    expect(result.dailyPay).toBe(70);
   });
 });

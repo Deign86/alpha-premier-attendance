@@ -15,6 +15,7 @@
  * H:J counters are formula territory and are never written.
  */
 import { DateTime } from 'luxon';
+import { getManilaWeekStart } from '@rfid-attendance/shared';
 import { capLateTimeoutOut } from './lunch-break.js';
 
 export type DtrSyncUser = {
@@ -677,6 +678,30 @@ function normalizeRecord(timeIn: string | null, timeOut: string | null): Normali
   return { kind: 'completed', timeIn: tin, timeOut: cappedOut, timeOutIso: cappedOut.toISO()! };
 }
 
+function isLateArrival(timeIn: string): boolean {
+  const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
+  if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
+  return actualIn.hour > 8 || (
+    actualIn.hour === 8 && (actualIn.minute > 0 || actualIn.second > 0 || actualIn.millisecond > 0)
+  );
+}
+
+function isWithinGraceWindow(timeIn: string): boolean {
+  const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
+  if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
+  const minutes = actualIn.hour * 60 + actualIn.minute;
+  return (minutes > 8 * 60 || (minutes === 8 * 60 && (actualIn.second > 0 || actualIn.millisecond > 0))) &&
+    (minutes < 8 * 60 + 15 || (minutes === 8 * 60 + 15 && actualIn.second === 0 && actualIn.millisecond === 0));
+}
+
+function isClampDisplayArrival(timeIn: string): boolean {
+  const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
+  if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
+  return isLateArrival(timeIn) && (actualIn.hour < 9 || (
+    actualIn.hour === 9 && actualIn.minute === 0 && actualIn.second === 0 && actualIn.millisecond === 0
+  ));
+}
+
 /**
  * Build [B, C, D, E] — DTR SOURCE OF TRUTH (actual stamps only).
  *
@@ -696,18 +721,29 @@ export function buildDtrRow(
   timeIn: string | null,
   timeOut: string | null,
   _attendanceDate: string,
+  clampLateIn = false,
 ): [string, string, string, string] {
   const record = normalizeRecord(timeIn, timeOut);
   if (record.kind === 'empty') return ['', '', '', ''];
-  if (record.kind === 'working') return [formatSheetTime(record.timeIn), '', '', ''];
+  if (record.kind === 'working') {
+    const started = clampLateIn && isClampDisplayArrival(record.timeIn)
+      ? '9:00:00 AM'
+      : formatSheetTime(record.timeIn);
+    return [started, '', '', ''];
+  }
   const inIso = record.timeIn.toISO()!;
-  const started = formatSheetTime(inIso);
+  const clampDisplayIn = clampLateIn && isClampDisplayArrival(inIso);
+  const started = clampDisplayIn
+    ? '9:00:00 AM'
+    : formatSheetTime(inIso);
   const ended = formatSheetTime(record.timeOutIso);
-  // Actual-stamps only, grouped by morning/afternoon columns:
-  // out before 13:00 → morning pair; in at/after noon → afternoon pair;
-  // otherwise the span crosses lunch (unknown split) → ends only.
+  // Short fragments retain actual stamps; a full lunch-spanning shift uses
+  // the fixed lunch split shared with the Rust DTR writer.
   if (isBeforeLunchOut(record.timeOutIso)) return [started, ended, '', ''];
-  if (isAfternoonArrival(inIso)) return ['', '', started, ended];
+  if (isAfternoonArrival(inIso) && !clampDisplayIn) return ['', '', started, ended];
+  if (!isShortStint(inIso, record.timeOutIso) && !isAfternoonArrival(inIso)) {
+    return [started, LUNCH_OUT, LUNCH_IN, ended];
+  }
   return [started, '', '', ended];
 }
 
@@ -926,6 +962,7 @@ export async function planPush(
   client: SheetsClient,
   record: AttendanceDay,
   allUsers: DtrSyncUser[],
+  attendanceHistory: AttendanceDay[] = [record],
 ): Promise<PushPlan> {
   const fail = (reason: PushSkipReason, detail: string): PushPlan => ({
     kind: 'skip',
@@ -948,7 +985,16 @@ export async function planPush(
           : 'tab-skip';
     return fail(reason, `tab ${resolved.status} for ${record.fullName}`);
   }
-  const values = buildDtrRow(record.timeIn, record.timeOut, record.attendanceDate);
+  const weekStart = getManilaWeekStart(record.attendanceDate);
+  const graceExhausted = attendanceHistory.some((arrival) => {
+    if (arrival.userId !== record.userId || arrival.attendanceDate >= record.attendanceDate) return false;
+    if (getManilaWeekStart(arrival.attendanceDate) !== weekStart || !arrival.timeIn?.trim()) return false;
+    return isWithinGraceWindow(arrival.timeIn);
+  });
+  const actualTimeIn = record.timeIn?.trim() ?? '';
+  const ungracedLate = actualTimeIn.length > 0 &&
+    (graceExhausted || !isWithinGraceWindow(actualTimeIn));
+  const values = buildDtrRow(record.timeIn, record.timeOut, record.attendanceDate, ungracedLate);
   if (values.every((v) => v === '')) return fail('no-time-in', 'no time-in yet');
   const rows = await client.getTabValues(resolved.tab);
   const wantMonth = Number(record.attendanceDate.slice(5, 7));

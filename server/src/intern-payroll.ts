@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import { evaluateArrivalWithBudget, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
-import { capLateTimeoutOut, ceilHour, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
+import { capLateTimeoutOut, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
 
 export type InternPayrollInput = {
   attendanceDate: string;
@@ -31,17 +31,15 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   // P4: reject inverted logs instead of silently setting worked hours to zero.
   if (actualTimeOut < actualTimeIn) throw new Error('Time-out cannot be earlier than time-in');
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
-  const graceEnd = DateTime.fromISO(`${input.attendanceDate}T08:15:00`, { zone: timezone });
-  if (!start.isValid || !graceEnd.isValid) throw new Error('Payroll timestamps must be valid ISO values');
+  if (!start.isValid) throw new Error('Payroll timestamps must be valid ISO values');
 
-  const lateMilliseconds = actualTimeIn.toMillis() - start.toMillis();
-  const rawLateHours = lateMilliseconds > 0 ? Math.ceil(lateMilliseconds / 3_600_000) : 0;
-  // Grace is one per Manila Monday-week; payable-in rounding must not decide grace eligibility.
-  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !input.graceAvailable);
+  const arrival = evaluateArrivalWithBudget(actualTimeIn.toISO()!, !input.graceAvailable, timezone);
   const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
-  const lateHours = graceUsed ? 0 : rawLateHours;
+  const lateHours = arrival.arrivalStatus === 'LATE' ? 1 : 0;
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
-  const computedTimeIn = lateHours > 0 ? ceilHour(actualTimeIn) : actualTimeIn;
+  // When weekly grace is spent, all later late arrivals use a fixed 09:00 payable time-in,
+  // even when the recorded time-in is later; this policy caps them at one late hour.
+  const computedTimeIn = graceUsed ? start : lateHours > 0 ? start.plus({ hours: 1 }) : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
   const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import type { CutoffInput } from '../src/cutoff-payroll.js';
+import payrollContract from '../../shared/payroll-fixtures.json';
+import { AdminService } from '../src/admin.js';
 import { calculateCutoffPayroll } from '../src/cutoff-payroll.js';
+import { calculateEmployeePayroll } from '../src/employee-payroll.js';
+import { calculateInternPayroll } from '../src/intern-payroll.js';
+import { InMemorySheetsService } from '../src/sheets.js';
 
 const jeanInput = {
   employeeId: 'APGCO-0013', employeeName: 'CHICO, JEAN ASHLEY', employeeType: 'EMPLOYEE' as const, payrollProfileId: 'JEAN_TENURED', payrollCutoffLabel: 'July 1-15, 2026', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15', payrollFrequency: 'SEMI_MONTHLY' as const,
@@ -9,6 +15,85 @@ const jeanInput = {
 };
 
 describe('cutoff payroll calculator', () => {
+  it('uses the supported shared payroll contract version', () => {
+    expect(payrollContract.version).toBe(1);
+  });
+
+  it.each(payrollContract.cases)('matches shared payroll contract: $name', (scenario) => {
+    // SAFETY: Inputs are the checked-in, versioned contract fixture matching CutoffInput's wire fields.
+    const input = { ...payrollContract.baseInput, ...scenario.input } as CutoffInput;
+    if ('error' in scenario) {
+      expect(() => calculateCutoffPayroll(input)).toThrow(scenario.error);
+      return;
+    }
+    expect(calculateCutoffPayroll(input)).toMatchObject(scenario.expected);
+  });
+
+  it('reconciles seeded Sep 1-15 attendance through daily and saved cutoff payroll engines', async () => {
+    const seed = payrollContract.sepCutoffSeed;
+    expect(seed.version).toBe(1);
+    expect(seed.rows).toHaveLength(11);
+    expect(seed.rows.map((row) => row.kind)).toEqual(expect.arrayContaining([
+      'regular', 'late', 'halfDay', 'absent', 'specialHoliday', 'regularHoliday', 'overtime',
+    ]));
+
+    const sheets = new InMemorySheetsService([
+      { userId: 'SEED-EMPLOYEE', fullName: 'Seed Employee', rfidUid: 'A001', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: seed.dailyRate.employee, payrollProfileId: 'BEA_STANDARD' },
+      { userId: 'SEED-INTERN', fullName: 'Seed Intern', rfidUid: 'B001', department: null, active: true, employeeType: 'INTERN' },
+    ]);
+    const admin = new AdminService(sheets, { timezone: 'Asia/Manila' });
+
+    for (const employeeType of ['EMPLOYEE', 'INTERN'] as const) {
+      let actualWorkingDays = 0;
+      let halfDayCount = 0;
+      let halfDayDeduction = 0;
+      let halfDayRows = 0;
+      let lateUnits = 0;
+      let lateDeduction = 0;
+      let overtimeHours = 0;
+
+      for (const row of seed.rows) {
+        overtimeHours += row.overtimeHours ?? 0;
+        if (row.timeIn === null || row.timeOut === null) continue;
+        actualWorkingDays += 1;
+        const actualTimeIn = `${row.date}T${row.timeIn}+08:00`;
+        const actualTimeOut = `${row.date}T${row.timeOut}+08:00`;
+        const daily = employeeType === 'EMPLOYEE'
+          ? calculateEmployeePayroll({ actualTimeIn, actualTimeOut, dailyRate: seed.dailyRate.employee })
+          : calculateInternPayroll({ attendanceDate: row.date, actualTimeIn, actualTimeOut, graceAvailable: false });
+        halfDayRows += Number(daily.isHalfDay);
+        halfDayDeduction += daily.halfDayDeduction;
+        lateUnits += daily.lateHours;
+        lateDeduction += daily.lateDeduction;
+      }
+      expect(halfDayRows).toBe(1);
+      const dailyRate = employeeType === 'EMPLOYEE' ? seed.dailyRate.employee : seed.dailyRate.intern;
+
+      const payroll = await admin.saveCutoffPayroll({
+        employeeId: employeeType === 'EMPLOYEE' ? 'SEED-EMPLOYEE' : 'SEED-INTERN',
+        payrollProfileId: 'BEA_STANDARD',
+        cutoffStart: seed.cutoffStart,
+        cutoffEnd: seed.cutoffEnd,
+        standardWorkingDays: 11,
+        actualWorkingDays,
+        absentDays: 11 - actualWorkingDays,
+        specialHolidayDays: seed.rows.filter((row) => row.kind === 'specialHoliday').length,
+        specialHolidayMultiplier: 0.3,
+        regularHolidayDays: seed.rows.filter((row) => row.kind === 'regularHoliday').length,
+        regularHolidayMultiplier: 1,
+        // The Sheets input accepts fractional half-day counts, not a precomputed
+        // deduction; encode the daily-engine shortfall as equivalent day fraction.
+        halfDayCount: halfDayDeduction / dailyRate,
+        lateUnits,
+        lateDeduction,
+        overtimeHours,
+        overtimeRate: 0,
+      });
+
+      expect(payroll).toMatchObject(seed.expected[employeeType]);
+    }
+  });
+
   it('calculates the Jean July 1-15 sample without a manual adjustment', () => {
     const result = calculateCutoffPayroll(jeanInput);
     expect(result.basicPay).toBe(7755);

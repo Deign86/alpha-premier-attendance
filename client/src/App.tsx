@@ -48,6 +48,7 @@ import {
   INTERN_DAILY_RATE_PHP,
   INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
   LATE_TIMEOUT_THRESHOLD,
+  ATTENDANCE_TIMEZONE,
   isLateTimeout,
   normalizeName,
   evaluateArrivalFromTimestamp,
@@ -2409,6 +2410,9 @@ function LiveAttendance() {
   const [attendance, setAttendance] = useState<LiveAttendanceState>({ kind: "loading" });
   const [lan, setLan] = useState<LanStatusResponse | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
+  const [tableUsers, setTableUsers] = useState<AdminUser[]>([]);
+  const [clampHistory, setClampHistory] = useState<AttendanceListItem[]>([]);
+  const clampHistoryWeekRef = useRef("");
   const liveAttendanceSeq = useRef(0);
   const refresh = useCallback(async () => {
     const seq = liveAttendanceSeq.current + 1;
@@ -2474,6 +2478,57 @@ function LiveAttendance() {
     };
   }, [refresh]);
 
+  useEffect(() => {
+    // Best-effort roster so the live table can show the display-only
+    // weekly-grace clamp (09:00 AM for repeat-late interns). Viewers without
+    // an admin session never resolve this, so actual times simply stay visible.
+    void loadAdminUsers()
+      .then((response) => {
+        // SAFETY: Error-shaped 401 bodies cast as AdminUsersResponse can omit users
+        setTableUsers(response.success ? response.users ?? [] : []);
+      })
+      .catch(() => setTableUsers([]));
+  }, []);
+
+  // The live snapshot only covers today, so weekly-grace exhaustion never
+  // shows in the loaded rows alone. Best-effort: fetch the earlier days of
+  // the current Manila week once so the display-only clamp can group by
+  // week. Any failure leaves history empty and the table shows actual times
+  // exactly as before, with no layout change.
+  useEffect(() => {
+    if (attendance.kind === "loading") return;
+    const today = localDate();
+    let weekStart: string;
+    try {
+      weekStart = getManilaWeekStart(today);
+    } catch {
+      return;
+    }
+    if (clampHistoryWeekRef.current === weekStart) return;
+    clampHistoryWeekRef.current = weekStart;
+    const dates: string[] = [];
+    for (
+      const cursor = new Date(`${weekStart}T00:00:00Z`);
+      cursor.toISOString().slice(0, 10) < today;
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    ) {
+      dates.push(cursor.toISOString().slice(0, 10));
+    }
+    if (!dates.length) return;
+    void (async () => {
+      try {
+        const responses = await Promise.all(dates.map((day) => loadAttendance(day)));
+        setClampHistory(
+          responses.flatMap((response) =>
+            response.success && Array.isArray(response.attendance) ? response.attendance : [],
+          ),
+        );
+      } catch {
+        setClampHistory([]);
+      }
+    })();
+  }, [attendance]);
+
   const refreshLan = useCallback(async () => {
     setLan(await getLanStatus());
   }, []);
@@ -2527,7 +2582,12 @@ function LiveAttendance() {
         onRefresh={() => void refreshLan()}
       />
       {attendance.kind === "loading" ? null : (
-        <AttendanceTable rows={attendance.rows} timezone="Asia/Manila" />
+        <AttendanceTable
+          rows={attendance.rows}
+          timezone="Asia/Manila"
+          users={tableUsers}
+          history={clampHistory}
+        />
       )}
     </main>
   );
@@ -2897,10 +2957,18 @@ function DashboardBrand() {
 function AttendanceTable({
   rows,
   timezone,
+  users = [],
+  history = [],
 }: {
   rows: AttendanceListItem[];
   timezone: string;
+  users?: AdminUser[];
+  history?: AttendanceListItem[];
 }) {
+  const clampedTimeInIds = useMemo(
+    () => clampedGraceTimeInIds([...rows, ...history], users),
+    [rows, users, history],
+  );
   if (!rows.length)
     return (
       <div className="empty-state">No attendance has been recorded today.</div>
@@ -2927,7 +2995,19 @@ function AttendanceTable({
                   <small>{row.userId}</small>
                 </td>
                 <td>{row.department || "—"}</td>
-                <td>{row.timeIn ? formatTime(row.timeIn, timezone) : "—"}</td>
+                <td>
+                  {clampedTimeInIds.has(row.attendanceId) && row.timeIn ? (
+                    <span
+                      className="clamped-time-in-chip clamped-time-in-static"
+                      data-testid="clamped-time-in"
+                      title={`Actual scan: ${formatTime(row.timeIn, timezone)} (weekly grace used)`}
+                    >
+                      09:00 AM
+                    </span>
+                  ) : (
+                    row.timeIn ? formatTime(row.timeIn, timezone) : "—"
+                  )}
+                </td>
                 <td>{row.timeOut ? formatTime(row.timeOut, timezone) : "—"}</td>
                 <td>
                   {late ? (
@@ -5719,11 +5799,10 @@ function EditPayrollDialog({
   if (!open || !record) return null;
 
   const nStdDays = Math.max(0, record.standardWorkingDays ?? 11);
-  const dailyRate = isIntern ? INTERN_DAILY_RATE_PHP : record.dailyRate;
   const actualDays = record.actualWorkingDays;
-  const absentDays = Math.max(0, nStdDays - actualDays);
-  const basicPay = dailyRate * nStdDays;
-  const absenceDeduction = dailyRate * absentDays;
+  const absentDays = record.absentDays;
+  const basicPay = record.basicPay;
+  const absenceDeduction = record.absenceDeduction;
 
   const nHra = isIntern ? 0 : Number(hra) || 0;
   const nInc = isIntern ? 0 : Number(incentivesAllowance) || 0;
@@ -5736,21 +5815,12 @@ function EditPayrollDialog({
   const nHdmf = isIntern ? 0 : Number(hdmf) || 0;
   const nAdvance = isIntern ? 0 : Number(salaryAdvance) || 0;
 
-  const halfDayDeduction = record.halfDayDeduction > 0
-    ? record.halfDayDeduction
-    : record.halfDayCount * dailyRate * 0.5;
-  const autoEarnings = basicPay + (isIntern ? 0 : record.regularHolidayPay + record.specialHolidayPay);
-  const autoDeductions = record.lateDeduction + absenceDeduction + halfDayDeduction;
+  const halfDayDeduction = record.halfDayDeduction;
+  const totalAllowance = record.totalAllowance;
+  const totalEarnings = record.grossCompensation;
+  const totalDeductions = payrollTotalDeductions(record);
 
-  const totalAllowance = isIntern ? 0 : nInc + nSpecAllow + nHra;
-  const totalEarnings = isIntern
-    ? Math.max(0, basicPay + nAdj)
-    : autoEarnings + totalAllowance + nOt + nAdj;
-  const manualDeductions = isIntern ? 0 : nSss + nPhic + nHdmf + nAdvance;
-  const totalDeductions = autoDeductions + manualDeductions;
-  const netPay = isIntern
-    ? Math.max(0, totalEarnings - totalDeductions)
-    : totalEarnings - totalDeductions;
+  const netPay = record.netPay;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -5772,7 +5842,7 @@ function EditPayrollDialog({
         dailyRate: record.dailyRate,
         standardWorkingDays: nStdDays,
         actualWorkingDays: record.actualWorkingDays,
-        basicPay,
+        basicPay: record.basicPay,
         hra: nHra,
         incentivesAllowance: nInc,
         specialAllowance: nSpecAllow,
@@ -5783,8 +5853,8 @@ function EditPayrollDialog({
         phic: nPhic,
         hdmf: nHdmf,
         salaryAdvance: nAdvance,
-        absentDays,
-        absenceDeduction,
+        absentDays: record.absentDays,
+        absenceDeduction: record.absenceDeduction,
         halfDayCount: record.halfDayCount,
         halfDayDeduction,
         // Backend defaults a missing fraction to 0.0, which zeroes the
@@ -6364,21 +6434,9 @@ function PayrollTable({
               const hdmf = row.hdmf ?? 0;
               const advance = row.salaryAdvance ?? 0;
               const parsedBreakdown = parseCalculationBreakdown(row.calculationBreakdown);
-              const datedDeductions = parsedBreakdown?.deductions ?? [];
-              const hasDatedDeductions = datedDeductions.length > 0;
-              const totalDeductions = hasDatedDeductions
-                ? datedDeductions.reduce((total, item) => total + item.amount, 0)
-                : row.totalDeductions ??
-                  row.lateDeduction +
-                    row.halfDayDeduction +
-                    row.absenceDeduction +
-                    sss +
-                    phic +
-                    hdmf +
-                    advance;
-              const netPay = hasDatedDeductions
-                ? row.grossCompensation - totalDeductions
-                : row.netPay;
+              const totalDeductions = payrollTotalDeductions(row);
+
+              const netPay = row.netPay;
 
               return (
                 <Fragment key={row.payrollId}>
@@ -6547,7 +6605,23 @@ function PayrollTable({
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => (
+                                  {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => {
+                                    // Intern late deduction with a real deduction amount: the weekly
+                                    // grace was already spent that week, so the engine pays the fixed
+                                    // 09:00 Manila time-in. Display mirrors that payable value and the
+                                    // tooltip keeps the actual scan (same policy as the attendance
+                                    // table). Arrivals past the 09:00 payable ceiling always show the
+                                    // actual time, matching the clamped-row rule.
+                                    const payableClampSeconds = item.timeIn
+                                      ? clampWindowClockSeconds(item.timeIn)
+                                      : null;
+                                    const clampedPayrollTimeIn =
+                                      row.employeeType === "INTERN" &&
+                                      item.category === "LATE" &&
+                                      payableClampSeconds !== null &&
+                                      payableClampSeconds <= LATE_CLAMP_CEILING_SECONDS &&
+                                      item.amount > 0;
+                                    return (
                                     <tr key={`${item.date}-${item.category}-${idx}`}>
                                       <td className="payroll-deduction-date">
                                         {formatDeductionDate(item.date)}
@@ -6558,16 +6632,33 @@ function PayrollTable({
                                         </span>
                                       </td>
                                       <td className="payroll-deduction-time">
-                                        {item.timeIn || item.timeOut
-                                          ? `${item.timeIn ?? "—"} – ${item.timeOut ?? "—"}`
-                                          : "—"}
+                                        {item.timeIn || item.timeOut ? (
+                                          <>
+                                            {clampedPayrollTimeIn ? (
+                                              <span
+                                                className="clamped-time-in-chip clamped-time-in-static"
+                                                data-testid="clamped-payroll-time-in"
+                                                title={`Actual scan: ${item.timeIn} (weekly grace used)`}
+                                              >
+                                                09:00 AM
+                                              </span>
+                                            ) : (
+                                              item.timeIn ?? "—"
+                                            )}
+                                            {" – "}
+                                            {item.timeOut ?? "—"}
+                                          </>
+                                        ) : (
+                                          "—"
+                                        )}
                                       </td>
                                       <td className="payroll-deduction-details">{item.details}</td>
                                       <td className="payroll-deduction-amount">
                                         {php(item.amount)}
                                       </td>
                                     </tr>
-                                  ))}
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
@@ -6682,6 +6773,24 @@ function formatDeductionDate(dateStr: string): string {
   });
 }
 
+/**
+ * Total deductions for display: the backend-authoritative value wins when
+ * present; legacy Sheets cutoff rows omit `totalDeductions`, so derive it
+ * from its components instead of showing ₱0 beside a reduced net pay.
+ */
+function payrollTotalDeductions(record: PayrollCutoffRecord): number {
+  if (record.totalDeductions != null) return record.totalDeductions;
+  return (
+    record.lateDeduction +
+    record.halfDayDeduction +
+    record.absenceDeduction +
+    (record.sss ?? 0) +
+    (record.phic ?? 0) +
+    (record.hdmf ?? 0) +
+    (record.salaryAdvance ?? 0)
+  );
+}
+
 function parseCalculationBreakdown(
   breakdownStr: string | null | undefined,
 ): CutoffCalculationBreakdownData | null {
@@ -6791,6 +6900,128 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   );
 }
 
+/** Payable clamp ceiling: arrivals at or before 09:00 Manila show 09:00. */
+const LATE_CLAMP_CEILING_SECONDS = 9 * 3600;
+
+/**
+ * Manila clock seconds since midnight for an ISO time-in, or null when
+ * unparseable.
+ */
+function manilaClockSeconds(timeInIso: string): number | null {
+  const date = new Date(timeInIso);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ATTENDANCE_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const read = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return read("hour") * 3600 + read("minute") * 60 + read("second");
+}
+
+/**
+ * Clock seconds since midnight for either an ISO time-in or a payroll
+ * "8:30 AM" style display label, or null when neither parses. Keeps the
+ * payroll clamp chip inside the same 09:00 ceiling as the attendance table.
+ */
+function clampWindowClockSeconds(timeInValue: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})\s*([AP]M)$/i.exec(timeInValue.trim());
+  if (match) {
+    const hour = Number(match[1]) % 12;
+    const minute = Number(match[2]);
+    if (hour > 11 || minute > 59) return null;
+    return (
+      hour * 3600 + minute * 60 + (match[3].toUpperCase() === "PM" ? 12 * 3600 : 0)
+    );
+  }
+  return manilaClockSeconds(timeInValue);
+}
+
+/**
+ * Display-only weekly-grace clamp: ids of intern rows whose payable time-in
+ * is the fixed 09:00 Manila value. That is only ungraced late arrivals at or
+ * before 09:00 — a (08:15, 09:00] arrival past the grace window, or a
+ * (08:00, 08:15] arrival that finds the week's grace already spent. Arrivals
+ * past 09:00 (e.g. 09:30) always keep their actual time-in in every view and
+ * never consume the grace; the first (08:00, 08:15] arrival of a week is
+ * graced and never included; on-time rows are never included. Grouping stays
+ * per userId + Manila Monday-week; callers may pass a wider set than they
+ * render (e.g. earlier days of the week alongside today's rows) and
+ * duplicated attendanceIds count once. Backing data (row.timeIn) is never
+ * mutated.
+ */
+function clampedGraceTimeInIds(
+  rows: AttendanceListItem[],
+  users: AdminUser[],
+): Set<string> {
+  const internIds = new Set(
+    users
+      .filter((user) => user.employeeType === "INTERN")
+      .map((user) => user.userId),
+  );
+  const groups = new Map<string, AttendanceListItem[]>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.attendanceId)) continue;
+    seen.add(row.attendanceId);
+    if (!row.timeIn || !internIds.has(row.userId)) continue;
+    const arrival = evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE);
+    if (arrival === "LATE") {
+      // Past the 09:00 payable ceiling: actual time-in is always shown, and
+      // the row neither spends the week's grace nor blocks a later in-window
+      // arrival from gracing.
+      const seconds = manilaClockSeconds(row.timeIn);
+      if (seconds === null || seconds > LATE_CLAMP_CEILING_SECONDS) continue;
+    } else if (arrival !== "GRACE_PERIOD") {
+      continue;
+    }
+    let weekStart: string;
+    try {
+      weekStart = getManilaWeekStart(row.attendanceDate);
+    } catch {
+      continue;
+    }
+    const key = `${row.userId}:${weekStart}`;
+    const list = groups.get(key) ?? [];
+    list.push(row);
+    groups.set(key, list);
+  }
+  const clamped = new Set<string>();
+  for (const list of groups.values()) {
+    list.sort((a, b) => {
+      const byDate = a.attendanceDate.localeCompare(b.attendanceDate);
+      return byDate !== 0 ? byDate : a.timeIn.localeCompare(b.timeIn);
+    });
+    // v3 rule: grace is consumed only by (08:00, 08:15] arrivals, and rows
+    // past 09:00 were excluded above, so a first late at 09:30 leaves the
+    // grace intact for a later in-window arrival. Within the remaining
+    // in-window rows: the week's first grace-window arrival is graced; any
+    // later arrival is an ungraced late payable at 09:00. A first past-window
+    // arrival (08:16–09:00) with no prior evidence stays on its actual time,
+    // which keeps the no-history fallback showing actual times.
+    let graceUsed = false;
+    let repeatLate = false;
+    for (const row of list) {
+      const inGraceWindow =
+        evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE) ===
+        "GRACE_PERIOD";
+      if (inGraceWindow && !graceUsed) {
+        graceUsed = true;
+        continue;
+      }
+      if (!graceUsed && !repeatLate) {
+        repeatLate = true;
+        continue;
+      }
+      clamped.add(row.attendanceId);
+    }
+  }
+  return clamped;
+}
+
 function AdminAttendance({
   rows,
   date,
@@ -6820,6 +7051,11 @@ function AdminAttendance({
   const arrivalMap = useMemo(
     () => evaluateAttendanceArrivals(activeRows),
     [activeRows],
+  );
+
+  const clampedTimeInIds = useMemo(
+    () => clampedGraceTimeInIds(activeRows, users),
+    [activeRows, users],
   );
 
   const counts = useMemo(() => {
@@ -6925,6 +7161,7 @@ function AdminAttendance({
     const result = exportAttendanceCsv(
       selectedRows,
       arrivalMap,
+      clampedTimeInIds,
       date,
     );
     if (result.success) {
@@ -6960,6 +7197,7 @@ function AdminAttendance({
     const result = exportAttendanceCsv(
       filteredRows,
       arrivalMap,
+      clampedTimeInIds,
       date,
     );
     setExporting(false);
@@ -7248,6 +7486,7 @@ function AdminAttendance({
                   selected={selectedAttendanceIds.has(row.attendanceId)}
                   onToggleSelect={() => toggleSelectAttendance(row.attendanceId)}
                   arrivalInfo={arrivalMap.get(row.attendanceId)}
+                  timeInClamped={clampedTimeInIds.has(row.attendanceId)}
                   onSaved={onSaved}
                 />
               ))
@@ -7497,6 +7736,7 @@ function BackdatedAttendanceModal({
 function exportAttendanceCsv(
   rows: AttendanceListItem[],
   arrivalMap: Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }>,
+  clampedTimeInIds: Set<string>,
   startDate: string,
   endDate?: string,
 ):
@@ -7526,6 +7766,8 @@ function exportAttendanceCsv(
     "Recorded By",
     "Recorded Reason",
     "Recorded At",
+    // Audit column appended last so every pre-existing column keeps its index.
+    "Actual time-in",
   ];
   const csvCell = (value: string | number | null) =>
     `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -7545,6 +7787,13 @@ function exportAttendanceCsv(
     if (info.arrivalStatus === "GRACE_PERIOD") return "Grace Period (GP)";
     return `Late (${info.minutesLate}m)`;
   };
+  // Weekly-grace clamped rows export the payable 09:00 Manila time-in in the
+  // Time in column (same ISO shape as every other row); the real scan keeps
+  // its own audit column because a CSV cell cannot carry the table tooltip.
+  const payableTimeIn = (row: AttendanceListItem) =>
+    clampedTimeInIds.has(row.attendanceId) && row.timeIn
+      ? `${row.attendanceDate}T09:00:00+08:00`
+      : row.timeIn;
   const content = [
     headers,
     ...rows.map((row) => [
@@ -7552,7 +7801,7 @@ function exportAttendanceCsv(
       row.userId,
       row.department,
       row.attendanceDate,
-      row.timeIn,
+      payableTimeIn(row),
       getArrivalText(row),
       row.timeOut,
       row.status,
@@ -7561,6 +7810,7 @@ function exportAttendanceCsv(
       row.recordedBy ?? "",
       row.recordedReason ?? "",
       row.recordedAt ?? "",
+      row.timeIn,
     ]),
   ]
     .map((line) => line.map(csvCell).join(","))
@@ -7594,12 +7844,14 @@ function AttendanceEditRow({
   selected,
   onToggleSelect,
   arrivalInfo,
+  timeInClamped,
   onSaved,
 }: {
   row: AttendanceListItem;
   selected?: boolean;
   onToggleSelect?: () => void;
   arrivalInfo?: { arrivalStatus: ArrivalStatus; minutesLate: number };
+  timeInClamped?: boolean;
   onSaved: () => void;
 }) {
   const [timeIn, setTimeIn] = useState(
@@ -7611,10 +7863,13 @@ function AttendanceEditRow({
   const [message, setMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteAttendanceConfirm, setDeleteAttendanceConfirm] = useState(false);
+  const [clampedRevealed, setClampedRevealed] = useState(false);
+  const timeInInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setTimeIn(row.timeIn ? row.timeIn.slice(11, 16) : "");
     setTimeOut(row.timeOut ? row.timeOut.slice(11, 16) : "");
+    setClampedRevealed(false);
   }, [row.timeIn, row.timeOut]);
 
   const late = row.status === "LATE_TIMEOUT";
@@ -7735,11 +7990,28 @@ function AttendanceEditRow({
         <td>
           <div className="time-input-group">
             <input
+              ref={timeInInputRef}
               aria-label={`Time in for ${row.fullName}`}
               type="time"
               value={timeIn}
+              onFocus={() => setClampedRevealed(true)}
               onChange={(e) => setTimeIn(e.target.value)}
             />
+            {timeInClamped && !clampedRevealed && row.timeIn && timeIn === row.timeIn.slice(11, 16) ? (
+              <button
+                type="button"
+                className="clamped-time-in-chip"
+                data-testid="clamped-time-in"
+                title={`Actual scan: ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)} (weekly grace used)`}
+                aria-label={`Shown as 09:00 AM for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
+                onClick={() => {
+                  setClampedRevealed(true);
+                  timeInInputRef.current?.focus();
+                }}
+              >
+                09:00 AM
+              </button>
+            ) : null}
             {timeIn ? (
               <button
                 type="button"

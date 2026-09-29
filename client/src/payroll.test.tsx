@@ -562,6 +562,27 @@ describe("PayrollWorkspace", () => {
     expect(screen.getAllByText(/PHP 760.00/i)).toHaveLength(2);
   });
 
+  it("renders backend payroll total deductions and net pay without recomputing them", () => {
+    const backendRecord = record({
+      grossCompensation: 1_000,
+      totalDeductions: 420,
+      netPay: 17,
+      lateDeduction: 10,
+      halfDayDeduction: 20,
+      absenceDeduction: 30,
+      sss: 40,
+      phic: 50,
+      hdmf: 60,
+      salaryAdvance: 70,
+    });
+
+    renderWorkspace([backendRecord]);
+
+    const payrollRow = screen.getByRole("row", { name: /Ada Lovelace/ });
+    expect(within(payrollRow).getByText("PHP 420.00")).toBeInTheDocument();
+    expect(within(payrollRow).getByText("PHP 17.00")).toBeInTheDocument();
+  });
+
   it("sends halfDayFraction alongside halfDayCount and halfDayDeduction when EditPayrollDialog saves cutoff changes", async () => {
     const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();

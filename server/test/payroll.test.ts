@@ -16,7 +16,7 @@ describe('payroll service integration', () => {
     expect(first.payrollId).toBe(second.payrollId);
     expect(first.dailyPay).toBe(80);
     expect(first.actualTimeIn).toBe(attendance.timeIn);
-    expect(first.computedTimeIn).toBe(attendance.timeIn);
+    expect(first.computedTimeIn).toBe('2026-07-28T08:00:00+08:00');
   });
 
   it('one grace per Manila week', async () => {

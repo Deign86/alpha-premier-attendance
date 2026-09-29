@@ -593,26 +593,26 @@ export async function loadInternPayrollReport(cutoffStart: string, cutoffEnd: st
   }
   return { success: true, payroll: [] };
 }
-export async function savePayrollCutoff<T extends object>(payroll: T, payrollId?: string): Promise<{ success: boolean }> {
+export async function savePayrollCutoff<T extends object>(payroll: T, payrollId?: string): Promise<{ success: boolean; payrollId?: string; netPay?: number }> {
   if (runningInTauri()) {
     if (payrollId) {
       const updatePayload = Object.assign({}, payroll, { payrollId });
       // SAFETY: Backend update cutoff returns success response
-      return (await tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', updatePayload)) as { success: boolean };
+      return (await tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', updatePayload)) as { success: boolean; payrollId?: string; netPay?: number };
     }
     // SAFETY: Backend create cutoff returns success response
-    return (await tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll)) as { success: boolean };
+    return (await tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll)) as { success: boolean; payrollId?: string; netPay?: number };
   }
   const response = await fetch(apiUrl(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs'), { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) });
   // SAFETY: Parsing admin save cutoff response JSON
-  return (await response.json()) as { success: boolean };
+  return (await response.json()) as { success: boolean; payrollId?: string; netPay?: number };
 }
-export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; error?: { message: string } }> {
+export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; generated?: number; error?: { message: string } }> {
   try {
     if (runningInTauri()) {
       const payload = customization ?? {};
       // SAFETY: Backend generate cutoff returns success or error response
-      return (await tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, payload)) as { success: boolean; error?: { message: string } };
+      return (await tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, payload)) as { success: boolean; generated?: number; error?: { message: string } };
     }
     return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } };
   } catch (err) {

@@ -70,6 +70,8 @@ function makeClient(valuesByTab: Record<string, string[][]>): SheetsClient & { w
     },
     async updateRow(tab: string, row1Based: number, values: string[]): Promise<void> {
       writes.push({ tab, row: row1Based, values });
+      const row = valuesByTab[tab]?.[row1Based - 1];
+      if (row) row.splice(1, 4, ...values);
     },
     async applyFormats(requests: FormatRequest[]): Promise<void> {
       paints.push(...requests);
@@ -242,11 +244,11 @@ describe('formatSheetTime', () => {
 
 describe('buildDtrRow', () => {
   const date = '2026-09-05';
-  it('completed day keeps actual stamps with no fixed lunch', () => {
+  it('completed day uses fixed lunch columns', () => {
     expect(buildDtrRow('2026-09-05T07:24:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
       '7:24:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '5:00:00 PM',
     ]);
   });
@@ -264,9 +266,21 @@ describe('buildDtrRow', () => {
   it('half-day timeout keeps actual stamps (no tap-out discard)', () => {
     expect(buildDtrRow('2026-09-05T08:04:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
       '8:04:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '3:00:00 PM',
+    ]);
+  });
+  it('rewrites arrivals through 09:00 regardless of grace and preserves later arrivals', () => {
+    const lateIn = '2026-09-05T08:04:00+08:00';
+    const timeOut = '2026-09-05T17:00:00+08:00';
+    expect(buildDtrRow(lateIn, timeOut, date)).toEqual(['8:04:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
+    expect(buildDtrRow(lateIn, timeOut, date, true)).toEqual(['9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', timeOut, date, true)).toEqual([
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T09:30:00+08:00', timeOut, date, true)).toEqual([
+      '9:30:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
   });
   it('sub-4h lunch-spanning stint keeps actuals at both ends (never half-day)', () => {
@@ -288,8 +302,8 @@ describe('buildDtrRow', () => {
   it('4h+ morning span closing early keeps actual stamps (payroll-only half-day)', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
       '8:00:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '3:00:00 PM',
     ]);
     expect(isShortStint('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00')).toBe(false);
@@ -297,11 +311,11 @@ describe('buildDtrRow', () => {
   });
   it('cutoff boundary keeps actual stamps on both sides of 16:59', () => {
     const early = buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:58:59+08:00', date);
-    expect(early).toEqual(['8:00:00 AM', '', '', '4:58:59 PM']);
+    expect(early).toEqual(['8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '4:58:59 PM']);
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T16:59:00+08:00', date)).toEqual([
       '8:00:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '4:59:00 PM',
     ]);
   });
@@ -345,14 +359,102 @@ describe('planPush', () => {
     if (plan.kind !== 'write') throw new Error('expected write plan');
     expect(plan.tab).toBe('ROSADO RAINEER');
     expect(plan.row1Based).toBe(2);
-    expect(plan.values).toEqual(['7:24:00 AM', '', '', '5:00:00 PM']);
+    expect(plan.values).toEqual(['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
     await executePush(client, plan);
-    expect(client.writes).toEqual([{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '', '', '5:00:00 PM'] }]);
+    expect(client.writes).toEqual([{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM'] }]);
+  });
+  it('computes weekly grace exhaustion from history; re-push converges and Monday resets', async () => {
+    const mondayDate = '2026-09-07';
+    const history: AttendanceDay[] = [
+      {
+        ...DAY,
+        attendanceDate: '2026-09-01',
+        timeIn: '2026-09-01T08:04:00+08:00',
+        timeOut: '2026-09-01T17:00:00+08:00',
+      },
+      {
+        ...DAY,
+        attendanceDate: '2026-09-03',
+        timeIn: '2026-09-03T08:05:00+08:00',
+        timeOut: '2026-09-03T17:00:00+08:00',
+      },
+      {
+        ...DAY,
+        attendanceDate: mondayDate,
+        timeIn: `${mondayDate}T08:06:00+08:00`,
+        timeOut: `${mondayDate}T17:00:00+08:00`,
+      },
+    ];
+    const client = makeClient({
+      'ROSADO RAINEER': [
+        baseRows[0],
+        ['9/1/2026', '', '', '', '', '0'],
+        ['9/3/2026', '', '', '', '', '0'],
+        ['9/7/2026', '', '', '', '', '0'],
+      ],
+    });
+    const firstLate = await planPush(client, history[0], ROSTER, history);
+    expect(firstLate.kind === 'write' ? firstLate.values[0] : '').toBe('8:04:00 AM');
+
+    const secondLate = await planPush(client, history[1], ROSTER, history);
+    expect(secondLate.kind === 'write' ? secondLate.values[0] : '').toBe('9:00:00 AM');
+    if (secondLate.kind !== 'write') throw new Error('expected second late write plan');
+    await executePush(client, secondLate);
+    expect(await planPush(client, history[1], ROSTER, history)).toMatchObject({ kind: 'in-sync' });
+
+    const monday = await planPush(client, history[2], ROSTER, history);
+    expect(monday.kind === 'write' ? monday.values[0] : '').toBe('8:06:00 AM');
+  });
+  it('only an in-window prior late consumes grace; display clamp still applies through 09:00', async () => {
+    const priorOutsideWindow: AttendanceDay = {
+      ...DAY,
+      attendanceDate: '2026-09-01',
+      timeIn: '2026-09-01T08:30:00+08:00',
+      timeOut: '2026-09-01T17:00:00+08:00',
+    };
+    const next08: AttendanceDay = {
+      ...DAY,
+      attendanceDate: '2026-09-03',
+      timeIn: '2026-09-03T08:08:00+08:00',
+    };
+    const late0930: AttendanceDay = { ...next08, timeIn: '2026-09-03T09:30:00+08:00' };
+    const client = makeClient({ 'ROSADO RAINEER': [baseRows[0], ['9/1/2026'], ['9/3/2026']] });
+    const graceStillAvailable = await planPush(client, next08, ROSTER, [priorOutsideWindow, next08]);
+    const actual0930 = await planPush(client, late0930, ROSTER, [priorOutsideWindow, late0930]);
+    expect(graceStillAvailable.kind === 'write' ? graceStillAvailable.values[0] : '').toBe('8:08:00 AM');
+    expect(actual0930.kind === 'write' ? actual0930.values[0] : '').toBe('9:30:00 AM');
+  });
+  it('clamps a backdated second late but excludes later history when planning the first late', async () => {
+    const firstLate: AttendanceDay = {
+      ...DAY,
+      attendanceDate: '2026-09-01',
+      timeIn: '2026-09-01T08:04:00+08:00',
+      timeOut: '2026-09-01T17:00:00+08:00',
+    };
+    const backdatedSecondLate: AttendanceDay = {
+      ...DAY,
+      attendanceDate: '2026-09-03',
+      timeIn: '2026-09-03T08:05:00+08:00',
+      timeOut: '2026-09-03T17:00:00+08:00',
+    };
+    const history = [firstLate, backdatedSecondLate];
+    const client = makeClient({
+      'ROSADO RAINEER': [
+        baseRows[0],
+        ['9/1/2026', '', '', '', '', '0'],
+        ['9/3/2026', '', '', '', '', '0'],
+      ],
+    });
+
+    const first = await planPush(client, firstLate, ROSTER, history);
+    const second = await planPush(client, backdatedSecondLate, ROSTER, history);
+    expect(first.kind === 'write' ? first.values[0] : '').toBe('8:04:00 AM');
+    expect(second.kind === 'write' ? second.values[0] : '').toBe('9:00:00 AM');
   });
   it('skips identical cells without writing', async () => {
     const synced = [
       baseRows[0],
-      ['9/5/2026', '7:24:00 AM', '', '', '5:00:00 PM', '8'],
+      ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
     ];
     const client = makeClient({ 'ROSADO RAINEER': synced });
     const plan = await planPush(client, DAY, ROSTER);
@@ -362,7 +464,7 @@ describe('planPush', () => {
     // pass can white/clear them (Rust InSync branch parity).
     expect(plan.tab).toBe('ROSADO RAINEER');
     expect(plan.row1Based).toBe(2);
-    expect(plan.values).toEqual(['7:24:00 AM', '', '', '5:00:00 PM']);
+    expect(plan.values).toEqual(['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
     await executePush(client, plan);
     expect(client.writes).toEqual([]);
   });
@@ -390,7 +492,7 @@ describe('planPush', () => {
   it('writes a local working record over a completed sheet row (system wins)', async () => {
     const completed = [
       baseRows[0],
-      ['9/5/2026', '7:24:00 AM', '', '', '5:00:00 PM', '8'],
+      ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
     ];
     const client = makeClient({ 'ROSADO RAINEER': completed });
     const working: AttendanceDay = { ...DAY, timeOut: null };
@@ -403,7 +505,7 @@ describe('planPush', () => {
   it('writes an older local clock-out over a newer sheet row (last writer wins)', async () => {
     const completed = [
       baseRows[0],
-      ['9/5/2026', '7:24:00 AM', '', '', '5:00:00 PM', '8'],
+      ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
     ];
     const client = makeClient({ 'ROSADO RAINEER': completed });
     const older: AttendanceDay = { ...DAY, timeOut: '2026-09-05T16:00:00+08:00' };
@@ -417,7 +519,7 @@ describe('planPush', () => {
   it('writes a newer local clock-out over an older sheet row', async () => {
     const older = [
       baseRows[0],
-      ['9/5/2026', '7:24:00 AM', '', '', '4:00:00 PM', '8'],
+      ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '4:00:00 PM', '8'],
     ];
     const client = makeClient({ 'ROSADO RAINEER': older });
     const plan = await planPush(client, DAY, ROSTER);
@@ -610,7 +712,7 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
   it('08:00-15:00 DTR keeps actual stamps while payroll deducts 1 hour unrendered', async () => {
     const { calculateInternPayroll } = await import('../src/intern-payroll.js');
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
-      '8:00:00 AM', '', '', '3:00:00 PM',
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '3:00:00 PM',
     ]);
     const pay = calculateInternPayroll({
       attendanceDate: date,
@@ -628,7 +730,7 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
   it('08:00-17:00 full day keeps actual stamps and full pay', async () => {
     const { calculateInternPayroll } = await import('../src/intern-payroll.js');
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
-      '8:00:00 AM', '', '', '5:00:00 PM',
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
     const pay = calculateInternPayroll({
       attendanceDate: date,
@@ -639,7 +741,7 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
     expect(pay.isHalfDay).toBe(false);
     expect(pay.dailyPay).toBe(80);
   });
-  it('sub-4h shift keeps actual stamps and stays half-day for pay', async () => {
+  it('sub-4h first late arrival keeps DTR stamps and uses flat ungraced payroll', async () => {
     const { calculateInternPayroll } = await import('../src/intern-payroll.js');
     expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
       '11:30:00 AM', '', '', '2:30:00 PM',
@@ -650,7 +752,15 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
       actualTimeOut: '2026-09-05T14:30:00+08:00',
       graceAvailable: true,
     });
-    expect(pay.isHalfDay).toBe(true);
+    expect(pay).toMatchObject({
+      computedTimeIn: '2026-09-05T09:00:00+08:00',
+      graceUsed: false,
+      lateHours: 1,
+      workedHours: 5,
+      halfDayDeduction: 20,
+      dailyPay: 50,
+      isHalfDay: false,
+    });
   });
   it('12:30 arrival keeps the actual in-time on the DTR', () => {
     expect(buildDtrRow('2026-09-05T12:30:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
@@ -663,16 +773,16 @@ describe('late time-out auto-cap (18:00+ renders/pays as 17:00)', () => {
   const date = '2026-09-05';
   it('08:00-19:30 DTR out shows 17:00 and classifies full', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toEqual([
-      '8:00:00 AM', '', '', '5:00:00 PM',
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toBe('full');
   });
   it('18:00:00 boundary caps while 17:59:59 stays actual', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T18:00:00+08:00', date)).toEqual([
-      '8:00:00 AM', '', '', '5:00:00 PM',
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:59:59+08:00', date)).toEqual([
-      '8:00:00 AM', '', '', '5:59:59 PM',
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:59:59 PM',
     ]);
   });
   it('08:00-19:30 payroll is full-day computed on capped 08:00-17:00', async () => {
@@ -704,8 +814,8 @@ describe('audit A1: shared normalization validates ordering after the cap', () =
   it('08:00-19:30 caps to 17:00 in both paths (row + full)', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toEqual([
       '8:00:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '5:00:00 PM',
     ]);
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toBe('full');
@@ -713,14 +823,14 @@ describe('audit A1: shared normalization validates ordering after the cap', () =
   it('18:00:00 caps while 17:59:59 stays actual', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T18:00:00+08:00', date)).toEqual([
       '8:00:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '5:00:00 PM',
     ]);
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:59:59+08:00', date)).toEqual([
       '8:00:00 AM',
-      '',
-      '',
+      '12:00:00 PM',
+      '1:00:00 PM',
       '5:59:59 PM',
     ]);
   });
