@@ -453,6 +453,24 @@ describe('planPush', () => {
     expect(actual0930.kind === 'write' ? actual0930.values[0] : '').toBe('10:00:00 AM');
     expect(actualFractional.kind === 'write' ? actualFractional.values[0] : '').toBe('9:00:00 AM');
   });
+  it('keeps post-cutover intern DTR stamps actual despite historical grace/clamp state', async () => {
+    const cutoffDate: AttendanceDay = {
+      ...DAY,
+      attendanceDate: '2026-10-01',
+      timeIn: '2026-10-01T09:30:00+08:00',
+      timeOut: '2026-10-01T17:00:00+08:00',
+    };
+    const client = makeClient({
+      'ROSADO RAINEER': [
+        baseRows[0],
+        ['DATE-October', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
+        ['10/1/2026', '', '', '', '', '0'],
+      ],
+    });
+    const plan = await planPush(client, cutoffDate, ROSTER, [cutoffDate]);
+    expect(plan.kind === 'write' ? plan.values[0] : '').toBe('9:30:00 AM');
+  });
+
   it('clamps a backdated second late but excludes later history when planning the first late', async () => {
     const firstLate: AttendanceDay = {
       ...DAY,

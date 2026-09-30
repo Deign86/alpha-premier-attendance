@@ -49,6 +49,7 @@ import {
   INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
   LATE_TIMEOUT_THRESHOLD,
   ATTENDANCE_TIMEZONE,
+  isNoGraceDate,
   isLateTimeout,
   normalizeName,
   evaluateArrivalFromTimestamp,
@@ -170,9 +171,11 @@ function toErrorMessage(cause: unknown, fallback: string): string {
 async function evaluateKioskArrival(
   attendance: { attendanceId: string; attendanceDate: string; timeIn: string },
   userId: string,
+  employeeType: "INTERN" | "EMPLOYEE",
   timezone: string,
 ): Promise<ArrivalStatus> {
-  const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone);
+  const cutoffAwareDate = employeeType === "INTERN" ? attendance.attendanceDate : undefined;
+  const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone, cutoffAwareDate);
   try {
     const weekStart = getManilaWeekStart(attendance.attendanceDate);
     const start = new Date(`${weekStart}T00:00:00Z`);
@@ -191,11 +194,12 @@ async function evaluateKioskArrival(
               userId: row.userId,
               attendanceDate: row.attendanceDate,
               timeIn: row.timeIn,
+              employeeType,
             }))
         : [],
     );
     if (!history.some((row) => row.attendanceId === attendance.attendanceId)) {
-      history.push({ ...attendance, userId });
+      history.push({ ...attendance, userId, employeeType });
     }
     return evaluateAttendanceArrivals(history).get(attendance.attendanceId)?.arrivalStatus ?? fallback;
   } catch {
@@ -740,7 +744,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
+          ? await evaluateKioskArrival(response.attendance, response.user.userId, response.user.employeeType, config.timezone)
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
@@ -749,6 +753,8 @@ export default function App() {
           userId: response.user.userId,
           attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
           arrivalStatus: arrival,
+          attendanceDate: response.attendance.attendanceDate,
+          employeeType: response.user.employeeType,
           isLateTimeout: isLate,
           isAssisted: response.attendance.source === "ADMIN_ASSISTED_SCAN",
           isFirstTimeInToday: response.action === "TIME_IN" ? isFirstTimeInToday : undefined,
@@ -790,7 +796,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
+          ? await evaluateKioskArrival(response.attendance, response.user.userId, response.user.employeeType, config.timezone)
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
@@ -799,6 +805,8 @@ export default function App() {
           userId: response.user.userId,
           attendanceType: response.action === "TIME_IN" ? "time_in" : "time_out",
           arrivalStatus: arrival,
+          attendanceDate: response.attendance.attendanceDate,
+          employeeType: response.user.employeeType,
           isLateTimeout: isLate,
           isAssisted: true,
           isFirstTimeInToday: response.action === "TIME_IN" ? isFirstTimeInToday : undefined,
@@ -6608,6 +6616,7 @@ function PayrollTable({
                                   {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => {
                                     const clampedPayrollTimeIn =
                                       row.employeeType === "INTERN" &&
+                                      !isNoGraceDate(item.date) &&
                                       item.category === "LATE" &&
                                       Boolean(item.timeIn && shouldClampHour(item.timeIn)) &&
                                       item.amount > 0;
@@ -7010,7 +7019,7 @@ function clampedGraceTimeInIds(
     if (seen.has(row.attendanceId)) continue;
     seen.add(row.attendanceId);
     if (!row.timeIn || !internIds.has(row.userId)) continue;
-    const arrival = evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE);
+    const arrival = evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE, row.attendanceDate);
     if (arrival !== "LATE" && arrival !== "GRACE_PERIOD") {
       continue;
     }
@@ -7033,6 +7042,7 @@ function clampedGraceTimeInIds(
     });
     let graceUsed = false;
     for (const row of list) {
+      if (isNoGraceDate(row.attendanceDate)) continue;
       const inGraceWindow =
         evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE) ===
           "GRACE_PERIOD" &&
@@ -7117,8 +7127,14 @@ function AdminAttendance({
   }, [date, hasInternRoster]);
 
   const arrivalMap = useMemo(
-    () => evaluateAttendanceArrivals(activeRows),
-    [activeRows],
+    () => {
+      const employeeTypes = new Map(users.map((user) => [user.userId, user.employeeType]));
+      return evaluateAttendanceArrivals(activeRows.map((row) => ({
+        ...row,
+        employeeType: employeeTypes.get(row.userId) ?? "EMPLOYEE",
+      })));
+    },
+    [activeRows, users],
   );
 
   const clampedTimeInIds = useMemo(

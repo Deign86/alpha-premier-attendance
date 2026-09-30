@@ -8,6 +8,13 @@ use chrono_tz::Asia::Manila;
 pub const INTERN_DAILY_RATE_PHP: i64 = 80;
 /// Payroll profile id stored on intern cutoff records (not a payroll_profiles row).
 pub const INTERN_PAYROLL_PROFILE_ID: &str = "INTERN_STANDARD";
+pub const NO_GRACE_CUTOFF_DATE: &str = "2026-10-01";
+
+pub fn is_no_grace_date(attendance_date: &str) -> bool {
+    NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
+        .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == attendance_date)
+        && attendance_date >= NO_GRACE_CUTOFF_DATE
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InternPayrollResult {
@@ -23,6 +30,10 @@ pub struct InternPayrollResult {
     pub worked_hours: f64,
 }
 
+/// Before 2026-10-01, an available weekly grace claim covers arrivals through
+/// 08:15 and the legacy quarter-hour clamp applies otherwise. On/after the
+/// cutoff there is no grace or clamp: computed clock-in stays actual and late
+/// hours round up to whole hours for deduction.
 pub fn calculate(
     attendance_date: &str,
     actual_time_in: &str,
@@ -34,6 +45,9 @@ pub fn calculate(
     let time_in = DateTime::parse_from_rfc3339(actual_time_in)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
+    if is_no_grace_date(attendance_date) && time_in.date_naive() != date {
+        return Err("Payroll clock-in date must match attendanceDate in Manila".into());
+    }
     let time_out = DateTime::parse_from_rfc3339(actual_time_out)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
@@ -51,38 +65,53 @@ pub fn calculate(
         .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
         .single()
         .ok_or("Invalid Manila start time")?;
-    let local_time_in = time_in.time();
-    let in_grace_window = time_in > start
-        && time_in <= start + chrono::Duration::minutes(15);
-    let grace_used = grace_available && in_grace_window;
-    // After :15:00, round the payable clock-in up to the next full hour.
-    let after_quarter_hour = local_time_in.minute() > 15
-        || (local_time_in.minute() == 15
-            && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0));
-    let clamped_in = if time_in > start && after_quarter_hour {
-        let hour_start = date
-            .and_hms_opt(local_time_in.hour(), 0, 0)
-            .ok_or("Invalid Manila late clamp time")?;
-        let next_hour = hour_start
-            .checked_add_signed(chrono::Duration::hours(1))
-            .ok_or("Invalid Manila late clamp time")?;
-        Manila
-            .from_local_datetime(&next_hour)
-            .single()
-            .ok_or("Invalid Manila late clamp time")?
+    let no_grace = is_no_grace_date(attendance_date);
+    let (grace_used, computed_in, payable_in, late_hours) = if no_grace {
+        let payable_in = time_in.max(start);
+        let late_hours = if time_in > start {
+            let late_duration = payable_in - start;
+            let seconds = late_duration.num_seconds() as f64
+                + late_duration.subsec_nanos() as f64 / 1_000_000_000.0;
+            (seconds / 3_600.0).ceil().max(1.0) as i64
+        } else {
+            0
+        };
+        (false, time_in, payable_in, late_hours)
     } else {
-        time_in
-    };
-    let computed_in = if grace_used { time_in } else { clamped_in };
-    let payable_in = if grace_used {
-        start
-    } else {
-        computed_in.max(start)
-    };
-    let late_hours = if !grace_used && time_in > start {
-        (payable_in - start).num_hours().max(1)
-    } else {
-        0
+        let local_time_in = time_in.time();
+        let in_grace_window = time_in > start
+            && time_in <= start + chrono::Duration::minutes(15);
+        let grace_used = grace_available && in_grace_window;
+        // After :15:00, round the payable clock-in up to the next full hour.
+        let after_quarter_hour = local_time_in.minute() > 15
+            || (local_time_in.minute() == 15
+                && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0));
+        let clamped_in = if time_in > start && after_quarter_hour {
+            let hour_start = date
+                .and_hms_opt(local_time_in.hour(), 0, 0)
+                .ok_or("Invalid Manila late clamp time")?;
+            let next_hour = hour_start
+                .checked_add_signed(chrono::Duration::hours(1))
+                .ok_or("Invalid Manila late clamp time")?;
+            Manila
+                .from_local_datetime(&next_hour)
+                .single()
+                .ok_or("Invalid Manila late clamp time")?
+        } else {
+            time_in
+        };
+        let computed_in = if grace_used { time_in } else { clamped_in };
+        let payable_in = if grace_used {
+            start
+        } else {
+            computed_in.max(start)
+        };
+        let late_hours = if !grace_used && time_in > start {
+            (payable_in - start).num_hours().max(1)
+        } else {
+            0
+        };
+        (grace_used, computed_in, payable_in, late_hours)
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
@@ -121,6 +150,88 @@ pub fn calculate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_grace_cutover_date_requires_a_valid_date_on_or_after_cutoff() {
+        assert!(!is_no_grace_date("2026-09-30"));
+        assert!(is_no_grace_date("2026-10-01"));
+        assert!(is_no_grace_date("2026-10-02"));
+        assert!(!is_no_grace_date("2026-2-01"));
+        assert!(!is_no_grace_date("not-a-date"));
+    }
+
+    #[test]
+    fn no_grace_cutover_charges_from_actual_clock_in_without_rounding() {
+        let eight_oh_eight = calculate(
+            "2026-10-01",
+            "2026-10-01T08:08:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(!eight_oh_eight.grace_used);
+        assert_eq!(eight_oh_eight.late_hours, 1);
+        assert_eq!(eight_oh_eight.daily_pay_centavos, 7_000);
+        assert_eq!(eight_oh_eight.computed_time_in, "2026-10-01T08:08:00+08:00");
+
+        let nine_thirty = calculate(
+            "2026-10-01",
+            "2026-10-01T09:30:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            false,
+        )
+        .unwrap();
+        assert!(!nine_thirty.grace_used);
+        assert_eq!(nine_thirty.late_hours, 2);
+        assert_eq!(nine_thirty.computed_time_in, "2026-10-01T09:30:00+08:00");
+
+        let on_time = calculate(
+            "2026-10-01",
+            "2026-10-01T08:00:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(!on_time.grace_used);
+        assert_eq!(on_time.late_hours, 0);
+        assert_eq!(on_time.daily_pay_centavos, 8_000);
+    }
+
+    #[test]
+    fn no_grace_cutover_rounds_fractional_hour_up() {
+        let result = calculate(
+            "2026-10-01",
+            "2026-10-01T09:00:00.000000001+08:00",
+            "2026-10-01T17:00:00+08:00",
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.late_hours, 2);
+        assert_eq!(result.late_deduction_centavos, 2_000);
+    }
+
+    #[test]
+    fn no_grace_cutover_rejects_clock_in_on_different_manila_date() {
+        let result = calculate(
+            "2026-10-01",
+            "2026-10-02T07:59:00+08:00",
+            "2026-10-02T17:00:00+08:00",
+            false,
+        );
+        assert!(matches!(
+            result,
+            Err(message) if message == "Payroll clock-in date must match attendanceDate in Manila"
+        ));
+
+        let pre_cutover = calculate(
+            "2026-09-30",
+            "2026-10-01T07:59:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            false,
+        );
+        assert!(pre_cutover.is_ok(), "pre-cutover mismatch remains calculable");
+    }
+
     #[test]
     fn worked_hours_are_gross_elapsed_and_keep_fixed_daily_pay() {
         // 08:00–17:00 → 8 paid hours (9h elapsed minus 1h lunch 12:00–13:00).
@@ -154,7 +265,7 @@ mod tests {
     }
     #[test]
     fn grace_period_applies_within_08_00_to_08_15() {
-        // 08:12 is in 8:00 - 8:15 grace period
+        // Pre-cutover: 08:12 is within the legacy 8:00–8:15 grace window.
         let result = calculate(
             "2026-08-01",
             "2026-08-01T08:12:00+08:00",

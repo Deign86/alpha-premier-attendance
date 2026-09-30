@@ -14,4 +14,6 @@ Review headers, row counts, duplicate IDs, Manila dates, and payroll totals. Exe
 npm run migrate:from-sheets -- --execute --input .\sheets-export --db .\attendance.db
 ```
 
+`--execute` is a historical restoration/import path: existing `InternGrace.csv` rows may be restored regardless of the live claim cutoff. This exemption does not authorize new runtime grace claims.
+
 Keep the old web system read-only for one semi-monthly period. Compare daily attendance counts, intern grace claims, employee raw timestamps, Jean/Bea cutoff totals, and exported Sheets rows. Decommission the web writer only after operator sign-off and a verified SQLite/photo restore.

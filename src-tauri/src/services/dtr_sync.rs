@@ -1063,19 +1063,22 @@ pub fn build_dtr_row(
     build_dtr_row_with_clamp(time_in, time_out, attendance_date, false)
 }
 
+// The quarter-hour clamp is pre-cutover only; post-cutover DTR keeps actual clock-in stamps.
 pub(crate) fn build_dtr_row_with_clamp(
     time_in: Option<&str>,
     time_out: Option<&str>,
-    _attendance_date: &str,
+    attendance_date: &str,
     clamp_late_in: bool,
 ) -> Result<[String; 4], String> {
+    let no_grace_cutover = crate::services::intern_payroll::is_no_grace_date(attendance_date);
     match normalize_record(time_in, time_out)? {
         NormalizedRecord::Empty => Ok([String::new(), String::new(), String::new(), String::new()]),
         NormalizedRecord::Working { time_in } => {
             // `format_sheet_time` validates/parses the raw stamp (keeps the
             // existing invalid-timestamp error for a working record).
             let started = format_sheet_time(&time_in)?;
-            let started = if (clamp_late_in || !is_in_grace_window(&time_in)?)
+            let started = if !no_grace_cutover
+                && (clamp_late_in || !is_in_grace_window(&time_in)?)
                 && is_after_eight(&time_in)?
                 && is_after_quarter_hour(&time_in)?
             {
@@ -1097,7 +1100,8 @@ pub(crate) fn build_dtr_row_with_clamp(
         } => {
             let tin_iso = time_in.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
             let started = format_sheet_time(&tin_iso)?;
-            let clamped_late_in = (clamp_late_in || !is_in_grace_window(&tin_iso)?)
+            let clamped_late_in = !no_grace_cutover
+                && (clamp_late_in || !is_in_grace_window(&tin_iso)?)
                 && is_after_eight(&tin_iso)?
                 && is_after_quarter_hour(&tin_iso)?;
             let started = if clamped_late_in {
@@ -3936,6 +3940,27 @@ mod tests {
             (Some("2026-09-09T08:15:00+08:00".to_string()), None),
         );
         assert!(grace_exhausted_from_history("2026-09-10", &history).unwrap());
+    }
+
+    #[test]
+    fn no_grace_cutover_dtr_preserves_actual_clock_in_for_working_and_completed_rows() {
+        let working = build_dtr_row_with_clamp(
+            Some("2026-10-01T08:16:00+08:00"),
+            None,
+            "2026-10-01",
+            true,
+        )
+        .unwrap();
+        assert_eq!(working[0], "8:16:00 AM");
+
+        let completed = build_dtr_row_with_clamp(
+            Some("2026-10-01T08:16:00+08:00"),
+            Some("2026-10-01T17:00:00+08:00"),
+            "2026-10-01",
+            true,
+        )
+        .unwrap();
+        assert_eq!(completed[0], "8:16:00 AM");
     }
 
     #[test]

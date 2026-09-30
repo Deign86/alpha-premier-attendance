@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DateTime } from 'luxon';
 import { google, type sheets_v4, type drive_v3 } from 'googleapis';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaTimestamp } from './time.js';
 import type { CardType, PayrollCalculationProfile, PayrollCutoffRecord, ScanSource } from '@rfid-attendance/shared';
-import { isLateTimeout } from '@rfid-attendance/shared';
+import { isLateTimeout, isNoGraceDate } from '@rfid-attendance/shared';
 import { defaultPayrollProfiles } from './cutoff-payroll.js';
 
 export type SheetUser = {
@@ -31,6 +32,8 @@ export type SheetPayrollProfile = PayrollCalculationProfile & { rowNumber?: numb
 export type SheetPayrollCutoff = PayrollCutoffRecord & { rowNumber?: number };
 
 export type SheetInternGrace = { graceId: string; userId: string; weekStart: string; attendanceId: string; usedAt: string; rowNumber?: number };
+/** attendanceDate must be verified against attendanceId; Google claim writers trust their caller to supply the canonical row date. */
+export type SheetInternGraceClaim = Omit<SheetInternGrace, 'rowNumber'> & { attendanceDate: string };
 
 export type SheetAttendance = {
   attendanceId: string;
@@ -81,7 +84,7 @@ export interface GoogleSheetsService {
   upsertPayrollCutoff(payroll: SheetPayrollCutoff): Promise<SheetPayrollCutoff>;
   deletePayrollCutoff(payrollId: string): Promise<void>;
   findInternGrace(userId: string, weekStart: string): Promise<SheetInternGrace | null>;
-  claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace>;
+  claimInternGrace(grace: SheetInternGraceClaim): Promise<SheetInternGrace>;
   writeAudit(event: AuditEvent): Promise<void>;
   healthCheck(): Promise<void>;
 }
@@ -265,9 +268,14 @@ export class InMemorySheetsService implements GoogleSheetsService {
     return matches[0] ? { ...matches[0] } : null;
   }
 
-  async claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace> {
+  async claimInternGrace(grace: SheetInternGraceClaim): Promise<SheetInternGrace> {
+    assertInternGraceClaimAllowed(grace);
+    const attendanceMatches = this.attendanceById.get(grace.attendanceId);
+    if (attendanceMatches.length !== 1 || attendanceMatches[0].userId !== grace.userId || attendanceMatches[0].attendanceDate !== grace.attendanceDate) {
+      throw new Error('Intern grace claim does not match its attendance row');
+    }
     if (await this.findInternGrace(grace.userId, grace.weekStart)) throw new Error('Intern grace already claimed');
-    const created = { ...grace };
+    const created = graceRecord(grace);
     this.grace.push(created);
     this.graceByUserWeek.add(KeyIndex.composite([created.userId, created.weekStart]), created);
     return { ...created };
@@ -975,10 +983,12 @@ export class GoogleSheetsAdapter implements GoogleSheetsService {
     return matches[0] ?? null;
   }
 
-  async claimInternGrace(grace: SheetInternGrace): Promise<SheetInternGrace> {
+  async claimInternGrace(grace: SheetInternGraceClaim): Promise<SheetInternGrace> {
+    assertInternGraceClaimAllowed(grace);
+    // Avoid a new full Attendance-sheet read here; payroll supplies the already-verified row date.
     const headers = await this.headersFor('InternGrace');
     await this.api.spreadsheets.values.append({ spreadsheetId: this.options.spreadsheetId, range: this.options.internGraceRange, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [valuesForGrace(headers, grace)] } });
-    return grace;
+    return graceRecord(grace);
   }
 
   private async deleteRow(range: string, rowNumber: number): Promise<void> {
@@ -1280,6 +1290,24 @@ function valuesForPayrollCutoff(headers: string[], payroll: SheetPayrollCutoff):
 function graceFromRow(row: string[], index: Record<string, number>, rowNumber: number): SheetInternGrace {
   return { graceId: row[index.graceid] ?? '', userId: row[index.userid] ?? '', weekStart: row[index.weekstart] ?? '', attendanceId: row[index.attendanceid] ?? '', usedAt: row[index.usedat] ?? '', rowNumber };
 }
+function assertInternGraceClaimAllowed(grace: SheetInternGraceClaim): void {
+  const parsedAttendanceDate = DateTime.fromISO(grace.attendanceDate, { zone: 'Asia/Manila' });
+  if (!parsedAttendanceDate.isValid || parsedAttendanceDate.toISODate() !== grace.attendanceDate) {
+    throw new Error('Intern grace claim requires a valid attendance date');
+  }
+  if (isNoGraceDate(grace.attendanceDate)) throw new Error('Intern grace discontinued since 2026-10-01');
+}
+
+function graceRecord(grace: SheetInternGraceClaim): SheetInternGrace {
+  return {
+    graceId: grace.graceId,
+    userId: grace.userId,
+    weekStart: grace.weekStart,
+    attendanceId: grace.attendanceId,
+    usedAt: grace.usedAt,
+  };
+}
+
 function valuesForGrace(headers: string[], grace: SheetInternGrace): string[] {
   const values = new Map<string, string>([
     ['graceid', grace.graceId],

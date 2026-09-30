@@ -196,6 +196,15 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
     expect(results.get('3')?.minutesLate).toBe(5);
   });
 
+  it('applies the no-grace cutoff to interns while leaving employee evaluation unchanged', () => {
+    const results = evaluateAttendanceArrivals([
+      { attendanceId: 'intern', userId: 'I1', attendanceDate: '2026-10-01', timeIn: '2026-10-01T08:08:00+08:00', employeeType: 'INTERN' },
+      { attendanceId: 'employee', userId: 'E1', attendanceDate: '2026-10-01', timeIn: '2026-10-01T08:08:00+08:00', employeeType: 'EMPLOYEE' },
+    ]);
+    expect(results.get('intern')).toEqual({ arrivalStatus: 'LATE', minutesLate: 8 });
+    expect(results.get('employee')).toEqual({ arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 });
+  });
+
   it('returns late minutes when the weekly grace budget is already used', () => {
     expect(evaluateArrivalWithBudget('2026-08-25T08:05:00+08:00', true)).toEqual({
       arrivalStatus: 'LATE',

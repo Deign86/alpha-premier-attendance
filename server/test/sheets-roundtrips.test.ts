@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { sheets_v4 } from 'googleapis';
 import { AttendanceService } from '../src/attendance.js';
-import { GoogleSheetsAdapter } from '../src/sheets.js';
+import { GoogleSheetsAdapter, InMemorySheetsService } from '../src/sheets.js';
 
 /**
  * Regression test for the "long loading on rescan (time-out)" bug.
@@ -65,6 +65,58 @@ const SHEET_DATA: Record<string, string[][]> = {
 };
 
 describe('GoogleSheetsAdapter scan round-trips', () => {
+  it('freezes post-cutoff intern grace claims by attendance date in both adapters', async () => {
+    const afterCutoffWeek = {
+      graceId: 'g1',
+      userId: 'u1',
+      weekStart: '2026-10-05',
+      attendanceId: 'att1',
+      attendanceDate: '2026-10-05',
+      usedAt: '2026-10-05T08:05:00+08:00',
+    };
+    const cutoffWeek = {
+      ...afterCutoffWeek,
+      graceId: 'g2',
+      weekStart: '2026-09-28',
+      attendanceId: 'att2',
+      attendanceDate: '2026-10-01',
+      usedAt: '2026-10-01T08:05:00+08:00',
+    };
+    const beforeCutoffSameWeek = {
+      ...cutoffWeek,
+      graceId: 'g3',
+      attendanceId: 'att3',
+      attendanceDate: '2026-09-30',
+      usedAt: '2026-09-30T08:05:00+08:00',
+    };
+    const missingAttendanceDate = {
+      graceId: 'g4',
+      userId: 'u1',
+      weekStart: '2026-09-28',
+      attendanceId: 'att4',
+      usedAt: '2026-09-30T08:05:00+08:00',
+    };
+    const memory = new InMemorySheetsService([], [
+      { attendanceId: 'att1', attendanceDate: '2026-10-05', userId: 'u1', rfidUid: 'AABBCC11', fullName: 'Test User', department: 'Eng', timeIn: '2026-10-05T08:05:00+08:00', timeOut: '2026-10-05T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+      { attendanceId: 'att2', attendanceDate: '2026-10-01', userId: 'u1', rfidUid: 'AABBCC11', fullName: 'Test User', department: 'Eng', timeIn: '2026-10-01T08:05:00+08:00', timeOut: '2026-10-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+      { attendanceId: 'att3', attendanceDate: '2026-09-30', userId: 'u1', rfidUid: 'AABBCC11', fullName: 'Test User', department: 'Eng', timeIn: '2026-09-30T08:05:00+08:00', timeOut: '2026-09-30T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+    ]);
+    await expect(memory.claimInternGrace(afterCutoffWeek)).rejects.toThrow('Intern grace discontinued since 2026-10-01');
+    await expect(memory.claimInternGrace(cutoffWeek)).rejects.toThrow('Intern grace discontinued since 2026-10-01');
+    await expect(Reflect.apply(memory.claimInternGrace, memory, [missingAttendanceDate])).rejects.toThrow('Intern grace claim requires a valid attendance date');
+    await expect(memory.claimInternGrace({ ...beforeCutoffSameWeek, attendanceId: 'att2' })).rejects.toThrow('Intern grace claim does not match its attendance row');
+    await expect(memory.claimInternGrace(beforeCutoffSameWeek)).resolves.toMatchObject({ weekStart: '2026-09-28' });
+
+    const { api, calls } = fakeSheetsApi();
+    const adapter = new GoogleSheetsAdapter({ spreadsheetId: 's1' }, api);
+    await expect(adapter.claimInternGrace(afterCutoffWeek)).rejects.toThrow('Intern grace discontinued since 2026-10-01');
+    await expect(adapter.claimInternGrace(cutoffWeek)).rejects.toThrow('Intern grace discontinued since 2026-10-01');
+    // A direct caller that spoofs a pre-cutoff date for an October attendanceId is outside the trusted-writer contract.
+    await expect(Reflect.apply(adapter.claimInternGrace, adapter, [missingAttendanceDate])).rejects.toThrow('Intern grace claim requires a valid attendance date');
+    await expect(adapter.claimInternGrace(beforeCutoffSameWeek)).resolves.toMatchObject({ weekStart: '2026-09-28' });
+    expect(calls.filter((call) => call.op === 'append')).toHaveLength(1);
+  });
+
   it('completes a TIME_OUT rescan within the round-trip budget', async () => {
     const { api, calls } = fakeSheetsApi();
     const adapter = new GoogleSheetsAdapter({ spreadsheetId: 's1' }, api);

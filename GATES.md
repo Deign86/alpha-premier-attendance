@@ -1152,3 +1152,25 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   EVIDENCE: Payroll sheet register adds Undertime Hours for EMPLOYEE and INTERN exports, derived as half-day pesos ÷ hourly rate (daily ÷ 8) to 1 decimal so production rows with whole-number counts still feed real data (e.g. PHP 176.56 at PHP 80/day → 17.7h); Halfday peso deduction unchanged. Column rebalanced to 20mm within the 273mm page.
   EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml --test payroll_sheet_undertime` passes 27/27 on Windows (new proof test asserting a real generated PDF contains the Undertime header, plus the full reporting suite via the same harness; also fixed the inner loader test's minimal `payroll_cutoffs` schema to include `half_day_count`).
 
+## Intern no-grace cutover (2026-10-01)
+
+- [x] Intern arrivals from 2026-10-01 have no grace; late deduction is `ceil(hours late) × PHP 10` and computed/DTR time-in stays actual (early arrivals floor to 08:00 for payable hours).
+  CHECK: `npm test -w server -- intern-payroll.test.ts`
+  CHECK: `npm test -w server -- intern-dtr-sync.test.ts`
+  CHECK: `npm test --prefix client -- App.test.tsx`
+  EXPECT: 08:08 charges 1 hour, 09:30 charges 2; cutoff dates never consume grace or apply the legacy hourly clamp; pre-cutover history remains unchanged.
+  EVIDENCE: Implemented in `server/src/intern-payroll.ts`, `server/src/intern-dtr-sync.ts`, `shared/src/api-contracts.ts`, and `client/src/App.tsx`; TTS also date-gates legacy grace status in `client/src/services/ttsService.ts`. `server/test/admin.test.ts` covers DTR display only; its fixtures seed the first attendance without a grace claim and do not prove the second arrival's payroll deduction.
+- [x] Live grace claims stop for cutoff attendance; legacy reads/imports remain available.
+  CHECK: `npm test -w server -- sheets-roundtrips.test.ts`
+  CHECK: `npm test -w server -- payroll.test.ts`
+  EXPECT: Oct. 1–5 claims are rejected; Sep. 30 remains valid; the payroll writer is the sole current production caller supplying the Google adapter's attendance date; historical imports remain exempt.
+  EVIDENCE: `server/src/sheets.ts` requires a write date, validates the InMemory row, and documents Google writer trust; `server/src/payroll.ts` is the sole current production caller passing its attendance row date. This is not an adapter-enforced caller restriction. `docs/migration-cutover.md` exempts historical `--execute` imports from the live-claim guard.
+- [x] Accepted residuals remain bounded and documented.
+  EVIDENCE: Google Sheets adapter does not reread Attendance for claim authorization; direct callers must pass the verified attendance date (`server/src/sheets.ts`, `server/src/payroll.ts`). The Sep. 5 DTR suite assertion mismatch remains separately tracked in `server/test/intern-dtr-sync.test.ts`.
+- [x] Phase 3 full TypeScript suite sweep and client verification complete.
+  CHECK: `npm test -w server`
+  CHECK: `npm test -w shared`
+  CHECK: `npm run typecheck -w client`
+  EXPECT: the known Sep. 5 DTR assertion is the only server failure; shared tests and client typecheck pass.
+  EVIDENCE: Server 278/279 tests passed (sole failure: `server/test/intern-dtr-sync.test.ts`, Sep. 5 undertime expectation); shared 38/38 passed; client typecheck passed; focused `ttsService.test.ts` 73/73 passed.
+

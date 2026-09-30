@@ -8,7 +8,7 @@ import type {
   TtsStatusResponse,
   VoiceStudioConnection,
 } from '@rfid-attendance/shared';
-import { ATTENDANCE_TIMEZONE } from '@rfid-attendance/shared';
+import { ATTENDANCE_TIMEZONE, isNoGraceDate } from '@rfid-attendance/shared';
 import { tauriApi } from '../tauri-api';
 import {
   getClonedBeaAudioUrl,
@@ -261,6 +261,8 @@ export type AttendancePhraseOptions = {
   personId?: string | null;
   userId?: string | null;
   arrivalStatus?: ArrivalStatus | null;
+  attendanceDate?: string;
+  employeeType?: 'INTERN' | 'EMPLOYEE';
   isLateTimeout?: boolean | null;
   isAssisted?: boolean;
   isFirstTimeInToday?: boolean | null;
@@ -337,12 +339,13 @@ export function resolveAttendanceSegments(options: AttendancePhraseOptions): Att
   const prefix = options.attendanceType === 'time_in' ? `${greeting},` : 'Goodbye,';
   const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
   const assistedPrefix = options.isAssisted ? 'assisted ' : '';
+  const arrivalStatus = effectiveArrivalStatus(options);
   let suffix: string;
 
   if (options.attendanceType === 'time_in') {
-    if (options.arrivalStatus === 'GRACE_PERIOD') {
+    if (arrivalStatus === 'GRACE_PERIOD') {
       suffix = `Your ${assistedPrefix}time in has been recorded. You made it within the grace period.${firstArrivalNote}`;
-    } else if (options.arrivalStatus === 'LATE') {
+    } else if (arrivalStatus === 'LATE') {
       suffix = `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
     } else {
       suffix = `Your ${assistedPrefix}time in has been recorded.${firstArrivalNote}`;
@@ -357,6 +360,18 @@ export function resolveAttendanceSegments(options: AttendancePhraseOptions): Att
   }
 
   return { prefix, suffix };
+}
+
+function effectiveArrivalStatus(options: AttendancePhraseOptions): ArrivalStatus | null | undefined {
+  if (
+    options.arrivalStatus === 'GRACE_PERIOD' &&
+    options.employeeType === 'INTERN' &&
+    options.attendanceDate !== undefined &&
+    isNoGraceDate(options.attendanceDate)
+  ) {
+    return 'LATE';
+  }
+  return options.arrivalStatus;
 }
 
 /**
@@ -389,12 +404,13 @@ export function buildAttendancePhrase(
 
   if (options.attendanceType === 'time_in') {
     const firstArrivalNote = options.isFirstTimeInToday ? ' You are the first arrival today.' : '';
+    const arrivalStatus = effectiveArrivalStatus(options);
 
-    if (options.arrivalStatus === 'GRACE_PERIOD') {
+    if (arrivalStatus === 'GRACE_PERIOD') {
       return `Your ${assistedPrefix}time in has been recorded within the grace period.${firstArrivalNote}`;
     }
 
-    if (options.arrivalStatus === 'LATE') {
+    if (arrivalStatus === 'LATE') {
       return `Your ${assistedPrefix}time in has been recorded. You are late.${firstArrivalNote}`;
     }
 

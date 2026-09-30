@@ -240,6 +240,39 @@ describe('intern payroll policy', () => {
     expect(result).toMatchObject({ computedTimeIn: '2026-09-22T08:08:00+08:00', lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 });
   });
 
+  it('preserves sub-millisecond precision when rounding post-cutover late hours', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-10-01',
+      actualTimeIn: '2026-10-01T09:00:00.000000001+08:00',
+      actualTimeOut: '2026-10-01T17:00:00+08:00',
+      graceAvailable: true,
+    });
+    expect(result).toMatchObject({
+      computedTimeIn: '2026-10-01T09:00:00+08:00',
+      graceUsed: false,
+      lateHours: 2,
+      lateDeduction: 20,
+    });
+  });
+
+  it('rejects post-cutover clock-ins on a different Manila calendar date', () => {
+    expect(() => calculateInternPayroll({
+      attendanceDate: '2026-10-01',
+      actualTimeIn: '2026-09-30T15:59:00Z',
+      actualTimeOut: '2026-10-01T17:00:00+08:00',
+      graceAvailable: true,
+    })).toThrow('Payroll clock-in date must match attendanceDate in Manila');
+  });
+
+  it('keeps legacy pre-cutover handling for mismatched clock-in dates', () => {
+    expect(() => calculateInternPayroll({
+      attendanceDate: '2026-09-30',
+      actualTimeIn: '2026-10-01T00:00:00+08:00',
+      actualTimeOut: '2026-10-01T17:00:00+08:00',
+      graceAvailable: true,
+    })).not.toThrow();
+  });
+
   it('treats fractional milliseconds after 08:15:00 as late but preserves the exact grace endpoint', () => {
     const exactGraceEnd = calculateInternPayroll({
       attendanceDate: '2026-09-22',

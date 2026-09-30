@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { evaluateArrivalWithBudget, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP } from '@rfid-attendance/shared';
+import { evaluateArrivalWithBudget, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, isNoGraceDate } from '@rfid-attendance/shared';
 import { capLateTimeoutOut, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
 
 export type InternPayrollInput = {
@@ -38,20 +38,36 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
   if (!start.isValid) throw new Error('Payroll timestamps must be valid ISO values');
 
-  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !input.graceAvailable, timezone);
-  const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
-  const clampLateIn = arrival.arrivalStatus === 'LATE' && (
-    actualTimeIn.minute > 15 ||
-    (actualTimeIn.minute === 15 && (
-      actualTimeIn.second > 0 || actualTimeIn.millisecond > 0 || hasSubMillisecondFraction(input.actualTimeIn)
-    ))
-  );
-  const effectiveTimeIn = clampLateIn
-    ? actualTimeIn.plus({ hours: 1 }).startOf('hour')
-    : actualTimeIn;
-  const lateHours = arrival.arrivalStatus === 'LATE'
-    ? Math.max(1, effectiveTimeIn.hour - start.hour)
-    : 0;
+  const noGrace = isNoGraceDate(input.attendanceDate);
+  if (noGrace && actualTimeIn.toISODate() !== input.attendanceDate) {
+    throw new Error('Payroll clock-in date must match attendanceDate in Manila');
+  }
+  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, noGrace || !input.graceAvailable, timezone, input.attendanceDate);
+  const graceUsed = !noGrace && arrival.arrivalStatus === 'GRACE_PERIOD';
+  let effectiveTimeIn = actualTimeIn;
+  let lateHours = 0;
+  if (noGrace) {
+    const elapsedMilliseconds = actualTimeIn.toMillis() - start.toMillis();
+    const hasFractionBeyondMillisecond = hasSubMillisecondFraction(input.actualTimeIn);
+    lateHours = arrival.arrivalStatus === 'LATE'
+      ? Math.max(1, Math.ceil(elapsedMilliseconds / 3_600_000) + (
+        hasFractionBeyondMillisecond && elapsedMilliseconds % 3_600_000 === 0 ? 1 : 0
+      ))
+      : 0;
+  } else {
+    const clampLateIn = arrival.arrivalStatus === 'LATE' && (
+      actualTimeIn.minute > 15 ||
+      (actualTimeIn.minute === 15 && (
+        actualTimeIn.second > 0 || actualTimeIn.millisecond > 0 || hasSubMillisecondFraction(input.actualTimeIn)
+      ))
+    );
+    effectiveTimeIn = clampLateIn
+      ? actualTimeIn.plus({ hours: 1 }).startOf('hour')
+      : actualTimeIn;
+    lateHours = arrival.arrivalStatus === 'LATE'
+      ? Math.max(1, effectiveTimeIn.hour - start.hour)
+      : 0;
+  }
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
   const computedTimeIn = graceUsed ? start : effectiveTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;

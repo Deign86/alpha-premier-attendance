@@ -95,6 +95,41 @@ describe('ttsService', () => {
       );
     });
 
+    it('does not speak grace wording for post-cutover interns while preserving history', () => {
+      expect(buildAttendancePhrase({
+        attendanceType: 'time_in',
+        employeeName: 'Ada Lovelace',
+        arrivalStatus: 'GRACE_PERIOD',
+        attendanceDate: '2026-10-01',
+        employeeType: 'INTERN',
+      })).toBe('Good morning, Ada Lovelace. Your time in has been recorded. You are late.');
+
+      expect(buildAttendancePhrase({
+        attendanceType: 'time_in',
+        employeeName: 'Ada Lovelace',
+        arrivalStatus: 'GRACE_PERIOD',
+        attendanceDate: '2026-09-30',
+        employeeType: 'INTERN',
+      })).toBe('Good morning, Ada Lovelace. Your time in has been recorded. You made it within the grace period.');
+    });
+
+    it('preserves dated post-cutover grace wording for employees and missing employee types', () => {
+      expect(buildAttendancePhrase({
+        attendanceType: 'time_in',
+        employeeName: 'Grace Hopper',
+        arrivalStatus: 'GRACE_PERIOD',
+        attendanceDate: '2026-10-01',
+        employeeType: 'EMPLOYEE',
+      })).toBe('Good morning, Grace Hopper. Your time in has been recorded. You made it within the grace period.');
+
+      expect(buildAttendancePhrase({
+        attendanceType: 'time_in',
+        employeeName: 'Ada Lovelace',
+        arrivalStatus: 'GRACE_PERIOD',
+        attendanceDate: '2026-10-01',
+      })).toBe('Good morning, Ada Lovelace. Your time in has been recorded. You made it within the grace period.');
+    });
+
     it('builds late time-in phrase noting outlier', () => {
       expect(
         buildAttendancePhrase({

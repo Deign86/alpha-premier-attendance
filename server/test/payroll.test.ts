@@ -27,8 +27,12 @@ describe('payroll service integration', () => {
       attendanceId, attendanceDate, userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: null,
       timeIn: `${attendanceDate}T08:08:00+08:00`, timeOut: `${attendanceDate}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID', notes: '',
     });
-    const first = await service.ensureForCompletedAttendance(attendanceFor('I-WEEK-1', '2026-09-21'), user);
-    const second = await service.ensureForCompletedAttendance(attendanceFor('I-WEEK-2', '2026-09-22'), user);
+    const firstAttendance = attendanceFor('I-WEEK-1', '2026-09-21');
+    const secondAttendance = attendanceFor('I-WEEK-2', '2026-09-22');
+    await sheets.createAttendance(firstAttendance);
+    await sheets.createAttendance(secondAttendance);
+    const first = await service.ensureForCompletedAttendance(firstAttendance, user);
+    const second = await service.ensureForCompletedAttendance(secondAttendance, user);
     expect(first).toMatchObject({ graceUsed: true, lateHours: 0, lateDeduction: 0, dailyPay: 80 });
     expect(second).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10, dailyPay: 70 });
   });
@@ -42,8 +46,12 @@ describe('payroll service integration', () => {
       timeIn: `${attendanceDate}T08:15:00+08:00`, timeOut: `${attendanceDate}T15:00:00+08:00`, status: 'COMPLETED', source: 'RFID', notes: '',
     });
 
-    const first = await service.ensureForCompletedAttendance(attendanceFor('I-815-WEEK-1', '2026-09-21'), user);
-    const second = await service.ensureForCompletedAttendance(attendanceFor('I-815-WEEK-2', '2026-09-22'), user);
+    const firstAttendance = attendanceFor('I-815-WEEK-1', '2026-09-21');
+    const secondAttendance = attendanceFor('I-815-WEEK-2', '2026-09-22');
+    await sheets.createAttendance(firstAttendance);
+    await sheets.createAttendance(secondAttendance);
+    const first = await service.ensureForCompletedAttendance(firstAttendance, user);
+    const second = await service.ensureForCompletedAttendance(secondAttendance, user);
 
     expect(first).toMatchObject({ graceUsed: true, lateHours: 0, lateDeduction: 0, basePay: 80, dailyPay: 60 });
     expect(second).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10, basePay: 80, dailyPay: 50 });

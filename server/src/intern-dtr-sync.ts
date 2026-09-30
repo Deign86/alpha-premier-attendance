@@ -15,7 +15,7 @@
  * H:J counters are formula territory and are never written.
  */
 import { DateTime } from 'luxon';
-import { getManilaWeekStart } from '@rfid-attendance/shared';
+import { getManilaWeekStart, isNoGraceDate } from '@rfid-attendance/shared';
 import { capLateTimeoutOut } from './lunch-break.js';
 
 export type DtrSyncUser = {
@@ -1029,14 +1029,15 @@ export async function planPush(
     return fail(reason, `tab ${resolved.status} for ${record.fullName}`);
   }
   const weekStart = getManilaWeekStart(record.attendanceDate);
-  const graceExhausted = attendanceHistory.some((arrival) => {
+  const noGrace = isNoGraceDate(record.attendanceDate);
+  const graceExhausted = !noGrace && attendanceHistory.some((arrival) => {
     if (arrival.userId !== record.userId || arrival.attendanceDate >= record.attendanceDate) return false;
     if (getManilaWeekStart(arrival.attendanceDate) !== weekStart || !arrival.timeIn?.trim()) return false;
     return isWithinGraceWindow(arrival.timeIn);
   });
   const actualTimeIn = record.timeIn?.trim() ?? '';
   const ungracedLate = actualTimeIn.length > 0 &&
-    (graceExhausted || !isWithinGraceWindow(actualTimeIn));
+    !noGrace && (graceExhausted || !isWithinGraceWindow(actualTimeIn));
   const values = buildDtrRow(record.timeIn, record.timeOut, record.attendanceDate, ungracedLate);
   if (values.every((v) => v === '')) return fail('no-time-in', 'no time-in yet');
   const rows = await client.getTabValues(resolved.tab);

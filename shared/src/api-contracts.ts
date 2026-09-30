@@ -31,6 +31,10 @@ export type AttendanceStatus = (typeof attendanceStatuses)[number];
  * (flagged for manual correction) instead of a normal `COMPLETED` shift.
  */
 export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
+export const NO_GRACE_CUTOFF_DATE = '2026-10-01';
+export function isNoGraceDate(attendanceDate: string): boolean {
+  return attendanceDate >= NO_GRACE_CUTOFF_DATE;
+}
 /** Official start of the workday. Arrivals at or before 08:00 are on time. */
 export const OFFICE_HOURS_START = '08:00';
 /** Official end of grace period window (8:00 AM - 8:15 AM). */
@@ -51,13 +55,14 @@ export function evaluateArrivalWithBudget(
   timeInIso: string,
   graceAlreadyUsed: boolean,
   timezone = ATTENDANCE_TIMEZONE,
+  attendanceDate?: string,
 ): ArrivalEvaluation {
   const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
   if (seconds === null) return { arrivalStatus: 'NONE', minutesLate: 0 };
   const startSeconds = 8 * 3600;
   const graceEndSeconds = 8 * 3600 + 15 * 60;
   if (seconds <= startSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
-  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds && !graceAlreadyUsed) {
+  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds && !graceAlreadyUsed && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) {
     return { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 };
   }
   return {
@@ -141,12 +146,12 @@ function manilaSecondsSinceMidnight(iso: string, timezone: string): number | nul
  * enforcing that each user receives at most 1 Grace Period (08:00:01 - 08:15:00) per work week.
  */
 export function evaluateAttendanceArrivals(
-  rows: Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn?: string | null }>,
+  rows: Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn?: string | null; employeeType?: 'INTERN' | 'EMPLOYEE' }>,
 ): Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }> {
   const result = new Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }>();
 
   // Group by userId and weekStart
-  const groups = new Map<string, Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn: string }>>();
+  const groups = new Map<string, Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn: string; employeeType?: 'INTERN' | 'EMPLOYEE' }>>();
   for (const row of rows) {
     if (!row.timeIn) {
       result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
@@ -161,7 +166,7 @@ export function evaluateAttendanceArrivals(
     }
     const key = `${row.userId}:${weekStart}`;
     const list = groups.get(key) ?? [];
-    list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn });
+    list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, employeeType: row.employeeType });
     groups.set(key, list);
   }
 
@@ -175,7 +180,8 @@ export function evaluateAttendanceArrivals(
     let graceUsedThisWeek = false;
 
     for (const item of list) {
-      const evaluation = evaluateArrivalWithBudget(item.timeIn, graceUsedThisWeek);
+      const attendanceDate = item.employeeType === 'EMPLOYEE' ? undefined : item.attendanceDate;
+      const evaluation = evaluateArrivalWithBudget(item.timeIn, graceUsedThisWeek, ATTENDANCE_TIMEZONE, attendanceDate);
       if (evaluation.arrivalStatus === 'GRACE_PERIOD') graceUsedThisWeek = true;
       result.set(item.attendanceId, evaluation);
     }
@@ -193,6 +199,7 @@ export function evaluateAttendanceArrivals(
 export function evaluateArrivalFromTimestamp(
   timeInIso: string,
   timezone = ATTENDANCE_TIMEZONE,
+  attendanceDate?: string,
 ): ArrivalStatus {
   const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
   if (seconds === null) return 'NONE';
@@ -202,7 +209,7 @@ export function evaluateArrivalFromTimestamp(
   const graceEndSeconds = graceHour * 3600 + graceMinute * 60;
 
   if (seconds <= startSeconds) return 'ON_TIME';
-  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds) return 'GRACE_PERIOD';
+  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) return 'GRACE_PERIOD';
   return 'LATE';
 }
 

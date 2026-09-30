@@ -40,7 +40,7 @@ export class PayrollService {
       const graceAvailable = !grace || grace.attendanceId === attendance.attendanceId;
       const calculation = calculateInternPayroll({ attendanceDate: attendance.attendanceDate, actualTimeIn, actualTimeOut, graceAvailable });
       if (calculation.graceUsed && !grace) {
-        await this.sheets.claimInternGrace({ graceId: crypto.randomUUID(), userId: user.userId, weekStart, attendanceId: attendance.attendanceId, usedAt: attendance.timeIn });
+        await this.sheets.claimInternGrace({ graceId: crypto.randomUUID(), userId: user.userId, weekStart, attendanceId: attendance.attendanceId, attendanceDate: attendance.attendanceDate, usedAt: attendance.timeIn });
       }
       return this.sheets.createPayroll({
         payrollId: crypto.randomUUID(), attendanceId: attendance.attendanceId, userId: user.userId, fullName: user.fullName, employeeType: 'INTERN', attendanceDate: attendance.attendanceDate,

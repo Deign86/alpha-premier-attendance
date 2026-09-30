@@ -5444,23 +5444,29 @@ async fn ensure_payroll(
                 chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| e.to_string())?;
             let week_start = date_value
                 - chrono::Duration::days(date_value.weekday().num_days_from_monday() as i64);
-            let grace_available = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id != ?",
-            )
-            .bind(user_id)
-            .bind(week_start.to_string())
-            .bind(attendance_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
-                == 0;
+            let no_grace_cutover = crate::services::intern_payroll::is_no_grace_date(date);
+            // Post-cutover skips grace-claim INSERT/DELETE, preserving pre-cutover history.
+            let grace_available = if no_grace_cutover {
+                false
+            } else {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id != ?",
+                )
+                .bind(user_id)
+                .bind(week_start.to_string())
+                .bind(attendance_id)
+                .fetch_one(&state.db)
+                .await
+                .map_err(|e| e.to_string())?
+                    == 0
+            };
             let mut result = crate::services::intern_payroll::calculate(
                 date,
                 actual_in,
                 actual_out,
                 grace_available,
             )?;
-            if result.grace_used {
+            if result.grace_used && !no_grace_cutover {
                 let grace_id = uuid::Uuid::new_v4().to_string();
                 let used_at = chrono::Utc::now().to_rfc3339();
                 let inserted = sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&state.db).await.map_err(|e| e.to_string())?.rows_affected() == 1;
@@ -5486,10 +5492,14 @@ async fn ensure_payroll(
                     }
                 }
             } else {
-                let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
-                    .bind(attendance_id)
-                    .execute(&state.db)
-                    .await;
+                // Keep legacy stale-claim cleanup for historical recalculations;
+                // post-cutover recalculations must never erase a history claim.
+                if date < crate::services::intern_payroll::NO_GRACE_CUTOFF_DATE {
+                    let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
+                        .bind(attendance_id)
+                        .execute(&state.db)
+                        .await;
+                }
             }
             (
                 result.computed_time_in,
