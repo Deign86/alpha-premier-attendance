@@ -93,7 +93,9 @@ pub fn calculate(
         && (worked_hours <= 4.0 || time_in.hour() >= super::payroll::HALF_DAY_LATE_ARRIVAL_HOUR);
     let unrendered_hours = (8.0 - worked_hours).max(0.0);
     // payable_in already excludes late hours; only the remaining shortfall is undertime.
-    let deduction = ((unrendered_hours - late_hours as f64).max(0.0) * hourly_rate_centavos as f64).round() as i64;
+    let remaining = (unrendered_hours - late_hours as f64).max(0.0);
+    let undertime_hours = (remaining - 1e-9).ceil() as i64;
+    let deduction = undertime_hours * hourly_rate_centavos;
     let daily_pay = base - late_deduction - deduction;
     // DTR DECOUPLING: `computed_time_out` is a PAYROLL-ONLY effective window.
     // A morning half-day closed before office close pays as 08:00-12:00 even
@@ -375,6 +377,26 @@ mod tests {
         assert_eq!(result.half_day_deduction_centavos, 2000);
         assert_eq!(result.base_pay_centavos, 8000);
     }
+
+    #[test]
+    fn undertime_deduction_rounds_up_to_whole_hours() {
+        for (time_out, expected_worked_hours) in [
+            ("15:05:00", 6.0 + 5.0 / 60.0),
+            ("15:34:00", 6.0 + 34.0 / 60.0),
+            ("15:00:00", 6.0),
+        ] {
+            let result = calculate(
+                "2026-08-01",
+                "2026-08-01T08:00:00+08:00",
+                &format!("2026-08-01T{time_out}+08:00"),
+                true,
+            )
+            .unwrap();
+            assert!((result.worked_hours - expected_worked_hours).abs() < 0.000_001, "{time_out}");
+            assert_eq!(result.half_day_deduction_centavos, 2_000, "{time_out}");
+        }
+    }
+
     #[test]
     fn four_pm_clock_out_pays_seven_hours() {
         // 8:00 AM to 4:00 PM (8h elapsed - 1h lunch = 7 hours worked) -> pay = 7 * ₱10 = ₱70 (7000 centavos, ₱10 deduction).

@@ -2386,7 +2386,23 @@ async fn payroll_intern_report(
     if cutoff_end < cutoff_start {
         return Err("INVALID_CUTOFF_DATES".into());
     }
-    reconcile_attendance_payroll_range(&state, &cutoff_start, &cutoff_end).await?;
+    let finalized_employee_ids = sqlx::query_scalar::<_, String>(
+        "SELECT employee_id FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='FINALIZED'",
+    )
+    .bind(&cutoff_start)
+    .bind(&cutoff_end)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .collect::<std::collections::HashSet<_>>();
+    reconcile_attendance_payroll_range(
+        &state,
+        &cutoff_start,
+        &cutoff_end,
+        &finalized_employee_ids,
+    )
+    .await?;
     let rows = sqlx::query(
         "SELECT u.user_id, u.full_name, \
          COALESCE(COUNT(p.payroll_id), 0) AS actual_days, \
@@ -2537,17 +2553,35 @@ async fn payroll_generate_cutoff_impl(
         return Err("INVALID_CUTOFF_DATES".into());
     }
 
-    reconcile_attendance_payroll_range(state, &cutoff_start, &cutoff_end).await?;
+    let finalized_employee_ids = sqlx::query_scalar::<_, String>(
+        "SELECT employee_id FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='FINALIZED'",
+    )
+    .bind(&cutoff_start)
+    .bind(&cutoff_end)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?
+    .into_iter()
+    .collect::<std::collections::HashSet<_>>();
+    reconcile_attendance_payroll_range(
+        state,
+        &cutoff_start,
+        &cutoff_end,
+        &finalized_employee_ids,
+    )
+    .await?;
 
     // A draft is a live view of attendance. Remove the prior generated draft
     // before rebuilding it, while preserving approved cutoff records.
     if let Some(selected_id) = customization.get("employeeId").and_then(|v| v.as_str()) {
-        sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='DRAFT'")
-            .bind(selected_id).bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='DRAFT' AND employee_id NOT IN (SELECT employee_id FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='FINALIZED')")
+            .bind(selected_id).bind(&cutoff_start).bind(&cutoff_end).bind(&cutoff_start).bind(&cutoff_end).execute(&state.db).await.map_err(|e| e.to_string())?;
     } else {
         sqlx::query(
-            "DELETE FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='DRAFT'",
+            "DELETE FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='DRAFT' AND employee_id NOT IN (SELECT employee_id FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='FINALIZED')",
         )
+        .bind(&cutoff_start)
+        .bind(&cutoff_end)
         .bind(&cutoff_start)
         .bind(&cutoff_end)
         .execute(&state.db)
@@ -2581,9 +2615,7 @@ async fn payroll_generate_cutoff_impl(
         let employee_name: String = row.get("full_name");
         let employee_type: String = row.get("employee_type");
         let is_intern = employee_type != "EMPLOYEE";
-        let finalized_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id=? AND cutoff_start=? AND cutoff_end=? AND status='FINALIZED'")
-            .bind(&employee_id).bind(&cutoff_start).bind(&cutoff_end).fetch_one(&state.db).await.map_err(|e| e.to_string())? > 0;
-        if finalized_exists {
+        if finalized_employee_ids.contains(&employee_id) {
             continue;
         }
         let profile_id = if is_intern {
@@ -5513,6 +5545,7 @@ async fn reconcile_attendance_payroll_range(
     state: &AppState,
     start_date: &str,
     end_date: &str,
+    excluded_employee_ids: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     let rows = sqlx::query(
         "SELECT a.attendance_id, a.attendance_date, a.user_id, a.full_name, \
@@ -5535,6 +5568,9 @@ async fn reconcile_attendance_payroll_range(
     for row in rows {
         let attendance_id: String = row.get("attendance_id");
         let user_id: String = row.get("user_id");
+        if excluded_employee_ids.contains(&user_id) {
+            continue;
+        }
         let full_name: String = row.get("full_name");
         let employee_type: String = row.get("employee_type");
         let daily_rate: Option<i64> = row.get("daily_rate_centavos");
@@ -5559,6 +5595,7 @@ async fn reconcile_attendance_payroll_range(
     let _ = sqlx::query(
         "DELETE FROM payroll \
          WHERE attendance_date >= ? AND attendance_date <= ? \
+           AND user_id NOT IN (SELECT employee_id FROM payroll_cutoffs WHERE cutoff_start=? AND cutoff_end=? AND status='FINALIZED') \
            AND attendance_id NOT IN ( \
              SELECT attendance_id FROM attendance \
              WHERE attendance_date >= ? AND attendance_date <= ? \
@@ -5567,6 +5604,8 @@ async fn reconcile_attendance_payroll_range(
                AND time_out IS NOT NULL \
            )",
     )
+    .bind(start_date)
+    .bind(end_date)
     .bind(start_date)
     .bind(end_date)
     .bind(start_date)
@@ -7973,7 +8012,12 @@ mod tests {
         .await
         .unwrap();
 
-        super::reconcile_attendance_payroll_range(&state, "2026-08-01", "2026-08-15")
+        super::reconcile_attendance_payroll_range(
+            &state,
+            "2026-08-01",
+            "2026-08-15",
+            &std::collections::HashSet::new(),
+        )
             .await
             .unwrap();
 

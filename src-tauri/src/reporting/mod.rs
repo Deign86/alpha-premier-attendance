@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn intern_sheet_row_includes_late_deduction_in_display_and_gross() {
+    async fn intern_sheet_row_includes_late_deduction_in_display_and_net() {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -99,9 +99,10 @@ mod tests {
               standard_working_days REAL NOT NULL, actual_working_days REAL NOT NULL, \
               basic_pay_centavos INTEGER NOT NULL, total_compensation_centavos INTEGER NOT NULL, \
               late_deduction_centavos INTEGER NOT NULL, half_day_deduction_centavos INTEGER NOT NULL, \
-              half_day_count REAL NOT NULL DEFAULT 0, absent_days REAL NOT NULL, absence_deduction_centavos INTEGER NOT NULL, \
-              manual_adjustment_centavos INTEGER NOT NULL, gross_compensation_centavos INTEGER NOT NULL, \
-              cutoff_start TEXT NOT NULL, cutoff_end TEXT NOT NULL)",
+               half_day_count REAL NOT NULL DEFAULT 0, absent_days REAL NOT NULL, absence_deduction_centavos INTEGER NOT NULL, \
+               manual_adjustment_centavos INTEGER NOT NULL, gross_compensation_centavos INTEGER NOT NULL, \
+               net_pay_centavos INTEGER NOT NULL, \
+               cutoff_start TEXT NOT NULL, cutoff_end TEXT NOT NULL)",
         )
         .execute(&db)
         .await
@@ -121,9 +122,9 @@ mod tests {
                 "INSERT INTO payroll_cutoffs (payroll_id, employee_id, employee_name, \
                  daily_rate_centavos, standard_working_days, actual_working_days, \
                  basic_pay_centavos, total_compensation_centavos, late_deduction_centavos, \
-                 half_day_deduction_centavos, absent_days, absence_deduction_centavos, \
-                 manual_adjustment_centavos, gross_compensation_centavos, cutoff_start, cutoff_end) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  half_day_deduction_centavos, absent_days, absence_deduction_centavos, \
+                  manual_adjustment_centavos, gross_compensation_centavos, net_pay_centavos, cutoff_start, cutoff_end) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(payroll_id)
             .bind(employee_id)
@@ -139,6 +140,7 @@ mod tests {
             .bind(0_i64)
             .bind(0_i64)
             .bind(88_000_i64)
+            .bind(87_000_i64)
             .bind("2026-08-16")
             .bind("2026-08-31")
             .execute(&db)
@@ -159,6 +161,12 @@ mod tests {
         assert_eq!(employee_rows.len(), 1);
         assert_eq!(employee_rows[0].late_deduction_centavos, 1_000);
         assert_eq!(employee_rows[0].gross_compensation_centavos, 87_000);
+        let pdf = std::env::temp_dir().join(format!("payroll-header-{}.pdf", uuid::Uuid::new_v4()));
+        generate_payroll_sheet_pdf(&intern_rows, "August 16-31, 2026", "INTERN", &office(), &pdf)
+            .expect("payroll sheet pdf");
+        let bytes = std::fs::read(&pdf).expect("payroll sheet pdf bytes");
+        assert!(bytes.windows(b"Net".len()).any(|window| window == b"Net"));
+        let _ = std::fs::remove_file(&pdf);
     }
 
     #[test]
@@ -768,12 +776,12 @@ mod tests {
     fn undertime_hours_match_halfday_pesos_at_hourly_rate() {
         // PHP 80/day intern: PHP 10 shortfall is exactly 1 hour.
         assert_eq!(undertime_hours_from_deduction(8_000, 1_000), 1.0);
-        // Production row (Allaena, Sep 16-30): PHP 176.56 at PHP 80/day.
+        assert_eq!(undertime_hours_from_deduction(8_000, 2_000), 2.0);
+        // Legacy deductions that are not whole-hour multiples retain tenths.
         assert_eq!(undertime_hours_from_deduction(8_000, 17_656), 17.7);
-        // True half day at PHP 80/day deducts PHP 40 -> 4 hours short.
-        assert_eq!(undertime_hours_from_deduction(8_000, 4_000), 4.0);
         assert_eq!(undertime_hours_from_deduction(8_000, 0), 0.0);
         assert_eq!(undertime_hours_from_deduction(0, 1_000), 0.0);
+        assert_eq!(undertime_hours_from_deduction(7, 1_000), 0.0);
     }
 }
 use printpdf::{
@@ -2189,7 +2197,7 @@ pub fn generate_payroll_register_pdf(
 /// One row of the consolidated payroll sheet. Mirrors the reference column
 /// layout of the printable payroll worksheet (Employee #, Employee Name,
 /// Cut Off Rate, Daily Rate, Actual Working Days, Standard Working Days,
-/// Basic Rate, Total Compensation, Late 10 /hr, Halfday, Absent, Gross
+/// Basic Rate, Total Compensation, Late 10 /hr, Halfday, Absent, Net
 /// Compensation) so the generated PDF matches the on-paper payroll reference.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PayrollSheetRow {
@@ -2207,6 +2215,7 @@ pub struct PayrollSheetRow {
     pub half_day_deduction_centavos: i64,
     pub undertime_hours: f64,
     pub absence_deduction_centavos: i64,
+    /// The sheet's Net Compensation amount (stored net, with a legacy recompute fallback).
     pub gross_compensation_centavos: i64,
 }
 
@@ -2332,18 +2341,21 @@ pub async fn load_employee_payslip_by_id(
 }
 
 /// Undertime hours backing the register column, derived from the peso
-/// deduction at the hourly rate (daily / 8), rounded to 1 decimal.
-/// Production cutoff rows store whole-number half_day_count values, so the
-/// count fraction cannot feed the column; this matches Halfday pesos exactly.
+/// deduction at the hourly rate (daily / 8), using whole hours for current
+/// deductions and tenths for legacy non-hour-multiple deductions.
 fn undertime_hours_from_deduction(
     daily_rate_centavos: i64,
     half_day_deduction_centavos: i64,
 ) -> f64 {
-    if daily_rate_centavos > 0 && half_day_deduction_centavos > 0 {
-        ((half_day_deduction_centavos as f64) / (daily_rate_centavos as f64 / 8.0) * 10.0).round()
-            / 10.0
+    let hourly_rate_centavos = daily_rate_centavos / 8;
+    if daily_rate_centavos <= 0 || hourly_rate_centavos == 0 || half_day_deduction_centavos <= 0 {
+        return 0.0;
+    }
+    if half_day_deduction_centavos % hourly_rate_centavos == 0 {
+        (half_day_deduction_centavos / hourly_rate_centavos) as f64
     } else {
-        0.0
+        ((half_day_deduction_centavos as f64 / (daily_rate_centavos as f64 / 8.0) * 10.0).round())
+            / 10.0
     }
 }
 
@@ -2363,7 +2375,7 @@ pub async fn load_payroll_sheet_rows(
          pc.total_compensation_centavos, pc.late_deduction_centavos, \
          pc.half_day_deduction_centavos, pc.half_day_count, pc.absent_days, pc.absence_deduction_centavos, \
          pc.manual_adjustment_centavos, \
-         pc.gross_compensation_centavos, COALESCE(u.employee_type, 'INTERN') AS employee_type \
+          pc.gross_compensation_centavos, pc.net_pay_centavos, COALESCE(u.employee_type, 'INTERN') AS employee_type \
          FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
          WHERE pc.cutoff_start = ? AND pc.cutoff_end = ? \
          ORDER BY pc.employee_name, pc.employee_id",
@@ -2408,8 +2420,7 @@ pub async fn load_payroll_sheet_rows(
             } else {
                 0
             };
-            // For the sheet presentation, Total Compensation represents the full cutoff rate
-            // and late, half-day, and absent days are deducted to arrive at Gross Compensation.
+            // For the sheet presentation, Total Compensation represents the full cutoff rate.
             let total_compensation_centavos = cutoff_rate_centavos;
             let manual_adjustment_centavos = row
                 .try_get::<i64, _>("manual_adjustment_centavos")
@@ -2420,6 +2431,11 @@ pub async fn load_payroll_sheet_rows(
                 - half_day_deduction_centavos
                 - absence_deduction_centavos)
                 .max(0);
+            // The sheet's Net column equals stored net_pay_centavos; recompute only for older DBs
+            // that do not have that column in their payroll_cutoffs table.
+            let gross_compensation_centavos = row
+                .try_get::<i64, _>("net_pay_centavos")
+                .unwrap_or(gross_compensation_centavos);
             PayrollSheetRow {
                 employee_id: row.get("employee_id"),
                 employee_name: row.get("employee_name"),
@@ -2505,7 +2521,7 @@ fn sheet_cell(
         winding_order: None,
     };
     if highlight {
-        // Yellow-highlighted Gross Compensation grand total like the reference.
+        // Yellow-highlighted Net Compensation grand total like the reference.
         ops.push(Op::SaveGraphicsState);
         ops.push(Op::SetFillColor {
             col: printpdf::Color::Rgb(printpdf::Rgb::new(0.953, 0.875, 0.247, None)),
@@ -2680,7 +2696,7 @@ pub fn generate_payroll_sheet_pdf(
             "Halfday",
             "Undertime\nHours",
             "Absent",
-            "Gross\nCompensation",
+            "Net\nCompensation",
             "Signature",
         ];
         let table_top_y = 170.0;
