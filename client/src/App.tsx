@@ -2480,7 +2480,7 @@ function LiveAttendance() {
 
   useEffect(() => {
     // Best-effort roster so the live table can show the display-only
-    // weekly-grace clamp (09:00 AM for repeat-late interns). Viewers without
+    // hourly payable clamp for non-graced intern late arrivals. Viewers without
     // an admin session never resolve this, so actual times simply stay visible.
     void loadAdminUsers()
       .then((response) => {
@@ -3000,9 +3000,9 @@ function AttendanceTable({
                     <span
                       className="clamped-time-in-chip clamped-time-in-static"
                       data-testid="clamped-time-in"
-                      title={`Actual scan: ${formatTime(row.timeIn, timezone)} (weekly grace used)`}
+                      title={`Actual scan: ${formatTime(row.timeIn, timezone)} (payable time clamped)`}
                     >
-                      09:00 AM
+                      {clampedTimeLabel(row.timeIn)}
                     </span>
                   ) : (
                     row.timeIn ? formatTime(row.timeIn, timezone) : "—"
@@ -6606,20 +6606,10 @@ function PayrollTable({
                                 </thead>
                                 <tbody>
                                   {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => {
-                                    // Intern late deduction with a real deduction amount: the weekly
-                                    // grace was already spent that week, so the engine pays the fixed
-                                    // 09:00 Manila time-in. Display mirrors that payable value and the
-                                    // tooltip keeps the actual scan (same policy as the attendance
-                                    // table). Arrivals past the 09:00 payable ceiling always show the
-                                    // actual time, matching the clamped-row rule.
-                                    const payableClampSeconds = item.timeIn
-                                      ? clampWindowClockSeconds(item.timeIn)
-                                      : null;
                                     const clampedPayrollTimeIn =
                                       row.employeeType === "INTERN" &&
                                       item.category === "LATE" &&
-                                      payableClampSeconds !== null &&
-                                      payableClampSeconds <= LATE_CLAMP_CEILING_SECONDS &&
+                                      Boolean(item.timeIn && shouldClampHour(item.timeIn)) &&
                                       item.amount > 0;
                                     return (
                                     <tr key={`${item.date}-${item.category}-${idx}`}>
@@ -6638,9 +6628,9 @@ function PayrollTable({
                                               <span
                                                 className="clamped-time-in-chip clamped-time-in-static"
                                                 data-testid="clamped-payroll-time-in"
-                                                title={`Actual scan: ${item.timeIn} (weekly grace used)`}
+                                                title={`Actual scan: ${item.timeIn} (payable time clamped)`}
                                               >
-                                                09:00 AM
+                                                {clampedTimeLabel(item.timeIn ?? "")}
                                               </span>
                                             ) : (
                                               item.timeIn ?? "—"
@@ -6900,9 +6890,6 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   );
 }
 
-/** Payable clamp ceiling: arrivals at or before 09:00 Manila show 09:00. */
-const LATE_CLAMP_CEILING_SECONDS = 9 * 3600;
-
 /**
  * Manila clock seconds since midnight for an ISO time-in, or null when
  * unparseable.
@@ -6924,8 +6911,8 @@ function manilaClockSeconds(timeInIso: string): number | null {
 
 /**
  * Clock seconds since midnight for either an ISO time-in or a payroll
- * "8:30 AM" style display label, or null when neither parses. Keeps the
- * payroll clamp chip inside the same 09:00 ceiling as the attendance table.
+ * "8:30 AM" style display label, or null when neither parses. Shared by the
+ * hourly clamp display and payroll details.
  */
 function clampWindowClockSeconds(timeInValue: string): number | null {
   const match = /^(\d{1,2}):(\d{2})\s*([AP]M)$/i.exec(timeInValue.trim());
@@ -6940,14 +6927,69 @@ function clampWindowClockSeconds(timeInValue: string): number | null {
   return manilaClockSeconds(timeInValue);
 }
 
+/** Round a payable late arrival strictly after :15 to the next Manila hour. */
+function clampedTimeLabel(timeInValue: string): string {
+  const seconds = clampWindowClockSeconds(timeInValue);
+  if (seconds === null) return timeInValue;
+  const hour = Math.floor(seconds / 3600);
+  const withinHour = seconds % 3600;
+  const clampedHour = isStrictlyPastQuarterHour(timeInValue, withinHour)
+    ? (hour + 1) % 24
+    : hour;
+  return `${clampedHour % 12 || 12}:00 ${clampedHour < 12 ? "AM" : "PM"}`;
+}
+
+function hasNonZeroSubMillisecondFraction(timeInValue: string): boolean {
+  const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i.exec(timeInValue)?.[1];
+  return fraction !== undefined && /[1-9]/.test(fraction.slice(3));
+}
+
+function isStrictlyPastQuarterHour(timeInValue: string, withinHour: number): boolean {
+  const date = new Date(timeInValue);
+  const fraction = Number.isFinite(date.getTime()) ? date.getMilliseconds() : 0;
+  return withinHour > 15 * 60 ||
+    (withinHour === 15 * 60 && (fraction > 0 || hasNonZeroSubMillisecondFraction(timeInValue)));
+}
+
+function shouldClampHour(timeInValue: string): boolean {
+  const seconds = clampWindowClockSeconds(timeInValue);
+  if (seconds === null) return false;
+  return isStrictlyPastQuarterHour(timeInValue, seconds % 3600);
+}
+
+function clampedTimeInIso(timeInIso: string): string {
+  const seconds = manilaClockSeconds(timeInIso);
+  const date = new Date(timeInIso);
+  if (seconds === null || !Number.isFinite(date.getTime())) return timeInIso;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ATTENDANCE_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  const dateText = `${part("year")}-${part("month")}-${part("day")}`;
+  const withinHour = seconds % 3600;
+  const nextHour = isStrictlyPastQuarterHour(timeInIso, withinHour)
+    ? Math.floor(seconds / 3600) + 1
+    : Math.floor(seconds / 3600);
+  const payable = new Date(`${dateText}T00:00:00+08:00`);
+  payable.setTime(payable.getTime() + nextHour * 3600_000);
+  const payableParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ATTENDANCE_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(payable);
+  const payablePart = (type: string) => payableParts.find((item) => item.type === type)?.value ?? "";
+  const payableDate = `${payablePart("year")}-${payablePart("month")}-${payablePart("day")}`;
+  return `${payableDate}T${String(nextHour % 24).padStart(2, "0")}:00:00+08:00`;
+}
+
 /**
- * Display-only weekly-grace clamp: ids of intern rows whose payable time-in
- * is the fixed 09:00 Manila value. That is only ungraced late arrivals at or
- * before 09:00 — a (08:15, 09:00] arrival past the grace window, or a
- * (08:00, 08:15] arrival that finds the week's grace already spent. Arrivals
- * past 09:00 (e.g. 09:30) always keep their actual time-in in every view and
- * never consume the grace; the first (08:00, 08:15] arrival of a week is
- * graced and never included; on-time rows are never included. Grouping stays
+ * Display-only payable clamp: non-graced late intern rows are clamped. The
+ * week's first grace-window arrival stays actual; employees and on-time rows
+ * are excluded. Grouping stays
  * per userId + Manila Monday-week; callers may pass a wider set than they
  * render (e.g. earlier days of the week alongside today's rows) and
  * duplicated attendanceIds count once. Backing data (row.timeIn) is never
@@ -6969,13 +7011,7 @@ function clampedGraceTimeInIds(
     seen.add(row.attendanceId);
     if (!row.timeIn || !internIds.has(row.userId)) continue;
     const arrival = evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE);
-    if (arrival === "LATE") {
-      // Past the 09:00 payable ceiling: actual time-in is always shown, and
-      // the row neither spends the week's grace nor blocks a later in-window
-      // arrival from gracing.
-      const seconds = manilaClockSeconds(row.timeIn);
-      if (seconds === null || seconds > LATE_CLAMP_CEILING_SECONDS) continue;
-    } else if (arrival !== "GRACE_PERIOD") {
+    if (arrival !== "LATE" && arrival !== "GRACE_PERIOD") {
       continue;
     }
     let weekStart: string;
@@ -6995,28 +7031,20 @@ function clampedGraceTimeInIds(
       const byDate = a.attendanceDate.localeCompare(b.attendanceDate);
       return byDate !== 0 ? byDate : a.timeIn.localeCompare(b.timeIn);
     });
-    // v3 rule: grace is consumed only by (08:00, 08:15] arrivals, and rows
-    // past 09:00 were excluded above, so a first late at 09:30 leaves the
-    // grace intact for a later in-window arrival. Within the remaining
-    // in-window rows: the week's first grace-window arrival is graced; any
-    // later arrival is an ungraced late payable at 09:00. A first past-window
-    // arrival (08:16–09:00) with no prior evidence stays on its actual time,
-    // which keeps the no-history fallback showing actual times.
     let graceUsed = false;
-    let repeatLate = false;
     for (const row of list) {
       const inGraceWindow =
         evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE) ===
-        "GRACE_PERIOD";
+          "GRACE_PERIOD" &&
+        !(
+          manilaClockSeconds(row.timeIn) === 8 * 3600 + 15 * 60 &&
+          isStrictlyPastQuarterHour(row.timeIn, 15 * 60)
+        );
       if (inGraceWindow && !graceUsed) {
         graceUsed = true;
         continue;
       }
-      if (!graceUsed && !repeatLate) {
-        repeatLate = true;
-        continue;
-      }
-      clamped.add(row.attendanceId);
+      if (shouldClampHour(row.timeIn)) clamped.add(row.attendanceId);
     }
   }
   return clamped;
@@ -7827,12 +7855,12 @@ function exportAttendanceCsv(
     if (info.arrivalStatus === "GRACE_PERIOD") return "Grace Period (GP)";
     return `Late (${info.minutesLate}m)`;
   };
-  // Weekly-grace clamped rows export the payable 09:00 Manila time-in in the
+  // Clamped rows export their hourly payable Manila time-in in the
   // Time in column (same ISO shape as every other row); the real scan keeps
   // its own audit column because a CSV cell cannot carry the table tooltip.
   const payableTimeIn = (row: AttendanceListItem) =>
     clampedTimeInIds.has(row.attendanceId) && row.timeIn
-      ? `${row.attendanceDate}T09:00:00+08:00`
+      ? clampedTimeInIso(row.timeIn)
       : row.timeIn;
   const content = [
     headers,
@@ -8042,14 +8070,14 @@ function AttendanceEditRow({
                 type="button"
                 className="clamped-time-in-chip"
                 data-testid="clamped-time-in"
-                title={`Actual scan: ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)} (weekly grace used)`}
-                aria-label={`Shown as 09:00 AM for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
+                title={`Actual scan: ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)} (payable time clamped)`}
+                aria-label={`Shown as ${clampedTimeLabel(row.timeIn)} for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
                 onClick={() => {
                   setClampedRevealed(true);
                   timeInInputRef.current?.focus();
                 }}
               >
-                09:00 AM
+                {clampedTimeLabel(row.timeIn)}
               </button>
             ) : null}
             {timeIn ? (

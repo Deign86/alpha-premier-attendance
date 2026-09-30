@@ -1140,3 +1140,15 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   EXPECT: admin 09-30 08:21 AM row renders the 09:00 AM chip with the actual-scan tooltip when week history shows grace spent; fetch failure still degrades to actual times.
   EVIDENCE: client clamp suite 11 passed; full client suite 15 files / 298 tests; lint + typecheck passed.
 
+## Hourly 15-minute clamp windows (2026-09-30)
+
+- [x] After weekly grace is unavailable/used, arrivals through minute :15 stay actual; arrivals strictly after :15 clamp to next hour (Manila). Exact :15:00 stays actual; :15:00.001+ clamps.
+  CHECK: Rust isolated intern payroll tests; `npm test -w server -- intern-payroll.test.ts intern-dtr-sync.test.ts`; `npm test --prefix client -- App.test.tsx -t "clamp"`
+  EXPECT: 09:03→09:03, 09:15:00→09:15, 09:15:00.000000001→10:00, 09:16→10:00; 08:16→09:00; 10:03→10:03, 10:16→11:00. Weekly grace includes 08:15:00.000 but excludes 08:15:00.000000001.
+- [x] Late deduction scales to the payable hour; late time-in remains clamp-consistent across payroll, DTR sheet, admin/live chips and CSV while raw punch remains auditable.
+  CHECK: focused Rust, server, and client tests above; `npm run lint:oxlint && npm run typecheck`
+  EXPECT: no stale fixed-09:00-only clamp; 09:03 has one late hour; 09:16→10:00 has two late hours; payroll/DTR/display agree.
+  EVIDENCE: Rust isolated suite 76 passed; server focused suite 158 passed and server typecheck passed; client full suite 299 passed and clamp suite 12 passed; root lint and typecheck passed. Boundary tests cover 08:15:00.000000001 as outside weekly grace and 09:15:00.000000001 clamping to 10:00.
+  EVIDENCE: Payroll sheet register adds Undertime Hours for EMPLOYEE and INTERN exports, derived as half-day pesos ÷ hourly rate (daily ÷ 8) to 1 decimal so production rows with whole-number counts still feed real data (e.g. PHP 176.56 at PHP 80/day → 17.7h); Halfday peso deduction unchanged. Column rebalanced to 20mm within the 273mm page.
+  EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml --test payroll_sheet_undertime` passes 27/27 on Windows (new proof test asserting a real generated PDF contains the Undertime header, plus the full reporting suite via the same harness; also fixed the inner loader test's minimal `payroll_cutoffs` schema to include `half_day_count`).
+

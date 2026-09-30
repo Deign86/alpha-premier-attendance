@@ -1019,8 +1019,8 @@ describe('Admin Attendance Corrections', () => {
 
       // Only the intern's repeat late row is clamped; grace-first, employee, and on-time rows render as before.
       const chip = await screen.findByTestId('clamped-time-in');
-      expect(chip).toHaveTextContent('09:00 AM');
-      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      expect(chip).toHaveTextContent('9:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
       expect(screen.getAllByTestId('clamped-time-in')).toHaveLength(1);
 
       // The actual scan stays underneath in the real input.
@@ -1105,8 +1105,8 @@ describe('Admin Attendance Corrections', () => {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
       const chip = await screen.findByTestId('clamped-time-in');
-      expect(chip).toHaveTextContent('09:00 AM');
-      expect(chip.getAttribute('title')).toBe('Actual scan: 8:21 AM (weekly grace used)');
+      expect(chip).toHaveTextContent('9:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:21 AM (payable time clamped)');
       expect(screen.getByDisplayValue('08:21')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -2975,8 +2975,8 @@ describe('Weekly-grace clamp display extension', () => {
       mockLiveFetch({ todayRows: todayOnlyRows, historyRows: mondayGraceRow });
       render(<App />);
       const chip = await screen.findByTestId('clamped-time-in');
-      expect(chip).toHaveTextContent('09:00 AM');
-      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      expect(chip).toHaveTextContent('9:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
       expect(screen.getAllByTestId('clamped-time-in')).toHaveLength(1);
       // The employee row keeps its actual time.
       expect(screen.getByText('9:01 AM')).toBeInTheDocument();
@@ -2994,9 +2994,8 @@ describe('Weekly-grace clamp display extension', () => {
       vi.restoreAllMocks();
       mockLiveFetch({ todayRows: todayOnlyRows, failHistory: true });
       render(<App />);
-      // Tuesday's row is the intern's first known late arrival: actual time, no chip.
-      expect(await screen.findByText('8:30 AM')).toBeInTheDocument();
-      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+      // Late rows clamp even when the best-effort history request fails.
+      expect(await screen.findByTestId('clamped-time-in')).toHaveTextContent('9:00 AM');
       expect(screen.getByText('9:01 AM')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -3040,23 +3039,21 @@ describe('Weekly-grace clamp display extension', () => {
       };
       render(<PayrollWorkspace users={[]} profiles={[]} records={[internRecord]} onSaved={vi.fn()} />);
       const chip = await screen.findByTestId('clamped-payroll-time-in');
-      expect(chip).toHaveTextContent('09:00 AM');
-      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      expect(chip).toHaveTextContent('9:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
       // Only the deducted late day clamps; the grace-applied day keeps its actual time.
       expect(screen.getAllByTestId('clamped-payroll-time-in')).toHaveLength(1);
       expect(screen.getByText('8:06 AM – 5:00 PM')).toBeInTheDocument();
       // SAFETY: the single clamped chip is located above
       const clampedCell = (screen.getByTestId('clamped-payroll-time-in') as HTMLElement).closest('td');
-      expect(clampedCell?.textContent).toBe('09:00 AM – 5:00 PM');
+      expect(clampedCell?.textContent).toBe('9:00 AM – 5:00 PM');
     } finally {
       window.history.pushState({}, '', '/');
     }
   });
 });
 
-describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
-  // One intern roster; v3 chips only ungraced lates at or before 09:00, so a
-  // 09:30 repeat late keeps its actual time-in in every surface.
+describe('hourly late clamp', () => {
   const v3Users = [
     { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
     { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
@@ -3113,7 +3110,55 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
     status: 'WORKING',
   });
 
-  it('shows a 09:30 repeat late its actual time-in in the admin table and CSV (no chip)', async () => {
+  it('uses a strict hourly :15 boundary for the first late and excludes employees and weekly grace', async () => {
+    vi.restoreAllMocks();
+    mockAdminFetch([
+      row('hour-grace-exact', '2026-07-27', '08:15:00.000000000'),
+      row('hour-0916', '2026-07-27', '09:16:00'),
+      row('hour-0903', '2026-07-28', '09:03:00'),
+      row('hour-1016', '2026-07-29', '10:16:00'),
+      row('hour-091500', '2026-07-30', '09:15:00'),
+      row('hour-0915001', '2026-07-31', '09:15:00.001'),
+      { ...row('hour-grace-sub-ms', '2026-07-27', '08:15:00.000000001'), userId: 'u3', fullName: 'Grace Hopper' },
+      { ...row('hour-grace-after-boundary', '2026-07-28', '08:10:00'), userId: 'u3', fullName: 'Grace Hopper' },
+      row('hour-091500000001', '2026-08-03', '09:15:00.000000001'),
+      { ...row('hour-employee', '2026-07-27', '09:16:00'), userId: 'u1', fullName: 'Ada Lovelace' },
+    ]);
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      const chips = await screen.findAllByTestId('clamped-time-in');
+      expect(chips).toHaveLength(5);
+      expect(chips.filter((chip) => chip.textContent === '10:00 AM')).toHaveLength(3);
+      expect(chips.filter((chip) => chip.textContent === '11:00 AM')).toHaveLength(1);
+      expect(screen.getByDisplayValue('09:03')).toBeInTheDocument();
+      expect(screen.getAllByDisplayValue('09:15')).toHaveLength(3);
+      expect(screen.getAllByDisplayValue('08:15')).toHaveLength(2);
+      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+      expect(screen.getAllByDisplayValue('09:16')).toHaveLength(2);
+      expect(screen.getByDisplayValue('10:16')).toBeInTheDocument();
+      const boundaryGraceInput = screen.getAllByDisplayValue('08:15').find((input) =>
+        input.closest('tr')?.textContent?.includes('Grace Hopper'),
+      );
+      expect(boundaryGraceInput?.closest('tr')).toHaveTextContent('9:00 AM');
+      const exactGraceInput = screen.getAllByDisplayValue('08:15').find((input) =>
+        input.closest('tr')?.textContent?.includes('Charles Babbage'),
+      );
+      expect(exactGraceInput?.closest('tr')).not.toHaveTextContent('clamped');
+      const subMillisecondClampInput = screen.getAllByDisplayValue('09:15').find((input) =>
+        input.closest('tr')?.textContent?.includes('2026-08-03'),
+      );
+      expect(subMillisecondClampInput?.closest('tr')).toHaveTextContent('10:00 AM');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('clamps a 09:30 repeat late to 10:00 in the admin table and CSV', async () => {
     vi.restoreAllMocks();
     const exportedBlobs: Blob[] = [];
     Object.defineProperty(URL, 'createObjectURL', {
@@ -3126,7 +3171,7 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
     const linkClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     // Monday 08:06 spends the week's grace; Tuesday 09:30 is a repeat late
-    // past the 09:00 payable ceiling, so it must never clamp.
+    // past the weekly grace window; it still uses the hourly clamp.
     mockAdminFetch([
       row('v3r1', '2026-07-27', '08:06:00'),
       row('v3r2', '2026-07-28', '09:30:00'),
@@ -3138,7 +3183,7 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+      expect(await screen.findByTestId('clamped-time-in')).toHaveTextContent('10:00 AM');
       expect(screen.getByDisplayValue('09:30')).toBeInTheDocument();
 
       await user.click(await screen.findByRole('button', { name: /export csv/i }));
@@ -3154,7 +3199,7 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
       const lateLine = lines.find((line) => line.includes('2026-07-28'));
       expect(lateLine).toBeDefined();
       // SAFETY: lateLine checked defined above
-      expect(cells(lateLine as string)[4]).toBe('2026-07-28T09:30:00+08:00');
+      expect(cells(lateLine as string)[4]).toBe('2026-07-28T10:00:00+08:00');
       // SAFETY: lateLine checked defined above
       expect(cells(lateLine as string)[13]).toBe('2026-07-28T09:30:00+08:00');
       // The graced Monday row is untouched, and the actual audit column stays last.
@@ -3167,11 +3212,11 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
     }
   });
 
-  it('chips an 08:30 repeat late while a 09:30 first late leaves the grace intact', async () => {
+  it('clamps all non-graced lates while preserving the first grace-window arrival', async () => {
     vi.restoreAllMocks();
     // u2: Tue 08:30 follows Monday's graced 08:06 and must chip.
-    // u3: Mon 09:30 is a past-ceiling first late; Tue 08:10 still graces and
-    // nothing chips for u3.
+    // u3: the non-grace Monday late clamps, while Tuesday's first grace-window
+    // arrival remains actual and does not get a chip.
     mockAdminFetch([
       row('v3a1', '2026-07-27', '08:06:00'),
       row('v3a2', '2026-07-28', '08:30:00'),
@@ -3186,12 +3231,11 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
       const chips = await screen.findAllByTestId('clamped-time-in');
-      expect(chips).toHaveLength(1);
-      expect(chips[0].getAttribute('title')).toBe('Actual scan: 8:30 AM (weekly grace used)');
+      expect(chips).toHaveLength(2);
+      expect(chips.map((chip) => chip.textContent)).toEqual(expect.arrayContaining(['9:00 AM', '10:00 AM']));
       // SAFETY: the chip renders inside its attendance row
       expect((chips[0] as HTMLElement).closest('tr')).toHaveTextContent('Charles Babbage');
-      // u3's 09:30 and 08:10 both stay on their actual times.
-      expect(screen.getByDisplayValue('09:30')).toBeInTheDocument();
+      // u3's first grace-window arrival stays actual.
       expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
@@ -3230,7 +3274,7 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
     }
   });
 
-  it('keeps a past-09:00 late on its actual time in the live table and payroll details', async () => {
+  it('clamps a past-09:00 late in the live table and payroll details', async () => {
     window.history.pushState({}, '', '/attendance');
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'));
@@ -3258,9 +3302,8 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
         return { ok: true, json: async () => ({ success: true }) } as Response;
       });
       render(<App />);
-      // Grace was consumed Monday, yet the past-ceiling row still shows actual.
-      expect(await screen.findByText('9:30 AM')).toBeInTheDocument();
-      expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
+      // Grace was consumed Monday; this later arrival clamps to the next hour.
+      expect(await screen.findByTestId('clamped-time-in')).toHaveTextContent('10:00 AM');
     } finally {
       vi.useRealTimers();
       window.history.pushState({}, '', '/');
@@ -3285,9 +3328,8 @@ describe('v3 late-clamp narrowing (09:00 payable ceiling)', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace users={[]} profiles={[]} records={[internRecord]} onSaved={vi.fn()} />);
-      // Pay still deducts (₱10.00 shown), but the past-ceiling time stays actual.
-      expect(await screen.findByText('9:30 AM – 5:00 PM')).toBeInTheDocument();
-      expect(screen.queryByTestId('clamped-payroll-time-in')).not.toBeInTheDocument();
+      // The payroll details use the same hourly display clamp.
+      expect(await screen.findByTestId('clamped-payroll-time-in')).toHaveTextContent('10:00 AM');
     } finally {
       window.history.pushState({}, '', '/');
     }

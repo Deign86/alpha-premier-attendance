@@ -2,10 +2,10 @@
   "version": 1,
   "internArrivalPolicyV3": [
     { "name": "first 08:08 consumes grace", "date": "2026-09-01", "timeIn": "08:08:00", "graceAvailable": true, "expected": { "computedTimeIn": "2026-09-01T08:00:00+08:00", "graceUsed": true, "lateHours": 0, "dailyPay": 80, "dtrIn": "8:08:00 AM" } },
-    { "name": "second 08:08 clamps display", "date": "2026-09-02", "timeIn": "08:08:00", "graceAvailable": false, "expected": { "computedTimeIn": "2026-09-02T09:00:00+08:00", "graceUsed": false, "lateHours": 1, "dailyPay": 70, "dtrIn": "9:00:00 AM" } },
+    { "name": "second 08:08 stays actual", "date": "2026-09-02", "timeIn": "08:08:00", "graceAvailable": false, "expected": { "computedTimeIn": "2026-09-02T08:08:00+08:00", "graceUsed": false, "lateHours": 1, "dailyPay": 70, "dtrIn": "8:08:00 AM" } },
     { "name": "first 08:16 preserves grace", "date": "2026-09-03", "timeIn": "08:16:00", "graceAvailable": true, "expected": { "computedTimeIn": "2026-09-03T09:00:00+08:00", "graceUsed": false, "lateHours": 1, "dailyPay": 70, "dtrIn": "9:00:00 AM" } },
-    { "name": "first 09:30 preserves actual pay and display", "date": "2026-09-04", "timeIn": "09:30:00", "graceAvailable": true, "expected": { "computedTimeIn": "2026-09-04T09:30:00+08:00", "graceUsed": false, "lateHours": 1, "dailyPay": 65, "dtrIn": "9:30:00 AM" } },
-    { "name": "second 09:30 keeps actual pay and display", "date": "2026-09-07", "timeIn": "09:30:00", "graceAvailable": false, "expected": { "computedTimeIn": "2026-09-07T09:30:00+08:00", "graceUsed": false, "lateHours": 1, "dailyPay": 65, "dtrIn": "9:30:00 AM" } },
+    { "name": "first 09:30 clamps to 10:00", "date": "2026-09-04", "timeIn": "09:30:00", "graceAvailable": true, "expected": { "computedTimeIn": "2026-09-04T10:00:00+08:00", "graceUsed": false, "lateHours": 2, "dailyPay": 60, "dtrIn": "10:00:00 AM" } },
+    { "name": "second 09:30 clamps to 10:00", "date": "2026-09-07", "timeIn": "09:30:00", "graceAvailable": false, "expected": { "computedTimeIn": "2026-09-07T10:00:00+08:00", "graceUsed": false, "lateHours": 2, "dailyPay": 60, "dtrIn": "10:00:00 AM" } },
     { "name": "Monday resets grace", "date": "2026-09-07", "timeIn": "08:08:00", "graceAvailable": true, "expected": { "computedTimeIn": "2026-09-07T08:00:00+08:00", "graceUsed": true, "lateHours": 0, "dailyPay": 80, "dtrIn": "8:08:00 AM" } }
   ],
   "baseInput": {
@@ -184,18 +184,18 @@
     "expected": {
       "daily": [
         { "date": "2026-09-01", "computedTimeIn": "2026-09-01T08:00:00+08:00", "graceUsed": false, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 0, "dailyPay": 80 },
-        { "date": "2026-09-02", "computedTimeIn": "2026-09-02T09:30:00+08:00", "graceUsed": false, "lateHours": 1, "lateDeduction": 10, "halfDayDeduction": 5, "dailyPay": 65 },
-        { "date": "2026-09-03", "computedTimeIn": "2026-09-03T09:30:00+08:00", "graceUsed": false, "lateHours": 1, "lateDeduction": 10, "halfDayDeduction": 5, "dailyPay": 65 },
+        { "date": "2026-09-02", "computedTimeIn": "2026-09-02T10:00:00+08:00", "graceUsed": false, "lateHours": 2, "lateDeduction": 20, "halfDayDeduction": 0, "dailyPay": 60 },
+        { "date": "2026-09-03", "computedTimeIn": "2026-09-03T10:00:00+08:00", "graceUsed": false, "lateHours": 2, "lateDeduction": 20, "halfDayDeduction": 0, "dailyPay": 60 },
         { "date": "2026-09-04", "computedTimeIn": "2026-09-04T08:00:00+08:00", "graceUsed": false, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 10, "dailyPay": 70 },
         { "date": "2026-09-07", "computedTimeIn": "2026-09-07T08:00:00+08:00", "graceUsed": true, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 0, "dailyPay": 80 },
-        { "date": "2026-09-08", "computedTimeIn": "2026-09-08T09:00:00+08:00", "graceUsed": false, "lateHours": 1, "lateDeduction": 10, "halfDayDeduction": 0, "dailyPay": 70 },
+        { "date": "2026-09-08", "computedTimeIn": "2026-09-08T08:08:00+08:00", "graceUsed": false, "lateHours": 1, "lateDeduction": 10, "halfDayDeduction": 0, "dailyPay": 70 },
         { "date": "2026-09-09", "computedTimeIn": "2026-09-09T08:00:00+08:00", "graceUsed": false, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 0, "dailyPay": 80 },
         { "date": "2026-09-10", "computedTimeIn": "2026-09-10T08:00:00+08:00", "graceUsed": false, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 20, "dailyPay": 60 },
         { "date": "2026-09-11", "computedTimeIn": "2026-09-11T08:00:00+08:00", "graceUsed": false, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 0, "dailyPay": 80 },
-        { "date": "2026-09-14", "computedTimeIn": "2026-09-14T09:30:00+08:00", "graceUsed": false, "lateHours": 1, "lateDeduction": 10, "halfDayDeduction": 5, "dailyPay": 65 },
+        { "date": "2026-09-14", "computedTimeIn": "2026-09-14T10:00:00+08:00", "graceUsed": false, "lateHours": 2, "lateDeduction": 20, "halfDayDeduction": 0, "dailyPay": 60 },
         { "date": "2026-09-15", "computedTimeIn": "2026-09-15T08:00:00+08:00", "graceUsed": true, "lateHours": 0, "lateDeduction": 0, "halfDayDeduction": 0, "dailyPay": 80 }
       ],
-      "cutoffDailyPayTotal": 795
+      "cutoffDailyPayTotal": 780
     }
   }
 }

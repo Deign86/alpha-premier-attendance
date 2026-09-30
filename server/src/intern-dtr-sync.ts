@@ -670,7 +670,7 @@ export function isShortStint(timeIn: string, timeOut: string): boolean {
 type NormalizedRecord =
   | { kind: 'empty' }
   | { kind: 'working'; timeIn: string }
-  | { kind: 'completed'; timeIn: DateTime; timeOut: DateTime; timeOutIso: string };
+  | { kind: 'completed'; timeIn: DateTime; timeInIso: string; timeOut: DateTime; timeOutIso: string };
 
 /**
  * Own parse + late-cap + ordering validation exactly once.
@@ -700,7 +700,12 @@ function normalizeRecord(timeIn: string | null, timeOut: string | null): Normali
   if (cappedOut < tin) {
     throw new Error(`Time-out cannot be earlier than time-in: ${timeOut} < ${timeIn}`);
   }
-  return { kind: 'completed', timeIn: tin, timeOut: cappedOut, timeOutIso: cappedOut.toISO()! };
+  return { kind: 'completed', timeIn: tin, timeInIso: timeIn, timeOut: cappedOut, timeOutIso: cappedOut.toISO()! };
+}
+
+function hasSubMillisecondFraction(iso: string): boolean {
+  const fraction = /T\d{2}:\d{2}:\d{2}\.(\d+)(?:Z|[+-]\d{2}:\d{2})?$/i.exec(iso)?.[1] ?? '';
+  return !/^0*$/.test(fraction.slice(3));
 }
 
 function isLateArrival(timeIn: string): boolean {
@@ -716,27 +721,32 @@ function isWithinGraceWindow(timeIn: string): boolean {
   if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
   const minutes = actualIn.hour * 60 + actualIn.minute;
   return (minutes > 8 * 60 || (minutes === 8 * 60 && actualIn.second > 0)) &&
-    (minutes < 8 * 60 + 15 || (minutes === 8 * 60 + 15 && actualIn.second === 0 && actualIn.millisecond === 0));
+    (minutes < 8 * 60 + 15 || (
+      minutes === 8 * 60 + 15 && actualIn.second === 0 && actualIn.millisecond === 0 && !hasSubMillisecondFraction(timeIn)
+    ));
 }
 
 function isClampDisplayArrival(timeIn: string): boolean {
   const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
   if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
   return isLateArrival(timeIn) && (
-    actualIn.hour < 9 ||
-    (actualIn.hour === 9 && actualIn.minute === 0 && actualIn.second === 0 && actualIn.millisecond === 0)
+    actualIn.minute > 15 ||
+    (actualIn.minute === 15 && (
+      actualIn.second > 0 || actualIn.millisecond > 0 || hasSubMillisecondFraction(timeIn)
+    ))
   );
 }
 
 function formatClampedArrival(timeIn: string): string {
   const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
   if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
-  return actualIn.set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toFormat('h:00:00 a').toUpperCase();
+  return actualIn.plus({ hours: 1 }).startOf('hour').toFormat('h:00:00 a').toUpperCase();
 }
 
 /**
- * Build [B, C, D, E] using actual punches except ungraced arrivals through 09:00,
- * which display at 09:00; lunch-spanning morning shifts use the fixed Rust split.
+ * Build [B, C, D, E] using actual punches except ungraced arrivals strictly
+ * past minute :15, which display at the next hour; lunch-spanning morning shifts
+ * use the fixed Rust split.
  *
  * Decoupled from payroll half-day logic (2026-09): this function NEVER
  * fabricates, truncates, or substitutes fixed-lunch/half-day conventions.
@@ -764,7 +774,7 @@ export function buildDtrRow(
     return [started, '', '', ''];
   }
   const inIso = record.timeIn.toISO()!;
-  const clampDisplayIn = clampLateIn && isClampDisplayArrival(inIso);
+  const clampDisplayIn = clampLateIn && isClampDisplayArrival(record.timeInIso);
   const started = clampDisplayIn
     ? formatClampedArrival(inIso)
     : formatSheetTime(inIso);

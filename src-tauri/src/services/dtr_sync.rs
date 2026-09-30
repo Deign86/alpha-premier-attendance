@@ -854,12 +854,24 @@ fn is_in_grace_window(time_in: &str) -> Result<bool, String> {
         && (t.minute() < 15 || (t.minute() == 15 && t.second() == 0 && t.nanosecond() == 0)))
 }
 
-fn is_at_or_before_nine(time_in: &str) -> Result<bool, String> {
+fn is_after_quarter_hour(time_in: &str) -> Result<bool, String> {
     let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
         .map_err(|_| format!("invalid timestamp: {time_in}"))?;
     let t = dt.with_timezone(&Manila).time();
-    Ok(t.hour() < 9
-        || (t.hour() == 9 && t.minute() == 0 && t.second() == 0 && t.nanosecond() == 0))
+    Ok(t.minute() > 15
+        || (t.minute() == 15 && (t.second() > 0 || t.nanosecond() > 0)))
+}
+
+fn next_full_hour_sheet_time(time_in: &str) -> Result<String, String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
+        .map_err(|_| format!("invalid timestamp: {time_in}"))?;
+    let local = dt.with_timezone(&Manila);
+    let next_hour = local
+        .date_naive()
+        .and_hms_opt(local.hour(), 0, 0)
+        .and_then(|hour| hour.checked_add_signed(chrono::Duration::hours(1)))
+        .ok_or_else(|| format!("invalid timestamp: {time_in}"))?;
+    Ok(next_hour.format("%-I:%M:%S %p").to_string().to_uppercase())
 }
 
 fn manila_week_start(attendance_date: &str) -> Result<String, String> {
@@ -1065,9 +1077,9 @@ pub(crate) fn build_dtr_row_with_clamp(
             let started = format_sheet_time(&time_in)?;
             let started = if (clamp_late_in || !is_in_grace_window(&time_in)?)
                 && is_after_eight(&time_in)?
-                && is_at_or_before_nine(&time_in)?
+                && is_after_quarter_hour(&time_in)?
             {
-                "9:00:00 AM".to_string()
+                next_full_hour_sheet_time(&time_in)?
             } else {
                 started
             };
@@ -1087,9 +1099,9 @@ pub(crate) fn build_dtr_row_with_clamp(
             let started = format_sheet_time(&tin_iso)?;
             let clamped_late_in = (clamp_late_in || !is_in_grace_window(&tin_iso)?)
                 && is_after_eight(&tin_iso)?
-                && is_at_or_before_nine(&tin_iso)?;
+                && is_after_quarter_hour(&tin_iso)?;
             let started = if clamped_late_in {
-                "9:00:00 AM".to_string()
+                next_full_hour_sheet_time(&tin_iso)?
             } else {
                 started
             };
@@ -3829,7 +3841,7 @@ mod tests {
     }
 
     #[test]
-    fn dtr_clamps_only_through_nine_and_prior_grace_counts_only_window_lates() {
+    fn dtr_clamps_after_each_quarter_hour_and_prior_grace_counts_only_window_lates() {
         let mut history = HashMap::new();
         let row = build_dtr_row_with_clamp(
             Some("2026-09-08T08:08:00+08:00"),
@@ -3852,7 +3864,7 @@ mod tests {
             exhausted,
         )
         .unwrap();
-        assert_eq!(row[0], "9:00:00 AM");
+        assert_eq!(row[0], "8:08:00 AM");
         history.insert(
             "2026-09-09".to_string(),
             (Some("2026-09-09T08:30:00+08:00".to_string()), None),
@@ -3861,15 +3873,17 @@ mod tests {
         assert!(!grace_exhausted_from_history("2026-09-10", &history).unwrap());
 
         for (time_in, expected) in [
-            ("08:08:00", "9:00:00 AM"),
+            ("08:08:00", "8:08:00 AM"),
+            ("08:15:00", "8:15:00 AM"),
             ("08:15:00.000000001", "9:00:00 AM"),
             ("08:15:00.500", "9:00:00 AM"),
             ("08:16:00", "9:00:00 AM"),
             ("08:30:00", "9:00:00 AM"),
             ("09:00:00", "9:00:00 AM"),
-            ("09:00:01", "9:00:01 AM"),
-            ("09:30:00", "9:30:00 AM"),
-            ("10:30:00", "10:30:00 AM"),
+            ("09:03:00", "9:03:00 AM"),
+            ("09:15:00", "9:15:00 AM"),
+            ("09:16:00", "10:00:00 AM"),
+            ("10:16:00", "11:00:00 AM"),
         ] {
             let row = build_dtr_row_with_clamp(
                 Some(&format!("2026-09-09T{time_in}+08:00")),
@@ -3888,6 +3902,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(first_post_grace_late[0], "9:00:00 AM");
+        for (time_in, expected, clamp) in [
+            ("09:03:00", "9:03:00 AM", false),
+            ("09:16:00", "10:00:00 AM", false),
+            ("10:16:00", "11:00:00 AM", false),
+            ("08:15:00", "8:15:00 AM", false),
+            ("08:15:00.000000001", "9:00:00 AM", false),
+        ] {
+            let row = build_dtr_row_with_clamp(
+                Some(&format!("2026-09-10T{time_in}+08:00")),
+                Some("2026-09-10T17:00:00+08:00"),
+                "2026-09-10",
+                clamp,
+            )
+            .unwrap();
+            assert_eq!(row[0], expected, "{time_in}");
+        }
         let after_nine = build_dtr_row_with_clamp(
             Some("2026-09-10T09:30:00+08:00"),
             Some("2026-09-10T17:00:00+08:00"),

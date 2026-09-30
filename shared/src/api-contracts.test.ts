@@ -203,6 +203,11 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
     });
   });
 
+  it('preserves nanosecond precision at the exact grace endpoint', () => {
+    expect(evaluateArrivalWithBudget('2026-08-25T08:15:00.000+08:00', false).arrivalStatus).toBe('GRACE_PERIOD');
+    expect(evaluateArrivalWithBudget('2026-08-25T08:15:00.000000001+08:00', false).arrivalStatus).toBe('LATE');
+  });
+
   it('treats arrivals strictly beyond 08:15 as LATE regardless of grace period availability', () => {
     const rows = [
       { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:16:00+08:00' },

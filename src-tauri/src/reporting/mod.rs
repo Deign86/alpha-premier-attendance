@@ -94,14 +94,14 @@ mod tests {
             .await
             .expect("users table");
         sqlx::query(
-            "CREATE TABLE payroll_cutoffs (payroll_id TEXT PRIMARY KEY, employee_id TEXT NOT NULL, \
-             employee_name TEXT NOT NULL, daily_rate_centavos INTEGER NOT NULL, \
-             standard_working_days REAL NOT NULL, actual_working_days REAL NOT NULL, \
-             basic_pay_centavos INTEGER NOT NULL, total_compensation_centavos INTEGER NOT NULL, \
-             late_deduction_centavos INTEGER NOT NULL, half_day_deduction_centavos INTEGER NOT NULL, \
-             absent_days REAL NOT NULL, absence_deduction_centavos INTEGER NOT NULL, \
-             manual_adjustment_centavos INTEGER NOT NULL, gross_compensation_centavos INTEGER NOT NULL, \
-             cutoff_start TEXT NOT NULL, cutoff_end TEXT NOT NULL)",
+             "CREATE TABLE payroll_cutoffs (payroll_id TEXT PRIMARY KEY, employee_id TEXT NOT NULL, \
+              employee_name TEXT NOT NULL, daily_rate_centavos INTEGER NOT NULL, \
+              standard_working_days REAL NOT NULL, actual_working_days REAL NOT NULL, \
+              basic_pay_centavos INTEGER NOT NULL, total_compensation_centavos INTEGER NOT NULL, \
+              late_deduction_centavos INTEGER NOT NULL, half_day_deduction_centavos INTEGER NOT NULL, \
+              half_day_count REAL NOT NULL DEFAULT 0, absent_days REAL NOT NULL, absence_deduction_centavos INTEGER NOT NULL, \
+              manual_adjustment_centavos INTEGER NOT NULL, gross_compensation_centavos INTEGER NOT NULL, \
+              cutoff_start TEXT NOT NULL, cutoff_end TEXT NOT NULL)",
         )
         .execute(&db)
         .await
@@ -151,6 +151,8 @@ mod tests {
         assert_eq!(intern_rows.len(), 1);
         assert_eq!(intern_rows[0].late_deduction_centavos, 1_000);
         assert_eq!(intern_rows[0].gross_compensation_centavos, 87_000);
+        // This fixture row carries only a late deduction (half-day is 0).
+        assert_eq!(intern_rows[0].undertime_hours, 0.0);
         let employee_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "EMPLOYEE")
             .await
             .expect("employee sheet rows");
@@ -366,6 +368,7 @@ mod tests {
                 total_compensation_centavos: 550_000,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.25_f64.fract().abs() * 8.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 550_000,
             },
@@ -381,6 +384,7 @@ mod tests {
                 total_compensation_centavos: 8_800_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 8_000_00,
                 gross_compensation_centavos: 800_00,
             },
@@ -396,6 +400,7 @@ mod tests {
                 total_compensation_centavos: 8_800_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 40_00,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 64_00_00,
                 gross_compensation_centavos: 200_00,
             },
@@ -406,6 +411,8 @@ mod tests {
             .unwrap();
         let bytes = std::fs::read(&pdf).unwrap();
         assert!(bytes.starts_with(b"%PDF"));
+        assert!(bytes.windows(b"Undertime".len()).any(|window| window == b"Undertime"));
+        assert_eq!(format_days(rows[0].undertime_hours), "2");
         let _ = std::fs::remove_file(&pdf);
     }
 
@@ -473,6 +480,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -488,6 +496,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -503,6 +512,7 @@ mod tests {
                 total_compensation_centavos: 3_150_00,
                 late_deduction_centavos: 10_00,
                 half_day_deduction_centavos: 150_00,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 2_990_00,
             },
@@ -518,6 +528,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -533,6 +544,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -548,6 +560,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -563,6 +576,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -578,6 +592,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -593,6 +608,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -696,6 +712,7 @@ mod tests {
                 total_compensation_centavos: 550_000,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
+                undertime_hours: 0.0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 550_000,
             })
@@ -723,6 +740,7 @@ mod tests {
             total_compensation_centavos: 550_000,
             late_deduction_centavos: 0,
             half_day_deduction_centavos: 0,
+            undertime_hours: 0.0,
             absence_deduction_centavos: 0,
             gross_compensation_centavos: 550_000,
         }];
@@ -744,6 +762,18 @@ mod tests {
         assert_eq!(format_days(11.0), "11");
         assert_eq!(format_days(10.5), "10.5");
         assert_eq!(format_days(0.0), "0");
+    }
+
+    #[test]
+    fn undertime_hours_match_halfday_pesos_at_hourly_rate() {
+        // PHP 80/day intern: PHP 10 shortfall is exactly 1 hour.
+        assert_eq!(undertime_hours_from_deduction(8_000, 1_000), 1.0);
+        // Production row (Allaena, Sep 16-30): PHP 176.56 at PHP 80/day.
+        assert_eq!(undertime_hours_from_deduction(8_000, 17_656), 17.7);
+        // True half day at PHP 80/day deducts PHP 40 -> 4 hours short.
+        assert_eq!(undertime_hours_from_deduction(8_000, 4_000), 4.0);
+        assert_eq!(undertime_hours_from_deduction(8_000, 0), 0.0);
+        assert_eq!(undertime_hours_from_deduction(0, 1_000), 0.0);
     }
 }
 use printpdf::{
@@ -2175,6 +2205,7 @@ pub struct PayrollSheetRow {
     pub total_compensation_centavos: i64,
     pub late_deduction_centavos: i64,
     pub half_day_deduction_centavos: i64,
+    pub undertime_hours: f64,
     pub absence_deduction_centavos: i64,
     pub gross_compensation_centavos: i64,
 }
@@ -2300,6 +2331,22 @@ pub async fn load_employee_payslip_by_id(
     Ok(row.as_ref().map(map_employee_payslip_row))
 }
 
+/// Undertime hours backing the register column, derived from the peso
+/// deduction at the hourly rate (daily / 8), rounded to 1 decimal.
+/// Production cutoff rows store whole-number half_day_count values, so the
+/// count fraction cannot feed the column; this matches Halfday pesos exactly.
+fn undertime_hours_from_deduction(
+    daily_rate_centavos: i64,
+    half_day_deduction_centavos: i64,
+) -> f64 {
+    if daily_rate_centavos > 0 && half_day_deduction_centavos > 0 {
+        ((half_day_deduction_centavos as f64) / (daily_rate_centavos as f64 / 8.0) * 10.0).round()
+            / 10.0
+    } else {
+        0.0
+    }
+}
+
 /// Loads the payroll sheet rows for one cutoff, filtered to `worker_type`
 /// ("EMPLOYEE" keeps employees; anything else keeps interns). Payroll cutoff
 /// rows do not store an employee type column, so it is derived from the live
@@ -2314,7 +2361,7 @@ pub async fn load_payroll_sheet_rows(
         "SELECT pc.employee_id, pc.employee_name, pc.daily_rate_centavos, \
          pc.standard_working_days, pc.actual_working_days, pc.basic_pay_centavos, \
          pc.total_compensation_centavos, pc.late_deduction_centavos, \
-         pc.half_day_deduction_centavos, pc.absent_days, pc.absence_deduction_centavos, \
+         pc.half_day_deduction_centavos, pc.half_day_count, pc.absent_days, pc.absence_deduction_centavos, \
          pc.manual_adjustment_centavos, \
          pc.gross_compensation_centavos, COALESCE(u.employee_type, 'INTERN') AS employee_type \
          FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
@@ -2345,6 +2392,8 @@ pub async fn load_payroll_sheet_rows(
             let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
             let effective_late_deduction = late_deduction_centavos;
             let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
+            let undertime_hours =
+                undertime_hours_from_deduction(daily_rate_centavos, half_day_deduction_centavos);
             let db_absent_days = row.get::<f64, _>("absent_days");
             let db_absence_deduction = row.get::<i64, _>("absence_deduction_centavos");
             let absent_days = if db_absent_days > 0.0 {
@@ -2383,6 +2432,7 @@ pub async fn load_payroll_sheet_rows(
                 total_compensation_centavos,
                 late_deduction_centavos: effective_late_deduction,
                 half_day_deduction_centavos,
+                undertime_hours,
                 absence_deduction_centavos,
                 gross_compensation_centavos,
             }
@@ -2517,8 +2567,8 @@ fn sheet_cell(
 
 /// Column widths of the reference payroll sheet in millimeters (usable width
 /// is 297 - 2 * 12 = 273 mm).
-const SHEET_COL_WIDTHS_MM: [f32; 12] = [
-    24.0, 42.0, 22.0, 20.0, 18.0, 18.0, 23.0, 16.0, 16.0, 16.0, 26.0, 32.0,
+const SHEET_COL_WIDTHS_MM: [f32; 13] = [
+    24.0, 37.0, 22.0, 20.0, 18.0, 18.0, 23.0, 16.0, 15.0, 20.0, 16.0, 22.0, 22.0,
 ];
 const SHEET_LEFT_MM: f32 = 12.0;
 const SHEET_ROW_H_MM: f32 = 7.0;
@@ -2618,7 +2668,7 @@ pub fn generate_payroll_sheet_pdf(
         ops.push(Op::RestoreGraphicsState);
 
         // --- table header row ---
-        const HEADERS: [&str; 12] = [
+        const HEADERS: [&str; 13] = [
             "Employee #",
             "Employee Name",
             "Cut Off\nRate",
@@ -2628,6 +2678,7 @@ pub fn generate_payroll_sheet_pdf(
             "Total\nCompensation",
             "Late 10\n/hr",
             "Halfday",
+            "Undertime\nHours",
             "Absent",
             "Gross\nCompensation",
             "Signature",
@@ -2655,7 +2706,7 @@ pub fn generate_payroll_sheet_pdf(
         // --- data rows ---
         let mut row_y = table_top_y - header_h - SHEET_ROW_H_MM;
         for row in chunk.iter() {
-            let cells: [String; 12] = [
+            let cells: [String; 13] = [
                 row.employee_id.clone(),
                 row.employee_name.clone(),
                 format_php(row.cutoff_rate_centavos),
@@ -2665,6 +2716,7 @@ pub fn generate_payroll_sheet_pdf(
                 format_php(row.total_compensation_centavos),
                 format_php(row.late_deduction_centavos),
                 format_php(row.half_day_deduction_centavos),
+                format_days(row.undertime_hours),
                 format_php(row.absence_deduction_centavos),
                 format_php(row.gross_compensation_centavos),
                 String::new(), // Signature blank for physical signing
@@ -2692,7 +2744,7 @@ pub fn generate_payroll_sheet_pdf(
         // --- grand total row (last page only), yellow-highlighted gross ---
         if chunk_index == chunks.len() - 1 {
             let total_gross: i64 = rows.iter().map(|row| row.gross_compensation_centavos).sum();
-            let total_w: f32 = SHEET_COL_WIDTHS_MM[..10].iter().sum();
+            let total_w: f32 = SHEET_COL_WIDTHS_MM[..11].iter().sum();
             sheet_cell(
                 &mut ops,
                 SHEET_LEFT_MM,
@@ -2710,7 +2762,7 @@ pub fn generate_payroll_sheet_pdf(
                 &mut ops,
                 last_x,
                 row_y,
-                SHEET_COL_WIDTHS_MM[10],
+                SHEET_COL_WIDTHS_MM[11],
                 SHEET_ROW_H_MM,
                 &format_php(total_gross),
                 7.0,
@@ -2718,12 +2770,12 @@ pub fn generate_payroll_sheet_pdf(
                 false,
                 true,
             );
-            let sig_x = last_x + SHEET_COL_WIDTHS_MM[10];
+            let sig_x = last_x + SHEET_COL_WIDTHS_MM[11];
             sheet_cell(
                 &mut ops,
                 sig_x,
                 row_y,
-                SHEET_COL_WIDTHS_MM[11],
+                SHEET_COL_WIDTHS_MM[12],
                 SHEET_ROW_H_MM,
                 "",
                 7.0,

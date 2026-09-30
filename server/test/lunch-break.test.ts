@@ -90,12 +90,12 @@ describe('intern payroll calculates hours 1:1 from DTR', () => {
     expect(result.dailyPay).toBe(80);
   });
 
-  it('preserves a 09:30 late arrival and charges one flat late hour', () => {
+  it('clamps a 09:30 late arrival to 10:00 and charges two late hours', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T09:30:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: false });
-    expect(result.computedTimeIn).toBe('2026-08-01T09:30:00+08:00');
-    expect(result.lateHours).toBe(1);
-    expect(result.lateDeduction).toBe(10);
-    expect(result.workedHours).toBe(6.5);
-    expect(result.dailyPay).toBe(65);
+    expect(result.computedTimeIn).toBe('2026-08-01T10:00:00+08:00');
+    expect(result.lateHours).toBe(2);
+    expect(result.lateDeduction).toBe(20);
+    expect(result.workedHours).toBe(6);
+    expect(result.dailyPay).toBe(60);
   });
 });

@@ -131,7 +131,9 @@ function manilaSecondsSinceMidnight(iso: string, timezone: string): number | nul
     hourCycle: 'h23',
   }).formatToParts(date);
   const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  return read('hour') * 3600 + read('minute') * 60 + read('second') + read('fractionalSecond') / 1000;
+  const fraction = /T\d{2}:\d{2}:\d{2}\.(\d+)(?:Z|[+-]\d{2}:\d{2})?$/i.exec(iso)?.[1] ?? '';
+  const subMillisecondSeconds = fraction.length > 3 ? Number(`0.${fraction.slice(3)}`) / 1000 : 0;
+  return read('hour') * 3600 + read('minute') * 60 + read('second') + read('fractionalSecond') / 1000 + subMillisecondSeconds;
 }
 
 /**

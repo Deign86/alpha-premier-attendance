@@ -24,6 +24,11 @@ export type InternPayrollResult = {
 
 const timezone = 'Asia/Manila';
 
+function hasSubMillisecondFraction(iso: string): boolean {
+  const fraction = /T\d{2}:\d{2}:\d{2}\.(\d+)(?:Z|[+-]\d{2}:\d{2})?$/i.exec(iso)?.[1] ?? '';
+  return !/^0*$/.test(fraction.slice(3));
+}
+
 export function calculateInternPayroll(input: InternPayrollInput): InternPayrollResult {
   const actualTimeIn = manilaTimestamp(input.actualTimeIn);
   // Late time-out auto-cap (overtime forbidden): 18:00+ pays as 17:00.
@@ -35,10 +40,20 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
 
   const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !input.graceAvailable, timezone);
   const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
-  const lateHours = arrival.arrivalStatus === 'LATE' ? 1 : 0;
+  const clampLateIn = arrival.arrivalStatus === 'LATE' && (
+    actualTimeIn.minute > 15 ||
+    (actualTimeIn.minute === 15 && (
+      actualTimeIn.second > 0 || actualTimeIn.millisecond > 0 || hasSubMillisecondFraction(input.actualTimeIn)
+    ))
+  );
+  const effectiveTimeIn = clampLateIn
+    ? actualTimeIn.plus({ hours: 1 }).startOf('hour')
+    : actualTimeIn;
+  const lateHours = arrival.arrivalStatus === 'LATE'
+    ? Math.max(1, effectiveTimeIn.hour - start.hour)
+    : 0;
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
-  const nineAm = start.set({ hour: 9 });
-  const computedTimeIn = graceUsed ? start : lateHours > 0 && actualTimeIn <= nineAm ? nineAm : actualTimeIn;
+  const computedTimeIn = graceUsed ? start : effectiveTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
   const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));

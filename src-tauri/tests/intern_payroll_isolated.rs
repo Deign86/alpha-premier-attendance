@@ -192,7 +192,7 @@ fn named_0815_to_1500_edge_and_boundary_cases_match_daily_rule() {
     // The remaining rows cover the seconds boundary and next-week Monday reset.
     let cases = [
         EdgeCase { date: "2026-09-01", time_in: "08:15:00", time_out: "15:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 2_000, expected_net_centavos: 6_000 },
-        EdgeCase { date: "2026-09-02", time_in: "08:15:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
+        EdgeCase { date: "2026-09-02", time_in: "08:15:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 1_250, expected_net_centavos: 5_750 },
         EdgeCase { date: "2026-09-03", time_in: "08:15:01", time_out: "15:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
         EdgeCase { date: "2026-09-04", time_in: "08:16:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0, expected_net_centavos: 7_000 },
         EdgeCase { date: "2026-09-07", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0, expected_net_centavos: 8_000 },
@@ -230,6 +230,35 @@ fn named_0815_to_1500_edge_and_boundary_cases_match_daily_rule() {
 }
 
 #[test]
+fn hourly_quarter_clamp_cases_keep_actual_scans_until_strictly_after_15_minutes() {
+    use services::intern_payroll::calculate;
+
+    for (time_in, grace, effective_in, late_hours) in [
+        ("09:03:00", false, "09:03:00", 1),
+        ("09:15:00", false, "09:15:00", 1),
+        ("09:15:00.001", false, "10:00:00", 2),
+        ("09:16:00", false, "10:00:00", 2),
+        ("10:16:00", false, "11:00:00", 3),
+        ("08:16:00", false, "09:00:00", 1),
+        ("08:15:00", true, "08:15:00", 0),
+    ] {
+        let result = calculate(
+            "2026-09-01",
+            &format!("2026-09-01T{time_in}+08:00"),
+            "2026-09-01T17:00:00+08:00",
+            grace,
+        )
+        .unwrap();
+        assert!(result.computed_time_in.ends_with(&format!("T{effective_in}+08:00")), "{time_in}");
+        assert_eq!(result.late_hours, late_hours, "{time_in}");
+        assert_eq!(result.late_deduction_centavos, late_hours * 1_000, "{time_in}");
+        if grace {
+            assert!(result.grace_used);
+        }
+    }
+}
+
+#[test]
 fn september_intern_time_seed_matches_fixed_nine_clamp_and_cutoff_cases() {
     use services::{cutoff_payroll::{calculate as calculate_cutoff, CutoffInput}, intern_payroll::calculate};
 
@@ -244,11 +273,11 @@ fn september_intern_time_seed_matches_fixed_nine_clamp_and_cutoff_cases() {
 
     let seeds = [
         Seed { date: "2026-09-01", time_in: "08:00:00", time_out: "17:00:00", expected_daily_pay: 8_000, expected_grace_used: false, expected_computed_in: "08:00:00" },
-        Seed { date: "2026-09-02", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 6_500, expected_grace_used: false, expected_computed_in: "09:30:00" },
-        Seed { date: "2026-09-03", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 6_500, expected_grace_used: false, expected_computed_in: "09:30:00" },
+        Seed { date: "2026-09-02", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 6_000, expected_grace_used: false, expected_computed_in: "10:00:00" },
+        Seed { date: "2026-09-03", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 6_000, expected_grace_used: false, expected_computed_in: "10:00:00" },
         Seed { date: "2026-09-04", time_in: "08:00:00", time_out: "16:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "08:00:00" },
         Seed { date: "2026-09-07", time_in: "08:08:00", time_out: "17:00:00", expected_daily_pay: 8_000, expected_grace_used: true, expected_computed_in: "08:08:00" },
-        Seed { date: "2026-09-08", time_in: "08:08:00", time_out: "17:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "09:00:00" },
+        Seed { date: "2026-09-08", time_in: "08:08:00", time_out: "17:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "08:08:00" },
     ];
 
     let mut grace_available = true;
@@ -291,9 +320,9 @@ fn september_intern_time_seed_matches_fixed_nine_clamp_and_cutoff_cases() {
         );
     }
 
-    assert_eq!(daily_pay_total, 43_000);
-    assert_eq!(late_total, 3_000);
-    assert_eq!(undertime_total, 2_000);
+    assert_eq!(daily_pay_total, 42_000);
+    assert_eq!(late_total, 5_000);
+    assert_eq!(undertime_total, 1_000);
 
     let cutoff = calculate_cutoff(&CutoffInput {
         employee_id: "INT-SEP-SEED".into(),
@@ -336,8 +365,8 @@ fn september_intern_time_seed_matches_fixed_nine_clamp_and_cutoff_cases() {
     assert_eq!(cutoff.absence_deduction, 40_000);
     assert_eq!(cutoff.late_deduction, late_total);
     assert_eq!(cutoff.half_day_deduction, undertime_total);
-    assert_eq!(cutoff.total_deductions, 45_000);
-    assert_eq!(cutoff.net_pay, 43_000);
+    assert_eq!(cutoff.total_deductions, 46_000);
+    assert_eq!(cutoff.net_pay, 42_000);
 }
 
 #[test]

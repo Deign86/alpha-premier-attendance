@@ -271,30 +271,43 @@ describe('buildDtrRow', () => {
       '3:00:00 PM',
     ]);
   });
-  it('clamps ungraced arrivals through 09:00 and preserves later actual times', () => {
+  it('clamps ungraced arrivals strictly past :15 to the next hour', () => {
     const lateIn = '2026-09-05T08:04:00+08:00';
     const timeOut = '2026-09-05T17:00:00+08:00';
     expect(buildDtrRow(lateIn, timeOut, date)).toEqual(['8:04:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
-    expect(buildDtrRow(lateIn, timeOut, date, true)).toEqual(['9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
+    expect(buildDtrRow(lateIn, timeOut, date, true)).toEqual(['8:04:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', timeOut, date, true)).toEqual([
       '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
     expect(buildDtrRow('2026-09-05T09:30:00+08:00', timeOut, date, true)).toEqual([
-      '9:30:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
+      '10:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
     expect(buildDtrRow('2026-09-05T09:00:00+08:00', timeOut, date, true)).toEqual([
       '9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
   });
-  it('keeps a 12:30 arrival in the afternoon time-in column', () => {
+  it('clamps a 12:30 arrival into the afternoon time-in column at 1:00', () => {
     expect(buildDtrRow('2026-09-05T12:30:00+08:00', '2026-09-05T17:00:00+08:00', date, true)).toEqual([
-      '', '', '12:30:00 PM', '5:00:00 PM',
+      '', '', '1:00:00 PM', '5:00:00 PM',
     ]);
   });
-  it('clamps 08:15:00.500 as late in Manila time', () => {
+  it('clamps 08:15:00.500 because fractional seconds are strictly past :15:00', () => {
     expect(buildDtrRow('2026-09-05T08:15:00.500+08:00', '2026-09-05T17:00:00+08:00', date, true)).toEqual([
       '9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
+  });
+  it.each([
+    { time: '09:03:00', expected: '9:03:00 AM', column: 'morning' },
+    { time: '09:15:00', expected: '9:15:00 AM', column: 'morning' },
+    { time: '09:15:00.000000001', expected: '10:00:00 AM', column: 'morning' },
+    { time: '09:15:00.001', expected: '10:00:00 AM', column: 'morning' },
+    { time: '09:16:00', expected: '10:00:00 AM', column: 'morning' },
+    { time: '10:16:00', expected: '11:00:00 AM', column: 'morning' },
+    { time: '13:16:00', expected: '2:00:00 PM', column: 'afternoon' },
+  ])('displays $time using hourly clamp', ({ time, expected, column }) => {
+    const row = buildDtrRow(`2026-09-05T${time}+08:00`, '2026-09-05T17:00:00+08:00', date, true);
+    expect(column === 'morning' ? row[0] : row[2]).toBe(expected);
+    if (column === 'afternoon') expect(row.slice(0, 2)).toEqual(['', '']);
   });
   it('sub-4h lunch-spanning stint uses the Rust fixed-lunch split', () => {
     expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
@@ -410,7 +423,7 @@ describe('planPush', () => {
     expect(firstLate.kind === 'write' ? firstLate.values[0] : '').toBe('8:04:00 AM');
 
     const secondLate = await planPush(client, history[1], ROSTER, history);
-    expect(secondLate.kind === 'write' ? secondLate.values[0] : '').toBe('9:00:00 AM');
+    expect(secondLate.kind === 'write' ? secondLate.values[0] : '').toBe('8:05:00 AM');
     if (secondLate.kind !== 'write') throw new Error('expected second late write plan');
     await executePush(client, secondLate);
     expect(await planPush(client, history[1], ROSTER, history)).toMatchObject({ kind: 'in-sync' });
@@ -418,7 +431,7 @@ describe('planPush', () => {
     const monday = await planPush(client, history[2], ROSTER, history);
     expect(monday.kind === 'write' ? monday.values[0] : '').toBe('8:06:00 AM');
   });
-  it('only an in-window prior late consumes grace; ungraced arrivals through 09:00 clamp there', async () => {
+  it('only an in-window prior late consumes grace; arrivals past :15 clamp hourly', async () => {
     const priorOutsideWindow: AttendanceDay = {
       ...DAY,
       attendanceDate: '2026-09-01',
@@ -437,7 +450,7 @@ describe('planPush', () => {
     const actual0930 = await planPush(client, late0930, ROSTER, [priorOutsideWindow, late0930]);
     const actualFractional = await planPush(client, lateFractionalGraceEnd, ROSTER, [lateFractionalGraceEnd]);
     expect(graceStillAvailable.kind === 'write' ? graceStillAvailable.values[0] : '').toBe('8:08:00 AM');
-    expect(actual0930.kind === 'write' ? actual0930.values[0] : '').toBe('9:30:00 AM');
+    expect(actual0930.kind === 'write' ? actual0930.values[0] : '').toBe('10:00:00 AM');
     expect(actualFractional.kind === 'write' ? actualFractional.values[0] : '').toBe('9:00:00 AM');
   });
   it('clamps a backdated second late but excludes later history when planning the first late', async () => {
@@ -465,7 +478,7 @@ describe('planPush', () => {
     const first = await planPush(client, firstLate, ROSTER, history);
     const second = await planPush(client, backdatedSecondLate, ROSTER, history);
     expect(first.kind === 'write' ? first.values[0] : '').toBe('8:04:00 AM');
-    expect(second.kind === 'write' ? second.values[0] : '').toBe('9:00:00 AM');
+    expect(second.kind === 'write' ? second.values[0] : '').toBe('8:05:00 AM');
   });
   it('skips identical cells without writing', async () => {
     const synced = [
@@ -786,12 +799,12 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
       graceAvailable: true,
     });
     expect(pay).toMatchObject({
-      computedTimeIn: '2026-09-05T11:30:00+08:00',
+      computedTimeIn: '2026-09-05T12:00:00+08:00',
       graceUsed: false,
-      lateHours: 1,
-      workedHours: 2,
-      halfDayDeduction: 50,
-      dailyPay: 20,
+      lateHours: 4,
+      workedHours: 1.5,
+      halfDayDeduction: 25,
+      dailyPay: 15,
       isHalfDay: true,
     });
   });
