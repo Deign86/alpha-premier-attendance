@@ -2867,29 +2867,30 @@ async fn payroll_generate_cutoff_impl(
                             .with_ymd_and_hms(in_m.year(), in_m.month(), in_m.day(), 8, 0, 0)
                             .single()
                             .unwrap_or(in_m);
+                        let nine_am = day_start + chrono::Duration::hours(1);
                         let in_effective = if rec_grace_used == Some(1) {
                             day_start
-                        } else if rec_late_hours > 0 {
-                            crate::services::payroll::ceil_hour(in_m)
+                        } else if rec_late_hours > 0 && in_m > day_start && in_m <= nine_am {
+                            nine_am
                         } else {
                             in_m.max(day_start)
                         };
                         let paid_sec = crate::services::lunch_break::paid_work_seconds(in_effective, capped_out);
-                        let wh = crate::services::payroll::round_hours(paid_sec).min(8);
-                        let late_hours_already_removed = if is_intern { rec_late_hours } else { 0 };
-                        let uh = (8 - wh - late_hours_already_removed).max(0);
+                        let wh = (paid_sec.max(0) as f64 / 3600.0).min(8.0);
+                        let late_hours_already_removed = if is_intern { rec_late_hours as f64 } else { 0.0 };
+                        let uh = (8.0 - wh - late_hours_already_removed).max(0.0);
                         (wh, uh)
                     } else {
-                        (0, 4)
+                        (0.0, 4.0)
                     }
                 } else {
-                    (0, 4)
+                    (0.0, 4.0)
                 };
 
-                let details = if unrendered_hrs > 0 {
+                let details = if unrendered_hrs > 0.0 {
                     format!("Incomplete hours: {} worked of 8 hrs ({} short), {} – {}",
-                        if worked_hrs == 1 { "1 hr".to_string() } else { format!("{} hrs", worked_hrs) },
-                        if unrendered_hrs == 1 { "1 hr".to_string() } else { format!("{} hrs", unrendered_hrs) },
+                        if worked_hrs == 1.0 { "1 hr".to_string() } else { format!("{} hrs", worked_hrs) },
+                        if unrendered_hrs == 1.0 { "1 hr".to_string() } else { format!("{} hrs", unrendered_hrs) },
                         in_str, out_str)
                 } else {
                     format!("Half-day: {} – {}", in_str, out_str)

@@ -271,7 +271,7 @@ describe('buildDtrRow', () => {
       '3:00:00 PM',
     ]);
   });
-  it('rewrites arrivals through 09:00 regardless of grace and preserves later arrivals', () => {
+  it('clamps ungraced arrivals through 09:00 and preserves later actual times', () => {
     const lateIn = '2026-09-05T08:04:00+08:00';
     const timeOut = '2026-09-05T17:00:00+08:00';
     expect(buildDtrRow(lateIn, timeOut, date)).toEqual(['8:04:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
@@ -281,6 +281,19 @@ describe('buildDtrRow', () => {
     ]);
     expect(buildDtrRow('2026-09-05T09:30:00+08:00', timeOut, date, true)).toEqual([
       '9:30:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T09:00:00+08:00', timeOut, date, true)).toEqual([
+      '9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
+    ]);
+  });
+  it('keeps a 12:30 arrival in the afternoon time-in column', () => {
+    expect(buildDtrRow('2026-09-05T12:30:00+08:00', '2026-09-05T17:00:00+08:00', date, true)).toEqual([
+      '', '', '12:30:00 PM', '5:00:00 PM',
+    ]);
+  });
+  it('clamps 08:15:00.500 as late in Manila time', () => {
+    expect(buildDtrRow('2026-09-05T08:15:00.500+08:00', '2026-09-05T17:00:00+08:00', date, true)).toEqual([
+      '9:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
     ]);
   });
   it('sub-4h lunch-spanning stint uses the Rust fixed-lunch split', () => {
@@ -405,7 +418,7 @@ describe('planPush', () => {
     const monday = await planPush(client, history[2], ROSTER, history);
     expect(monday.kind === 'write' ? monday.values[0] : '').toBe('8:06:00 AM');
   });
-  it('only an in-window prior late consumes grace; display clamp still applies through 09:00', async () => {
+  it('only an in-window prior late consumes grace; ungraced arrivals through 09:00 clamp there', async () => {
     const priorOutsideWindow: AttendanceDay = {
       ...DAY,
       attendanceDate: '2026-09-01',
@@ -418,11 +431,14 @@ describe('planPush', () => {
       timeIn: '2026-09-03T08:08:00+08:00',
     };
     const late0930: AttendanceDay = { ...next08, timeIn: '2026-09-03T09:30:00+08:00' };
+    const lateFractionalGraceEnd: AttendanceDay = { ...next08, timeIn: '2026-09-03T08:15:00.500+08:00' };
     const client = makeClient({ 'ROSADO RAINEER': [baseRows[0], ['9/1/2026'], ['9/3/2026']] });
     const graceStillAvailable = await planPush(client, next08, ROSTER, [priorOutsideWindow, next08]);
     const actual0930 = await planPush(client, late0930, ROSTER, [priorOutsideWindow, late0930]);
+    const actualFractional = await planPush(client, lateFractionalGraceEnd, ROSTER, [lateFractionalGraceEnd]);
     expect(graceStillAvailable.kind === 'write' ? graceStillAvailable.values[0] : '').toBe('8:08:00 AM');
     expect(actual0930.kind === 'write' ? actual0930.values[0] : '').toBe('9:30:00 AM');
+    expect(actualFractional.kind === 'write' ? actualFractional.values[0] : '').toBe('9:00:00 AM');
   });
   it('clamps a backdated second late but excludes later history when planning the first late', async () => {
     const firstLate: AttendanceDay = {
@@ -770,13 +786,13 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
       graceAvailable: true,
     });
     expect(pay).toMatchObject({
-      computedTimeIn: '2026-09-05T09:00:00+08:00',
+      computedTimeIn: '2026-09-05T11:30:00+08:00',
       graceUsed: false,
       lateHours: 1,
-      workedHours: 5,
-      halfDayDeduction: 20,
-      dailyPay: 50,
-      isHalfDay: false,
+      workedHours: 2,
+      halfDayDeduction: 50,
+      dailyPay: 20,
+      isHalfDay: true,
     });
   });
   it('12:30 arrival keeps the actual in-time on the DTR', () => {
@@ -909,7 +925,7 @@ describe('auto-provision upcoming month blocks', () => {
     expect(updateCells.rows.length).toBe(32);
     expect(updateCells.rows[0]?.values[0]?.userEnteredValue?.stringValue).toBe('DATE-November');
     expect(updateCells.rows[1]?.values[0]?.userEnteredValue?.stringValue).toBe('11/1/2026');
-    expect(updateCells.rows[1]?.values[5]?.userEnteredValue?.formulaValue).toBe('=MIN(8,ROUND(((C70-B70)+(E70-D70))*24,0))');
+    expect(updateCells.rows[1]?.values[5]?.userEnteredValue?.formulaValue).toBe('=MIN(8,((C70-B70)+(E70-D70))*24)');
     expect(updateCells.rows[31]?.values[4]?.userEnteredValue?.stringValue).toBe('TOTAL HOURS');
     expect(updateCells.rows[31]?.values[5]?.userEnteredValue?.formulaValue).toBe('=SUM(F70:F99)');
 

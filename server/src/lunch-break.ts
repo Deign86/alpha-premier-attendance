@@ -3,20 +3,11 @@ import { DateTime } from 'luxon';
 /**
  * Shared payroll clock helpers and the fixed 12:00–13:00 Manila lunch window.
  *
- * IMPORTANT (post-0.1.74): the lunch-window helpers (`lunchBreakExcludedSeconds`,
- * `paidWorkSeconds`, `paidWorkHours`, `paidWorkHoursCeiled`) are NOT part of the
- * payroll calculation any more. The engines derive paid hours 1:1 from the
- * recorded DTR time-in/time-out (rounded whole hours, no lunch term), so
- * payroll deliberately does not subtract this window. Those helpers currently
- * have no non-test consumer in `server/src`; they are kept because
- * `server/test/lunch-break.test.ts` pins them and because the desktop app still
- * uses the equivalent helper for the attendance-report TOTAL_HOURS column
- * (`reporting::elapsed_hours`, lunch-net). Reports and payroll therefore
- * intentionally disagree on every lunch-spanning shift — do not "reconcile"
- * them by re-adding the lunch term to payroll.
+ * Payroll hours use the paid-work helpers below: fractional elapsed hours
+ * capped at 8, with the overlapping lunch window excluded.
  *
  * The remaining exports here (`capLateTimeoutOut`, `isHalfDayWork`,
- * `effectiveHalfDayTimeOut`, `ceilHour`, `manilaTimestamp`) ARE live payroll
+ * `effectiveHalfDayTimeOut`, `manilaTimestamp`) ARE live payroll
  * inputs and must not be removed. `officeCloseFor` and the hour constants have
  * no external consumer either; they back the helpers above.
  *
@@ -72,20 +63,9 @@ export function paidWorkSeconds(start: DateTime, end: DateTime): number {
   return Math.max(0, elapsed - lunchBreakExcludedSeconds(start, end));
 }
 
-/** Paid work hours rounded to the nearest whole hour, capped at 8, excluding lunch. */
+/** Paid work hours as fractional hours, capped at 8, excluding lunch. */
 export function paidWorkHours(start: DateTime, end: DateTime): number {
-  return Math.min(8, Math.round(paidWorkSeconds(start, end) / 3600));
-}
-
-/**
- * Paid work hours rounded up to the next whole hour, excluding lunch.
- *
- * Mirrors the existing payroll convention of ceiling fractional hours so a
- * 07:30–16:30 shift (8.0 paid hours after the lunch cut) still reports 8
- * hours, never 9.
- */
-export function paidWorkHoursCeiled(start: DateTime, end: DateTime): number {
-  return Math.ceil(paidWorkSeconds(start, end) / 3600);
+  return Math.min(8, paidWorkSeconds(start, end) / 3600);
 }
 
 /** Parses an ISO timestamp into Manila time, throwing on invalid input. */
@@ -97,14 +77,6 @@ export function manilaTimestamp(value: string): DateTime {
   const parsed = DateTime.fromISO(text, { setZone: true }).setZone(timezone);
   if (!parsed.isValid) throw new Error('Payroll timestamps must be valid ISO values');
   return parsed;
-}
-
-/** Round a Manila timestamp up to the next whole hour (exact hours stay put). */
-export function ceilHour(value: DateTime): DateTime {
-  // P5: truncate sub-second residue first so 08:00:00.500 counts exact-hour.
-  const truncated = value.set({ millisecond: 0 });
-  const floor = truncated.startOf('hour');
-  return truncated.equals(floor) ? floor : floor.plus({ hours: 1 });
 }
 
 /** 17:00:00 Manila on the same calendar day as the given clock-out. */
@@ -153,16 +125,14 @@ export function effectiveHalfDayTimeOut(
 }
 
 /**
- * Shared shift core: paid seconds -> rounded hours -> half-day -> deductions.
+ * Shared shift core: paid seconds -> fractional hours -> half-day -> deductions.
  *
  * Byte-identical to the former inline blocks in `employee-payroll.ts:15-20`
  * and `intern-payroll.ts:48-53`. Callers keep their divergences OUTSIDE:
- * `payableIn` (employee 08:00 floor vs intern grace/late-ceil choice),
+ * `payableIn` (employee 08:00 floor vs intern grace/late-policy choice),
  * `hourlyRate` (employee dailyRate/8 vs intern fixed/8), and the
  * computed-time-out else-branch (employee startOf-hour floor vs intern
- * passthrough) all stay in the engines. No lunch term is re-added here:
- * `paidWorkSeconds` is the DTR-elapsed source and reports-vs-payroll
- * disagreement on lunch-spanning shifts is intentional.
+ * passthrough) all stay in the engines. `paidWorkSeconds` subtracts lunch.
  */
 export type ShiftCoreResult = {
   paidSeconds: number;
@@ -180,7 +150,7 @@ export function computeShiftCore(
   hourlyRate: number,
 ): ShiftCoreResult {
   const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
-  const workedHours = Math.min(8, Math.max(0, Math.round(paidSeconds / 3600)));
+  const workedHours = Math.min(8, Math.max(0, paidSeconds / 3600));
   const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
   const unrenderedHours = Math.max(0, 8 - workedHours);
   const halfDayDeduction = unrenderedHours * hourlyRate;

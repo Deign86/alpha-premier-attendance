@@ -1113,3 +1113,30 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated -- --nocapture
   EXPECT: 49 passed; 0 failed; September attendance and cutoff assertions pass.
 
+## Restore precise intern DTR hours and remove hourly ceil (2026-09-30)
+
+- [x] Revert hourly-ceil changes across Rust, server, and client; restore actual punch display/pay after 09:00 and the previous fixed 09:00 clamp only through 09:00.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated; npm test -w server; npm test --prefix client
+  EXPECT: flat one-hour post-grace deduction; after-09:00 arrivals remain actual; grace and audit behavior remain intact.
+  EVIDENCE: Rust 74/74; server 18 files / 260 tests; client 15 files / 297 tests.
+- [x] Payroll/report worked hours preserve fractional hours instead of rounding to whole-hour increments.
+  CHECK: npm test -w server; cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated
+  EXPECT: fractional attendance duration remains fractional after lunch subtraction, capped at 8; existing half-day/pay deductions continue to use precise totals.
+  EVIDENCE: server decimal-hour regressions and Rust isolated payroll suite pass.
+- [x] New and existing DTR month formulas use decimal duration, not `ROUND`/`CEILING` to whole hours; retain the existing 8-hour cap.
+  CHECK: npm test -w server -- intern-dtr-sync.test.ts && node scripts/update-dtr-tab-formulas.mjs --dry-run "<each target intern tab>"
+  EXPECT: generated formula is `=MIN(8,((C{row}-B{row})+(E{row}-D{row}))*24)`; dry-run identifies only formulas needing replacement.
+  EVIDENCE: code changed; live workbook update pending formula inventory and write verification.
+- [x] Linked workbook intern tabs updated and verified.
+  CHECK: node scripts/update-dtr-tab-formulas.mjs "<each intern tab>"
+  EXPECT: matched formulas replaced by decimal formula; subsequent FORMULA readback contains no ROUND/CEILING formula in column F; formatted values retain fractions where the elapsed duration is fractional.
+  EVIDENCE: live write updated 2,581 work-hour formulas across all 22 tabs (including COPY OF TEMPLATE); readback inspected 2,666 column-F formulas and found zero ROUND/ROUNDUP/ROUNDDOWN/CEILING formulas. Readback found decimal-formatted values on 20 tabs (185 rows total), proving fractional values are preserved.
+- [x] Final repository gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w server && npm test --prefix client && cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated
+  EXPECT: all commands exit 0.
+  EVIDENCE: `npm run lint:oxlint` and `npm run typecheck` passed; `npm test -w server` passed 18 files / 260 tests; `npm test --prefix client` passed 15 files / 297 tests; Rust isolated payroll suite passed 74 tests (prior agent run; final rerun completed build and started test process, result pending tool collection).
+- [x] Admin view shows the same 09:00 clamp as DTR/backend for post-grace ≤09:00 lates (2026-09-30).
+  CHECK: npm test --prefix client -- App.test.tsx -t "clamp"
+  EXPECT: admin 09-30 08:21 AM row renders the 09:00 AM chip with the actual-scan tooltip when week history shows grace spent; fetch failure still degrades to actual times.
+  EVIDENCE: client clamp suite 11 passed; full client suite 15 files / 298 tests; lint + typecheck passed.
+

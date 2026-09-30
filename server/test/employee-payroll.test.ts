@@ -3,7 +3,7 @@ import { calculateEmployeePayroll } from '../src/employee-payroll.js';
 import { manilaTimestamp } from '../src/lunch-break.js';
 
 describe('employee payroll policy', () => {
-  it('rounds input up and output down without changing actual timestamps', () => {
+  it('floors an early arrival to 08:00 without rounding later arrivals up', () => {
     const result = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T07:50:00+08:00',
       actualTimeOut: '2026-07-28T17:10:00+08:00',
@@ -19,7 +19,7 @@ describe('employee payroll policy', () => {
       halfDayDeduction: 0,
       basePay: 650,
       dailyPay: 650,
-      // 07:50 to 17:10 elapsed is ceiled to 10 hours and capped at standard 8 hours.
+      // Paid hours preserve decimals, capped at 8 with the lunch window excluded.
       workedHours: 8,
     });
   });
@@ -69,17 +69,17 @@ describe('employee payroll policy', () => {
     expect(result.workedHours).toBe(8);
     expect(result.dailyPay).toBe(650);
 
-    // Partial window: 11:45–13:15 elapsed is 1.5h minus 1h lunch = 0.5h -> rounded to 1h.
+    // Partial window: 11:45–13:15 is 0.5 paid hours after lunch exclusion.
     const partial = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T11:45:00+08:00',
       actualTimeOut: '2026-07-28T13:15:00+08:00',
       dailyRate: 650,
     });
-    expect(partial.workedHours).toBe(1);
-    expect(partial.dailyPay).toBe(81.25);
+    expect(partial.workedHours).toBe(0.5);
+    expect(partial.dailyPay).toBe(40.625);
   });
 
-  it('strictly counts whole hours: 08:00-12:30 pays 4 hours, matching 08:00-12:00', () => {
+  it('preserves fractional hours for 08:00-12:30 after lunch subtraction', () => {
     const atNoon = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00+08:00',
       actualTimeOut: '2026-07-28T12:00:00+08:00',
@@ -170,13 +170,13 @@ describe('employee payroll policy', () => {
     expect(before.workedHours).toBe(5);
   });
 
-  it('P5: sub-second residue does not push an exact hour up', () => {
+  it('preserves sub-second arrival time instead of rounding to an hour', () => {
     const result = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T08:00:00.500+08:00',
       actualTimeOut: '2026-07-28T17:00:00+08:00',
       dailyRate: 600,
     });
-    expect(result.computedTimeIn).toBe('2026-07-28T08:00:00+08:00');
+    expect(result.computedTimeIn).toBe('2026-07-28T08:00:00.500+08:00');
     expect(result.isHalfDay).toBe(false);
   });
 

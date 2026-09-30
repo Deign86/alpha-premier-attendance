@@ -7047,6 +7047,46 @@ function AdminAttendance({
   const [backdatedModalOpen, setBackdatedModalOpen] = useState(false);
 
   const activeRows = rows;
+  const [clampWeekHistory, setClampWeekHistory] = useState<AttendanceListItem[]>([]);
+  const hasInternRoster = users.some((user) => user.employeeType === "INTERN");
+
+  useEffect(() => {
+    let cancelled = false;
+    setClampWeekHistory([]);
+    if (!hasInternRoster || !date) return () => { cancelled = true; };
+
+    let weekStart: string;
+    try {
+      weekStart = getManilaWeekStart(date);
+    } catch {
+      return () => { cancelled = true; };
+    }
+
+    const dates: string[] = [];
+    for (
+      const cursor = new Date(`${weekStart}T00:00:00Z`);
+      cursor.toISOString().slice(0, 10) < date;
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    ) {
+      dates.push(cursor.toISOString().slice(0, 10));
+    }
+    if (!dates.length) return () => { cancelled = true; };
+
+    void Promise.all(dates.map((day) => loadAttendance(day)))
+      .then((responses) => {
+        if (cancelled) return;
+        setClampWeekHistory(
+          responses.flatMap((response) =>
+            response.success && Array.isArray(response.attendance) ? response.attendance : [],
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setClampWeekHistory([]);
+      });
+
+    return () => { cancelled = true; };
+  }, [date, hasInternRoster]);
 
   const arrivalMap = useMemo(
     () => evaluateAttendanceArrivals(activeRows),
@@ -7054,8 +7094,8 @@ function AdminAttendance({
   );
 
   const clampedTimeInIds = useMemo(
-    () => clampedGraceTimeInIds(activeRows, users),
-    [activeRows, users],
+    () => clampedGraceTimeInIds([...activeRows, ...clampWeekHistory], users),
+    [activeRows, clampWeekHistory, users],
   );
 
   const counts = useMemo(() => {

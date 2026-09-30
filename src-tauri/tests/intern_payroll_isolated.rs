@@ -230,7 +230,7 @@ fn named_0815_to_1500_edge_and_boundary_cases_match_daily_rule() {
 }
 
 #[test]
-fn september_intern_time_seed_matches_ts_grace_clamp_and_cutoff_cases() {
+fn september_intern_time_seed_matches_fixed_nine_clamp_and_cutoff_cases() {
     use services::{cutoff_payroll::{calculate as calculate_cutoff, CutoffInput}, intern_payroll::calculate};
 
     struct Seed {
@@ -244,8 +244,8 @@ fn september_intern_time_seed_matches_ts_grace_clamp_and_cutoff_cases() {
 
     let seeds = [
         Seed { date: "2026-09-01", time_in: "08:00:00", time_out: "17:00:00", expected_daily_pay: 8_000, expected_grace_used: false, expected_computed_in: "08:00:00" },
-        Seed { date: "2026-09-02", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "09:30:00" },
-        Seed { date: "2026-09-03", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "09:30:00" },
+        Seed { date: "2026-09-02", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 6_500, expected_grace_used: false, expected_computed_in: "09:30:00" },
+        Seed { date: "2026-09-03", time_in: "09:30:00", time_out: "17:00:00", expected_daily_pay: 6_500, expected_grace_used: false, expected_computed_in: "09:30:00" },
         Seed { date: "2026-09-04", time_in: "08:00:00", time_out: "16:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "08:00:00" },
         Seed { date: "2026-09-07", time_in: "08:08:00", time_out: "17:00:00", expected_daily_pay: 8_000, expected_grace_used: true, expected_computed_in: "08:08:00" },
         Seed { date: "2026-09-08", time_in: "08:08:00", time_out: "17:00:00", expected_daily_pay: 7_000, expected_grace_used: false, expected_computed_in: "09:00:00" },
@@ -291,9 +291,9 @@ fn september_intern_time_seed_matches_ts_grace_clamp_and_cutoff_cases() {
         );
     }
 
-    assert_eq!(daily_pay_total, 44_000);
+    assert_eq!(daily_pay_total, 43_000);
     assert_eq!(late_total, 3_000);
-    assert_eq!(undertime_total, 1_000);
+    assert_eq!(undertime_total, 2_000);
 
     let cutoff = calculate_cutoff(&CutoffInput {
         employee_id: "INT-SEP-SEED".into(),
@@ -336,8 +336,8 @@ fn september_intern_time_seed_matches_ts_grace_clamp_and_cutoff_cases() {
     assert_eq!(cutoff.absence_deduction, 40_000);
     assert_eq!(cutoff.late_deduction, late_total);
     assert_eq!(cutoff.half_day_deduction, undertime_total);
-    assert_eq!(cutoff.total_deductions, 44_000);
-    assert_eq!(cutoff.net_pay, daily_pay_total);
+    assert_eq!(cutoff.total_deductions, 45_000);
+    assert_eq!(cutoff.net_pay, 43_000);
 }
 
 #[test]

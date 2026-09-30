@@ -43,19 +43,21 @@ export async function updateTabs(tabNames, dryRun = false) {
         const row1 = idx + 1;
         const val = r[0];
         if (typeof val === 'string') {
-          // Match =MIN(8,((C{r}-B{r})+(E{r}-D{r}))*24) or variations
-          const minMatch = val.match(/^=MIN\(8,\s*\(?\(?C(\d+)-B\1\)?\s*\+\s*\(?E\1-D\1\)?\)?\*24\)$/i);
+          // Match decimal, ROUND, and CEILING variants of the capped work-hours formula.
+          const minMatch = val.match(/^=MIN\(8,\s*\(\(C(\d+)-B\1\)\+\(E\1-D\1\)\)\*24\)$/i)
+            || val.match(/^=MIN\(8,\s*ROUND\(\(\(C(\d+)-B\1\)\+\(E\1-D\1\)\)\*24,\s*0\)\)$/i)
+            || val.match(/^=MIN\(8,\s*CEILING\(\(\(C(\d+)-B\1\)\+\(E\1-D\1\)\)\*24,\s*1\)\)$/i);
           if (minMatch) {
             const rowNum = minMatch[1];
             replacedCount++;
-            return [`=MIN(8,CEILING(((C${rowNum}-B${rowNum})+(E${rowNum}-D${rowNum}))*24,1))`];
+            return [`=MIN(8,((C${rowNum}-B${rowNum})+(E${rowNum}-D${rowNum}))*24)`];
           }
           // Match Lorraine experimental formula: =IF(((C{r}-B{r})+(E{r}-D{r}))*24 <= 4, 4, MIN(8, ROUND(((C{r}-B{r})+(E{r}-D{r}))*24, 0)))
           const ifMatch = val.match(/^=IF\(\(\(C(\d+)-B\1\)\+\(E\1-D\1\)\)\*24\s*<=\s*4/i);
           if (ifMatch) {
             const rowNum = ifMatch[1];
             replacedCount++;
-            return [`=MIN(8,CEILING(((C${rowNum}-B${rowNum})+(E${rowNum}-D${rowNum}))*24,1))`];
+            return [`=MIN(8,((C${rowNum}-B${rowNum})+(E${rowNum}-D${rowNum}))*24)`];
           }
         }
         return [val ?? ''];

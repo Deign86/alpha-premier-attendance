@@ -12,8 +12,7 @@ use chrono_tz::{Asia::Manila, Tz};
 /// 08:00–17:00 day pays 8 hours (9 elapsed - 1 lunch).
 ///
 /// Do not add or remove the lunch term on only one side of that pair: both are
-/// already lunch-net. `paid_work_hours_ceiled` is currently referenced only by
-/// this module's tests.
+/// already lunch-net.
 ///
 /// Overnight/multi-day spans subtract EVERY touched day's window (a 22:00 to
 /// next-day 14:00 shift loses one hour per day crossed). Night shifts are
@@ -54,16 +53,9 @@ pub fn paid_work_seconds(start: DateTime<Tz>, end: DateTime<Tz>) -> i64 {
     (elapsed - lunch_excluded_seconds(start, end)).max(0)
 }
 
-/// Paid work hours rounded to the nearest whole hour (capped at 8), excluding lunch.
+/// Precise paid work hours (capped at 8), excluding lunch.
 pub fn paid_work_hours(start: DateTime<Tz>, end: DateTime<Tz>) -> f64 {
-    super::payroll::round_hours(paid_work_seconds(start, end)).min(8) as f64
-}
-
-/// Paid work hours rounded to the nearest whole hour, excluding lunch.
-///
-/// Half hours round up, and the result is capped at 8.
-pub fn paid_work_hours_ceiled(start: DateTime<Tz>, end: DateTime<Tz>) -> i64 {
-    super::payroll::round_hours(paid_work_seconds(start, end)).min(8)
+    (paid_work_seconds(start, end).max(0) as f64 / 3600.0).min(8.0)
 }
 
 #[cfg(test)]
@@ -83,7 +75,8 @@ mod tests {
         // 09:00–17:00: 8 clocked hours, 1 excluded → 7 paid.
         assert_eq!(lunch_excluded_seconds(at(9, 0, 1), at(17, 0, 1)), 3600);
         assert_eq!(paid_work_seconds(at(9, 0, 1), at(17, 0, 1)), 7 * 3600);
-        assert_eq!(paid_work_hours_ceiled(at(9, 0, 1), at(17, 0, 1)), 7);
+        assert_eq!(paid_work_hours(at(9, 0, 1), at(17, 0, 1)), 7.0);
+        assert_eq!(paid_work_hours(at(11, 30, 1), at(12, 30, 1)), 0.5);
     }
 
     #[test]

@@ -57,7 +57,7 @@ export function evaluateArrivalWithBudget(
   const startSeconds = 8 * 3600;
   const graceEndSeconds = 8 * 3600 + 15 * 60;
   if (seconds <= startSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
-  if (seconds <= graceEndSeconds && !graceAlreadyUsed) {
+  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds && !graceAlreadyUsed) {
     return { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 };
   }
   return {
@@ -127,10 +127,11 @@ function manilaSecondsSinceMidnight(iso: string, timezone: string): number | nul
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    fractionalSecondDigits: 3,
     hourCycle: 'h23',
   }).formatToParts(date);
   const read = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  return read('hour') * 3600 + read('minute') * 60 + read('second');
+  return read('hour') * 3600 + read('minute') * 60 + read('second') + read('fractionalSecond') / 1000;
 }
 
 /**
@@ -185,7 +186,7 @@ export function evaluateAttendanceArrivals(
  * Evaluates a single arrival timestamp against office hours policy:
  * - <= 08:00:00: ON_TIME
  * - 08:00:01 - 08:15:00: GRACE_PERIOD
- * - > 08:15:00: LATE
+ * - > 08:15:00.000: LATE
  */
 export function evaluateArrivalFromTimestamp(
   timeInIso: string,
@@ -199,7 +200,7 @@ export function evaluateArrivalFromTimestamp(
   const graceEndSeconds = graceHour * 3600 + graceMinute * 60;
 
   if (seconds <= startSeconds) return 'ON_TIME';
-  if (seconds <= graceEndSeconds) return 'GRACE_PERIOD';
+  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds) return 'GRACE_PERIOD';
   return 'LATE';
 }
 

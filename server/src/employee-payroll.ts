@@ -1,4 +1,4 @@
-import { capLateTimeoutOut, ceilHour, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
+import { capLateTimeoutOut, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
 
 export type EmployeePayrollInput = { actualTimeIn: string; actualTimeOut: string; dailyRate: number };
 export type EmployeePayrollResult = { computedTimeIn: string; computedTimeOut: string; lateHours: number; lateDeduction: number; isHalfDay: boolean; halfDayDeduction: number; basePay: number; dailyPay: number; workedHours: number };
@@ -22,7 +22,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
 
   // TODO: Employee late rules TBD by client
   return {
-    computedTimeIn: ceilHour(actualTimeIn).toISO({ suppressMilliseconds: true })!,
+    computedTimeIn: payableIn.toISO({ suppressMilliseconds: true })!,
     computedTimeOut: effectiveTimeOut.toISO({ suppressMilliseconds: true })!,
     lateHours: 0,
     lateDeduction: 0,
@@ -30,8 +30,7 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): EmployeeP
     halfDayDeduction,
     basePay: input.dailyRate,
     dailyPay,
-    // Post-0.1.75: payable daily hours are gross elapsed DTR time strictly by the
-    // hour (rounded) — the 12:00–13:00 lunch window is NOT subtracted here.
+    // Payable hours preserve fractional duration and subtract the lunch window.
     workedHours,
   };
 }

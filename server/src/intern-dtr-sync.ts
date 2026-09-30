@@ -470,7 +470,7 @@ export function buildNewMonthBlockRequests(
         { userEnteredValue: { stringValue: '' } },
         { userEnteredValue: { stringValue: '' } },
         { userEnteredValue: { stringValue: '' } },
-        { userEnteredValue: { formulaValue: `=MIN(8,ROUND(((C${r}-B${r})+(E${r}-D${r}))*24,0))` } },
+        { userEnteredValue: { formulaValue: `=MIN(8,((C${r}-B${r})+(E${r}-D${r}))*24)` } },
       ],
     });
   }
@@ -715,21 +715,28 @@ function isWithinGraceWindow(timeIn: string): boolean {
   const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
   if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
   const minutes = actualIn.hour * 60 + actualIn.minute;
-  return (minutes > 8 * 60 || (minutes === 8 * 60 && (actualIn.second > 0 || actualIn.millisecond > 0))) &&
+  return (minutes > 8 * 60 || (minutes === 8 * 60 && actualIn.second > 0)) &&
     (minutes < 8 * 60 + 15 || (minutes === 8 * 60 + 15 && actualIn.second === 0 && actualIn.millisecond === 0));
 }
 
 function isClampDisplayArrival(timeIn: string): boolean {
   const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
   if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
-  return isLateArrival(timeIn) && (actualIn.hour < 9 || (
-    actualIn.hour === 9 && actualIn.minute === 0 && actualIn.second === 0 && actualIn.millisecond === 0
-  ));
+  return isLateArrival(timeIn) && (
+    actualIn.hour < 9 ||
+    (actualIn.hour === 9 && actualIn.minute === 0 && actualIn.second === 0 && actualIn.millisecond === 0)
+  );
+}
+
+function formatClampedArrival(timeIn: string): string {
+  const actualIn = DateTime.fromISO(timeIn, { zone: MANILA_ZONE });
+  if (!actualIn.isValid) throw new Error(`invalid Manila timestamp: ${timeIn}`);
+  return actualIn.set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toFormat('h:00:00 a').toUpperCase();
 }
 
 /**
- * Build [B, C, D, E] using actual punches except the weekly-late 09:00
- * display clamp; lunch-spanning morning shifts use the fixed Rust split.
+ * Build [B, C, D, E] using actual punches except ungraced arrivals through 09:00,
+ * which display at 09:00; lunch-spanning morning shifts use the fixed Rust split.
  *
  * Decoupled from payroll half-day logic (2026-09): this function NEVER
  * fabricates, truncates, or substitutes fixed-lunch/half-day conventions.
@@ -752,16 +759,17 @@ export function buildDtrRow(
   if (record.kind === 'empty') return ['', '', '', ''];
   if (record.kind === 'working') {
     const started = clampLateIn && isClampDisplayArrival(record.timeIn)
-      ? '9:00:00 AM'
+      ? formatClampedArrival(record.timeIn)
       : formatSheetTime(record.timeIn);
     return [started, '', '', ''];
   }
   const inIso = record.timeIn.toISO()!;
   const clampDisplayIn = clampLateIn && isClampDisplayArrival(inIso);
   const started = clampDisplayIn
-    ? '9:00:00 AM'
+    ? formatClampedArrival(inIso)
     : formatSheetTime(inIso);
   const ended = formatSheetTime(record.timeOutIso);
+  if (clampDisplayIn && isAfternoonArrival(inIso)) return ['', '', started, ended];
   // Short fragments retain actual stamps; a full lunch-spanning shift uses
   // the fixed lunch split shared with the Rust DTR writer.
   if (isBeforeLunchOut(record.timeOutIso)) return [started, ended, '', ''];

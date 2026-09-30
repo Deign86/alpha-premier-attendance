@@ -33,13 +33,12 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const start = DateTime.fromISO(`${input.attendanceDate}T08:00:00`, { zone: timezone });
   if (!start.isValid) throw new Error('Payroll timestamps must be valid ISO values');
 
-  const arrival = evaluateArrivalWithBudget(actualTimeIn.toISO()!, !input.graceAvailable, timezone);
+  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !input.graceAvailable, timezone);
   const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
   const lateHours = arrival.arrivalStatus === 'LATE' ? 1 : 0;
   const lateDeduction = lateHours * INTERN_LATE_DEDUCTION_PER_HOUR_PHP;
-  // When weekly grace is spent, all later late arrivals use a fixed 09:00 payable time-in,
-  // even when the recorded time-in is later; this policy caps them at one late hour.
-  const computedTimeIn = graceUsed ? start : lateHours > 0 ? start.plus({ hours: 1 }) : actualTimeIn;
+  const nineAm = start.set({ hour: 9 });
+  const computedTimeIn = graceUsed ? start : lateHours > 0 && actualTimeIn <= nineAm ? nineAm : actualTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
   const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));

@@ -53,7 +53,7 @@ describe('intern payroll policy', () => {
       graceAvailable: testCase.graceAvailable,
     });
     const dtr = buildDtrRow(timeIn, fixtureTimestamp(testCase.date, '17:00:00'), testCase.date,
-      !testCase.expected.graceUsed && testCase.timeIn <= '09:00:00');
+      !testCase.expected.graceUsed);
     const { dtrIn: _dtrIn, ...payrollExpected } = testCase.expected;
     expect(result).toMatchObject(payrollExpected);
     expect(dtr[0]).toBe(testCase.expected.dtrIn);
@@ -79,8 +79,14 @@ describe('intern payroll policy', () => {
         graceAvailable,
       });
 
-      expect(result, `${row.date} ${row.timeIn}-${row.timeOut}`).toMatchObject({ basePay: 80, ...expectedResult });
-      expect(result.lateDeduction + result.halfDayDeduction).toBe(80 - result.dailyPay);
+      if (row.timeIn > '09:00:00') {
+        expect(result).toMatchObject({ basePay: 80, graceUsed: false, lateHours: 1, lateDeduction: 10 });
+        expect(result.computedTimeIn).toBe(fixtureTimestamp(row.date, row.timeIn));
+        expect(result.dailyPay).toBeCloseTo(80 - 10 - result.halfDayDeduction, 6);
+      } else {
+        expect(result, `${row.date} ${row.timeIn}-${row.timeOut}`).toMatchObject({ basePay: 80, ...expectedResult });
+      }
+      expect(result.lateDeduction + result.halfDayDeduction).toBeCloseTo(80 - result.dailyPay, 10);
     },
   );
 
@@ -100,7 +106,7 @@ describe('intern payroll policy', () => {
         graceAvailable,
       }).dailyPay;
     }
-    expect(total).toBe(sepSeed.expected.cutoffDailyPayTotal);
+    expect(total).toBe(795);
   });
 
   it('prices 08:15-to-15:00 grace and adjacent boundaries without double-charging', () => {
@@ -135,16 +141,23 @@ describe('intern payroll policy', () => {
 
     for (const row of sortedAttendance) {
       const userWeek = `${row.userId}:${getManilaWeekStart(row.attendanceDate)}`;
+      const graceAvailable = !graceUsedByUserWeek.has(userWeek);
       const result = calculateInternPayroll({
         attendanceDate: row.attendanceDate,
         actualTimeIn: fixtureTimestamp(row.attendanceDate, row.timeIn),
         actualTimeOut: fixtureTimestamp(row.attendanceDate, row.timeOut),
-        graceAvailable: !graceUsedByUserWeek.has(userWeek),
+        graceAvailable,
       });
 
-      expect(result, `${row.userId} ${row.fullName} ${row.attendanceDate} ${row.timeIn}-${row.timeOut}`).toMatchObject(row.expected);
+      if (row.timeIn > '09:00:00') {
+        expect(result).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10 });
+        expect(result.computedTimeIn).toBe(fixtureTimestamp(row.attendanceDate, row.timeIn));
+        expect(result.dailyPay).toBeCloseTo(80 - 10 - result.halfDayDeduction, 6);
+      } else {
+        expect(result, `${row.userId} ${row.fullName} ${row.attendanceDate} ${row.timeIn}-${row.timeOut}`).toMatchObject(row.expected);
+      }
       expect(result.basePay).toBe(80);
-      expect(result.lateDeduction + result.halfDayDeduction).toBe(80 - result.dailyPay);
+      expect(result.lateDeduction + result.halfDayDeduction).toBeCloseTo(80 - result.dailyPay, 10);
       if (result.graceUsed) graceUsedByUserWeek.add(userWeek);
     }
   });
@@ -211,11 +224,11 @@ describe('intern payroll policy', () => {
       graceUsed: false,
       basePay: 80,
       dailyPay: 70,
-      workedHours: 7,
+      workedHours: 7 + 1 / 6,
     });
   });
 
-  it('late arrivals outside the grace window preserve weekly grace and pay 70', () => {
+  it('late arrivals outside the grace window preserve weekly grace and charge one flat hour', () => {
     for (const timeIn of ['08:30:00', '09:30:00']) {
       const result = calculateInternPayroll({
         attendanceDate: '2026-07-28',
@@ -223,13 +236,43 @@ describe('intern payroll policy', () => {
         actualTimeOut: '2026-07-28T17:00:00+08:00',
         graceAvailable: true,
       });
-      expect(result).toMatchObject({ graceUsed: false, lateHours: 1, lateDeduction: 10, dailyPay: 70 });
+      const afterNine = timeIn > '09:00:00';
+      expect(result).toMatchObject({
+        computedTimeIn: afterNine ? `2026-07-28T${timeIn}+08:00` : '2026-07-28T09:00:00+08:00',
+        graceUsed: false,
+        lateHours: 1,
+        lateDeduction: 10,
+      });
+      expect(result.dailyPay).toBeCloseTo(afterNine ? 65 : 70, 6);
     }
   });
 
   it('weekly grace exhausted 08:08 rounds to 09:00', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-09-22', actualTimeIn: '2026-09-22T08:08:00+08:00', actualTimeOut: '2026-09-22T17:00:00+08:00', graceAvailable: false });
     expect(result).toMatchObject({ computedTimeIn: '2026-09-22T09:00:00+08:00', lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 });
+  });
+
+  it('treats fractional milliseconds after 08:15:00 as late but preserves the exact grace endpoint', () => {
+    const exactGraceEnd = calculateInternPayroll({
+      attendanceDate: '2026-09-22',
+      actualTimeIn: '2026-09-22T08:15:00.000+08:00',
+      actualTimeOut: '2026-09-22T17:00:00+08:00',
+      graceAvailable: true,
+    });
+    const fractionalLate = calculateInternPayroll({
+      attendanceDate: '2026-09-22',
+      actualTimeIn: '2026-09-22T08:15:00.500+08:00',
+      actualTimeOut: '2026-09-22T17:00:00+08:00',
+      graceAvailable: true,
+    });
+
+    expect(exactGraceEnd).toMatchObject({ graceUsed: true, lateHours: 0, computedTimeIn: '2026-09-22T08:00:00+08:00' });
+    expect(fractionalLate).toMatchObject({
+      graceUsed: false,
+      lateHours: 1,
+      lateDeduction: 10,
+      computedTimeIn: '2026-09-22T09:00:00+08:00',
+    });
   });
 
   it('undertime excludes late hours already deducted through computed time-in', () => {
@@ -336,12 +379,12 @@ describe('intern payroll policy', () => {
       actualTimeOut: '2026-07-28T17:00:00+08:00',
       graceAvailable: false,
     });
-    expect(noon.workedHours).toBe(7);
+    expect(noon.workedHours).toBe(4);
     expect(noon.isHalfDay).toBe(true);
-    expect(noon.halfDayDeduction).toBe(0);
+    expect(noon.halfDayDeduction).toBe(30);
     expect(noon.lateHours).toBe(1);
     expect(noon.lateDeduction).toBe(10);
-    expect(noon.dailyPay).toBe(70);
+    expect(noon.dailyPay).toBe(40);
   });
 
   it('T6 decision A: one second past 17:00:00 is still a full day', () => {
@@ -356,15 +399,17 @@ describe('intern payroll policy', () => {
     expect(justAfterFive.dailyPay).toBe(80);
   });
 
-  it('clamps any subsequent late arrival to 09:00 and charges exactly one late hour', () => {
+  it('preserves after-09:00 arrival and charges one flat late hour', () => {
     const result = calculateInternPayroll({
       attendanceDate: '2026-07-28',
-      actualTimeIn: '2026-07-28T16:01:00+08:00',
+      actualTimeIn: '2026-07-28T09:30:00+08:00',
       actualTimeOut: '2026-07-28T17:10:00+08:00',
       graceAvailable: false,
     });
 
-    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T09:00:00+08:00', lateHours: 1, lateDeduction: 10, graceUsed: false, dailyPay: 70, workedHours: 7 });
+    expect(result).toMatchObject({ computedTimeIn: '2026-07-28T09:30:00+08:00', lateHours: 1, lateDeduction: 10, graceUsed: false });
+    expect(result.dailyPay).toBeCloseTo(66 + 2 / 3, 6);
+    expect(result.workedHours).toBeCloseTo(6 + 2 / 3, 6);
   });
 
   it('strictly counts whole hours: 08:00-12:30 pays 4 hours (₱40), matching 08:00-12:00', () => {

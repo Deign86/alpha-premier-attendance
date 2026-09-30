@@ -1047,6 +1047,73 @@ describe('Admin Attendance Corrections', () => {
     }
   });
 
+  it('uses earlier week history to clamp an admin date-only 08:21 late arrival', async () => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-30T10:00:00+08:00'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch mock intern roster
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [{ userId: 'u-lazaro', fullName: 'Deign Grey O. Lazaro', rfidUid: 'RFID-LAZARO', employeeType: 'INTERN', status: 'ACTIVE' }],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/attendance?date=')) {
+        // SAFETY: Earlier Monday grace-window scan returned by the week-history probe
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-09-28',
+            fetchedAt: '2026-09-30T10:00:00+08:00',
+            attendance: [{ attendanceId: 'lazaro-grace', attendanceDate: '2026-09-28', userId: 'u-lazaro', fullName: 'Deign Grey O. Lazaro', department: 'Operations', timeIn: '2026-09-28T08:10:00+08:00', timeOut: null, status: 'WORKING' }],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Admin endpoint contains only the selected date's rows
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-09-30',
+            attendance: [{ attendanceId: 'lazaro-late', attendanceDate: '2026-09-30', userId: 'u-lazaro', fullName: 'Deign Grey O. Lazaro', department: 'Operations', timeIn: '2026-09-30T08:21:00+08:00', timeOut: null, status: 'WORKING' }],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true, profiles: [], cutoffs: [] }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('09:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 8:21 AM (weekly grace used)');
+      expect(screen.getByDisplayValue('08:21')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('exports the clamped 09:00 time-in with the actual scan preserved in a sibling audit column', async () => {
     vi.restoreAllMocks();
     const exportedBlobs: Blob[] = [];

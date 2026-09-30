@@ -858,7 +858,8 @@ fn is_at_or_before_nine(time_in: &str) -> Result<bool, String> {
     let dt = chrono::DateTime::parse_from_rfc3339(time_in.trim())
         .map_err(|_| format!("invalid timestamp: {time_in}"))?;
     let t = dt.with_timezone(&Manila).time();
-    Ok(t.hour() < 9 || (t.hour() == 9 && t.minute() == 0 && t.second() == 0 && t.nanosecond() == 0))
+    Ok(t.hour() < 9
+        || (t.hour() == 9 && t.minute() == 0 && t.second() == 0 && t.nanosecond() == 0))
 }
 
 fn manila_week_start(attendance_date: &str) -> Result<String, String> {
@@ -1098,8 +1099,8 @@ pub(crate) fn build_dtr_row_with_clamp(
             if is_before_lunch_out(&time_out_iso)? {
                 return Ok([started, ended, String::new(), String::new()]);
             }
-            // in at/after noon -> afternoon pair only
-            if is_afternoon_arrival(&tin_iso)? && !clamped_late_in {
+            // Actual or policy-displayed noon arrivals use the afternoon pair.
+            if is_afternoon_arrival(&tin_iso)? {
                 return Ok([String::new(), String::new(), started, ended]);
             }
             // shift crosses lunch -> populate standard lunch out/in
@@ -3710,6 +3711,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(second_late_same_week[0], "9:00:00 AM");
+        let afternoon_actual = build_dtr_row_with_clamp(
+            Some("2026-09-10T12:30:00+08:00"),
+            Some("2026-09-10T17:00:00+08:00"),
+            "2026-09-10",
+            true,
+        )
+        .unwrap();
+        assert_eq!(afternoon_actual, ["", "", "12:30:00 PM", "5:00:00 PM"]);
         let late_afternoon = build_dtr_row_with_clamp(
             Some("2026-09-10T12:05:00+08:00"),
             Some("2026-09-10T17:00:00+08:00"),
@@ -3820,7 +3829,7 @@ mod tests {
     }
 
     #[test]
-    fn dtr_clamp_is_limited_to_nine_and_prior_grace_counts_only_window_lates() {
+    fn dtr_clamps_only_through_nine_and_prior_grace_counts_only_window_lates() {
         let mut history = HashMap::new();
         let row = build_dtr_row_with_clamp(
             Some("2026-09-08T08:08:00+08:00"),
@@ -3853,10 +3862,14 @@ mod tests {
 
         for (time_in, expected) in [
             ("08:08:00", "9:00:00 AM"),
+            ("08:15:00.000000001", "9:00:00 AM"),
+            ("08:15:00.500", "9:00:00 AM"),
             ("08:16:00", "9:00:00 AM"),
             ("08:30:00", "9:00:00 AM"),
             ("09:00:00", "9:00:00 AM"),
+            ("09:00:01", "9:00:01 AM"),
             ("09:30:00", "9:30:00 AM"),
+            ("10:30:00", "10:30:00 AM"),
         ] {
             let row = build_dtr_row_with_clamp(
                 Some(&format!("2026-09-09T{time_in}+08:00")),
@@ -4024,7 +4037,7 @@ mod tests {
         )
         .unwrap();
         assert!(!pay.is_half_day);
-        assert_eq!(pay.worked_hours, 6);
+        assert_eq!(pay.worked_hours, 6.0);
         assert_eq!(pay.half_day_deduction_centavos, 2000);
         assert_eq!(pay.daily_pay_centavos, 6000);
     }
@@ -4215,12 +4228,10 @@ mod tests {
         assert!(pay.is_half_day);
         // Late deduction also applies (12:30 vs 08:00 start), so only assert
         // the half-day flag + deduction, not the floored net pay.
-        // Payroll parity (TS intern-payroll, Rust intern_payroll): an ungraced
-        // late arrival pays from the 09:00 clamp, so the payable span is
-        // 09:00-17:00 (7 net hours); the 1 late hour is the only deduction, so
-        // the half-day shortfall is 0.
-        assert_eq!(pay.worked_hours, 7);
-        assert_eq!(pay.half_day_deduction_centavos, 0);
+        // After 09:00 the actual arrival is used for paid hours; the flat late
+        // deduction remains one hour and the rest is undertime.
+        assert_eq!(pay.worked_hours, 4.0);
+        assert_eq!(pay.half_day_deduction_centavos, 3_000);
     }
 
     #[test]
