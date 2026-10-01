@@ -1166,7 +1166,7 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   EXPECT: Oct. 1–5 claims are rejected; Sep. 30 remains valid; the payroll writer is the sole current production caller supplying the Google adapter's attendance date; historical imports remain exempt.
   EVIDENCE: `server/src/sheets.ts` requires a write date, validates the InMemory row, and documents Google writer trust; `server/src/payroll.ts` is the sole current production caller passing its attendance row date. This is not an adapter-enforced caller restriction. `docs/migration-cutover.md` exempts historical `--execute` imports from the live-claim guard.
 - [x] Accepted residuals remain bounded and documented.
-  EVIDENCE: Google Sheets adapter does not reread Attendance for claim authorization; direct callers must pass the verified attendance date (`server/src/sheets.ts`, `server/src/payroll.ts`). The Sep. 5 DTR suite assertion mismatch remains separately tracked in `server/test/intern-dtr-sync.test.ts`.
+  EVIDENCE: Google Sheets adapter does not reread Attendance for claim authorization; direct callers must pass the verified attendance date (`server/src/sheets.ts`, `server/src/payroll.ts`). RESOLVED — the Sep. 5 `server/test/intern-dtr-sync.test.ts:819` expectation was stale: 11:30→14:30 implies 2.5h undertime, but commit `9a51919` locks whole-hour ceiling, so `ceil(2.5) × ₱10 = ₱30`; ₱80 − ₱40 late − ₱30 undertime = ₱10 daily pay. CHECK: `npm test -w server -- test/intern-dtr-sync.test.ts -t "sub-4h first late arrival"`.
 - [x] Phase 3 full TypeScript suite sweep and client verification complete.
   CHECK: `npm test -w server`
   CHECK: `npm test -w shared`

@@ -821,8 +821,8 @@ describe('DTR vs payroll independence (half-day decoupling)', () => {
       graceUsed: false,
       lateHours: 4,
       workedHours: 1.5,
-      halfDayDeduction: 25,
-      dailyPay: 15,
+      halfDayDeduction: 30,
+      dailyPay: 10,
       isHalfDay: true,
     });
   });
