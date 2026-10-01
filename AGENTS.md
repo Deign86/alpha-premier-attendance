@@ -4,6 +4,9 @@
 
 On every user prompt and for every task, all four skills and disciplines are automatically active simultaneously without exception:
 
+### 0. Superpowers (Auto-Invoke Every Prompt)
+Installed repo-wide via `opencode.json` → `superpowers@git+https://github.com/obra/superpowers.git` (OpenCode V1 `plugin` key). On every prompt, before any other work: use the `skill` tool to load `using-superpowers`, then check for the relevant Superpowers skill before the task (brainstorming before code/design, writing-plans before implementation, test-driven-development during implementation, systematic-debugging for bugs, requesting-code-review between tasks, finishing-a-development-branch at the end). If the plugin bootstrap is missing, follow `https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md` troubleshooting and proceed with the skill workflow manually. Superpowers never overrides the Quartet below or the repo Verification Workflow.
+
 ### 1. Grill-Me (Relentless Design-Tree Interview & Plan Sharpening)
 Before executing ambiguous or non-trivial design/planning decisions:
 1. **Map the Design Tree**: Treat every requirement and decision as a tree of dependent choices.
