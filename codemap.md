@@ -30,7 +30,7 @@ RFID attendance desktop kiosk (Tauri v2 + React 18 + Rust + Express + Google She
 | `shared/src/` | Contract/policy source: scan/payroll/LAN/bathroom types, Manila time math, office identity. | [View Map](shared/src/codemap.md) |
 | `src-tauri/` | Desktop crate + packaging: Tauri v2 app, SQLite truth, NSIS/updater config. | [View Map](src-tauri/codemap.md) |
 | `src-tauri/src/` | Backend modules: commands, `AppState`, SQLite, LAN Axum server, lifecycle/tray, services. | [View Map](src-tauri/src/codemap.md) |
-| `src-tauri/src/bin/` | Legacy Sheets-CSV migration utility (dry-run/execute). | [View Map](src-tauri/src/bin/codemap.md) |
+| `src-tauri/src/bin/` | Legacy Sheets-CSV migration utility (dry-run/execute). | [View Map](src-tauri/codemap-bin.md) |
 | `src-tauri/src/reporting/` | Export data loaders + XLSX/PDF document generators. | [View Map](src-tauri/src/reporting/codemap.md) |
 | `src-tauri/src/services/` | Business services: scanner, payroll, Sheets/DTR sync, reconciliation, voice jobs. | [View Map](src-tauri/src/services/codemap.md) |
 | `src-tauri/src/tts/` | Speech manager: engine fallback, playback, IPC integration. | [View Map](src-tauri/src/tts/codemap.md) |
