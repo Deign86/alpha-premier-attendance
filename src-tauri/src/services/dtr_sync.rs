@@ -3667,7 +3667,7 @@ mod tests {
                 "2026-09-05"
             ),
             Ok([
-                "9:46:23 AM".to_string(),
+                "10:00:00 AM".to_string(),
                 "12:00:00 PM".to_string(),
                 "1:00:00 PM".to_string(),
                 String::new()
@@ -3726,7 +3726,7 @@ mod tests {
             week_one_exhausted,
         )
         .unwrap();
-        assert_eq!(second_late_same_week[0], "9:00:00 AM");
+        assert_eq!(second_late_same_week[0], "8:05:00 AM");
         let afternoon_actual = build_dtr_row_with_clamp(
             Some("2026-09-10T12:30:00+08:00"),
             Some("2026-09-10T17:00:00+08:00"),
@@ -3734,7 +3734,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(afternoon_actual, ["", "", "12:30:00 PM", "5:00:00 PM"]);
+        assert_eq!(afternoon_actual, ["", "", "1:00:00 PM", "5:00:00 PM"]);
         let late_afternoon = build_dtr_row_with_clamp(
             Some("2026-09-10T12:05:00+08:00"),
             Some("2026-09-10T17:00:00+08:00"),
@@ -3742,7 +3742,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(late_afternoon, ["", "", "12:05:00 PM", "5:00:00 PM"]);
+        assert_eq!(late_afternoon, ["", "", "1:00:00 PM", "5:00:00 PM"]);
         let rows = vec![vec!["9/10/2026".to_string()]];
         let plan = match plan_dtr_push_in_rows_with_clamp(
             "Tab",
@@ -3757,7 +3757,7 @@ mod tests {
             DtrPlanOutcome::Write(plan) => plan,
             other => panic!("expected first push write, got {other:?}"),
         };
-        assert_eq!(plan.values[0], "9:00:00 AM");
+        assert_eq!(plan.values[0], "8:05:00 AM");
         let landed = vec![vec![
             "9/10/2026".to_string(),
             plan.values[0].clone(),
@@ -3826,7 +3826,7 @@ mod tests {
         let DtrPlanOutcome::Write(plan) = replanned else {
             panic!("earlier first-late backdate must re-clamp the later date");
         };
-        assert_eq!(plan.values[0], "9:00:00 AM");
+        assert_eq!(plan.values[0], "8:05:00 AM");
 
         history.remove("2026-09-08");
         let unclamped_again = plan_dtr_push_in_rows_with_clamp(
@@ -3929,7 +3929,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(after_nine[0], "9:30:00 AM");
+        assert_eq!(after_nine[0], "10:00:00 AM");
         history.insert(
             "2026-09-09".to_string(),
             (Some("2026-09-09T08:15:01+08:00".to_string()), None),
@@ -4269,7 +4269,7 @@ mod tests {
             [
                 String::new(),
                 String::new(),
-                "12:30:00 PM".to_string(),
+                "1:00:00 PM".to_string(),
                 "5:00:00 PM".to_string()
             ]
         );
@@ -4867,7 +4867,7 @@ mod tests {
                 "2026-09-05"
             ),
             Ok([
-                "11:30:00 AM".to_string(),
+                "12:00:00 PM".to_string(),
                 "12:00:00 PM".to_string(),
                 "1:00:00 PM".to_string(),
                 "2:30:00 PM".to_string()

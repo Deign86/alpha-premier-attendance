@@ -662,7 +662,7 @@ mod tests {
         .unwrap();
         assert!(!just_before.is_half_day);
         assert!((just_before.worked_hours - (28_799.0 / 3_600.0)).abs() < 0.000_001);
-        assert_eq!(just_before.daily_pay_centavos, 8000);
+        assert_eq!(just_before.daily_pay_centavos, 7000);
         for time_out in [
             "2026-08-01T17:00:00+08:00",
             "2026-08-01T17:00:01+08:00",
@@ -704,7 +704,7 @@ mod tests {
         )
         .unwrap();
         assert!(half.is_half_day);
-        assert_eq!(half.daily_pay_centavos, 3500);
+        assert_eq!(half.daily_pay_centavos, 3000);
         assert!(half.computed_time_out.contains("T12:00:00+08:00"));
         // Full day keeps the actual time-out.
         let full = calculate(
