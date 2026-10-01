@@ -1214,3 +1214,80 @@ verified against source before implementation; Oracle Gates 1+2 passed
   section. Pre-existing unrelated modifications (`scripts/*.mjs`,
   untracked `scripts/*` helpers, `AGENTS.md`/`opencode.json` from the
   prior plugin-install task) were not touched by this phase.
+
+## Freeze-lock everything (Phase 5, user-approved scope)
+
+Two new files, zero prod-code changes. Exact-money locks (toBe/toEqual
+only, never toBeCloseTo); 1-cent divergence = revert. Full vectors below;
+fixer transcribes, never generates by running code.
+
+TS `server/test/payroll-cutoff-freeze.test.ts` (vitest, T0 header style;
+header ALSO states: snapshots are an independently reviewed baseline —
+a snapshot mismatch is investigated, never blanket-updated with -u
+without human approval):
+- F-CONTRACT (tamper-evident, independent of future fixture mutations):
+  PINNED_SHA256 `08d8d00bd22a980243770eb307d2aaf58f27e7fa582ba33d6235d695c9c180b6`
+  = SHA-256 of `shared/payroll-fixtures.json` AFTER normalizing CRLF → LF
+  only (no trimming, no JSON renormalization) — i.e. fixture content
+  excluding checkout line-ending conversion. Asserted via node:crypto
+  (read file, `.replace(/\r\n/g, '\n')`, hash); any content change fails
+  loudly here first. LF/CRLF invariance evidence (measured 2026-10-01):
+  CRLF-renormalized digest identical (true); raw working-tree bytes
+  differ (mixed checkout — the hazard was real); trailing-space edit and
+  value edit (780→781) both change the digest (true/true).
+  (documented default-value locks, incl. omitted hra/sss/phic/hdmf/
+  salaryAdvance exercising zero defaults); every EXPECTED output/error
+  below is a HARD-CODED literal transcribed from the v1 read, never
+  `scenario.expected`.
+- F-CASES (11, input = {...baseInput, ...case.input} through
+  `calculateCutoffPayroll`, exact toBe per hard-coded literal +
+  toMatchSnapshot of the money projection): rounds-to-cents basicPay /
+  gross / net 100.01; half-day whole + fractional-count halfDayDeduction
+  50.01; BUG-PAY-02 totalAllowance 0, gross 880, net 0; intern floor
+  gross 0, net 0; holidays special 30 / regular 100 / gross 130; manual
+  adjustment 12.34 / gross 112.34 / net 112.34; errors throw containing
+  "valid cutoff dates", "Payroll values", "approval",
+  "manual adjustment reason" (substrings verified vs
+  `server/src/cutoff-payroll.ts:95-113`).
+- Snapshot projection (money fields ONLY, metadata excluded):
+  basicPay, specialHolidayPay, regularHolidayPay, totalCompensation, hra,
+  incentivesAllowance, specialAllowance, totalAllowance, lateDeduction,
+  halfDayDeduction, absenceDeduction, overtimePay, sss, phic, hdmf,
+  salaryAdvance, totalDeductions, manualAdjustment, grossCompensation,
+  netPay. Initial .snap reviewed against the literals above.
+Rust `src-tauri/tests/cutoff_freeze.rs` (`include!` pattern, sync tests,
+fully self-contained — all 11 inputs hard-coded as CutoffInput literals,
+no fixture reads): same 11 cases through `cutoff_payroll::calculate`,
+peso values ×100 (10001; 5001; 5001; 0/88000/0; 0/0; 3000/10000/13000;
+1234/11234/11234); error cases is_err with messages derived from Rust
+validate fns (read source). Both files carry the same PINNED_SHA256 with
+a binding comment (TS enforces it by test; Rust documents it — no hash
+dep in the Rust test harness, stated limitation). Report overlap: list
+any vector already asserted with identical literals elsewhere + file:line
+(duplicate execution here is an independently anchored freeze, not new
+coverage).
+
+Gates:
+- [x] F1 TS freeze file; CHECK `npx vitest run
+  test/payroll-cutoff-freeze.test.ts` (cwd server); EXPECT all pass,
+  snapshot file created. EVIDENCE: 12/12 pass, 7 snapshots written and
+  reviewed against hard-coded literals (2026-10-01).
+- [x] F2 Rust freeze file; CHECK `cargo test --manifest-path
+  src-tauri/Cargo.toml --test cutoff_freeze`; EXPECT pass + overlap
+  report in the task result. EVIDENCE: 24/24 (11 new + 13 in-module).
+  Overlap: BUG-PAY-02 outputs also asserted at
+  `cutoff_payroll.rs:576,581-583` and
+  `intern_payroll_isolated.rs:143-144,169-171` with differing inputs —
+  retained as independent freeze, not new coverage.
+- [x] F3 No regressions: `npm run test -w server` green;
+  `cargo test --manifest-path src-tauri/Cargo.toml --test
+  payroll_hours_accuracy --test intern_payroll_isolated --test
+  payroll_sheet_undertime --test cutoff_freeze` green;
+  `npm run lint:oxlint` exit 0. EVIDENCE: server 20 files / 304 tests;
+  cargo 24 + 81 + 64 + 28; oxlint exit 0 (2026-10-01).
+- [x] F4 Honesty flip per new file (fail, revert, green). EVIDENCE: TS
+  basicPay literal 100.01→100.02 failed as expected, reverted green;
+  Rust 10,001→10,002 failed as expected, reverted green.
+- [x] F5 Scope: `git status --short` shows only the 2 new files +
+  `server/test/__snapshots__/payroll-cutoff-freeze.test.ts.snap` + GATES.md.
+  EVIDENCE: confirmed 2026-10-01; unrelated tree dirt left untouched.
