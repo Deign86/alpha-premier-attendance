@@ -4281,12 +4281,13 @@ mod tests {
         )
         .unwrap();
         assert!(pay.is_half_day);
-        // Late deduction also applies (12:30 vs 08:00 start), so only assert
-        // the half-day flag + deduction, not the floored net pay.
-        // After 09:00 the actual arrival is used for paid hours; the flat late
-        // deduction remains one hour and the rest is undertime.
+        // Half-day rule: a post-noon arrival renders the afternoon half, so
+        // the 4-hour shortfall is half-day deduction, never late hours.
+        assert_eq!(pay.late_hours, 0);
+        assert_eq!(pay.late_deduction_centavos, 0);
         assert_eq!(pay.worked_hours, 4.0);
-        assert_eq!(pay.half_day_deduction_centavos, 0);
+        assert_eq!(pay.half_day_deduction_centavos, 4_000);
+        assert_eq!(pay.daily_pay_centavos, 4_000);
     }
 
     #[test]
