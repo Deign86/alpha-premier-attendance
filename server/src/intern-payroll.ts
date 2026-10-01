@@ -39,6 +39,9 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   if (!start.isValid) throw new Error('Payroll timestamps must be valid ISO values');
 
   const noGrace = isNoGraceDate(input.attendanceDate);
+  // Half-day rule: an arrival at/after 12:00 renders the afternoon half of
+  // the 8-hour day, so the shortfall is half-day undertime, never late hours.
+  const afternoonHalfDay = actualTimeIn.hour >= 12;
   if (noGrace && actualTimeIn.toISODate() !== input.attendanceDate) {
     throw new Error('Payroll clock-in date must match attendanceDate in Manila');
   }
@@ -49,13 +52,13 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   if (noGrace) {
     const elapsedMilliseconds = actualTimeIn.toMillis() - start.toMillis();
     const hasFractionBeyondMillisecond = hasSubMillisecondFraction(input.actualTimeIn);
-    lateHours = arrival.arrivalStatus === 'LATE'
+    lateHours = !afternoonHalfDay && arrival.arrivalStatus === 'LATE'
       ? Math.max(1, Math.ceil(elapsedMilliseconds / 3_600_000) + (
         hasFractionBeyondMillisecond && elapsedMilliseconds % 3_600_000 === 0 ? 1 : 0
       ))
       : 0;
   } else {
-    const clampLateIn = arrival.arrivalStatus === 'LATE' && (
+    const clampLateIn = !afternoonHalfDay && arrival.arrivalStatus === 'LATE' && (
       actualTimeIn.minute > 15 ||
       (actualTimeIn.minute === 15 && (
         actualTimeIn.second > 0 || actualTimeIn.millisecond > 0 || hasSubMillisecondFraction(input.actualTimeIn)
@@ -64,7 +67,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
     effectiveTimeIn = clampLateIn
       ? actualTimeIn.plus({ hours: 1 }).startOf('hour')
       : actualTimeIn;
-    lateHours = arrival.arrivalStatus === 'LATE'
+    lateHours = !afternoonHalfDay && arrival.arrivalStatus === 'LATE'
       ? Math.max(1, effectiveTimeIn.hour - start.hour)
       : 0;
   }

@@ -126,4 +126,35 @@ fn intern_vectors_match_rust_hours_contract() {
     assert!(r_i6.is_half_day);
     assert_eq!(r_i6.half_day_deduction_centavos, 4_000);
     assert_eq!(r_i6.daily_pay_centavos, 4_000);
+
+    // R-I7: 12:00–17:00 books the shortfall as half-day undertime, not late.
+    let r_i7 = calculate("2026-10-02", "2026-10-02T12:00:00+08:00", "2026-10-02T17:00:00+08:00", false).unwrap();
+    assert_eq!(r_i7.late_hours, 0);
+    assert_eq!(r_i7.late_deduction_centavos, 0);
+    assert_eq!(r_i7.worked_hours, 4.0);
+    assert!(r_i7.is_half_day);
+    assert_eq!(r_i7.half_day_deduction_centavos, 4_000);
+    assert_eq!(r_i7.daily_pay_centavos, 4_000);
+    assert!(!r_i7.grace_used);
+
+    // R-I8: same rule on the pre-cutover branch (no clamp at minute 0 anyway).
+    let r_i8 = calculate("2026-09-15", "2026-09-15T12:00:00+08:00", "2026-09-15T17:00:00+08:00", false).unwrap();
+    assert_eq!(r_i8.late_hours, 0);
+    assert_eq!(r_i8.late_deduction_centavos, 0);
+    assert_eq!(r_i8.worked_hours, 4.0);
+    assert!(r_i8.is_half_day);
+    assert_eq!(r_i8.half_day_deduction_centavos, 4_000);
+    assert_eq!(r_i8.daily_pay_centavos, 4_000);
+    assert!(!r_i8.grace_used);
+
+    // R-I9: 12:30 pre-cutover skips the quarter-hour clamp (payable stays actual).
+    // 12:30-to-17:00 spans 4.5h minus the 0.5h 12:30-13:00 lunch overlap.
+    let r_i9 = calculate("2026-09-15", "2026-09-15T12:30:00+08:00", "2026-09-15T17:00:00+08:00", false).unwrap();
+    assert_eq!(r_i9.late_hours, 0);
+    assert_eq!(r_i9.late_deduction_centavos, 0);
+    assert_eq!(r_i9.computed_time_in, "2026-09-15T12:30:00+08:00");
+    assert_eq!(r_i9.worked_hours, 4.0);
+    assert!(r_i9.is_half_day);
+    assert_eq!(r_i9.half_day_deduction_centavos, 4_000);
+    assert_eq!(r_i9.daily_pay_centavos, 4_000);
 }

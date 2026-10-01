@@ -189,8 +189,7 @@ describe('payroll hours accuracy characterization', () => {
       expect(october.dailyPay).toBe(70);
     });
 
-    it('T-I6: converts an 08:00-to-12:30 shift to four worked hours and noon time-out', () => {
-      // Rules: lunch-break.ts:146-159 truncates through lunch-adjusted paid seconds; :102-106 marks half day; :118-125 applies noon.
+    it('T-I6: converts an 08:00-to-12:30 shift to four worked hours and noon time-out', () => {      // Rules: lunch-break.ts:146-159 truncates through lunch-adjusted paid seconds; :102-106 marks half day; :118-125 applies noon.
       const result = calculateInternPayroll({
         attendanceDate: '2026-10-01',
         actualTimeIn: '2026-10-01T08:00:00+08:00',
@@ -203,6 +202,59 @@ describe('payroll hours accuracy characterization', () => {
       expect(result.halfDayDeduction).toBe(40);
       expect(result.dailyPay).toBe(40);
       expect(result.computedTimeOut).toBe('2026-10-01T12:00:00+08:00');
+    });
+
+    it('T-I7: books a 12:00-to-17:00 afternoon arrival as half-day undertime, not late', () => {
+      // Rule: an arrival at/after 12:00 renders the afternoon half of the day;
+      // the 4-hour shortfall is half-day deduction, never late hours.
+      const result = calculateInternPayroll({
+        attendanceDate: '2026-10-02',
+        actualTimeIn: '2026-10-02T12:00:00+08:00',
+        actualTimeOut: '2026-10-02T17:00:00+08:00',
+        graceAvailable: false,
+      });
+
+      expect(result.lateHours).toBe(0);
+      expect(result.lateDeduction).toBe(0);
+      expect(result.workedHours).toBe(4);
+      expect(result.isHalfDay).toBe(true);
+      expect(result.halfDayDeduction).toBe(40);
+      expect(result.dailyPay).toBe(40);
+    });
+
+    it('T-I8: books a pre-cutover 12:00-to-17:00 arrival as half-day undertime, not late', () => {
+      // Rule: same afternoon-arrival exemption on the legacy grace branch.
+      const result = calculateInternPayroll({
+        attendanceDate: '2026-09-15',
+        actualTimeIn: '2026-09-15T12:00:00+08:00',
+        actualTimeOut: '2026-09-15T17:00:00+08:00',
+        graceAvailable: false,
+      });
+
+      expect(result.lateHours).toBe(0);
+      expect(result.lateDeduction).toBe(0);
+      expect(result.workedHours).toBe(4);
+      expect(result.isHalfDay).toBe(true);
+      expect(result.halfDayDeduction).toBe(40);
+      expect(result.dailyPay).toBe(40);
+    });
+    it('T-I9: skips the quarter clamp for a pre-cutover 12:30 arrival', () => {
+      // Rule: payable stays the actual stamp when no late is charged.
+      // 12:30-to-17:00 spans 4.5h minus the 0.5h 12:30-13:00 lunch overlap.
+      const result = calculateInternPayroll({
+        attendanceDate: '2026-09-15',
+        actualTimeIn: '2026-09-15T12:30:00+08:00',
+        actualTimeOut: '2026-09-15T17:00:00+08:00',
+        graceAvailable: false,
+      });
+
+      expect(result.lateHours).toBe(0);
+      expect(result.lateDeduction).toBe(0);
+      expect(result.computedTimeIn).toBe('2026-09-15T12:30:00+08:00');
+      expect(result.workedHours).toBe(4);
+      expect(result.isHalfDay).toBe(true);
+      expect(result.halfDayDeduction).toBe(40);
+      expect(result.dailyPay).toBe(40);
     });
   });
 });

@@ -1291,3 +1291,29 @@ Gates:
 - [x] F5 Scope: `git status --short` shows only the 2 new files +
   `server/test/__snapshots__/payroll-cutoff-freeze.test.ts.snap` + GATES.md.
   EVIDENCE: confirmed 2026-10-01; unrelated tree dirt left untouched.
+
+## Half-day afternoon-arrival rule (bugfix 2026-10-01)
+
+Report: intern 12:00→17:00 marked late, ₱10 instead of ₱40. Reproduced:
+engine booked late 4 / ₱40 late + ₱0 half-day (isHalfDay true) and the
+breakdown rendered a "Late" item — composition defect confirmed; a ₱10
+total was not reproducible on any path (all yield ₱40), likely a misread
+of the ₱10/hr rate. Rule (user-prescribed): arrival at/after 12:00
+renders the afternoon half — late_hours forced 0, quarter clamp skipped,
+shortfall books as half-day undertime; payable/worked hours untouched.
+Changed (prod): `server/src/intern-payroll.ts` (both branches),
+`src-tauri/src/services/intern_payroll.rs` (both branches). Tests: new
+T-I7/I8/I9 + R-I7/I8/I9 (incl. clamp-skip proof via computedTimeIn);
+updated locking tests `intern-payroll.test.ts` noon case +
+`afternoon_arrival_*` Rust unit test. Employee engine already correct,
+unchanged.
+
+- [x] H1 New vectors fail before, pass after (TDD RED→GREEN).
+  EVIDENCE: TS 3 failed pre-fix / 16-19 green post-fix; Rust accuracy
+  binary RED pre-fix, 64/64 post-fix. One test-authored math error
+  (T-I9/R-I9 3.5h vs true 4.0h — 0.5h lunch overlap) corrected with
+  symmetric T-I6 evidence, clamp-skip locked via computedTimeIn asserts.
+- [x] H2 No regressions (parallel lanes fix-6/fix-7, read-only).
+  EVIDENCE: server 20 files / 307 tests green; oxlint exit 0; server
+  typecheck exit 0; cargo payroll_hours_accuracy 64 + intern_payroll_
+  isolated 81 + payroll_sheet_undertime 27 + cutoff_freeze 24, all green.

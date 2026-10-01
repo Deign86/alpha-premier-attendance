@@ -429,7 +429,7 @@ describe('intern payroll policy', () => {
     expect(fullDay.dailyPay).toBe(80);
   });
 
-  it('afternoon arrival at/after 12:00 PM is half day even with 17:00+ time-out', () => {
+  it('afternoon arrival at/after 12:00 PM books half-day deduction, not late', () => {
     const noon = calculateInternPayroll({
       attendanceDate: '2026-07-28',
       actualTimeIn: '2026-07-28T12:00:00+08:00',
@@ -438,9 +438,9 @@ describe('intern payroll policy', () => {
     });
     expect(noon.workedHours).toBe(4);
     expect(noon.isHalfDay).toBe(true);
-    expect(noon.halfDayDeduction).toBe(0);
-    expect(noon.lateHours).toBe(4);
-    expect(noon.lateDeduction).toBe(40);
+    expect(noon.halfDayDeduction).toBe(40);
+    expect(noon.lateHours).toBe(0);
+    expect(noon.lateDeduction).toBe(0);
     expect(noon.dailyPay).toBe(40);
   });
 

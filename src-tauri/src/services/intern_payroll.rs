@@ -68,7 +68,10 @@ pub fn calculate(
     let no_grace = is_no_grace_date(attendance_date);
     let (grace_used, computed_in, payable_in, late_hours) = if no_grace {
         let payable_in = time_in.max(start);
-        let late_hours = if time_in > start {
+        // Half-day rule: an arrival at/after 12:00 renders the afternoon half
+        // of the 8-hour day, so the shortfall is half-day undertime, never late.
+        let afternoon_half_day = time_in.hour() >= 12;
+        let late_hours = if !afternoon_half_day && time_in > start {
             let late_duration = payable_in - start;
             let seconds = late_duration.num_seconds() as f64
                 + late_duration.subsec_nanos() as f64 / 1_000_000_000.0;
@@ -82,10 +85,15 @@ pub fn calculate(
         let in_grace_window = time_in > start
             && time_in <= start + chrono::Duration::minutes(15);
         let grace_used = grace_available && in_grace_window;
+        // Half-day rule (mirrors the no-grace branch): an arrival at/after
+        // 12:00 renders the afternoon half of the day — no quarter-hour
+        // clamp and no late hours; the shortfall is half-day undertime.
+        let afternoon_half_day = time_in.hour() >= 12;
         // After :15:00, round the payable clock-in up to the next full hour.
-        let after_quarter_hour = local_time_in.minute() > 15
-            || (local_time_in.minute() == 15
-                && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0));
+        let after_quarter_hour = !afternoon_half_day
+            && (local_time_in.minute() > 15
+                || (local_time_in.minute() == 15
+                    && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0)));
         let clamped_in = if time_in > start && after_quarter_hour {
             let hour_start = date
                 .and_hms_opt(local_time_in.hour(), 0, 0)
@@ -106,7 +114,7 @@ pub fn calculate(
         } else {
             computed_in.max(start)
         };
-        let late_hours = if !grace_used && time_in > start {
+        let late_hours = if !grace_used && !afternoon_half_day && time_in > start {
             (payable_in - start).num_hours().max(1)
         } else {
             0
@@ -675,8 +683,10 @@ mod tests {
     }
 
     #[test]
-    fn afternoon_late_arrival_uses_actual_stamp_and_flat_late_deduction() {
-        // Later-than-09:00 arrival is displayed and paid from the actual stamp.
+    fn afternoon_arrival_books_half_day_undertime_instead_of_late() {
+        // Half-day rule: a 12:00 arrival renders the afternoon half of the
+        // 8-hour day — displayed and paid from the actual stamp with the
+        // 4-hour shortfall as half-day deduction, never late hours.
         let noon = calculate(
             "2026-08-01",
             "2026-08-01T12:00:00+08:00",
@@ -686,9 +696,10 @@ mod tests {
         .unwrap();
         assert!(noon.is_half_day);
         assert_eq!(noon.computed_time_in, "2026-08-01T12:00:00+08:00");
-        assert_eq!(noon.late_hours, 4);
+        assert_eq!(noon.late_hours, 0);
+        assert_eq!(noon.late_deduction_centavos, 0);
         assert_eq!(noon.worked_hours, 4.0);
-        assert_eq!(noon.half_day_deduction_centavos, 0);
+        assert_eq!(noon.half_day_deduction_centavos, 4_000);
         assert_eq!(noon.daily_pay_centavos, 4000);
     }
 
