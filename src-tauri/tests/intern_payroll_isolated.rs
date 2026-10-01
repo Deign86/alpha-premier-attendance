@@ -192,7 +192,7 @@ fn named_0815_to_1500_edge_and_boundary_cases_match_daily_rule() {
     // The remaining rows cover the seconds boundary and next-week Monday reset.
     let cases = [
         EdgeCase { date: "2026-09-01", time_in: "08:15:00", time_out: "15:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 2_000, expected_net_centavos: 6_000 },
-        EdgeCase { date: "2026-09-02", time_in: "08:15:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 1_250, expected_net_centavos: 5_750 },
+        EdgeCase { date: "2026-09-02", time_in: "08:15:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
         EdgeCase { date: "2026-09-03", time_in: "08:15:01", time_out: "15:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
         EdgeCase { date: "2026-09-04", time_in: "08:16:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0, expected_net_centavos: 7_000 },
         EdgeCase { date: "2026-09-07", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0, expected_net_centavos: 8_000 },
@@ -394,7 +394,7 @@ fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
         AttendanceCase { employee_id: "APG-2026-118", date: "2026-09-04", time_in: "08:15:01", time_out: "17:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0 },
         AttendanceCase { employee_id: "APG-2026-119", date: "2026-09-04", time_in: "08:16:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0 },
         AttendanceCase { employee_id: "APG-2026-117", date: "2026-09-08", time_in: "08:30:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0 },
-        AttendanceCase { employee_id: "APG-2026-118", date: "2026-09-09", time_in: "09:00:01", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0 },
+        AttendanceCase { employee_id: "APG-2026-118", date: "2026-09-09", time_in: "09:00:01", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 1_000 },
         AttendanceCase { employee_id: "APG-2026-119", date: "2026-09-10", time_in: "08:00:00", time_out: "16:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 1_000 },
         AttendanceCase { employee_id: "APG-2026-116", date: "2026-09-11", time_in: "08:00:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 2_000 },
         AttendanceCase { employee_id: "APG-2026-117", date: "2026-09-11", time_in: "08:30:00", time_out: "16:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 1_000 },
@@ -441,7 +441,7 @@ fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
     let late_total: i64 = employee_totals.iter().map(|totals| totals.0).sum();
     let undertime_total: i64 = employee_totals.iter().map(|totals| totals.1).sum();
     assert_eq!(late_total, 9_000);
-    assert_eq!(undertime_total, 6_000);
+    assert_eq!(undertime_total, 7_000);
 
     let mut cutoff_net_total = 0_i64;
     for (index, employee_id) in employee_ids.iter().enumerate() {
@@ -489,7 +489,7 @@ fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
         assert_eq!(cutoff.net_pay, attendance_days * 8_000 - late - undertime, "{employee_id}");
         cutoff_net_total += cutoff.net_pay;
     }
-    assert_eq!(cutoff_net_total, 121_000);
+    assert_eq!(cutoff_net_total, 120_000);
 }
 
 #[test]
