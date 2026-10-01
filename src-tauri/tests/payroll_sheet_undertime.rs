@@ -1,5 +1,5 @@
 // Runnable proof (on Windows) that the payroll sheet PDF register renders the
-// Undertime Hours column. The lib unit tests cannot execute in this
+// Undertime Deduction column. The lib unit tests cannot execute in this
 // environment (the lib test binary fails to load native deps), so this
 // harness includes the reporting module directly, mirroring
 // intern_payroll_isolated.rs to avoid Tauri/WebView2 in the test process.
@@ -48,8 +48,11 @@ mod reporting {
 }
 
 #[test]
-fn payroll_sheet_pdf_renders_undertime_hours_column() {
-    use reporting::{PayrollSheetRow, generate_payroll_sheet_pdf};
+fn payroll_sheet_pdf_renders_undertime_deduction_in_pesos() {
+    use reporting::{
+        PayrollSheetRow, format_php, generate_payroll_sheet_pdf,
+        PAYROLL_SHEET_UNDERTIME_HEADER,
+    };
 
     let rows = vec![PayrollSheetRow {
         employee_id: "E-1".into(),
@@ -62,8 +65,8 @@ fn payroll_sheet_pdf_renders_undertime_hours_column() {
         basic_pay_centavos: 550_000,
         total_compensation_centavos: 550_000,
         late_deduction_centavos: 0,
-        half_day_deduction_centavos: 0,
-        undertime_hours: 2.0,
+        half_day_deduction_centavos: 18_000,
+        undertime_deduction_centavos: 18_000,
         absence_deduction_centavos: 0,
         gross_compensation_centavos: 550_000,
     }];
@@ -81,11 +84,7 @@ fn payroll_sheet_pdf_renders_undertime_hours_column() {
     .unwrap();
     let bytes = std::fs::read(&pdf).unwrap();
     assert!(bytes.starts_with(b"%PDF"));
-    assert!(
-        bytes
-            .windows(b"Undertime".len())
-            .any(|window| window == b"Undertime"),
-        "register must render the Undertime column"
-    );
+    assert_eq!(PAYROLL_SHEET_UNDERTIME_HEADER, "Undertime\nDeduction (PHP)");
+    assert_eq!(format_php(rows[0].undertime_deduction_centavos), "PHP 180.00");
     let _ = std::fs::remove_file(&pdf);
 }

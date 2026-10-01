@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(intern_rows[0].late_deduction_centavos, 1_000);
         assert_eq!(intern_rows[0].gross_compensation_centavos, 87_000);
         // This fixture row carries only a late deduction (half-day is 0).
-        assert_eq!(intern_rows[0].undertime_hours, 0.0);
+        assert_eq!(intern_rows[0].undertime_deduction_centavos, 0);
         let employee_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "EMPLOYEE")
             .await
             .expect("employee sheet rows");
@@ -376,7 +376,7 @@ mod tests {
                 total_compensation_centavos: 550_000,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.25_f64.fract().abs() * 8.0,
+                undertime_deduction_centavos: 18_000,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 550_000,
             },
@@ -392,7 +392,7 @@ mod tests {
                 total_compensation_centavos: 8_800_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 8_000_00,
                 gross_compensation_centavos: 800_00,
             },
@@ -408,7 +408,7 @@ mod tests {
                 total_compensation_centavos: 8_800_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 40_00,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 64_00_00,
                 gross_compensation_centavos: 200_00,
             },
@@ -420,7 +420,7 @@ mod tests {
         let bytes = std::fs::read(&pdf).unwrap();
         assert!(bytes.starts_with(b"%PDF"));
         assert!(bytes.windows(b"Undertime".len()).any(|window| window == b"Undertime"));
-        assert_eq!(format_days(rows[0].undertime_hours), "2");
+        assert_eq!(format_php(rows[0].undertime_deduction_centavos), "PHP 180.00");
         let _ = std::fs::remove_file(&pdf);
     }
 
@@ -488,7 +488,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -504,7 +504,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -520,7 +520,7 @@ mod tests {
                 total_compensation_centavos: 3_150_00,
                 late_deduction_centavos: 10_00,
                 half_day_deduction_centavos: 150_00,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 2_990_00,
             },
@@ -536,7 +536,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -552,7 +552,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -568,7 +568,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -584,7 +584,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -600,7 +600,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -616,7 +616,7 @@ mod tests {
                 total_compensation_centavos: 3_300_00,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 3_300_00,
             },
@@ -720,7 +720,7 @@ mod tests {
                 total_compensation_centavos: 550_000,
                 late_deduction_centavos: 0,
                 half_day_deduction_centavos: 0,
-                undertime_hours: 0.0,
+                undertime_deduction_centavos: 0,
                 absence_deduction_centavos: 0,
                 gross_compensation_centavos: 550_000,
             })
@@ -748,7 +748,7 @@ mod tests {
             total_compensation_centavos: 550_000,
             late_deduction_centavos: 0,
             half_day_deduction_centavos: 0,
-            undertime_hours: 0.0,
+            undertime_deduction_centavos: 0,
             absence_deduction_centavos: 0,
             gross_compensation_centavos: 550_000,
         }];
@@ -772,17 +772,6 @@ mod tests {
         assert_eq!(format_days(0.0), "0");
     }
 
-    #[test]
-    fn undertime_hours_match_halfday_pesos_at_hourly_rate() {
-        // PHP 80/day intern: PHP 10 shortfall is exactly 1 hour.
-        assert_eq!(undertime_hours_from_deduction(8_000, 1_000), 1.0);
-        assert_eq!(undertime_hours_from_deduction(8_000, 2_000), 2.0);
-        // Legacy deductions that are not whole-hour multiples retain tenths.
-        assert_eq!(undertime_hours_from_deduction(8_000, 17_656), 17.7);
-        assert_eq!(undertime_hours_from_deduction(8_000, 0), 0.0);
-        assert_eq!(undertime_hours_from_deduction(0, 1_000), 0.0);
-        assert_eq!(undertime_hours_from_deduction(7, 1_000), 0.0);
-    }
 }
 use printpdf::{
     BuiltinFont, Mm, Op, PaintMode, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt,
@@ -792,6 +781,8 @@ use printpdf::{
 /// Phoenix brand mark embedded at compile time so PDF reports never depend on
 /// runtime asset paths. The mark is transparent-backed and works on white paper.
 const BRAND_PHOENIX_PNG: &[u8] = include_bytes!("../../../assets/logo_phoenix.png");
+
+pub const PAYROLL_SHEET_UNDERTIME_HEADER: &str = "Undertime\nDeduction (PHP)";
 
 /// Decodes and registers the phoenix mark on the document, returning the image
 /// id plus the dpi that renders the square mark `size_mm` tall. Registered once
@@ -2213,7 +2204,7 @@ pub struct PayrollSheetRow {
     pub total_compensation_centavos: i64,
     pub late_deduction_centavos: i64,
     pub half_day_deduction_centavos: i64,
-    pub undertime_hours: f64,
+    pub undertime_deduction_centavos: i64,
     pub absence_deduction_centavos: i64,
     /// The sheet's Net Compensation amount (stored net, with a legacy recompute fallback).
     pub gross_compensation_centavos: i64,
@@ -2340,25 +2331,6 @@ pub async fn load_employee_payslip_by_id(
     Ok(row.as_ref().map(map_employee_payslip_row))
 }
 
-/// Undertime hours backing the register column, derived from the peso
-/// deduction at the hourly rate (daily / 8), using whole hours for current
-/// deductions and tenths for legacy non-hour-multiple deductions.
-fn undertime_hours_from_deduction(
-    daily_rate_centavos: i64,
-    half_day_deduction_centavos: i64,
-) -> f64 {
-    let hourly_rate_centavos = daily_rate_centavos / 8;
-    if daily_rate_centavos <= 0 || hourly_rate_centavos == 0 || half_day_deduction_centavos <= 0 {
-        return 0.0;
-    }
-    if half_day_deduction_centavos % hourly_rate_centavos == 0 {
-        (half_day_deduction_centavos / hourly_rate_centavos) as f64
-    } else {
-        ((half_day_deduction_centavos as f64 / (daily_rate_centavos as f64 / 8.0) * 10.0).round())
-            / 10.0
-    }
-}
-
 /// Loads the payroll sheet rows for one cutoff, filtered to `worker_type`
 /// ("EMPLOYEE" keeps employees; anything else keeps interns). Payroll cutoff
 /// rows do not store an employee type column, so it is derived from the live
@@ -2404,8 +2376,6 @@ pub async fn load_payroll_sheet_rows(
             let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
             let effective_late_deduction = late_deduction_centavos;
             let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
-            let undertime_hours =
-                undertime_hours_from_deduction(daily_rate_centavos, half_day_deduction_centavos);
             let db_absent_days = row.get::<f64, _>("absent_days");
             let db_absence_deduction = row.get::<i64, _>("absence_deduction_centavos");
             let absent_days = if db_absent_days > 0.0 {
@@ -2448,7 +2418,7 @@ pub async fn load_payroll_sheet_rows(
                 total_compensation_centavos,
                 late_deduction_centavos: effective_late_deduction,
                 half_day_deduction_centavos,
-                undertime_hours,
+                undertime_deduction_centavos: half_day_deduction_centavos,
                 absence_deduction_centavos,
                 gross_compensation_centavos,
             }
@@ -2694,7 +2664,7 @@ pub fn generate_payroll_sheet_pdf(
             "Total\nCompensation",
             "Late 10\n/hr",
             "Halfday",
-            "Undertime\nHours",
+            PAYROLL_SHEET_UNDERTIME_HEADER,
             "Absent",
             "Net\nCompensation",
             "Signature",
@@ -2732,7 +2702,7 @@ pub fn generate_payroll_sheet_pdf(
                 format_php(row.total_compensation_centavos),
                 format_php(row.late_deduction_centavos),
                 format_php(row.half_day_deduction_centavos),
-                format_days(row.undertime_hours),
+                format_php(row.undertime_deduction_centavos),
                 format_php(row.absence_deduction_centavos),
                 format_php(row.gross_compensation_centavos),
                 String::new(), // Signature blank for physical signing
