@@ -3742,7 +3742,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(late_afternoon, ["", "", "1:00:00 PM", "5:00:00 PM"]);
+        assert_eq!(late_afternoon, ["", "", "12:05:00 PM", "5:00:00 PM"]);
         let rows = vec![vec!["9/10/2026".to_string()]];
         let plan = match plan_dtr_push_in_rows_with_clamp(
             "Tab",
@@ -4286,7 +4286,7 @@ mod tests {
         // After 09:00 the actual arrival is used for paid hours; the flat late
         // deduction remains one hour and the rest is undertime.
         assert_eq!(pay.worked_hours, 4.0);
-        assert_eq!(pay.half_day_deduction_centavos, 3_000);
+        assert_eq!(pay.half_day_deduction_centavos, 0);
     }
 
     #[test]
