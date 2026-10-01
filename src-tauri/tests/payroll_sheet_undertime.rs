@@ -72,7 +72,7 @@ fn payroll_sheet_pdf_renders_undertime_deduction_in_pesos() {
     }];
     let pdf = std::env::temp_dir().join(format!(
         "payroll-sheet-undertime-{}.pdf",
-        std::process::id()
+        uuid::Uuid::new_v4()
     ));
     generate_payroll_sheet_pdf(
         &rows,

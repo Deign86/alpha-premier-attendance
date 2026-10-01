@@ -21,6 +21,7 @@ jobs:
   build-windows:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: windows-latest
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
@@ -64,13 +65,13 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build frontend
-        run: npm run build
-
-      - name: Run Rust tests
+      - name: Run Rust tests (match CI suite)
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
         env:
           ALPHA_PREMIER_REQUIRE_EMBED_KEY: "0"
+
+      - name: Build frontend
+        run: npm run build
 
       - name: Check embedded sheets-key secret
         shell: bash
