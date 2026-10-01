@@ -1174,3 +1174,43 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   EXPECT: the known Sep. 5 DTR assertion is the only server failure; shared tests and client typecheck pass.
   EVIDENCE: Server 278/279 tests passed (sole failure: `server/test/intern-dtr-sync.test.ts`, Sep. 5 undertime expectation); shared 38/38 passed; client typecheck passed; focused `ttsService.test.ts` 73/73 passed.
 
+
+
+## Payroll hours-accuracy + regression tests (2026-10-01, deepwork ses_f09f57b85ffeCSxHklNfyzmXqq)
+
+Tests-only scope: two new files, zero prod-code changes. Characterization,
+not parity: the Rust/TS employee fractional-hour divergence is documented,
+never aligned. Full hand-calculated contract (every vector + rule citation)
+verified against source before implementation; Oracle Gates 1+2 passed
+(APPROVE-WITH-NOTES, attempt 2 of 3).
+
+- [x] TS accuracy matrix covers hours-to-pay per role with new vectors.
+  CHECK: `npx vitest run test/payroll-hours-accuracy.test.ts` (cwd server)
+  EXPECT: 13/13 pass — employee full/late-rounding/undertime/half-day/cap/
+  rate-edge/error vectors (T-E1..T-E7) + intern late/undertime/combined/
+  cutover/fractional vectors (T-I1..T-I6) as literal expects.
+  EVIDENCE: 13 passed. Honesty flip (T-E1 worked 8→9) failed as expected,
+  reverted, green. File: `server/test/payroll-hours-accuracy.test.ts`.
+- [x] Rust accuracy matrix mirrors the vectors via the isolated pattern.
+  CHECK: `cargo test --manifest-path src-tauri/Cargo.toml --test payroll_hours_accuracy`
+  EXPECT: pass — `include!` modules (no lib import; `services` is private),
+  numerics-only asserts, sync deterministic vectors (R-E1..R-E7, R-I1..R-I6).
+  EVIDENCE: 2/2 new fns pass (binary run 64/64 incl. in-module unit tests).
+  One contract typo caught honestly: R-E2 deduction transcribed as 4,000,
+  actual 40,000 (4 unrendered x 10,000 hourly) — fixed in test + contract,
+  re-run green. Honesty flip (R-I1 late 0→1) failed as expected, reverted,
+  green. File: `src-tauri/tests/payroll_hours_accuracy.rs`.
+- [x] No existing-test regressions on either runtime.
+  CHECK: `npm run test -w server`
+  CHECK: `cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated --test payroll_sheet_undertime`
+  EXPECT: all green.
+  EVIDENCE: server 19 files / 292 tests passed; `intern_payroll_isolated`
+  81/81; `payroll_sheet_undertime` 28/28.
+- [x] Anti-slop + scope hold: oxlint clean, explicit types, no `any`.
+  CHECK: `npm run lint:oxlint`
+  CHECK: `git status --short`
+  EXPECT: lint exits 0; only intended files touched.
+  EVIDENCE: lint exit 0. New files: the 2 test files above + this GATES.md
+  section. Pre-existing unrelated modifications (`scripts/*.mjs`,
+  untracked `scripts/*` helpers, `AGENTS.md`/`opencode.json` from the
+  prior plugin-install task) were not touched by this phase.
