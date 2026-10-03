@@ -205,12 +205,26 @@ pub struct AppState {
     /// 30s ticks; short lock-take-unlock admissions keep it contention-free
     /// under the single queue loop (concurrency 1, mutex as backstop).
     pub dtr_throttle: Arc<tokio::sync::Mutex<DtrThrottleBucket>>,
+    /// End of the last throttle denial window; distinguishes a current
+    /// denial from a merely nearly-exhausted bucket in health activity.
+    pub dtr_throttle_denied_until_ms: Arc<AtomicU64>,
     /// Plan todo 8 (frozen): in-memory half of the shared in-progress guard.
     /// Fast mutual exclusion across admin_sync_now + admin_sync_intern_dtr +
     /// per-row sync; the persisted half is the sync_state row
     /// (__sync_guard__/manual_dtr_sync). Fresh false on every boot — a
     /// restart can never inherit a held flag.
     pub sync_in_progress: Arc<AtomicBool>,
+    /// Latest DTR token-acquisition result for live health activity; never
+    /// inferred from a historical queue error.
+    pub dtr_offline: Arc<AtomicBool>,
+    /// True when the current token-acquisition failure is credential/config related.
+    pub dtr_auth_config_failed: Arc<AtomicBool>,
+    /// Start time for the currently active token acquisition failure.
+    pub dtr_token_failure_since: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// Last confirmed successful DTR values write in this process.
+    pub dtr_last_successful_write_at: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// First DTR queue persistence failure observed during this process.
+    pub dtr_persistence_failure_since: Arc<tokio::sync::Mutex<Option<String>>>,
     /// Plan todo 10: cumulative PROCESSING-lease recoveries since boot,
     /// surfaced as `leaseRecovered` in the admin health contract.
     pub lease_recovered: Arc<AtomicU64>,
@@ -296,7 +310,13 @@ impl AppState {
             dtr_throttle: Arc::new(tokio::sync::Mutex::new(DtrThrottleBucket::new(
                 wall_now_ms(),
             ))),
+            dtr_throttle_denied_until_ms: Arc::new(AtomicU64::new(0)),
             sync_in_progress: Arc::new(AtomicBool::new(false)),
+            dtr_offline: Arc::new(AtomicBool::new(false)),
+            dtr_auth_config_failed: Arc::new(AtomicBool::new(false)),
+            dtr_token_failure_since: Arc::new(tokio::sync::Mutex::new(None)),
+            dtr_last_successful_write_at: Arc::new(tokio::sync::Mutex::new(None)),
+            dtr_persistence_failure_since: Arc::new(tokio::sync::Mutex::new(None)),
             lease_recovered: Arc::new(AtomicU64::new(0)),
             tts: Arc::new(TtsManager::new(tts)),
             updater,
@@ -305,6 +325,36 @@ impl AppState {
 
     pub fn next_sequence(&self) -> u64 {
         self.bus.sequence.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    pub async fn mark_dtr_persistence_failure(&self) {
+        let mut failure_since = self.dtr_persistence_failure_since.lock().await;
+        if failure_since.is_none() {
+            *failure_since = Some(chrono::Utc::now().to_rfc3339());
+        }
+    }
+
+    pub async fn mark_dtr_write_success(&self) {
+        *self.dtr_last_successful_write_at.lock().await = Some(chrono::Utc::now().to_rfc3339());
+    }
+
+    pub async fn mark_dtr_token_failure(&self, auth_config: bool) {
+        self.dtr_offline
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.dtr_auth_config_failed
+            .store(auth_config, std::sync::atomic::Ordering::Relaxed);
+        let mut since = self.dtr_token_failure_since.lock().await;
+        if since.is_none() {
+            *since = Some(chrono::Utc::now().to_rfc3339());
+        }
+    }
+
+    pub async fn clear_dtr_token_failure(&self) {
+        self.dtr_offline
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.dtr_auth_config_failed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        *self.dtr_token_failure_since.lock().await = None;
     }
 }
 
@@ -438,6 +488,102 @@ pub async fn sync_guard_status(db: &SqlitePool) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use crate::config::{LanConfig, ScannerConfig};
+
+    #[tokio::test]
+    async fn manual_sync_guard_rejects_overlap_and_release_allows_reacquisition() {
+        use crate::config::{OfficeConfig, TtsConfig, UpdaterConfig};
+
+        let data_dir = std::env::temp_dir().join(format!("alpha-sync-guard-{}", Uuid::new_v4()));
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        sync_guard_try_acquire(&state.db, state.sync_in_progress.as_ref(), "admin_sync_now")
+            .await
+            .unwrap();
+        let overlap = sync_guard_try_acquire(
+            &state.db,
+            state.sync_in_progress.as_ref(),
+            "admin_sync_intern_dtr:bulk",
+        )
+        .await
+        .unwrap_err();
+        assert!(overlap.contains("DTR_SYNC_IN_PROGRESS"));
+        assert!(state.sync_in_progress.load(Ordering::SeqCst));
+
+        sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+        assert!(!state.sync_in_progress.load(Ordering::SeqCst));
+        sync_guard_try_acquire(
+            &state.db,
+            state.sync_in_progress.as_ref(),
+            "admin_sync_intern_dtr:bulk",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sync_guard_status(&state.db).await.map(|entry| entry.0),
+            Some("admin_sync_intern_dtr:bulk".to_string())
+        );
+        sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[tokio::test]
+    async fn background_owner_excludes_manual_and_release_allows_reacquisition() {
+        use crate::config::{OfficeConfig, TtsConfig, UpdaterConfig};
+
+        let data_dir = std::env::temp_dir().join(format!("alpha-sync-guard-bg-{}", Uuid::new_v4()));
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        // Background tick holds the guard: a manual button press is excluded
+        // and the busy error names the background holder.
+        sync_guard_try_acquire(&state.db, state.sync_in_progress.as_ref(), "background_sync")
+            .await
+            .unwrap();
+        let overlap = sync_guard_try_acquire(
+            &state.db,
+            state.sync_in_progress.as_ref(),
+            "admin_sync_intern_dtr:bulk",
+        )
+        .await
+        .unwrap_err();
+        assert!(overlap.contains("DTR_SYNC_IN_PROGRESS"));
+        assert!(overlap.contains("background_sync"));
+
+        sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+        assert!(!state.sync_in_progress.load(Ordering::SeqCst));
+        sync_guard_try_acquire(&state.db, state.sync_in_progress.as_ref(), "admin_sync_now")
+            .await
+            .unwrap();
+        sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
 
     #[tokio::test]
     async fn migrations_create_required_indexes_and_queue() {

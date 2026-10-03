@@ -1,9 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminUser, BathroomStatusResponse } from "@rfid-attendance/shared";
 import { BathroomKeyLogPanel } from "./bathroom-key-log";
 import * as api from "./api";
+import * as ttsService from "./services/ttsService";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const mockUsers: AdminUser[] = [
   {
@@ -101,22 +107,21 @@ describe("BathroomKeyLogPanel", () => {
     });
 
     const user = userEvent.setup();
+    vi.spyOn(ttsService, "announceBathroom").mockResolvedValue(null);
     render(<BathroomKeyLogPanel users={mockUsers} />);
 
-    await screen.findByRole("heading", { name: "Bathroom Key Log" });
+    expect(await screen.findByTestId("bathroom-status-male")).toHaveTextContent("AVAILABLE");
 
     // Select John Doe in the male picker
     const malePicker = screen.getByRole("listbox", { name: /select male employee/i });
-    const johnOption = withinList(malePicker, "John Doe");
-    expect(johnOption).toBeInTheDocument();
-    await user.click(johnOption!);
+    await user.click(within(malePicker).getByRole("option", { name: /john doe/i }));
 
     // Click checkout button
-    const checkoutBtn = screen.getAllByRole("button", { name: /time out \(check out key\)/i })[0];
+    const checkoutBtn = within(screen.getByTestId("bathroom-card-male")).getByRole("button", { name: /time out \(check out key\)/i });
     expect(checkoutBtn).not.toBeDisabled();
     await user.click(checkoutBtn);
 
-    expect(checkoutSpy).toHaveBeenCalledWith("EMP-01", "MALE");
+    await waitFor(() => expect(checkoutSpy).toHaveBeenCalledWith("EMP-01", "MALE"));
   });
 
   it("displays in-use holder info and returns the key when Time In is clicked", async () => {
@@ -162,6 +167,7 @@ describe("BathroomKeyLogPanel", () => {
     expect(await screen.findByText("IN USE")).toBeInTheDocument();
     expect(screen.getByText("Currently with")).toBeInTheDocument();
     expect(screen.getAllByText("John Doe").length).toBeGreaterThan(0);
+    expect(within(screen.getByTestId("bathroom-card-male")).queryByRole("button", { name: /time out \(check out key\)/i })).not.toBeInTheDocument();
 
     const returnBtn = screen.getByRole("button", { name: /time in \(return key\)/i });
     await user.click(returnBtn);

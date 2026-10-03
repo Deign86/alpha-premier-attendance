@@ -1,5 +1,4 @@
 import type {
-  AdminSyncDtrResponse,
   ArtifactExportResponse,
   AttendanceXlsxExportResponse,
   BathroomActionResponse,
@@ -40,7 +39,7 @@ import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { tauriApi } from './tauri-api';
-import type { NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
+import type { ManualSyncReport, NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
 
 export async function loadVoiceClipStates(): Promise<VoiceClipState[]> {
   if (!runningInTauri()) return [];
@@ -718,10 +717,10 @@ export async function nukeSheetsResync(confirm: boolean): Promise<{ success: boo
   return { success: false, error: { message: 'Google Sheets sync is available in the desktop application.' } };
 }
 
-export async function syncInternDtr(userId?: string): Promise<AdminSyncDtrResponse> {
+export async function syncInternDtr(userId?: string, startFromUserId?: string): Promise<ManualSyncReport> {
   if (runningInTauri()) {
     try {
-      return await tauriApi.syncInternDtr(nativeAdminToken ?? '', userId);
+      return await tauriApi.syncInternDtr(nativeAdminToken ?? '', userId, startFromUserId);
     } catch (error) {
       return {
         success: false,
@@ -806,6 +805,7 @@ export interface DtrSyncHealth {
   leaseRecovered: number;
   oldestRetryableAgeSec: number | null;
   pendingAgeAlert: boolean;
+  dtr?: NativeSyncStatusResponse['dtr'];
 }
 
 export type DtrSyncHealthResult =
@@ -869,6 +869,17 @@ function parseDtrSyncInProgress(entry: NativeSyncInProgress | null | undefined):
   return { owner, startedAt };
 }
 
+function parseDtrSyncSummary(summary: NativeSyncStatusResponse['dtr']): NativeSyncStatusResponse['dtr'] | undefined {
+  if (summary === null || summary === undefined) return undefined;
+  const retryablePending = isMissing(summary.retryablePending) ? 0 : toNonNegativeInt(summary.retryablePending);
+  if (retryablePending === null) return undefined;
+  if (!isMissing(summary.persistenceFailure) && summary.persistenceFailure !== true && summary.persistenceFailure !== false) return undefined;
+  const persistenceFailure = isMissing(summary.persistenceFailure) ? false : summary.persistenceFailure;
+  const emittedAt = isMissing(summary.emittedAt) ? new Date().toISOString() : toText(summary.emittedAt);
+  if (emittedAt === null) return undefined;
+  return { ...summary, retryablePending, persistenceFailure, emittedAt };
+}
+
 function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth | null {
   if (!isPlainObject(raw)) return null;
   // SAFETY: Presence of the status envelope was verified above
@@ -907,6 +918,8 @@ function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth
   const oldestRetryableAgeSec = isMissing(response.oldestRetryableAgeSec) ? null : toNonNegativeInt(response.oldestRetryableAgeSec);
   if (!isMissing(response.oldestRetryableAgeSec) && oldestRetryableAgeSec === null) return null;
   if (!isMissing(response.pendingAgeAlert) && Object.prototype.toString.call(response.pendingAgeAlert) !== '[object Boolean]') return null;
+  const dtr = parseDtrSyncSummary(response.dtr);
+  if (!isMissing(response.dtr) && !dtr) return null;
   return {
     pending,
     deadLetter,
@@ -922,6 +935,7 @@ function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth
     oldestRetryableAgeSec,
     // SAFETY: Boolean shape of pendingAgeAlert was verified above
     pendingAgeAlert: (isMissing(response.pendingAgeAlert) ? false : response.pendingAgeAlert) as boolean,
+    dtr,
   };
 }
 

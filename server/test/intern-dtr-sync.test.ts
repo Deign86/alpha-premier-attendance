@@ -541,6 +541,34 @@ describe('planPush', () => {
     expect(plan.reason).toBe('tab-no-match');
     expect(plan.detail).toMatch(/NO_MATCH/);
   });
+  it('skips an ambiguous tab resolution instead of pushing to a shared tab', async () => {
+    const client = makeClient({ RAINEER: baseRows });
+    const user: DtrSyncUser = { userId: 'USER-A', fullName: 'Raineer Rosado' };
+    const rival: DtrSyncUser = { userId: 'USER-B', fullName: 'Raineer Santos' };
+    const plan = await planPush(client, { ...DAY, userId: user.userId, fullName: user.fullName }, [user, rival]);
+    expect(plan).toMatchObject({
+      kind: 'skip',
+      reason: 'tab-ambiguous',
+      detail: 'tab AMBIGUOUS for Raineer Rosado',
+    });
+  });
+  it('skips records without a time-in before reading sheet values', async () => {
+    const client = makeClient({ 'ROSADO RAINEER': baseRows });
+    const plan = await planPush(client, { ...DAY, timeIn: null, timeOut: null }, ROSTER);
+    expect(plan).toMatchObject({ kind: 'skip', reason: 'no-time-in', detail: 'no time-in yet' });
+  });
+  it('skips when a tab has month headers but no matching month block', async () => {
+    const client = makeClient({
+      'ROSADO RAINEER': [
+        ['DATE-October', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
+        ['10/5/2026', '', '', '', '', '0'],
+      ],
+    });
+    const plan = await planPush(client, DAY, ROSTER);
+    expect(plan).toMatchObject({ kind: 'skip', reason: 'no-month-block' });
+    if (plan.kind !== 'skip') throw new Error('expected skip plan');
+    expect(plan.detail).toMatch(/no September block/);
+  });
   it('skips missing date rows with reason', async () => {
     const client = makeClient({ 'ROSADO RAINEER': [baseRows[0]] });
     const plan = await planPush(client, DAY, ROSTER);
@@ -728,12 +756,22 @@ describe('auto-create tab alignment', () => {
       title: 'COPY OF TEMPLATE',
       sheetId: DTR_TEMPLATE_SHEET_ID,
     });
+    expect(pickTemplateSheet([{ title: 'monthly template backup', sheetId: 7 }])).toEqual({
+      title: 'monthly template backup',
+      sheetId: 7,
+    });
   });
   it('validates tab names like Sheets does', () => {
     expect(isValidTabName('Deign Grey O. Lazaro')).toBe(true);
     expect(isValidTabName('')).toBe(false);
     expect(isValidTabName('A:B')).toBe(false);
     expect(isValidTabName('A/B')).toBe(false);
+    expect(isValidTabName('A\\B')).toBe(false);
+    expect(isValidTabName('A?B')).toBe(false);
+    expect(isValidTabName('A*B')).toBe(false);
+    expect(isValidTabName('A[B]')).toBe(false);
+    expect(isValidTabName('   ')).toBe(false);
+    expect(isValidTabName(`  ${'x'.repeat(100)}  `)).toBe(true);
     expect(isValidTabName('x'.repeat(101))).toBe(false);
   });
   it('detects duplicate-name errors only', () => {
@@ -748,6 +786,8 @@ describe('auto-create tab alignment', () => {
     // Single-character middle initial "C." must not collide between distinct people
     expect(hasTabOverlap(['Raineer C. Rosado'], 'Maricon C. Danao')).toBe(false);
     expect(hasTabOverlap([], '')).toBe(true);
+    expect(hasTabOverlap(['COPY OF TEMPLATE', '---'], 'J.')).toBe(true);
+    expect(hasTabOverlap(['JR'], 'Rona Pacada Jr')).toBe(false);
   });
   it('creates a missing tab and resolves it', async () => {
     const client = makeClient({ 'COPY OF TEMPLATE': [] });
@@ -768,6 +808,28 @@ describe('auto-create tab alignment', () => {
     const tab = await ensurePersonTab(client, mary, [mary, rival]);
     expect(tab).toBeNull();
     expect(client.created).toEqual([]);
+  });
+  it('does not attempt to create a tab with an invalid Sheets title', async () => {
+    const client = makeClient({ 'COPY OF TEMPLATE': [] });
+    const invalid: DtrSyncUser = { userId: 'INVALID', fullName: 'Rona/Pacada' };
+    await expect(ensurePersonTab(client, invalid, [invalid])).resolves.toBeNull();
+    expect(client.created).toEqual([]);
+  });
+  it('returns null when a concurrent duplicate-name creation wins the race', async () => {
+    const client = makeClient({ 'COPY OF TEMPLATE': [] });
+    let duplicateAttempts = 0;
+    client.duplicateTemplate = async () => {
+      duplicateAttempts += 1;
+      return null;
+    };
+    await expect(ensurePersonTab(client, RONA, [RONA])).resolves.toBeNull();
+    expect(duplicateAttempts).toBe(1);
+    expect(client.created).toEqual([]);
+  });
+  it('returns null if the duplicate call succeeds but the tab cannot be re-resolved', async () => {
+    const client = makeClient({ 'COPY OF TEMPLATE': [] });
+    client.duplicateTemplate = async (_sourceSheetId, newTitle) => ({ title: newTitle, sheetId: 900 });
+    await expect(ensurePersonTab(client, RONA, [RONA])).resolves.toBeNull();
   });
 });
 

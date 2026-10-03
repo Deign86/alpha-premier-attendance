@@ -6,6 +6,7 @@ import { unlockAdmin } from './api';
 import * as api from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
+import { resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
 import type { BathroomScanResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
 
 let rfidHandlers: Array<(uid: string) => void> = [];
@@ -82,6 +83,62 @@ beforeEach(() => {
 });
 
 describe('RFID kiosk', () => {
+  it('marks the kiosk DTR badge as attention when DEAD items exist', async () => {
+    const emittedAt = new Date().toISOString();
+    act(() => {
+      setDtrSyncHealthSnapshot({
+        activity: 'idle',
+        queued: 0,
+        retryablePending: 0,
+        needsAttention: 0,
+        dead: 1,
+        persistenceFailure: false,
+        emittedAt,
+      });
+    });
+    render(<App />);
+    expect(await screen.findByLabelText('Intern DTR sync health')).toHaveClass('attention');
+    act(() => {
+      setDtrSyncHealthSnapshot({
+        activity: 'idle',
+        queued: 0,
+        retryablePending: 0,
+        needsAttention: 0,
+        dead: 0,
+        persistenceFailure: true,
+        emittedAt,
+      });
+    });
+    expect(await screen.findByText('Attendance could not be queued for DTR sync; notify an administrator.')).toBeInTheDocument();
+    expect(screen.queryByText('No DTR items queued')).not.toBeInTheDocument();
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('renders retryable work from the complete DTR health event', async () => {
+    let healthHandler: ((payload: tauriApi.DtrSyncHealthEvent) => void) | null = null;
+    vi.spyOn(tauriApi, 'listenForDtrSyncHealth').mockImplementation((handler) => {
+      healthHandler = handler;
+      return Promise.resolve(() => {});
+    });
+    render(<App />);
+    await waitFor(() => expect(healthHandler).not.toBeNull());
+
+    act(() => {
+      healthHandler?.({
+        activity: 'retrying',
+        queued: 0,
+        retryablePending: 2,
+        needsAttention: 0,
+        dead: 0,
+        persistenceFailure: false,
+        emittedAt: new Date().toISOString(),
+      });
+    });
+
+    expect(await screen.findByText('2 punches are waiting for retry; attempts are bounded.')).toBeInTheDocument();
+    expect(screen.queryByText('No DTR items queued')).not.toBeInTheDocument();
+  });
+
   it('uses Manila local time for the welcoming greeting', () => {
     expect(greetingForDate(new Date('2026-08-04T01:00:00Z'), 'Asia/Manila')).toBe('Good morning');
     expect(greetingForDate(new Date('2026-08-04T05:00:00Z'), 'Asia/Manila')).toBe('Good afternoon');

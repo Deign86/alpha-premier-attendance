@@ -44,6 +44,23 @@ export interface NativeSyncStatusResponse {
   leaseRecovered?: number | null;
   oldestRetryableAgeSec?: number | null;
   pendingAgeAlert?: boolean | null;
+  dtr?: {
+    enabled: boolean;
+    queued: number;
+    retrying: number;
+    processing: number;
+    dead: number;
+    retryablePending: number;
+    needsAttention: number;
+    persistenceFailure: boolean;
+    nextRetryEligibleAt: string | null;
+    oldestOutstandingAgeSec: number | null;
+    currentIssue: 'none' | 'transport' | 'auth_config' | 'quota' | 'unresolved_layout' | 'persistence';
+    currentIssueSince: string | null;
+    lastSuccessfulWriteAt: string | null;
+    activity: 'idle' | 'queued' | 'syncing' | 'throttled' | 'retrying' | 'disabled' | 'offline' | 'unavailable';
+    emittedAt: string;
+  } | null;
 }
 
 /** Native command bridge. The existing HTTP API remains available during cutover. */
@@ -99,7 +116,7 @@ export const tauriApi = {
   openGeneratedArtifact: (token: string, artifactId: string) => invoke<{ success: true; artifactId: string }>('open_generated_artifact', { token, artifactId }),
   syncStatus: (token: string) => invoke<NativeSyncStatusResponse>('admin_get_sync_status', { token }),
   syncNow: (token: string) => invoke('admin_sync_now', { token }),
-  syncInternDtr: (token: string, userId?: string) => invoke<AdminSyncDtrResponse>('admin_sync_intern_dtr', { token, userId }),
+  syncInternDtr: (token: string, userId?: string, startFromUserId?: string) => invoke<ManualSyncReport>('admin_sync_intern_dtr', { token, userId, startFromUserId }),
   getInternDtrSync: (token: string) => invoke<{ success: true; enabled: boolean }>('admin_get_intern_dtr_sync', { token }),
   setInternDtrSync: (token: string, enabled: boolean) => invoke<{ success: true; enabled: boolean }>('admin_set_intern_dtr_sync', { token, enabled }),
   sheetsNukeResync: (token: string, confirm: boolean) => invoke('admin_sheets_nuke_resync', { token, confirm }),
@@ -157,9 +174,28 @@ export interface DtrSyncProgress {
   source?: DtrSyncSource;
 }
 
+export type ManualSyncReport = AdminSyncDtrResponse & {
+  stoppedTab?: string | null;
+  stoppedUserId?: string | null;
+};
+
+export interface DtrSyncHealthEvent {
+  activity: 'idle' | 'queued' | 'syncing' | 'throttled' | 'retrying' | 'disabled' | 'offline' | 'unavailable';
+  queued: number;
+  retryablePending: number;
+  needsAttention: number;
+  dead: number;
+  persistenceFailure: boolean;
+  emittedAt: string;
+}
+
 /** Listen for real-time intern DTR sync progress events from the Rust backend. */
 export const listenForDtrSyncProgress = (handler: (payload: DtrSyncProgress) => void) =>
   listen<DtrSyncProgress>('dtr-sync-progress', (event) => handler(event.payload));
+
+/** Listen for the counts-only kiosk DTR health event. */
+export const listenForDtrSyncHealth = (handler: (payload: DtrSyncHealthEvent) => void) =>
+  listen<DtrSyncHealthEvent>('dtr-sync-health', (event) => handler(event.payload));
 
 /** Listen for tray menu "Check for updates…" trigger. */
 export const listenForCheckForUpdates = async (handler: () => void): Promise<() => void> => {

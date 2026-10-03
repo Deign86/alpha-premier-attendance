@@ -123,13 +123,14 @@ import {
   listenForScannerStatus,
   listenForAttendanceUpdates,
   listenForDtrSyncProgress,
+  listenForDtrSyncHealth,
   type DtrSyncProgress,
   type DtrSyncSource,
   getScannerStatus,
   setScannerPaused,
   notifyScanSuccess,
 } from "./tauri-api";
-import { setDtrSyncActive, useDtrSyncActive } from "./dtr-sync-guard";
+import { dtrSyncHealthCopy, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
 
 type ScannerStatus = {
   state: "connected" | "scanning" | "offline" | "error";
@@ -264,6 +265,7 @@ export default function App() {
   const path = window.location.pathname;
   if (path === "/attendance") return <LiveAttendance />;
   if (path === "/admin") return <AdminPanel />;
+  const syncSnapshot = useDtrSyncHealthSnapshot();
   const [state, setState] = useState<KioskState>("ready");
   const [uid, setUid] = useState("");
   const [manualMode, setManualMode] = useState(false);
@@ -291,6 +293,13 @@ export default function App() {
           paused: false,
         },
   );
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenForDtrSyncHealth((health) => setDtrSyncHealthSnapshot(health))
+      .then((cleanup) => { unlisten = cleanup; })
+      .catch(() => { /* web mode or mock environment */ });
+    return () => { if (unlisten) unlisten(); };
+  }, []);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestController = useRef<AbortController | null>(null);
   const recentScans = useRef(new Map<string, number>());
@@ -1240,6 +1249,11 @@ export default function App() {
             <i aria-hidden="true" />
             {scannerPill.label}
           </span>
+          {syncSnapshot && (
+            <span className={`sync-badge ${syncSnapshot.needsAttention > 0 || syncSnapshot.dead > 0 ? "attention" : syncSnapshot.queued > 0 ? "pending" : "idle"}`} role="status" aria-label="Intern DTR sync health">
+              {dtrSyncHealthCopy(syncSnapshot)}
+            </span>
+          )}
           <div
             className="clock"
             aria-label={`Current time in ${config.timezone}`}
@@ -3448,11 +3462,37 @@ type SyncHealthState =
   | { kind: "error"; message: string }
   | { kind: "syncing" };
 
+type StoppedDtrSync = { tab: string; userId: string | null };
+
+function dtrHealthCopy(health: DtrSyncHealth | null, stale: boolean): string | null {
+  if (stale) return "DTR status update delayed";
+  const dtr = health?.dtr;
+  if (!dtr) return null;
+  if (dtr.activity === "unavailable") return "DTR status unavailable. Attendance continues to save locally.";
+  if (dtr.retryablePending > 0) {
+    const eligibility = dtr.nextRetryEligibleAt
+      ? ` Next retry eligibility: ${new Date(dtr.nextRetryEligibleAt).toLocaleString()}.`
+      : "";
+    return `${dtr.retryablePending} punches are waiting for retry. Retry attempts are bounded.${eligibility}`;
+  }
+  if (!dtr.enabled || dtr.activity === "disabled") return "Sheet syncing paused; attendance recording continues.";
+  if (dtr.dead > 0) return `Some punches need admin help (${dtr.dead} permanently failed).`;
+  if (dtr.needsAttention > 0) return "Punches need admin attention before they can sync.";
+  if (dtr.persistenceFailure || dtr.currentIssue === "persistence") return "An attendance punch could not be queued for DTR sync; notify an administrator.";
+  if (dtr.currentIssue === "auth_config" || dtr.currentIssue === "unresolved_layout") return "Punches need admin attention before they can sync.";
+  if (dtr.activity === "throttled") return "Google Sheets is rate-limiting sync. Punches are safe and waiting.";
+  if (dtr.activity === "retrying") return "DTR retry attempts are in progress; attempts are bounded.";
+  if (dtr.activity === "offline") return "DTR connection unavailable.";
+  if (dtr.retryablePending > 0 || dtr.activity === "queued" || dtr.queued > 0) return "Punches are waiting in the DTR queue.";
+  return null;
+}
+
 export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) {
   const [info, setInfo] = useState<DatabaseInfoResponse | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stoppedDtrSync, setStoppedDtrSync] = useState<StoppedDtrSync | null>(null);
   const [backupResult, setBackupResult] = useState<GeneratedFileResult | null>(
     null,
   );
@@ -3470,12 +3510,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       : null;
   const syncBadge = (() => {
     if (syncState.kind === "syncing") return { label: "Syncing", className: "sync-badge pending" };
-    if (syncState.kind === "error" || syncState.kind === "stale") return { label: "Offline", className: "sync-badge idle" };
-    if (!syncHealth) return { label: "Not synced", className: "sync-badge idle" };
-    if (syncHealth.deadLetter > 0 || syncHealth.lastError) return { label: "Attention", className: "sync-badge attention" };
-    if (syncHealth.pending > 0 || syncHealth.dtrPendingCount > 0) return { label: "Pending", className: "sync-badge pending" };
-    if (syncHealth.lastSyncedAt) return { label: "Healthy", className: "sync-badge ok" };
-    return { label: "Not synced", className: "sync-badge idle" };
+    if (syncState.kind === "error") return { label: "DTR status unavailable", className: "sync-badge idle" };
+    if (syncState.kind === "stale") return { label: "DTR status delayed", className: "sync-badge idle" };
+    if (!syncHealth?.dtr) return { label: "DTR status unavailable", className: "sync-badge idle" };
+    if (syncHealth.dtr.dead > 0 || syncHealth.dtr.needsAttention > 0) return { label: "DTR attention", className: "sync-badge attention" };
+    if (syncHealth.dtr.activity === "queued" || syncHealth.dtr.queued > 0 || syncHealth.dtr.retryablePending > 0 || syncHealth.dtr.retrying > 0 || syncHealth.dtr.processing > 0) return { label: "DTR pending", className: "sync-badge pending" };
+    if (syncHealth.dtr.activity === "disabled") return { label: "DTR paused", className: "sync-badge idle" };
+    return { label: "DTR idle", className: "sync-badge idle" };
   })();
 
   const syncHealthSeq = useRef(0);
@@ -3494,6 +3535,26 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     syncHealthSeq.current = seq;
     const response = await loadDtrSyncHealth();
     if (syncHealthSeq.current !== seq) return;
+    if (response.success && response.health.dtr) {
+      setDtrSyncHealthSnapshot({
+        activity: response.health.dtr.activity,
+        queued: response.health.dtr.queued,
+        retryablePending: response.health.dtr.retryablePending,
+        needsAttention: response.health.dtr.needsAttention,
+        dead: response.health.dtr.dead,
+        persistenceFailure: response.health.dtr.persistenceFailure,
+        emittedAt: response.health.dtr.emittedAt,
+      });
+    } else {
+      setDtrSyncHealthSnapshot({
+        activity: "unavailable",
+        queued: 0,
+        retryablePending: 0,
+        needsAttention: 0,
+        dead: 0,
+        persistenceFailure: false,
+      });
+    }
     setSyncState((prev) => {
       // A background poll must not dislodge `syncing`; only the manual sync's
       // own post-sync refresh (releaseSyncing) may leave it — :3339 is the
@@ -3510,29 +3571,17 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     const response = await getInternDtrSync();
     if (response.success) setDtrSyncEnabled(response.enabled);
   }, []);
+  useEffect(() => startDtrSyncHealthPolling(() => refreshSyncHealth()), [refreshSyncHealth]);
   useEffect(() => {
-    void refreshSyncHealth();
     void refreshDtrSyncToggle();
-    const tick = () => {
-      if (document.hidden) return;
-      void refreshSyncHealth();
-    };
-    const timer = window.setInterval(tick, 5000);
-    const onVisibility = () => {
-      if (!document.hidden) void refreshSyncHealth();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [refreshSyncHealth, refreshDtrSyncToggle]);
+  }, [refreshDtrSyncToggle]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenForDtrSyncProgress((progress) => {
       setDtrProgress(progress);
       applyDtrProgressToGuard(progress);
+      if (progress.status === "done" || progress.status === "complete" || progress.status === "error") void refreshDtrSyncHealth(() => refreshSyncHealth());
     })
       .then((cleanup) => {
         unlisten = cleanup;
@@ -3543,7 +3592,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     return () => {
       if (unlisten) unlisten();
     };
-  }, []);
+  }, [refreshSyncHealth]);
 
   const refresh = useCallback(async () => {
     const response = await loadDatabaseInfo();
@@ -3564,6 +3613,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     const response = await setInternDtrSync(next);
     if (response.success) {
       setDtrSyncEnabled(response.enabled);
+      void refreshDtrSyncHealth(() => refreshSyncHealth());
       setNotice(response.enabled ? "Intern DTR sync enabled on this device." : "Intern DTR sync disabled on this device. Queued punches are kept and resume on re-enable.");
     } else {
       setError(response.error?.message ?? "DTR sync toggle failed.");
@@ -3571,7 +3621,11 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     setDtrToggleBusy(false);
   };
 
-  const syncInterns = async () => {
+  const syncInterns = async (startFromUserId?: string) => {
+    if (dtrSyncActive) {
+      setNotice("Sync already running.");
+      return;
+    }
     setBusy(true);
     setSyncState({ kind: "syncing" });
     setDtrSyncActive(true);
@@ -3579,8 +3633,22 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     setError("");
     setNotice("");
     try {
-      const response = await syncInternDtr();
+      const response = await syncInternDtr(undefined, startFromUserId);
       const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
+      if (response.stoppedTab || response.stoppedUserId) {
+        const stoppedDetail = (response.stoppedUserId
+          ? response.details.find((detail) => detail.userId === response.stoppedUserId)
+          : undefined)
+          ?? (response.stoppedTab
+            ? response.details.find((detail) => detail.tab === response.stoppedTab)
+            : undefined);
+        setStoppedDtrSync({
+          tab: response.stoppedTab ?? stoppedDetail?.fullName ?? "Unknown tab",
+          userId: response.stoppedUserId ?? stoppedDetail?.userId ?? null,
+        });
+      } else if (response.success && !hasErrors) {
+        setStoppedDtrSync(null);
+      }
       if (response.success && !hasErrors) {
         const createdCount = response.tabsCreated?.length ?? 0;
         const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
@@ -3589,8 +3657,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         const errDetail = hasErrors
           ? response.errors.join("; ")
           : response.error?.message || "DTR sync failed.";
-        setError(errDetail);
-        if (response.rowsSynced > 0) {
+        const alreadyRunning = isDtrSyncAlreadyRunning(errDetail);
+        if (alreadyRunning) {
+          setNotice("Sync already running.");
+        } else {
+          setError(errDetail);
+        }
+        if (response.rowsSynced > 0 && !alreadyRunning) {
           setNotice(`Synced ${response.rowsSynced} row(s), but encountered errors: ${errDetail}`);
         }
       }
@@ -3599,7 +3672,10 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       setDtrSyncActive(false);
       setDtrProgress(null);
     }
-    void refreshSyncHealth(true);
+    setSyncState((prev) => prev.kind === "syncing"
+      ? syncHealth ? { kind: "refreshing", health: syncHealth } : { kind: "loading" }
+      : prev);
+    void refreshDtrSyncHealth(() => refreshSyncHealth(true));
   };
 
   const createBackup = async () => {
@@ -3800,6 +3876,21 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           Sync Intern DTR now
         </button>
       </div>
+      {stoppedDtrSync && (
+        <p className="dashboard-alert db-notice" role="status">
+          Stopped at {stoppedDtrSync.tab}{" "}
+          <button
+            className="text-button"
+            type="button"
+            disabled={busy || dtrSyncActive || stoppedDtrSync.userId === null}
+            onClick={() => {
+              if (stoppedDtrSync.userId !== null) void syncInterns(stoppedDtrSync.userId);
+            }}
+          >
+            Retry
+          </button>
+        </p>
+      )}
       {notice && (
         <p className="dashboard-alert db-notice" role="status">
           {notice}
@@ -3813,7 +3904,10 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       <div className="sync-health" aria-label="DTR sync status" role="status">
         <div className="sync-health-head">
           <strong>DTR sync status</strong>
-          <span className={syncBadge.className}>{syncState.kind === "syncing" ? "Syncing…" : syncBadge.label}</span>
+          <span className={syncBadge.className} aria-label="DTR-only sync status">{syncState.kind === "syncing" ? "Syncing…" : syncBadge.label}</span>
+          {syncHealth && syncHealth.deadLetter > 0 && (
+            <span className="sync-badge attention" aria-label="All sync failures">All sync failures: {syncHealth.deadLetter}</span>
+          )}
         </div>
         {syncState.kind === "syncing" && (
           <div
@@ -3850,9 +3944,14 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           </div>
         )}
         {syncState.kind === "error" ? (
-          <p className="sync-health-note">Sync status unavailable — {syncState.message}</p>
+        <p className="sync-health-note">DTR status unavailable — {syncState.message}</p>
         ) : (
           <>
+            {dtrHealthCopy(syncHealth, syncState.kind === "stale") && (
+              <p className={syncHealth?.dtr?.dead || syncHealth?.dtr?.needsAttention ? "sync-health-error" : "sync-health-note"}>
+                {dtrHealthCopy(syncHealth, syncState.kind === "stale")}
+              </p>
+            )}
             {syncState.kind === "stale" && (
               <p className="sync-health-error">Sync status unavailable — showing last known data ({syncState.message})</p>
             )}
@@ -3905,16 +4004,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
               Last sync: {formatWhen(syncHealth?.lastSyncedAt ?? null)}
               {syncHealth && syncHealth.deadLetter > 0 ? (
                 <>
-                  {` · ${syncHealth.deadLetter} failed item(s) need attention `}
+                  {` · ${syncHealth.deadLetter} failed ops item(s) `}
                   <button className="text-button" type="button" disabled={busy} onClick={() => void syncInterns()}>
                     Retry sync now
                   </button>
                 </>
               ) : ""}
             </p>
-            {syncHealth?.lastError && (
-              <p className="sync-health-error">Last error: {syncHealth.lastError}</p>
-            )}
           </>
         )}
       </div>
@@ -4126,6 +4222,10 @@ export function UserEditor({
   }, []);
 
   const handleSyncDtr = async (userId?: string) => {
+    if (dtrSyncActive) {
+      setMessage("Sync already running.");
+      return;
+    }
     setSyncingDtrUserId(userId ?? "ALL");
     setDtrSyncActive(true);
     setDtrProgress(null);
@@ -4141,7 +4241,7 @@ export function UserEditor({
         const errDetail = hasErrors
           ? response.errors.join("; ")
           : response.error?.message || "DTR sync failed.";
-        setMessage(`DTR sync error: ${errDetail}`);
+        setMessage(isDtrSyncAlreadyRunning(errDetail) ? "Sync already running." : `DTR sync error: ${errDetail}`);
       }
     } finally {
       setSyncingDtrUserId(null);

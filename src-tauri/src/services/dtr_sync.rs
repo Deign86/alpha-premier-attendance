@@ -28,8 +28,8 @@
 //!   titles are exactly what the rename/create-tab flows need. The
 //!   pending recheck shares one fetch per run.
 //! - A tab renamed or deleted between the title fetch and the write
-//!   surfaces as a transport error and rides the standard queue
-//!   retry/backoff (then DEAD with the error preserved) — the Sheets
+//!   surfaces as a transport error and rides the transient queue
+//!   retry/backoff indefinitely — the Sheets
 //!   API offers no transactions, and neither do plan+execute.
 //! - Duplicate attendance rows for one user+date cannot exist
 //!   (`ux_attendance_user_date`) and queue rows are idempotent
@@ -42,13 +42,26 @@ use crate::services::sheets_sync::{
     classify_403_body, parse_retry_after_secs, per_call_budget_actual, per_call_should_retry,
     per_call_sleep_ms,
 };
-use crate::services::sync_retry::{DtrThrottleBucket, split_dtr_batch};
+use crate::services::sync_retry::{DtrThrottleBucket, GOOGLE_TRANSPORT_FAILED, split_dtr_batch};
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike, Weekday};
 use chrono_tz::Asia::Manila;
 use std::collections::{HashMap, HashSet};
 
 pub const DTR_TABLE_NAME: &str = "InternDtr";
+
+pub fn token_failure_is_auth_config(error: &str) -> bool {
+    if error.contains("GOOGLE_OAUTH_REJECTED") {
+        return true;
+    }
+    if error.contains("GOOGLE_OAUTH_TRANSPORT") || error.contains("GOOGLE_OAUTH_HTTP_ERROR") {
+        return false;
+    }
+    let normalized = error.to_ascii_lowercase();
+    ["credential", "service account", "private key", "invalid_grant", "unauthorized", "token file"]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
 // Retained for sheet-contract readability (owner template labels). DTR rows
 // carry actual stamps only since the DTR/payroll decoupling; nothing
 // substitutes these into B:E anymore.
@@ -1426,7 +1439,8 @@ async fn sleep_within_budget(already_slept_ms: u64, want_ms: u64) -> u64 {
 
 /// Runs one Google call with the shared bound above. Returns the last
 /// response (success, non-retryable, or attempts exhausted) so the caller maps
-/// it to the transient code; transport exhaustion returns the generic code.
+/// it to the appropriate error code; exhausted transport failures retain a
+/// distinct queue-transient marker while auth and other finite errors stay distinct.
 async fn dtr_call_with_retry(
     build: impl Fn() -> reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, String> {
@@ -1445,9 +1459,15 @@ async fn dtr_call_with_retry(
                     sleep_within_budget(slept_ms, per_call_sleep_ms(attempt, retry_after)).await;
                 attempt += 1;
             }
-            Err(_) => {
+            Err(e) => {
                 if attempt + 1 >= PER_CALL_MAX_ATTEMPTS {
-                    return Err(GOOGLE_REQUEST_FAILED.to_string());
+                    // Deterministic request-builder errors stay finite;
+                    // only network-side exhaustion keeps the transient
+                    // marker (D1).
+                    if e.is_builder() {
+                        return Err(GOOGLE_REQUEST_FAILED.to_string());
+                    }
+                    return Err(GOOGLE_TRANSPORT_FAILED.to_string());
                 }
                 slept_ms =
                     sleep_within_budget(slept_ms, per_call_sleep_ms(attempt, None)).await;
@@ -2249,20 +2269,41 @@ fn roster_has(roster: &[(String, String)], user_id: &str) -> bool {
 /// name changed since tracking began, the next scan event refreshes it
 /// via this same upsert; a pass in between may use the stale name and
 /// simply stay pending until then.
+#[derive(Clone, Copy)]
+enum DtrPendingReason<'a> {
+    MissingTab,
+    BackfillFailed,
+    Unresolvable(&'a str),
+    Transport,
+}
+
+impl DtrPendingReason<'_> {
+    fn code(self) -> String {
+        match self {
+            Self::MissingTab => "missing_tab".to_string(),
+            Self::BackfillFailed => "backfill_failed".to_string(),
+            Self::Unresolvable(reason) => format!("unresolvable:{reason}"),
+            Self::Transport => "transport".to_string(),
+        }
+    }
+}
+
 async fn note_dtr_pending(
     state: &AppState,
     user_id: &str,
     full_name: &str,
     now: &str,
+    reason: DtrPendingReason<'_>,
 ) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO dtr_pending (user_id, full_name, first_seen, last_checked, attempts) VALUES (?, ?, ?, ?, 0) \
-         ON CONFLICT(user_id) DO UPDATE SET full_name = excluded.full_name, last_checked = excluded.last_checked, attempts = dtr_pending.attempts + 1",
+        "INSERT INTO dtr_pending (user_id, full_name, first_seen, last_checked, attempts, reason_code) VALUES (?, ?, ?, ?, 0, ?) \
+         ON CONFLICT(user_id) DO UPDATE SET full_name = excluded.full_name, last_checked = excluded.last_checked, attempts = dtr_pending.attempts + 1, reason_code = excluded.reason_code",
     )
     .bind(user_id)
     .bind(full_name)
     .bind(now)
     .bind(now)
+    .bind(reason.code())
     .execute(&state.db)
     .await
     .map_err(|e| e.to_string())?;
@@ -2359,6 +2400,7 @@ pub async fn clear_dtr_row(
         .error_for_status()
         .map(|_| ())
         .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    state.mark_dtr_write_success().await;
     // P1 rule: paint is cosmetic — log-only so a batchUpdate failure
     // after cleared values never fails the pass.
     let white = DtrFormatOp {
@@ -2391,7 +2433,14 @@ async fn skip_unresolvable_row(
     reason: &'static str,
 ) -> Result<bool, String> {
     let now = chrono::Utc::now().to_rfc3339();
-    note_dtr_pending(state, user_id, full_name, &now).await?;
+    note_dtr_pending(
+        state,
+        user_id,
+        full_name,
+        &now,
+        DtrPendingReason::Unresolvable(reason),
+    )
+    .await?;
     log::warn!(
         "dtr skip: unresolvable for {full_name} ({user_id}) on {attendance_date}: {reason}; SYNCED-with-skip, noted in dtr_pending"
     );
@@ -2433,7 +2482,14 @@ pub async fn push_dtr_row(
     .await?
     else {
         let now = chrono::Utc::now().to_rfc3339();
-        note_dtr_pending(state, &user_id, &full_name, &now).await?;
+        note_dtr_pending(
+            state,
+            &user_id,
+            &full_name,
+            &now,
+            DtrPendingReason::MissingTab,
+        )
+        .await?;
         log::info!("dtr pending: no tab yet for {full_name} ({user_id})");
         return Ok(false);
     };
@@ -2447,7 +2503,14 @@ pub async fn push_dtr_row(
         if complete {
             clear_dtr_pending(state, &user_id).await?;
         } else {
-            note_dtr_pending(state, &user_id, &full_name, &now).await?;
+            note_dtr_pending(
+                state,
+                &user_id,
+                &full_name,
+                &now,
+                DtrPendingReason::Unresolvable("backfill_incomplete"),
+            )
+            .await?;
         }
         return Ok(wrote > 0);
     }
@@ -2492,6 +2555,7 @@ pub async fn push_dtr_row(
     match outcome {
         DtrPlanOutcome::Write(plan) => {
             execute_dtr_push(client, token, spreadsheet_id, &plan).await?;
+            state.mark_dtr_write_success().await;
             let ops = plan_row_format(sheet_id, plan.row_1based, kind);
             // P1: paint is cosmetic — a batchUpdate 403/429 must not fail
             // a row whose values already landed. Log and continue.
@@ -2725,6 +2789,7 @@ async fn backfill_user_history(
             }
         }
         execute_dtr_batch_push(client, token, spreadsheet_id, &pending_writes).await?;
+        state.mark_dtr_write_success().await;
     }
 
     // P1: final paint is cosmetic — log-only so a batchUpdate failure
@@ -2805,12 +2870,26 @@ pub async fn process_dtr_pending(
         {
             Ok(Some((_tab, _sheet_id, fresh, _created))) => fresh,
             Ok(None) => {
-                note_dtr_pending(state, user_id, full_name, &now).await?;
+                note_dtr_pending(
+                    state,
+                    user_id,
+                    full_name,
+                    &now,
+                    DtrPendingReason::MissingTab,
+                )
+                .await?;
                 continue;
             }
             Err(error) => {
                 log::warn!("dtr pending recheck failed for {full_name} ({user_id}): {error}");
-                note_dtr_pending(state, user_id, full_name, &now).await?;
+                note_dtr_pending(
+                    state,
+                    user_id,
+                    full_name,
+                    &now,
+                    DtrPendingReason::Transport,
+                )
+                .await?;
                 continue;
             }
         };
@@ -2831,13 +2910,28 @@ pub async fn process_dtr_pending(
                 backfilled += 1;
             }
             Ok((wrote, false)) => {
-                note_dtr_pending(state, user_id, full_name, &now).await?;
+                note_dtr_pending(
+                    state,
+                    user_id,
+                    full_name,
+                    &now,
+                    DtrPendingReason::Unresolvable("backfill_incomplete"),
+                )
+                .await?;
                 log::warn!(
                     "dtr backfill incomplete for {full_name} ({user_id}), {wrote} rows written; stays pending"
                 );
             }
             Err(error) => {
                 log::warn!("dtr backfill failed for {full_name} ({user_id}): {error}");
+                note_dtr_pending(
+                    state,
+                    user_id,
+                    full_name,
+                    &now,
+                    DtrPendingReason::Transport,
+                )
+                .await?;
             }
         }
     }
@@ -2864,6 +2958,90 @@ pub struct ManualSyncReport {
     pub rows_synced: usize,
     pub details: Vec<InternSyncDetail>,
     pub errors: Vec<String>,
+    pub stopped_tab: Option<String>,
+    pub stopped_user_id: Option<String>,
+}
+
+fn split_manual_sync_roster(
+    interns: &[(String, String)],
+    start_from_user_id: Option<&str>,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let Some(start_id) = start_from_user_id else {
+        return (Vec::new(), interns.to_vec());
+    };
+    let Some(start_index) = interns.iter().position(|(user_id, _)| user_id == start_id) else {
+        return (Vec::new(), interns.to_vec());
+    };
+    (interns[..start_index].to_vec(), interns[start_index..].to_vec())
+}
+
+fn set_first_outstanding(
+    stopped_user_id: &mut Option<String>,
+    stopped_tab: &mut Option<String>,
+    user_id: &str,
+    tab: Option<&str>,
+) {
+    if stopped_user_id.is_none() {
+        *stopped_user_id = Some(user_id.to_string());
+        *stopped_tab = tab.map(str::to_string);
+    }
+}
+
+async fn record_incomplete_backfill(
+    state: &AppState,
+    user_id: &str,
+    full_name: &str,
+    tab: &str,
+    tab_created: bool,
+    rows_synced: usize,
+    now: &str,
+) -> Result<InternSyncDetail, String> {
+    note_dtr_pending(
+        state,
+        user_id,
+        full_name,
+        now,
+        DtrPendingReason::Unresolvable("backfill_incomplete"),
+    )
+    .await?;
+    Ok(InternSyncDetail {
+        user_id: user_id.to_string(),
+        full_name: full_name.to_string(),
+        tab: Some(tab.to_string()),
+        tab_created,
+        rows_synced,
+        status: "BACKFILL_INCOMPLETE".to_string(),
+    })
+}
+
+async fn record_backfill_failure(
+    state: &AppState,
+    user_id: &str,
+    full_name: &str,
+    tab: &str,
+    tab_created: bool,
+    error: &str,
+    now: &str,
+) -> Result<(String, InternSyncDetail), String> {
+    note_dtr_pending(
+        state,
+        user_id,
+        full_name,
+        now,
+        DtrPendingReason::BackfillFailed,
+    )
+    .await?;
+    Ok((
+        format!("{full_name}: Backfill failed: {error}"),
+        InternSyncDetail {
+            user_id: user_id.to_string(),
+            full_name: full_name.to_string(),
+            tab: Some(tab.to_string()),
+            tab_created,
+            rows_synced: 0,
+            status: "BACKFILL_FAILED".to_string(),
+        },
+    ))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -2886,6 +3064,7 @@ pub async fn manual_sync_intern_dtr(
     state: &AppState,
     app: Option<&tauri::AppHandle>,
     target_user_id: Option<&str>,
+    start_from_user_id: Option<&str>,
 ) -> Result<ManualSyncReport, String> {
     use sqlx::Row;
     if !is_dtr_sync_enabled(&state.db).await {
@@ -2895,9 +3074,18 @@ pub async fn manual_sync_intern_dtr(
         .ok_or_else(|| "DTR spreadsheet ID is not configured".to_string())?;
     let path = state.lan.google_service_account_json_path.as_deref()
         .ok_or_else(|| "Google service account JSON path is not configured".to_string())?;
-    let token = crate::services::sheets_sync::google_access_token(path)
-        .await
-        .map_err(|e| format!("Google Sheets auth failed: {e}"))?;
+    let token = match crate::services::sheets_sync::google_access_token(path).await {
+        Ok(token) => {
+            state.clear_dtr_token_failure().await;
+            token
+        }
+        Err(error) => {
+            state
+                .mark_dtr_token_failure(token_failure_is_auth_config(&error))
+                .await;
+            return Err(format!("Google Sheets auth failed: {error}"));
+        }
+    };
     let client = crate::services::sheets_sync::sheets_client();
 
     let mut meta = fetch_tab_meta(&client, &token, &spreadsheet_id).await?;
@@ -2928,6 +3116,12 @@ pub async fn manual_sync_intern_dtr(
         }
     }
 
+    let (skipped_interns, interns) = if target_user_id.is_none() {
+        split_manual_sync_roster(&interns, start_from_user_id)
+    } else {
+        (Vec::new(), interns)
+    };
+
     if let Some(app) = app {
         use tauri::Emitter;
         let _ = app.emit(
@@ -2944,8 +3138,21 @@ pub async fn manual_sync_intern_dtr(
 
     let mut tabs_created = Vec::new();
     let mut rows_synced = 0;
-    let mut details = Vec::with_capacity(interns.len());
+    let mut details = skipped_interns
+        .iter()
+        .map(|(user_id, full_name)| InternSyncDetail {
+            user_id: user_id.clone(),
+            full_name: full_name.clone(),
+            tab: None,
+            tab_created: false,
+            rows_synced: 0,
+            status: "SKIPPED".to_string(),
+        })
+        .collect::<Vec<_>>();
+    details.reserve(interns.len());
     let mut errors = Vec::new();
+    let mut stopped_tab = None;
+    let mut stopped_user_id = None;
 
     for (idx, (user_id, full_name)) in interns.iter().enumerate() {
         if let Some(app) = app {
@@ -3019,11 +3226,19 @@ pub async fn manual_sync_intern_dtr(
         };
 
         let Some(tab) = tab_opt else {
+            set_first_outstanding(&mut stopped_user_id, &mut stopped_tab, user_id, None);
             // Todo 3: a manually-synced intern with no tab yet stays visible
             // (MISSING_TAB) AND tracked, so the pending rescan re-drives
             // them once the owner creates the tab.
             let now = chrono::Utc::now().to_rfc3339();
-            note_dtr_pending(state, user_id, full_name, &now).await?;
+            note_dtr_pending(
+                state,
+                user_id,
+                full_name,
+                &now,
+                DtrPendingReason::MissingTab,
+            )
+            .await?;
             details.push(InternSyncDetail {
                 user_id: user_id.clone(),
                 full_name: full_name.clone(),
@@ -3045,32 +3260,97 @@ pub async fn manual_sync_intern_dtr(
                 rows_synced += wrote;
                 if complete {
                     let _ = clear_dtr_pending(state, user_id).await;
+                    details.push(InternSyncDetail {
+                        user_id: user_id.clone(),
+                        full_name: full_name.clone(),
+                        tab: Some(tab),
+                        tab_created,
+                        rows_synced: wrote,
+                        status: if tab_created {
+                            "TAB_CREATED_AND_SYNCED".to_string()
+                        } else if wrote > 0 {
+                            "SYNCED".to_string()
+                        } else {
+                            "IN_SYNC".to_string()
+                        },
+                    });
+                } else {
+                    set_first_outstanding(
+                        &mut stopped_user_id,
+                        &mut stopped_tab,
+                        user_id,
+                        Some(&tab),
+                    );
+                    let now = chrono::Utc::now().to_rfc3339();
+                    match record_incomplete_backfill(
+                        state,
+                        user_id,
+                        full_name,
+                        &tab,
+                        tab_created,
+                        wrote,
+                        &now,
+                    )
+                    .await
+                    {
+                        Ok(detail) => details.push(detail),
+                        Err(error) => {
+                            errors.push(format!(
+                                "{full_name}: Backfill incomplete and pending tracking failed: {error}"
+                            ));
+                            details.push(InternSyncDetail {
+                                user_id: user_id.clone(),
+                                full_name: full_name.clone(),
+                                tab: Some(tab),
+                                tab_created,
+                                rows_synced: wrote,
+                                status: "BACKFILL_INCOMPLETE".to_string(),
+                            });
+                        }
+                    }
                 }
-                details.push(InternSyncDetail {
-                    user_id: user_id.clone(),
-                    full_name: full_name.clone(),
-                    tab: Some(tab),
-                    tab_created,
-                    rows_synced: wrote,
-                    status: if tab_created {
-                        "TAB_CREATED_AND_SYNCED".to_string()
-                    } else if wrote > 0 {
-                        "SYNCED".to_string()
-                    } else {
-                        "IN_SYNC".to_string()
-                    },
-                });
             }
             Err(e) => {
-                errors.push(format!("{full_name}: Backfill failed: {e}"));
-                details.push(InternSyncDetail {
-                    user_id: user_id.clone(),
-                    full_name: full_name.clone(),
-                    tab: Some(tab),
+                set_first_outstanding(
+                    &mut stopped_user_id,
+                    &mut stopped_tab,
+                    user_id,
+                    Some(&tab),
+                );
+                let now = chrono::Utc::now().to_rfc3339();
+                match record_backfill_failure(
+                    state,
+                    user_id,
+                    full_name,
+                    &tab,
                     tab_created,
-                    rows_synced: 0,
-                    status: "BACKFILL_FAILED".to_string(),
-                });
+                    &e,
+                    &now,
+                )
+                .await
+                {
+                    Ok((failure, detail)) => {
+                        errors.push(failure);
+                        details.push(detail);
+                    }
+                    Err(pending_error) => {
+                        // A pending-tracking failure must neither abort the
+                        // remaining interns nor swallow the original Sheets
+                        // error: preserve both, keep the report row, continue.
+                        errors.push(format!("{full_name}: Backfill failed: {e}"));
+                        errors.push(format!(
+                            "{full_name}: pending tracking failed: {pending_error}"
+                        ));
+                        details.push(InternSyncDetail {
+                            user_id: user_id.clone(),
+                            full_name: full_name.clone(),
+                            tab: Some(tab.clone()),
+                            tab_created,
+                            rows_synced: 0,
+                            status: "BACKFILL_FAILED".to_string(),
+                        });
+                    }
+                }
             }
         }
     }
@@ -3100,12 +3380,14 @@ pub async fn manual_sync_intern_dtr(
     }
 
     Ok(ManualSyncReport {
-        success: errors.is_empty(),
+        success: errors.is_empty() && stopped_user_id.is_none(),
         interns_checked: interns.len(),
         tabs_created,
         rows_synced,
         details,
         errors,
+        stopped_tab,
+        stopped_user_id,
     })
 }
 
@@ -3120,6 +3402,109 @@ mod tests {
             ("u2".to_string(), "Kyle Ricio".to_string()),
             ("u3".to_string(), "Elaizah Altiche".to_string()),
         ]
+    }
+
+    #[test]
+    fn resumed_interns_skip_roster_prefix_and_unknown_start_fails_open() {
+        let interns = vec![
+            ("u1".to_string(), "First Intern".to_string()),
+            ("u2".to_string(), "Second Intern".to_string()),
+            ("u3".to_string(), "Third Intern".to_string()),
+        ];
+
+        let (skipped, resumed) = split_manual_sync_roster(&interns, Some("u2"));
+        assert_eq!(skipped, interns[..1]);
+        assert_eq!(resumed, interns[1..]);
+
+        let (skipped, resumed) = split_manual_sync_roster(&interns, Some("missing"));
+        assert!(skipped.is_empty());
+        assert_eq!(resumed, interns);
+    }
+
+    #[test]
+    fn manual_sync_report_exposes_stopped_tab() {
+        let report = ManualSyncReport {
+            success: false,
+            interns_checked: 0,
+            tabs_created: Vec::new(),
+            rows_synced: 0,
+            details: Vec::new(),
+            errors: Vec::new(),
+            stopped_tab: Some("FAILED TAB".to_string()),
+            stopped_user_id: Some("u-failed".to_string()),
+        };
+        assert_eq!(report.stopped_tab.as_deref(), Some("FAILED TAB"));
+        assert_eq!(report.stopped_user_id.as_deref(), Some("u-failed"));
+    }
+
+    #[test]
+    fn missing_tab_report_stops_by_user_id_without_tab_title() {
+        let report = ManualSyncReport {
+            success: false,
+            interns_checked: 1,
+            tabs_created: Vec::new(),
+            rows_synced: 0,
+            details: vec![InternSyncDetail {
+                user_id: "u-missing".to_string(),
+                full_name: "Missing Intern".to_string(),
+                tab: None,
+                tab_created: false,
+                rows_synced: 0,
+                status: "MISSING_TAB".to_string(),
+            }],
+            errors: Vec::new(),
+            stopped_tab: None,
+            stopped_user_id: Some("u-missing".to_string()),
+        };
+        assert_eq!(report.details[0].tab, None);
+        assert_eq!(report.stopped_tab, None);
+        assert_eq!(report.stopped_user_id.as_deref(), Some("u-missing"));
+    }
+
+    #[tokio::test]
+    async fn incomplete_earlier_intern_remains_first_stop_before_later_failure() {
+        let state = pending_test_state().await;
+        let incomplete = record_incomplete_backfill(
+            &state,
+            "u-a",
+            "Intern A",
+            "Tab A",
+            false,
+            2,
+            "2026-10-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let mut stopped_user_id = None;
+        let mut stopped_tab = None;
+        set_first_outstanding(&mut stopped_user_id, &mut stopped_tab, "u-a", Some("Tab A"));
+        let (_, failed) = record_backfill_failure(
+            &state,
+            "u-b",
+            "Intern B",
+            "Tab B",
+            false,
+            "Sheets failure",
+            "2026-10-03T00:00:01Z",
+        )
+        .await
+        .unwrap();
+        set_first_outstanding(&mut stopped_user_id, &mut stopped_tab, "u-b", Some("Tab B"));
+
+        assert_eq!(incomplete.status, "BACKFILL_INCOMPLETE");
+        assert_eq!(incomplete.rows_synced, 2);
+        assert_eq!(failed.status, "BACKFILL_FAILED");
+        assert_eq!(stopped_user_id.as_deref(), Some("u-a"));
+        assert_eq!(stopped_tab.as_deref(), Some("Tab A"));
+        let pending: (String, String) = sqlx::query_as(
+            "SELECT user_id, reason_code FROM dtr_pending WHERE user_id='u-a'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(pending.0, "u-a");
+        assert_eq!(pending.1, "unresolvable:backfill_incomplete");
+        state.db.close().await;
     }
 
     #[test]
@@ -3308,6 +3693,22 @@ mod tests {
         dtr_get_json(&client, "token", url).await.unwrap();
         assert!(started.elapsed() >= std::time::Duration::from_millis(900));
         assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exhausted_network_failure_emits_transient_marker() {
+        // D1 producer proof: refused connections exhaust the bounded
+        // in-call retries and return GOOGLE_TRANSPORT_FAILED (transient at
+        // queue level), not the finite generic code. Deterministic
+        // builder-class errors keep the finite branch in the code above.
+        let client = test_client();
+        let err = dtr_call_with_retry(|| client.post("http://127.0.0.1:9/__refused"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            crate::services::sync_retry::GOOGLE_TRANSPORT_FAILED
+        );
     }
 
     fn test_client() -> reqwest::Client {
@@ -4609,20 +5010,37 @@ mod tests {
         .unwrap();
         assert_eq!(table.as_deref(), Some("dtr_pending"));
         // First miss records the intern…
-        note_dtr_pending(&state, "u-new", "New Intern", "2026-09-05T00:00:00+08:00").await.unwrap();
+        note_dtr_pending(
+            &state,
+            "u-new",
+            "New Intern",
+            "2026-09-05T00:00:00+08:00",
+            DtrPendingReason::MissingTab,
+        )
+        .await
+        .unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
             .fetch_one(&state.db)
             .await
             .unwrap();
         assert_eq!(count, 1);
         // …repeat misses upsert (no duplicate rows), attempts grows…
-        note_dtr_pending(&state, "u-new", "New Intern", "2026-09-05T00:01:00+08:00").await.unwrap();
-        let (count, attempts): (i64, i64) =
-            sqlx::query_as("SELECT COUNT(*), MAX(attempts) FROM dtr_pending")
+        note_dtr_pending(
+            &state,
+            "u-new",
+            "New Intern",
+            "2026-09-05T00:01:00+08:00",
+            DtrPendingReason::Transport,
+        )
+        .await
+        .unwrap();
+        let (count, attempts, reason): (i64, i64, String) =
+            sqlx::query_as("SELECT COUNT(*), MAX(attempts), MAX(reason_code) FROM dtr_pending")
                 .fetch_one(&state.db)
                 .await
                 .unwrap();
         assert_eq!((count, attempts), (1, 1));
+        assert_eq!(reason, "transport");
         // …and a backfilled tab clears tracking.
         clear_dtr_pending(&state, "u-new").await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
@@ -4630,6 +5048,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn backfill_failure_keeps_report_detail_and_durably_requeues_user() {
+        let state = pending_test_state().await;
+        let now = "2026-10-03T00:00:00Z";
+
+        let (failure, detail) = record_backfill_failure(
+            &state,
+            "u-backfill-failed",
+            "Backfill Failed Intern",
+            "Backfill Failed Intern",
+            true,
+            "temporary Sheets failure",
+            now,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(detail.user_id, "u-backfill-failed");
+        assert_eq!(detail.full_name, "Backfill Failed Intern");
+        assert_eq!(detail.status, "BACKFILL_FAILED");
+        assert_eq!(detail.tab.as_deref(), Some("Backfill Failed Intern"));
+        assert!(detail.tab_created);
+        assert_eq!(detail.rows_synced, 0);
+        assert_eq!(
+            failure,
+            "Backfill Failed Intern: Backfill failed: temporary Sheets failure"
+        );
+        let pending: (String, String, i64, String) = sqlx::query_as(
+            "SELECT user_id, full_name, attempts, reason_code FROM dtr_pending WHERE user_id='u-backfill-failed'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(
+            pending,
+            (
+                "u-backfill-failed".to_string(),
+                "Backfill Failed Intern".to_string(),
+                0,
+                "backfill_failed".to_string()
+            )
+        );
     }
 
     #[test]
@@ -5114,14 +5576,26 @@ mod tests {
                 .bind(&row_id).bind("UPSERT").bind(&payload).bind(&now_text).bind(&now_text).bind(&now_text).bind(&key)
                 .execute(&state.db).await.unwrap();
         }
-        // 1 PROCESSING row locked 3s ago: the crash victim (the claim wrote
-        // locked_at, the process died before the terminal update).
+        // A crash between status and lease writes can leave PROCESSING with
+        // NULL locked_at. Keep this row in the same restart test to pin its
+        // current recovery behavior alongside the stale timestamp case.
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,locked_at,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users','resume-null-lock','UPSERT','{\"userId\":\"resume-null-lock\"}',0,'PROCESSING',NULL,?,?,?,'Users:resume-null-lock:UPSERT')")
+            .bind(&now_text).bind(&now_text).bind(&now_text)
+            .execute(&state.db).await.unwrap();
+        // The following stale lease must still be visited after the lower-id
+        // NULL lease in ORDER BY id recovery enumeration.
         let stale_lock = (now - chrono::Duration::seconds(3)).to_rfc3339();
         sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,locked_at,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users','resume-victim','UPSERT','{\"userId\":\"resume-victim\"}',0,'PROCESSING',?,?,?,?,?)")
             .bind(&stale_lock).bind(&now_text).bind(&now_text).bind(&now_text).bind("Users:resume-victim:UPSERT")
             .execute(&state.db).await.unwrap();
         // 1 dtr_pending row: must survive the restart tick untouched.
-        note_dtr_pending(&state, "u-pending", "Pending Intern", &now_text)
+        note_dtr_pending(
+            &state,
+            "u-pending",
+            "Pending Intern",
+            &now_text,
+            DtrPendingReason::MissingTab,
+        )
             .await
             .unwrap();
         // Restart tick against a dead endpoint: every claim fails finite
@@ -5141,6 +5615,16 @@ mod tests {
             victim.0, "RETRY",
             "kill-mid-PROCESSING must resume as RETRY"
         );
+        let null_lock: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, locked_at FROM sync_queue WHERE row_id='resume-null-lock'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        // D5: a NULL lock means legacy/corrupt state (the claim writes
+        // status + locked_at atomically), so the recovery pass resets it to
+        // RETRY instead of leaving it stuck in PROCESSING forever.
+        assert_eq!(null_lock, ("RETRY".to_string(), None));
         // No lease left stuck, nothing synced or dead-lettered by the refused endpoint.
         let stuck: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status='PROCESSING'")
@@ -5158,12 +5642,13 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!((stuck, synced, dead), (0, 0, 0));
-        // The recovery counter backing health `leaseRecovered` fired exactly once.
+        // The recovery counter backing health `leaseRecovered` fired once per
+        // recovered lease (stale victim + NULL-locked row).
         assert_eq!(
             state
                 .lease_recovered
                 .load(std::sync::atomic::Ordering::Relaxed),
-            1
+            2
         );
         // dtr_pending survived the restart tick.
         let pending: i64 =

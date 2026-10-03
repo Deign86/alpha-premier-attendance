@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { InMemorySheetsService } from '../src/sheets.js';
@@ -8,7 +8,8 @@ import type { DtrSyncUser, SheetsClient } from '../src/intern-dtr-sync.js';
 const config = {
   timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 150, resultResetDelayMs: 4000,
   scanCooldownMs: 10, rateLimitWindowMs: 60000, rateLimitMax: 100, port: 3001, corsOrigin: '*', sheetsMode: 'memory' as const,
-  enableCardSetup: false, enableAdmin: true, adminPin: '2468', adminSessionSecret: 'test-secret', adminSessionMinutes: 15,
+  googleCreateFolderIfMissing: false, enableCardSetup: false, setupSessionMinutes: 15,
+  enableAdmin: true, adminPin: '2468', adminSessionSecret: 'test-secret', adminSessionMinutes: 15,
 };
 
 describe('admin and live attendance API', () => {
@@ -256,6 +257,22 @@ describe('admin and live attendance API', () => {
     expect(users.body.users).toHaveLength(2);
   });
 
+  it('expires signed admin sessions and rejects tampered session tokens', async () => {
+    const service = new AdminService(new InMemorySheetsService(), config);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    try {
+      const { token } = await service.unlock('2468');
+      expect(() => service.verify(token)).not.toThrow();
+      expect(() => service.verify(`${token}x`)).toThrow('session has expired');
+
+      vi.advanceTimersByTime(15 * 60 * 1000);
+      expect(() => service.verify(token)).toThrow('session has expired');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('allows editing bathroom key log timestamps with validation and permission checks', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABB', department: 'Engineering', active: true, gender: 'FEMALE' },
@@ -305,6 +322,28 @@ describe('admin and live attendance API', () => {
       timeIn: '10:25',
     }).expect(200);
     expect(aliasRes.body.entry.durationSeconds).toBe(1200);
+  });
+
+  it('rejects double checkout and double return through the bathroom API', async () => {
+    const sheets = new InMemorySheetsService([
+      { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'AABB', department: 'Engineering', active: true, gender: 'FEMALE' },
+      { userId: 'u2', fullName: 'Grace Hopper', rfidUid: 'CCDD', department: 'Engineering', active: true, gender: 'FEMALE' },
+    ]);
+    const app = createApp({ sheets, config, logger: false });
+    const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+
+    const first = await agent.post('/api/admin/bathroom/time-out').send({ userId: 'u1', genderKey: 'FEMALE' }).expect(200);
+    expect(first.body.entry).toMatchObject({ userId: 'u1', genderKey: 'FEMALE', status: 'OUT', timeIn: null });
+    await agent.post('/api/admin/bathroom/time-out').send({ userId: 'u2', genderKey: 'FEMALE' }).expect(409);
+
+    // SAFETY: The successful bathroom checkout response includes the created entry's string logId.
+    const logId = first.body.entry.logId as string;
+    const returned = await agent.post('/api/admin/bathroom/time-in').send({ logId }).expect(200);
+    expect(returned.body.entry).toMatchObject({ logId, status: 'RETURNED' });
+    expect(returned.body.entry.timeIn).toEqual(expect.any(String));
+    expect(returned.body.entry.durationSeconds).toEqual(expect.any(Number));
+    await agent.post('/api/admin/bathroom/time-in').send({ logId }).expect(400);
   });
 });
 

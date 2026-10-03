@@ -864,11 +864,33 @@ async fn recover_stale_processing_leases(
 
     for lease in leases {
         let locked_at: Option<String> = lease.get("locked_at");
+        let id: i64 = lease.get("id");
+        // D5: the claim UPDATE sets status + locked_at atomically, so a NULL
+        // lock means legacy/corrupt state — recover it instead of leaving it
+        // stuck in PROCESSING forever (the staleness predicate rejects None,
+        // and `locked_at = NULL` never matches in SQL).
+        if locked_at.is_none() {
+            let updated = sqlx::query(
+                "UPDATE sync_queue SET status='RETRY', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING' AND locked_at IS NULL",
+            )
+            .bind(&now_text)
+            .bind(&now_text)
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+            if updated.rows_affected() == 1 {
+                log::warn!("sync_queue lease {id} had no lock timestamp; reset to RETRY");
+                state
+                    .lease_recovered
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            continue;
+        }
         if !processing_lease_is_stale(locked_at.as_deref(), &now) {
             continue;
         }
 
-        let id: i64 = lease.get("id");
         let updated = sqlx::query(
             "UPDATE sync_queue SET status='RETRY', locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING' AND locked_at=?",
         )
@@ -939,7 +961,7 @@ pub(crate) async fn google_access_token(path: &str) -> Result<String, String> {
         .map_err(|_| "service account key invalid".to_string())?;
     let assertion = jsonwebtoken::encode(&header, &claims, &key)
         .map_err(|_| "JWT signing failed".to_string())?;
-    let response: serde_json::Value = sheets_client()
+    let response = sheets_client()
         .post(claims.aud)
         .form(&[
             ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
@@ -947,17 +969,44 @@ pub(crate) async fn google_access_token(path: &str) -> Result<String, String> {
         ])
         .send()
         .await
-        .map_err(|e| format!("Google access token request failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Google access token request failed: {e}"))?
-        .json()
+        .map_err(|_| oauth_token_transport_error())?;
+    let status = response.status();
+    let body = response
+        .text()
         .await
-        .map_err(|e| format!("Google access token response invalid: {e}"))?;
+        .map_err(|_| oauth_token_transport_error())?;
+    if !status.is_success() {
+        return Err(oauth_token_error_message(status, &body));
+    }
+    let response: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| "GOOGLE_OAUTH_RESPONSE_INVALID".to_string())?;
     response
         .get("access_token")
         .and_then(|v| v.as_str())
         .map(str::to_owned)
-        .ok_or_else(|| "Google token response did not contain access_token".into())
+        .ok_or_else(|| "GOOGLE_OAUTH_RESPONSE_MISSING_TOKEN".into())
+}
+
+fn oauth_token_transport_error() -> String {
+    "GOOGLE_OAUTH_TRANSPORT: token endpoint connection failed".to_string()
+}
+
+fn oauth_token_error_message(status: reqwest::StatusCode, body: &str) -> String {
+    let reason = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("error").and_then(serde_json::Value::as_str).map(str::to_string))
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    if matches!(status.as_u16(), 400 | 401 | 403) {
+        format!("GOOGLE_OAUTH_REJECTED: status={} reason={reason}", status.as_u16())
+    } else {
+        format!("GOOGLE_OAUTH_HTTP_ERROR: status={} reason={reason}", status.as_u16())
+    }
 }
 
 fn google_status_error(status: reqwest::StatusCode) -> &'static str {
@@ -2368,7 +2417,10 @@ pub async fn nuke_and_resync(state: &AppState) -> Result<serde_json::Value, Stri
         let now = chrono::Utc::now().to_rfc3339();
         for (row_id, payload) in rows {
             let idempotency_key = format!("{table_name}:{row_id}:UPSERT");
-            requeue_sync_row(&state.db, table_name, &row_id, "UPSERT", &payload.to_string(), &now, &idempotency_key).await;
+            let persisted = requeue_sync_row(&state.db, table_name, &row_id, "UPSERT", &payload.to_string(), &now, &idempotency_key).await;
+            if !persisted && table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+                state.mark_dtr_persistence_failure().await;
+            }
             queued += 1;
         }
     }
@@ -2409,9 +2461,16 @@ pub(crate) async fn requeue_sync_row(
     payload_json: &str,
     now: &str,
     idempotency_key: &str,
-) {
-    let _ = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',attempts=0,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
-        .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await;
+) -> bool {
+    // Fire-and-forget by design (a queue bookkeeping failure never fails
+    // the caller), but a failed write must be observable: log it with the
+    // row identity instead of discarding it silently (D2).
+    if let Err(error) = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',attempts=0,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
+        .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await {
+        log::warn!("sync_queue write failed for {table_name}:{row_id} ({operation}): {error}");
+        return false;
+    }
+    true
 }
 
 /// Plan todo 7: queue-path DTR admission against the shared bucket.
@@ -2429,6 +2488,10 @@ async fn dtr_throttle_admit(
         .await
         .take(writes, calls, wall_now_ms());
     if wait_ms > 0 {
+        state.dtr_throttle_denied_until_ms.store(
+            wall_now_ms().saturating_add(wait_ms),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         log::warn!(
             "DTR throttle: deferring {writes} writes + {calls} calls for {wait_ms}ms (50-writes/min budget spent)"
         );
@@ -2482,6 +2545,7 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         if pending_count > 0 {
             match google_access_token(path).await {
                 Ok(token) => {
+                    state.clear_dtr_token_failure().await;
                     let client = sheets_client();
                     if let Err(error) =
                         crate::services::dtr_sync::process_dtr_pending(
@@ -2497,6 +2561,11 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                     }
                 }
                 Err(error) => {
+                    state
+                        .mark_dtr_token_failure(
+                            crate::services::dtr_sync::token_failure_is_auth_config(&error),
+                        )
+                        .await;
                     eprintln!("[sheets] dtr pending recheck skipped: {error}");
                 }
             }
@@ -2520,13 +2589,28 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
     let shared_google_token: Option<String> = if google_mode || dtr_sheet.is_some() {
         if let Some(path) = google_path {
             match google_access_token(path).await {
-                Ok(tok) => Some(tok),
+                Ok(tok) => {
+                    if dtr_sheet.is_some() {
+                        state.clear_dtr_token_failure().await;
+                    }
+                    Some(tok)
+                }
                 Err(err) => {
                     log::warn!("google token acquisition failed at batch start: {err}");
+                    if dtr_sheet.is_some() {
+                        state
+                            .mark_dtr_token_failure(
+                                crate::services::dtr_sync::token_failure_is_auth_config(&err),
+                            )
+                            .await;
+                    }
                     None
                 }
             }
         } else {
+            if dtr_sheet.is_some() {
+                state.mark_dtr_token_failure(true).await;
+            }
             None
         }
     } else {
@@ -2564,9 +2648,25 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
     let dtr_upload_allowed = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
     for row in rows {
         let id: i64 = row.get("id");
+        let table_name: String = row.get("table_name");
+        let is_dtr_row = table_name == crate::services::dtr_sync::DTR_TABLE_NAME;
         if !dtr_upload_allowed {
-            let table_name: String = row.get("table_name");
-            if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+            if is_dtr_row {
+                continue;
+            }
+        }
+        // Throttle-before-claim: a denied DTR row must stay PENDING/RETRY
+        // (no lease taken) so the next tick retries it immediately instead
+        // of stranding it in PROCESSING for the 5-min lease. Malformed rows
+        // skip the gate so they still reach the row-identity error path.
+        if is_dtr_row {
+            let row_id: String = row.get("row_id");
+            let payload_json: String = row.get("payload_json");
+            let payload_ok = serde_json::from_str::<serde_json::Value>(&payload_json)
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .is_some();
+            if !row_id.trim().is_empty() && payload_ok && !dtr_throttle_admit(state, 1, 1).await {
                 continue;
             }
         }
@@ -2575,7 +2675,6 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             continue;
         }
         let attempts: i64 = row.get("attempts");
-        let table_name: String = row.get("table_name");
         let row_id: String = row.get("row_id");
         let operation: String = row.get("operation");
         let payload_json: String = row.get("payload_json");
@@ -2587,13 +2686,8 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
             Err(SHEETS_ROW_ID_MISSING_ERROR.to_string())
         } else if let Some(payload) = payload.as_ref() {
             if table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
-                // Plan todo 7: queue-path DTR dispatch is bucket-exclusive —
-                // one admission (1 write + 1 call) per row before claiming.
-                // Denial skips the row for this pass (still due next tick);
-                // later ops rows in the same batch keep draining (bypass).
-                if !dtr_throttle_admit(state, 1, 1).await {
-                    continue;
-                }
+                // Admission already happened before the claim above; an
+                // admitted row always dispatches here.
                 if is_delete {
                     // Admin-deleted attendance clears that date's B:E cells
                     // (values only — the template row stays; missing tab/row
@@ -2776,6 +2870,20 @@ mod tests {
     use super::*;
     use chrono::Duration as ChronoDuration;
     use serde_json::json;
+
+    #[test]
+    fn oauth_token_error_preserves_http_status_and_reason_class() {
+        let rejected = oauth_token_error_message(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_grant","error_description":"signature rejected"}"#,
+        );
+        assert!(rejected.contains("400"));
+        assert!(rejected.contains("invalid_grant"));
+        assert!(crate::services::dtr_sync::token_failure_is_auth_config(&rejected));
+
+        let network = oauth_token_transport_error();
+        assert!(crate::services::dtr_sync::token_failure_is_auth_config(&network) == false);
+    }
 
     #[test]
     fn managed_tabs_have_stable_versioned_headers() {
@@ -3551,5 +3659,204 @@ mod tests {
         assert_eq!(row.get::<i64, _>("attempts"), 0);
         assert_eq!(row.get::<Option<String>, _>("last_error"), None);
         assert_eq!(row.get::<Option<String>, _>("last_error_code"), None);
+    }
+
+    #[tokio::test]
+    async fn requeue_discards_queue_write_error_and_leaves_existing_row_unchanged() {
+        let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::query("CREATE TABLE sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, row_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_error_code TEXT, status TEXT NOT NULL DEFAULT 'PENDING', next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, idempotency_key TEXT)")
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX ux_sync_queue_idempotency ON sync_queue(idempotency_key) WHERE idempotency_key IS NOT NULL")
+            .execute(&db)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,last_error,last_error_code,status,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users','u1','UPSERT','{}',5,'old failure','GOOGLE_SYNC_FAILED','DEAD',?,?,?,'Users:u1:UPSERT')")
+            .bind(&now)
+            .bind(&now)
+            .bind(&now)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER reject_requeue BEFORE INSERT ON sync_queue BEGIN SELECT RAISE(ABORT, 'simulated queue write failure'); END")
+            .execute(&db)
+            .await
+            .unwrap();
+
+        // This void helper keeps its fire-and-forget shape, but a failed
+        // SQLite write is now logged with the row identity (D2) instead of
+        // vanishing silently; the existing row stays untouched below.
+        requeue_sync_row(
+            &db,
+            "Users",
+            "u1",
+            "UPSERT",
+            "{\"fixed\":true}",
+            &now,
+            "Users:u1:UPSERT",
+        )
+        .await;
+        let row = sqlx::query(
+            "SELECT status, attempts, payload_json, last_error FROM sync_queue WHERE idempotency_key='Users:u1:UPSERT'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "DEAD");
+        assert_eq!(row.get::<i64, _>("attempts"), 5);
+        assert_eq!(row.get::<String, _>("payload_json"), "{}");
+        assert_eq!(row.get::<Option<String>, _>("last_error").as_deref(), Some("old failure"));
+    }
+
+    #[tokio::test]
+    async fn processing_row_without_lock_timestamp_recovers_to_retry() {
+        // D5: the claim sets status + locked_at atomically, so a NULL lock
+        // means legacy/corrupt state — the recovery pass must reset it to
+        // RETRY instead of leaving it stuck in PROCESSING forever.
+        use crate::config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig, UpdaterConfig};
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-null-lease-{}", uuid::Uuid::new_v4()));
+        let state = crate::state::AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let now = chrono::Utc::now();
+        let past = (now - ChronoDuration::seconds(60)).to_rfc3339();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,locked_at,next_attempt_at,created_at,updated_at) VALUES ('Users','null-lock','UPSERT','{}',0,'PROCESSING',NULL,?,?,?)")
+            .bind(&past).bind(&past).bind(&past)
+            .execute(&state.db).await.unwrap();
+        super::recover_stale_processing_leases(&state, now).await.unwrap();
+        let row = sqlx::query("SELECT status, locked_at FROM sync_queue WHERE row_id='null-lock'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.get::<String, _>("status"), "RETRY");
+        assert_eq!(row.get::<Option<String>, _>("locked_at"), None);
+        assert_eq!(
+            state.lease_recovered.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn production_transport_error_is_classified_and_persisted_on_queue_row() {
+        use crate::config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig, UpdaterConfig};
+
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-sync-error-{}", uuid::Uuid::new_v4()));
+        let state = crate::state::AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('Users','transport-error','UPSERT','{}',0,'PENDING',?,?,?,'Users:transport-error:UPSERT')")
+            .bind(&now)
+            .bind(&now)
+            .bind(&now)
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        // A refused local HTTP connection follows the production endpoint
+        // mapping, then the queue classifier and mutation path, without Google.
+        let processed = run_once(&state, Some("http://127.0.0.1:9/__sync_failure")).await;
+        assert_eq!(processed.unwrap(), 0);
+        let row = sqlx::query("SELECT status, attempts, last_error, last_error_code, locked_at FROM sync_queue WHERE row_id='transport-error'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "RETRY");
+        assert_eq!(row.get::<i64, _>("attempts"), 1);
+        assert_eq!(
+            row.get::<Option<String>, _>("last_error").as_deref(),
+            Some(SHEETS_REQUEST_FAILED_ERROR)
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("last_error_code").as_deref(),
+            Some("GOOGLE_SYNC_FAILED")
+        );
+        assert_eq!(row.get::<Option<String>, _>("locked_at"), None);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// Regression: a throttle-denied DTR row must stay unclaimed (PENDING,
+    /// no lease) so the next tick retries it immediately, and a later ops
+    /// row in the same batch must still be attempted (bypass, not block).
+    #[tokio::test]
+    async fn throttled_dtr_row_stays_unclaimed_and_ops_row_still_drains() {
+        use crate::config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig, UpdaterConfig};
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-dtr-throttle-{}", uuid::Uuid::new_v4()));
+        let mut state = crate::state::AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        // DTR branch reachable without network: sheet id defaults on, and the
+        // denied row never reaches the token fetch.
+        state.lan.google_service_account_json_path =
+            Some(data_dir.join("no-key.json").to_string_lossy().to_string());
+        // Exhaust the shared DTR bucket so admission denies.
+        for _ in 0..200 {
+            if state.dtr_throttle.lock().await.take(1, 1, wall_now_ms()) > 0 {
+                break;
+            }
+        }
+        let past = (chrono::Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
+        let dtr_payload = serde_json::json!({
+            "userId": "u-1",
+            "fullName": "Test Intern",
+            "attendanceDate": "2026-09-05",
+            "timeIn": "2026-09-05T08:00:00+08:00",
+            "timeOut": null
+        })
+        .to_string();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,next_attempt_at,created_at,updated_at) VALUES (?,?,?,?,0,'PENDING',?,?,?)")
+            .bind(crate::services::dtr_sync::DTR_TABLE_NAME).bind("att-1").bind("UPSERT").bind(&dtr_payload).bind(&past).bind(&past).bind(&past)
+            .execute(&state.db).await.unwrap();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,next_attempt_at,created_at,updated_at) VALUES (?,?,?,?,0,'PENDING',?,?,?)")
+            .bind("Users").bind("u-9").bind("UPSERT").bind("{}").bind(&past).bind(&past).bind(&past)
+            .execute(&state.db).await.unwrap();
+        let _ = super::run_once(&state, Some("http://127.0.0.1:9/__dtr_regression")).await;
+        let dtr =
+            sqlx::query("SELECT status, locked_at FROM sync_queue WHERE table_name='InternDtr'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(dtr.get::<String, _>("status"), "PENDING");
+        assert_eq!(dtr.get::<Option<String>, _>("locked_at"), None);
+        let ops = sqlx::query("SELECT status FROM sync_queue WHERE table_name='Users'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(ops.get::<String, _>("status"), "RETRY");
     }
 }

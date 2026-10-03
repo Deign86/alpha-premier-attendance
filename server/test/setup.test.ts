@@ -8,7 +8,7 @@ const setupConfig = { enableCardSetup: true, setupAdminPin: '2468', setupSession
 const appConfig = {
   timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 150, resultResetDelayMs: 4000,
   scanCooldownMs: 10000, rateLimitWindowMs: 60000, rateLimitMax: 100, port: 3001, corsOrigin: '*',
-  sheetsMode: 'memory' as const, ...setupConfig,
+  sheetsMode: 'memory' as const, googleCreateFolderIfMissing: false, ...setupConfig,
 };
 
 describe('card setup service', () => {
@@ -125,5 +125,24 @@ describe('card setup HTTP API', () => {
     await request(app).post('/api/attendance/scan').send({ rfidUid: 'AABB', source: 'RFID' }).expect(200);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
     expect((await sheets.findAttendance('U1', today))?.userId).toBe('U1');
+  });
+
+  it('returns the registered card status through the card lookup aliases', async () => {
+    const app = createApp({
+      sheets: new InMemorySheetsService([
+        { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: null, active: true },
+        { userId: 'u2', fullName: 'Grace', rfidUid: 'CCDD', department: null, active: false },
+      ]),
+      config: appConfig,
+      logger: false,
+    });
+    const unlock = await request(app).post('/api/setup/unlock').send({ pin: '2468' }).expect(200);
+    // SAFETY: The successful setup-unlock response contract includes a string setupToken.
+    const token = unlock.body.setupToken as string;
+
+    const active = await request(app).get('/api/setup/cards/AA-BB').set('x-setup-token', token).expect(200);
+    expect(active.body).toMatchObject({ rfidUid: 'AABB', user: { userId: 'u1', active: true } });
+    const inactive = await request(app).get('/api/setup/card?rfidUid=CC:DD').set('Authorization', `Bearer ${token}`).expect(200);
+    expect(inactive.body).toMatchObject({ rfidUid: 'CCDD', user: { userId: 'u2', active: false } });
   });
 });

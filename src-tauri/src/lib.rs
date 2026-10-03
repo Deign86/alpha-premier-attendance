@@ -4101,6 +4101,8 @@ struct SyncHealthPendingPerson {
     attempts: i64,
     #[serde(rename = "lastChecked")]
     last_checked: Option<String>,
+    #[serde(rename = "reasonCode")]
+    reason_code: String,
 }
 
 #[derive(serde::Serialize)]
@@ -4116,6 +4118,323 @@ struct SyncHealthInProgress {
     started_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DtrCurrentIssue {
+    None,
+    Transport,
+    AuthConfig,
+    Quota,
+    UnresolvedLayout,
+    Persistence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DtrSyncActivity {
+    Idle,
+    Queued,
+    Syncing,
+    Throttled,
+    Retrying,
+    Disabled,
+    Offline,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DtrSyncHealth {
+    enabled: bool,
+    queued: i64,
+    retrying: i64,
+    processing: i64,
+    dead: i64,
+    retryable_pending: i64,
+    needs_attention: i64,
+    next_retry_eligible_at: Option<String>,
+    oldest_outstanding_age_sec: Option<i64>,
+    current_issue: DtrCurrentIssue,
+    current_issue_since: Option<String>,
+    persistence_failure: bool,
+    emitted_at: String,
+    last_successful_write_at: Option<String>,
+    activity: DtrSyncActivity,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DtrSyncHealthEvent {
+    activity: DtrSyncActivity,
+    queued: i64,
+    retryable_pending: i64,
+    needs_attention: i64,
+    dead: i64,
+    persistence_failure: bool,
+    emitted_at: String,
+}
+
+fn dtr_sync_health_event(health: &DtrSyncHealth) -> DtrSyncHealthEvent {
+    DtrSyncHealthEvent {
+        activity: health.activity,
+        queued: health.queued,
+        retryable_pending: health.retryable_pending,
+        needs_attention: health.needs_attention + health.dead,
+        dead: health.dead,
+        persistence_failure: health.current_issue == DtrCurrentIssue::Persistence,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+async fn emit_dtr_sync_health(app: &tauri::AppHandle, state: &AppState) {
+    use tauri::Emitter;
+    let health = dtr_sync_health_summary(state).await;
+    let _ = app.emit("dtr-sync-health", dtr_sync_health_event(&health));
+}
+
+fn dtr_queue_issue(
+    status: &str,
+    error: &str,
+    error_code: &str,
+) -> Option<DtrCurrentIssue> {
+    if error_code == crate::services::sync_retry::GOOGLE_RATE_LIMITED
+        || error_code == crate::services::sync_retry::GOOGLE_DAILY_LIMIT
+        || error.contains("GOOGLE_RATE_LIMITED")
+        || error.contains("dailyLimitExceeded")
+    {
+        return Some(DtrCurrentIssue::Quota);
+    }
+    if status == "DEAD"
+        && (error_code == crate::services::sheets_sync::GOOGLE_AUTH_FAILED
+            || error_code == crate::services::sync_retry::GOOGLE_PERMISSION_DENIED
+            || error.to_ascii_lowercase().contains("service account")
+            || error.to_ascii_lowercase().contains("credential"))
+    {
+        return Some(DtrCurrentIssue::AuthConfig);
+    }
+    if error_code == crate::services::sync_retry::GOOGLE_TRANSPORT_FAILED
+        || error_code == crate::services::sync_retry::GOOGLE_SERVER_ERROR
+        || error.contains("timeout-after-connect")
+        || error.to_ascii_lowercase().contains("connection")
+        || error.to_ascii_lowercase().contains("transport")
+    {
+        return Some(DtrCurrentIssue::Transport);
+    }
+    None
+}
+
+fn dtr_pending_issue(reason_code: &str) -> Option<DtrCurrentIssue> {
+    match reason_code {
+        "transport" | "backfill_failed" => Some(DtrCurrentIssue::Transport),
+        "missing_tab" => Some(DtrCurrentIssue::UnresolvedLayout),
+        code if code.starts_with("unresolvable:") => Some(DtrCurrentIssue::UnresolvedLayout),
+        _ => None,
+    }
+}
+
+fn dtr_sync_activity(
+    enabled: bool,
+    offline: bool,
+    throttled: bool,
+    syncing: bool,
+    retrying: i64,
+    queued: i64,
+) -> DtrSyncActivity {
+    if !enabled {
+        DtrSyncActivity::Disabled
+    } else if offline {
+        DtrSyncActivity::Offline
+    } else if throttled {
+        DtrSyncActivity::Throttled
+    } else if syncing {
+        DtrSyncActivity::Syncing
+    } else if retrying > 0 {
+        DtrSyncActivity::Retrying
+    } else if queued > 0 {
+        DtrSyncActivity::Queued
+    } else {
+        DtrSyncActivity::Idle
+    }
+}
+
+async fn dtr_sync_health_query(state: &AppState) -> Result<DtrSyncHealth, sqlx::Error> {
+    let status_rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT status, COUNT(*) FROM sync_queue WHERE table_name='InternDtr' GROUP BY status",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let mut queued = 0;
+    let mut retrying = 0;
+    let mut processing = 0;
+    let mut dead = 0;
+    for (status, count) in status_rows {
+        match status.as_str() {
+            "PENDING" => queued = count,
+            "RETRY" => retrying = count,
+            "PROCESSING" => processing = count,
+            "DEAD" => dead = count,
+            _ => {}
+        }
+    }
+    let needs_attention: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM dtr_pending WHERE reason_code GLOB 'unresolvable:?*'",
+    )
+    .fetch_one(&state.db)
+    .await?;
+    let retryable_pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM dtr_pending WHERE reason_code NOT GLOB 'unresolvable:?*'",
+    )
+    .fetch_one(&state.db)
+    .await?;
+    let next_retry_eligible_at: Option<String> = sqlx::query_scalar(
+        "SELECT MIN(next_attempt_at) FROM sync_queue WHERE table_name='InternDtr' AND status='RETRY'",
+    )
+    .fetch_one(&state.db)
+    .await?;
+    let oldest_outstanding_at: Option<String> = sqlx::query_scalar(
+        "SELECT MIN(created_at) FROM sync_queue WHERE table_name='InternDtr' AND status IN ('PENDING','RETRY')",
+    )
+    .fetch_one(&state.db)
+    .await?;
+    let oldest_outstanding_age_sec = oldest_outstanding_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|instant| {
+            chrono::Utc::now()
+                .signed_duration_since(instant.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0)
+        });
+    let pending_rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT reason_code, first_seen, last_checked FROM dtr_pending ORDER BY last_checked DESC",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let issue_rows: Vec<(String, Option<String>, Option<String>, String)> = sqlx::query_as(
+        "SELECT status, last_error, last_error_code, updated_at FROM sync_queue WHERE table_name='InternDtr' AND status IN ('RETRY','DEAD') AND last_error IS NOT NULL ORDER BY updated_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let queue_issue = issue_rows.into_iter().find_map(
+        |(status, error, error_code, updated_at)| {
+            let issue = dtr_queue_issue(
+                &status,
+                error.as_deref().unwrap_or_default(),
+                error_code.as_deref().unwrap_or_default(),
+            )?;
+            Some((issue, updated_at))
+        },
+    );
+    let mut current_issue = DtrCurrentIssue::None;
+    let mut current_issue_since = None;
+    let pending_signal = pending_rows
+        .iter()
+        .find(|(reason, _, _)| matches!(reason.as_str(), "transport" | "backfill_failed"))
+        .map(|(reason, first_seen, last_checked)| {
+            (
+                dtr_pending_issue(reason).unwrap_or(DtrCurrentIssue::Transport),
+                last_checked.clone().unwrap_or_else(|| first_seen.clone()),
+            )
+        })
+        .or_else(|| {
+            pending_rows.iter().find_map(|(reason, first_seen, _)| {
+                dtr_pending_issue(reason).map(|issue| (issue, first_seen.clone()))
+            })
+        });
+    if let Some((pending_issue, pending_since)) = pending_signal {
+        let signal_is_newer = queue_issue.as_ref().is_some_and(|(_, signal_since)| {
+            chrono::DateTime::parse_from_rfc3339(signal_since).ok()
+                > chrono::DateTime::parse_from_rfc3339(&pending_since).ok()
+        });
+        if signal_is_newer {
+            if let Some((issue, since)) = queue_issue {
+                current_issue = issue;
+                current_issue_since = Some(since);
+            }
+        } else {
+            current_issue = pending_issue;
+            current_issue_since = Some(pending_since);
+        }
+    } else if let Some((issue, since)) = queue_issue {
+        current_issue = issue;
+        current_issue_since = Some(since);
+    }
+    if state.dtr_offline.load(std::sync::atomic::Ordering::Relaxed) {
+        current_issue = if state
+            .dtr_auth_config_failed
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            DtrCurrentIssue::AuthConfig
+        } else {
+            DtrCurrentIssue::Transport
+        };
+        current_issue_since = state.dtr_token_failure_since.lock().await.clone();
+    }
+    if let Some(persistence_since) = state
+        .dtr_persistence_failure_since
+        .lock()
+        .await
+        .clone()
+    {
+        current_issue = DtrCurrentIssue::Persistence;
+        current_issue_since = Some(persistence_since);
+    }
+    let last_successful_write_at = state.dtr_last_successful_write_at.lock().await.clone();
+    let enabled = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await
+        && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some();
+    let now_ms = crate::services::sync_retry::wall_now_ms();
+    let throttled = state
+        .dtr_throttle_denied_until_ms
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > now_ms;
+    let syncing = processing > 0 || crate::state::sync_guard_status(&state.db).await.is_some();
+    let activity = dtr_sync_activity(
+        enabled,
+        state.dtr_offline.load(std::sync::atomic::Ordering::Relaxed),
+        throttled,
+        syncing,
+        retrying,
+        queued,
+    );
+    Ok(DtrSyncHealth {
+        enabled,
+        queued,
+        retrying,
+        processing,
+        dead,
+        retryable_pending,
+        needs_attention,
+        next_retry_eligible_at,
+        oldest_outstanding_age_sec,
+        current_issue,
+        current_issue_since,
+        persistence_failure: current_issue == DtrCurrentIssue::Persistence,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+        last_successful_write_at,
+        activity,
+    })
+}
+
+async fn dtr_sync_health_summary(state: &AppState) -> DtrSyncHealth {
+    dtr_sync_health_query(state).await.unwrap_or(DtrSyncHealth {
+        enabled: false,
+        queued: 0,
+        retrying: 0,
+        processing: 0,
+        dead: 0,
+        retryable_pending: 0,
+        needs_attention: 0,
+        next_retry_eligible_at: None,
+        oldest_outstanding_age_sec: None,
+        current_issue: DtrCurrentIssue::None,
+        current_issue_since: None,
+        persistence_failure: false,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+        last_successful_write_at: None,
+        activity: DtrSyncActivity::Unavailable,
+    })
+}
+
 /// Plan todo 10: admin-only sync-health contract. New fields are explicit
 /// serde types (no untyped JSON): throttle state, guard owner, lease
 /// recoveries, and retryable-queue age. Idle reads are all nulls/zero/false.
@@ -4129,6 +4448,7 @@ struct SyncHealthResponse {
     by_table: Vec<SyncHealthTableRow>,
     #[serde(rename = "dtrPending")]
     dtr_pending: SyncHealthDtrPending,
+    dtr: DtrSyncHealth,
     #[serde(rename = "lastSyncedAt")]
     last_synced_at: Option<String>,
     #[serde(rename = "lastError")]
@@ -4147,8 +4467,27 @@ struct SyncHealthResponse {
     pending_age_alert: bool,
 }
 
+async fn admin_pending_summary(state: &AppState) -> Result<SyncHealthDtrPending, sqlx::Error> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
+        .fetch_one(&state.db)
+        .await?;
+    let rows: Vec<(String, String, i64, Option<String>, String)> = sqlx::query_as(
+        "SELECT user_id, full_name, attempts, last_checked, reason_code FROM dtr_pending ORDER BY full_name ASC LIMIT 50",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let items = rows
+        .into_iter()
+        .map(|(user_id, full_name, attempts, last_checked, reason_code)| {
+            SyncHealthPendingPerson { user_id, full_name, attempts, last_checked, reason_code }
+        })
+        .collect();
+    Ok(SyncHealthDtrPending { count, items })
+}
+
 #[tauri::command]
 async fn admin_get_sync_status(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
 ) -> Result<SyncHealthResponse, String> {
@@ -4181,27 +4520,9 @@ async fn admin_get_sync_status(
             pending,
         })
         .collect();
-    let dtr_pending_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dtr_pending")
-        .fetch_one(&state.db)
+    let dtr_pending = admin_pending_summary(&state)
         .await
-        .unwrap_or(0);
-    let dtr_pending_rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT user_id, full_name, attempts, last_checked FROM dtr_pending ORDER BY full_name ASC LIMIT 50",
-    )
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-    let dtr_pending_items: Vec<SyncHealthPendingPerson> = dtr_pending_rows
-        .into_iter()
-        .map(
-            |(user_id, full_name, attempts, last_checked)| SyncHealthPendingPerson {
-                user_id,
-                full_name,
-                attempts,
-                last_checked,
-            },
-        )
-        .collect();
+        .unwrap_or(SyncHealthDtrPending { count: 0, items: Vec::new() });
     let last_synced_at: Option<String> = sqlx::query_scalar("SELECT MAX(last_synced_at) FROM sync_state")
         .fetch_one(&state.db)
         .await
@@ -4257,15 +4578,16 @@ async fn admin_get_sync_status(
         });
     let pending_age_alert: bool = oldest_retryable_age_sec
         .is_some_and(|age| age > crate::services::sync_retry::PENDING_AGE_ALERT_SECS);
+    let dtr = dtr_sync_health_summary(&state).await;
+    use tauri::Emitter;
+    let _ = app.emit("dtr-sync-health", dtr_sync_health_event(&dtr));
     Ok(SyncHealthResponse {
         success: true,
         pending,
         dead_letter: dead,
         by_table,
-        dtr_pending: SyncHealthDtrPending {
-            count: dtr_pending_count,
-            items: dtr_pending_items,
-        },
+        dtr,
+        dtr_pending,
         last_synced_at,
         last_error,
         throttled_until,
@@ -4296,6 +4618,7 @@ async fn admin_retry_sync_item(
 
 #[tauri::command]
 async fn admin_sync_now(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
@@ -4334,6 +4657,7 @@ async fn admin_sync_now(
         }
     }
     crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    emit_dtr_sync_health(&app, &state).await;
     if let Some(error) = drain_error {
         return Err(error);
     }
@@ -4376,6 +4700,7 @@ async fn admin_sync_intern_dtr(
     state: State<'_, AppState>,
     token: String,
     user_id: Option<String>,
+    start_from_user_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
@@ -4403,9 +4728,15 @@ async fn admin_sync_intern_dtr(
         return Err(busy);
     }
     let report =
-        crate::services::dtr_sync::manual_sync_intern_dtr(&state, Some(&app), user_id.as_deref())
-            .await;
+        crate::services::dtr_sync::manual_sync_intern_dtr(
+            &state,
+            Some(&app),
+            user_id.as_deref(),
+            start_from_user_id.as_deref(),
+        )
+        .await;
     crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    emit_dtr_sync_health(&app, &state).await;
     let report = report?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
@@ -4966,7 +5297,19 @@ async fn enqueue_sync(
 ) {
     let now = chrono::Utc::now().to_rfc3339();
     let idempotency_key = format!("{table_name}:{row_id}:{operation}");
-    crate::services::sheets_sync::requeue_sync_row(&state.db, table_name, row_id, operation, &payload.to_string(), &now, &idempotency_key).await;
+    let persisted = crate::services::sheets_sync::requeue_sync_row(
+        &state.db,
+        table_name,
+        row_id,
+        operation,
+        &payload.to_string(),
+        &now,
+        &idempotency_key,
+    )
+    .await;
+    if !persisted && table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
+        state.mark_dtr_persistence_failure().await;
+    }
 }
 
 /// Mirror an attendance mutation to the intern DTR sheet (enqueue-only).
@@ -5846,6 +6189,11 @@ pub fn run() {
                 }
             };
             log::info!("AppState initialized successfully");
+            let health_app = app.handle().clone();
+            let health_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                emit_dtr_sync_health(&health_app, &health_state).await;
+            });
             if state.lan.enabled || state.lan.allow_runtime_start {
                 let runtime = state.lan_runtime.clone();
                 let server_state = state.clone();
@@ -5865,16 +6213,36 @@ pub fn run() {
                 });
             }
             let sync_state = state.clone();
+            let sync_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Initial 5-second grace period on cold boot prevents network contention
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 loop {
                     let endpoint = sync_state.lan.sheets_sync_endpoint.as_deref();
-                    if let Err(error) =
-                        crate::services::sheets_sync::run_once(&sync_state, endpoint).await
+                    match crate::state::sync_guard_try_acquire(
+                        &sync_state.db,
+                        sync_state.sync_in_progress.as_ref(),
+                        "background_sync",
+                    )
+                    .await
                     {
-                        // Log-only: a failed sync pass must never disturb the kiosk.
-                        log::warn!("sheets sync pass failed: {error}");
+                        Ok(()) => {
+                            if let Err(error) =
+                                crate::services::sheets_sync::run_once(&sync_state, endpoint).await
+                            {
+                                // Log-only: a failed sync pass must never disturb the kiosk.
+                                log::warn!("sheets sync pass failed: {error}");
+                            }
+                            crate::state::sync_guard_release(
+                                &sync_state.db,
+                                sync_state.sync_in_progress.as_ref(),
+                            )
+                            .await;
+                            emit_dtr_sync_health(&sync_app, &sync_state).await;
+                        }
+                        Err(busy) => {
+                            log::info!("background sheets sync skipped: {busy}");
+                        }
                     }
                     if let Err(error) =
                         crate::services::dtr_recon::check_and_run_scheduled(&sync_state).await
@@ -6070,6 +6438,238 @@ mod tests {
         assert!(!super::valid_cutoff_date("2026-13-01"));
         assert!(!super::valid_cutoff_date("2026-99-99"));
         assert!(!super::valid_cutoff_date(""));
+    }
+
+    #[tokio::test]
+    async fn dtr_sync_health_counts_only_intern_dtr_and_reports_issue_and_activity() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let temp = std::env::temp_dir().join(format!("alpha-dtr-health-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let now = chrono::Utc::now();
+        let now_text = now.to_rfc3339();
+        let retry_at = (now + chrono::Duration::seconds(45)).to_rfc3339();
+        for (table, id, status, created, updated, error, code) in [
+            (
+                "InternDtr",
+                "dtr-pending",
+                "PENDING",
+                (now - chrono::Duration::seconds(40)).to_rfc3339(),
+                now_text.clone(),
+                None,
+                None,
+            ),
+            (
+                "InternDtr",
+                "dtr-retry",
+                "RETRY",
+                (now - chrono::Duration::seconds(90)).to_rfc3339(),
+                now_text.clone(),
+                Some("GOOGLE_TRANSPORT_FAILED"),
+                Some("GOOGLE_REQUEST_FAILED"),
+            ),
+            (
+                "InternDtr",
+                "dtr-processing",
+                "PROCESSING",
+                now_text.clone(),
+                now_text.clone(),
+                None,
+                None,
+            ),
+            (
+                "InternDtr",
+                "dtr-dead",
+                "DEAD",
+                now_text.clone(),
+                now_text.clone(),
+                Some("400 invalid DTR payload"),
+                Some("GOOGLE_SYNC_FAILED"),
+            ),
+            (
+                "Users",
+                "ops-pending",
+                "PENDING",
+                now_text.clone(),
+                now_text.clone(),
+                None,
+                None,
+            ),
+        ] {
+            sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,last_error,last_error_code,status,next_attempt_at,created_at,updated_at,idempotency_key,locked_at) VALUES (?,?, 'UPSERT','{}',0,?,?,?,?,?,?,?,NULL)")
+                .bind(table)
+                .bind(id)
+                .bind(error)
+                .bind(code)
+                .bind(status)
+                .bind(&retry_at)
+                .bind(created)
+                .bind(updated)
+                .bind(format!("{table}:{id}:UPSERT"))
+                .execute(&state.db)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE sync_queue SET updated_at=? WHERE row_id='dtr-retry'")
+            .bind(&now_text)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sync_queue SET next_attempt_at=? WHERE row_id='dtr-retry'")
+            .bind(&retry_at)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,status,next_attempt_at,created_at,updated_at,idempotency_key) VALUES ('InternDtr','dtr-synced','UPSERT','{}',0,'SYNCED',?,?,?,'InternDtr:dtr-synced:UPSERT')")
+            .bind(&now_text)
+            .bind(&now_text)
+            .bind("2026-10-02T12:00:00Z")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO dtr_pending (user_id,full_name,first_seen,last_checked,attempts,reason_code) VALUES ('pending-user','Pending User',?,?,1,'missing_tab')")
+            .bind((now - chrono::Duration::seconds(120)).to_rfc3339())
+            .bind(&now_text)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        for (user_id, reason) in [
+            ("pending-transport", "transport"),
+            ("pending-backfill", "backfill_failed"),
+            ("pending-layout", "unresolvable:no_month_block"),
+        ] {
+            sqlx::query("INSERT INTO dtr_pending (user_id,full_name,first_seen,last_checked,attempts,reason_code) VALUES (?, ?, ?, ?, 0, ?)")
+                .bind(user_id)
+                .bind(user_id)
+                .bind(&now_text)
+                .bind(&now_text)
+                .bind(reason)
+                .execute(&state.db)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            super::dtr_sync_health_summary(&state)
+                .await
+                .last_successful_write_at,
+            None,
+            "a SYNCED queue row can represent a skip and is not proof of a Sheets write"
+        );
+        *state.dtr_last_successful_write_at.lock().await =
+            Some("2026-10-02T12:00:00Z".to_string());
+
+        let health = super::dtr_sync_health_summary(&state).await;
+        assert!(health.enabled);
+        assert_eq!((health.queued, health.retrying, health.processing, health.dead), (1, 1, 1, 1));
+        assert_eq!(health.needs_attention, 1);
+        assert_eq!(health.retryable_pending, 3);
+        assert_eq!(health.next_retry_eligible_at.as_deref(), Some(retry_at.as_str()));
+        assert!(health.oldest_outstanding_age_sec.is_some_and(|age| (90..=120).contains(&age)));
+        assert_eq!(health.current_issue, super::DtrCurrentIssue::Transport);
+        assert_eq!(health.current_issue_since.as_deref(), Some(now_text.as_str()));
+        assert_eq!(health.last_successful_write_at.as_deref(), Some("2026-10-02T12:00:00Z"));
+        assert_eq!(health.activity, super::DtrSyncActivity::Syncing);
+        let event = serde_json::to_value(super::dtr_sync_health_event(&health)).unwrap();
+        assert_eq!(event["activity"], "syncing");
+        assert_eq!(event["queued"], 1);
+        assert_eq!(event["needsAttention"], 2);
+        assert_eq!(event["dead"], 1);
+        assert_eq!(event["persistenceFailure"], false);
+        assert!(chrono::DateTime::parse_from_rfc3339(event["emittedAt"].as_str().unwrap()).is_ok());
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn admin_pending_items_include_reason_code() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let temp = std::env::temp_dir().join(format!("alpha-dtr-pending-reason-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(), temp.join("attendance.db"), temp.join("exports"), false,
+            LanConfig::default(), OfficeConfig::default(), crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(), crate::config::UpdaterConfig::default(),
+        ).await.unwrap();
+        sqlx::query("INSERT INTO dtr_pending (user_id,full_name,first_seen,last_checked,attempts,reason_code) VALUES ('u-reason','Reason User','2026-10-03T00:00:00Z',NULL,0,'backfill_failed')")
+            .execute(&state.db).await.unwrap();
+        let response = super::admin_pending_summary(&state).await.unwrap();
+        assert_eq!(response.items[0].reason_code, "backfill_failed");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn dtr_health_event_has_timestamp_and_dead_and_persistence_attention() {
+        let health = super::DtrSyncHealth {
+            enabled: true,
+            queued: 0,
+            retrying: 0,
+            processing: 0,
+            dead: 2,
+            retryable_pending: 0,
+            needs_attention: 1,
+            next_retry_eligible_at: None,
+            oldest_outstanding_age_sec: None,
+            current_issue: super::DtrCurrentIssue::Persistence,
+            current_issue_since: None,
+            persistence_failure: true,
+            emitted_at: "2026-10-03T00:00:00Z".to_string(),
+            last_successful_write_at: None,
+            activity: super::DtrSyncActivity::Idle,
+        };
+        let event = serde_json::to_value(super::dtr_sync_health_event(&health)).unwrap();
+        assert_eq!(event["dead"], 2);
+        assert_eq!(event["needsAttention"], 3);
+        assert_eq!(event["persistenceFailure"], true);
+        assert!(event["emittedAt"].as_str().is_some());
+        // The admin payload carries the same attention signals (gate: admin
+        // refresh must not erase a persistence warning).
+        let admin = serde_json::to_value(&health).unwrap();
+        assert_eq!(admin["persistenceFailure"], true);
+        assert_eq!(admin["emittedAt"], "2026-10-03T00:00:00Z");
+    }
+
+    #[test]
+    fn dtr_pending_reason_classification_preserves_transport_failures() {
+        assert_eq!(
+            super::dtr_pending_issue("transport"),
+            Some(super::DtrCurrentIssue::Transport)
+        );
+        assert_eq!(
+            super::dtr_pending_issue("backfill_failed"),
+            Some(super::DtrCurrentIssue::Transport)
+        );
+        assert_eq!(
+            super::dtr_pending_issue("missing_tab"),
+            Some(super::DtrCurrentIssue::UnresolvedLayout)
+        );
+    }
+
+    #[test]
+    fn dtr_token_config_failures_are_not_generic_offline_failures() {
+        assert_eq!(
+            crate::services::dtr_sync::token_failure_is_auth_config(
+                "service account credentials file not found"
+            ),
+            true
+        );
+        assert_eq!(
+            crate::services::dtr_sync::token_failure_is_auth_config("connect timeout"),
+            false
+        );
     }
 
     #[test]
@@ -7667,6 +8267,190 @@ mod tests {
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn intern_rfid_time_in_persists_intern_dtr_queue_row() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let previous_sheet_id = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        let previous_enabled =
+            std::env::var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED).ok();
+        std::env::set_var(crate::config::ENV_DTR_SHEET_ID, "test-dtr-sheet");
+        std::env::set_var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED, "1");
+        let temp = std::env::temp_dir().join(format!("alpha-rfid-dtr-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        super::upsert_user_record(
+            &state.db,
+            "INT_RFID_DTR",
+            "C0FFEE1234",
+            "RFID DTR Intern",
+            Some("QA"),
+            "ACTIVE",
+            "INTERN",
+            Some("FEMALE"),
+            None,
+            Some("INTERN_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-10-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        let result = super::scan_rfid_impl(
+            None,
+            &state,
+            serde_json::json!({"rfidUid":"C0FFEE1234", "source":"RFID"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["success"], true);
+        assert_eq!(result["action"], "TIME_IN");
+        let attendance_id = result["attendance"]["attendanceId"]
+            .as_str()
+            .expect("attendance id")
+            .to_string();
+        let queued = sqlx::query("SELECT operation, payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&attendance_id)
+            .fetch_one(&state.db)
+            .await
+            .expect("intern DTR queue row");
+        let payload: serde_json::Value =
+            serde_json::from_str(&queued.get::<String, _>("payload_json")).unwrap();
+        assert_eq!(queued.get::<String, _>("operation"), "UPSERT");
+        assert_eq!(payload["userId"], "INT_RFID_DTR");
+        assert_eq!(payload["fullName"], "RFID DTR Intern");
+        assert_eq!(payload["timeIn"], result["attendance"]["timeIn"]);
+        assert_eq!(payload["timeOut"], serde_json::Value::Null);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+        match previous_sheet_id {
+            Some(value) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, value),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
+        match previous_enabled {
+            Some(value) => {
+                std::env::set_var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED, value)
+            }
+            None => std::env::remove_var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED),
+        }
+    }
+
+    #[tokio::test]
+    async fn assisted_intern_time_in_persists_intern_dtr_queue_row() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let previous_sheet_id = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        let previous_enabled =
+            std::env::var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED).ok();
+        std::env::set_var(crate::config::ENV_DTR_SHEET_ID, "test-dtr-sheet");
+        std::env::set_var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED, "1");
+        let temp = std::env::temp_dir().join(format!("alpha-assisted-dtr-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        super::upsert_user_record(
+            &state.db,
+            "ADMIN_ASSIST_DTR",
+            "ADDE1234",
+            "Desk Admin",
+            Some("QA"),
+            "ACTIVE",
+            "EMPLOYEE",
+            Some("MALE"),
+            None,
+            None,
+            None,
+            "ADMIN_ASSIST",
+            "2026-10-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        super::upsert_user_record(
+            &state.db,
+            "INT_ASSIST_DTR",
+            "C0FFEE1235",
+            "Assisted DTR Intern",
+            Some("QA"),
+            "ACTIVE",
+            "INTERN",
+            Some("FEMALE"),
+            None,
+            Some("INTERN_STANDARD"),
+            None,
+            "EMPLOYEE",
+            "2026-10-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        let result = super::scan_rfid_impl(
+            None,
+            &state,
+            serde_json::json!({
+                "rfidUid":"ADDE1234",
+                "targetUserId":"INT_ASSIST_DTR",
+                "reason":"Reader unavailable"
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["success"], true);
+        assert_eq!(result["action"], "TIME_IN");
+        assert_eq!(result["attendance"]["source"], "ADMIN_ASSISTED_SCAN");
+        let attendance_id = result["attendance"]["attendanceId"]
+            .as_str()
+            .expect("attendance id")
+            .to_string();
+        let queued = sqlx::query("SELECT operation, payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
+            .bind(&attendance_id)
+            .fetch_one(&state.db)
+            .await
+            .expect("intern DTR queue row");
+        let payload: serde_json::Value =
+            serde_json::from_str(&queued.get::<String, _>("payload_json")).unwrap();
+        assert_eq!(queued.get::<String, _>("operation"), "UPSERT");
+        assert_eq!(payload["userId"], "INT_ASSIST_DTR");
+        assert_eq!(payload["fullName"], "Assisted DTR Intern");
+        assert_eq!(payload["timeIn"], result["attendance"]["timeIn"]);
+        assert_eq!(payload["timeOut"], serde_json::Value::Null);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+        match previous_sheet_id {
+            Some(value) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, value),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
+        match previous_enabled {
+            Some(value) => {
+                std::env::set_var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED, value)
+            }
+            None => std::env::remove_var(crate::services::dtr_sync::ENV_DTR_SYNC_ENABLED),
+        }
     }
 
     #[tokio::test]

@@ -241,6 +241,35 @@ mod tests {
     }
 
     #[test]
+    fn grace_boundary_changes_at_the_october_first_cutover() {
+        let before_cutover = calculate(
+            "2026-09-30",
+            "2026-09-30T08:15:00+08:00",
+            "2026-09-30T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(before_cutover.grace_used);
+        assert_eq!(before_cutover.late_hours, 0);
+        assert_eq!(before_cutover.late_deduction_centavos, 0);
+        assert_eq!(before_cutover.daily_pay_centavos, 8_000);
+        assert_eq!(before_cutover.computed_time_in, "2026-09-30T08:15:00+08:00");
+
+        let cutoff_day = calculate(
+            "2026-10-01",
+            "2026-10-01T08:15:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert!(!cutoff_day.grace_used);
+        assert_eq!(cutoff_day.late_hours, 1);
+        assert_eq!(cutoff_day.late_deduction_centavos, 1_000);
+        assert_eq!(cutoff_day.daily_pay_centavos, 7_000);
+        assert_eq!(cutoff_day.computed_time_in, "2026-10-01T08:15:00+08:00");
+    }
+
+    #[test]
     fn worked_hours_are_gross_elapsed_and_keep_fixed_daily_pay() {
         // 08:00–17:00 → 8 paid hours (9h elapsed minus 1h lunch 12:00–13:00).
         let result = calculate(
@@ -625,6 +654,7 @@ mod tests {
         )
         .unwrap();
         assert!(!before_six.is_half_day);
+        assert_eq!(before_six.computed_time_out, "2026-08-01T17:59:59+08:00");
     }
 
     #[test]
@@ -701,6 +731,26 @@ mod tests {
         assert_eq!(noon.worked_hours, 4.0);
         assert_eq!(noon.half_day_deduction_centavos, 4_000);
         assert_eq!(noon.daily_pay_centavos, 4000);
+    }
+
+    #[test]
+    fn afternoon_arrival_on_no_grace_cutover_is_half_day_undertime_not_late() {
+        let result = calculate(
+            "2026-10-01",
+            "2026-10-01T12:00:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+
+        assert!(!result.grace_used);
+        assert_eq!(result.computed_time_in, "2026-10-01T12:00:00+08:00");
+        assert!(result.is_half_day);
+        assert_eq!(result.late_hours, 0);
+        assert_eq!(result.late_deduction_centavos, 0);
+        assert_eq!(result.worked_hours, 4.0);
+        assert_eq!(result.half_day_deduction_centavos, 4_000);
+        assert_eq!(result.daily_pay_centavos, 4_000);
     }
 
     #[test]
