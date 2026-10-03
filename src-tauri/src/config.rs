@@ -869,6 +869,49 @@ mod tests {
     }
 
     #[test]
+    fn lan_runtime_bind_validation_covers_private_public_loopback_and_wildcard_edges() {
+        for address in [
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 25)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 25)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+        ] {
+            let config = LanConfig {
+                bind_address: Some(address),
+                ..Default::default()
+            };
+            assert!(config.validate_runtime().is_ok(), "{address} should be accepted");
+        }
+
+        let public = LanConfig {
+            bind_address: Some(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))),
+            ..Default::default()
+        };
+        assert!(public.validate_runtime().is_err());
+
+        let wildcard_without_opt_in = LanConfig {
+            bind_address: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            allowed_subnets: vec!["192.168.1.0/24".parse().unwrap()],
+            ..Default::default()
+        };
+        assert!(wildcard_without_opt_in.validate_runtime().is_err());
+
+        let wildcard_without_subnet = LanConfig {
+            bind_address: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            allow_wildcard_bind: true,
+            ..Default::default()
+        };
+        assert!(wildcard_without_subnet.validate_runtime().is_err());
+
+        let restricted_wildcard = LanConfig {
+            bind_address: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            allow_wildcard_bind: true,
+            allowed_subnets: vec!["192.168.1.0/24".parse().unwrap()],
+            ..Default::default()
+        };
+        assert!(restricted_wildcard.validate_runtime().is_ok());
+    }
+
+    #[test]
     fn office_defaults_match_the_canonical_address() {
         let office = OfficeConfig::default();
         assert_eq!(office.company_name, "Alpha Premier Group of Companies OPC.");
@@ -922,6 +965,17 @@ mod tests {
             office.display_short(),
             "Tektite East Tower, Ortigas Center, Pasig"
         );
+    }
+
+    #[test]
+    fn office_display_overrides_take_precedence_over_composed_addresses() {
+        let office = OfficeConfig {
+            office_display_short: "  Configured short  ".into(),
+            office_display_full: "  Configured full  ".into(),
+            ..OfficeConfig::default()
+        };
+        assert_eq!(office.display_short(), "Configured short");
+        assert_eq!(office.display_full(), "Configured full");
     }
 
     #[test]

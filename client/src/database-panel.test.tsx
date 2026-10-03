@@ -4,8 +4,19 @@ import userEvent from '@testing-library/user-event';
 import { DatabasePanel, UserEditor } from './App';
 import * as api from './api';
 import * as tauriApi from './tauri-api';
-import { resetDtrSyncGuardForTests } from './dtr-sync-guard';
-import type { DatabaseInfoResponse } from '@rfid-attendance/shared';
+import { getDtrSyncHealthSnapshot, resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
+import type { AdminSyncDtrResponse, DatabaseInfoResponse } from '@rfid-attendance/shared';
+
+const successfulDtrSync: AdminSyncDtrResponse = {
+  success: true,
+  internsChecked: 1,
+  tabsCreated: [],
+  rowsSynced: 2,
+  details: [],
+  errors: [],
+};
+
+type DtrInvokeArgs = { token: string; userId?: string; startFromUserId?: string };
 
 const mockDbInfo: DatabaseInfoResponse = {
   success: true,
@@ -60,6 +71,23 @@ describe('DatabasePanel', () => {
         leaseRecovered: 0,
         oldestRetryableAgeSec: null,
         pendingAgeAlert: false,
+        dtr: {
+          enabled: true,
+          queued: 0,
+          retrying: 0,
+          processing: 0,
+          dead: 0,
+          retryablePending: 0,
+          needsAttention: 0,
+          persistenceFailure: false,
+          nextRetryEligibleAt: null,
+          oldestOutstandingAgeSec: null,
+          currentIssue: 'none',
+          currentIssueSince: null,
+          lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z',
+          activity: 'idle',
+        },
       },
     });
   });
@@ -204,6 +232,195 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Maricon C\. Danao\)\./i)).toBeInTheDocument();
   });
 
+  it('shows the stopped tab and retries from that intern, keeping resumed progress until completion', async () => {
+    const failed = Object.assign({
+      success: false,
+      internsChecked: 2,
+      tabsCreated: [],
+      rowsSynced: 1,
+      details: [
+        { userId: 'APG-TAB-MATCH', fullName: 'Tab Match Intern', tab: 'Failed Tab', tabCreated: false, rowsSynced: 0, status: 'SKIPPED' },
+        { userId: 'APG-FAIL', fullName: 'Failed Intern', tab: 'Other Tab', tabCreated: false, rowsSynced: 0, status: 'ERROR' },
+      ],
+      errors: ['write failed'],
+      error: { message: 'write failed' },
+    }, { stoppedTab: 'Failed Tab', stoppedUserId: 'APG-FAIL' });
+    let resolveResumed: ((report: AdminSyncDtrResponse) => void) | null = null;
+    const invokeSpy = vi.fn(async (command: string, args: DtrInvokeArgs | undefined) => {
+      if (command !== 'admin_sync_intern_dtr') return { success: true, enabled: true };
+      if (args?.startFromUserId) {
+        return new Promise<AdminSyncDtrResponse>((resolve) => { resolveResumed = resolve; });
+      }
+      return failed;
+    });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: { invoke: invokeSpy } });
+    let progressHandler: ((payload: tauriApi.DtrSyncProgress) => void) | null = null;
+    vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockImplementation((handler) => {
+      progressHandler = handler;
+      return Promise.resolve(() => {});
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    await user.click(await screen.findByRole('button', { name: /sync intern dtr now/i }));
+    expect(await screen.findByText('Stopped at Failed Tab')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(invokeSpy).toHaveBeenCalledWith('admin_sync_intern_dtr', {
+      token: '',
+      userId: undefined,
+      startFromUserId: 'APG-FAIL',
+    }, undefined));
+    act(() => {
+      progressHandler?.({ current: 1, total: 2, userId: 'APG-FAIL', fullName: 'Failed Intern', status: 'syncing' });
+    });
+    expect(screen.getByText(/Syncing intern 1 of 2: Failed Intern/)).toBeInTheDocument();
+    await act(async () => {
+      resolveResumed?.({ success: true, internsChecked: 2, tabsCreated: [], rowsSynced: 3, details: [], errors: [] });
+    });
+    expect(await screen.findByText(/DTR sync complete: checked 2 intern\(s\), synced 3 row\(s\)\./)).toBeInTheDocument();
+    expect(screen.queryByText('Stopped at Failed Tab')).not.toBeInTheDocument();
+  });
+
+  it('retries the stopped user from a Rust-shaped MISSING_TAB report', async () => {
+    const missingTabReport = Object.assign({
+      success: false,
+      internsChecked: 1,
+      tabsCreated: [],
+      rowsSynced: 0,
+      details: [
+        { userId: 'APG-MISSING', fullName: 'Missing Tab Intern', tab: null, tabCreated: false, rowsSynced: 0, status: 'MISSING_TAB' },
+      ],
+      errors: ['The intern DTR tab was not found.'],
+      error: { message: 'The intern DTR tab was not found.' },
+    }, { stoppedTab: null, stoppedUserId: 'APG-MISSING' });
+    const invokeSpy = vi.fn(async (command: string, args: DtrInvokeArgs | undefined) => {
+      if (command !== 'admin_sync_intern_dtr') return { success: true, enabled: true };
+      if (args?.startFromUserId) {
+        return { success: true, internsChecked: 1, tabsCreated: [], rowsSynced: 1, details: [], errors: [] };
+      }
+      return missingTabReport;
+    });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: { invoke: invokeSpy } });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    await user.click(await screen.findByRole('button', { name: /sync intern dtr now/i }));
+    expect(await screen.findByText('Stopped at Missing Tab Intern')).toBeInTheDocument();
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+
+    expect(invokeSpy).toHaveBeenCalledWith('admin_sync_intern_dtr', {
+      token: '',
+      userId: undefined,
+      startFromUserId: 'APG-MISSING',
+    }, undefined);
+  });
+
+  it('routes Data and per-intern sync buttons to the DTR command with the right user ID', async () => {
+    const invokeSpy = vi.fn(async (_command: string, _args: DtrInvokeArgs | undefined) => successfulDtrSync);
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: { invoke: invokeSpy },
+    });
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockResolvedValue(() => {});
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    render(
+      <UserEditor
+        users={[
+          {
+            userId: 'APG-2026-103',
+            rfidUid: 'ABCDEF1234',
+            fullName: 'Juan Dela Cruz',
+            department: null,
+            status: 'ACTIVE',
+            employeeType: 'INTERN',
+            gender: null,
+            dailyRate: null,
+          },
+        ]}
+        editing={null}
+        setEditing={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+
+    await user.click(await screen.findByTestId('dtr-sync-now'));
+    await user.click(await screen.findByTestId('dtr-sync-row-APG-2026-103'));
+
+    expect(invokeSpy).toHaveBeenCalledWith('admin_sync_intern_dtr', {
+      token: '',
+      userId: undefined,
+      startFromUserId: undefined,
+    }, undefined);
+    expect(invokeSpy).toHaveBeenCalledWith('admin_sync_intern_dtr', {
+      token: '',
+      userId: 'APG-2026-103',
+      startFromUserId: undefined,
+    }, undefined);
+  });
+
+  it('surfaces a DTR_SYNC_IN_PROGRESS response from the native second caller', async () => {
+    const invokeSpy = vi.fn(async (_command: string, _args: DtrInvokeArgs | undefined) => {
+      throw new Error('DTR_SYNC_IN_PROGRESS: another sync is active');
+    });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: { invoke: invokeSpy },
+    });
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    await user.click(await screen.findByTestId('dtr-sync-now'));
+
+    expect(await screen.findByText('Sync already running.')).toBeInTheDocument();
+    expect(invokeSpy).toHaveBeenCalledWith('admin_sync_intern_dtr', {
+      token: '',
+      userId: undefined,
+    }, undefined);
+  });
+
+  it('renders partial sync failures and BACKFILL_FAILED detail messages', async () => {
+    const partialFailure: AdminSyncDtrResponse = {
+      success: true,
+      internsChecked: 2,
+      tabsCreated: [],
+      rowsSynced: 2,
+      details: [
+        {
+          userId: 'APG-2026-103',
+          fullName: 'Juan Dela Cruz',
+          tab: 'Juan Dela Cruz',
+          tabCreated: false,
+          rowsSynced: 0,
+          status: 'BACKFILL_FAILED',
+        },
+      ],
+      errors: [
+        'BACKFILL_FAILED: Juan Dela Cruz (APG-2026-103): Google Sheets write failed',
+        'BACKFILL_FAILED: Maricon Danao (APG-2026-116): permission denied',
+      ],
+    };
+    const invokeSpy = vi.fn(async (_command: string, _args: DtrInvokeArgs | undefined) => partialFailure);
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: { invoke: invokeSpy },
+    });
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    await user.click(await screen.findByTestId('dtr-sync-now'));
+
+    const errorsAlert = await screen.findByRole('alert');
+    expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Juan Dela Cruz \(APG-2026-103\): Google Sheets write failed/i);
+    expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Maricon Danao \(APG-2026-116\): permission denied/i);
+    expect(screen.getByText(/Synced 2 row\(s\), but encountered errors:/i)).toBeInTheDocument();
+  });
+
   it('displays real-time progress bar when dtr-sync-progress events occur during sync', async () => {
     let progressHandler: ((payload: tauriApi.DtrSyncProgress) => void) | null = null;
     vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockImplementation((handler) => {
@@ -295,7 +512,7 @@ describe('DatabasePanel', () => {
     render(<DatabasePanel />);
 
     expect(await screen.findByLabelText('DTR sync status')).toBeInTheDocument();
-    expect(await screen.findByText('Pending')).toBeInTheDocument();
+    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
     expect(screen.getByText('attendance')).toBeInTheDocument();
     expect(screen.getByText('2 pending')).toBeInTheDocument();
     expect(screen.getByText('InternDtr tabs')).toBeInTheDocument();
@@ -304,7 +521,7 @@ describe('DatabasePanel', () => {
     expect(loadDtrSyncHealthSpy).toHaveBeenCalled();
   });
 
-  it('flags failed sync items as Attention with the last error', async () => {
+  it('labels DTR health separately and reports global ops DEAD items', async () => {
     loadDtrSyncHealthSpy.mockResolvedValueOnce({
       success: true,
       health: {
@@ -321,13 +538,225 @@ describe('DatabasePanel', () => {
         leaseRecovered: 0,
         oldestRetryableAgeSec: null,
         pendingAgeAlert: false,
+        dtr: {
+          enabled: true,
+          queued: 0,
+          retrying: 0,
+          processing: 0,
+          dead: 0,
+          retryablePending: 0,
+          needsAttention: 0,
+          persistenceFailure: false,
+          nextRetryEligibleAt: null,
+          oldestOutstandingAgeSec: null,
+          currentIssue: 'none',
+          currentIssueSince: null,
+          lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z',
+          activity: 'idle',
+        },
       },
     });
 
     render(<DatabasePanel />);
 
-    expect(await screen.findByText('Attention')).toBeInTheDocument();
-    expect(await screen.findByText(/Last error: Google Sheets auth failed: expired token/)).toBeInTheDocument();
+    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
+    expect(screen.getByText('All sync failures: 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('DTR-only sync status')).toHaveTextContent('DTR idle');
+    expect(screen.queryByText('Healthy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Attention')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Last error: Google Sheets auth failed: expired token/)).not.toBeInTheDocument();
+  });
+
+  it('renders unavailable before the DTR disabled state and uses retry eligibility copy', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: null,
+        lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
+        dtr: {
+          enabled: false,
+          queued: 0,
+          retrying: 0,
+          processing: 0,
+          dead: 0,
+          retryablePending: 2,
+          needsAttention: 0,
+          persistenceFailure: false,
+          nextRetryEligibleAt: '2026-08-15T01:00:00Z',
+          oldestOutstandingAgeSec: null,
+          currentIssue: 'none',
+          currentIssueSince: null,
+          lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z',
+          activity: 'unavailable',
+        },
+      },
+    });
+
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText('DTR status unavailable. Attendance continues to save locally.')).toBeInTheDocument();
+    expect(screen.queryByText('Sheet syncing paused; attendance recording continues.')).not.toBeInTheDocument();
+  });
+
+  it('renders retryable work as waiting and action-required work as admin attention', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: null,
+        lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
+        dtr: {
+          enabled: true,
+          queued: 0,
+          retrying: 0,
+          processing: 0,
+          dead: 0,
+          retryablePending: 2,
+          needsAttention: 0,
+          persistenceFailure: false,
+          nextRetryEligibleAt: '2026-08-15T01:00:00Z',
+          oldestOutstandingAgeSec: null,
+          currentIssue: 'unresolved_layout',
+          currentIssueSince: null,
+          lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z',
+          activity: 'retrying',
+        },
+      },
+    });
+
+    const { unmount } = render(<DatabasePanel />);
+    expect(await screen.findByText(/2 punches are waiting for retry/)).toBeInTheDocument();
+    expect(screen.getByText(/Retry attempts are bounded/)).toBeInTheDocument();
+    expect(screen.getByText(/Next retry eligibility:/)).toBeInTheDocument();
+    expect(screen.queryByText(/next attempt|automatic delivery/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/need admin (?:help|attention)/i)).not.toBeInTheDocument();
+    unmount();
+
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: null,
+        lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
+        dtr: {
+          enabled: true,
+          queued: 0,
+          retrying: 0,
+          processing: 0,
+          dead: 0,
+          retryablePending: 0,
+          needsAttention: 1,
+          persistenceFailure: false,
+          nextRetryEligibleAt: null,
+          oldestOutstandingAgeSec: null,
+          currentIssue: 'unresolved_layout',
+          currentIssueSince: null,
+          lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z',
+          activity: 'idle',
+        },
+      },
+    });
+    render(<DatabasePanel />);
+    expect(await screen.findByText('Punches need admin attention before they can sync.')).toBeInTheDocument();
+  });
+
+  it('shows DTR DEAD independently and does not mark it as an ops failure', async () => {
+    loadDtrSyncHealthSpy.mockResolvedValueOnce({
+      success: true,
+      health: {
+        pending: 0,
+        deadLetter: 0,
+        byTable: [],
+        dtrPendingCount: 0,
+        dtrPendingItems: [],
+        lastSyncedAt: null,
+        lastError: null,
+        throttledUntil: null,
+        lastThrottleReason: null,
+        inProgress: null,
+        leaseRecovered: 0,
+        oldestRetryableAgeSec: null,
+        pendingAgeAlert: false,
+        dtr: {
+          enabled: true,
+          queued: 0,
+          retrying: 0,
+          processing: 0,
+          dead: 1,
+          retryablePending: 0,
+          needsAttention: 0,
+          persistenceFailure: false,
+          nextRetryEligibleAt: null,
+          oldestOutstandingAgeSec: null,
+          currentIssue: 'none',
+          currentIssueSince: null,
+          lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z',
+          activity: 'idle',
+        },
+      },
+    });
+
+    render(<DatabasePanel />);
+    expect(await screen.findByText('DTR attention')).toBeInTheDocument();
+    expect(screen.queryByText('All sync failures: 1')).not.toBeInTheDocument();
+    expect(getDtrSyncHealthSnapshot()).toMatchObject({
+      emittedAt: '2026-08-15T00:00:00Z',
+      dead: 1,
+      persistenceFailure: false,
+    });
+  });
+
+  it('preserves a prior queue-persistence warning after an admin health refresh', async () => {
+    setDtrSyncHealthSnapshot({
+      activity: 'idle',
+      queued: 0,
+      retryablePending: 0,
+      needsAttention: 0,
+      dead: 0,
+      persistenceFailure: true,
+      emittedAt: '2026-08-15T00:00:00Z',
+    });
+
+    render(<DatabasePanel />);
+
+    await screen.findByLabelText('DTR sync status');
+    expect(getDtrSyncHealthSnapshot()?.persistenceFailure).toBe(true);
   });
 
   it('shows stale rows with an explicit offline indication when a refresh fails after a success', async () => {
@@ -363,7 +792,7 @@ describe('DatabasePanel', () => {
     });
 
     expect(await screen.findByText(/showing last known data \(network unreachable\)/i)).toBeInTheDocument();
-    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.getByText('DTR status update delayed')).toBeInTheDocument();
     expect(screen.getByText('attendance')).toBeInTheDocument();
     expect(screen.getByText('2 pending')).toBeInTheDocument();
   });
@@ -377,22 +806,18 @@ describe('DatabasePanel', () => {
     render(<DatabasePanel />);
 
     expect(
-      await screen.findByText(/Sync status unavailable — Sync status is available in the desktop application\./),
+      await screen.findByText(/DTR status unavailable — Sync status is available in the desktop application\./),
     ).toBeInTheDocument();
-    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.getByText('DTR status unavailable')).toBeInTheDocument();
     expect(screen.queryByText('InternDtr tabs')).not.toBeInTheDocument();
   });
 
-  it('ignores an older in-flight refresh that resolves after a newer one', async () => {
+  it('deduplicates a visibility refresh while the health request is in flight', async () => {
     let resolveFirst: (value: Awaited<ReturnType<typeof api.loadDtrSyncHealth>>) => void = () => {};
-    let resolveSecond: (value: Awaited<ReturnType<typeof api.loadDtrSyncHealth>>) => void = () => {};
     const first = new Promise<Awaited<ReturnType<typeof api.loadDtrSyncHealth>>>((resolve) => {
       resolveFirst = resolve;
     });
-    const second = new Promise<Awaited<ReturnType<typeof api.loadDtrSyncHealth>>>((resolve) => {
-      resolveSecond = resolve;
-    });
-    loadDtrSyncHealthSpy.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    loadDtrSyncHealthSpy.mockReturnValueOnce(first);
 
     render(<DatabasePanel />);
     await screen.findByLabelText('DTR sync status');
@@ -401,10 +826,10 @@ describe('DatabasePanel', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await waitFor(() => {
-      expect(loadDtrSyncHealthSpy).toHaveBeenCalledTimes(2);
+      expect(loadDtrSyncHealthSpy).toHaveBeenCalledTimes(1);
     });
 
-    resolveSecond({
+    resolveFirst({
       success: true,
       health: {
         pending: 0,
@@ -422,30 +847,7 @@ describe('DatabasePanel', () => {
         pendingAgeAlert: false,
       },
     });
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
-
-    resolveFirst({
-      success: true,
-      health: {
-        pending: 9,
-        deadLetter: 0,
-        byTable: [{ tableName: 'attendance', pending: 9 }],
-        dtrPendingCount: 0,
-        dtrPendingItems: [],
-        lastSyncedAt: '2026-08-14T00:00:00Z',
-        lastError: null,
-        throttledUntil: null,
-        lastThrottleReason: null,
-        inProgress: null,
-        leaseRecovered: 0,
-        oldestRetryableAgeSec: null,
-        pendingAgeAlert: false,
-      },
-    });
-    await waitFor(() => {
-      expect(screen.queryByText('9 pending')).not.toBeInTheDocument();
-    });
-    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
   });
 
   it('refreshes sync health after Sync Intern DTR now', async () => {
@@ -501,19 +903,16 @@ describe('DatabasePanel', () => {
       })
       .mockReturnValueOnce(manual);
 
-    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
-      success: true,
-      internsChecked: 1,
-      tabsCreated: [],
-      rowsSynced: 1,
-      details: [],
-      errors: [],
+    let resolveSync: (value: Awaited<ReturnType<typeof api.syncInternDtr>>) => void = () => {};
+    const syncPromise = new Promise<Awaited<ReturnType<typeof api.syncInternDtr>>>((resolve) => {
+      resolveSync = resolve;
     });
+    const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockReturnValueOnce(syncPromise);
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    // Initial mount load is the first mock (a resolved healthy payload).
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    // Initial mount load is a successful payload without the typed DTR summary.
+    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
 
     // Start the manual sync. It sets the syncing state SYNCHRONOUSLY, then
     // calls refreshSyncHealth which consumes the pending `manual` promise.
@@ -548,7 +947,12 @@ describe('DatabasePanel', () => {
         },
       });
     });
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSync({ success: true, internsChecked: 1, tabsCreated: [], rowsSynced: 1, details: [], errors: [] });
+    });
+    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
   });
 
   it('does not let a background poll clear the Syncing badge (N8a)', async () => {
@@ -564,7 +968,7 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
     // The next loadDtrSyncHealth call after mount is the background poll.
     loadDtrSyncHealthSpy.mockReturnValueOnce(bgPromise);
 
@@ -617,7 +1021,7 @@ describe('DatabasePanel', () => {
         errors: [],
       });
     });
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
   });
 
   it('shared guard disables Data Sync-now, Users bulk and per-row buttons while progress advances (task 9)', async () => {
@@ -742,12 +1146,12 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
 
     const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
     await user.click(syncBtn);
     expect(await screen.findByText(/DTR sync complete/i)).toBeInTheDocument();
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
     expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
   });
 
@@ -830,7 +1234,7 @@ describe('DatabasePanel', () => {
 
     render(<DatabasePanel />);
 
-    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/Throttled until/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
   });

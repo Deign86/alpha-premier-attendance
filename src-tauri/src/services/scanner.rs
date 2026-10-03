@@ -296,6 +296,26 @@ mod tests {
     }
 
     #[test]
+    fn accepts_inclusive_uid_length_boundaries() {
+        let variable_hex = ScannerConfig {
+            expected_length: 0,
+            character_set: ScannerCharacterSet::Hex,
+            ..ScannerConfig::default()
+        };
+
+        assert_eq!(normalize("ABCD", &variable_hex), ScanParse::Valid("ABCD".into()));
+        assert_eq!(
+            normalize(&"A".repeat(64), &variable_hex),
+            ScanParse::Valid("A".repeat(64))
+        );
+        assert!(matches!(normalize("ABC", &variable_hex), ScanParse::Invalid(_)));
+        assert!(matches!(
+            normalize(&"A".repeat(65), &variable_hex),
+            ScanParse::Invalid(_)
+        ));
+    }
+
+    #[test]
     fn test_scanner_handle_paused_state() {
         let handle = super::ScannerHandle::new(ScannerConfig::default());
         assert!(!handle.paused());

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, exportPayrollCsv, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, exportPayrollCsv, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
+import type { NativeSyncStatusResponse } from './tauri-api';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -27,6 +28,55 @@ describe('scan requests', () => {
       success: true,
       offlineQueued: true,
     });
+  });
+});
+
+describe('DTR sync health parsing', () => {
+  it('preserves Rust summary retry count, persistence flag, and timestamp', async () => {
+    const emittedAt = '2026-10-03T08:15:00Z';
+    const response: NativeSyncStatusResponse = {
+      success: true,
+      pending: 0,
+      deadLetter: 0,
+      byTable: [],
+      dtrPending: { count: 0, items: [] },
+      lastSyncedAt: null,
+      lastError: null,
+      throttledUntil: null,
+      lastThrottleReason: null,
+      inProgress: null,
+      leaseRecovered: 0,
+      oldestRetryableAgeSec: null,
+      pendingAgeAlert: false,
+      dtr: {
+        enabled: true,
+        queued: 0,
+        retrying: 3,
+        processing: 0,
+        dead: 1,
+        retryablePending: 3,
+        needsAttention: 0,
+        persistenceFailure: true,
+        nextRetryEligibleAt: null,
+        oldestOutstandingAgeSec: null,
+        currentIssue: 'persistence',
+        currentIssueSince: emittedAt,
+        lastSuccessfulWriteAt: null,
+        activity: 'retrying',
+        emittedAt,
+      },
+    };
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+    vi.spyOn(tauriApi, 'syncStatus').mockResolvedValueOnce(response);
+
+    const result = await loadDtrSyncHealth();
+
+    expect(result).toMatchObject({
+      success: true,
+      health: { dtr: { retryablePending: 3, persistenceFailure: true, emittedAt } },
+    });
+    // SAFETY: Removing test mock property from window
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 });
 

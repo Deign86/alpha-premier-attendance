@@ -187,6 +187,9 @@ describe('GoogleSheetsAdapter Drive folder auto-create/reuse', () => {
       .flat()
       .filter((request) => (request as { addSheet?: unknown }).addSheet).length;
     expect(addSheetCount).toBe(6);
+    expect(sheets.calls.batchUpdates.flat()[0]).toMatchObject({
+      addSheet: { properties: { title: expect.any(String) } },
+    });
     expect(sheets.calls.appends).toContain('PayrollProfiles');
     expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toMatchObject({ driveFolderId: 'folder-1', spreadsheetId: 'sheet-1' });
   });

@@ -237,6 +237,34 @@ describe('employee payroll policy', () => {
     expect(result.computedTimeOut).toBe('2026-07-28T17:00:00+08:00');
   });
 
+  it('caps the exact 18:00 LATE_TIMEOUT boundary while preserving a 17:59:59 clock-out', () => {
+    const atBoundary = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T18:00:00+08:00',
+      dailyRate: 600,
+    });
+    const beforeBoundary = calculateEmployeePayroll({
+      actualTimeIn: '2026-07-28T08:00:00+08:00',
+      actualTimeOut: '2026-07-28T17:59:59+08:00',
+      dailyRate: 600,
+    });
+
+    expect(atBoundary).toMatchObject({
+      computedTimeOut: '2026-07-28T17:00:00+08:00',
+      workedHours: 8,
+      isHalfDay: false,
+      halfDayDeduction: 0,
+      dailyPay: 600,
+    });
+    expect(beforeBoundary).toMatchObject({
+      computedTimeOut: '2026-07-28T17:00:00+08:00',
+      workedHours: 8,
+      isHalfDay: false,
+      halfDayDeduction: 0,
+      dailyPay: 600,
+    });
+  });
+
   it('A2: the non-morning-half-day else branch floors the time-out to the hour', () => {
     const result = calculateEmployeePayroll({
       actualTimeIn: '2026-07-28T13:30:00+08:00',

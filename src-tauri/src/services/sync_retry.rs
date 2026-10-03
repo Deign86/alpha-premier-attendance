@@ -7,6 +7,9 @@
 /// contain no credentials, paths, or response bodies.
 pub const GOOGLE_RATE_LIMITED: &str = "GOOGLE_RATE_LIMITED";
 pub const GOOGLE_REQUEST_FAILED: &str = "GOOGLE_REQUEST_FAILED";
+/// Queue marker for exhausted DTR transport retries; unlike a generic request
+/// failure, this remains transient across queue-level retries.
+pub const GOOGLE_TRANSPORT_FAILED: &str = "GOOGLE_TRANSPORT_FAILED";
 pub const GOOGLE_PERMISSION_DENIED: &str = "GOOGLE_PERMISSION_DENIED";
 /// 403 dailyLimitExceeded: finite 5-strike-to-DEAD with this code (operator
 /// action, ~24h block — retrying within-day clogs the queue). Never transient.
@@ -77,13 +80,15 @@ pub fn classify_403_body(body: &str) -> String {
 /// Queue-string form of the classifier: recovers the transient verdict from the
 /// short error strings producers store in `sync_queue.last_error`
 /// (`GOOGLE_SERVER_ERROR`, numeric 5xx markers, rate-limit reason fragments,
-/// the `timeout-after-connect` marker). Anything unrecognized stays finite so
-/// unknown failures keep aging toward DEAD instead of clogging the queue.
+/// the `timeout-after-connect` marker, or exhausted DTR transport retry marker).
+/// Anything unrecognized stays finite so unknown failures keep aging toward
+/// DEAD instead of clogging the queue.
 pub fn is_transient_sync_error(error: &str) -> bool {
     if is_rate_limited_error(error) {
         return true;
     }
     if error.contains(GOOGLE_SERVER_ERROR)
+        || error.contains(GOOGLE_TRANSPORT_FAILED)
         || error.contains("rateLimitExceeded")
         || error.contains("userRateLimitExceeded")
         || error.contains("quotaExceeded")
@@ -395,8 +400,8 @@ fn jittered_queue_backoff_secs(capped_base_secs: u64) -> u64 {
 }
 
 /// Computes backoff duration, new queue status, and error code for failed sync rows.
-/// Transient failures (429 / 5xx / timeout-after-connect / 403-rateLimit via
-/// `is_transient_sync_error`) use the pinned transient policy (60s base,
+/// Transient failures (429 / 5xx / timeout-after-connect / 403-rateLimit / DTR
+/// transport exhaustion via `is_transient_sync_error`) use the pinned transient policy (60s base,
 /// 960s cap, ±50% full jitter), always stay RETRY, and never consume the
 /// 5-strike DEAD budget — the run_once fail arm must skip the attempts
 /// increment for them.
@@ -448,6 +453,7 @@ mod tests {
         DtrThrottleBucket, GENERIC_BACKOFF_CAP_SECS, SYNC_GUARD_COMPLETED,
         SYNC_GUARD_STALE_SECS, TRANSIENT_BACKOFF_BASE_SECS,
         TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
+        is_transient_sync_error,
         processing_lease_stale_secs, split_dtr_batch, sync_guard_busy_error,
         sync_guard_row_releasable,
     };
@@ -675,5 +681,25 @@ mod tests {
         assert_eq!(code, "GOOGLE_SYNC_FAILED");
         let (_, status, _) = calculate_retry_backoff(4, "Google Sheets sync payload is invalid");
         assert_eq!(status, "DEAD");
+    }
+
+    #[test]
+    fn exhausted_transport_errors_remain_transient_beyond_per_call_retries() {
+        // dtr_call_with_retry uses a distinct marker after its bounded retries;
+        // queue-level retry must then remain infinite, unlike corrupt payloads.
+        let transport_error = "GOOGLE_TRANSPORT_FAILED";
+        assert!(is_transient_sync_error(transport_error));
+        for attempts in [0_i64, 4, 100] {
+            let (_, status, code) = calculate_retry_backoff(attempts, transport_error);
+            assert_eq!(status, "RETRY", "attempts={attempts}");
+            assert_eq!(code, super::GOOGLE_REQUEST_FAILED);
+        }
+
+        assert!(!is_transient_sync_error("GOOGLE_REQUEST_FAILED"));
+        assert!(!is_transient_sync_error("400 invalid payload"));
+        assert_eq!(
+            calculate_retry_backoff(4, "400 invalid payload").1,
+            "DEAD"
+        );
     }
 }

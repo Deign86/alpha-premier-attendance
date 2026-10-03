@@ -235,6 +235,57 @@ describe('intern payroll policy', () => {
     }
   });
 
+  it('keeps an exact 09:00 late arrival at 09:00 and charges exactly one late hour', () => {
+    const result = calculateInternPayroll({
+      attendanceDate: '2026-10-01',
+      actualTimeIn: '2026-10-01T09:00:00+08:00',
+      actualTimeOut: '2026-10-01T17:00:00+08:00',
+      graceAvailable: true,
+    });
+
+    expect(result).toMatchObject({
+      computedTimeIn: '2026-10-01T09:00:00+08:00',
+      computedTimeOut: '2026-10-01T17:00:00+08:00',
+      graceUsed: false,
+      lateHours: 1,
+      lateDeduction: 10,
+      isHalfDay: false,
+      halfDayDeduction: 0,
+      dailyPay: 70,
+      workedHours: 7,
+    });
+  });
+
+  it('caps an exact 18:00 clock-out but preserves 17:59:59 below the threshold', () => {
+    const atBoundary = calculateInternPayroll({
+      attendanceDate: '2026-10-01',
+      actualTimeIn: '2026-10-01T08:00:00+08:00',
+      actualTimeOut: '2026-10-01T18:00:00+08:00',
+      graceAvailable: false,
+    });
+    const beforeBoundary = calculateInternPayroll({
+      attendanceDate: '2026-10-01',
+      actualTimeIn: '2026-10-01T08:00:00+08:00',
+      actualTimeOut: '2026-10-01T17:59:59+08:00',
+      graceAvailable: false,
+    });
+
+    expect(atBoundary).toMatchObject({
+      computedTimeOut: '2026-10-01T17:00:00+08:00',
+      workedHours: 8,
+      isHalfDay: false,
+      halfDayDeduction: 0,
+      dailyPay: 80,
+    });
+    expect(beforeBoundary).toMatchObject({
+      computedTimeOut: '2026-10-01T17:59:59+08:00',
+      workedHours: 8,
+      isHalfDay: false,
+      halfDayDeduction: 0,
+      dailyPay: 80,
+    });
+  });
+
   it('weekly grace exhausted 08:08 stays actual and deducts one late hour', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-09-22', actualTimeIn: '2026-09-22T08:08:00+08:00', actualTimeOut: '2026-09-22T17:00:00+08:00', graceAvailable: false });
     expect(result).toMatchObject({ computedTimeIn: '2026-09-22T08:08:00+08:00', lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 });
