@@ -3508,6 +3508,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     syncState.kind === "ready" || syncState.kind === "refreshing" || syncState.kind === "stale"
       ? syncState.health
       : null;
+  const dtrDead = syncHealth?.dtr?.dead ?? 0;
   const syncBadge = (() => {
     if (syncState.kind === "syncing") return { label: "Syncing", className: "sync-badge pending" };
     if (syncState.kind === "error") return { label: "DTR status unavailable", className: "sync-badge idle" };
@@ -3905,8 +3906,8 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         <div className="sync-health-head">
           <strong>DTR sync status</strong>
           <span className={syncBadge.className} aria-label="DTR-only sync status">{syncState.kind === "syncing" ? "Syncing…" : syncBadge.label}</span>
-          {syncHealth && syncHealth.deadLetter > 0 && (
-            <span className="sync-badge attention" aria-label="All sync failures">All sync failures: {syncHealth.deadLetter}</span>
+          {dtrDead > 0 && (
+            <span className="sync-badge attention" aria-label="DTR sync failures">DTR sync failures: {dtrDead}</span>
           )}
         </div>
         {syncState.kind === "syncing" && (
@@ -4002,9 +4003,9 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
             )}
             <p className="sync-health-note">
               Last sync: {formatWhen(syncHealth?.lastSyncedAt ?? null)}
-              {syncHealth && syncHealth.deadLetter > 0 ? (
+              {dtrDead > 0 ? (
                 <>
-                  {` · ${syncHealth.deadLetter} failed ops item(s) `}
+                  {` · ${dtrDead} failed DTR item(s) `}
                   <button className="text-button" type="button" disabled={busy} onClick={() => void syncInterns()}>
                     Retry sync now
                   </button>

@@ -521,7 +521,7 @@ describe('DatabasePanel', () => {
     expect(loadDtrSyncHealthSpy).toHaveBeenCalled();
   });
 
-  it('labels DTR health separately and reports global ops DEAD items', async () => {
+  it('shows DTR health without reporting unrelated global ops DEAD items', async () => {
     loadDtrSyncHealthSpy.mockResolvedValueOnce({
       success: true,
       health: {
@@ -561,7 +561,8 @@ describe('DatabasePanel', () => {
     render(<DatabasePanel />);
 
     expect(await screen.findByText('DTR idle')).toBeInTheDocument();
-    expect(screen.getByText('All sync failures: 1')).toBeInTheDocument();
+    expect(screen.queryByText('All sync failures: 1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/failed DTR item\(s\)/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('DTR-only sync status')).toHaveTextContent('DTR idle');
     expect(screen.queryByText('Healthy')).not.toBeInTheDocument();
     expect(screen.queryByText('Attention')).not.toBeInTheDocument();

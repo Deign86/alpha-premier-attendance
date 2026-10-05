@@ -3379,6 +3379,18 @@ pub async fn manual_sync_intern_dtr(
         );
     }
 
+    if errors.is_empty() && stopped_user_id.is_none() {
+        let synced_at = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO sync_state (table_name, row_id, last_synced_hash, sheet_row_number, last_synced_at) VALUES ('InternDtrManualSync', 'last_successful_sync', 'manual', NULL, ?) \
+             ON CONFLICT(table_name, row_id) DO UPDATE SET last_synced_at = excluded.last_synced_at",
+        )
+        .bind(synced_at)
+        .execute(&state.db)
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+
     Ok(ManualSyncReport {
         success: errors.is_empty() && stopped_user_id.is_none(),
         interns_checked: interns.len(),
