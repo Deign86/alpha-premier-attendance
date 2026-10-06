@@ -132,9 +132,9 @@ export class AdminService {
     const current = await this.sheets.findUserById(userId);
     const byUid = await this.sheets.findUserByUid(rfidUid);
     if (byUid && byUid.userId !== userId) throw new AdminError('USER_CONFLICT', 'That RFID card is assigned to another user.', 409);
-    const employeeType = isAssist ? 'EMPLOYEE' : (value.employeeType ?? current?.employeeType ?? 'INTERN');
-    const dailyRate = !isAssist && employeeType === 'EMPLOYEE' ? value.dailyRate : null;
-    if (!isAssist && employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Employees require a positive daily rate.');
+    if (!isAssist && value.employeeType === 'EMPLOYEE') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Only interns can be created or edited.');
+    const employeeType = isAssist ? 'EMPLOYEE' : 'INTERN';
+    const dailyRate = null;
     if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.');
     const user: SheetUser = {
       userId,
@@ -145,7 +145,7 @@ export class AdminService {
       employeeType,
       gender: isAssist ? null : (value.gender === undefined ? current?.gender ?? null : value.gender),
       dailyRate,
-      payrollProfileId: isAssist ? null : (value.payrollProfileId === undefined ? current?.payrollProfileId ?? null : value.payrollProfileId),
+      payrollProfileId: null,
       photoUrl: isAssist ? null : (value.photoUrl === undefined ? current?.photoUrl ?? null : value.photoUrl),
       cardType: value.cardType ?? current?.cardType ?? 'EMPLOYEE',
     };
@@ -575,13 +575,9 @@ export class AdminService {
   }
 
   async cutoffPayroll(): Promise<SheetPayrollCutoff[]> {
-    const [records, users] = await Promise.all([this.sheets.listPayrollCutoffs(), this.sheets.listUsers()]);
-    // The PayrollCutoffs register does not store an employee type column; derive
-    // intern vs employee classification from the live Users register so the
-    // printable worksheet can apply intern-specific layout and labels.
-    const byId = new Map(users.map((user): [string, 'EMPLOYEE' | 'INTERN'] => [user.userId, (user.employeeType ?? 'INTERN') === 'EMPLOYEE' ? 'EMPLOYEE' : 'INTERN']));
+    const records = await this.sheets.listPayrollCutoffs();
     return records
-      .map((record) => ({ ...record, employeeType: byId.get(record.employeeId) ?? 'EMPLOYEE' }))
+      .map((record) => ({ ...record, employeeType: 'INTERN' as const }))
       .sort((a, b) => b.cutoffStart.localeCompare(a.cutoffStart));
   }
 
@@ -590,25 +586,15 @@ export class AdminService {
     if (value === null) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll values are required.');
     const employeeId = String(value.employeeId ?? '').trim();
     const employee = await this.sheets.findUserById(employeeId);
-    if (!employee) throw new AdminError('ADMIN_VALIDATION_ERROR', 'The employee was not found.');
-    const isIntern = (employee.employeeType ?? 'INTERN') !== 'EMPLOYEE';
-    if (!isIntern && !employee.dailyRate) throw new AdminError('ADMIN_VALIDATION_ERROR', 'An employee daily rate is required before cutoff payroll can be saved.');
-    const profiles = await this.payrollProfiles();
-    const profileId = isIntern ? INTERN_PAYROLL_PROFILE_ID : String(value.payrollProfileId ?? employee.payrollProfileId ?? 'BEA_STANDARD');
+    if (!employee || employee.employeeType === 'EMPLOYEE') throw new AdminError('ADMIN_VALIDATION_ERROR', 'The intern was not found.');
+    const profileId = INTERN_PAYROLL_PROFILE_ID;
     const number = (field: CutoffNumberField, fallback: number) => value[field] === undefined || value[field] === null || value[field] === '' ? fallback : Number(value[field]);
     const existing = existingPayrollId ? await this.sheets.findPayrollCutoff(existingPayrollId) : null;
     if (existingPayrollId && !existing) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Payroll record was not found.', 404);
     if (existing?.status === 'FINALIZED') throw new AdminError('ADMIN_VALIDATION_ERROR', 'Finalized payroll cannot be edited.');
     try {
       const cutoffLabel = String(value.payrollCutoffLabel ?? '').trim() || `${value.cutoffStart ?? ''} to ${value.cutoffEnd ?? ''}`;
-      let cutoff: CutoffInput;
-      if (isIntern) {
-        cutoff = internCutoffInput({ value, employee, profileId: INTERN_PAYROLL_PROFILE_ID, cutoffLabel, number });
-      } else {
-        const profile = profiles.find((item) => item.profileId === profileId) ?? defaultPayrollProfiles.find((item) => item.profileId === profileId);
-        if (!profile) throw new AdminError('ADMIN_VALIDATION_ERROR', 'Select a valid payroll calculation profile.');
-        cutoff = employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number });
-      }
+      const cutoff = internCutoffInput({ value, employee, profileId, cutoffLabel, number });
       const calculated = calculateCutoffPayroll(cutoff);
       return this.sheets.upsertPayrollCutoff({ ...calculated, payrollId: existingPayrollId ?? crypto.randomUUID(), finalizedAt: null });
     } catch (error) { throw new AdminError('ADMIN_VALIDATION_ERROR', error instanceof Error ? error.message : 'Payroll values are invalid.'); }
@@ -630,38 +616,9 @@ export class AdminService {
   private assertEnabled() { if (!resolveAdminAuth({ enableAdmin: this.config.enableAdmin, enableCardSetup: false, adminPin: this.config.adminPin, adminSessionSecret: this.config.adminSessionSecret, adminSessionMinutes: this.config.adminSessionMinutes }).enabled) throw new AdminError('ADMIN_DISABLED', 'Administrator access is not configured.', 403); }
   private equal(a: string, b: string) { const ah = crypto.createHash('sha256').update(a).digest(); const bh = crypto.createHash('sha256').update(b).digest(); return crypto.timingSafeEqual(ah, bh); }
 }
-function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: user.employeeType ?? 'INTERN', gender: user.gender ?? null, dailyRate: user.dailyRate ?? null, payrollProfileId: user.payrollProfileId ?? null, photoUrl: user.photoUrl ?? null, cardType: user.cardType ?? 'EMPLOYEE' }; }
+function toAdminUser(user: SheetUser): AdminUser { return { userId: user.userId, rfidUid: user.rfidUid, fullName: user.fullName, department: user.department, status: user.active ? 'ACTIVE' : 'INACTIVE', employeeType: 'INTERN', gender: user.gender ?? null, dailyRate: null, payrollProfileId: null, photoUrl: user.photoUrl ?? null, cardType: user.cardType ?? 'EMPLOYEE' }; }
 function toAttendance(row: SheetAttendance, user?: SheetUser): AttendanceListItem { return { attendanceId: row.attendanceId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, timeOut: row.timeOut, status: row.status, userId: row.userId, fullName: user?.fullName ?? row.fullName, department: user?.department ?? row.department, source: row.source, recordedBy: row.recordedBy ?? null, recordedReason: row.recordedReason ?? null, recordedAt: row.recordedAt ?? null }; }
 function validTimestamp(value: string, date: string): boolean { return value.startsWith(`${date}T`) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value) && Number.isFinite(new Date(value).getTime()); }
-
-function employeeCutoffInput({ value, employee, profile, profileId, cutoffLabel, number }: CutoffInputBuilder & { profile: PayrollCalculationProfile }): CutoffInput {
-  const cutoffStart = String(value.cutoffStart ?? '');
-  const cutoffEnd = String(value.cutoffEnd ?? '');
-  const defaultStandardDays = countWorkdays(cutoffStart, cutoffEnd) || profile.standardWorkingDaysPerCutoff;
-  const standardWorkingDays = number('standardWorkingDays', defaultStandardDays);
-  const actualWorkingDays = number('actualWorkingDays', standardWorkingDays);
-  const absentDays = value.absentDays != null ? number('absentDays', 0) : Math.max(0, standardWorkingDays - actualWorkingDays);
-  return {
-    employeeId: employee.userId, employeeName: employee.fullName, employeeType: 'EMPLOYEE', payrollProfileId: profileId, payrollCutoffLabel: cutoffLabel,
-    cutoffStart, cutoffEnd, payrollFrequency: 'SEMI_MONTHLY', dailyRate: number('dailyRate', employee.dailyRate ?? 0),
-    standardWorkingDays, actualWorkingDays,
-    basicPay: value.basicPay != null ? number('basicPay', 0) : undefined,
-    specialHolidayDays: number('specialHolidayDays', 0), specialHolidayMultiplier: number('specialHolidayMultiplier', profile.specialHolidayMultiplier),
-    specialHolidayPay: value.specialHolidayPay != null ? number('specialHolidayPay', 0) : undefined,
-    regularHolidayDays: number('regularHolidayDays', 0), regularHolidayMultiplier: number('regularHolidayMultiplier', profile.regularHolidayMultiplier),
-    regularHolidayPay: value.regularHolidayPay != null ? number('regularHolidayPay', 0) : undefined,
-    hra: number('hra', 0),
-    incentivesAllowance: number('incentivesAllowance', profile.incentivesAllowance), specialAllowance: number('specialAllowance', profile.specialAllowance),
-    lateUnits: number('lateUnits', 0), lateDeduction: number('lateDeduction', 0),
-    halfDayCount: number('halfDayCount', 0), halfDayFraction: number('halfDayFraction', profile.halfDayFraction || 0.5) || profile.halfDayFraction || 0.5, absentDays,
-    absenceDeduction: value.absenceDeduction != null ? number('absenceDeduction', 0) : undefined,
-    overtimeHours: number('overtimeHours', 0), overtimeRate: number('overtimeRate', profile.overtimeRate),
-    overtimePay: value.overtimePay != null ? number('overtimePay', 0) : undefined,
-    sss: number('sss', 0), phic: number('phic', 0), hdmf: number('hdmf', 0), salaryAdvance: number('salaryAdvance', 0),
-    manualAdjustment: number('manualAdjustment', 0), adjustmentReason: cutoffAdjustmentReason(value.adjustmentReason),
-    approvedWorkingDayOverage: Boolean(value.approvedWorkingDayOverage), status: 'DRAFT',
-  };
-}
 
 /**
  * Builds the shared cutoff input for an intern record using the fixed intern

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AdminSyncDtrResponse, ArtifactExportResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollCsvExportResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
+import type { AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
 
 export interface NativeHealthResponse {
   success: boolean;
@@ -105,11 +105,7 @@ export const tauriApi = {
   payrollUpdateCutoff: <T extends object>(token: string, input: T) => invoke('payroll_update_cutoff', { token, input }),
   payrollFinalizeCutoff: (token: string, payrollId: string) => invoke('payroll_finalize_cutoff', { token, payrollId }),
   payrollDeleteCutoff: (token: string, payrollId: string) => invoke('payroll_delete_cutoff', { token, payrollId }),
-  payrollExportCsv: (token: string) => invoke<PayrollCsvExportResponse>('payroll_export_csv', { token }),
   exportAttendanceXlsx: (token: string, date: string) => invoke<AttendanceXlsxExportResponse>('export_attendance_xlsx', { token, date }),
-  exportPayrollXlsx: (token: string, cutoff?: string) => invoke<ArtifactExportResponse>('export_payroll_xlsx', { token, cutoff }),
-  generatePayrollPayslipPdf: (token: string, payrollId: string) => invoke<ArtifactExportResponse>('generate_payroll_payslip_pdf', { token, payrollId }),
-  generatePayrollRegisterPdf: (token: string, cutoff?: string) => invoke<ArtifactExportResponse>('generate_payroll_register_pdf', { token, cutoff }),
   openGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('open_generated_file', { token, filePath }),
   revealGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('reveal_generated_file', { token, filePath }),
   openGeneratedDirectory: (token: string, directoryPath: string) => invoke<{ success: true; message: string }>('open_generated_directory', { token, directoryPath }),

@@ -65,13 +65,14 @@ pub fn calculate(
         .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
         .single()
         .ok_or("Invalid Manila start time")?;
+    let late_start = start + chrono::Duration::minutes(1);
     let no_grace = is_no_grace_date(attendance_date);
     let (grace_used, computed_in, payable_in, late_hours) = if no_grace {
-        let payable_in = time_in.max(start);
+        let payable_in = if time_in < late_start { start } else { time_in };
         // Half-day rule: an arrival at/after 12:00 renders the afternoon half
         // of the 8-hour day, so the shortfall is half-day undertime, never late.
         let afternoon_half_day = time_in.hour() >= 12;
-        let late_hours = if !afternoon_half_day && time_in > start {
+        let late_hours = if !afternoon_half_day && time_in >= late_start {
             let late_duration = payable_in - start;
             let seconds = late_duration.num_seconds() as f64
                 + late_duration.subsec_nanos() as f64 / 1_000_000_000.0;
@@ -82,7 +83,7 @@ pub fn calculate(
         (false, time_in, payable_in, late_hours)
     } else {
         let local_time_in = time_in.time();
-        let in_grace_window = time_in > start
+        let in_grace_window = time_in >= late_start
             && time_in <= start + chrono::Duration::minutes(15);
         let grace_used = grace_available && in_grace_window;
         // Half-day rule (mirrors the no-grace branch): an arrival at/after
@@ -94,7 +95,7 @@ pub fn calculate(
             && (local_time_in.minute() > 15
                 || (local_time_in.minute() == 15
                     && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0)));
-        let clamped_in = if time_in > start && after_quarter_hour {
+        let clamped_in = if time_in >= late_start && after_quarter_hour {
             let hour_start = date
                 .and_hms_opt(local_time_in.hour(), 0, 0)
                 .ok_or("Invalid Manila late clamp time")?;
@@ -109,12 +110,12 @@ pub fn calculate(
             time_in
         };
         let computed_in = if grace_used { time_in } else { clamped_in };
-        let payable_in = if grace_used {
+        let payable_in = if grace_used || time_in < late_start {
             start
         } else {
             computed_in.max(start)
         };
-        let late_hours = if !grace_used && !afternoon_half_day && time_in > start {
+        let late_hours = if !grace_used && !afternoon_half_day && time_in >= late_start {
             (payable_in - start).num_hours().max(1)
         } else {
             0
@@ -203,6 +204,26 @@ mod tests {
         assert!(!on_time.grace_used);
         assert_eq!(on_time.late_hours, 0);
         assert_eq!(on_time.daily_pay_centavos, 8_000);
+
+        let still_on_time = calculate(
+            "2026-10-01",
+            "2026-10-01T08:00:59+08:00",
+            "2026-10-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(still_on_time.late_hours, 0);
+        assert_eq!(still_on_time.late_deduction_centavos, 0);
+
+        let first_late_minute = calculate(
+            "2026-10-01",
+            "2026-10-01T08:01:00+08:00",
+            "2026-10-01T17:00:00+08:00",
+            true,
+        )
+        .unwrap();
+        assert_eq!(first_late_minute.late_hours, 1);
+        assert_eq!(first_late_minute.late_deduction_centavos, 1_000);
     }
 
     #[test]
@@ -434,7 +455,7 @@ mod tests {
     fn grace_window_edges_and_late_display_boundary_match_policy() {
         for (time_in, grace_available, expected_grace) in [
             ("08:00:00", true, false),
-            ("08:00:01", true, true),
+            ("08:00:01", true, false),
             ("08:15:00", true, true),
             ("08:15:00.000000001", true, false),
             ("08:15:00.500", true, false),
@@ -452,13 +473,13 @@ mod tests {
             .unwrap();
             assert_eq!(result.grace_used, expected_grace, "{time_in}");
             let expected_late_hours = match time_in {
-                "08:00:00" => 0,
+                "08:00:00" | "08:00:01" => 0,
                 _ if expected_grace => 0,
                 "09:30:00" => 2,
                 _ => 1,
             };
             assert_eq!(result.late_hours, expected_late_hours);
-            assert_eq!(result.daily_pay_centavos, if expected_grace || time_in == "08:00:00" { 8_000 } else if time_in == "09:30:00" { 6_000 } else { 7_000 });
+            assert_eq!(result.daily_pay_centavos, if expected_grace || matches!(time_in, "08:00:00" | "08:00:01") { 8_000 } else if time_in == "09:30:00" { 6_000 } else { 7_000 });
             let expected_in = match time_in {
                 "08:15:00.000000001" | "08:15:00.500" => "09:00:00",
                 "08:15:01" | "08:30:00" => "09:00:00",

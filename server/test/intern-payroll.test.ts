@@ -23,7 +23,7 @@ const SEPTEMBER_ATTENDANCE: SeptemberAttendanceFixture[] = [
   { attendanceDate: '2026-09-01', userId: 'APG-2026-116', fullName: 'Maricon', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
   { attendanceDate: '2026-09-02', userId: 'APG-2026-116', fullName: 'Maricon', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
   { attendanceDate: '2026-09-03', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:00:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-04', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:00:01', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-04', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:00:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
   { attendanceDate: '2026-09-01', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '09:00:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
   { attendanceDate: '2026-09-02', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '08:00:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 10, dailyPay: 70 } },
   { attendanceDate: '2026-09-03', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '08:00:00', timeOut: '15:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 20, dailyPay: 60 } },
@@ -109,7 +109,7 @@ describe('intern payroll policy', () => {
       { label: 'same-week grace exhausted, exact 08:15', attendanceDate: '2026-09-22', timeIn: '08:15:00', timeOut: '15:00:00', graceAvailable: false, expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 20, dailyPay: 50, workedHours: 5.75 } },
       { label: 'one second beyond grace is ungraced', attendanceDate: '2026-09-23', timeIn: '08:15:01', timeOut: '17:00:00', graceAvailable: true, expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70, workedHours: 7 } },
       { label: '08:16 arrival is ungraced when weekly budget is available', attendanceDate: '2026-09-24', timeIn: '08:16:00', timeOut: '17:00:00', graceAvailable: true, expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70, workedHours: 7 } },
-      { label: '08:00:01 arrival to 17:00', attendanceDate: '2026-09-25', timeIn: '08:00:01', timeOut: '17:00:00', graceAvailable: true, expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80, workedHours: 8 } },
+      { label: '08:00:01 arrival to 17:00', attendanceDate: '2026-09-25', timeIn: '08:00:01', timeOut: '17:00:00', graceAvailable: true, expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80, workedHours: 8 } },
     ];
 
     expect(getManilaWeekStart(cases[0].attendanceDate)).toBe(getManilaWeekStart(cases[1].attendanceDate));

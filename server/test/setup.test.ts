@@ -83,24 +83,20 @@ describe('card setup service', () => {
     await expect(service.unlock('EEFF00')).rejects.toThrow('invalid');
   });
 
-  it('preserves existing payrollProfileId when updating an existing user', async () => {
+  it('rejects attempts to enroll an employee after the intern-only migration', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'EMP1', fullName: 'Jane Doe', rfidUid: 'EEFF00', department: 'Engineering', active: true, employeeType: 'EMPLOYEE', dailyRate: 500, payrollProfileId: 'PRF-001' },
     ]);
     const service = new SetupService(sheets, setupConfig);
     const token = (await service.unlock('2468')).setupToken;
-    const result = await service.upsertUser(token, {
+    await expect(service.upsertUser(token, {
       userId: 'EMP1',
       fullName: 'Jane Doe Updated',
       rfidUid: 'EEFF00',
       status: 'ACTIVE',
       employeeType: 'EMPLOYEE',
       dailyRate: 600,
-    });
-    expect(result.created).toBe(false);
-    expect(result.user.payrollProfileId).toBe('PRF-001');
-    const stored = await sheets.findUserById('EMP1');
-    expect(stored?.payrollProfileId).toBe('PRF-001');
+    })).rejects.toThrow('Only interns can be enrolled.');
   });
 });
 

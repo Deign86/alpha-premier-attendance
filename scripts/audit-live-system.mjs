@@ -355,7 +355,7 @@ async function runAudit() {
     }
   }
 
-  // 6. Test Exports: Attendance XLSX, Payroll XLSX, Register PDF
+  // 6. Test Exports: Attendance XLSX and intern payroll PDF
   console.log('\n--- 6. Testing Exports Generation ---');
   try {
     const attExport = await client.invoke('export_attendance_xlsx', {
@@ -372,31 +372,20 @@ async function runAudit() {
   }
 
   try {
-    const payrollXlsx = await client.invoke('export_payroll_xlsx', {
+    const payrollPdf = await client.invoke('generate_payroll_pdf', {
       token,
-      cutoff: 'August 1-15, 2026'
+      cutoffStart: '2026-08-01',
+      cutoffEnd: '2026-08-15',
+      payrollCutoffLabel: 'August 1-15, 2026',
+      workerType: 'INTERN'
     });
-    if (payrollXlsx?.filePath && existsSync(payrollXlsx.filePath)) {
-      passes.push(`Payroll XLSX export successfully created: ${payrollXlsx.fileName} (${payrollXlsx.sizeBytes} bytes)`);
+    if (payrollPdf?.pdf?.filePath && existsSync(payrollPdf.pdf.filePath)) {
+      passes.push(`Intern payroll PDF successfully created: ${payrollPdf.pdf.fileName} (${payrollPdf.pdf.sizeBytes} bytes)`);
     } else {
-      findings.push({ severity: 'MEDIUM', title: 'Payroll XLSX file missing after export', error: JSON.stringify(payrollXlsx) });
+      findings.push({ severity: 'MEDIUM', title: 'Intern payroll PDF missing after export', error: JSON.stringify(payrollPdf) });
     }
   } catch (e) {
-    findings.push({ severity: 'MEDIUM', title: 'export_payroll_xlsx failed', error: e.message });
-  }
-
-  try {
-    const registerPdf = await client.invoke('generate_payroll_register_pdf', {
-      token,
-      cutoff: 'August 1-15, 2026'
-    });
-    if (registerPdf?.filePath && existsSync(registerPdf.filePath)) {
-      passes.push(`Payroll Register PDF successfully created: ${registerPdf.fileName} (${registerPdf.sizeBytes} bytes)`);
-    } else {
-      findings.push({ severity: 'MEDIUM', title: 'generate_payroll_register_pdf file missing after export', error: JSON.stringify(registerPdf) });
-    }
-  } catch (e) {
-    findings.push({ severity: 'MEDIUM', title: 'generate_payroll_register_pdf failed', error: e.message });
+    findings.push({ severity: 'MEDIUM', title: 'generate_payroll_pdf failed', error: e.message });
   }
 
   // 7. Check for Client-Side Runtime Errors in the Webview

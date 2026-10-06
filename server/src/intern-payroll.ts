@@ -75,7 +75,7 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const computedTimeIn = graceUsed ? start : effectiveTimeIn;
   const basePay = INTERN_DAILY_RATE_PHP;
   const hourlyRate = INTERN_DAILY_RATE_PHP / 8;
-  const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start ? start : actualTimeIn));
+  const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start.plus({ minutes: 1 }) ? start : actualTimeIn));
   const { workedHours, isHalfDay, halfDayDeduction: grossShortfall } = computeShiftCore(payableIn, actualTimeOut, actualTimeIn, hourlyRate);
   // payableIn already removes late hours; exclude those hours from undertime to avoid duplicate charging.
   const remainingHours = Math.max(0, grossShortfall / hourlyRate - lateHours);

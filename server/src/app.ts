@@ -7,7 +7,6 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { google } from 'googleapis';
 import type { ScanRequest } from '@rfid-attendance/shared';
-import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { AttendanceService } from './attendance.js';
 import { asScanError, ScanError } from './errors.js';
 import { safeConfig, type AppConfig } from './config.js';
@@ -258,23 +257,6 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.patch('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.saveCutoffPayroll(req.body, req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/payroll/cutoffs/:payrollId/finalize', async (req, res) => { try { requireAdmin(req); res.json({ success: true, payroll: await admin.finalizeCutoffPayroll(req.params.payrollId) }); } catch (error) { sendAdminError(req, res, error); } });
   app.delete('/api/admin/payroll/cutoffs/:payrollId', async (req, res) => { try { requireAdmin(req); await admin.deleteCutoffPayroll(req.params.payrollId); res.json({ success: true }); } catch (error) { sendAdminError(req, res, error); } });
-  app.get('/api/admin/payroll/export', async (req, res) => {
-    try {
-      requireAdmin(req);
-      const office = options.config.office ?? DEFAULT_OFFICE_IDENTITY;
-      const rows = await admin.cutoffPayroll();
-      const headers = ['Employee #', 'Employee Name', 'Cut Off Rate', 'Daily Rate', 'Standard Working Days', 'Actual Working Days', 'Basic Rate', 'Special Holidays (30%)', 'Regular Holiday (100%)', 'Total Compensation', 'Incentives Allowance', 'Special Allowance', 'Total Allowance', 'Late', 'Halfday', 'Absent', 'Overtime', 'Gross Compensation'];
-      const values = rows.map((item) => [item.employeeId, item.employeeName, item.payrollCutoffLabel, item.dailyRate, item.standardWorkingDays, item.actualWorkingDays, item.basicPay, item.specialHolidayPay, item.regularHolidayPay, item.totalCompensation, item.incentivesAllowance, item.specialAllowance, item.totalAllowance, item.lateDeduction, item.halfDayDeduction, item.absenceDeduction, item.overtimePay, item.grossCompensation]);
-      const csv = [
-        ['Company', office.companyName],
-        ['Office', resolveOfficeDisplay(office, 'full')],
-        headers,
-        ...values,
-      ].map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-      res.type('text/csv').attachment('payroll-cutoffs.csv').send(csv);
-    } catch (error) { sendAdminError(req, res, error); }
-  });
-
   app.post('/api/setup/unlock', async (req, res) => {
     try {
       // SAFETY: Extracting pin or rfidUid property from request body

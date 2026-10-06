@@ -60,9 +60,10 @@ export function evaluateArrivalWithBudget(
   const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
   if (seconds === null) return { arrivalStatus: 'NONE', minutesLate: 0 };
   const startSeconds = 8 * 3600;
+  const lateStartSeconds = startSeconds + 60;
   const graceEndSeconds = 8 * 3600 + 15 * 60;
-  if (seconds <= startSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
-  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds && !graceAlreadyUsed && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) {
+  if (seconds < lateStartSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
+  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && !graceAlreadyUsed && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) {
     return { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 };
   }
   return {
@@ -143,15 +144,15 @@ function manilaSecondsSinceMidnight(iso: string, timezone: string): number | nul
 
 /**
  * Determines arrival evaluation (ON_TIME, GRACE_PERIOD, LATE) across a collection of rows,
- * enforcing that each user receives at most 1 Grace Period (08:00:01 - 08:15:00) per work week.
+ * enforcing that each user receives at most 1 Grace Period (08:01:00 - 08:15:00) per work week.
  */
 export function evaluateAttendanceArrivals(
-  rows: Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn?: string | null; employeeType?: 'INTERN' | 'EMPLOYEE' }>,
+  rows: Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn?: string | null }>,
 ): Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }> {
   const result = new Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }>();
 
   // Group by userId and weekStart
-  const groups = new Map<string, Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn: string; employeeType?: 'INTERN' | 'EMPLOYEE' }>>();
+  const groups = new Map<string, Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn: string }>>();
   for (const row of rows) {
     if (!row.timeIn) {
       result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
@@ -166,7 +167,7 @@ export function evaluateAttendanceArrivals(
     }
     const key = `${row.userId}:${weekStart}`;
     const list = groups.get(key) ?? [];
-    list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn, employeeType: row.employeeType });
+    list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn });
     groups.set(key, list);
   }
 
@@ -180,8 +181,7 @@ export function evaluateAttendanceArrivals(
     let graceUsedThisWeek = false;
 
     for (const item of list) {
-      const attendanceDate = item.employeeType === 'EMPLOYEE' ? undefined : item.attendanceDate;
-      const evaluation = evaluateArrivalWithBudget(item.timeIn, graceUsedThisWeek, ATTENDANCE_TIMEZONE, attendanceDate);
+      const evaluation = evaluateArrivalWithBudget(item.timeIn, graceUsedThisWeek, ATTENDANCE_TIMEZONE, item.attendanceDate);
       if (evaluation.arrivalStatus === 'GRACE_PERIOD') graceUsedThisWeek = true;
       result.set(item.attendanceId, evaluation);
     }
@@ -192,8 +192,8 @@ export function evaluateAttendanceArrivals(
 
 /**
  * Evaluates a single arrival timestamp against office hours policy:
- * - <= 08:00:00: ON_TIME
- * - 08:00:01 - 08:15:00: GRACE_PERIOD
+ * - 08:00:00 - 08:00:59.999...: ON_TIME
+ * - 08:01:00 - 08:15:00: GRACE_PERIOD
  * - > 08:15:00.000: LATE
  */
 export function evaluateArrivalFromTimestamp(
@@ -206,10 +206,11 @@ export function evaluateArrivalFromTimestamp(
   const [startHour, startMinute] = OFFICE_HOURS_START.split(':').map(Number);
   const [graceHour, graceMinute] = GRACE_PERIOD_END.split(':').map(Number);
   const startSeconds = startHour * 3600 + startMinute * 60;
+  const lateStartSeconds = startSeconds + 60;
   const graceEndSeconds = graceHour * 3600 + graceMinute * 60;
 
-  if (seconds <= startSeconds) return 'ON_TIME';
-  if (seconds >= startSeconds + 1 && seconds <= graceEndSeconds && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) return 'GRACE_PERIOD';
+  if (seconds < lateStartSeconds) return 'ON_TIME';
+  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) return 'GRACE_PERIOD';
   return 'LATE';
 }
 
@@ -481,7 +482,7 @@ export const INTERN_LATE_DEDUCTION_PER_HOUR_PHP = 10;
  */
 export const INTERN_PAYROLL_PROFILE_ID = 'INTERN_STANDARD';
 
-export type EmployeeClassification = 'INTERN' | 'EMPLOYEE';
+export type EmployeeClassification = 'INTERN';
 
 export type PayrollCalculationProfile = {
   profileId: PayrollProfileId;
@@ -623,8 +624,8 @@ export type PayrollProfilesResponse = { success: true; profiles: PayrollCalculat
 export type PayrollCutoffsResponse = { success: true; payroll: PayrollCutoffRecord[] };
 export type InternPayrollReportResponse = { success: true; payroll: PayrollCutoffRecord[] };
 
-/** Payroll PDF generation targets: employees only, or interns only. */
-export const payrollPdfWorkerTypes = ['employee', 'intern'] as const;
+/** Payroll PDF generation target for the intern-only application. */
+export const payrollPdfWorkerTypes = ['intern'] as const;
 export type PayrollPdfWorkerType = (typeof payrollPdfWorkerTypes)[number];
 
 /**
@@ -761,7 +762,7 @@ export type SetupUser = {
   fullName: string;
   department: string | null;
   status: 'ACTIVE' | 'INACTIVE';
-  employeeType: 'INTERN' | 'EMPLOYEE';
+  employeeType: 'INTERN';
   gender: UserGender | null;
   dailyRate: number | null;
   payrollProfileId?: PayrollProfileId | null;
@@ -789,7 +790,7 @@ export type SetupUpsertRequest = {
   fullName?: string;
   department?: string;
   status: 'ACTIVE' | 'INACTIVE';
-  employeeType?: 'INTERN' | 'EMPLOYEE';
+  employeeType?: 'INTERN';
   gender?: UserGender | null;
   dailyRate?: number | null;
   payrollProfileId?: PayrollProfileId | null;

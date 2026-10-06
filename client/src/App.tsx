@@ -32,7 +32,6 @@ import type {
   SetupUser,
   UserGender,
   AttendanceListItem,
-  PayrollCalculationProfile,
   PayrollCutoffRecord,
   CutoffCalculationBreakdownData,
   AttendanceDeductionItem,
@@ -62,7 +61,6 @@ import {
   checkAdminSession,
   createDatabaseBackup,
   deletePayrollCutoff,
-  deletePayrollProfile,
   deleteAdminAttendance,
   deleteAdminUser,
   dismissRestoreFailure,
@@ -77,7 +75,6 @@ import {
   getInternDtrSync,
   setInternDtrSync,
   loadPayrollCutoffs,
-  loadPayrollProfiles,
   lockAdmin,
   lockSetup,
   lookupSetupCard,
@@ -90,7 +87,6 @@ import {
   saveAdminAttendance,
   saveAdminUser,
   savePayrollCutoff,
-  savePayrollProfile,
   generatePayrollCutoff,
   generatePayrollPdf,
   loadPayrollPdfs,
@@ -172,11 +168,9 @@ function toErrorMessage(cause: unknown, fallback: string): string {
 async function evaluateKioskArrival(
   attendance: { attendanceId: string; attendanceDate: string; timeIn: string },
   userId: string,
-  employeeType: "INTERN" | "EMPLOYEE",
   timezone: string,
 ): Promise<ArrivalStatus> {
-  const cutoffAwareDate = employeeType === "INTERN" ? attendance.attendanceDate : undefined;
-  const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone, cutoffAwareDate);
+  const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone, attendance.attendanceDate);
   try {
     const weekStart = getManilaWeekStart(attendance.attendanceDate);
     const start = new Date(`${weekStart}T00:00:00Z`);
@@ -195,12 +189,11 @@ async function evaluateKioskArrival(
               userId: row.userId,
               attendanceDate: row.attendanceDate,
               timeIn: row.timeIn,
-              employeeType,
             }))
         : [],
     );
     if (!history.some((row) => row.attendanceId === attendance.attendanceId)) {
-      history.push({ ...attendance, userId, employeeType });
+      history.push({ ...attendance, userId });
     }
     return evaluateAttendanceArrivals(history).get(attendance.attendanceId)?.arrivalStatus ?? fallback;
   } catch {
@@ -587,12 +580,9 @@ export default function App() {
           ? "Admin"
           : (setupForm.department.trim().replace(/\s+/g, " ") || undefined),
         status: setupForm.status,
-        employeeType: isAssist ? "EMPLOYEE" : setupForm.employeeType,
+        employeeType: "INTERN",
         gender: isAssist ? null : (setupForm.gender || null),
-        dailyRate:
-          !isAssist && setupForm.employeeType === "EMPLOYEE"
-            ? Number(setupForm.dailyRate)
-            : null,
+        dailyRate: null,
         photoUrl: isAssist ? null : (setupForm.photoUrl || null),
         cardType: setupForm.cardType,
         label: setupForm.label.trim() || undefined,
@@ -753,7 +743,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? await evaluateKioskArrival(response.attendance, response.user.userId, response.user.employeeType, config.timezone)
+          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
@@ -805,7 +795,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? await evaluateKioskArrival(response.attendance, response.user.userId, response.user.employeeType, config.timezone)
+          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
@@ -1817,7 +1807,7 @@ function SetupDialog(props: SetupDialogProps) {
                     checked={props.form.cardType === "EMPLOYEE"}
                     onChange={() => props.onFormChange("cardType", "EMPLOYEE")}
                   />
-                  Employee card
+                  Intern card
                 </label>
                 <label className={`segment-option ${props.form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
                   <input
@@ -1922,23 +1912,6 @@ function SetupDialog(props: SetupDialogProps) {
                   </select>
                 </label>
                 <label>
-                  <span className="field-label">Employee type</span>
-                  <select
-                    value={props.form.employeeType}
-                    onChange={(event) =>
-                      props.onFormChange(
-                        "employeeType",
-                        event.target.value === "EMPLOYEE"
-                          ? "EMPLOYEE"
-                          : "INTERN",
-                      )
-                    }
-                  >
-                    <option value="INTERN">Intern</option>
-                    <option value="EMPLOYEE">Regular Employee</option>
-                  </select>
-                </label>
-                <label>
                   <span className="field-label">
                     Gender <span className="optional">optional</span>
                   </span>
@@ -1959,22 +1932,6 @@ function SetupDialog(props: SetupDialogProps) {
                     <option value="FEMALE">Female (Ma'am)</option>
                   </select>
                 </label>
-                {props.form.employeeType === "EMPLOYEE" && (
-                  <label>
-                    <span className="field-label">Daily rate (PHP)</span>
-                    <input
-                      type="number"
-                      min="1"
-                      step="0.01"
-                      placeholder="e.g. 610.00"
-                      value={props.form.dailyRate}
-                      onChange={(event) =>
-                        props.onFormChange("dailyRate", event.target.value)
-                      }
-                      required
-                    />
-                  </label>
-                )}
                 <div className="photo-field">
                   <span className="field-label">
                     ID photo <span className="optional">optional</span>
@@ -2086,9 +2043,7 @@ function SetupDialog(props: SetupDialogProps) {
                   props.busy ||
                   (props.form.cardType === "EMPLOYEE" &&
                     (!props.form.userId.trim() ||
-                      !props.form.fullName.trim() ||
-                      (props.form.employeeType === "EMPLOYEE" &&
-                        Number(props.form.dailyRate) <= 0)))
+                      !props.form.fullName.trim()))
                 }
               >
                 {props.busy ? (
@@ -3072,7 +3027,6 @@ function AdminPanel() {
   );
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [rows, setRows] = useState<AttendanceListItem[]>([]);
-  const [profiles, setProfiles] = useState<PayrollCalculationProfile[]>([]);
   const [cutoffs, setCutoffs] = useState<PayrollCutoffRecord[]>([]);
   const [date, setDate] = useState(localDate());
   const [editing, setEditing] = useState<AdminUser | null>(null);
@@ -3158,17 +3112,14 @@ function AdminPanel() {
       const [
         userResponse,
         attendanceResponse,
-        profileResponse,
         cutoffResponse,
       ] = await Promise.all([
         loadAdminUsers(),
         loadAdminAttendance(date),
-        loadPayrollProfiles(),
         loadPayrollCutoffs(),
       ]);
       if (userResponse.success) setUsers(userResponse.users ?? []);
       if (attendanceResponse.success) setRows(attendanceResponse.attendance ?? []);
-      if (profileResponse.success) setProfiles(profileResponse.profiles ?? []);
       if (cutoffResponse.success) setCutoffs(cutoffResponse.payroll ?? []);
     } catch {
       setError("Unable to load administrator data.");
@@ -3330,7 +3281,6 @@ function AdminPanel() {
           {tab === "users" ? (
             <UserEditor
               users={users}
-              profiles={profiles}
               editing={editing}
               setEditing={setEditing}
               onSaved={load}
@@ -3345,8 +3295,6 @@ function AdminPanel() {
             />
           ) : tab === "payroll" ? (
             <PayrollWorkspace
-              users={users}
-              profiles={profiles}
               records={cutoffs}
               onSaved={load}
             />
@@ -3376,7 +3324,7 @@ type AdminUser = {
   fullName: string;
   department: string | null;
   status: "ACTIVE" | "INACTIVE";
-  employeeType: "INTERN" | "EMPLOYEE";
+  employeeType: "INTERN";
   gender: UserGender | null;
   dailyRate: number | null;
   payrollProfileId?: string | null;
@@ -4078,13 +4026,11 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
 }
 export function UserEditor({
   users = [],
-  profiles = [],
   editing,
   setEditing,
   onSaved,
 }: {
   users?: AdminUser[];
-  profiles?: PayrollCalculationProfile[];
   editing: AdminUser | null;
   setEditing: (user: AdminUser | null) => void;
   onSaved: () => void;
@@ -4104,22 +4050,6 @@ export function UserEditor({
   };
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
   const [message, setMessage] = useState("");
-  const blankProfile: PayrollCalculationProfile = {
-    profileId: "",
-    label: "",
-    payrollFrequency: "SEMI_MONTHLY",
-    standardWorkingDaysPerCutoff: 11,
-    incentivesAllowance: 0,
-    specialAllowance: 0,
-    specialHolidayMultiplier: 0.3,
-    regularHolidayMultiplier: 1,
-    halfDayFraction: 0.5,
-    overtimeRate: 0,
-  };
-  const [profileForm, setProfileForm] = useState<PayrollCalculationProfile>(blankProfile);
-  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
-  const [profileMessage, setProfileMessage] = useState("");
-  const [profileBusy, setProfileBusy] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState("");
   const [deleteUserTarget, setDeleteUserTarget] = useState<AdminUser | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
@@ -4154,53 +4084,6 @@ export function UserEditor({
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
-
-  const saveProfile = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const profile = { ...profileForm, profileId: profileForm.profileId.trim(), label: profileForm.label.trim() };
-    if (!profile.profileId || !profile.label) {
-      setProfileMessage("Profile ID and name are required.");
-      return;
-    }
-    setProfileBusy(true);
-    try {
-      const response = await savePayrollProfile(profile);
-      if (!response.success) {
-        setProfileMessage("Unable to save payroll profile.");
-        return;
-      }
-      setProfileMessage("Payroll profile saved.");
-      setEditingProfileId(null);
-      setProfileForm(blankProfile);
-      onSaved();
-    } catch (error) {
-      setProfileMessage(toErrorMessage(error, "Unable to save payroll profile."));
-    } finally {
-      setProfileBusy(false);
-    }
-  };
-
-  const removeProfile = async (profile: PayrollCalculationProfile) => {
-    if (!window.confirm(`Delete payroll profile “${profile.label}”?`)) return;
-    setProfileBusy(true);
-    try {
-      const response = await deletePayrollProfile(profile.profileId);
-      if (!response.success) {
-        setProfileMessage(response.error?.message ?? "Unable to delete payroll profile.");
-        return;
-      }
-      if (editingProfileId === profile.profileId) {
-        setEditingProfileId(null);
-        setProfileForm(blankProfile);
-      }
-      setProfileMessage("Payroll profile deleted.");
-      onSaved();
-    } catch (error) {
-      setProfileMessage(toErrorMessage(error, "Unable to delete payroll profile."));
-    } finally {
-      setProfileBusy(false);
-    }
-  };
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -4460,9 +4343,9 @@ export function UserEditor({
         // "Not set" renders as "" in the select; send null so the backend
         // clears the field instead of writing an empty string.
         gender: form.gender || null,
-        dailyRate: form.employeeType === "EMPLOYEE" ? form.dailyRate : null,
-        payrollProfileId:
-          form.employeeType === "EMPLOYEE" ? form.payrollProfileId : null,
+        employeeType: "INTERN",
+        dailyRate: null,
+        payrollProfileId: null,
         photoUrl: form.cardType === "ADMIN_ASSIST" ? null : (form.photoUrl ?? null),
       };
       const response = await saveAdminUser(payload, editing?.userId);
@@ -4552,7 +4435,7 @@ export function UserEditor({
                   checked={form.cardType !== "ADMIN_ASSIST"}
                   onChange={() => setForm({ ...form, cardType: "EMPLOYEE" })}
                 />
-                Employee card
+                Intern card
               </label>
               <label className={`segment-option is-admin-card ${form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
                 <input
@@ -4685,27 +4568,6 @@ export function UserEditor({
                 />
               </label>
               <label>
-                Employee type
-                <select
-                  value={form.employeeType}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      employeeType: e.target.value === "EMPLOYEE" ? "EMPLOYEE" : "INTERN",
-                      dailyRate:
-                        e.target.value === "INTERN" ? null : form.dailyRate,
-                      payrollProfileId:
-                        e.target.value === "INTERN"
-                          ? (form.payrollProfileId ?? profiles[0]?.profileId ?? null)
-                          : null,
-                    })
-                  }
-                >
-                  <option value="INTERN">Intern</option>
-                  <option value="EMPLOYEE">Employee</option>
-                </select>
-              </label>
-              <label>
                 Gender
                 <select
                   value={form.gender ?? ""}
@@ -4721,42 +4583,6 @@ export function UserEditor({
                   <option value="FEMALE">Female</option>
                 </select>
               </label>
-              {form.employeeType === "EMPLOYEE" && (
-                <>
-                  <label>
-                    Daily rate (PHP)
-                    <input
-                      required
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      value={form.dailyRate ?? ""}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          dailyRate: Number(e.target.value) || null,
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Payroll calculation
-                    <select
-                      value={form.payrollProfileId ?? profiles[0]?.profileId ?? ""}
-                      onChange={(e) =>
-                        setForm({ ...form, payrollProfileId: e.target.value })
-                      }
-                    >
-                      {profiles.length === 0 && <option value="">No payroll profiles</option>}
-                      {profiles.map((profile) => (
-                        <option key={profile.profileId} value={profile.profileId}>
-                          {profile.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </>
-              )}
               <div className="photo-field">
                 <span className="field-label">
                   ID photo <span className="optional">optional</span>
@@ -5053,7 +4879,6 @@ export function UserEditor({
                 </th>
                 <th>User</th>
                 <th>RFID</th>
-                <th>Payroll profile</th>
                 <th>Status</th>
                 <th>Voice</th>
                 <th />
@@ -5062,7 +4887,7 @@ export function UserEditor({
             <tbody>
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: "center", padding: "20px 12px" }}>
+                  <td colSpan={6} style={{ textAlign: "center", padding: "20px 12px" }}>
                     No users match &ldquo;{userSearch.trim()}&rdquo;.{" "}
                     <button className="text-button" type="button" onClick={() => setUserSearch("")}>
                       Clear
@@ -5104,18 +4929,6 @@ export function UserEditor({
                     )}
                   </td>
                   <td className="user-status-cell">{user.rfidUid}</td>
-                  <td className="user-status-cell">
-                    {user.cardType === "ADMIN_ASSIST"
-                      ? "Not applicable"
-                      : user.employeeType === "EMPLOYEE"
-                        ? (profiles.find(
-                            (profile) =>
-                              profile.profileId === user.payrollProfileId,
-                          )?.label ??
-                          user.payrollProfileId ??
-                          "None")
-                        : "Not applicable"}
-                  </td>
                   <td className="user-status-cell">{user.status}</td>
                   <td>
                     {user.cardType === "ADMIN_ASSIST" ? (
@@ -5164,51 +4977,6 @@ export function UserEditor({
                 </tr>
                 ))
               )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="admin-form">
-        <h2>{editingProfileId ? "Edit payroll profile" : "Add payroll profile"}</h2>
-        <form onSubmit={(event) => void saveProfile(event)}>
-          <label>
-            Profile ID
-            <input
-              required
-              disabled={Boolean(editingProfileId)}
-              value={profileForm.profileId}
-              onChange={(event) => setProfileForm({ ...profileForm, profileId: event.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "_") })}
-            />
-          </label>
-          <label>
-            Profile name
-            <input required value={profileForm.label} onChange={(event) => setProfileForm({ ...profileForm, label: event.target.value })} />
-          </label>
-          <label>Standard working days per cutoff<input required type="number" min="0" step="0.01" value={profileForm.standardWorkingDaysPerCutoff} onChange={(event) => setProfileForm({ ...profileForm, standardWorkingDaysPerCutoff: Number(event.target.value) })} /></label>
-          <label>Incentives allowance (PHP)<input required type="number" min="0" step="0.01" value={profileForm.incentivesAllowance} onChange={(event) => setProfileForm({ ...profileForm, incentivesAllowance: Number(event.target.value) })} /></label>
-          <label>Special allowance (PHP)<input required type="number" min="0" step="0.01" value={profileForm.specialAllowance} onChange={(event) => setProfileForm({ ...profileForm, specialAllowance: Number(event.target.value) })} /></label>
-          <label>Special holiday multiplier<input required type="number" min="0" step="0.01" value={profileForm.specialHolidayMultiplier} onChange={(event) => setProfileForm({ ...profileForm, specialHolidayMultiplier: Number(event.target.value) })} /></label>
-          <label>Regular holiday multiplier<input required type="number" min="0" step="0.01" value={profileForm.regularHolidayMultiplier} onChange={(event) => setProfileForm({ ...profileForm, regularHolidayMultiplier: Number(event.target.value) })} /></label>
-          <label>Half-day fraction<input required type="number" min="0" step="0.01" value={profileForm.halfDayFraction} onChange={(event) => setProfileForm({ ...profileForm, halfDayFraction: Number(event.target.value) })} /></label>
-          <label>Overtime rate (PHP/hour)<input required type="number" min="0" step="0.01" value={profileForm.overtimeRate} onChange={(event) => setProfileForm({ ...profileForm, overtimeRate: Number(event.target.value) })} /></label>
-          {profileMessage && <p className="dashboard-alert" role="status">{profileMessage}</p>}
-          <button className="submit-button" type="submit" disabled={profileBusy}>{profileBusy ? "Saving…" : "Save payroll profile"}</button>
-          {editingProfileId && <button className="text-button" type="button" onClick={() => { setEditingProfileId(null); setProfileForm(blankProfile); setProfileMessage(""); }}>Cancel edit</button>}
-        </form>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Profile</th><th>Actions</th></tr></thead>
-            <tbody>
-              {profiles.map((profile) => (
-                <tr key={profile.profileId}>
-                  <td><strong>{profile.label}</strong><small>{profile.profileId}</small></td>
-                  <td>
-                    <button className="text-button" type="button" onClick={() => { setEditingProfileId(profile.profileId); setProfileForm(profile); setProfileMessage(""); }}>Edit</button>
-                    <button className="text-button danger-button" type="button" disabled={profileBusy} onClick={() => void removeProfile(profile)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-              {profiles.length === 0 && <tr><td colSpan={2}>No payroll profiles configured.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -5458,8 +5226,6 @@ export function PayrollWorkspace({
   records,
   onSaved,
 }: {
-  users: AdminUser[];
-  profiles: PayrollCalculationProfile[];
   records: PayrollCutoffRecord[];
   onSaved: () => void;
 }) {
@@ -5629,7 +5395,7 @@ export function PayrollWorkspace({
   }, [form.cutoffStart, form.cutoffEnd, form.payrollCutoffLabel, records]);
 
   const [pdfMessage, setPdfMessage] = useState("");
-  const [generating, setGenerating] = useState<null | "employee" | "intern">(null);
+  const [generating, setGenerating] = useState(false);
   const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
 
   useEffect(() => {
@@ -5638,7 +5404,7 @@ export function PayrollWorkspace({
     });
   }, []);
 
-  const generatePdf = async (workerType: "employee" | "intern") => {
+  const generatePdf = async () => {
     if (generating) return;
     if (!selectedCutoff) {
       setPdfMessage(
@@ -5646,14 +5412,14 @@ export function PayrollWorkspace({
       );
       return;
     }
-    setGenerating(workerType);
+    setGenerating(true);
     setPdfMessage("");
     try {
       const response = await generatePayrollPdf({
         cutoffStart: selectedCutoff.cutoffStart,
         cutoffEnd: selectedCutoff.cutoffEnd,
         payrollCutoffLabel: selectedCutoff.label,
-        workerType,
+        workerType: "intern",
       });
       if (response.success) {
         setPayrollPdfs((current) => [
@@ -5671,7 +5437,7 @@ export function PayrollWorkspace({
           : "Unable to generate the payroll PDF.",
       );
     } finally {
-      setGenerating(null);
+      setGenerating(false);
     }
   };
 
@@ -5757,18 +5523,10 @@ export function PayrollWorkspace({
             <button
               className="admin-button"
               type="button"
-              onClick={() => void generatePdf("employee")}
-              disabled={generating !== null}
+              onClick={() => void generatePdf()}
+              disabled={generating}
             >
-              {generating === "employee" ? "Generating..." : "Generate Employee Payroll PDF"}
-            </button>
-            <button
-              className="admin-button"
-              type="button"
-              onClick={() => void generatePdf("intern")}
-              disabled={generating !== null}
-            >
-              {generating === "intern" ? "Generating..." : "Generate Intern Payroll PDF"}
+              {generating ? "Generating..." : "Generate Intern Payroll PDF"}
             </button>
           </div>
         </div>
@@ -6952,7 +6710,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
               <th>Period</th>
               <th>Type</th>
               <th>Generated</th>
-              <th>Employees</th>
+              <th>Interns</th>
               <th>Total</th>
               <th>Actions</th>
             </tr>
@@ -6966,7 +6724,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
                     {pdf.cutoffStart} to {pdf.cutoffEnd}
                   </small>
                 </td>
-                <td>{pdf.workerType === "employee" ? "Employee" : "Intern"}</td>
+                <td>Intern</td>
                 <td>{formatGeneratedAt(pdf.generatedAt)}</td>
                 <td>{pdf.employeeCount}</td>
                 <td>

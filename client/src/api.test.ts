@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, exportPayrollCsv, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
 afterEach(() => {
@@ -77,52 +77,6 @@ describe('DTR sync health parsing', () => {
     });
     // SAFETY: Removing test mock property from window
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-  });
-});
-
-describe('payroll exports', () => {
-  it('uses the native payroll export command and returns file metadata', async () => {
-    const spy = vi.spyOn(tauriApi, 'payrollExportCsv').mockResolvedValueOnce({
-      success: true,
-      filePath: 'C:\\Data\\exports\\payroll-2026-08-04.csv',
-      directoryPath: 'C:\\Data\\exports',
-      fileName: 'payroll-2026-08-04.csv',
-      fileKind: 'csv',
-      isPortableMode: true,
-    });
-    Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
-    const createObjectUrl = vi.fn();
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
-
-    const result = await exportPayrollCsv();
-
-    expect(result.success).toBe(true);
-    expect(spy).toHaveBeenCalledWith('');
-    expect(createObjectUrl).not.toHaveBeenCalled();
-    // SAFETY: Removing test mock property from window
-    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-  });
-
-  it('downloads the CSV through a blob in web mode without file metadata', async () => {
-    // SAFETY: Mock Response object for fetch
-    const mockResponse = {
-      ok: true,
-      text: async () => 'payrollId,employeeId\n',
-    } as Response;
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse);
-    const createObjectUrl = vi.fn(() => 'blob:payroll');
-    const revokeObjectUrl = vi.fn();
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
-    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
-
-    const result = await exportPayrollCsv();
-
-    expect(result.success).toBe(true);
-    expect(createObjectUrl).toHaveBeenCalled();
-    expect(click).toHaveBeenCalled();
-    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:payroll');
-    click.mockRestore();
   });
 });
 

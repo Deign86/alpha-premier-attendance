@@ -128,11 +128,9 @@ export class SetupService {
       throw new SetupError('USER_CONFLICT', 'That RFID card is already assigned to another user.', 409);
     }
     const existing = await this.sheets.findUserById(userId);
-    const employeeType = isAssist ? 'EMPLOYEE' : (value.employeeType ?? existing?.employeeType ?? 'INTERN');
-    const dailyRate = !isAssist && employeeType === 'EMPLOYEE' ? value.dailyRate : null;
-    if (!isAssist && employeeType === 'EMPLOYEE' && (!Number.isFinite(dailyRate) || (dailyRate ?? 0) <= 0)) {
-      throw new SetupError('SETUP_VALIDATION_ERROR', 'Employees require a positive daily rate.', 400);
-    }
+    if (!isAssist && value.employeeType === 'EMPLOYEE') throw new SetupError('SETUP_VALIDATION_ERROR', 'Only interns can be enrolled.', 400);
+    const employeeType = isAssist ? 'EMPLOYEE' : 'INTERN';
+    const dailyRate = null;
     if (value.gender !== undefined && value.gender !== null && value.gender !== 'MALE' && value.gender !== 'FEMALE') {
       throw new SetupError('SETUP_VALIDATION_ERROR', 'Gender must be MALE or FEMALE.', 400);
     }
@@ -150,7 +148,7 @@ export class SetupService {
       dailyRate,
       photoUrl: isAssist ? null : (value.photoUrl === undefined ? existing?.photoUrl ?? null : isPhotoUrl(value.photoUrl) ? value.photoUrl : null),
       cardType: value.cardType ?? 'EMPLOYEE',
-      payrollProfileId: existing?.payrollProfileId ?? null,
+      payrollProfileId: null,
     };
     try {
       const saved = await this.sheets.upsertUser(user);

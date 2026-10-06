@@ -13,24 +13,19 @@ const config = {
 };
 
 describe('admin and live attendance API', () => {
-  it('creates, finalizes, and exports cutoff payroll without changing daily payroll', async () => {
-    const sheets = new InMemorySheetsService([{ userId: 'APGCO-0013', fullName: 'CHICO, JEAN ASHLEY', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705, payrollProfileId: 'JEAN_TENURED' }]);
+  it('creates, finalizes, and deletes intern cutoff payroll without changing daily payroll', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'INT-EXPORT-1', fullName: 'Maria Santos', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' }]);
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
-    const profiles = await agent.get('/api/admin/payroll/profiles').expect(200);
-    expect(profiles.body.profiles.map((profile: { profileId: string }) => profile.profileId)).toContain('JEAN_TENURED');
-    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15', actualWorkingDays: 11, specialHolidayDays: 1, manualAdjustment: 1500, adjustmentReason: 'Legacy payroll adjustment / needs verification' }).expect(200);
-    expect(created.body.payroll.grossCompensation).toBe(16216.5);
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'INT-EXPORT-1', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15', actualWorkingDays: 11 }).expect(200);
+    expect(created.body.payroll).toMatchObject({ employeeType: 'INTERN', dailyRate: 80, netPay: 880 });
     const payrollId = created.body.payroll.payrollId as string;
     await agent.post(`/api/admin/payroll/cutoffs/${payrollId}/finalize`).expect(200);
-    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll[0]).toMatchObject({ payrollId, status: 'FINALIZED', netPay: 16216.5 });
-    const draft = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 11 }).expect(200);
+    expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll[0]).toMatchObject({ payrollId, status: 'FINALIZED', netPay: 880 });
+    const draft = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'INT-EXPORT-1', cutoffStart: '2026-07-16', cutoffEnd: '2026-07-31', actualWorkingDays: 12 }).expect(200);
     await agent.delete(`/api/admin/payroll/cutoffs/${draft.body.payroll.payrollId}`).expect(200);
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(1);
-    const exported = await agent.get('/api/admin/payroll/export').expect(200);
-    expect(exported.text).toContain('CHICO, JEAN ASHLEY');
-    expect(exported.text).toContain('"Company","Alpha Premier Group of Companies OPC."');
-    expect(exported.text).toContain('"Office","Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Metro Manila"');
+    await agent.get('/api/admin/payroll/export').expect(404);
     // Finalized cutoff can be deleted with confirmation
     await agent.delete(`/api/admin/payroll/cutoffs/${payrollId}`).expect(200);
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(0);
@@ -58,17 +53,17 @@ describe('admin and live attendance API', () => {
     expect((await agent.get('/api/admin/users')).body.users).toHaveLength(0);
   });
 
-  it('deletes subsequent payroll cutoffs when an employee is deleted', async () => {
-    const sheets = new InMemorySheetsService([{ userId: 'EMP-DELETE-1', fullName: 'John Doe', rfidUid: 'EEFF', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 500, payrollProfileId: 'BEA_STANDARD' }]);
+  it('deletes subsequent payroll cutoffs when an intern is deleted', async () => {
+    const sheets = new InMemorySheetsService([{ userId: 'INT-DELETE-1', fullName: 'John Doe', rfidUid: 'EEFF', department: null, active: true, employeeType: 'INTERN' }]);
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
 
-    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'EMP-DELETE-1', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15', actualWorkingDays: 10 }).expect(200);
+    const created = await agent.post('/api/admin/payroll/cutoffs').send({ employeeId: 'INT-DELETE-1', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15', actualWorkingDays: 10 }).expect(200);
     const payrollId = created.body.payroll.payrollId as string;
     expect(await sheets.findPayrollCutoff(payrollId)).not.toBeNull();
 
-    await agent.delete('/api/admin/users/EMP-DELETE-1').expect(200);
-    expect(await sheets.findUserById('EMP-DELETE-1')).toBeNull();
+    await agent.delete('/api/admin/users/INT-DELETE-1').expect(200);
+    expect(await sheets.findUserById('INT-DELETE-1')).toBeNull();
     expect(await sheets.findPayrollCutoff(payrollId)).toBeNull();
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(0);
   });
@@ -122,21 +117,6 @@ describe('admin and live attendance API', () => {
     });
   });
 
-  it('applies a fillable employee late deduction to gross and net pay', async () => {
-    const sheets = new InMemorySheetsService([{ userId: 'APGCO-0013', fullName: 'CHICO, JEAN ASHLEY', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705, payrollProfileId: 'JEAN_TENURED' }]);
-    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
-    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
-    // 11 days at 705 = 7755 basic + 211.5 special holiday + 6750 allowances = 14716.5,
-    // then the fillable late form (5 hours at PHP 50/hr) deducts 250.
-    const created = await agent.post('/api/admin/payroll/cutoffs').send({
-      employeeId: 'APGCO-0013', payrollProfileId: 'JEAN_TENURED', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15',
-      actualWorkingDays: 11, specialHolidayDays: 1, lateUnits: 5, lateDeductionRate: 50, lateDeduction: 250,
-    }).expect(200);
-    expect(created.body.payroll).toMatchObject({
-      lateUnits: 5, lateDeduction: 250, grossCompensation: 14716.5, totalDeductions: 250, netPay: 14466.5, status: 'DRAFT',
-    });
-  });
-
   it('rejects stale attendance edits and conflicting RFID assignments', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: null, active: true },
@@ -145,6 +125,14 @@ describe('admin and live attendance API', () => {
     const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
     await agent.post('/api/admin/unlock').send({ pin: '2468' });
     await agent.patch('/api/admin/users/u1').send({ userId: 'u1', rfidUid: 'CCDD', fullName: 'Ada', status: 'ACTIVE' }).expect(409);
+  });
+
+  it('rejects employee creation in the admin API', async () => {
+    const sheets = new InMemorySheetsService();
+    const app = createApp({ sheets, config, logger: false }); const agent = request.agent(app);
+    await agent.post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+    await agent.post('/api/admin/users').send({ userId: 'EMP-1', rfidUid: 'A1B2', fullName: 'Legacy Employee', status: 'ACTIVE', employeeType: 'EMPLOYEE', dailyRate: 500 }).expect(400);
+    expect(await sheets.findUserById('EMP-1')).toBeNull();
   });
 
   it('keeps an after-hours admin time-out flagged LATE_TIMEOUT until the official time is re-entered', async () => {

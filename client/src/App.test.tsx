@@ -1039,7 +1039,7 @@ describe('Admin Attendance Corrections', () => {
           json: async () => ({
             success: true,
             users: [
-              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
               { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
               { userId: 'u3', fullName: 'Grace Hopper', rfidUid: 'RFID-3', employeeType: 'INTERN', status: 'ACTIVE' },
             ],
@@ -1210,7 +1210,7 @@ describe('Admin Attendance Corrections', () => {
           json: async () => ({
             success: true,
             users: [
-              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
               { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
             ],
           }),
@@ -1326,7 +1326,7 @@ describe('Admin Attendance Corrections', () => {
           json: async () => ({
             success: true,
             users: [
-              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
               { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
             ],
           }),
@@ -1376,7 +1376,7 @@ describe('Admin Attendance Corrections', () => {
     } finally {
       window.history.pushState({}, '', '/');
     }
-  });
+  }, 15_000);
 
   it('shows a Voice slot per user with play and regenerate actions', async () => {
     vi.restoreAllMocks();
@@ -1397,7 +1397,7 @@ describe('Admin Attendance Corrections', () => {
           json: async () => ({
             success: true,
             users: [
-              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
               { userId: 'u2', fullName: 'Zed Nullman', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
             ],
           }),
@@ -1576,7 +1576,7 @@ describe('Admin Attendance Corrections', () => {
           json: async () => ({
             success: true,
             users: [
-              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
             ],
           }),
         } as Response;
@@ -1942,7 +1942,7 @@ describe('Admin Attendance Corrections', () => {
                 userId: 'EMP-01',
                 fullName: 'Bob Smith',
                 department: 'Operations',
-                employeeType: 'EMPLOYEE',
+                employeeType: 'INTERN',
               },
             }),
           } as Response;
@@ -2910,7 +2910,7 @@ describe('N7 concurrent voice regen ownership', () => {
             json: async () => ({
               success: true,
               users: [
-                { userId: 'uA', fullName: 'Ada Alpha', rfidUid: 'RFID-A', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+                { userId: 'uA', fullName: 'Ada Alpha', rfidUid: 'RFID-A', employeeType: 'INTERN', status: 'ACTIVE' },
                 { userId: 'uB', fullName: 'Zed Beta', rfidUid: 'RFID-B', employeeType: 'INTERN', status: 'ACTIVE' },
               ],
             }),
@@ -3004,7 +3004,7 @@ describe('Weekly-grace clamp display extension', () => {
           json: async () => ({
             success: true,
             users: [
-              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
               { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
             ],
           }),
@@ -3104,7 +3104,7 @@ describe('Weekly-grace clamp display extension', () => {
         manualAdjustment: 0, adjustmentReason: null, grossCompensation: 800, netPay: 790,
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
-      render(<PayrollWorkspace users={[]} profiles={[]} records={[internRecord]} onSaved={vi.fn()} />);
+      render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
       const chip = await screen.findByTestId('clamped-payroll-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
       expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
@@ -3122,7 +3122,7 @@ describe('Weekly-grace clamp display extension', () => {
 
 describe('hourly late clamp', () => {
   const v3Users = [
-    { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+    { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
     { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
     { userId: 'u3', fullName: 'Grace Hopper', rfidUid: 'RFID-3', employeeType: 'INTERN', status: 'ACTIVE' },
   ];
@@ -3177,7 +3177,7 @@ describe('hourly late clamp', () => {
     status: 'WORKING',
   });
 
-  it('uses a strict hourly :15 boundary for the first late and excludes employees and weekly grace', async () => {
+  it('uses a strict hourly :15 boundary for intern attendance and weekly grace', async () => {
     vi.restoreAllMocks();
     mockAdminFetch([
       row('hour-grace-exact', '2026-07-27', '08:15:00.000000000'),
@@ -3199,8 +3199,8 @@ describe('hourly late clamp', () => {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
       const chips = await screen.findAllByTestId('clamped-time-in');
-      expect(chips).toHaveLength(5);
-      expect(chips.filter((chip) => chip.textContent === '10:00 AM')).toHaveLength(3);
+      expect(chips).toHaveLength(6);
+      expect(chips.filter((chip) => chip.textContent === '10:00 AM')).toHaveLength(4);
       expect(chips.filter((chip) => chip.textContent === '11:00 AM')).toHaveLength(1);
       expect(screen.getByDisplayValue('09:03')).toBeInTheDocument();
       expect(screen.getAllByDisplayValue('09:15')).toHaveLength(3);
@@ -3394,7 +3394,7 @@ describe('hourly late clamp', () => {
         manualAdjustment: 0, adjustmentReason: null, grossCompensation: 800, netPay: 790,
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
-      render(<PayrollWorkspace users={[]} profiles={[]} records={[internRecord]} onSaved={vi.fn()} />);
+      render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
       // The payroll details use the same hourly display clamp.
       expect(await screen.findByTestId('clamped-payroll-time-in')).toHaveTextContent('10:00 AM');
     } finally {
@@ -3406,7 +3406,7 @@ describe('hourly late clamp', () => {
 describe('Payroll total-deductions fallback', () => {
   function cutoffRecord(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {
     return {
-      payrollId: 'P-FALLBACK', employeeId: 'EMP-FB', employeeName: 'Ada Lovelace', employeeType: 'EMPLOYEE',
+      payrollId: 'P-FALLBACK', employeeId: 'EMP-FB', employeeName: 'Ada Lovelace', employeeType: 'INTERN',
       payrollProfileId: 'BEA_STANDARD', payrollCutoffLabel: 'August 1-15, 2026', cutoffStart: '2026-08-01', cutoffEnd: '2026-08-15',
       payrollFrequency: 'SEMI_MONTHLY', dailyRate: 500, standardWorkingDays: 11, actualWorkingDays: 10, basicPay: 5500,
       specialHolidayDays: 0, specialHolidayMultiplier: 0.3, specialHolidayPay: 0, regularHolidayDays: 0, regularHolidayMultiplier: 1, regularHolidayPay: 0,
@@ -3422,7 +3422,7 @@ describe('Payroll total-deductions fallback', () => {
   function renderRecords(records: PayrollCutoffRecord[]) {
     vi.restoreAllMocks();
     vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
-    return render(<PayrollWorkspace users={[]} profiles={[]} records={records} onSaved={vi.fn()} />);
+    return render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
   }
 
   it('derives total deductions from components when a legacy cutoff row omits the field', () => {

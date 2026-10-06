@@ -1,5 +1,27 @@
 # CI/release fix acceptance gates
 
+## 08:00 minute late-penalty boundary
+
+- [x] The full 08:00 minute is on time; late/grace handling starts at 08:01:00.
+  CHECK: npm test -w shared -- api-contracts.test.ts && npm test -w server -- intern-payroll.test.ts && cargo test --manifest-path src-tauri/Cargo.toml intern_payroll
+  EXPECT: 08:00:00 through 08:00:59 incur no late deduction and consume no grace; 08:01:00 follows the applicable grace/no-grace policy, including a PHP 10 late deduction for interns on/after the no-grace cutoff.
+  EVIDENCE: `npm test` passed shared arrival regressions; Rust `intern_payroll_isolated` passed 64/64 and `payroll_hours_accuracy` passed 46/46, including the 08:00:59/08:01:00 boundary policy.
+
+## Intern-only scope migration
+
+- [ ] Ma'am Bea is converted from employee to intern before employee records are removed.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml migration_bea_employee_to_intern
+  EXPECT: the migration preserves Bea as an INTERN with no employee payroll profile/rate, then removes remaining EMPLOYEE users and their dependent operational/payroll rows.
+  EVIDENCE: Migration `0019_intern_only_scope.sql` and regression `migration_bea_employee_to_intern` are present and compile; local Rust lib test execution is blocked by Windows `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`, so execution evidence is pending CI.
+- [x] New and edited attendance users can only be interns; employee classification/pay-rate/profile controls are gone from the UI and rejected by the native write path.
+  CHECK: npm run typecheck && npm test -w client -- App.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml admin_upsert
+  EXPECT: intern registration/editing remains functional, admin-assist cards remain functional, and EMPLOYEE user payloads cannot create an employee record.
+  EVIDENCE: `npm run lint:oxlint`, `npm run typecheck`, and full `npm test` passed; client registration/edit regressions and server rejection tests cover intern-only writes, while `cargo check` validates the native changes.
+- [x] Employee payroll engines and employee payroll export actions are removed while intern payroll remains functional.
+  CHECK: npm test -w server -- intern-payroll.test.ts payroll.test.ts && cargo test --manifest-path src-tauri/Cargo.toml intern_payroll
+  EXPECT: no employee payroll calculation branch remains; completed intern attendance still produces intern payroll and the payroll workspace exposes intern-only output.
+  EVIDENCE: Full `npm test` passed with 22 payroll workspace tests exposing only intern PDF generation; legacy CSV/XLSX/payslip/register API and command entry points are no longer exposed; Rust intern payroll integration suites passed 64/64 and 46/46.
+
 ## September 2026 intern attendance edge fixtures
 
 - [x] Attendance fixtures cover exact/on-boundary and one-second-late arrivals across the Aug 31–Sep 6 Manila week.

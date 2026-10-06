@@ -5,10 +5,6 @@ mod services {
         include!("../src/services/payroll.rs");
     }
 
-    pub mod employee_payroll {
-        include!("../src/services/employee_payroll.rs");
-    }
-
     pub mod lunch_break {
         include!("../src/services/lunch_break.rs");
     }
@@ -16,56 +12,6 @@ mod services {
     pub mod intern_payroll {
         include!("../src/services/intern_payroll.rs");
     }
-}
-
-#[test]
-fn employee_vectors_match_rust_hours_contract() {
-    use services::employee_payroll::calculate;
-
-    // R-E1: regular full workday.
-    let r_e1 = calculate("2026-10-01T08:00:00+08:00", "2026-10-01T17:00:00+08:00", 80_000).unwrap();
-    assert_eq!(r_e1.worked_hours, 8);
-    assert_eq!(r_e1.daily_pay_centavos, 80_000);
-    assert_eq!(r_e1.half_day_deduction_centavos, 0);
-    assert!(!r_e1.is_half_day);
-
-    // R-E2: four paid hours; expectation transcribed from GATES.md.
-    let r_e2 = calculate("2026-10-01T08:00:00+08:00", "2026-10-01T12:00:00+08:00", 80_000).unwrap();
-    assert_eq!(r_e2.worked_hours, 4);
-    assert_eq!(r_e2.daily_pay_centavos, 40_000);
-    assert_eq!(r_e2.half_day_deduction_centavos, 40_000);
-    assert!(r_e2.is_half_day);
-
-    // R-E3: 45 paid minutes round to one hour (characterization vs T-E3).
-    let r_e3 = calculate("2026-10-01T11:45:00+08:00", "2026-10-01T13:15:00+08:00", 80_000).unwrap();
-    assert_eq!(r_e3.worked_hours, 1);
-    assert_eq!(r_e3.daily_pay_centavos, 10_000);
-    assert_eq!(r_e3.half_day_deduction_centavos, 70_000);
-    assert!(r_e3.is_half_day);
-
-    // R-E4: hourly rate integer division truncates 80,300 / 8 to 10,037.
-    let r_e4 = calculate("2026-10-01T08:00:00+08:00", "2026-10-01T17:00:00+08:00", 80_300).unwrap();
-    assert_eq!(r_e4.worked_hours, 8);
-    assert_eq!(r_e4.daily_pay_centavos, 80_296);
-    assert_eq!(r_e4.half_day_deduction_centavos, 0);
-    assert!(!r_e4.is_half_day);
-
-    // R-E5: time-out cap produces the same result as R-E1.
-    let r_e5 = calculate("2026-10-01T08:00:00+08:00", "2026-10-01T18:30:00+08:00", 80_000).unwrap();
-    assert_eq!(r_e5.worked_hours, 8);
-    assert_eq!(r_e5.daily_pay_centavos, 80_000);
-    assert_eq!(r_e5.half_day_deduction_centavos, 0);
-    assert!(!r_e5.is_half_day);
-
-    // R-E6: one paid hour of undertime.
-    let r_e6 = calculate("2026-10-01T08:00:00+08:00", "2026-10-01T16:00:00+08:00", 80_000).unwrap();
-    assert_eq!(r_e6.worked_hours, 7);
-    assert_eq!(r_e6.daily_pay_centavos, 70_000);
-    assert_eq!(r_e6.half_day_deduction_centavos, 10_000);
-    assert!(!r_e6.is_half_day);
-
-    // R-E7: inverted stamps are rejected.
-    assert!(calculate("2026-10-01T09:00:00+08:00", "2026-10-01T08:00:00+08:00", 80_000).is_err());
 }
 
 #[test]

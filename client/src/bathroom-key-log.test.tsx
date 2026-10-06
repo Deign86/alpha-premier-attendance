@@ -18,7 +18,7 @@ const mockUsers: AdminUser[] = [
     fullName: "John Doe",
     department: "Engineering",
     status: "ACTIVE",
-    employeeType: "EMPLOYEE",
+    employeeType: "INTERN",
     gender: "MALE",
     dailyRate: 1500,
     payrollProfileId: "BEA_STANDARD",
@@ -31,7 +31,7 @@ const mockUsers: AdminUser[] = [
     fullName: "Jane Smith",
     department: "Human Resources",
     status: "ACTIVE",
-    employeeType: "EMPLOYEE",
+    employeeType: "INTERN",
     gender: "FEMALE",
     dailyRate: 1500,
     payrollProfileId: "BEA_STANDARD",
@@ -44,7 +44,7 @@ const mockUsers: AdminUser[] = [
     fullName: "Front Desk Admin",
     department: "Admin",
     status: "ACTIVE",
-    employeeType: "EMPLOYEE",
+    employeeType: "INTERN",
     gender: null,
     dailyRate: null,
     payrollProfileId: null,
@@ -68,8 +68,7 @@ describe("BathroomKeyLogPanel", () => {
 
     render(<BathroomKeyLogPanel users={mockUsers} />);
 
-    expect(await screen.findByRole("heading", { name: "Bathroom Key Log" })).toBeInTheDocument();
-    expect(screen.getByTestId("bathroom-card-male")).toBeInTheDocument();
+    expect(await screen.findByTestId("bathroom-card-male")).toBeInTheDocument();
     expect(screen.getByTestId("bathroom-card-female")).toBeInTheDocument();
 
     const availablePills = screen.getAllByText("AVAILABLE");

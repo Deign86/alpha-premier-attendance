@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { getManilaWeekStart } from '@rfid-attendance/shared';
-import { calculateEmployeePayroll } from './employee-payroll.js';
 import { calculateInternPayroll } from './intern-payroll.js';
 import { KeyedMutex } from './mutex.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayroll, SheetUser } from './sheets.js';
@@ -12,19 +11,6 @@ export class PayrollService {
 
   async ensureForCompletedAttendance(attendance: SheetAttendance, user: SheetUser): Promise<SheetPayroll> {
     if (!attendance.timeIn || !attendance.timeOut || attendance.status !== 'COMPLETED') throw new Error('Payroll requires completed attendance');
-
-    if ((user.employeeType ?? 'INTERN') === 'EMPLOYEE') {
-      const existing = await this.sheets.findPayrollByAttendanceId(attendance.attendanceId);
-      if (existing) return existing;
-      const dailyRate = user.dailyRate;
-      if (dailyRate === null || dailyRate === undefined) throw new Error('Employee daily rate is required for payroll');
-      const calculation = calculateEmployeePayroll({ actualTimeIn: attendance.timeIn, actualTimeOut: attendance.timeOut, dailyRate });
-      return this.sheets.createPayroll({
-        payrollId: crypto.randomUUID(), attendanceId: attendance.attendanceId, userId: user.userId, fullName: user.fullName, employeeType: 'EMPLOYEE', attendanceDate: attendance.attendanceDate,
-        actualTimeIn: attendance.timeIn, actualTimeOut: attendance.timeOut, computedTimeIn: calculation.computedTimeIn, computedTimeOut: calculation.computedTimeOut,
-        graceUsed: null, lateHours: calculation.lateHours, lateDeduction: calculation.lateDeduction, basePay: calculation.basePay, dailyPay: calculation.dailyPay, notes: 'Employee late rules pending client approval',
-      });
-    }
 
     const weekStart = getManilaWeekStart(attendance.attendanceDate);
     const actualTimeIn = attendance.timeIn;

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
-  PayrollCalculationProfile,
   PayrollCutoffRecord,
   PayrollPdfRecord,
 } from "@rfid-attendance/shared";
@@ -10,22 +9,9 @@ import type {
 import * as api from "./api";
 import { PayrollWorkspace } from "./App";
 
-const profiles: PayrollCalculationProfile[] = [{
-  profileId: "BEA_STANDARD",
-  label: "Bea standard",
-  payrollFrequency: "SEMI_MONTHLY",
-  standardWorkingDaysPerCutoff: 11,
-  incentivesAllowance: 0,
-  specialAllowance: 0,
-  specialHolidayMultiplier: 0.3,
-  regularHolidayMultiplier: 1,
-  halfDayFraction: 0.5,
-  overtimeRate: 0,
-}];
-
 function record(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {
   return {
-    payrollId: "P-001", employeeId: "EMP-001", employeeName: "Ada Lovelace", employeeType: "EMPLOYEE",
+    payrollId: "P-001", employeeId: "EMP-001", employeeName: "Ada Lovelace", employeeType: "INTERN",
     payrollProfileId: "BEA_STANDARD", payrollCutoffLabel: "August 1-15, 2026", cutoffStart: "2026-08-01", cutoffEnd: "2026-08-15",
     payrollFrequency: "SEMI_MONTHLY", dailyRate: 500, standardWorkingDays: 11, actualWorkingDays: 11, basicPay: 5500,
     specialHolidayDays: 0, specialHolidayMultiplier: 0.3, specialHolidayPay: 0, regularHolidayDays: 0, regularHolidayMultiplier: 1, regularHolidayPay: 0,
@@ -66,7 +52,7 @@ function pdfRecord(overrides: Partial<PayrollPdfRecord> = {}): PayrollPdfRecord 
     cutoffStart: "2026-08-01",
     cutoffEnd: "2026-08-15",
     payrollCutoffLabel: "August 1-15, 2026",
-    workerType: "employee",
+    workerType: "intern",
     generatedAt: "2026-08-14T10:30:00+08:00",
     employeeCount: 1,
     totalAmount: 5500,
@@ -78,33 +64,6 @@ function pdfRecord(overrides: Partial<PayrollPdfRecord> = {}): PayrollPdfRecord 
 function renderWorkspace(records: PayrollCutoffRecord[]) {
   return render(
     <PayrollWorkspace
-      users={[
-        {
-          userId: "EMP-001",
-          rfidUid: "E001",
-          fullName: "Ada Lovelace",
-          department: "Engineering",
-          status: "ACTIVE",
-          employeeType: "EMPLOYEE",
-          gender: "FEMALE",
-          dailyRate: 500,
-          payrollProfileId: "BEA_STANDARD",
-          photoUrl: null,
-        },
-        {
-          userId: "INT-001",
-          rfidUid: "I001",
-          fullName: "Maria Santos",
-          department: "Marketing",
-          status: "ACTIVE",
-          employeeType: "INTERN",
-          gender: "FEMALE",
-          dailyRate: null,
-          payrollProfileId: "INTERN_STANDARD",
-          photoUrl: null,
-        },
-      ]}
-      profiles={profiles}
       records={records}
       onSaved={vi.fn()}
     />,
@@ -133,10 +92,7 @@ describe("PayrollWorkspace", () => {
   it("generates payroll from a selected cutoff and shows backend errors", async () => {
     generatePayrollCutoffSpy.mockRejectedValueOnce("Unable to generate payroll.");
     const user = userEvent.setup();
-    render(<PayrollWorkspace users={[{
-      userId: "EMP-1", rfidUid: "ABCD1234", fullName: "Ada Lovelace", department: null, status: "ACTIVE",
-      employeeType: "EMPLOYEE", gender: null, dailyRate: 500, payrollProfileId: "BEA_STANDARD", photoUrl: null,
-    }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
+    render(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -146,10 +102,10 @@ describe("PayrollWorkspace", () => {
     expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
   });
 
-  it("shows exactly the two generate payroll PDF buttons and no print/export actions", () => {
+  it("shows only the intern payroll PDF action and no print/export actions", () => {
     renderWorkspace([record()]);
-    expect(screen.getByRole("button", { name: "Generate Employee Payroll PDF" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate Employee Payroll PDF" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
     // No payslip, register, CSV/XLSX, or browser print actions.
     expect(screen.queryByRole("button", { name: /payslip/i })).not.toBeInTheDocument();
@@ -159,8 +115,8 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByRole("button", { name: /csv|xlsx|excel/i })).not.toBeInTheDocument();
   });
 
-  it("generates an employee payroll PDF for the selected cutoff and shows the link list", async () => {
-    const pdf = pdfRecord();
+  it("generates an intern payroll PDF for the selected cutoff and shows the link list", async () => {
+    const pdf = pdfRecord({ totalAmount: 770 });
     generatePayrollPdfSpy.mockResolvedValue({
       success: true,
       pdf,
@@ -171,15 +127,15 @@ describe("PayrollWorkspace", () => {
       isPortableMode: false,
     });
     const user = userEvent.setup();
-    renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
+    renderWorkspace([internRecord({ netPay: 770 })]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
 
     await waitFor(() =>
       expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
         cutoffStart: "2026-08-01",
         cutoffEnd: "2026-08-15",
         payrollCutoffLabel: "August 1-15, 2026",
-        workerType: "employee",
+        workerType: "intern",
       }),
     );
     expect(
@@ -189,9 +145,7 @@ describe("PayrollWorkspace", () => {
     expect(screen.getAllByText("August 1-15, 2026").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Open PDF" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
-    // The employee PDF total is the employee gross only (appears in the PDF
-    // history list alongside the saved payroll table values).
-    expect(screen.getAllByText("PHP 5,500.00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("PHP 770.00").length).toBeGreaterThan(0);
     expect(window.print).not.toHaveBeenCalled();
   });
 
@@ -235,8 +189,8 @@ describe("PayrollWorkspace", () => {
       error: { message: "Unable to generate the payroll PDF." },
     });
     const user = userEvent.setup();
-    renderWorkspace([record()]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
+    renderWorkspace([internRecord()]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
     expect(
       await screen.findByText("Unable to generate the payroll PDF."),
     ).toBeInTheDocument();
@@ -246,7 +200,7 @@ describe("PayrollWorkspace", () => {
   it("shows a message instead of generating when there are no records", async () => {
     const user = userEvent.setup();
     renderWorkspace([]);
-    await user.click(screen.getByRole("button", { name: "Generate Employee Payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
     expect(
       screen.getByText("No payroll records to generate. Create and save a payroll first."),
     ).toBeInTheDocument();
@@ -255,7 +209,6 @@ describe("PayrollWorkspace", () => {
   });
 
   it("lists previously generated payroll PDFs with open and reveal actions", async () => {
-    const employeePdf = pdfRecord();
     const internPdf = pdfRecord({
       payrollPdfId: "payroll-2026-08-14_10-31-00_intern",
       fileName: "payroll-2026-08-14_10-31-00_intern.pdf",
@@ -265,16 +218,16 @@ describe("PayrollWorkspace", () => {
     });
     loadPayrollPdfsSpy.mockResolvedValue({
       success: true,
-      payrollPdfs: [employeePdf, internPdf],
+      payrollPdfs: [internPdf],
     });
-    renderWorkspace([record(), internRecord()]);
+    renderWorkspace([internRecord()]);
 
     // The period label appears in the PDF history rows (the saved payroll
     // table renders it too, so exact-match queries would be ambiguous).
     expect(await screen.findAllByText("August 1-15, 2026")).not.toHaveLength(0);
-    expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Show in Folder" })).toHaveLength(2);
-    expect(screen.getAllByText("Employee")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Show in Folder" })).toHaveLength(1);
+    expect(screen.queryByText("Employee")).not.toBeInTheDocument();
     expect(screen.getAllByText("Intern")).toHaveLength(1);
     expect(window.print).not.toHaveBeenCalled();
   });
@@ -321,31 +274,28 @@ describe("PayrollWorkspace", () => {
     });
   });
 
-  it("opens the edit dialog on a draft record and saves updated earnings and deductions", async () => {
+  it("opens the edit dialog on a draft intern record and saves the manual adjustment", async () => {
     const savePayrollCutoffSpy = vi.spyOn(api, "savePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();
-    renderWorkspace([record({ status: "DRAFT", standardWorkingDays: 11 })]);
+    renderWorkspace([internRecord({ status: "DRAFT", standardWorkingDays: 11 })]);
 
     await user.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByRole("dialog", { name: /Edit Payroll — Ada Lovelace/i })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /Edit Payroll — Maria Santos \(Intern\)/i })).toBeInTheDocument();
 
-    const hraInput = screen.getByLabelText("HRA");
-    const sssInput = screen.getByLabelText("SSS Employee Share");
-    await user.clear(hraInput);
-    await user.type(hraInput, "500");
-    await user.clear(sssInput);
-    await user.type(sssInput, "450");
+    const adjustmentInput = screen.getByLabelText(/Manual Adjustment/i);
+    await user.clear(adjustmentInput);
+    await user.type(adjustmentInput, "50");
+    await user.type(screen.getByLabelText(/Adjustment Reason/i), "Attendance correction");
 
     await user.click(screen.getByRole("button", { name: /Save Changes/i }));
     await waitFor(() => {
       expect(savePayrollCutoffSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          payrollId: "P-001",
-          standardWorkingDays: 11,
-          hra: 500,
-          sss: 450,
+          payrollId: "P-INT-001",
+          manualAdjustment: 50,
+          adjustmentReason: "Attendance correction",
         }),
-        "P-001",
+        "P-INT-001",
       );
     });
   });
@@ -353,10 +303,7 @@ describe("PayrollWorkspace", () => {
   it("allows setting standard working days in the generate panel to customize cutoff generation", async () => {
     generatePayrollCutoffSpy.mockResolvedValueOnce({ success: true });
     const user = userEvent.setup();
-    render(<PayrollWorkspace users={[{
-      userId: "EMP-1", rfidUid: "ABCD1234", fullName: "Ada Lovelace", department: null, status: "ACTIVE",
-      employeeType: "EMPLOYEE", gender: null, dailyRate: 500, payrollProfileId: "BEA_STANDARD", photoUrl: null,
-    }]} profiles={profiles} records={[]} onSaved={vi.fn()} />);
+    render(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
     const stdDaysInput = screen.getByLabelText(/Standard days/i);

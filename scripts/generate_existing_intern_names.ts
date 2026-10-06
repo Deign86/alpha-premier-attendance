@@ -6,7 +6,7 @@
  * generates cloned name audio via local VoiceStudio (Ma'am Bea profile), and creates a machine-readable manifest.
  *
  * Usage:
- *   npx tsx scripts/generate_existing_intern_names.ts [--dry-run] [--missing-only] [--force] [--person-id <id>] [--interns-only]
+ *   npx tsx scripts/generate_existing_intern_names.ts [--dry-run] [--missing-only] [--force] [--person-id <id>]
  */
 
 import { execFileSync } from 'node:child_process';
@@ -66,7 +66,6 @@ export type BatchGeneratorOptions = {
   missingOnly?: boolean;
   force?: boolean;
   personId?: string;
-  internsOnly?: boolean;
   mockUsers?: SheetUser[];
   backupPath?: string;
   dbPath?: string;
@@ -243,14 +242,13 @@ export async function runBatchInternNameGeneration(
     missingOnly = true,
     force = false,
     personId,
-    internsOnly = false,
     mockUsers,
     backupPath,
     dbPath,
   } = options;
 
   console.log('='.repeat(75));
-  console.log(' Alpha Premier Attendance — Cloned Bea Intern & Employee Name Generator');
+  console.log(' Alpha Premier Attendance — Cloned Bea Intern Name Generator');
   console.log('='.repeat(75));
 
   // 1. Load users from source
@@ -318,18 +316,17 @@ export async function runBatchInternNameGeneration(
       users = [
         { userId: 'USR_INT_001', fullName: 'Maria Santos', employeeType: 'INTERN', status: 'ACTIVE' },
         { userId: 'USR_INT_002', fullName: 'Juan Dela Cruz', employeeType: 'INTERN', status: 'ACTIVE' },
-        { userId: 'USR_EMP_001', fullName: 'Ada Lovelace', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
       ];
     }
   }
 
   // 2. Filter target users
   let targetUsers = users.filter(
-    (u) => (u.status === 'ACTIVE' || u.active === true) && !u.userId.startsWith('ADMIN_CARD') && !u.userId.startsWith('ADMIN_'),
+    (u) => (u.status === 'ACTIVE' || u.active === true)
+      && (u.employeeType ?? 'INTERN') === 'INTERN'
+      && !u.userId.startsWith('ADMIN_CARD')
+      && !u.userId.startsWith('ADMIN_'),
   );
-  if (internsOnly) {
-    targetUsers = targetUsers.filter((u) => u.employeeType === 'INTERN');
-  }
   if (personId) {
     targetUsers = targetUsers.filter((u) => u.userId === personId);
   }
@@ -467,7 +464,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
   const dryRun = args.includes('--dry-run');
   const force = args.includes('--force');
   const missingOnly = !force || args.includes('--missing-only');
-  const internsOnly = args.includes('--interns-only');
   const personIdIndex = args.indexOf('--person-id');
   const personId = personIdIndex >= 0 && args[personIdIndex + 1] ? args[personIdIndex + 1] : undefined;
   const backupIndex = args.indexOf('--backup');
@@ -480,7 +476,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
     missingOnly,
     force,
     personId,
-    internsOnly,
     backupPath,
     dbPath,
   }).catch((err) => {

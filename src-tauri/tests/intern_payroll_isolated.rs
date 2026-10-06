@@ -5,10 +5,6 @@ mod services {
         include!("../src/services/payroll.rs");
     }
 
-    pub mod employee_payroll {
-        include!("../src/services/employee_payroll.rs");
-    }
-
     pub mod lunch_break {
         include!("../src/services/lunch_break.rs");
     }
@@ -24,7 +20,7 @@ mod services {
 
 #[tokio::test]
 async fn september_cutoff_seed_persists_backend_calculations_to_sqlite() {
-    use services::{cutoff_payroll::{calculate, CutoffInput}, employee_payroll, intern_payroll};
+    use services::{cutoff_payroll::{calculate, CutoffInput}, intern_payroll};
     use sqlx::{sqlite::SqlitePoolOptions, Row};
 
     let pool = SqlitePoolOptions::new()
@@ -35,53 +31,6 @@ async fn september_cutoff_seed_persists_backend_calculations_to_sqlite() {
     sqlx::query("CREATE TABLE attendance (employee_id TEXT, attendance_date TEXT, time_in TEXT, time_out TEXT, daily_pay INTEGER)")
         .execute(&pool).await.unwrap();
     sqlx::query("CREATE TABLE payroll_cutoffs (employee_id TEXT PRIMARY KEY, basic_pay INTEGER, regular_holiday_pay INTEGER, late_deduction INTEGER, half_day_deduction INTEGER, absence_deduction INTEGER, gross_compensation INTEGER, total_deductions INTEGER, net_pay INTEGER)")
-        .execute(&pool).await.unwrap();
-
-    let employee_shifts = [
-        ("2026-09-01", "08:00:00", "17:00:00"),
-        ("2026-09-02", "08:00:00", "17:00:00"),
-        ("2026-09-03", "08:00:00", "17:00:00"), // regular holiday
-        ("2026-09-04", "08:00:00", "12:00:00"), // half-day
-        ("2026-09-07", "08:00:00", "17:00:00"),
-        ("2026-09-08", "08:00:00", "17:00:00"),
-        ("2026-09-09", "08:00:00", "17:00:00"),
-        ("2026-09-10", "08:00:00", "17:00:00"),
-        ("2026-09-11", "08:00:00", "17:00:00"),
-        ("2026-09-14", "08:00:00", "17:00:00"),
-    ];
-    let mut employee_half_day = 0_i64;
-    for (date, time_in, time_out) in employee_shifts {
-        let daily = employee_payroll::calculate(
-            &format!("{date}T{time_in}+08:00"),
-            &format!("{date}T{time_out}+08:00"),
-            80_000,
-        ).unwrap();
-        employee_half_day += daily.half_day_deduction_centavos;
-        sqlx::query("INSERT INTO attendance VALUES (?, ?, ?, ?, ?)")
-            .bind("EMP-SEP")
-            .bind(date)
-            .bind(time_in)
-            .bind(time_out)
-            .bind(daily.daily_pay_centavos)
-            .execute(&pool).await.unwrap();
-    }
-    let employee_cutoff = calculate(&CutoffInput {
-        employee_id: "EMP-SEP".into(), employee_name: "September Employee".into(), employee_type: "EMPLOYEE".into(),
-        cutoff_start: "2026-09-01".into(), cutoff_end: "2026-09-15".into(), daily_rate: 800.0,
-        standard_working_days: 11.0, actual_working_days: 10.0, basic_pay: None,
-        special_holiday_days: 0.0, special_holiday_multiplier: 0.3, special_holiday_pay: None,
-        regular_holiday_days: 1.0, regular_holiday_multiplier: 1.0, regular_holiday_pay: None,
-        hra: 0.0, incentives_allowance: 0.0, special_allowance: 0.0, late_deduction: 0.0,
-        half_day_count: 1.0, half_day_fraction: 0.5, half_day_deduction: Some(employee_half_day as f64 / 100.0),
-        absent_days: 1.0, absence_deduction: None, overtime_hours: 0.0, overtime_rate: 0.0, overtime_pay: None,
-        sss_employee_share: 0.0, phic_employee_share: 0.0, hdmf_employee_share: 0.0, salary_advance: 0.0,
-        manual_adjustment: 0.0, adjustment_reason: None, approved_working_day_overage: false,
-    }).unwrap();
-    sqlx::query("INSERT INTO payroll_cutoffs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind("EMP-SEP").bind(employee_cutoff.basic_pay).bind(employee_cutoff.regular_holiday_pay)
-        .bind(employee_cutoff.late_deduction).bind(employee_cutoff.half_day_deduction)
-        .bind(employee_cutoff.absence_deduction).bind(employee_cutoff.gross_compensation)
-        .bind(employee_cutoff.total_deductions).bind(employee_cutoff.net_pay)
         .execute(&pool).await.unwrap();
 
     let intern_shifts = [
@@ -127,36 +76,6 @@ async fn september_cutoff_seed_persists_backend_calculations_to_sqlite() {
         .bind(intern_cutoff.total_deductions).bind(intern_cutoff.net_pay)
         .execute(&pool).await.unwrap();
 
-    // BUG-PAY-02: with zero attendance, configured allowances must not survive.
-    let zero_day = calculate(&CutoffInput {
-        employee_id: "EMP-ZERO".into(), employee_name: "Zero Attendance".into(), employee_type: "EMPLOYEE".into(),
-        cutoff_start: "2026-09-01".into(), cutoff_end: "2026-09-15".into(), daily_rate: 800.0,
-        standard_working_days: 11.0, actual_working_days: 0.0, basic_pay: None,
-        special_holiday_days: 0.0, special_holiday_multiplier: 0.3, special_holiday_pay: None,
-        regular_holiday_days: 0.0, regular_holiday_multiplier: 1.0, regular_holiday_pay: None,
-        hra: 200.0, incentives_allowance: 1_000.0, special_allowance: 100.0, late_deduction: 0.0,
-        half_day_count: 0.0, half_day_fraction: 0.5, half_day_deduction: None,
-        absent_days: 11.0, absence_deduction: None, overtime_hours: 0.0, overtime_rate: 0.0, overtime_pay: None,
-        sss_employee_share: 0.0, phic_employee_share: 0.0, hdmf_employee_share: 0.0, salary_advance: 0.0,
-        manual_adjustment: 0.0, adjustment_reason: None, approved_working_day_overage: false,
-    }).unwrap();
-    assert_eq!(zero_day.total_allowance, 0);
-    assert_eq!(zero_day.net_pay, 0);
-    sqlx::query("INSERT INTO payroll_cutoffs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind("EMP-ZERO").bind(zero_day.basic_pay).bind(zero_day.regular_holiday_pay)
-        .bind(zero_day.late_deduction).bind(zero_day.half_day_deduction).bind(zero_day.absence_deduction)
-        .bind(zero_day.gross_compensation).bind(zero_day.total_deductions).bind(zero_day.net_pay)
-        .execute(&pool).await.unwrap();
-
-    let employee_row = sqlx::query("SELECT * FROM payroll_cutoffs WHERE employee_id='EMP-SEP'")
-        .fetch_one(&pool).await.unwrap();
-    assert_eq!(employee_row.get::<i64, _>("basic_pay"), 880_000);
-    assert_eq!(employee_row.get::<i64, _>("regular_holiday_pay"), 80_000);
-    assert_eq!(employee_row.get::<i64, _>("half_day_deduction"), 40_000);
-    assert_eq!(employee_row.get::<i64, _>("absence_deduction"), 80_000);
-    assert_eq!(employee_row.get::<i64, _>("total_deductions"), 120_000);
-    assert_eq!(employee_row.get::<i64, _>("net_pay"), 840_000);
-
     let intern_row = sqlx::query("SELECT * FROM payroll_cutoffs WHERE employee_id='INT-SEP'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(intern_row.get::<i64, _>("late_deduction"), 1_000);
@@ -164,12 +83,7 @@ async fn september_cutoff_seed_persists_backend_calculations_to_sqlite() {
     assert_eq!(intern_row.get::<i64, _>("absence_deduction"), 8_000);
     assert_eq!(intern_row.get::<i64, _>("total_deductions"), 113_000);
     assert_eq!(intern_row.get::<i64, _>("net_pay"), 0); // intern floor at zero
-    let zero_row = sqlx::query("SELECT * FROM payroll_cutoffs WHERE employee_id='EMP-ZERO'")
-        .fetch_one(&pool).await.unwrap();
-    assert_eq!(zero_row.get::<i64, _>("gross_compensation"), 880_000);
-    assert_eq!(zero_row.get::<i64, _>("total_deductions"), 880_000);
-    assert_eq!(zero_row.get::<i64, _>("net_pay"), 0);
-    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM attendance WHERE attendance_date BETWEEN '2026-09-01' AND '2026-09-15'").fetch_one(&pool).await.unwrap(), 20);
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM attendance WHERE attendance_date BETWEEN '2026-09-01' AND '2026-09-15'").fetch_one(&pool).await.unwrap(), 10);
 }
 
 #[test]
@@ -195,7 +109,7 @@ fn named_0815_to_1500_edge_and_boundary_cases_match_daily_rule() {
         EdgeCase { date: "2026-09-02", time_in: "08:15:00", time_out: "15:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
         EdgeCase { date: "2026-09-03", time_in: "08:15:01", time_out: "15:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 2_000, expected_net_centavos: 5_000 },
         EdgeCase { date: "2026-09-04", time_in: "08:16:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0, expected_net_centavos: 7_000 },
-        EdgeCase { date: "2026-09-07", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0, expected_net_centavos: 8_000 },
+        EdgeCase { date: "2026-09-07", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0, expected_net_centavos: 8_000 },
     ];
 
     for case in cases {
@@ -387,7 +301,7 @@ fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
 
     let cases = [
         AttendanceCase { employee_id: "APG-2026-116", date: "2026-09-01", time_in: "08:00:00", time_out: "17:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0 },
-        AttendanceCase { employee_id: "APG-2026-117", date: "2026-09-01", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0 },
+        AttendanceCase { employee_id: "APG-2026-117", date: "2026-09-01", time_in: "08:00:01", time_out: "17:00:00", grace_available: true, expected_grace_used: false, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0 },
         AttendanceCase { employee_id: "APG-2026-116", date: "2026-09-02", time_in: "08:08:00", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0 },
         AttendanceCase { employee_id: "APG-2026-116", date: "2026-09-03", time_in: "08:08:00", time_out: "17:00:00", grace_available: false, expected_grace_used: false, expected_late_hours: 1, expected_late_centavos: 1_000, expected_undertime_centavos: 0 },
         AttendanceCase { employee_id: "APG-2026-117", date: "2026-09-03", time_in: "08:15:00", time_out: "17:00:00", grace_available: true, expected_grace_used: true, expected_late_hours: 0, expected_late_centavos: 0, expected_undertime_centavos: 0 },

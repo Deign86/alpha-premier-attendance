@@ -1,7 +1,6 @@
 pub mod cutoff_payroll;
 pub mod dtr_recon;
 pub mod dtr_sync;
-pub mod employee_payroll;
 pub mod intern_payroll;
 pub mod lunch_break;
 pub mod office_hours;

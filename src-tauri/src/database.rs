@@ -773,6 +773,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_bea_employee_to_intern() {
+        let dir = std::env::temp_dir().join(format!("alpha-intern-only-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = AppState::new(
+            dir.clone(),
+            dir.join("attendance.db"),
+            dir.join("exports"),
+            false,
+            crate::config::LanConfig::default(),
+            crate::config::OfficeConfig::default(),
+            ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .expect("database");
+        let now = chrono::Utc::now().to_rfc3339();
+        for (id, name, employee_type, profile) in [
+            ("BEA-1", "Ma'am Bea", "EMPLOYEE", Some("BEA_STANDARD")),
+            ("EMP-2", "Legacy Employee", "EMPLOYEE", Some("JEAN_TENURED")),
+            ("INT-1", "Existing Intern", "INTERN", None),
+        ] {
+            sqlx::query("INSERT INTO users (user_id,rfid_uid,full_name,status,employee_type,daily_rate_centavos,payroll_profile_id,card_type,created_at,updated_at) VALUES (?,?,?,?,?,50000,?,'EMPLOYEE',?,?)")
+                .bind(id)
+                .bind(format!("RFID-{id}"))
+                .bind(name)
+                .bind("ACTIVE")
+                .bind(employee_type)
+                .bind(profile)
+                .bind(&now)
+                .bind(&now)
+                .execute(&state.db)
+                .await
+                .unwrap();
+        }
+        sqlx::raw_sql(include_str!("../db/migrations/0019_intern_only_scope.sql"))
+            .execute(&state.db)
+            .await
+            .expect("intern-only migration");
+
+        let bea: (String, Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT employee_type,daily_rate_centavos,payroll_profile_id FROM users WHERE user_id='BEA-1'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(bea, ("INTERN".into(), None, None));
+        let legacy_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE user_id='EMP-2'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(legacy_count, 0);
+        let intern_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE user_id='INT-1' AND employee_type='INTERN'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(intern_count, 1);
+        let employee_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE employee_type='EMPLOYEE'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(employee_count, 0);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn create_backup_produces_a_readable_consistent_snapshot() {
         let dir = std::env::temp_dir().join(format!("alpha-backup-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();

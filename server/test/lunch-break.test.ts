@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DateTime } from 'luxon';
 import { lunchBreakExcludedSeconds, paidWorkHours, paidWorkSeconds } from '../src/lunch-break.js';
-import { calculateEmployeePayroll } from '../src/employee-payroll.js';
 import { calculateInternPayroll } from '../src/intern-payroll.js';
 
 const timezone = 'Asia/Manila';
@@ -60,25 +59,6 @@ describe('lunch break exclusion (12:00–13:00 Manila)', () => {
   it('clamps inverted or zero intervals at zero paid time', () => {
     expect(paidWorkSeconds(at(17, 0), at(9, 0))).toBe(0);
     expect(paidWorkSeconds(at(9, 0), at(9, 0))).toBe(0);
-  });
-});
-
-describe('employee payroll calculates hours 1:1 from DTR', () => {
-  it('reports 8 payable hours for a 08:00–17:00 shift', () => {
-    const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T08:00:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(8);
-    expect(result.dailyPay).toBe(500);
-  });
-
-  it('reports 0.5 worked hours for an 11:45-13:15 shift', () => {
-    const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T11:45:00+08:00', actualTimeOut: '2026-08-01T13:15:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(0.5);
-    expect(result.dailyPay).toBe(31.25);
-  });
-
-  it('preserves 6.5 paid hours', () => {
-    const result = calculateEmployeePayroll({ actualTimeIn: '2026-08-01T09:00:00+08:00', actualTimeOut: '2026-08-01T16:30:00+08:00', dailyRate: 500 });
-    expect(result.workedHours).toBe(6.5);
   });
 });
 

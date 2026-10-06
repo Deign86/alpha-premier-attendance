@@ -205,11 +205,7 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     let net = gross - total_deductions;
     // T2: intern cutoff floors at zero (mirrors the TS engine and the daily
     // intern rule) — an intern can never owe money for a period.
-    let (gross_compensation, net_pay) = if input.employee_type == "INTERN" {
-        (gross.max(0), net.max(0))
-    } else {
-        (gross, net)
-    };
+    let (gross_compensation, net_pay) = (gross.max(0), net.max(0));
 
     Ok(CutoffResult {
         basic_pay: basic,
@@ -625,12 +621,6 @@ mod tests {
         let intern = calculate(&base).unwrap();
         assert_eq!(intern.net_pay, 0);
         assert_eq!(intern.gross_compensation, 8_000);
-        let employee = calculate(&CutoffInput {
-            employee_type: "EMPLOYEE".into(),
-            ..base
-        })
-        .unwrap();
-        assert_eq!(employee.net_pay, -92_000);
     }
 
     #[test]

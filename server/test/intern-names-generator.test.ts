@@ -45,7 +45,6 @@ describe('batch intern name voice generation', () => {
 
     const result = await runBatchInternNameGeneration({
       dryRun: true,
-      internsOnly: true,
       mockUsers,
     });
 
@@ -63,12 +62,12 @@ describe('batch intern name voice generation', () => {
     expect(profiles['USR_INT_002']).toBeDefined();
     expect(profiles['USR_INT_002'].normalizedSpeechText).toBe('Juan Dela Cruz');
 
-    // Should NOT include regular employee or archived intern when internsOnly is set
+    // Employee and archived records are excluded from intern name generation.
     expect(profiles['USR_EMP_001']).toBeUndefined();
     expect(profiles['USR_INT_003']).toBeUndefined();
   });
 
-  it('discovers BOTH active interns and regular employees by default', async () => {
+  it('excludes legacy employee records by default', async () => {
     const mockUsers: SheetUser[] = [
       {
         userId: 'USR_INT_001',
@@ -101,23 +100,18 @@ describe('batch intern name voice generation', () => {
 
     const result = await runBatchInternNameGeneration({
       dryRun: true,
-      internsOnly: false,
       mockUsers,
     });
 
-    // 2 active users (1 intern + 1 employee, excluding archived)
-    expect(result.discovered).toBe(2);
-    expect(result.generated).toBe(2);
+    expect(result.discovered).toBe(1);
+    expect(result.generated).toBe(1);
 
     const profiles = result.manifest.profiles;
     expect(profiles['USR_INT_001']).toBeDefined();
     expect(profiles['USR_INT_001'].employeeType).toBe('INTERN');
     expect(profiles['USR_INT_001'].normalizedSpeechText).toBe('Maria Santos');
 
-    expect(profiles['USR_EMP_001']).toBeDefined();
-    expect(profiles['USR_EMP_001'].employeeType).toBe('EMPLOYEE');
-    expect(profiles['USR_EMP_001'].normalizedSpeechText).toBe('Ada Lovelace');
-
+    expect(profiles['USR_EMP_001']).toBeUndefined();
     expect(profiles['USR_EMP_002']).toBeUndefined();
   });
 });

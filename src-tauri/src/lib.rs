@@ -215,7 +215,7 @@ async fn admin_users(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let rows = sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, gender, daily_rate_centavos, payroll_profile_id, photo_url, card_type FROM users ORDER BY full_name")
+    let rows = sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, gender, daily_rate_centavos, payroll_profile_id, photo_url, card_type FROM users WHERE employee_type = 'INTERN' OR card_type = 'ADMIN_ASSIST' ORDER BY full_name")
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     let users = rows.into_iter().map(|row| {
         let user_id = row.get::<String,_>("user_id");
@@ -249,8 +249,7 @@ async fn admin_list_users(
 /// clip; assist cards, inactive users, and unknown types never enqueue.
 fn should_enqueue_voice_job(card_type: &str, employee_type: &str, status: &str) -> bool {
     card_type != "ADMIN_ASSIST"
-        && (employee_type.eq_ignore_ascii_case("INTERN")
-            || employee_type.eq_ignore_ascii_case("EMPLOYEE"))
+        && employee_type.eq_ignore_ascii_case("INTERN")
         && status.eq_ignore_ascii_case("ACTIVE")
 }
 
@@ -378,13 +377,12 @@ async fn admin_upsert_user_inner(
         .and_then(|v| v.as_str())
         .unwrap_or("ACTIVE");
 
-    let employee_type = if is_assist {
-        "EMPLOYEE"
-    } else {
-        user.get("employeeType")
-            .and_then(|v| v.as_str())
-            .unwrap_or("INTERN")
-    };
+    if !is_assist
+        && user.get("employeeType").and_then(|v| v.as_str()).is_some_and(|value| value != "INTERN")
+    {
+        return Err("ADMIN_VALIDATION_ERROR".into());
+    }
+    let employee_type = "INTERN";
 
     let department = if is_assist {
         Some(user.get("department").and_then(|v| v.as_str()).unwrap_or("Admin"))
@@ -402,7 +400,6 @@ async fn admin_upsert_user_inner(
         || rfid_uid.is_empty()
         || full_name.is_empty()
         || !matches!(status, "ACTIVE" | "INACTIVE")
-        || !matches!(employee_type, "INTERN" | "EMPLOYEE")
         || !matches!(card_type, "EMPLOYEE" | "ADMIN_ASSIST")
         || gender
             .as_deref()
@@ -422,13 +419,7 @@ async fn admin_upsert_user_inner(
         }
     }
 
-    let daily_rate = if is_assist {
-        None
-    } else {
-        user.get("dailyRate")
-            .and_then(|v| v.as_i64())
-            .map(|v| v * 100)
-    };
+    let daily_rate = None;
 
     let photo_cleared = match user.get("photoUrl") {
         Some(serde_json::Value::Null) => true,
@@ -462,7 +453,7 @@ async fn admin_upsert_user_inner(
         employee_type,
         gender.as_deref(),
         daily_rate,
-        if is_assist { None } else { user.get("payrollProfileId").and_then(|v| v.as_str()) },
+        None,
         photo_url_arg,
         card_type,
         &now,
@@ -1637,8 +1628,8 @@ async fn admin_update_attendance_impl(
     // (cap_late_timeout_out) before any math, so the day is a full capped shift.
     if status == "COMPLETED" || status == "LATE_TIMEOUT" {
         if let (Some(actual_in), Some(actual_out)) = (time_in, time_out) {
-            if let Some(user_row) = sqlx::query("SELECT user_id,full_name,employee_type,daily_rate_centavos FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
-                ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), user_row.get("employee_type"), user_row.get("daily_rate_centavos"), date, actual_in, actual_out).await?;
+            if let Some(user_row) = sqlx::query("SELECT user_id,full_name FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
+                ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), date, actual_in, actual_out).await?;
             }
         }
     }
@@ -1795,15 +1786,11 @@ async fn admin_create_backdated_attendance_impl(
     // (cap_late_timeout_out) before any math, so the day is a full capped shift.
     if status == "COMPLETED" || status == "LATE_TIMEOUT" {
         if let Some(actual_out) = time_out {
-            let employee_type: String = user.get("employee_type");
-            let daily_rate: Option<i64> = user.get("daily_rate_centavos");
             let _ = ensure_payroll(
                 state,
                 &attendance_id,
                 user_id,
                 full_name.clone(),
-                &employee_type,
-                daily_rate,
                 attendance_date,
                 time_in,
                 actual_out,
@@ -3216,85 +3203,6 @@ async fn payroll_delete_cutoff(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     delete_cutoff_record(&state, payroll_id).await
-}
-
-#[tauri::command]
-async fn payroll_export_csv(
-    state: State<'_, AppState>,
-    token: String,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    let rows = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_cutoff_label,cutoff_start,cutoff_end,basic_pay_centavos,hra_centavos,incentives_allowance_centavos,special_allowance_centavos,regular_holiday_pay_centavos,special_holiday_pay_centavos,overtime_pay_centavos,gross_compensation_centavos,sss_centavos,phic_centavos,hdmf_centavos,salary_advance_centavos,absence_deduction_centavos,late_deduction_centavos,half_day_deduction_centavos,net_pay_centavos,status FROM payroll_cutoffs ORDER BY cutoff_start,employee_name").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let mut output = String::new();
-    output.push_str(&format!(
-        "\"Company\",\"{}\"\n",
-        state.office.company_name.replace('"', "\"\"")
-    ));
-    output.push_str(&format!(
-        "\"Office\",\"{}\"\n",
-        state.office.display_full().replace('"', "\"\"")
-    ));
-    output.push_str("PAYROLL_ID,EMPLOYEE_ID,EMPLOYEE_NAME,CUTOFF_LABEL,CUTOFF_START,CUTOFF_END,BASIC_PAY_PHP,HRA_PHP,INCENTIVES_PHP,SPECIAL_ALLOWANCE_PHP,REGULAR_HOLIDAY_PHP,SPECIAL_HOLIDAY_PHP,OVERTIME_PHP,GROSS_PAY_PHP,SSS_PHP,PHIC_PHP,HDMF_PHP,SALARY_ADVANCE_PHP,ABSENT_DEDUCTION_PHP,LATE_DEDUCTION_PHP,TOTAL_DEDUCTIONS_PHP,NET_PAY_PHP,STATUS\n");
-    for row in rows {
-        let name = row.get::<String, _>("employee_name").replace('"', "\"\"");
-        let label = row
-            .get::<String, _>("payroll_cutoff_label")
-            .replace('"', "\"\"");
-        let sss = row.get::<i64, _>("sss_centavos") as f64 / 100.0;
-        let phic = row.get::<i64, _>("phic_centavos") as f64 / 100.0;
-        let hdmf = row.get::<i64, _>("hdmf_centavos") as f64 / 100.0;
-        let adv = row.get::<i64, _>("salary_advance_centavos") as f64 / 100.0;
-        let abs = row.get::<i64, _>("absence_deduction_centavos") as f64 / 100.0;
-        let late = (row.get::<i64, _>("late_deduction_centavos") + row.get::<i64, _>("half_day_deduction_centavos")) as f64 / 100.0;
-        let total_ded = sss + phic + hdmf + adv + abs + late;
-        output.push_str(&format!(
-            "{},{},\"{}\",\"{}\",{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{}\n",
-            row.get::<String, _>("payroll_id"),
-            row.get::<String, _>("employee_id"),
-            name,
-            label,
-            row.get::<String, _>("cutoff_start"),
-            row.get::<String, _>("cutoff_end"),
-            row.get::<i64, _>("basic_pay_centavos") as f64 / 100.0,
-            row.get::<i64, _>("hra_centavos") as f64 / 100.0,
-            row.get::<i64, _>("incentives_allowance_centavos") as f64 / 100.0,
-            row.get::<i64, _>("special_allowance_centavos") as f64 / 100.0,
-            row.get::<i64, _>("regular_holiday_pay_centavos") as f64 / 100.0,
-            row.get::<i64, _>("special_holiday_pay_centavos") as f64 / 100.0,
-            row.get::<i64, _>("overtime_pay_centavos") as f64 / 100.0,
-            row.get::<i64, _>("gross_compensation_centavos") as f64 / 100.0,
-            sss,
-            phic,
-            hdmf,
-            adv,
-            abs,
-            late,
-            total_ded,
-            row.get::<i64, _>("net_pay_centavos") as f64 / 100.0,
-            row.get::<String, _>("status")
-        ));
-    }
-    let date = chrono::Utc::now()
-        .with_timezone(&Manila)
-        .format("%Y-%m-%d")
-        .to_string();
-    let file_name = format!("payroll-{date}.csv");
-    let output_path = state.exports_dir.join(&file_name);
-    std::fs::create_dir_all(&state.exports_dir).map_err(|e| e.to_string())?;
-    std::fs::write(&output_path, &output).map_err(|e| {
-        log::error!("payroll CSV write to {} failed: {e}", output_path.display());
-        "EXPORT_WRITE_FAILED".to_string()
-    })?;
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'EXPORT_GENERATED', ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(chrono::Utc::now().to_rfc3339()).bind("Payroll CSV generated").bind(format!("export-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
-    Ok(generated_file_metadata(
-        &state,
-        &file_name,
-        &output_path,
-        "csv",
-        format!("Payroll CSV generated: {file_name}."),
-    ))
 }
 
 async fn enrich_cutoff_input(
@@ -5071,16 +4979,11 @@ async fn generate_payroll_pdf(
     if cutoff_end < cutoff_start {
         return Err("INVALID_CUTOFF_PERIOD".into());
     }
-    let worker_upper = match worker_type.as_str() {
-        "EMPLOYEE" => "EMPLOYEE",
-        "INTERN" => "INTERN",
-        _ => return Err("INVALID_WORKER_TYPE".into()),
-    };
-    let worker_lower = if worker_upper == "EMPLOYEE" {
-        "employee"
-    } else {
-        "intern"
-    };
+    if worker_type != "INTERN" {
+        return Err("INVALID_WORKER_TYPE".into());
+    }
+    let worker_upper = "INTERN";
+    let worker_lower = "intern";
     let label = if payroll_cutoff_label.trim().is_empty() {
         format!("{cutoff_start} to {cutoff_end}")
     } else {
@@ -5096,32 +4999,7 @@ async fn generate_payroll_pdf(
     let output_path = state.exports_dir.join(&file_name);
     let generated_at = manila_now.to_rfc3339();
 
-    let (employee_count, total_amount_centavos) = if worker_upper == "EMPLOYEE" {
-        let emp_rows =
-            crate::reporting::load_employee_payslip_rows(&state.db, &cutoff_start, &cutoff_end)
-                .await
-                .map_err(|e| e.to_string())?;
-        if emp_rows.is_empty() {
-            return Err(format!(
-                "NO_PAYROLL_RECORDS: No employee payroll records for {label}. Create and save an employee payroll for this cutoff first."
-            ));
-        }
-        if let Err(error) = (|| {
-            std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
-                .map_err(|e| e.to_string())?;
-            crate::reporting::generate_employee_payslip_document(
-                &emp_rows,
-                &label,
-                &state.office,
-                &output_path,
-            )
-        })() {
-            log::error!("employee payroll payslip PDF generation failed: {error}");
-            return Err(error);
-        }
-        let total: i64 = emp_rows.iter().map(|r| r.gross_compensation_centavos).sum();
-        (emp_rows.len() as i64, total)
-    } else {
+    let (employee_count, total_amount_centavos) = {
         let rows = crate::reporting::load_payroll_sheet_rows(
             &state.db,
             &cutoff_start,
@@ -5226,7 +5104,7 @@ async fn list_payroll_pdfs(
                 "cutoffStart": row.get::<String, _>("cutoff_start"),
                 "cutoffEnd": row.get::<String, _>("cutoff_end"),
                 "payrollCutoffLabel": row.get::<String, _>("payroll_cutoff_label"),
-                "workerType": if row.get::<String, _>("worker_type") == "EMPLOYEE" { "employee" } else { "intern" },
+                "workerType": "intern",
                 "generatedAt": row.get::<String, _>("created_at"),
                 "employeeCount": row.get::<i64, _>("employee_count"),
                 "totalAmount": row.get::<i64, _>("total_amount_centavos") as f64 / 100.0,
@@ -5611,15 +5489,11 @@ async fn scan_rfid_impl(
         && (attendance_status == "COMPLETED" || attendance_status == "LATE_TIMEOUT")
     {
         if let (Some(actual_in), Some(actual_out)) = (time_in.as_deref(), time_out.as_deref()) {
-            let employee_type: String = effective_user.get("employee_type");
-            let daily_rate: Option<i64> = effective_user.get("daily_rate_centavos");
             if let Err(error) = ensure_payroll(
                 &state,
                 &attendance_id,
                 &user_id,
                 effective_user.get::<String, _>("full_name"),
-                &employee_type,
-                daily_rate,
                 &date,
                 actual_in,
                 actual_out,
@@ -5758,104 +5632,80 @@ async fn ensure_payroll(
     attendance_id: &str,
     user_id: &str,
     full_name: String,
-    employee_type: &str,
-    daily_rate: Option<i64>,
     date: &str,
     actual_in: &str,
     actual_out: &str,
 ) -> Result<(), String> {
-    let (computed_in, computed_out, grace_used, late_hours, deduction, is_half_day, half_day_deduction, base_pay, daily_pay) =
-        if employee_type == "EMPLOYEE" {
-            let result = crate::services::employee_payroll::calculate(
-                actual_in,
-                actual_out,
-                daily_rate.unwrap_or(0),
-            )?;
-            (
-                result.computed_time_in,
-                result.computed_time_out,
-                None,
-                result.late_hours,
-                result.late_deduction_centavos,
-                result.is_half_day,
-                result.half_day_deduction_centavos,
-                result.base_pay_centavos,
-                result.daily_pay_centavos,
-            )
+    let (computed_in, computed_out, grace_used, late_hours, deduction, is_half_day, half_day_deduction, base_pay, daily_pay) = {
+        let date_value =
+            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| e.to_string())?;
+        let week_start = date_value
+            - chrono::Duration::days(date_value.weekday().num_days_from_monday() as i64);
+        let no_grace_cutover = crate::services::intern_payroll::is_no_grace_date(date);
+        // Post-cutover skips grace-claim INSERT/DELETE, preserving pre-cutover history.
+        let grace_available = if no_grace_cutover {
+            false
         } else {
-            let date_value =
-                chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| e.to_string())?;
-            let week_start = date_value
-                - chrono::Duration::days(date_value.weekday().num_days_from_monday() as i64);
-            let no_grace_cutover = crate::services::intern_payroll::is_no_grace_date(date);
-            // Post-cutover skips grace-claim INSERT/DELETE, preserving pre-cutover history.
-            let grace_available = if no_grace_cutover {
-                false
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id != ?",
+            )
+            .bind(user_id)
+            .bind(week_start.to_string())
+            .bind(attendance_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+                == 0
+        };
+        let mut result = crate::services::intern_payroll::calculate(
+            date,
+            actual_in,
+            actual_out,
+            grace_available,
+        )?;
+        if result.grace_used && !no_grace_cutover {
+            let grace_id = uuid::Uuid::new_v4().to_string();
+            let used_at = chrono::Utc::now().to_rfc3339();
+            let inserted = sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&state.db).await.map_err(|e| e.to_string())?.rows_affected() == 1;
+            if inserted {
+                enqueue_sync(state, "InternGrace", &grace_id, "UPSERT", &serde_json::json!({"graceId":grace_id,"userId":user_id,"weekStart":week_start.to_string(),"attendanceId":attendance_id,"usedAt":used_at})).await;
             } else {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id != ?",
+                let own_claim: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id=?",
                 )
                 .bind(user_id)
                 .bind(week_start.to_string())
                 .bind(attendance_id)
                 .fetch_one(&state.db)
                 .await
-                .map_err(|e| e.to_string())?
-                    == 0
-            };
-            let mut result = crate::services::intern_payroll::calculate(
+                .map_err(|e| e.to_string())?;
+                if own_claim == 0 {
+                    result = crate::services::intern_payroll::calculate(
                 date,
                 actual_in,
                 actual_out,
-                grace_available,
-            )?;
-            if result.grace_used && !no_grace_cutover {
-                let grace_id = uuid::Uuid::new_v4().to_string();
-                let used_at = chrono::Utc::now().to_rfc3339();
-                let inserted = sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&state.db).await.map_err(|e| e.to_string())?.rows_affected() == 1;
-                if inserted {
-                    enqueue_sync(state, "InternGrace", &grace_id, "UPSERT", &serde_json::json!({"graceId":grace_id,"userId":user_id,"weekStart":week_start.to_string(),"attendanceId":attendance_id,"usedAt":used_at})).await;
-                } else {
-                    let own_claim: i64 = sqlx::query_scalar(
-                        "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id=?",
-                    )
-                    .bind(user_id)
-                    .bind(week_start.to_string())
-                    .bind(attendance_id)
-                    .fetch_one(&state.db)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                    if own_claim == 0 {
-                        result = crate::services::intern_payroll::calculate(
-                            date,
-                            actual_in,
-                            actual_out,
-                            false,
-                        )?;
-                    }
-                }
-            } else {
-                // Keep legacy stale-claim cleanup for historical recalculations;
-                // post-cutover recalculations must never erase a history claim.
-                if date < crate::services::intern_payroll::NO_GRACE_CUTOFF_DATE {
-                    let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
-                        .bind(attendance_id)
-                        .execute(&state.db)
-                        .await;
+                        false,
+                    )?;
                 }
             }
-            (
-                result.computed_time_in,
-                result.computed_time_out,
-                Some(result.grace_used),
-                result.late_hours,
-                result.late_deduction_centavos,
-                result.is_half_day,
-                result.half_day_deduction_centavos,
-                result.base_pay_centavos,
-                result.daily_pay_centavos,
-            )
-        };
+        } else if date < crate::services::intern_payroll::NO_GRACE_CUTOFF_DATE {
+            let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
+                .bind(attendance_id)
+                .execute(&state.db)
+                .await;
+        }
+        (
+            result.computed_time_in,
+            result.computed_time_out,
+            Some(result.grace_used),
+            result.late_hours,
+            result.late_deduction_centavos,
+            result.is_half_day,
+            result.half_day_deduction_centavos,
+            result.base_pay_centavos,
+            result.daily_pay_centavos,
+        )
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let payroll_id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
@@ -5879,7 +5729,7 @@ async fn ensure_payroll(
            half_day_deduction_centavos=excluded.half_day_deduction_centavos, \
            updated_at=excluded.updated_at",
     )
-    .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind(employee_type).bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(if is_half_day { 1 } else { 0 }).bind(half_day_deduction).bind(&now).bind(&now)
+    .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind("INTERN").bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(if is_half_day { 1 } else { 0 }).bind(half_day_deduction).bind(&now).bind(&now)
     .execute(&state.db).await.map_err(|e| e.to_string())?;
 
     let effective_payroll_id: String = sqlx::query_scalar(
@@ -5890,7 +5740,7 @@ async fn ensure_payroll(
     .await
     .map_err(|e| e.to_string())?;
 
-    enqueue_sync(state, "Payroll", &effective_payroll_id, "UPSERT", &serde_json::json!({"payrollId":effective_payroll_id,"attendanceId":attendance_id,"userId":user_id,"employeeType":employee_type,"attendanceDate":date,"actualTimeIn":actual_in,"actualTimeOut":actual_out,"computedTimeIn":computed_in,"computedTimeOut":computed_out,"lateHours":late_hours,"lateDeductionCentavos":deduction,"isHalfDay":is_half_day,"halfDayDeductionCentavos":half_day_deduction,"dailyPayCentavos":daily_pay})).await;
+    enqueue_sync(state, "Payroll", &effective_payroll_id, "UPSERT", &serde_json::json!({"payrollId":effective_payroll_id,"attendanceId":attendance_id,"userId":user_id,"employeeType":"INTERN","attendanceDate":date,"actualTimeIn":actual_in,"actualTimeOut":actual_out,"computedTimeIn":computed_in,"computedTimeOut":computed_out,"lateHours":late_hours,"lateDeductionCentavos":deduction,"isHalfDay":is_half_day,"halfDayDeductionCentavos":half_day_deduction,"dailyPayCentavos":daily_pay})).await;
     Ok(())
 }
 
@@ -5925,8 +5775,6 @@ async fn reconcile_attendance_payroll_range(
             continue;
         }
         let full_name: String = row.get("full_name");
-        let employee_type: String = row.get("employee_type");
-        let daily_rate: Option<i64> = row.get("daily_rate_centavos");
         let date: String = row.get("attendance_date");
         let actual_in: String = row.get("time_in");
         let actual_out: String = row.get("time_out");
@@ -5936,8 +5784,6 @@ async fn reconcile_attendance_payroll_range(
             &attendance_id,
             &user_id,
             full_name,
-            &employee_type,
-            daily_rate,
             &date,
             &actual_in,
             &actual_out,
@@ -6359,11 +6205,7 @@ pub fn run() {
             payroll_update_cutoff,
             payroll_finalize_cutoff,
             payroll_delete_cutoff,
-            payroll_export_csv,
             export_attendance_xlsx,
-            export_payroll_xlsx,
-            generate_payroll_payslip_pdf,
-            generate_payroll_register_pdf,
             generate_payroll_pdf,
             list_payroll_pdfs,
             open_generated_file,

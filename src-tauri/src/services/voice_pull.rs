@@ -307,7 +307,7 @@ pub async fn worker_status(db: &SqlitePool) -> Result<VoiceWorkerStatus, String>
 /// worker mp3 on disk wins, else the live queue row, else bundled-manifest fallback.
 pub async fn clip_states(db: &SqlitePool, data_dir: &std::path::Path) -> Result<Vec<VoiceClipState>, String> {
     let users: Vec<(String,)> = sqlx::query_as(
-        "SELECT user_id FROM users WHERE status = 'ACTIVE' AND employee_type IN ('INTERN', 'EMPLOYEE') AND (card_type IS NULL OR card_type != 'ADMIN_ASSIST') ORDER BY user_id ASC",
+        "SELECT user_id FROM users WHERE status = 'ACTIVE' AND employee_type = 'INTERN' AND (card_type IS NULL OR card_type != 'ADMIN_ASSIST') ORDER BY user_id ASC",
     )
     .fetch_all(db)
     .await
