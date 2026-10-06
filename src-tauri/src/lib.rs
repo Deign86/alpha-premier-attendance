@@ -6517,7 +6517,7 @@ mod tests {
     #[test]
     fn voice_jobs_enqueue_only_for_active_roster_members() {
         assert!(should_enqueue_voice_job("EMPLOYEE", "INTERN", "ACTIVE"));
-        assert!(should_enqueue_voice_job("EMPLOYEE", "EMPLOYEE", "active"));
+        assert!(!should_enqueue_voice_job("EMPLOYEE", "EMPLOYEE", "active"));
         assert!(!should_enqueue_voice_job("ADMIN_ASSIST", "INTERN", "ACTIVE"));
         assert!(!should_enqueue_voice_job("EMPLOYEE", "INTERN", "INACTIVE"));
         assert!(!should_enqueue_voice_job("EMPLOYEE", "VISITOR", "ACTIVE"));
@@ -7252,10 +7252,10 @@ mod tests {
             "Photo Test User",
             Some("IT"),
             "ACTIVE",
-            "EMPLOYEE",
+            "INTERN",
             Some("MALE"),
-            Some(50_000),
-            Some("BEA_STANDARD"),
+            None,
+            None,
             None,
             "EMPLOYEE",
             "2026-08-01T00:00:00Z",
@@ -7294,7 +7294,7 @@ mod tests {
             "fullName": "Photo Test User",
             "department": "IT",
             "status": "ACTIVE",
-            "employeeType": "EMPLOYEE",
+            "employeeType": "INTERN",
             "gender": "MALE",
             "photoUrl": null,
         });
@@ -7775,8 +7775,8 @@ mod tests {
         );
         assert_eq!(
             late_payroll.get::<i64, _>("daily_pay_centavos"),
-            50_000,
-            "The capped day pays the full 8h at the daily rate"
+            8_000,
+            "The capped day pays the intern's full PHP 80 daily rate"
         );
 
         state.db.close().await;

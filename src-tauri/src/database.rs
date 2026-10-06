@@ -1390,15 +1390,15 @@ mod tests {
             .fetch_one(&target_state.db)
             .await
             .unwrap();
-        assert_eq!(profile_count, 3); // 2 default seed profiles + 1 custom
+        assert_eq!(profile_count, 1); // intern-only migration removes legacy employee profiles
 
-        let profile_label: String = sqlx::query_scalar(
-            "SELECT label FROM payroll_profiles WHERE profile_id = 'PROF-PORT-001'",
+        let legacy_profile_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM payroll_profiles WHERE profile_id = 'PROF-PORT-001'",
         )
         .fetch_one(&target_state.db)
         .await
         .unwrap();
-        assert_eq!(profile_label, "Semi-Monthly Standard");
+        assert_eq!(legacy_profile_count, 0);
 
         let cutoff_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_cutoffs")
             .fetch_one(&target_state.db)

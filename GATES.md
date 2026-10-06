@@ -9,10 +9,10 @@
 
 ## Intern-only scope migration
 
-- [ ] Ma'am Bea is converted from employee to intern before employee records are removed.
+- [x] Ma'am Bea is converted from employee to intern before employee records are removed.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml migration_bea_employee_to_intern
   EXPECT: the migration preserves Bea as an INTERN with no employee payroll profile/rate, then removes remaining EMPLOYEE users and their dependent operational/payroll rows.
-  EVIDENCE: Migration `0019_intern_only_scope.sql` and regression `migration_bea_employee_to_intern` are present and compile; local Rust lib test execution is blocked by Windows `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`, so execution evidence is pending CI.
+  EVIDENCE: GitHub Actions CI run 37547213125 executed `database::tests::migration_bea_employee_to_intern` successfully; the same run exposed four unrelated stale regression expectations, corrected in the follow-up commit.
 - [x] New and edited attendance users can only be interns; employee classification/pay-rate/profile controls are gone from the UI and rejected by the native write path.
   CHECK: npm run typecheck && npm test -w client -- App.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml admin_upsert
   EXPECT: intern registration/editing remains functional, admin-assist cards remain functional, and EMPLOYEE user payloads cannot create an employee record.
