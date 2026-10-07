@@ -1339,3 +1339,16 @@ unchanged.
   EVIDENCE: server 20 files / 307 tests green; oxlint exit 0; server
   typecheck exit 0; cargo payroll_hours_accuracy 64 + intern_payroll_
   isolated 81 + payroll_sheet_undertime 27 + cutoff_freeze 24, all green.
+
+## GitHub Actions parallel release steps (2026-10-07)
+
+- [x] P1 Release workflow uses native GitHub Actions `parallel` groups only for independent setup/install/verification work.
+  CHECK: `Get-Content -Raw .github/workflows/release.yml | npx --yes yaml@2.8.1 valid`
+  EXPECT: exit 0; workflow contains three `parallel` groups of 2 steps each.
+  EVIDENCE: YAML validation exited 0; measured 3 `parallel` groups. The verification branch uses `npm run build:fast`, so it does not invoke the auto-cleaner that can remove `src-tauri/target` while Rust tests run.
+- [x] P2 Required repository checks remain green after the workflow-only change.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all commands exit 0.
+  EVIDENCE: `npm run lint:oxlint` exited 0 with 0 warnings/errors; `npm run typecheck` exited 0; `npm test` exited 0 with 20 test files passed. `npm run lint` and `npm run build:fast` also exited 0.
+- [x] P3 Diff preserves release ordering: version bump completes before validation; all validation completes before Tauri packaging/release.
+  EVIDENCE: measured step lines: version bump 53; parallel JS/Rust validation starts at 62/70; Tauri packaging/release starts at 79.

@@ -31,22 +31,24 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+      - parallel:
+          - name: Setup Node
+            uses: actions/setup-node@v4
+            with:
+              node-version: 22
+              cache: npm
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          - name: Setup Rust
+            uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust dependencies and target artifacts
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "src-tauri"
+      - parallel:
+          - name: Cache Rust dependencies and target artifacts
+            uses: swatinem/rust-cache@v2
+            with:
+              workspaces: "src-tauri"
 
-      - name: Install dependencies
-        run: npm ci
+          - name: Install dependencies
+            run: npm ci
 
       - name: Resolve and bump version
         id: version_step
@@ -56,22 +58,19 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           node scripts/bump-version.mjs --commit
 
-      - name: Typecheck
-        run: npm run typecheck
+      - parallel:
+          - name: Verify JavaScript and build frontend
+            shell: bash
+            run: |
+              npm run typecheck
+              npm run lint
+              npm test
+              npm run build:fast
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-
-      - name: Run Rust tests (match CI suite)
-        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
-        env:
-          ALPHA_PREMIER_REQUIRE_EMBED_KEY: "0"
-
-      - name: Build frontend
-        run: npm run build
+          - name: Run Rust tests (match CI suite)
+            run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+            env:
+              ALPHA_PREMIER_REQUIRE_EMBED_KEY: "0"
 
       - name: Check embedded sheets-key secret
         shell: bash
