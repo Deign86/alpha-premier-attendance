@@ -421,7 +421,7 @@ const pinResetMessages = {
   RESET_LOCKED: 'Too many wrong codes today. Try again tomorrow, use an admin RFID card, or ask IT to change admin_pin in config.toml.',
   RESET_CODE_INVALID: 'That code is incorrect. Check the email and try again.',
   RESET_CODE_EXPIRED: 'That code expired or was entered wrong too many times. Request a new code.',
-  INVALID_NEW_PIN: 'The new PIN must be 6 to 12 digits and cannot be the old default PIN.',
+  INVALID_NEW_PIN: 'The new PIN must be 6 to 12 digits and cannot be a repeated or sequential number like 111111 or 123456.',
 } as const;
 
 type PinResetFailure = { success: false; error: { message: string } };

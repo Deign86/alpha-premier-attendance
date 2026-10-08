@@ -388,10 +388,10 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: grep -n "argument_case" C:/Users/Deign/.cargo/registry/src/index.crates.io-*/tauri-macros-2.6.3/src/command/wrapper.rs | head -3
   EXPECT: `argument_case` defaults to `Camel`; live `setup_lookup_card {rfidUid}` succeeds, `{rfid_uid}` fails missing key.
   EVIDENCE: Live drive against fresh binary 2026-09-06; skill cites wrapper.rs line 51 / 506-507.
-- [x] Verify harness and skill used the then code-default admin PIN (since retired from docs; scripts now read ALPHA_PREMIER_ADMIN_PIN).
+- [x] Verify harness and skill used the then code-default admin PIN (since removed everywhere; scripts now read ALPHA_PREMIER_ADMIN_PIN).
   CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('scripts/verify-tauri-mcp.mjs','utf8'); if(!s.includes(\"pin: process.env.ALPHA_PREMIER_ADMIN_PIN\") || s.includes('1234')) process.exit(1);"
   EXPECT: command exits 0
-  EVIDENCE: `default_admin_pin` in src-tauri/src/config.rs returns Some(<retired default>); live 1234 gives INVALID_ADMIN_PIN.
+  EVIDENCE: `default_admin_pin` in src-tauri/src/config.rs returned the built-in default (since removed); live 1234 gives INVALID_ADMIN_PIN.
 - [x] Both skill trees are byte-identical mirrors with camelCase IPC examples and real tauri_* tool names.
   CHECK: diff -r .agents/skills/verify-alpha-premier-attendance .agent/skills/verify-alpha-premier-attendance && node --check scripts/verify-tauri-mcp.mjs && npm run doctor:mcp
   EXPECT: diff empty; syntax OK; doctor healthy.

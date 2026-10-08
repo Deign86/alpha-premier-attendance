@@ -51,7 +51,7 @@ fn hash_round_trips_and_rejects_wrong_or_malformed_input() {
 fn new_pin_must_be_6_to_12_digits_and_not_the_public_default() {
     assert!(validate_new_pin("482915").is_ok());
     assert!(validate_new_pin("123456789012").is_ok());
-    for bad in ["12345", "1234567890123", "48a915", " 482915", "", BURNED_PIN] {
+    for bad in ["12345", "1234567890123", "48a915", " 482915", "", "000000", "777777", "123456", "234567", "654321", "9876543"] {
         assert_eq!(validate_new_pin(bad).unwrap_err(), "INVALID_NEW_PIN", "{bad:?}");
     }
 }
@@ -69,10 +69,10 @@ async fn correct_code_stores_new_pin_hash_and_clears_the_code() {
     complete_reset(&db, &reset.code, "482915", Some(CONFIG_PIN), t0() + Duration::minutes(5)).await.unwrap();
     let stored = effective_pin_hash(&db, Some(CONFIG_PIN)).await.unwrap().expect("pin hash stored");
     assert!(verify_secret(&stored, "482915"));
-    assert!(!verify_secret(&stored, BURNED_PIN));
+    assert!(!verify_secret(&stored, "482916"));
     // The code is single-use.
     assert_eq!(
-        complete_reset(&db, &reset.code, "555555", Some(CONFIG_PIN), t0() + Duration::minutes(6)).await.unwrap_err(),
+        complete_reset(&db, &reset.code, "597531", Some(CONFIG_PIN), t0() + Duration::minutes(6)).await.unwrap_err(),
         "RESET_CODE_EXPIRED"
     );
 }
@@ -102,7 +102,7 @@ async fn invalid_new_pin_does_not_spend_an_attempt() {
     let db = pool().await;
     let code = sent_code(&db, t0()).await;
     for _ in 0..10 {
-        assert_eq!(complete_reset(&db, &code, BURNED_PIN, Some(CONFIG_PIN), t0()).await.unwrap_err(), "INVALID_NEW_PIN");
+        assert_eq!(complete_reset(&db, &code, "123456", Some(CONFIG_PIN), t0()).await.unwrap_err(), "INVALID_NEW_PIN");
     }
     complete_reset(&db, &code, "482915", Some(CONFIG_PIN), t0()).await.unwrap();
 }

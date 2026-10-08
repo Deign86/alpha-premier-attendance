@@ -7605,7 +7605,7 @@ mod tests {
         assert!(state.admin_session.lock().await.is_none(), "reset ends the open admin session");
 
         assert_eq!(super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
-        assert_eq!(super::setup_unlock_impl(&state, "293906".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        assert_eq!(super::setup_unlock_impl(&state, "135246".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
         assert!(super::setup_unlock_impl(&state, " 482915 ".to_string()).await.is_ok());
         assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok(), "admin card still unlocks");
         assert!(super::setup_unlock_impl(&state, "ADMIN_CARD_ADDE23".to_string()).await.is_ok());
@@ -7616,7 +7616,7 @@ mod tests {
         let state = open(&temp, Some("")).await;
         assert_eq!(super::setup_unlock_impl(&state, "482915".to_string()).await.unwrap_err(), "ADMIN_DISABLED");
         assert_eq!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.unwrap_err(), "ADMIN_DISABLED");
-        assert_eq!(super::admin_pin_reset_confirm_impl(&state, "000000", "555555").await.unwrap_err(), "ADMIN_DISABLED");
+        assert_eq!(super::admin_pin_reset_confirm_impl(&state, "000000", "597531").await.unwrap_err(), "ADMIN_DISABLED");
         state.db.close().await;
 
         // Same config PIN again: the emailed PIN still applies.
@@ -7627,7 +7627,7 @@ mod tests {
         // No admin_pin in config.toml (the usual kiosk): the emailed PIN keeps working.
         let state = open(&temp, None).await;
         assert!(super::setup_unlock_impl(&state, "482915".to_string()).await.is_ok());
-        assert_eq!(super::setup_unlock_impl(&state, "293906".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        assert_eq!(super::setup_unlock_impl(&state, "135246".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
         state.db.close().await;
 
         // A fresh install with no PIN anywhere: no PIN unlocks, cards do, and a reset sets one.
@@ -7640,7 +7640,7 @@ mod tests {
         )
         .await
         .unwrap();
-        for attempt in ["293906", "", "0000"] {
+        for attempt in ["135246", "", "0000"] {
             assert_eq!(super::setup_unlock_impl(&state, attempt.to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
         }
         assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok(), "card unlocks with no PIN set");

@@ -23,8 +23,6 @@ use std::num::NonZeroU32;
 
 /// Fixed recipient, also hard-coded in scripts/pin-reset-mailer/Code.gs.
 pub const RESET_RECIPIENT: &str = "thealphapremiergroup@gmail.com";
-/// The retired built-in PIN was public, so it can never be chosen as a new PIN.
-pub const BURNED_PIN: &str = "293906";
 pub const CODE_TTL_MINUTES: i64 = 15;
 const RESEND_COOLDOWN_SECONDS: i64 = 60;
 const MAX_CODE_ATTEMPTS: u32 = 5;
@@ -111,10 +109,13 @@ pub fn verify_secret(stored: &str, secret: &str) -> bool {
     pbkdf2::verify(pbkdf2::PBKDF2_HMAC_SHA256, iterations, &salt, secret.as_bytes(), &derived).is_ok()
 }
 
-/// New PINs are 6-12 digits and never the public legacy default.
+/// New PINs are 6-12 digits and not trivially guessable (one repeated digit or a run like 123456 / 654321).
 pub fn validate_new_pin(pin: &str) -> Result<(), String> {
-    let valid = (6..=12).contains(&pin.len()) && pin.bytes().all(|b| b.is_ascii_digit()) && pin != BURNED_PIN;
-    if valid {
+    let digits = pin.as_bytes();
+    let numeric = (6..=12).contains(&digits.len()) && digits.iter().all(u8::is_ascii_digit);
+    let repeated = digits.windows(2).all(|pair| pair[0] == pair[1]);
+    let run = digits.windows(2).all(|pair| pair[1] == pair[0] + 1) || digits.windows(2).all(|pair| pair[0] == pair[1] + 1);
+    if numeric && !repeated && !run {
         Ok(())
     } else {
         Err("INVALID_NEW_PIN".into())
