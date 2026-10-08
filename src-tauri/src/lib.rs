@@ -5705,7 +5705,7 @@ async fn ensure_payroll(
             chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| e.to_string())?;
         let week_start = date_value
             - chrono::Duration::days(date_value.weekday().num_days_from_monday() as i64);
-        let no_grace_cutover = crate::services::intern_payroll::is_no_grace_date(date);
+        let no_grace_cutover = crate::services::intern_payroll::policy_for_date(date).rules().weekly_grace_window_minutes.is_none();
         // Post-cutover skips grace-claim INSERT/DELETE, preserving pre-cutover history.
         let grace_available = if no_grace_cutover {
             false
@@ -5752,7 +5752,7 @@ async fn ensure_payroll(
                     )?;
                 }
             }
-        } else if date < crate::services::intern_payroll::NO_GRACE_CUTOFF_DATE {
+        } else if !no_grace_cutover {
             let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
                 .bind(attendance_id)
                 .execute(&state.db)
@@ -5773,8 +5773,8 @@ async fn ensure_payroll(
     let now = chrono::Utc::now().to_rfc3339();
     let payroll_id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO payroll (payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_time_in,actual_time_out,computed_time_in,computed_time_out,grace_used,late_hours,late_deduction_centavos,base_pay_centavos,daily_pay_centavos,is_half_day,half_day_deduction_centavos,created_at,updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) \
+        "INSERT INTO payroll (payroll_id,attendance_id,user_id,full_name,employee_type,attendance_date,actual_time_in,actual_time_out,computed_time_in,computed_time_out,grace_used,late_hours,late_deduction_centavos,base_pay_centavos,daily_pay_centavos,is_half_day,half_day_deduction_centavos,created_at,updated_at,policy_version) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) \
          ON CONFLICT(attendance_id) DO UPDATE SET \
            user_id=excluded.user_id, \
            full_name=excluded.full_name, \
@@ -5791,9 +5791,10 @@ async fn ensure_payroll(
            daily_pay_centavos=excluded.daily_pay_centavos, \
            is_half_day=excluded.is_half_day, \
            half_day_deduction_centavos=excluded.half_day_deduction_centavos, \
-           updated_at=excluded.updated_at",
+           updated_at=excluded.updated_at, \
+           policy_version=excluded.policy_version",
     )
-    .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind("INTERN").bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(if is_half_day { 1 } else { 0 }).bind(half_day_deduction).bind(&now).bind(&now)
+    .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind("INTERN").bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(if is_half_day { 1 } else { 0 }).bind(half_day_deduction).bind(&now).bind(&now).bind(crate::services::intern_payroll::policy_for_date(date).as_str())
     .execute(&state.db).await.map_err(|e| e.to_string())?;
 
     let effective_payroll_id: String = sqlx::query_scalar(

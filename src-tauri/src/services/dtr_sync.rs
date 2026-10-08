@@ -1083,7 +1083,9 @@ pub(crate) fn build_dtr_row_with_clamp(
     attendance_date: &str,
     clamp_late_in: bool,
 ) -> Result<[String; 4], String> {
-    let no_grace_cutover = crate::services::intern_payroll::is_no_grace_date(attendance_date);
+    let no_grace_cutover = !crate::services::intern_payroll::policy_for_date(attendance_date)
+        .rules()
+        .quarter_hour_clamp;
     match normalize_record(time_in, time_out)? {
         NormalizedRecord::Empty => Ok([String::new(), String::new(), String::new(), String::new()]),
         NormalizedRecord::Working { time_in } => {

@@ -10,10 +10,87 @@ pub const INTERN_DAILY_RATE_PHP: i64 = 80;
 pub const INTERN_PAYROLL_PROFILE_ID: &str = "INTERN_STANDARD";
 pub const NO_GRACE_CUTOFF_DATE: &str = "2026-10-01";
 
+/// How late arrivals are converted to whole deductible hours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LateRounding {
+    /// Hours between 08:00 and the (quarter-hour clamped) payable clock-in, floored, minimum 1.
+    FlooredClampedHours,
+    /// Hours between 08:00 and the actual clock-in, rounded up, minimum 1.
+    CeilActualHours,
+}
+
+/// Date-dependent payroll rules of one policy version. Every rule that may
+/// change over time lives here and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyRules {
+    /// Weekly grace claim: minutes after 08:00 covered when a claim is available.
+    pub weekly_grace_window_minutes: Option<i64>,
+    /// After :15:00 the payable clock-in rounds up to the next full hour.
+    pub quarter_hour_clamp: bool,
+    pub late_rounding: LateRounding,
+    /// Clock-in must fall on `attendanceDate` in Manila time.
+    pub require_same_manila_date: bool,
+}
+
+/// Dated payroll policy versions. Never edit a released version; add a new one
+/// and extend `policy_for_date` (see docs/payroll-policy.md).
+///
+/// | rule                       | V1_WEEKLY_GRACE (< 2026-10-01) | V2_NO_GRACE (>= 2026-10-01) |
+/// |----------------------------|--------------------------------|-----------------------------|
+/// | weekly grace window        | 15 min when claim available    | none                        |
+/// | quarter-hour clamp         | yes (next full hour after :15) | no (actual clock-in)        |
+/// | late-hour rounding         | floored clamped hours, min 1   | ceil actual hours, min 1    |
+/// | same-Manila-date clock-in  | not enforced                   | required                    |
+///
+/// Not date-gated (both versions): arrival at/after 12:00 is half-day
+/// undertime, never late.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyVersion {
+    V1WeeklyGrace,
+    V2NoGrace,
+}
+
+impl PolicyVersion {
+    /// Stable identifier persisted in `payroll.policy_version`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::V1WeeklyGrace => "V1_WEEKLY_GRACE",
+            Self::V2NoGrace => "V2_NO_GRACE",
+        }
+    }
+
+    pub const fn rules(self) -> PolicyRules {
+        match self {
+            Self::V1WeeklyGrace => PolicyRules {
+                weekly_grace_window_minutes: Some(15),
+                quarter_hour_clamp: true,
+                late_rounding: LateRounding::FlooredClampedHours,
+                require_same_manila_date: false,
+            },
+            Self::V2NoGrace => PolicyRules {
+                weekly_grace_window_minutes: None,
+                quarter_hour_clamp: false,
+                late_rounding: LateRounding::CeilActualHours,
+                require_same_manila_date: true,
+            },
+        }
+    }
+}
+
+/// Policy in force on `attendance_date` (canonical `YYYY-MM-DD`). Anything
+/// that is not a canonical date prices under V1, as before versioning.
+pub fn policy_for_date(attendance_date: &str) -> PolicyVersion {
+    let canonical = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
+        .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == attendance_date);
+    if canonical && attendance_date >= NO_GRACE_CUTOFF_DATE {
+        PolicyVersion::V2NoGrace
+    } else {
+        PolicyVersion::V1WeeklyGrace
+    }
+}
+
 pub fn is_no_grace_date(attendance_date: &str) -> bool {
-    NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
-        .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == attendance_date)
-        && attendance_date >= NO_GRACE_CUTOFF_DATE
+    policy_for_date(attendance_date) == PolicyVersion::V2NoGrace
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,10 +107,8 @@ pub struct InternPayrollResult {
     pub worked_hours: f64,
 }
 
-/// Before 2026-10-01, an available weekly grace claim covers arrivals through
-/// 08:15 and the legacy quarter-hour clamp applies otherwise. On/after the
-/// cutoff there is no grace or clamp: computed clock-in stays actual and late
-/// hours round up to whole hours for deduction.
+/// Prices one day under the policy version in force on `attendance_date`
+/// (see [`PolicyVersion`]).
 pub fn calculate(
     attendance_date: &str,
     actual_time_in: &str,
@@ -42,10 +117,11 @@ pub fn calculate(
 ) -> Result<InternPayrollResult, String> {
     let date = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
         .map_err(|_| "attendanceDate must be a valid Manila date")?;
+    let rules = policy_for_date(attendance_date).rules();
     let time_in = DateTime::parse_from_rfc3339(actual_time_in)
         .map_err(|_| "Payroll timestamps must be valid ISO values")?
         .with_timezone(&Manila);
-    if is_no_grace_date(attendance_date) && time_in.date_naive() != date {
+    if rules.require_same_manila_date && time_in.date_naive() != date {
         return Err("Payroll clock-in date must match attendanceDate in Manila".into());
     }
     let time_out = DateTime::parse_from_rfc3339(actual_time_out)
@@ -66,61 +142,53 @@ pub fn calculate(
         .single()
         .ok_or("Invalid Manila start time")?;
     let late_start = start + chrono::Duration::minutes(1);
-    let no_grace = is_no_grace_date(attendance_date);
-    let (grace_used, computed_in, payable_in, late_hours) = if no_grace {
-        let payable_in = if time_in < late_start { start } else { time_in };
-        // Half-day rule: an arrival at/after 12:00 renders the afternoon half
-        // of the 8-hour day, so the shortfall is half-day undertime, never late.
-        let afternoon_half_day = time_in.hour() >= 12;
-        let late_hours = if !afternoon_half_day && time_in >= late_start {
-            let late_duration = payable_in - start;
-            let seconds = late_duration.num_seconds() as f64
-                + late_duration.subsec_nanos() as f64 / 1_000_000_000.0;
-            (seconds / 3_600.0).ceil().max(1.0) as i64
-        } else {
-            0
-        };
-        (false, time_in, payable_in, late_hours)
+    let local_time_in = time_in.time();
+    let in_grace_window = rules
+        .weekly_grace_window_minutes
+        .is_some_and(|m| time_in >= late_start && time_in <= start + chrono::Duration::minutes(m));
+    let grace_used = grace_available && in_grace_window;
+    // Half-day rule: an arrival at/after 12:00 renders the afternoon half of
+    // the 8-hour day: no clamp and no late hours; the shortfall is half-day
+    // undertime.
+    let afternoon_half_day = time_in.hour() >= 12;
+    // After :15:00, round the payable clock-in up to the next full hour.
+    let after_quarter_hour = rules.quarter_hour_clamp
+        && !afternoon_half_day
+        && (local_time_in.minute() > 15
+            || (local_time_in.minute() == 15
+                && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0)));
+    let clamped_in = if time_in >= late_start && after_quarter_hour {
+        let hour_start = date
+            .and_hms_opt(local_time_in.hour(), 0, 0)
+            .ok_or("Invalid Manila late clamp time")?;
+        let next_hour = hour_start
+            .checked_add_signed(chrono::Duration::hours(1))
+            .ok_or("Invalid Manila late clamp time")?;
+        Manila
+            .from_local_datetime(&next_hour)
+            .single()
+            .ok_or("Invalid Manila late clamp time")?
     } else {
-        let local_time_in = time_in.time();
-        let in_grace_window = time_in >= late_start
-            && time_in <= start + chrono::Duration::minutes(15);
-        let grace_used = grace_available && in_grace_window;
-        // Half-day rule (mirrors the no-grace branch): an arrival at/after
-        // 12:00 renders the afternoon half of the day — no quarter-hour
-        // clamp and no late hours; the shortfall is half-day undertime.
-        let afternoon_half_day = time_in.hour() >= 12;
-        // After :15:00, round the payable clock-in up to the next full hour.
-        let after_quarter_hour = !afternoon_half_day
-            && (local_time_in.minute() > 15
-                || (local_time_in.minute() == 15
-                    && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0)));
-        let clamped_in = if time_in >= late_start && after_quarter_hour {
-            let hour_start = date
-                .and_hms_opt(local_time_in.hour(), 0, 0)
-                .ok_or("Invalid Manila late clamp time")?;
-            let next_hour = hour_start
-                .checked_add_signed(chrono::Duration::hours(1))
-                .ok_or("Invalid Manila late clamp time")?;
-            Manila
-                .from_local_datetime(&next_hour)
-                .single()
-                .ok_or("Invalid Manila late clamp time")?
-        } else {
-            time_in
-        };
-        let computed_in = if grace_used { time_in } else { clamped_in };
-        let payable_in = if grace_used || time_in < late_start {
-            start
-        } else {
-            computed_in.max(start)
-        };
-        let late_hours = if !grace_used && !afternoon_half_day && time_in >= late_start {
-            (payable_in - start).num_hours().max(1)
-        } else {
-            0
-        };
-        (grace_used, computed_in, payable_in, late_hours)
+        time_in
+    };
+    let computed_in = if grace_used { time_in } else { clamped_in };
+    let payable_in = if grace_used || time_in < late_start {
+        start
+    } else {
+        computed_in.max(start)
+    };
+    let late_hours = if !grace_used && !afternoon_half_day && time_in >= late_start {
+        match rules.late_rounding {
+            LateRounding::FlooredClampedHours => (payable_in - start).num_hours().max(1),
+            LateRounding::CeilActualHours => {
+                let late_duration = payable_in - start;
+                let seconds = late_duration.num_seconds() as f64
+                    + late_duration.subsec_nanos() as f64 / 1_000_000_000.0;
+                (seconds / 3_600.0).ceil().max(1.0) as i64
+            }
+        }
+    } else {
+        0
     };
     let base = INTERN_DAILY_RATE_PHP * 100;
     let hourly_rate_centavos = (INTERN_DAILY_RATE_PHP * 100) / 8;
@@ -159,6 +227,55 @@ pub fn calculate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_for_date_pins_boundary_dates() {
+        assert_eq!(policy_for_date("2026-09-30"), PolicyVersion::V1WeeklyGrace);
+        assert_eq!(policy_for_date("2026-10-01"), PolicyVersion::V2NoGrace);
+        assert_eq!(policy_for_date("2027-01-01"), PolicyVersion::V2NoGrace);
+        assert_eq!(policy_for_date("not-a-date"), PolicyVersion::V1WeeklyGrace);
+    }
+
+    /// LOUD GUARD: fails if the cutoff date or any rule of a released policy
+    /// version changes. Do not edit a row; add a new PolicyVersion, a new row
+    /// here, and update docs/payroll-policy.md.
+    #[test]
+    fn released_policy_versions_are_frozen() {
+        assert_eq!(
+            NO_GRACE_CUTOFF_DATE, "2026-10-01",
+            "add a new PolicyVersion instead of moving the cutoff"
+        );
+        let released = [
+            (
+                PolicyVersion::V1WeeklyGrace,
+                "V1_WEEKLY_GRACE",
+                PolicyRules {
+                    weekly_grace_window_minutes: Some(15),
+                    quarter_hour_clamp: true,
+                    late_rounding: LateRounding::FlooredClampedHours,
+                    require_same_manila_date: false,
+                },
+            ),
+            (
+                PolicyVersion::V2NoGrace,
+                "V2_NO_GRACE",
+                PolicyRules {
+                    weekly_grace_window_minutes: None,
+                    quarter_hour_clamp: false,
+                    late_rounding: LateRounding::CeilActualHours,
+                    require_same_manila_date: true,
+                },
+            ),
+        ];
+        for (version, id, rules) in released {
+            assert_eq!(version.as_str(), id);
+            assert_eq!(version.rules(), rules, "{id} rules changed; add a new PolicyVersion");
+        }
+        // Exhaustive: a new variant breaks this match until it is added above.
+        match PolicyVersion::V2NoGrace {
+            PolicyVersion::V1WeeklyGrace | PolicyVersion::V2NoGrace => {}
+        }
+    }
 
     #[test]
     fn no_grace_cutover_date_requires_a_valid_date_on_or_after_cutoff() {
