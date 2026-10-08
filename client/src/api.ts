@@ -412,6 +412,48 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
   return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
 }
 
+const pinResetMessages = {
+  ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
+  RESET_EMAIL_NOT_CONFIGURED: 'Email reset is not set up in this app build. Contact IT.',
+  RESET_EMAIL_FAILED: 'The reset email could not be sent. Check the internet connection and try again.',
+  RESET_RATE_LIMITED: 'A code was requested less than a minute ago. Use the newest reset email, or wait a minute and request another.',
+  RESET_EMAIL_RATE_LIMITED: 'Too many reset emails were sent this hour. Try again later, or use an admin RFID card.',
+  RESET_LOCKED: 'Too many wrong codes today. Try again tomorrow, use an admin RFID card, or ask IT to change admin_pin in config.toml.',
+  RESET_CODE_INVALID: 'That code is incorrect. Check the email and try again.',
+  RESET_CODE_EXPIRED: 'That code expired or was entered wrong too many times. Request a new code.',
+  INVALID_NEW_PIN: 'The new PIN must be 6 to 12 digits and cannot be the old default PIN.',
+} as const;
+
+type PinResetFailure = { success: false; error: { message: string } };
+
+function pinResetError<T>(error: T): PinResetFailure {
+  const code = errorString(error);
+  const known = Object.entries(pinResetMessages).find(([key]) => key === code);
+  return { success: false, error: { message: known ? known[1] : 'The PIN reset failed. Please try again.' } };
+}
+
+/** Forgot-PIN step 1: the desktop app emails a one-time code to the company inbox. */
+export async function requestAdminPinReset(): Promise<{ success: true; recipient: string; requestId: string; expiresAt: string } | PinResetFailure> {
+  if (!runningInTauri()) return { success: false, error: { message: 'PIN reset is only available in the desktop app.' } };
+  try {
+    const response = await tauriApi.adminPinResetRequest();
+    return { success: true, recipient: response.recipient, requestId: response.requestId, expiresAt: response.expiresAt };
+  } catch (error) {
+    return pinResetError(error);
+  }
+}
+
+/** Forgot-PIN step 2: verify the emailed code and set the new PIN. */
+export async function confirmAdminPinReset(code: string, newPin: string): Promise<{ success: true } | PinResetFailure> {
+  if (!runningInTauri()) return { success: false, error: { message: 'PIN reset is only available in the desktop app.' } };
+  try {
+    await tauriApi.adminPinResetConfirm(code.trim(), newPin);
+    return { success: true };
+  } catch (error) {
+    return pinResetError(error);
+  }
+}
+
 export async function lockAdmin(): Promise<void> {
   if (runningInTauri()) {
     nativeAdminToken = null;

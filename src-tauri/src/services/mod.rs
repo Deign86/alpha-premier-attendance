@@ -1,3 +1,4 @@
+pub mod admin_pin;
 pub mod cutoff_payroll;
 pub mod dtr_recon;
 pub mod dtr_sync;

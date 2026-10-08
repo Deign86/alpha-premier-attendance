@@ -76,6 +76,10 @@ jobs:
         shell: bash
         run: if [ -z "${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}" ]; then echo "::error::Missing ALPHA_PREMIER_EMBED_KEY_JSON repo secret (full service-account JSON). GitHub Releases must ship DTR-connected."; exit 1; fi
 
+      - name: Check PIN reset mailer secret
+        shell: bash
+        run: if [ -z "${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}" ]; then echo "::error::Missing ALPHA_PREMIER_PIN_RESET_URL repo secret (Apps Script web app URL, see scripts/pin-reset-mailer/Code.gs). Releases must ship the admin PIN email reset."; exit 1; fi
+
       - name: Build Tauri app and attach to release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -83,6 +87,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
+          # Baked in via option_env! for the Forgot-PIN email (services/admin_pin.rs).
+          ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
           # Fail closed: build.rs panics without an embedded key when this is 1.
           ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
         with:

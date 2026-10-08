@@ -50,3 +50,6 @@ tauri-build.err
 # Deepwork scheduler state (git-local)
 .slim/deepwork/
 
+
+# clasp project binding for the PIN reset mailer (account-specific)
+scripts/pin-reset-mailer/.clasp.json

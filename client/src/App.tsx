@@ -152,6 +152,7 @@ import {
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
+import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
 import { BathroomKeyLogPanel } from "./bathroom-key-log";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
@@ -1569,6 +1570,10 @@ export default function App() {
           form={setupForm}
           inputRef={setupInputRef}
           onPinChange={setAdminPin}
+          onPinResetStart={() => {
+            setSetupError("");
+            setAdminPin("");
+          }}
           onUnlock={handleUnlock}
           onUidChange={handleSetupInput}
           onScanAnother={() => {
@@ -1624,6 +1629,8 @@ type SetupDialogProps = {
   form: SetupForm;
   inputRef: React.Ref<HTMLInputElement>;
   onPinChange: (value: string) => void;
+  /** Clears the PIN field and stale unlock error when Forgot PIN opens. */
+  onPinResetStart: () => void;
   onUnlock: (event: React.FormEvent) => void;
   onUidChange: (value: string) => void;
   onScanAnother: () => void;
@@ -1636,6 +1643,12 @@ type SetupDialogProps = {
 
 function SetupDialog(props: SetupDialogProps) {
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  const [resettingPin, setResettingPin] = useState(false);
+  const [pinNotice, setPinNotice] = useState("");
+  // An admin card tap can unlock mid-reset; a later expiry must land on unlock, not reset.
+  useEffect(() => {
+    if (props.token) setResettingPin(false);
+  }, [props.token]);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -1696,7 +1709,14 @@ function SetupDialog(props: SetupDialogProps) {
             <X size={19} />
           </button>
         </div>
-        {!props.token ? (
+        {!props.token && resettingPin ? (
+          <PinResetPanel
+            onDone={(notice) => {
+              setResettingPin(false);
+              setPinNotice(notice ?? "");
+            }}
+          />
+        ) : !props.token ? (
           <form className="setup-form" onSubmit={props.onUnlock}>
             <div className="setup-steps" aria-label="Card association steps">
               <span className="is-active">01 Unlock</span>
@@ -1714,7 +1734,10 @@ function SetupDialog(props: SetupDialogProps) {
               placeholder="Enter PIN or scan admin card…"
               autoComplete="off"
               value={props.pin}
-              onChange={(event) => props.onPinChange(event.target.value)}
+              onChange={(event) => {
+                setPinNotice("");
+                props.onPinChange(event.target.value);
+              }}
               autoFocus
             />
             {props.error && (
@@ -1733,6 +1756,18 @@ function SetupDialog(props: SetupDialogProps) {
                 <LockKeyhole size={17} />
               )}{" "}
               Unlock setup
+            </button>
+            {pinNotice && <p className="setup-success">{pinNotice}</p>}
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => {
+                setPinNotice("");
+                props.onPinResetStart();
+                setResettingPin(true);
+              }}
+            >
+              Forgot PIN?
             </button>
           </form>
         ) : props.step === "scan" ? (
@@ -3034,6 +3069,12 @@ function AdminPanel() {
   const [nuking, setNuking] = useState(false);
   const [nukeConfirmOpen, setNukeConfirmOpen] = useState(false);
   const [manualUpdateCheck, setManualUpdateCheck] = useState<number>(0);
+  const [resettingPin, setResettingPin] = useState(false);
+  const [pinNotice, setPinNotice] = useState("");
+  // An admin card tap can unlock mid-reset; a later expiry must land on unlock, not reset.
+  useEffect(() => {
+    if (unlocked) setResettingPin(false);
+  }, [unlocked]);
 
   const unlockWithPinOrRfid = useCallback(
     async (candidate: string) => {
@@ -3152,6 +3193,18 @@ function AdminPanel() {
   useEffect(() => {
     if (unlocked) void load();
   }, [unlocked, load]);
+  if (!unlocked && resettingPin)
+    return (
+      <main className="dashboard-shell admin-login">
+        <a href="/">← Scanner</a>
+        <PinResetPanel
+          onDone={(notice) => {
+            setResettingPin(false);
+            setPinNotice(notice ?? "");
+          }}
+        />
+      </main>
+    );
   if (!unlocked)
     return (
       <main className="dashboard-shell admin-login">
@@ -3169,12 +3222,28 @@ function AdminPanel() {
               type="password"
               placeholder="Enter PIN or scan admin card…"
               value={pin}
-              onChange={(event) => setPin(event.target.value)}
+              onChange={(event) => {
+                setPinNotice("");
+                setPin(event.target.value);
+              }}
             />
           </label>
           {error && <p className="dashboard-alert">{error}</p>}
           <button className="submit-button" disabled={busy || !pin.trim()}>
             Unlock admin
+          </button>
+          {pinNotice && <p className="setup-success">{pinNotice}</p>}
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => {
+              setPinNotice("");
+              setError("");
+              setPin("");
+              setResettingPin(true);
+            }}
+          >
+            Forgot PIN?
           </button>
         </form>
       </main>

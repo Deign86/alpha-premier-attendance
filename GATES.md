@@ -1352,3 +1352,22 @@ unchanged.
   EVIDENCE: `npm run lint:oxlint` exited 0 with 0 warnings/errors; `npm run typecheck` exited 0; `npm test` exited 0 with 20 test files passed. `npm run lint` and `npm run build:fast` also exited 0.
 - [x] P3 Diff preserves release ordering: version bump completes before validation; all validation completes before Tauri packaging/release.
   EVIDENCE: measured step lines: version bump 53; parallel JS/Rust validation starts at 62/70; Tauri packaging/release starts at 79.
+
+## Admin PIN email reset (2026-10-08)
+
+- [x] R1 Forgot-PIN emails a one-time 6-digit code plus a request ID; the code is stored only as a PBKDF2 hash, expires in 15 minutes, dies after 5 wrong tries, and only replaces the previous code once the email is sent. A 60-second resend wait and a 10-wrong-codes-per-24h lock survive voided codes. The recipient is fixed in the mailer script.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test admin_pin_isolated
+  EXPECT: 10 admin_pin_isolated tests pass.
+  EVIDENCE: 10/10 passed via a Tauri-free scratch package that includes the same test file (the official target links the 660 MB app with GNU ld and was stopped); cargo check --tests exited 0.
+- [ ] R2 Unlock: before any reset the config/default PIN works (no lockout on upgrade); after a reset only the new PIN works, registered ADMIN_ASSIST cards still unlock, non-admin cards stay rejected, the open admin session ends; config.toml `admin_pin = ""` still disables admin; changing admin_pin in config.toml takes over from the emailed PIN.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib test_admin_unlock -- --test-threads=1
+  EXPECT: both unlock tests pass, or the lib binary is recorded BLOCKED (STATUS_ENTRYPOINT_NOT_FOUND) per docs/testing/rust-test-parity.md and left to CI.
+  EVIDENCE: BLOCKED locally: lib test binary compiled and linked, then failed to start with 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND, the documented Windows limitation. Left to CI.
+- [x] R3 Both PIN screens (card-setup dialog and /admin login) offer Forgot PIN: email code, or I already have a code, then code + new PIN twice; clear messages for every backend error code; resend confirmation; stale PIN/error cleared.
+  CHECK: npm test -w client -- pin-reset
+  EXPECT: 16 pin-reset tests pass.
+  EVIDENCE: 16/16 passed.
+- [x] R4 Repo gates stay green.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo check --manifest-path src-tauri/Cargo.toml --tests
+  EXPECT: all exit 0.
+  EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 38/38, client 356/356, server 287/287); cargo check --tests exit 0. Original code vs this change on the same 3 heavy client files: 98/98 vs 105/105, so earlier timeouts were machine load, not the change.
