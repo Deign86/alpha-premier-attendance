@@ -388,10 +388,10 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
   CHECK: grep -n "argument_case" C:/Users/Deign/.cargo/registry/src/index.crates.io-*/tauri-macros-2.6.3/src/command/wrapper.rs | head -3
   EXPECT: `argument_case` defaults to `Camel`; live `setup_lookup_card {rfidUid}` succeeds, `{rfid_uid}` fails missing key.
   EVIDENCE: Live drive against fresh binary 2026-09-06; skill cites wrapper.rs line 51 / 506-507.
-- [x] Verify harness and skill use the code-default admin PIN 293906, not 1234.
-  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('scripts/verify-tauri-mcp.mjs','utf8'); if(!s.includes(\"pin: '293906'\") || s.includes('1234')) process.exit(1);"
+- [x] Verify harness and skill used the then code-default admin PIN (since retired from docs; scripts now read ALPHA_PREMIER_ADMIN_PIN).
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('scripts/verify-tauri-mcp.mjs','utf8'); if(!s.includes(\"pin: process.env.ALPHA_PREMIER_ADMIN_PIN\") || s.includes('1234')) process.exit(1);"
   EXPECT: command exits 0
-  EVIDENCE: `default_admin_pin` in src-tauri/src/config.rs returns Some("293906"); live 1234 gives INVALID_ADMIN_PIN.
+  EVIDENCE: `default_admin_pin` in src-tauri/src/config.rs returns Some(<retired default>); live 1234 gives INVALID_ADMIN_PIN.
 - [x] Both skill trees are byte-identical mirrors with camelCase IPC examples and real tauri_* tool names.
   CHECK: diff -r .agents/skills/verify-alpha-premier-attendance .agent/skills/verify-alpha-premier-attendance && node --check scripts/verify-tauri-mcp.mjs && npm run doctor:mcp
   EXPECT: diff empty; syntax OK; doctor healthy.
@@ -427,11 +427,11 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
 ## Meta-skills Tauri-MCP grounding gates
 
 - [x] create-verification-skill prescribes Tauri MCP as the main driver with repo-grounded facts.
-  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('.agents/skills/create-verification-skill/SKILL.md','utf8'); for (const t of ['tauri_ipc_execute_command','293906','127.0.0.1:5173','ws://127.0.0.1:9223','camelCase','capture_native_screenshot']) if(!s.includes(t)) process.exit(1); if(s.includes('\"ServerName\":')) process.exit(1);"
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('.agents/skills/create-verification-skill/SKILL.md','utf8'); for (const t of ['tauri_ipc_execute_command','ALPHA_PREMIER_ADMIN_PIN','127.0.0.1:5173','ws://127.0.0.1:9223','camelCase','capture_native_screenshot']) if(!s.includes(t)) process.exit(1); if(s.includes('\"ServerName\":')) process.exit(1);"
   EXPECT: command exits 0
   EVIDENCE: driver reference section (launch/doctor/gateway/raw-protocol/5s-budget/auth), Drive and Evidence sections require the Tauri recipe and live proof standard, one short non-Tauri fallback paragraph retained.
 - [x] maintain-verification-skill drives every feature live over Tauri MCP and triages stale driver facts as drift.
-  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('.agents/skills/maintain-verification-skill/SKILL.md','utf8'); for (const t of ['tauri_ipc_execute_command','293906','execute_js','capture_native_screenshot','SHAPES','127.0.0.1:5173','127.0.0.1:9223','command", "args','camelCase','rfidUid','5s']) if(!s.toUpperCase().includes(t.toUpperCase())) process.exit(1);"
+  CHECK: node -e "const fs=require('fs'); const s=fs.readFileSync('.agents/skills/maintain-verification-skill/SKILL.md','utf8'); for (const t of ['tauri_ipc_execute_command','ALPHA_PREMIER_ADMIN_PIN','execute_js','capture_native_screenshot','SHAPES','127.0.0.1:5173','127.0.0.1:9223','command", "args','camelCase','rfidUid','5s']) if(!s.toUpperCase().includes(t.toUpperCase())) process.exit(1);"
   EXPECT: command exits 0
   EVIDENCE: live-pass step names ports/PIN/envelopes/shape assertions/edge probing/5s budget; triage step flags stale driver facts as drift-with-teeth; outcomes and scope discipline unchanged.
 

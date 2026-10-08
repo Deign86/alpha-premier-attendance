@@ -5,14 +5,14 @@ Guided workflow to register unrecognized RFID cards and associate them with acti
 ## Sub-features
 
 - `SETUP-DETECT`: Automatically intercepts unassigned RFID scans and prompts the operator to register the card.
-- `SETUP-AUTH`: Lightweight PIN protection (`293906` — the code default in `src-tauri/src/config.rs`, overridable by config file) distinct from full administrative privileges.
+- `SETUP-AUTH`: Lightweight PIN protection (the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs) — the code default in `src-tauri/src/config.rs`, overridable by config file) distinct from full administrative privileges.
 - `SETUP-BIND`: Dropdown selection of active employees missing an assigned RFID card.
 - `SETUP-WEDGE`: Live RFID listener automatically populates scanned card UID into the binding form while in setup mode.
 
 ## How to get to it (user POV)
 
 - Scan an unregistered RFID card on the kiosk (or click the "Card Setup" / "Admin setup" button).
-- Enter the Setup PIN (`293906`) when prompted in the unlock dialog.
+- Enter the Setup PIN (the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs)) when prompted in the unlock dialog.
 - Select the employee from the list to bind the card to, or click "Create New Employee".
 
 ## Driving it with Tauri MCP
@@ -25,7 +25,7 @@ Preconditions:
   ```
   tool: tauri_ipc_execute_command, args: {
     "command": "setup_unlock",
-    "args": { "pin": "293906" }
+    "args": { "pin": "<admin PIN>" }
   }
   ```
   *Observable result*: Returns `{ "success": true, "token": "<token>", "expiresAt": "..." }`.

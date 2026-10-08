@@ -293,7 +293,7 @@ async function runVerification() {
       // WORKFLOW B: Admin PIN Unlock & Roster Management
       console.log('  ► Driving [ADMIN-AUTH] & [ADMIN-ROSTER]...');
       try {
-        const unlockRes = await client.invoke('setup_unlock', { pin: '293906' });
+        const unlockRes = await client.invoke('setup_unlock', { pin: process.env.ALPHA_PREMIER_ADMIN_PIN ?? '' });
       sessionToken = unlockRes?.token || 'test-token';
       const usersRes = await client.invoke('admin_list_users', { token: sessionToken });
       results.workflows.admin = {
@@ -303,7 +303,7 @@ async function runVerification() {
       } catch (stepErr) {
         results.workflows.admin = { passed: false, details: 'Live drive failed: ' + stepErr.message };
       }
-      console.log(`  ✓ Admin unlocked with PIN 293906. Roster retrieved (${results.workflows.admin.details.userCount} users)`);
+      console.log(`  ✓ Admin unlocked with ALPHA_PREMIER_ADMIN_PIN. Roster retrieved (${results.workflows.admin.details.userCount} users)`);
 
       // WORKFLOW C: Unknown Card Setup Flow
       console.log('  ► Driving [SETUP-DETECT] & [SETUP-BIND]...');

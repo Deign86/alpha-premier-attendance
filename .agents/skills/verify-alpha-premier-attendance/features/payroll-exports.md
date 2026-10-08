@@ -12,7 +12,7 @@ Calculates semi-monthly cutoff attendance, overtime, deductions, and generates o
 
 ## How to get to it (user POV)
 
-- Navigate to the Admin workspace (requires PIN unlock `293906`).
+- Navigate to the Admin workspace (requires PIN unlock the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs)).
 - Select the "Payroll" tab.
 - Choose a payroll cutoff period from the cutoff selector dropdown (or pick custom dates).
 - Click "Generate from attendance", then "Generate Employee Payroll PDF" or "Generate Intern Payroll PDF".

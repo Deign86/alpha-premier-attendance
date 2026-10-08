@@ -27,8 +27,9 @@ viewer_password_hash = ""
 viewer_session_minutes = 480
 sse_keep_alive_seconds = 15
 
-# Local admin PIN for protected card association.
-admin_pin = "293906"
+# Optional local admin PIN. Leave unset and use "Forgot PIN?" on the kiosk to set one
+# (6 to 12 digits, emailed reset code). Setting admin_pin = "" turns admin access off.
+# admin_pin = "choose-6-to-12-digits"
 admin_session_minutes = 15
 
 # Keyboard-mode RFID scanner configuration.

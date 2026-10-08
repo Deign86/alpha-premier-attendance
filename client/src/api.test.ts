@@ -299,7 +299,7 @@ describe('admin session lifecycle', () => {
     });
     vi.spyOn(tauriApi, 'setupLock').mockResolvedValueOnce({ success: true });
 
-    const unlockResult = await unlockAdmin('293906');
+    const unlockResult = await unlockAdmin('test-pin');
     expect(unlockResult.success).toBe(true);
     if (unlockResult.success) {
       expect(unlockResult.expiresAt).toBe(expiresAt);

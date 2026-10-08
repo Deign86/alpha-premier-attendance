@@ -1522,7 +1522,7 @@ describe('Admin Attendance Corrections', () => {
     try {
       window.history.pushState({}, '', '/admin');
       // Seed the native admin token (Tauri mode keeps it in module state).
-      await unlockAdmin('293906');
+      await unlockAdmin('test-pin');
       const user = userEvent.setup();
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));

@@ -4,7 +4,7 @@ Administrative workspace for managing employee and intern profiles, RFID card ma
 
 ## Sub-features
 
-- `ADMIN-AUTH`: Protected entry requiring the configured administrator PIN (`293906` — the `default_admin_pin` in `src-tauri/src/config.rs`; a config file can override it).
+- `ADMIN-AUTH`: Protected entry requiring the configured administrator PIN (the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs) — the `default_admin_pin` in `src-tauri/src/config.rs`; a config file can override it).
 - `ADMIN-ROSTER`: Paginated table listing all employees and interns with filtering and search.
 - `ADMIN-UPSERT`: Add new worker or edit details (name, employee ID, role, worker type, RFID UID, rate).
 - `ADMIN-PHOTO`: Client-side validation and storage of profile photo (JPEG/PNG/WebP, capped at 500 KiB / 4096x4096px).
@@ -13,7 +13,7 @@ Administrative workspace for managing employee and intern profiles, RFID card ma
 ## How to get to it (user POV)
 
 - From the Kiosk view, click the "Admin" button in the upper header.
-- Enter the Admin PIN (`293906`) in the PIN modal and click "Unlock".
+- Enter the Admin PIN (the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs)) in the PIN modal and click "Unlock".
 - The Admin workspace displays tabs for "Employees", "Attendance", "Payroll", and "Database".
 
 ## Driving it with Tauri MCP
@@ -26,7 +26,7 @@ Preconditions:
   ```
   tool: tauri_ipc_execute_command, args: {
       "command": "setup_unlock",
-      "args": { "pin": "293906" }
+      "args": { "pin": "<admin PIN>" }
     }
   ```
   *Observable result*: Returns `{ "success": true, "token": "<session_token>", "expiresAt": "..." }`.

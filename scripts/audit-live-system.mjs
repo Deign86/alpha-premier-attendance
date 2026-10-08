@@ -117,7 +117,7 @@ async function runAudit() {
   console.log('\n--- 1. Admin Auth ---');
   let token = null;
   try {
-    const authRes = await client.invoke('setup_unlock', { pin: '293906' });
+    const authRes = await client.invoke('setup_unlock', { pin: process.env.ALPHA_PREMIER_ADMIN_PIN ?? '' });
     token = authRes.token;
     passes.push('Admin PIN authentication succeeded.');
     console.log('✓ Admin unlocked. Token acquired.');

@@ -5,14 +5,14 @@ Guided workflow to register unrecognized RFID cards and associate them with acti
 ## Sub-features
 
 - `SETUP-DETECT`: Automatically intercepts unassigned RFID scans and prompts the operator to register the card.
-- `SETUP-AUTH`: PIN protection using the shared admin PIN (`293906` default, overridable by config file) — plus `ADMIN_ASSIST` card unlock. Not a separate privilege from admin.
+- `SETUP-AUTH`: PIN protection using the shared admin PIN (the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs) default, overridable by config file) — plus `ADMIN_ASSIST` card unlock. Not a separate privilege from admin.
 - `SETUP-BIND`: Free-text User ID + Full name form (plus status/type/gender selects), not an employee dropdown. No "Create New Employee" button — new cards show a blank profile.
 - `SETUP-WEDGE`: While the setup `scan` step is live, wedge/global scans route to the setup input; the native scanner only pauses while typing in non-scan steps. No separate "detection mode" exists.
 
 ## How to get to it (user POV)
 
 - Scan an unregistered RFID card on the kiosk (or click the "Admin setup" footer button; unknown-card errors show "Setup this card").
-- Enter the Setup PIN (`293906`) when prompted in the unlock dialog.
+- Enter the Setup PIN (the admin PIN (set `ALPHA_PREMIER_ADMIN_PIN` for scripted runs)) when prompted in the unlock dialog.
 - Fill User ID + Full name in the binding form and save.
 
 ## Driving it with Tauri MCP
@@ -28,7 +28,7 @@ Preconditions:
 - An unregistered card UID (e.g. `CARD-NEW-999`) is scanned or supplied.
 
 - **Trigger Setup Unlock** (see IPC route note above):
-  `setup_unlock` with `{ "pin": "293906" }` (the shared admin PIN — setup has
+  `setup_unlock` with `{ "pin": "<admin PIN>" }` (the shared admin PIN — setup has
   no separate privilege; `admin_unlock` is an alias. A registered
   `ADMIN_ASSIST` card UID also unlocks).
   *Observable result*: Returns `{ "success": true, "token": "<token>", "expiresAt": "..." }`.
