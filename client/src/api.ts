@@ -646,7 +646,7 @@ export async function savePayrollCutoff<T extends object>(payroll: T, payrollId?
   // SAFETY: Parsing admin save cutoff response JSON
   return (await response.json()) as { success: boolean; payrollId?: string; netPay?: number };
 }
-export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; generated?: number; error?: { message: string } }> {
+export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; generated?: number; warnings?: string[]; error?: { message: string } }> {
   try {
     if (runningInTauri()) {
       const payload = customization ?? {};

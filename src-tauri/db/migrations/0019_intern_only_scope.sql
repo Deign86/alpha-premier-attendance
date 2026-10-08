@@ -1,3 +1,12 @@
+-- Admin RFID cards were stored as EMPLOYEE rows; keep them (and their access)
+-- by moving them out of the employee scope before employees are removed.
+UPDATE users
+SET employee_type = 'INTERN',
+    daily_rate_centavos = NULL,
+    payroll_profile_id = NULL,
+    updated_at = datetime('now')
+WHERE employee_type = 'EMPLOYEE' AND card_type = 'ADMIN_ASSIST';
+
 -- Convert Ma'am Bea before removing the legacy employee scope.
 -- BEA_STANDARD is the historical payroll profile assigned to her employee row.
 -- The name fallback is only used when there is exactly one employee row whose
@@ -21,6 +30,14 @@ WHERE employee_type = 'EMPLOYEE'
       )
     )
   );
+
+-- Snapshots of finalized employee cutoffs reference payroll_cutoffs; without this
+-- delete the cutoff delete below fails with a FOREIGN KEY error.
+DELETE FROM payroll_snapshots
+WHERE payroll_id IN (
+  SELECT payroll_id FROM payroll_cutoffs
+  WHERE employee_id IN (SELECT user_id FROM users WHERE employee_type = 'EMPLOYEE')
+);
 
 -- Remove payroll generated under the employee-only rules.
 DELETE FROM payroll_cutoffs

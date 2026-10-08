@@ -2228,7 +2228,7 @@ async fn load_table_payloads(
 ) -> Result<Vec<(String, serde_json::Value)>, String> {
     let cents = |value: i64| -> f64 { value as f64 / 100.0 };
     let rows: Vec<(String, serde_json::Value)> = match table_name {
-        "Users" => sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, daily_rate_centavos, payroll_profile_id, revision, updated_at FROM users")
+        "Users" => sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, daily_rate_centavos, payroll_profile_id, revision, updated_at FROM users WHERE COALESCE(card_type, 'EMPLOYEE') != 'ADMIN_ASSIST'")
             .fetch_all(db).await.map_err(|e| e.to_string())?
             .into_iter().map(|row| {
                 let id: String = row.get("user_id");

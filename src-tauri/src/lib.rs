@@ -2383,7 +2383,8 @@ async fn payroll_intern_report(
     .map_err(|e| e.to_string())?
     .into_iter()
     .collect::<std::collections::HashSet<_>>();
-    reconcile_attendance_payroll_range(
+    // Rows that cannot be priced are logged and skipped, not fatal for the report.
+    let _skipped = reconcile_attendance_payroll_range(
         &state,
         &cutoff_start,
         &cutoff_end,
@@ -2550,7 +2551,7 @@ async fn payroll_generate_cutoff_impl(
     .map_err(|e| e.to_string())?
     .into_iter()
     .collect::<std::collections::HashSet<_>>();
-    reconcile_attendance_payroll_range(
+    let reconcile_warnings = reconcile_attendance_payroll_range(
         state,
         &cutoff_start,
         &cutoff_end,
@@ -2972,7 +2973,7 @@ async fn payroll_generate_cutoff_impl(
         enqueue_sync(&state, "PayrollCutoffs", &payroll_id, "UPSERT", &serde_json::json!({"payrollId":payroll_id,"employeeId":employee_id,"payrollCutoffLabel":payroll_cutoff_label,"cutoffStart":cutoff_start,"cutoffEnd":cutoff_end,"basicPay":calculated.basic_pay as f64 / 100.0,"lateDeduction":calculated.late_deduction as f64 / 100.0,"grossCompensation":gross_amount as f64 / 100.0,"netPay":net_amount as f64 / 100.0})).await;
         generated += 1;
     }
-    Ok(serde_json::json!({"success":true,"generated":generated}))
+    Ok(serde_json::json!({"success":true,"generated":generated,"warnings":reconcile_warnings}))
 }
 
 #[tauri::command]
@@ -5812,7 +5813,7 @@ async fn reconcile_attendance_payroll_range(
     start_date: &str,
     end_date: &str,
     excluded_employee_ids: &std::collections::HashSet<String>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let rows = sqlx::query(
         "SELECT a.attendance_id, a.attendance_date, a.user_id, a.full_name, \
          COALESCE(u.employee_type, 'INTERN') AS employee_type, \
@@ -5831,6 +5832,19 @@ async fn reconcile_attendance_payroll_range(
     .await
     .map_err(|e| e.to_string())?;
 
+    // Days inside any finalized cutoff are frozen, even when this range only overlaps it.
+    let frozen: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT employee_id, cutoff_start, cutoff_end FROM payroll_cutoffs 
+         WHERE status='FINALIZED' AND cutoff_end >= ? AND cutoff_start <= ?",
+    )
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    // One unpayable row must not block everyone else; report it instead.
+    let mut warnings: Vec<String> = Vec::new();
+
     for row in rows {
         let attendance_id: String = row.get("attendance_id");
         let user_id: String = row.get("user_id");
@@ -5839,19 +5853,29 @@ async fn reconcile_attendance_payroll_range(
         }
         let full_name: String = row.get("full_name");
         let date: String = row.get("attendance_date");
+        if frozen
+            .iter()
+            .any(|(id, from, to)| *id == user_id && from.as_str() <= date.as_str() && date.as_str() <= to.as_str())
+        {
+            continue;
+        }
         let actual_in: String = row.get("time_in");
         let actual_out: String = row.get("time_out");
 
-        ensure_payroll(
+        if let Err(error) = ensure_payroll(
             state,
             &attendance_id,
             &user_id,
-            full_name,
+            full_name.clone(),
             &date,
             &actual_in,
             &actual_out,
         )
-        .await?;
+        .await
+        {
+            log::warn!("payroll skipped for {full_name} on {date}: {error}");
+            warnings.push(format!("{full_name} {date}: {error}"));
+        }
     }
 
     let _ = sqlx::query(
@@ -5875,7 +5899,7 @@ async fn reconcile_attendance_payroll_range(
     .execute(&state.db)
     .await;
 
-    Ok(())
+    Ok(warnings)
 }
 
 async fn upload_photo_inner(

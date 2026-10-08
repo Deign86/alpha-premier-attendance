@@ -5388,10 +5388,15 @@ export function PayrollWorkspace({
         customization,
       );
       if (response.success) {
+        const skipped = response.warnings ?? [];
+        const skippedNote =
+          skipped.length > 0
+            ? ` ${skipped.length} attendance record(s) could not be priced and were left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? "…" : ""}. Fix them in Attendance, then regenerate.`
+            : "";
         setMessage(
-          existingCutoffRecords.length > 0
+          (existingCutoffRecords.length > 0
             ? "Existing cutoff was replaced and regenerated from attendance."
-            : "Payroll drafts were generated from completed attendance.",
+            : "Payroll drafts were generated from completed attendance.") + skippedNote,
         );
         onSaved();
         setConfirmOpen(false);

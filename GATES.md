@@ -1371,3 +1371,13 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo check --manifest-path src-tauri/Cargo.toml --tests
   EXPECT: all exit 0.
   EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 38/38, client 356/356, server 287/287); cargo check --tests exit 0. Original code vs this change on the same 3 heavy client files: 98/98 vs 105/105, so earlier timeouts were machine load, not the change.
+
+## Audit fixes batch 1 (2026-10-08)
+
+- [x] M1 Migration 0019 no longer fails on finalized employee cutoffs with snapshots and no longer deletes admin RFID cards.
+  CHECK: python -I <scratch>/mig19check.py . (applies migrations 0001-0018 to an in-memory SQLite, inserts an admin card + finalized employee cutoff + snapshot, then runs 0019)
+  EVIDENCE: original 0019 -> "FOREIGN KEY constraint failed", admin card kept as EMPLOYEE and employee left behind; fixed 0019 -> "migration OK", users = ADMIN_CARD_1 (INTERN, ADMIN_ASSIST) + INT-1, cutoffs 0, snapshots 0.
+- [ ] M2 One unpayable attendance row no longer blocks cutoff generation for every intern; days inside any finalized cutoff are never recomputed; skipped rows are reported to the admin.
+  CHECK: cargo check --tests (compiled); behaviour covered by CI-only lib tests.
+- [ ] M3 Admin RFID card IDs are no longer exported to the Google Sheets Users sheet (existing rows already in the sheet are not removed).
+  CHECK: cargo check --tests (compiled).
