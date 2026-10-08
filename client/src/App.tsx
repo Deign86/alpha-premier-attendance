@@ -7851,6 +7851,13 @@ function exportAttendanceCsv(
   };
 }
 
+/** Edited HH:MM becomes HH:MM:00+08:00; an unchanged HH:MM keeps the original stamp. */
+export function keepOrBuildManilaIso(date: string, hhmm: string, original: string | null | undefined): string | null {
+  if (!hhmm) return null;
+  if (original && original.slice(11, 16) === hhmm) return original;
+  return `${date}T${hhmm}:00+08:00`;
+}
+
 function AttendanceEditRow({
   row,
   selected,
@@ -7886,8 +7893,10 @@ function AttendanceEditRow({
 
   const late = row.status === "LATE_TIMEOUT";
   const save = async () => {
-    const timeInIso = timeIn ? `${row.attendanceDate}T${timeIn}:00+08:00` : null;
-    const timeOutIso = timeOut ? `${row.attendanceDate}T${timeOut}:00+08:00` : null;
+    // An untouched time keeps its exact stamp: rebuilding it as HH:MM:00 would drop
+    // the seconds and can change late hours and grace use.
+    const timeInIso = keepOrBuildManilaIso(row.attendanceDate, timeIn, row.timeIn);
+    const timeOutIso = keepOrBuildManilaIso(row.attendanceDate, timeOut, row.timeOut);
     const response = await saveAdminAttendance(row.attendanceId, {
       attendanceDate: row.attendanceDate,
       timeIn: timeInIso,

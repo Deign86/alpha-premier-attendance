@@ -230,9 +230,82 @@ pub fn calculate(input: &CutoffInput) -> Result<CutoffResult, String> {
     })
 }
 
+/// Category of the balancing line that ties the per-day breakdown to the engine total.
+pub const RECONCILIATION_CATEGORY: &str = "RECONCILIATION";
+
+fn item_amount_centavos(item: &serde_json::Value) -> i64 {
+    item.get("amount")
+        .and_then(serde_json::Value::as_f64)
+        .map(|amount| (amount * 100.0).round() as i64)
+        .unwrap_or(0)
+}
+
+/// Net pay always comes from `calculate`. The per-day deduction list is only an
+/// explanation of it, so this drops any earlier balancing line and adds one
+/// when the list does not add up to the engine total (standard
+/// days, holidays, or admin edits). The list then always sums to the engine.
+pub fn reconcile_deduction_items(
+    items: Vec<serde_json::Value>,
+    engine_total_deductions_centavos: i64,
+    date: &str,
+) -> Vec<serde_json::Value> {
+    let mut items: Vec<serde_json::Value> = items
+        .into_iter()
+        .filter(|item| item.get("category").and_then(serde_json::Value::as_str) != Some(RECONCILIATION_CATEGORY))
+        .collect();
+    let difference = engine_total_deductions_centavos - items.iter().map(item_amount_centavos).sum::<i64>();
+    if difference != 0 {
+        items.push(serde_json::json!({
+            "date": date,
+            "category": RECONCILIATION_CATEGORY,
+            "label": "Adjustment",
+            "details": "Difference between the daily records and the cutoff totals (standard days, holidays or admin edits)",
+            "timeIn": null,
+            "timeOut": null,
+            "workedHours": null,
+            "hoursShort": null,
+            "lateHours": null,
+            "amount": difference as f64 / 100.0,
+        }));
+    }
+    items
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconcile_adds_one_balancing_line_so_items_sum_to_engine_total() {
+        let items = vec![
+            serde_json::json!({"category": "ABSENCE", "amount": 80.0}),
+            serde_json::json!({"category": "LATE", "amount": 10.0}),
+        ];
+        let out = reconcile_deduction_items(items, 8_000, "2026-10-15");
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2]["category"], RECONCILIATION_CATEGORY);
+        assert_eq!(out.iter().map(item_amount_centavos).sum::<i64>(), 8_000);
+    }
+
+    #[test]
+    fn reconcile_is_a_no_op_when_items_already_match_and_is_idempotent() {
+        let items = vec![serde_json::json!({"category": "LATE", "amount": 10.0})];
+        let same = reconcile_deduction_items(items.clone(), 1_000, "2026-10-15");
+        assert_eq!(same, items);
+        let once = reconcile_deduction_items(items.clone(), 2_500, "2026-10-15");
+        let twice = reconcile_deduction_items(once.clone(), 2_500, "2026-10-15");
+        assert_eq!(once, twice);
+        let changed = reconcile_deduction_items(once, 1_000, "2026-10-15");
+        assert_eq!(changed, items, "stale balancing line is removed when totals now match");
+    }
+
+    #[test]
+    fn reconcile_can_credit_back_when_items_overcount() {
+        let items = vec![serde_json::json!({"category": "ABSENCE", "amount": 160.0})];
+        let out = reconcile_deduction_items(items, 8_000, "2026-10-15");
+        assert_eq!(out[1]["amount"], -80.0);
+        assert_eq!(out.iter().map(item_amount_centavos).sum::<i64>(), 8_000);
+    }
     #[test]
     fn computes_cutoff_in_centavos() {
         let result = calculate(&CutoffInput {

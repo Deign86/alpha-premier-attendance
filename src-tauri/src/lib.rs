@@ -2763,8 +2763,7 @@ async fn payroll_generate_cutoff_impl(
                 .map(String::from),
             approved_working_day_overage: true,
         };
-        let mut calculated = crate::services::cutoff_payroll::calculate(&input)?;
-        // Keep engine gross; net is reconciled to the visible deduction items below.
+        let calculated = crate::services::cutoff_payroll::calculate(&input)?;
         let gross_amount = calculated.gross_compensation;
 
         let daily_records = sqlx::query(
@@ -2942,9 +2941,12 @@ async fn payroll_generate_cutoff_impl(
             d_a.cmp(d_b)
         });
 
-        calculated.total_deductions = deduction_items_total_centavos(&deduction_items);
-        let net_before_floor = gross_amount - calculated.total_deductions;
-        calculated.net_pay = if is_intern { net_before_floor.max(0) } else { net_before_floor };
+        // Net pay is the engine's; the per-day list only explains it.
+        let deduction_items = crate::services::cutoff_payroll::reconcile_deduction_items(
+            deduction_items,
+            calculated.total_deductions,
+            &cutoff_end,
+        );
         let net_amount = calculated.net_pay;
 
         let calculation_breakdown_json = transparent_cutoff_breakdown(
@@ -3082,9 +3084,8 @@ async fn payroll_update_cutoff(
     let mut input = enrich_cutoff_input(&state.db, &input).await?;
     apply_intern_rules(&state.db, &mut input).await?;
     let parsed = cutoff_input(&input);
-    let mut result = crate::services::cutoff_payroll::calculate(&parsed)?;
+    let result = crate::services::cutoff_payroll::calculate(&parsed)?;
     let now = chrono::Utc::now().to_rfc3339();
-    // Keep engine gross; net is reconciled to the preserved deduction items below.
     let late_units = input
         .get("lateUnits")
         .and_then(|v| v.as_f64())
@@ -3096,14 +3097,13 @@ async fn payroll_update_cutoff(
         .await
         .map_err(|e| e.to_string())?
         .flatten();
-    let deduction_items = preserved_deduction_items(previous_breakdown);
-    result.total_deductions = deduction_items_total_centavos(&deduction_items);
-    let net_before_floor = result.gross_compensation - result.total_deductions;
-    result.net_pay = if parsed.employee_type == "INTERN" {
-        net_before_floor.max(0)
-    } else {
-        net_before_floor
-    };
+    // Net pay is the engine's, so admin edits (late units, absences, half-days,
+    // adjustments) change it; the kept per-day list is rebalanced to match.
+    let deduction_items = crate::services::cutoff_payroll::reconcile_deduction_items(
+        preserved_deduction_items(previous_breakdown),
+        result.total_deductions,
+        &parsed.cutoff_end,
+    );
     let gross = result.gross_compensation;
     let net = result.net_pay;
     let breakdown = transparent_cutoff_breakdown(&parsed, &result, late_units, deduction_items).to_string();
@@ -3464,14 +3464,6 @@ fn preserved_deduction_items(existing_breakdown: Option<String>) -> Vec<serde_js
         .and_then(|json| json.get("deductions").cloned())
         .and_then(|deductions| deductions.as_array().cloned())
         .unwrap_or_default()
-}
-
-fn deduction_items_total_centavos(deductions: &[serde_json::Value]) -> i64 {
-    deductions
-        .iter()
-        .filter_map(|item| item.get("amount").and_then(serde_json::Value::as_f64))
-        .map(php_to_centavos)
-        .sum()
 }
 
 fn transparent_cutoff_breakdown(
