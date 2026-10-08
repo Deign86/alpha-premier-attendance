@@ -250,7 +250,7 @@ node scripts/capture-readme-screenshots.mjs  # refresh docs/screenshots/
 
 ```text
 client/       React, Vite, TypeScript kiosk and admin UI
-server/       Web API retained for compatibility and comparison
+server/       Legacy Node web API retained for compatibility (payroll authority is the Rust engine)
 shared/       Shared TypeScript API and LAN contracts
 src-tauri/    Tauri v2 app, Rust commands, services, SQLite, LAN server
 docs/         Deployment, hardware, payroll, migration guides

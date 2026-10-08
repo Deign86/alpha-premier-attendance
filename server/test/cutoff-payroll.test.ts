@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CutoffInput } from '../src/cutoff-payroll.js';
-import payrollContract from '../../shared/payroll-fixtures.json';
+import payrollContract from './fixtures/ts-payroll-fixtures.json';
 import { AdminService } from '../src/admin.js';
 import { calculateCutoffPayroll } from '../src/cutoff-payroll.js';
 import { calculateInternPayroll } from '../src/intern-payroll.js';

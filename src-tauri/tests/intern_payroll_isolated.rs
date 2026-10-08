@@ -18,6 +18,15 @@ mod services {
     }
 }
 
+#[path = "common/fixture.rs"]
+mod fixture;
+#[path = "common/cutoff_cases.rs"]
+mod cutoff_cases;
+#[path = "common/intern_cases.rs"]
+mod intern_cases;
+#[path = "common/intern_cutoff_cases.rs"]
+mod intern_cutoff_cases;
+
 #[tokio::test]
 async fn september_cutoff_seed_persists_backend_calculations_to_sqlite() {
     use services::{cutoff_payroll::{calculate, CutoffInput}, intern_payroll};
@@ -407,87 +416,22 @@ fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
 }
 
 #[test]
-fn cutoff_payroll_matches_shared_versioned_contract_fixtures() {
-    use services::cutoff_payroll::{calculate, CutoffInput};
-    use serde_json::Value;
+fn intern_cutoffs_match_the_rust_golden_contract() {
+    let scenarios = fixture::section("intern_payroll_isolated", "internCutoffs");
+    let scenarios = scenarios.as_array().expect("internCutoffs array");
+    assert!(scenarios.len() >= 3, "pre-cutover, post-cutover and straddling cutoffs are required");
 
-    let fixture: Value = serde_json::from_str(include_str!("../../shared/payroll-fixtures.json"))
-        .expect("valid shared payroll fixtures");
-    assert_eq!(fixture["version"], 1);
+    for scenario in scenarios {
+        let name = scenario["name"].as_str().expect("scenario name");
+        let actual = intern_cutoff_cases::run_intern_cutoff(scenario);
+        assert_eq!(actual, scenario["expected"], "{name}");
 
-    for scenario in fixture["cases"].as_array().expect("fixture cases") {
-        let name = scenario["name"].as_str().expect("case name");
-        let mut merged = fixture["baseInput"].as_object().expect("base input").clone();
-        for (key, value) in scenario["input"].as_object().expect("case input") {
-            merged.insert(key.clone(), value.clone());
-        }
-        let input = Value::Object(merged);
-        let number = |key: &str| input[key].as_f64().unwrap_or(0.0);
-        let optional_number = |key: &str| input[key].as_f64();
-        let string = |key: &str| input[key].as_str().expect("string input").to_owned();
-        let optional_string = |key: &str| input[key].as_str().map(str::to_owned);
-        let cutoff = CutoffInput {
-            employee_id: string("employeeId"),
-            employee_name: string("employeeName"),
-            employee_type: string("employeeType"),
-            cutoff_start: string("cutoffStart"),
-            cutoff_end: string("cutoffEnd"),
-            daily_rate: number("dailyRate"),
-            standard_working_days: number("standardWorkingDays"),
-            actual_working_days: number("actualWorkingDays"),
-            basic_pay: optional_number("basicPay"),
-            special_holiday_days: number("specialHolidayDays"),
-            special_holiday_multiplier: number("specialHolidayMultiplier"),
-            special_holiday_pay: optional_number("specialHolidayPay"),
-            regular_holiday_days: number("regularHolidayDays"),
-            regular_holiday_multiplier: number("regularHolidayMultiplier"),
-            regular_holiday_pay: optional_number("regularHolidayPay"),
-            hra: number("hra"),
-            incentives_allowance: number("incentivesAllowance"),
-            special_allowance: number("specialAllowance"),
-            late_deduction: number("lateDeduction"),
-            half_day_count: number("halfDayCount"),
-            half_day_fraction: number("halfDayFraction"),
-            half_day_deduction: optional_number("halfDayDeduction"),
-            absent_days: number("absentDays"),
-            absence_deduction: optional_number("absenceDeduction"),
-            overtime_hours: number("overtimeHours"),
-            overtime_rate: number("overtimeRate"),
-            overtime_pay: optional_number("overtimePay"),
-            sss_employee_share: number("sss"),
-            phic_employee_share: number("phic"),
-            hdmf_employee_share: number("hdmf"),
-            salary_advance: number("salaryAdvance"),
-            manual_adjustment: number("manualAdjustment"),
-            adjustment_reason: optional_string("adjustmentReason"),
-            approved_working_day_overage: input["approvedWorkingDayOverage"].as_bool().expect("approval flag"),
-        };
-
-        let result = calculate(&cutoff);
-        if let Some(error) = scenario["error"].as_str() {
-            assert!(result.as_ref().err().is_some_and(|message| message.contains(error)), "{name}: {result:?}");
-            continue;
-        }
-        let result = result.unwrap_or_else(|error| panic!("{name}: {error}"));
-        for (key, expected) in scenario["expected"].as_object().expect("expected output") {
-            let expected_centavos = (expected.as_f64().expect("expected number") * 100.0).round() as i64;
-            let actual = match key.as_str() {
-                "basicPay" => result.basic_pay,
-                "specialHolidayPay" => result.special_holiday_pay,
-                "regularHolidayPay" => result.regular_holiday_pay,
-                "totalAllowance" => result.total_allowance,
-                "halfDayDeduction" => result.half_day_deduction,
-                "manualAdjustment" => result.gross_compensation
-                    - result.basic_pay
-                    - result.special_holiday_pay
-                    - result.regular_holiday_pay
-                    - result.total_allowance
-                    - result.overtime_pay,
-                "grossCompensation" => result.gross_compensation,
-                "netPay" => result.net_pay,
-                key => panic!("unsupported expected output {key}"),
-            };
-            assert_eq!(actual, expected_centavos, "{name}: {key}");
-        }
+        // With no manual adjustment, advance or allowance the cutoff net is
+        // exactly what the daily rows paid (absent days already deducted).
+        let net = actual["cutoff"]["netPay"].as_i64().expect("net");
+        assert_eq!(net, actual["totals"]["dailyPayCentavos"].as_i64().expect("daily total"), "{name}: cutoff net must equal daily pay total");
+        assert_eq!(actual["cutoff"]["lateDeduction"], actual["totals"]["lateDeductionCentavos"], "{name}");
+        assert_eq!(actual["cutoff"]["halfDayDeduction"], actual["totals"]["undertimeDeductionCentavos"], "{name}");
     }
+    fixture::assert_owned_consumed("intern_payroll_isolated");
 }

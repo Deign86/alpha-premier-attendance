@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getManilaWeekStart } from '@rfid-attendance/shared';
-import payrollContract from '../../shared/payroll-fixtures.json';
+import payrollContract from './fixtures/ts-payroll-fixtures.json';
 import { calculateInternPayroll } from '../src/intern-payroll.js';
 import { buildDtrRow } from '../src/intern-dtr-sync.js';
 

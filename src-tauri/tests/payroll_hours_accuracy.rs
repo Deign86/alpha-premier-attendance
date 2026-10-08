@@ -14,6 +14,11 @@ mod services {
     }
 }
 
+#[path = "common/fixture.rs"]
+mod fixture;
+#[path = "common/intern_cases.rs"]
+mod intern_cases;
+
 #[test]
 fn intern_vectors_match_rust_hours_contract() {
     use services::intern_payroll::calculate;
@@ -103,4 +108,88 @@ fn intern_vectors_match_rust_hours_contract() {
     assert!(r_i9.is_half_day);
     assert_eq!(r_i9.half_day_deduction_centavos, 4_000);
     assert_eq!(r_i9.daily_pay_centavos, 4_000);
+}
+
+#[test]
+fn intern_daily_cases_match_the_rust_golden_contract() {
+    let cases = fixture::section("payroll_hours_accuracy", "internDaily");
+    let cases = cases.as_array().expect("internDaily array");
+    assert!(cases.iter().any(|case| case["error"].is_string()), "golden set must cover rejected inputs");
+    assert!(cases.iter().any(|case| case["date"].as_str().is_some_and(|date| date < "2026-10-01")), "pre-cutover dates");
+    assert!(cases.iter().any(|case| case["date"].as_str().is_some_and(|date| date >= "2026-10-01")), "post-cutover dates");
+
+    for case in cases {
+        let name = case["name"].as_str().expect("case name");
+        let actual = intern_cases::run_daily(case);
+        if let Some(error) = case["error"].as_str() {
+            assert_eq!(actual["error"].as_str(), Some(error), "{name}");
+        } else {
+            assert_eq!(actual["expected"], case["expected"], "{name}");
+        }
+    }
+    fixture::assert_owned_consumed("payroll_hours_accuracy");
+}
+
+type Sweep = Result<services::intern_payroll::InternPayrollResult, String>;
+
+/// Plain-loop sweep: every minute of arrival between 07:00 and 16:59 against
+/// several clock-outs, on a pre-cutover and a post-cutover date, with and
+/// without an available weekly grace.
+fn sweep(mut visit: impl FnMut(&str, bool, &str, &str, Sweep)) {
+    use services::intern_payroll::calculate;
+    for date in ["2026-09-15", "2026-10-06"] {
+        for grace in [true, false] {
+            for time_out in ["12:00:00", "13:30:00", "15:00:00", "16:59:59", "17:00:00", "17:30:00", "18:00:00", "19:00:00"] {
+                for minute in 7 * 60..17 * 60 {
+                    let time_in = format!("{:02}:{:02}:00", minute / 60, minute % 60);
+                    let result = calculate(date, &format!("{date}T{time_in}+08:00"), &format!("{date}T{time_out}+08:00"), grace);
+                    visit(date, grace, &time_in, time_out, result);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn invariant_daily_pay_stays_between_zero_and_the_daily_base() {
+    let mut checked = 0;
+    sweep(|date, grace, time_in, time_out, result| {
+        if let Ok(pay) = result {
+            checked += 1;
+            assert!((0..=8_000).contains(&pay.daily_pay_centavos), "{date} grace={grace} {time_in}-{time_out}: {}", pay.daily_pay_centavos);
+        }
+    });
+    assert!(checked > 10_000, "sweep must exercise the engine, got {checked}");
+}
+
+#[test]
+fn invariant_late_plus_undertime_never_exceed_the_base_and_explain_the_pay() {
+    sweep(|date, grace, time_in, time_out, result| {
+        if let Ok(pay) = result {
+            let deductions = pay.late_deduction_centavos + pay.half_day_deduction_centavos;
+            let context = format!("{date} grace={grace} {time_in}-{time_out}");
+            assert!(pay.late_deduction_centavos >= 0 && pay.half_day_deduction_centavos >= 0, "{context}");
+            assert_eq!(pay.base_pay_centavos, 8_000, "{context}");
+            assert_eq!(pay.daily_pay_centavos, (8_000 - deductions).max(0), "{context}");
+        }
+    });
+}
+
+#[test]
+fn invariant_arriving_later_never_increases_pay() {
+    use std::collections::HashMap;
+    // Key: (date, grace, time_out) -> previous minute's arrival and pay.
+    let mut previous: HashMap<(String, bool, String), (String, i64)> = HashMap::new();
+    sweep(|date, grace, time_in, time_out, result| {
+        let Ok(pay) = result else { return };
+        let key = (date.to_owned(), grace, time_out.to_owned());
+        if let Some((earlier_in, earlier_pay)) = previous.get(&key) {
+            assert!(
+                pay.daily_pay_centavos <= *earlier_pay,
+                "{date} grace={grace} out {time_out}: arriving {time_in} paid {} but {earlier_in} paid {earlier_pay}",
+                pay.daily_pay_centavos
+            );
+        }
+        previous.insert(key, (time_in.to_owned(), pay.daily_pay_centavos));
+    });
 }
