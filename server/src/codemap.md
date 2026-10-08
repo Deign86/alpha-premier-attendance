@@ -7,6 +7,7 @@
 - `app.ts` is the HTTP boundary; `attendance.ts`, `setup.ts`, and `admin.ts` own application rules and translate invalid states into domain errors.
 - `sheets.ts` defines `GoogleSheetsService`, row contracts, in-memory indexed storage, and a Google Sheets adapter that validates/reconciles headers and performs row-level writes.
 - RFID identity and Manila time are normalized in `rfid.ts` and `time.ts`; `mutex.ts` serializes attendance by user and intern weekly-grace claims by user/week.
+- LEGACY: the TypeScript payroll engine in this folder (`payroll.ts`, `intern-payroll.ts`, `cutoff-payroll.ts`, `lunch-break.ts`) is retained only for the legacy Node server. The Rust engine in `src-tauri/src/services/` is the single source of truth and owns `shared/payroll-fixtures.json`; do not treat this copy as a parity oracle.
 - Per-attendance payroll (`payroll.ts`) dispatches to intern/employee engines; cutoff payroll is assembled in `admin.ts` and calculated by `cutoff-payroll.ts`.
 
 ## Flow

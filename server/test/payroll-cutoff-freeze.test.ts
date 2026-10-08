@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import type { CutoffInput } from '../src/cutoff-payroll.js';
 import { calculateCutoffPayroll } from '../src/cutoff-payroll.js';
-import payrollFixtures from '../../shared/payroll-fixtures.json';
+import payrollFixtures from './fixtures/ts-payroll-fixtures.json';
 
 // T0 FREEZE (test-only): independently reviewed baseline; a snapshot mismatch
 // is investigated, never blanket-updated with -u without human approval.
@@ -23,7 +23,7 @@ function sortedJson(value: object): string {
 
 describe('T0 freeze: cutoff payroll contract', () => {
   it('pins fixture bytes after CRLF-to-LF normalization only', async () => {
-    const fixtureBytes = await readFile(new URL('../../shared/payroll-fixtures.json', import.meta.url), 'utf8');
+    const fixtureBytes = await readFile(new URL('./fixtures/ts-payroll-fixtures.json', import.meta.url), 'utf8');
     const normalizedFixture = fixtureBytes.replace(/\r\n/g, '\n');
     expect(createHash('sha256').update(normalizedFixture, 'utf8').digest('hex')).toBe(PINNED_SHA256);
   });

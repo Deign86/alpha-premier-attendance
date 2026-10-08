@@ -37,3 +37,7 @@ command wiring. Do not treat this list as parity for the full library suite.
 - Payroll grace tests should pass `grace_available` explicitly for each case
   and use fixed attendance dates. Do not use the host's current date or
   weekday to build Manila weekly-grace expectations.
+
+## Golden fixture contract
+
+`shared/payroll-fixtures.json` (version 2) is owned by the Rust engine. Section ownership: `baseInput` and `cutoffCases` are asserted by `cutoff_freeze`, `internDaily` by `payroll_hours_accuracy` (together with the invariant sweeps), and `internCutoffs` by `intern_payroll_isolated`. Rust is the only payroll engine of record; the TypeScript copy in `server/src` is legacy and has its own fixture under `server/test/fixtures/`.
