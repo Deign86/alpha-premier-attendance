@@ -6692,7 +6692,8 @@ function php(value: number): string {
     .replace("₱", "PHP ");
 }
 
-function formatDeductionDate(dateStr: string): string {
+export function formatDeductionDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
   const parts = dateStr.split("-");
   if (parts.length !== 3) return dateStr;
   const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));

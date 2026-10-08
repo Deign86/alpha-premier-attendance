@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square" alt="Windows 10/11" />
   <img src="https://img.shields.io/badge/Tauri-v2-FFC131?style=flat-square" alt="Tauri v2" />
   <img src="https://img.shields.io/badge/store-SQLite-003B57?style=flat-square" alt="SQLite" />
-  <img src="https://img.shields.io/badge/version-0.1.51-DAA520?style=flat-square" alt="v0.1.51" />
+  <img src="https://img.shields.io/github/v/release/Deign86/alpha-premier-attendance?style=flat-square&color=DAA520&label=version" alt="Latest release" />
 </p>
 
 <p align="center">
@@ -31,6 +31,10 @@
 </p>
 
 <p align="center">
+  <img src="docs/screenshots/kiosk-scan-success.png" width="800" alt="Kiosk showing a recorded time-in" />
+</p>
+
+<p align="center">
   <em>The front-desk kiosk at rest — card tap drives the whole flow. Below: bathroom key mode, live viewer, and admin unlock.</em>
 </p>
 
@@ -42,19 +46,21 @@
 
 ## What is Alpha Premier Attendance?
 
-Paper logbooks and generic HR tools assume someone is watching the door. This app **is** the watcher: a Tauri v2 desktop app on the front-desk Windows laptop, the only machine connected to the RFID reader and the only attendance writer. It stores everything in local SQLite and exposes a read-only live dashboard to the office LAN.
+Paper logbooks and generic HR tools assume someone is watching the door. This app **is** the watcher: a Tauri v2 desktop app on the front-desk Windows laptop, the only machine connected to the RFID reader and the only attendance writer. It records **intern** time-ins and time-outs, prices each day by fixed office rules, and produces cutoff payroll — all in local SQLite — and exposes a read-only live dashboard to the office LAN.
 
 | Approach | Needs watcher | Works offline | Per-tap proof | Payroll-ready |
 | --- | --- | --- | --- | --- |
 | Paper logbook / Sheets | Yes | Yes | No | Manual |
 | Generic cloud HR | Yes | No | Sometimes | Varies |
-| **Alpha Premier Attendance** | **No — kiosk is always on** | **Yes, SQLite-first** | **Photo + audit trail** | **One-click PDF per cutoff** |
+| **Alpha Premier Attendance** | **No — kiosk is always on** | **Yes, SQLite-first** | **Photo + audit trail** | **One-click intern PDF per cutoff** |
 
 - **Offline-first kiosk** — SQLite is the source of truth; Google Sheets is an optional write-only export, never required for a scan.
-- **Sub-second tap flow** — native-layer capture, photo feedback, duplicate cooldown.
-- **Office rules built in** — 8:00–17:00 hours, grace, late-timeout, unpaid lunch.
+- **Sub-second tap flow** — native-layer capture, photo feedback, spoken greeting, duplicate cooldown.
+- **Office rules built in** — 8:00–17:00 hours, late and undertime deductions, 17:00 time-out cap, unpaid lunch.
+- **One payroll authority** — every desktop payroll result comes from the Rust engine with dated policy versions, so a rule change never reprices past days.
 - **Boss-friendly live view** — read-only browser dashboard over the office Wi-Fi, no install.
-- **Audit-ready payroll** — semi-monthly cutoffs, one consolidated PDF per worker type.
+- **Audit-ready payroll** — semi-monthly cutoffs that freeze on finalize, one consolidated intern PDF per cutoff.
+- **Recoverable admin access** — admin PIN or RFID card, with a free "Forgot PIN?" email reset.
 
 ## Download
 
@@ -64,7 +70,7 @@ Paper logbooks and generic HR tools assume someone is watching the door. This ap
 
 > The NSIS package bundles the WebView2 bootstrapper and installs machine-wide (admin approval required). The portable `.exe` needs WebView2 already installed — prefer the NSIS package for fresh machines.
 >
-> Pushing a `v*` tag builds and signs release bundles in CI (`.github/workflows/release.yml`).
+> Every push to `main` runs CI and `.github/workflows/release.yml`, which bumps the patch version, runs the TypeScript and Rust tests, then builds and signs the installer and updater files for a GitHub Release. Installed kiosks pick up new releases through the built-in updater.
 
 ## Features
 
@@ -93,27 +99,70 @@ The Rust layer completes a scan on the Enter suffix or idle-timeout fallback, no
 
 ### Attendance rules
 
-| Rule | Value |
+Rules are versioned by date (see [docs/payroll-policy.md](docs/payroll-policy.md)). Each priced day records the policy version that priced it.
+
+| Rule | Value (from 2026-10-01) |
 | --- | --- |
 | Office hours | 08:00–17:00, `Asia/Manila` |
-| Late grace | Arrival after 08:15 is late; grace usable at most once per user per week |
-| Late time-out | Time-out at or after 18:00 is saved as `LATE_TIMEOUT` — kept and flagged, no payroll row until the official time-out is re-entered before 18:00 |
-| Lunch | 12:00–13:00 fixed window is unpaid — subtracted from worked hours, the `TOTAL_HOURS` workbook column, and overtime inputs (intern lateness still measured from 08:00) |
-| Intern rate | PHP 80.00/day, PHP 10.00/hour late deduction after weekly grace |
+| On time | Arrival up to 08:00:59 is on time; earlier arrival earns nothing extra |
+| Late | From 08:01:00 every started hour late costs PHP 10.00, measured from 08:00 to the actual tap (08:08 → 1 hour, 09:30 → 2 hours). No grace period |
+| Undertime | Each short hour of the 8-hour day costs PHP 10.00, never counting hours already charged as late |
+| Afternoon arrival | Arriving at or after 12:00 books a half-day shortfall as undertime, not late hours |
+| Late time-out | A time-out at or after 18:00 is saved as `LATE_TIMEOUT` and flagged for correction; payroll prices the day with the time-out capped at 17:00 |
+| Lunch | 12:00–13:00 is unpaid and excluded from worked hours |
+| Intern rate | PHP 80.00/day; a day's pay never goes below PHP 0 |
+
+Before 2026-10-01 a weekly grace applied (first arrival up to 08:15 each Manila Monday–Sunday week was free, later ones late, with a quarter-hour clamp). Those days keep that pricing.
 
 ### Admin
 
-`/admin` unlocks with the administrator PIN or a registered admin RFID card into a short-lived session. Tabs: **users** (roster + card binding), **attendance** (editor, exports), **payroll** (cutoff workspace), **data** (backup/restore, LAN viewer, updater), **voice** (TTS settings).
+`/admin` unlocks with the administrator PIN or a registered admin RFID card into a short-lived session. Tabs: **users** (roster + card binding), **attendance** (editor, backdated entries, exports), **payroll** (cutoff workspace), **data** (backup/restore, LAN viewer, updater), **voice** (TTS settings).
+
+Attendance edits and backdated entries (for forgotten time-ins or time-outs) are saved together with their payroll: either both are written or neither is, and a time that cannot be priced is reported instead of saved. Times you do not touch keep their exact stamp.
+
+#### Admin PIN and Forgot PIN
+
+- A fresh install has **no PIN**: admin RFID cards unlock, and **Forgot PIN?** sets the first PIN.
+- **Forgot PIN?** (on the card-setup dialog and the `/admin` login) emails a one-time 6-digit code to the company inbox. The code lasts 15 minutes, allows 5 tries, and each request shows a request ID that matches the email subject. Enter the code and a new 6–12 digit PIN.
+- The PIN is stored only as a PBKDF2 hash in the local database, **per PC** — it is not synced between installs. Admin RFID cards are unaffected by PIN changes.
+- `admin_pin = ""` in `config.toml` turns admin access off; an explicit `admin_pin = "…"` there overrides an emailed PIN (the way back if the inbox is lost).
+- The email is sent by a free Google Apps Script web app (`scripts/pin-reset-mailer/`, deployed with `clasp`) whose recipient is fixed in the script; its URL is baked in at build time from the `ALPHA_PREMIER_PIN_RESET_URL` secret.
 
 <p align="center">
-  <img src="docs/screenshots/admin.png" width="800" alt="Administrator access unlock screen" />
+  <img src="docs/screenshots/admin-unlock.png" width="800" alt="Administrator unlock screen with Forgot PIN link" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/admin-forgot-pin.png" width="800" alt="Forgot PIN panel that emails a reset code" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/admin-attendance.png" width="800" alt="Admin attendance corrections" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/admin-users.png" width="800" alt="Admin users and RFID cards" />
 </p>
 
 ### Payroll
 
-The Payroll tab has exactly two generate actions — **Generate Employee Payroll PDF** and **Generate Intern Payroll PDF**. Each produces one consolidated landscape sheet (printpdf, no browser print) with the reference columns, company/cutoff header, and a highlighted Gross Compensation grand total. Files land timestamped in the exports folder, are recorded in the `payroll_pdfs` table (period, worker type, headcount, total, SHA-256, size), and listed with **Open PDF** / **Show in Folder**.
+The app is **intern-only**. Employee payroll, payslips and CSV/XLSX payroll exports were retired in v0.2.6; the one remaining generate action is **Generate Intern Payroll PDF**. It produces one consolidated landscape sheet (printpdf, no browser print) with the reference columns, company/cutoff header, and a highlighted grand total. Files land timestamped in the exports folder, are recorded in the `payroll_pdfs` table (period, headcount, total, SHA-256, size), and listed with **Open PDF** / **Show in Folder**.
 
-Cutoff payroll supports semi-monthly profiles, allowances, incentives, manual adjustments, finalization, and a fillable late-deduction section (total late hours × PHP-per-hour rate, overridable). Interns appear on the intern sheet at the fixed daily rate.
+How a cutoff is built:
+
+1. Every completed attendance day is priced by the Rust engine (`src-tauri/src/services/intern_payroll.rs`) under the policy version for that date.
+2. **Generate** builds a semi-monthly draft per intern from those days. Net pay is the engine's total; the per-day list (absences, late, undertime) explains it and is balanced to it with an explicit "Adjustment" line when standard days, holidays or edits make them differ.
+3. **Edit** a draft (standard days, half-days, late units, manual adjustment with a required reason) and net pay recalculates.
+4. **Finalize** freezes the cutoff with a snapshot; later attendance edits or regenerating an overlapping range never reprice finalized days.
+5. A day that cannot be priced is skipped and listed on screen, so one bad record never blocks everyone else's payroll.
+
+<p align="center">
+  <img src="docs/screenshots/admin-payroll.png" width="800" alt="Admin payroll workspace with a cutoff draft" />
+</p>
+
+<p align="center"><em>Screenshots show the browser build with made-up demo interns; the installed desktop app adds cutoff generation from attendance.</em></p>
+
+Payroll rules and the checklist for changing them safely live in [docs/payroll-policy.md](docs/payroll-policy.md). The shared contract in `shared/payroll-fixtures.json` is replayed by the Rust tests.
 
 ### Bathroom key log
 
@@ -177,12 +226,12 @@ npm run tauri:build
 
 ```text
 src-tauri/target/release/alpha-premier-attendance.exe
-src-tauri/target/release/bundle/nsis/Alpha Premier Attendance_0.1.51_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Alpha Premier Attendance_<version>_x64-setup.exe
 ```
 
 ## Generated files and portable mode
 
-Everything the app creates (attendance/payroll workbooks, CSVs, payslips, register PDFs) goes to the exports folder, and the UI shows the exact path with `Open file` / `Show in folder`.
+Everything the app creates (attendance workbooks and the intern payroll PDF) goes to the exports folder, and the UI shows the exact path with `Open file` / `Show in folder`.
 
 | Mode | Location |
 | --- | --- |
@@ -214,24 +263,16 @@ The database is one file — move machines via **Admin → Data and backup**: cr
 | LAN server | Axum + SSE on port 4173 (read-only) |
 | Export | Async Google Sheets queue (optional, write-only) + printpdf payroll PDFs |
 | Voice | Piper/ONNX TTS with cloned voices (`scripts/generate_cloned_voices.py`) |
-| Contracts | Shared TS API/LAN/office-hours rules (`shared/`) mirrored in Rust |
+| Payroll engine | Rust is authoritative (`intern_payroll.rs`, dated policy versions), checked by golden fixtures in `shared/payroll-fixtures.json` |
+| Contracts | Shared TS API/LAN/office-hours types (`shared/`) used by the client |
 | Automation | Tauri MCP bridge (`ws://127.0.0.1:9223`) — `doctor:mcp` / `verify:mcp` |
-
-<p align="center">
-  <img src="docs/screenshots/verify-live-kiosk.png" width="800" alt="Native Tauri bridge verification screenshot" />
-</p>
-
-<p align="center">
-  <em>Native screenshot captured through the live Tauri MCP bridge during automated verification.</em>
-</p>
 
 ## Roadmap
 
 | Feature | Description |
 | --- | --- |
-| Signed auto-update rollout | Promote updater artifacts to the front-desk fleet |
 | Sheets reconciliation UI | Surface export queue health in the Data tab |
-| Multi-terminal roster sync | Keep single-writer SQLite, share snapshots |
+| Multi-terminal roster sync | Keep single-writer SQLite, share snapshots (PINs stay per PC) |
 | Self-enrollment kiosk flow | Assisted card binding without admin help |
 
 ## Development
@@ -242,7 +283,7 @@ npm run typecheck   # shared, client, server
 npm run lint        # eslint workspaces + oxlint
 npm test            # vitest: shared, client, server
 npm run rust:check
-npm run rust:test
+npm run rust:test   # full Rust suite; see docs/testing/rust-test-parity.md for the Windows lib-test limit
 node scripts/doctor-tauri-mcp.mjs   # Tauri bridge pre-flight
 node scripts/verify-tauri-mcp.mjs   # drives kiosk/admin/payroll via bridge
 node scripts/capture-readme-screenshots.mjs  # refresh docs/screenshots/
@@ -250,14 +291,24 @@ node scripts/capture-readme-screenshots.mjs  # refresh docs/screenshots/
 
 ```text
 client/       React, Vite, TypeScript kiosk and admin UI
-server/       Legacy Node web API retained for compatibility (payroll authority is the Rust engine)
+server/       Legacy Node web API for browser development and comparison (not shipped in the desktop app; the Rust engine is the payroll authority)
 shared/       Shared TypeScript API and LAN contracts
 src-tauri/    Tauri v2 app, Rust commands, services, SQLite, LAN server
 docs/         Deployment, hardware, payroll, migration guides
 docs/screenshots/  README screenshots captured from the running app
-scripts/      Dev, migration, voice, and screenshot helpers
+scripts/      Dev, migration, voice, screenshot helpers, and the PIN-reset mailer (scripts/pin-reset-mailer/)
 evidence/     Automated verification output + native screenshots
 ```
+
+### Release secrets
+
+Set these GitHub Actions secrets before releasing (the Release workflow fails if one is missing):
+
+| Secret | Purpose |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Sign installer and updater artifacts |
+| `ALPHA_PREMIER_EMBED_KEY_JSON` | Service-account key baked in for the intern-DTR Sheets export |
+| `ALPHA_PREMIER_PIN_RESET_URL` | Apps Script URL that emails Forgot-PIN codes |
 
 ## Contributing
 
@@ -268,7 +319,7 @@ evidence/     Automated verification output + native screenshots
 
 ## Security
 
-Admin/PIN sessions are short-lived in-memory Tauri state. PINs, token hashes, and Google credentials never leave the front-desk laptop; the LAN viewer is read-only and subnet-restricted. Report vulnerabilities privately to the repository owner.
+Admin sessions are short-lived in-memory Tauri state. The admin PIN is stored only as a salted PBKDF2 hash on each PC, with a limited number of reset-code attempts. Google credentials never leave the front-desk laptop; the only thing sent out for a PIN reset is a one-time code, to a fixed company address; the LAN viewer is read-only and subnet-restricted. Report vulnerabilities privately to the repository owner.
 
 ## License
 

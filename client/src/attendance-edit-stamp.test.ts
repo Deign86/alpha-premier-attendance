@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keepOrBuildManilaIso } from './App';
+import { formatDeductionDate, keepOrBuildManilaIso } from './App';
 
 describe('keepOrBuildManilaIso', () => {
   it('keeps the exact stamp (seconds included) when the HH:MM was not edited', () => {
@@ -16,5 +16,18 @@ describe('keepOrBuildManilaIso', () => {
 
   it('returns null when the time was cleared', () => {
     expect(keepOrBuildManilaIso('2026-10-08', '', '2026-10-08T09:00:30+08:00')).toBeNull();
+  });
+});
+
+describe('formatDeductionDate', () => {
+  it('does not crash on a deduction item without a date', () => {
+    expect(formatDeductionDate(undefined)).toBe('—');
+    expect(formatDeductionDate(null)).toBe('—');
+    expect(formatDeductionDate('')).toBe('—');
+  });
+
+  it('formats a real date and passes unknown text through', () => {
+    expect(formatDeductionDate('2026-10-08')).toContain('2026');
+    expect(formatDeductionDate('soon')).toBe('soon');
   });
 });
