@@ -1,11 +1,11 @@
 // Admin PIN storage and the email reset code.
 //
-// After an email reset the PIN lives as a PBKDF2 hash in `app_settings`.
-// config.toml stays in charge: `admin_pin = ""` still turns admin off, and
-// changing `admin_pin` there replaces an emailed PIN (IT's way back if the
-// inbox is lost). Until a reset happens the config PIN works as before, so
-// upgrading never locks anyone out. Admin RFID cards are checked separately
-// in `setup_unlock_impl` and are never touched here.
+// The PIN lives as a PBKDF2 hash in `app_settings`, set through the email reset.
+// config.toml stays in charge: `admin_pin = ""` turns admin off, and an explicit
+// `admin_pin` there replaces an emailed PIN (IT's way back if the inbox is
+// lost). With no PIN anywhere, only admin RFID cards unlock until a reset sets
+// one. Admin RFID cards are checked separately in `setup_unlock_impl` and are
+// never touched here.
 //
 // Kept free of Tauri/AppState so `tests/admin_pin_isolated.rs` can include
 // it directly on Windows (see docs/testing/rust-test-parity.md).
@@ -23,7 +23,7 @@ use std::num::NonZeroU32;
 
 /// Fixed recipient, also hard-coded in scripts/pin-reset-mailer/Code.gs.
 pub const RESET_RECIPIENT: &str = "thealphapremiergroup@gmail.com";
-/// The old built-in PIN is public, so it can never be chosen again.
+/// The retired built-in PIN was public, so it can never be chosen as a new PIN.
 pub const BURNED_PIN: &str = "293906";
 pub const CODE_TTL_MINUTES: i64 = 15;
 const RESEND_COOLDOWN_SECONDS: i64 = 60;
@@ -178,12 +178,16 @@ async fn save_json<T: Serialize>(db: &SqlitePool, key: &str, value: &T, now: Dat
 
 /// The emailed PIN hash, unless config.toml's `admin_pin` changed since that
 /// reset; then the config PIN wins and the stale hash is removed.
-pub async fn effective_pin_hash(db: &SqlitePool, config_pin: &str) -> Result<Option<String>, String> {
+pub async fn effective_pin_hash(db: &SqlitePool, config_pin: Option<&str>) -> Result<Option<String>, String> {
     let Some(hash) = get_setting(db, PIN_HASH_KEY).await? else {
         return Ok(None);
     };
     let fingerprint = get_setting(db, CONFIG_FINGERPRINT_KEY).await?;
-    if fingerprint.as_deref().is_some_and(|value| value != config_fingerprint(config_pin)) {
+    // Only an explicit config.toml PIN can override; an unset one never does.
+    let overridden = config_pin
+        .filter(|pin| !pin.is_empty())
+        .is_some_and(|pin| fingerprint.as_deref().is_some_and(|value| value != config_fingerprint(pin)));
+    if overridden {
         delete_setting(db, PIN_HASH_KEY).await?;
         delete_setting(db, CONFIG_FINGERPRINT_KEY).await?;
         return Ok(None);
@@ -242,7 +246,7 @@ pub async fn complete_reset(
     db: &SqlitePool,
     code: &str,
     new_pin: &str,
-    config_pin: &str,
+    config_pin: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<(), String> {
     validate_new_pin(new_pin)?;
@@ -264,7 +268,7 @@ pub async fn complete_reset(
         return Err("RESET_CODE_INVALID".into());
     }
     put_setting(db, PIN_HASH_KEY, &hash_secret(new_pin)?, now).await?;
-    put_setting(db, CONFIG_FINGERPRINT_KEY, &config_fingerprint(config_pin), now).await?;
+    put_setting(db, CONFIG_FINGERPRINT_KEY, &config_fingerprint(config_pin.unwrap_or("")), now).await?;
     delete_setting(db, RESET_KEY).await?;
     delete_setting(db, GUARD_KEY).await
 }

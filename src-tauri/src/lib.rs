@@ -3874,15 +3874,15 @@ async fn setup_unlock_impl(
     pin: String,
 ) -> Result<serde_json::Value, String> {
     // config.toml `admin_pin = ""` stays the off switch, even after an email reset.
-    let configured = state
-        .lan
-        .admin_pin
-        .as_deref()
-        .ok_or_else(|| "ADMIN_DISABLED".to_string())?;
+    if state.lan.admin_pin.as_deref() == Some("") {
+        return Err("ADMIN_DISABLED".into());
+    }
+    let configured = state.lan.admin_pin.as_deref();
     let pin_trimmed = pin.trim();
+    // No PIN anywhere (not set in config, not reset yet) means only admin cards unlock.
     let is_pin_match = match crate::services::admin_pin::effective_pin_hash(&state.db, configured).await? {
         Some(hash) => crate::services::admin_pin::verify_secret(&hash, pin_trimmed),
-        None => configured == pin_trimmed,
+        None => configured.is_some_and(|pin| pin == pin_trimmed),
     };
     let mut is_admin_card_match = false;
     if !is_pin_match {
@@ -3941,7 +3941,7 @@ async fn audit_admin_pin_event(state: &AppState, event_type: &str, message: &str
 /// Forgot-PIN step 1: email a one-time code to the fixed company inbox.
 async fn admin_pin_reset_request(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     use crate::services::admin_pin;
-    if state.lan.admin_pin.is_none() {
+    if state.lan.admin_pin.as_deref() == Some("") {
         return Err("ADMIN_DISABLED".into());
     }
     let url = admin_pin::reset_mail_url().ok_or_else(|| "RESET_EMAIL_NOT_CONFIGURED".to_string())?;
@@ -3983,11 +3983,10 @@ async fn admin_pin_reset_confirm_impl(
     code: &str,
     new_pin: &str,
 ) -> Result<serde_json::Value, String> {
-    let configured = state
-        .lan
-        .admin_pin
-        .as_deref()
-        .ok_or_else(|| "ADMIN_DISABLED".to_string())?;
+    if state.lan.admin_pin.as_deref() == Some("") {
+        return Err("ADMIN_DISABLED".into());
+    }
+    let configured = state.lan.admin_pin.as_deref();
     crate::services::admin_pin::complete_reset(&state.db, code, new_pin, configured, chrono::Utc::now()).await?;
     *state.admin_session.lock().await = None;
     audit_admin_pin_event(state, "ADMIN_PIN_RESET", "Admin PIN changed via email reset code").await;
@@ -7537,15 +7536,44 @@ mod tests {
         state.db.close().await;
 
         // config.toml admin_pin = "" stays the off switch after a reset.
-        let state = open(&temp, None).await;
+        let state = open(&temp, Some("")).await;
         assert_eq!(super::setup_unlock_impl(&state, "482915".to_string()).await.unwrap_err(), "ADMIN_DISABLED");
         assert_eq!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.unwrap_err(), "ADMIN_DISABLED");
+        assert_eq!(super::admin_pin_reset_confirm_impl(&state, "000000", "555555").await.unwrap_err(), "ADMIN_DISABLED");
         state.db.close().await;
 
         // Same config PIN again: the emailed PIN still applies.
         let state = open(&temp, Some("2468")).await;
         assert!(super::setup_unlock_impl(&state, "482915".to_string()).await.is_ok());
         state.db.close().await;
+
+        // No admin_pin in config.toml (the usual kiosk): the emailed PIN keeps working.
+        let state = open(&temp, None).await;
+        assert!(super::setup_unlock_impl(&state, "482915".to_string()).await.is_ok());
+        assert_eq!(super::setup_unlock_impl(&state, "293906".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        state.db.close().await;
+
+        // A fresh install with no PIN anywhere: no PIN unlocks, cards do, and a reset sets one.
+        let fresh = std::env::temp_dir().join(format!("alpha-admin-pin-fresh-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(fresh.join("exports")).unwrap();
+        let state = open(&fresh, None).await;
+        super::upsert_user_record(
+            &state.db, "ADMIN_CARD_ADDE23", "ADDE23", "Front Desk Admin", Some("Admin"), "ACTIVE", "INTERN",
+            None, None, None, None, "ADMIN_ASSIST", "2026-10-08T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        for attempt in ["293906", "", "0000"] {
+            assert_eq!(super::setup_unlock_impl(&state, attempt.to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        }
+        assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok(), "card unlocks with no PIN set");
+        let now = chrono::Utc::now();
+        let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
+        crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
+        super::admin_pin_reset_confirm_impl(&state, &reset.code, "246810").await.unwrap();
+        assert!(super::setup_unlock_impl(&state, "246810".to_string()).await.is_ok());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&fresh);
 
         // IT changes admin_pin in config.toml: that PIN takes over, cards keep working.
         let state = open(&temp, Some("135790")).await;

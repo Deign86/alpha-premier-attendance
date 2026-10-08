@@ -34,7 +34,9 @@ pub struct LanConfig {
     /// Title for a newly created Google Sheets spreadsheet.
     #[serde(default = "default_google_spreadsheet_title")]
     pub google_spreadsheet_title: String,
-    #[serde(default = "default_admin_pin")]
+    /// `None` = no PIN set yet: admin RFID cards work and "Forgot PIN?" sets one.
+    /// `Some("")` = admin access off. Any other value is a config.toml PIN.
+    #[serde(default)]
     pub admin_pin: Option<String>,
     #[serde(default = "default_admin_session_minutes")]
     pub admin_session_minutes: u64,
@@ -71,7 +73,7 @@ impl Default for LanConfig {
             google_drive_folder_name: default_google_drive_folder_name(),
             google_create_folder_if_missing: false,
             google_spreadsheet_title: default_google_spreadsheet_title(),
-            admin_pin: Some("293906".into()),
+            admin_pin: None,
             admin_session_minutes: 15,
             enabled: false,
             allow_runtime_start: true,
@@ -103,9 +105,6 @@ fn default_session_minutes() -> u64 {
 }
 fn default_keep_alive_seconds() -> u64 {
     15
-}
-fn default_admin_pin() -> Option<String> {
-    Some("293906".into())
 }
 fn default_admin_session_minutes() -> u64 {
     15
@@ -640,9 +639,6 @@ pub fn load_config(
     if lan.google_spreadsheet_title.trim().is_empty() {
         lan.google_spreadsheet_title = default_google_spreadsheet_title();
     }
-    if lan.admin_pin.as_deref().is_some_and(str::is_empty) {
-        lan.admin_pin = None;
-    }
     if lan
         .viewer_password_hash
         .as_deref()
@@ -707,7 +703,7 @@ mod tests {
         let config = LanConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.port, 4173);
-        assert_eq!(config.admin_pin.as_deref(), Some("293906"));
+        assert_eq!(config.admin_pin, None);
     }
 
     #[test]
