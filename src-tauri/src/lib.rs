@@ -1567,8 +1567,11 @@ async fn admin_update_attendance_impl(
         "MISSED"
     };
     let now = chrono::Utc::now().to_rfc3339();
+    // One transaction: attendance update + payroll/grace rebuild commit together.
+    // Sync/audit side effects run only after commit.
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
     let updated = sqlx::query("UPDATE attendance SET attendance_date=?,time_in=?,time_out=?,status=?,revision=revision+1,updated_at=? WHERE attendance_id=? AND time_in IS ? AND time_out IS ? AND revision=?")
-        .bind(date).bind(time_in).bind(time_out).bind(status).bind(&now).bind(attendance_id).bind(expected_in).bind(expected_out).bind(row.get::<i64,_>("revision")).execute(&state.db).await.map_err(|e|e.to_string())?;
+        .bind(date).bind(time_in).bind(time_out).bind(status).bind(&now).bind(attendance_id).bind(expected_in).bind(expected_out).bind(row.get::<i64,_>("revision")).execute(&mut *tx).await.map_err(|e|e.to_string())?;
     if updated.rows_affected() != 1 {
         return Err("ATTENDANCE_CONFLICT".into());
     }
@@ -1576,7 +1579,7 @@ async fn admin_update_attendance_impl(
     let payroll_ids: Vec<String> =
         sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
             .bind(&attendance_id)
-            .fetch_all(&state.db)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -1585,7 +1588,7 @@ async fn admin_update_attendance_impl(
     let grace_rows: Vec<(String, String)> =
         sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
             .bind(&attendance_id)
-            .fetch_all(&state.db)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -1596,43 +1599,36 @@ async fn admin_update_attendance_impl(
                 )
             })
             .collect();
-    let _ = sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
+    sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
         .bind(&attendance_id)
-        .execute(&state.db)
-        .await;
-    let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
         .bind(&attendance_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut pending: Vec<PendingSync> = Vec::new();
     for payroll_id in payroll_ids {
-        enqueue_sync(
-            &state,
-            "Payroll",
-            &payroll_id,
-            "DELETE",
-            &serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id}),
-        )
-        .await;
+        let payload = serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id});
+        pending.push(("Payroll", payroll_id, "DELETE", payload));
     }
     for (grace_id, user_id) in grace_rows {
-        enqueue_sync(
-            &state,
-            "InternGrace",
-            &user_id,
-            "DELETE",
-            &serde_json::json!({"userId":user_id,"attendanceId":attendance_id,"graceId":grace_id}),
-        )
-        .await;
+        let payload = serde_json::json!({"userId":user_id,"attendanceId":attendance_id,"graceId":grace_id});
+        pending.push(("InternGrace", user_id, "DELETE", payload));
     }
     // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
     // (cap_late_timeout_out) before any math, so the day is a full capped shift.
     if status == "COMPLETED" || status == "LATE_TIMEOUT" {
         if let (Some(actual_in), Some(actual_out)) = (time_in, time_out) {
-            if let Some(user_row) = sqlx::query("SELECT user_id,full_name FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? {
-                ensure_payroll(&state, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), date, actual_in, actual_out).await?;
+            if let Some(user_row) = sqlx::query("SELECT user_id,full_name FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(&attendance_id).fetch_optional(&mut *tx).await.map_err(|e| e.to_string())? {
+                pending.extend(ensure_payroll_tx(&mut tx, &attendance_id, user_row.get("user_id"), user_row.get("full_name"), date, actual_in, actual_out).await?);
             }
         }
     }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    flush_pending_sync(state, pending).await;
     enqueue_sync(state, "Attendance", attendance_id, "UPSERT", &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status})).await;
     // Mirror the correction to the intern DTR sheet: the idempotent re-push
     // rewrites the same tab row (half-day/working/full tiers + paint), so
@@ -1762,6 +1758,8 @@ async fn admin_create_backdated_attendance_impl(
     let full_name: String = user.get("full_name");
     let department: Option<String> = user.get("department");
 
+    // Attendance insert + payroll commit together; sync side effects run after commit.
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
     sqlx::query(
         "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, notes, recorded_by, recorded_reason, recorded_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ADMIN_BACKDATED_ENTRY', '', 'Admin', ?, ?, ?, ?)"
     )
@@ -1778,25 +1776,29 @@ async fn admin_create_backdated_attendance_impl(
     .bind(&now_ts)
     .bind(&now_ts)
     .bind(&now_ts)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
 
     // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
     // (cap_late_timeout_out) before any math, so the day is a full capped shift.
+    let mut pending: Vec<PendingSync> = Vec::new();
     if status == "COMPLETED" || status == "LATE_TIMEOUT" {
         if let Some(actual_out) = time_out {
-            let _ = ensure_payroll(
-                state,
+            pending = ensure_payroll_tx(
+                &mut tx,
                 &attendance_id,
                 user_id,
                 full_name.clone(),
                 attendance_date,
                 time_in,
                 actual_out,
-            ).await;
+            )
+            .await?;
         }
     }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    flush_pending_sync(state, pending).await;
 
     let seq = state.next_sequence();
     let event_payload = serde_json::json!({
@@ -1925,23 +1927,27 @@ async fn admin_delete_attendance_impl(
                 )
             })
             .collect();
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
     let result = sqlx::query("DELETE FROM attendance WHERE attendance_id=? AND attendance_date=?")
         .bind(attendance_id)
         .bind(date)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
     if result.rows_affected() != 1 {
         return Err("ATTENDANCE_NOT_FOUND".into());
     }
-    let _ = sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
+    sqlx::query("DELETE FROM payroll WHERE attendance_id=?")
         .bind(attendance_id)
-        .execute(&state.db)
-        .await;
-    let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
         .bind(attendance_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
     enqueue_sync(
         state,
         "Attendance",
@@ -3135,15 +3141,18 @@ async fn payroll_finalize_cutoff(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let now = chrono::Utc::now().to_rfc3339();
-    let result = sqlx::query("UPDATE payroll_cutoffs SET status='FINALIZED', finalized_at=?, revision=revision+1, updated_at=? WHERE payroll_id=? AND status='DRAFT'").bind(&now).bind(&now).bind(&payroll_id).execute(&state.db).await.map_err(|e| e.to_string())?;
+    // Status flip + snapshot commit together: never FINALIZED without a snapshot.
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+    let result = sqlx::query("UPDATE payroll_cutoffs SET status='FINALIZED', finalized_at=?, revision=revision+1, updated_at=? WHERE payroll_id=? AND status='DRAFT'").bind(&now).bind(&now).bind(&payroll_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     if result.rows_affected() == 0 {
         return Err("PAYROLL_NOT_FOUND_OR_FINALIZED".into());
     }
-    let snapshot = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,basic_pay_centavos,total_allowance_centavos,incentives_allowance_centavos,late_deduction_centavos,manual_adjustment_centavos,gross_compensation_centavos,net_pay_centavos,status,revision FROM payroll_cutoffs WHERE payroll_id=?").bind(&payroll_id).fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    let snapshot = sqlx::query("SELECT payroll_id,employee_id,employee_name,payroll_profile_id,payroll_cutoff_label,cutoff_start,cutoff_end,basic_pay_centavos,total_allowance_centavos,incentives_allowance_centavos,late_deduction_centavos,manual_adjustment_centavos,gross_compensation_centavos,net_pay_centavos,status,revision FROM payroll_cutoffs WHERE payroll_id=?").bind(&payroll_id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
     let snapshot_json = serde_json::json!({"payrollId":snapshot.get::<String,_>("payroll_id"),"employeeId":snapshot.get::<String,_>("employee_id"),"employeeName":snapshot.get::<String,_>("employee_name"),"profile":snapshot.get::<String,_>("payroll_profile_id"),"cutoffLabel":snapshot.get::<String,_>("payroll_cutoff_label"),"cutoffStart":snapshot.get::<String,_>("cutoff_start"),"cutoffEnd":snapshot.get::<String,_>("cutoff_end"),"basicPayCentavos":snapshot.get::<i64,_>("basic_pay_centavos"),"allowancesCentavos":snapshot.get::<i64,_>("total_allowance_centavos"),"incentivesCentavos":snapshot.get::<i64,_>("incentives_allowance_centavos"),"lateDeductionCentavos":snapshot.get::<i64,_>("late_deduction_centavos"),"manualAdjustmentCentavos":snapshot.get::<i64,_>("manual_adjustment_centavos"),"grossCentavos":snapshot.get::<i64,_>("gross_compensation_centavos"),"netCentavos":snapshot.get::<i64,_>("net_pay_centavos"),"status":"FINALIZED"});
     let snapshot_text = snapshot_json.to_string();
     let snapshot_hash = format!("{:x}", Sha256::digest(snapshot_text.as_bytes()));
-    sqlx::query("INSERT INTO payroll_snapshots (snapshot_id,payroll_id,revision,status,snapshot_json,snapshot_sha256,created_at) VALUES (?,?,?,?,?,?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(&payroll_id).bind(snapshot.get::<i64,_>("revision")).bind("FINALIZED").bind(snapshot_text).bind(snapshot_hash).bind(&now).execute(&state.db).await.map_err(|e| e.to_string())?;
+    sqlx::query("INSERT INTO payroll_snapshots (snapshot_id,payroll_id,revision,status,snapshot_json,snapshot_sha256,created_at) VALUES (?,?,?,?,?,?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(&payroll_id).bind(snapshot.get::<i64,_>("revision")).bind("FINALIZED").bind(snapshot_text).bind(snapshot_hash).bind(&now).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
     enqueue_sync(
         &state,
         "PayrollCutoffs",
@@ -5523,13 +5532,49 @@ async fn scan_rfid_impl(
             // never as a normal COMPLETED shift.
             let late = crate::services::office_hours::is_late_timeout(&timestamp);
             let new_status = if late { "LATE_TIMEOUT" } else { "COMPLETED" };
+            // Time-out + payroll commit together: a payroll failure rolls the
+            // time-out back so the card can simply be scanned again.
+            let mut tx = match state.db.begin().await {
+                Ok(tx) => tx,
+                Err(_) => {
+                    return Ok(
+                        serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
+                    );
+                }
+            };
             let result = sqlx::query("UPDATE attendance SET time_out = ?, status = ?, source = ?, recorded_by = COALESCE(?, recorded_by), recorded_reason = COALESCE(?, recorded_reason), recorded_at = COALESCE(?, recorded_at), revision = revision + 1, updated_at = ? WHERE attendance_id = ? AND revision = ? AND time_out IS NULL")
-                .bind(&timestamp).bind(new_status).bind(effective_source).bind(&recorded_by).bind(&recorded_reason).bind(&recorded_at).bind(&timestamp).bind(&id).bind(row.get::<i64,_>("revision")).execute(&state.db).await;
+                .bind(&timestamp).bind(new_status).bind(effective_source).bind(&recorded_by).bind(&recorded_reason).bind(&recorded_at).bind(&timestamp).bind(&id).bind(row.get::<i64,_>("revision")).execute(&mut *tx).await;
             if result.map(|r| r.rows_affected()).unwrap_or(0) != 1 {
                 return Ok(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_DATA_CONFLICT","message":"Attendance changed before the scan was saved."}}),
                 );
             }
+            // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
+            // (cap_late_timeout_out) before any math, so the day is a full capped shift.
+            let pending = match ensure_payroll_tx(
+                &mut tx,
+                &id,
+                &user_id,
+                effective_user.get::<String, _>("full_name"),
+                &date,
+                tin.as_deref().unwrap_or_default(),
+                &timestamp,
+            )
+            .await
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    return Ok(
+                        serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"PAYROLL_GENERATION_FAILED","message":error}}),
+                    );
+                }
+            };
+            if tx.commit().await.is_err() {
+                return Ok(
+                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
+                );
+            }
+            flush_pending_sync(&state, pending).await;
             (id, "TIME_OUT", tin, Some(timestamp.clone()), new_status)
         }
     };
@@ -5543,29 +5588,6 @@ async fn scan_rfid_impl(
                 debounce.insert(
                     cooldown_key,
                     crate::state::ScanDebounce { fast: now, slow: Some(now) },
-                );
-            }
-        }
-    }
-    // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
-    // (cap_late_timeout_out) before any math, so the day is a full capped shift.
-    if action == "TIME_OUT"
-        && (attendance_status == "COMPLETED" || attendance_status == "LATE_TIMEOUT")
-    {
-        if let (Some(actual_in), Some(actual_out)) = (time_in.as_deref(), time_out.as_deref()) {
-            if let Err(error) = ensure_payroll(
-                &state,
-                &attendance_id,
-                &user_id,
-                effective_user.get::<String, _>("full_name"),
-                &date,
-                actual_in,
-                actual_out,
-            )
-            .await
-            {
-                return Ok(
-                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"PAYROLL_GENERATION_FAILED","message":error}}),
                 );
             }
         }
@@ -5691,6 +5713,17 @@ async fn scan_rfid_impl(
     )
 }
 
+/// Sync rows (table, row id, operation, payload) produced inside a transaction;
+/// flush them with `flush_pending_sync` only AFTER the transaction commits.
+type PendingSync = (&'static str, String, &'static str, serde_json::Value);
+
+async fn flush_pending_sync(state: &AppState, pending: Vec<PendingSync>) {
+    for (table, row_id, operation, payload) in pending {
+        enqueue_sync(state, table, &row_id, operation, &payload).await;
+    }
+}
+
+/// Atomic wrapper: grace claim + payroll upsert commit together or not at all.
 async fn ensure_payroll(
     state: &AppState,
     attendance_id: &str,
@@ -5700,6 +5733,24 @@ async fn ensure_payroll(
     actual_in: &str,
     actual_out: &str,
 ) -> Result<(), String> {
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+    let pending = ensure_payroll_tx(&mut tx, attendance_id, user_id, full_name, date, actual_in, actual_out).await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    flush_pending_sync(state, pending).await;
+    Ok(())
+}
+
+/// Runs entirely on the caller's connection/transaction (never touches the pool).
+async fn ensure_payroll_tx(
+    conn: &mut sqlx::SqliteConnection,
+    attendance_id: &str,
+    user_id: &str,
+    full_name: String,
+    date: &str,
+    actual_in: &str,
+    actual_out: &str,
+) -> Result<Vec<PendingSync>, String> {
+    let mut pending: Vec<PendingSync> = Vec::new();
     let (computed_in, computed_out, grace_used, late_hours, deduction, is_half_day, half_day_deduction, base_pay, daily_pay) = {
         let date_value =
             chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| e.to_string())?;
@@ -5716,7 +5767,7 @@ async fn ensure_payroll(
             .bind(user_id)
             .bind(week_start.to_string())
             .bind(attendance_id)
-            .fetch_one(&state.db)
+            .fetch_one(&mut *conn)
             .await
             .map_err(|e| e.to_string())?
                 == 0
@@ -5730,9 +5781,9 @@ async fn ensure_payroll(
         if result.grace_used && !no_grace_cutover {
             let grace_id = uuid::Uuid::new_v4().to_string();
             let used_at = chrono::Utc::now().to_rfc3339();
-            let inserted = sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&state.db).await.map_err(|e| e.to_string())?.rows_affected() == 1;
+            let inserted = sqlx::query("INSERT OR IGNORE INTO intern_grace (grace_id,user_id,week_start,attendance_id,used_at) VALUES (?,?,?,?,?)").bind(&grace_id).bind(user_id).bind(week_start.to_string()).bind(attendance_id).bind(&used_at).execute(&mut *conn).await.map_err(|e| e.to_string())?.rows_affected() == 1;
             if inserted {
-                enqueue_sync(state, "InternGrace", &grace_id, "UPSERT", &serde_json::json!({"graceId":grace_id,"userId":user_id,"weekStart":week_start.to_string(),"attendanceId":attendance_id,"usedAt":used_at})).await;
+                pending.push(("InternGrace", grace_id.clone(), "UPSERT", serde_json::json!({"graceId":grace_id,"userId":user_id,"weekStart":week_start.to_string(),"attendanceId":attendance_id,"usedAt":used_at})));
             } else {
                 let own_claim: i64 = sqlx::query_scalar(
                     "SELECT COUNT(*) FROM intern_grace WHERE user_id=? AND week_start=? AND attendance_id=?",
@@ -5740,7 +5791,7 @@ async fn ensure_payroll(
                 .bind(user_id)
                 .bind(week_start.to_string())
                 .bind(attendance_id)
-                .fetch_one(&state.db)
+                .fetch_one(&mut *conn)
                 .await
                 .map_err(|e| e.to_string())?;
                 if own_claim == 0 {
@@ -5753,10 +5804,11 @@ async fn ensure_payroll(
                 }
             }
         } else if date < crate::services::intern_payroll::NO_GRACE_CUTOFF_DATE {
-            let _ = sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
+            sqlx::query("DELETE FROM intern_grace WHERE attendance_id=?")
                 .bind(attendance_id)
-                .execute(&state.db)
-                .await;
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         (
             result.computed_time_in,
@@ -5794,18 +5846,18 @@ async fn ensure_payroll(
            updated_at=excluded.updated_at",
     )
     .bind(&payroll_id).bind(attendance_id).bind(user_id).bind(&full_name).bind("INTERN").bind(date).bind(actual_in).bind(actual_out).bind(&computed_in).bind(&computed_out).bind(grace_used.map(|v| if v {1} else {0})).bind(late_hours).bind(deduction).bind(base_pay).bind(daily_pay).bind(if is_half_day { 1 } else { 0 }).bind(half_day_deduction).bind(&now).bind(&now)
-    .execute(&state.db).await.map_err(|e| e.to_string())?;
+    .execute(&mut *conn).await.map_err(|e| e.to_string())?;
 
     let effective_payroll_id: String = sqlx::query_scalar(
         "SELECT payroll_id FROM payroll WHERE attendance_id=?"
     )
     .bind(attendance_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|e| e.to_string())?;
 
-    enqueue_sync(state, "Payroll", &effective_payroll_id, "UPSERT", &serde_json::json!({"payrollId":effective_payroll_id,"attendanceId":attendance_id,"userId":user_id,"employeeType":"INTERN","attendanceDate":date,"actualTimeIn":actual_in,"actualTimeOut":actual_out,"computedTimeIn":computed_in,"computedTimeOut":computed_out,"lateHours":late_hours,"lateDeductionCentavos":deduction,"isHalfDay":is_half_day,"halfDayDeductionCentavos":half_day_deduction,"dailyPayCentavos":daily_pay})).await;
-    Ok(())
+    pending.push(("Payroll", effective_payroll_id.clone(), "UPSERT", serde_json::json!({"payrollId":effective_payroll_id,"attendanceId":attendance_id,"userId":user_id,"employeeType":"INTERN","attendanceDate":date,"actualTimeIn":actual_in,"actualTimeOut":actual_out,"computedTimeIn":computed_in,"computedTimeOut":computed_out,"lateHours":late_hours,"lateDeductionCentavos":deduction,"isHalfDay":is_half_day,"halfDayDeductionCentavos":half_day_deduction,"dailyPayCentavos":daily_pay})));
+    Ok(pending)
 }
 
 async fn reconcile_attendance_payroll_range(
@@ -8080,6 +8132,66 @@ mod tests {
             Some(v) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, v),
             None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
         }
+    }
+
+    #[tokio::test]
+    async fn admin_update_rolls_back_attendance_when_payroll_write_fails() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let temp = std::env::temp_dir().join(format!("alpha-admin-rollback-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let unlock_res = super::setup_unlock_impl(&state, "1234".to_string()).await.unwrap();
+        let token = unlock_res["token"].as_str().unwrap().to_string();
+        super::upsert_user_record(
+            &state.db, "INT_RB", "CARD_INT_RB", "Rollback Intern", Some("QA"),
+            "ACTIVE", "INTERN", Some("MALE"), None, Some("BEA_STANDARD"),
+            None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        // Late open day (pre grace cut-over): completing it claims a grace row
+        // first, then writes payroll. The trigger makes the payroll write fail.
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('aid-rb','2026-08-12','INT_RB','CARD_INT_RB','Rollback Intern','QA','2026-08-12T08:10:00+08:00',NULL,'WORKING','RFID','2026-08-12T00:00:00Z','2026-08-12T00:00:00Z')")
+            .execute(&state.db).await.unwrap();
+        let rev_before: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-rb'").fetch_one(&state.db).await.unwrap();
+        sqlx::query("CREATE TRIGGER fail_payroll_insert BEFORE INSERT ON payroll BEGIN SELECT RAISE(ABORT, 'forced payroll failure'); END")
+            .execute(&state.db).await.unwrap();
+        let err = super::admin_update_attendance_impl(&state, &token, "aid-rb", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap_err();
+        assert!(err.contains("forced payroll failure"), "unexpected error: {err}");
+        let row = sqlx::query("SELECT time_out,status,revision FROM attendance WHERE attendance_id='aid-rb'")
+            .fetch_one(&state.db).await.unwrap();
+        assert!(row.get::<Option<String>, _>("time_out").is_none());
+        assert_eq!(row.get::<String, _>("status"), "WORKING");
+        assert_eq!(row.get::<i64, _>("revision"), rev_before);
+        let grace: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM intern_grace WHERE attendance_id='aid-rb'").fetch_one(&state.db).await.unwrap();
+        assert_eq!(grace, 0);
+        let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE row_id='aid-rb'").fetch_one(&state.db).await.unwrap();
+        assert_eq!(queued, 0);
+        let audited: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE event_type='ADMIN_ATTENDANCE_UPDATED'").fetch_one(&state.db).await.unwrap();
+        assert_eq!(audited, 0);
+        // The same edit succeeds once the failure is removed.
+        sqlx::query("DROP TRIGGER fail_payroll_insert").execute(&state.db).await.unwrap();
+        let ok = super::admin_update_attendance_impl(&state, &token, "aid-rb", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
+        assert_eq!(ok["status"], "COMPLETED");
+        let payroll: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll WHERE attendance_id='aid-rb'").fetch_one(&state.db).await.unwrap();
+        assert_eq!(payroll, 1);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[tokio::test]
