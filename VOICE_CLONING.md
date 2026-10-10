@@ -70,7 +70,11 @@ To deliver studio-quality voice cloning without demanding GPU hardware or high-l
   VoiceStudio's "Shared on your Network" popup lists all network adapters including virtual ones:
   - ❌ **`192.168.56.x`**: VirtualBox Host-Only adapter. Internal only; unreachable from kiosk.
   - ❌ **`172.16.x.x` – `172.31.x.x`**: Hyper-V / WSL virtual switches. Unreachable from kiosk.
-  - ✅ **`192.168.1.x` / `192.168.0.x`**: Physical Wi-Fi or Ethernet adapter (matches router subnet).
+  - ❌ **`100.64.x.x` – `100.127.x.x`**: Tailscale / VPN overlay. Unreachable unless the kiosk joins the same tailnet.
+  - ✅ **`192.168.x.x` (e.g. `192.168.254.163`) / `10.x.x.x`**: Physical Wi-Fi or Ethernet adapter (matches the router subnet the kiosk is on).
+  - The kiosk's **Test Connection** names the adapter type when a virtual address is entered.
+  - Patched VoiceStudio builds (`lan_ipv4_addresses()` in `backend/services/network_share.py`) list the default-route address first and hide these virtual adapters.
+  - A DHCP IP can change on router restart: prefer the computer name, or add a DHCP reservation for the host in the router.
 - **Voice profile**: a profile named like `"Ma'am Bea"` must exist (auto-discovered by name; ids differ per PC).
 - **ffmpeg on the host**: required for mp3 output. Without it the host answers wav and the kiosk job stays queued with an explicit error.
 - **Kiosk setting**: Voice Announcements → VoiceStudio Server holds the host URL (e.g. `http://DEIGN-GAMING:3901`) and Share PIN. No software is installed on the host beyond stock VoiceStudio.

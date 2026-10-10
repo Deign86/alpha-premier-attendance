@@ -83,6 +83,23 @@ pub fn normalize_host(raw: &str) -> String {
     }
 }
 
+/// Explains an unreachable host whose IP belongs to an adapter VoiceStudio's
+/// share popup lists but other LAN PCs can't route to.
+pub fn virtual_adapter_hint(host: &str) -> Option<&'static str> {
+    let authority = host.split("://").nth(1).unwrap_or(host);
+    let ip: std::net::Ipv4Addr = authority.split([':', '/']).next()?.parse().ok()?;
+    let [a, b, c, _] = ip.octets();
+    if a == 172 && (16..=31).contains(&b) {
+        Some(" That is a Hyper-V/WSL virtual adapter address; use the host's Wi-Fi/Ethernet IP or its computer name.")
+    } else if a == 192 && b == 168 && c == 56 {
+        Some(" That is a VirtualBox host-only address; use the host's Wi-Fi/Ethernet IP or its computer name.")
+    } else if a == 100 && (64..=127).contains(&b) {
+        Some(" That is a Tailscale/VPN address; use the host's Wi-Fi/Ethernet IP or its computer name.")
+    } else {
+        None
+    }
+}
+
 /// Backoff after `attempts` failures: 1m, 2m, 4m … capped at 6h.
 pub fn backoff_secs(attempts: i64) -> i64 {
     let shift = attempts.clamp(0, 12) as u32;
@@ -249,9 +266,10 @@ pub async fn check_connection(db: &SqlitePool) -> VoiceConnectionStatus {
             } else {
                 "network error"
             };
+            let hint = virtual_adapter_hint(&host).unwrap_or("");
             VoiceConnectionStatus {
                 ok: false,
-                message: format!("Cannot reach VoiceStudio at {host} ({detail}: {e}). Check the address, port (e.g. 3901 for sharing), and that VoiceStudio is running."),
+                message: format!("Cannot reach VoiceStudio at {host} ({detail}: {e}). Check the address, port (e.g. 3901 for sharing), and that VoiceStudio is running.{hint}"),
             }
         }
         Ok(response) => {
@@ -515,6 +533,15 @@ mod tests {
         assert_eq!(normalize_host(""), DEFAULT_VOICESTUDIO_BASE_URL);
         assert_eq!(normalize_host("not a url"), DEFAULT_VOICESTUDIO_BASE_URL);
         assert_eq!(normalize_host("ftp://host/voices"), DEFAULT_VOICESTUDIO_BASE_URL);
+    }
+
+    #[test]
+    fn virtual_adapter_hint_flags_unroutable_share_addresses() {
+        assert!(virtual_adapter_hint("http://172.19.80.1:3901").unwrap().contains("Hyper-V"));
+        assert!(virtual_adapter_hint("http://192.168.56.1:3901").unwrap().contains("VirtualBox"));
+        assert!(virtual_adapter_hint("http://100.120.64.9:3901").unwrap().contains("Tailscale"));
+        assert_eq!(virtual_adapter_hint("http://192.168.254.163:3901"), None);
+        assert_eq!(virtual_adapter_hint("http://DEIGN-GAMING:3901"), None);
     }
 
     #[test]
