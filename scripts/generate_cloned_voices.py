@@ -292,6 +292,12 @@ PHRASE_CATALOG = [
     },
     {
         "category": "scan-error",
+        "slug": "gender-not-set",
+        "phrase": "Gender is not set for this card. Please ask an administrator.",
+        "tone": "neutral",
+    },
+    {
+        "category": "scan-error",
         "slug": "admin-card-requires-selection",
         "phrase": "Admin card requires employee selection.",
         "tone": "neutral",

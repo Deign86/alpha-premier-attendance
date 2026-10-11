@@ -361,6 +361,9 @@ describe('ttsService', () => {
       expect(buildScanErrorPhrase({ errorCode: 'ADMIN_CARD_NOT_ALLOWED' })).toBe(
         'Admin cards cannot check out bathroom keys.',
       );
+      expect(buildScanErrorPhrase({ errorCode: 'GENDER_NOT_SET' })).toBe(
+        'Gender is not set for this card. Please ask an administrator.',
+      );
       expect(buildScanErrorPhrase({ errorCode: 'ADMIN_CARD_REQUIRES_SELECTION' })).toBe(
         'Admin card requires employee selection.',
       );

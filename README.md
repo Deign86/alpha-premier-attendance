@@ -152,7 +152,7 @@ How a cutoff is built:
 
 1. Every completed attendance day is priced by the Rust engine (`src-tauri/src/services/intern_payroll.rs`) under the policy version for that date.
 2. **Generate** builds a semi-monthly draft per intern from those days. Net pay is the engine's total; the per-day list (absences, late, undertime) explains it and is balanced to it with an explicit "Adjustment" line when standard days, holidays or edits make them differ.
-3. **Edit** a draft (standard days, half-days, late units, manual adjustment with a required reason) and net pay recalculates.
+3. **Edit** a draft's manual adjustment (a reason is required) and net pay recalculates; to change days or late hours, correct attendance and generate again.
 4. **Finalize** freezes the cutoff with a snapshot; later attendance edits or regenerating an overlapping range never reprice finalized days.
 5. A day that cannot be priced is skipped and listed on screen, so one bad record never blocks everyone else's payroll.
 

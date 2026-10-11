@@ -4270,8 +4270,9 @@ export function UserEditor({
   }, [safeUsers, userSearch]);
   const isUserFiltering = userSearch.trim().length > 0;
 
-  const allUsersSelected = safeUsers.length > 0 && selectedUserIds.size === safeUsers.length;
-  const someUsersSelected = selectedUserIds.size > 0 && selectedUserIds.size < safeUsers.length;
+  // "Select all" acts on the rows the search currently shows, never on hidden users.
+  const allUsersSelected = filteredUsers.length > 0 && filteredUsers.every((u) => selectedUserIds.has(u.userId));
+  const someUsersSelected = selectedUserIds.size > 0 && !allUsersSelected;
 
   useEffect(() => {
     if (masterUserCheckboxRef.current) {
@@ -4296,7 +4297,7 @@ export function UserEditor({
     if (allUsersSelected) {
       setSelectedUserIds(new Set());
     } else {
-      setSelectedUserIds(new Set(safeUsers.map((u) => u.userId)));
+      setSelectedUserIds(new Set(filteredUsers.map((u) => u.userId)));
     }
   };
 
@@ -4823,13 +4824,13 @@ export function UserEditor({
           <div className="table-batch-actions">
             {selectedUserIds.size > 0 ? (
               <>
-                {selectedUserIds.size < safeUsers.length && (
+                {!allUsersSelected && (
                   <button
                     className="text-button"
                     type="button"
-                    onClick={() => setSelectedUserIds(new Set(safeUsers.map((u) => u.userId)))}
+                    onClick={() => setSelectedUserIds(new Set(filteredUsers.map((u) => u.userId)))}
                   >
-                    Select all ({safeUsers.length})
+                    Select all ({filteredUsers.length})
                   </button>
                 )}
                 <button
@@ -4869,7 +4870,7 @@ export function UserEditor({
                 <button
                   className="text-button"
                   type="button"
-                  onClick={() => setSelectedUserIds(new Set(safeUsers.map((u) => u.userId)))}
+                  onClick={() => setSelectedUserIds(new Set(filteredUsers.map((u) => u.userId)))}
                 >
                   Select all
                 </button>
@@ -5374,10 +5375,9 @@ export function PayrollWorkspace({
     if (saving) return;
     setSaving(true);
     try {
-      if (existingCutoffRecords.length > 0) {
-        for (const r of existingCutoffRecords) {
-          await deletePayrollCutoff(r.payrollId);
-        }
+      // Finalized rows are approved pay: regenerating rebuilds drafts only.
+      for (const r of existingCutoffRecords) {
+        if (r.status !== "FINALIZED") await deletePayrollCutoff(r.payrollId);
       }
       const stdDays = Number(form.standardWorkingDays);
       const customization = !Number.isNaN(stdDays) && stdDays > 0 ? { standardWorkingDays: stdDays } : undefined;
@@ -5395,7 +5395,7 @@ export function PayrollWorkspace({
             : "";
         setMessage(
           (existingCutoffRecords.length > 0
-            ? "Existing cutoff was replaced and regenerated from attendance."
+            ? "Draft records for this cutoff were regenerated from attendance; finalized records were kept."
             : "Payroll drafts were generated from completed attendance.") + skippedNote,
         );
         onSaved();
@@ -5609,7 +5609,7 @@ export function PayrollWorkspace({
       {existingCutoffRecords.length > 0 && (
         <div className="cutoff-existing-banner" role="status">
           <span>
-            Payroll already exists for this cutoff ({existingCutoffRecords.length} record(s)). Generating from attendance will replace existing records.
+            Payroll already exists for this cutoff ({existingCutoffRecords.length} record(s)). Generating from attendance will replace draft records; finalized records are kept.
           </span>
           <div className="cutoff-existing-actions">
             <button
@@ -5642,8 +5642,8 @@ export function PayrollWorkspace({
         title={existingCutoffRecords.length > 0 ? "Regenerate cutoff payroll?" : "Generate payroll drafts?"}
         message={
           existingCutoffRecords.length > 0
-            ? `Payroll already exists for ${form.cutoffStart} through ${form.cutoffEnd} (${existingCutoffRecords.length} record(s)). Generating new payroll will replace these existing records with fresh calculations from latest attendance. Continue?`
-            : `This will generate payroll records for ${form.cutoffStart} through ${form.cutoffEnd} from completed attendance. Incomplete or late-timeout attendance will not be paid. Continue?`
+            ? `Payroll already exists for ${form.cutoffStart} through ${form.cutoffEnd} (${existingCutoffRecords.length} record(s)). Generating new payroll will replace the draft records with fresh calculations from latest attendance; finalized records are kept. Continue?`
+            : `This will generate payroll records for ${form.cutoffStart} through ${form.cutoffEnd} from completed attendance. Days without a time-out are not paid; late time-outs are paid up to 17:00. Continue?`
         }
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => void confirmGenerate()}
@@ -7918,7 +7918,9 @@ function AttendanceEditRow({
       );
       onSaved();
     } else {
-      setMessage(response.error?.message ?? "Conflict");
+      setMessage(response.error?.message ?? "Unable to save attendance.");
+      // A stale row cannot be saved again as-is; reload it so the admin sees the current times.
+      if (response.error?.code === "ATTENDANCE_CONFLICT" || response.error?.code === "ATTENDANCE_NOT_FOUND") onSaved();
     }
   };
   const remove = async () => {

@@ -195,13 +195,13 @@ export function BathroomKeyLogPanel({
         await refreshStatus(date);
       } else {
         const message = res.error?.message ?? "Failed to check out key.";
-        setError(message.includes("BATHROOM_KEY_ALREADY_IN_USE") || message.includes('status=OUT')
+        setError(res.error?.code === "BATHROOM_KEY_ALREADY_CHECKED_OUT" || message.includes("status=OUT")
           ? "This key is currently in use. Please return it before checking out again."
           : message);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      setError(message.includes("BATHROOM_KEY_ALREADY_IN_USE")
+      setError(message.includes("BATHROOM_KEY_ALREADY_CHECKED_OUT")
         ? "This key is currently in use. Please return it before checking out again."
         : "Network or server error checking out bathroom key.");
     } finally {
