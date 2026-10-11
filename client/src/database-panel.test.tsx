@@ -1025,6 +1025,28 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText('DTR idle')).toBeInTheDocument();
   });
 
+  it('Users "Select all" selects only the users the search shows', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const intern = (userId: string, fullName: string) => ({
+      userId, rfidUid: `${userId}-UID`, fullName, department: null, status: 'ACTIVE' as const,
+      employeeType: 'INTERN' as const, gender: null, dailyRate: null,
+    });
+    const user = userEvent.setup();
+    render(
+      <UserEditor
+        users={[intern('A-1', 'Alex Rivera'), intern('S-2', 'Sam Santos'), intern('A-3', 'Alex Cruz')]}
+        editing={null}
+        setEditing={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+    await user.type(screen.getByRole('searchbox', { name: 'Search users' }), 'Alex');
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(screen.getByText('2 of 3 user(s) selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete selected (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select all users' })).toBeChecked();
+  });
+
   it('shared guard disables Data Sync-now, Users bulk and per-row buttons while progress advances (task 9)', async () => {
     const handlers: Array<(payload: tauriApi.DtrSyncProgress) => void> = [];
     vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockImplementation((handler) => {

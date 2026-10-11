@@ -1299,9 +1299,27 @@ async fn process_bathroom_scan(
     let photo_url: Option<String> = user_row.get("photo_url");
     let gender_raw: Option<String> = user_row.get("gender");
 
-    let gender_key = match gender_raw.as_deref() {
+    // A key the tapper already holds wins over the profile gender, so a holder
+    // can always return it even if their gender was changed meanwhile.
+    let held_key: Option<String> = sqlx::query_scalar(
+        "SELECT gender_key FROM bathroom_log WHERE user_id = ? AND time_in IS NULL LIMIT 1",
+    )
+    .bind(&user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let gender_key = match held_key.as_deref().or(gender_raw.as_deref()) {
         Some("FEMALE") => "FEMALE",
-        _ => "MALE",
+        Some("MALE") => "MALE",
+        _ => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "error": {
+                    "code": "GENDER_NOT_SET",
+                    "message": "Gender is not set for this card. Ask an administrator to set it in Users and RFID."
+                }
+            }));
+        }
     };
 
     let active_row = sqlx::query(
@@ -7890,6 +7908,43 @@ mod tests {
         assert_eq!(res4["success"], true);
         assert_eq!(res4["action"], "CHECKOUT");
         assert_eq!(res4["user"]["fullName"], "Bob Smith");
+
+        // 5. A card with no gender on file is refused instead of getting the male key.
+        super::upsert_user_record(
+            &state.db,
+            "EMP_03",
+            "C9D8E7F6",
+            "Casey Unset",
+            Some("Interns"),
+            "ACTIVE",
+            "INTERN",
+            None,
+            Some(8_000),
+            None,
+            None,
+            "EMPLOYEE",
+            "2026-08-27T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let res5 = super::process_bathroom_scan(&state, "C9D8E7F6").await.unwrap();
+        assert_eq!(res5["success"], false);
+        assert_eq!(res5["error"]["code"], "GENDER_NOT_SET");
+        let unset_logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bathroom_log WHERE user_id = 'EMP_03'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(unset_logs, 0);
+
+        // 6. A holder whose gender was cleared can still return the key they hold.
+        sqlx::query("UPDATE users SET gender = NULL WHERE user_id = 'EMP_02'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let res6 = super::process_bathroom_scan(&state, "E5F6A7B8").await.unwrap();
+        assert_eq!(res6["success"], true);
+        assert_eq!(res6["action"], "RETURN");
+        assert_eq!(res6["genderKey"], "MALE");
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);

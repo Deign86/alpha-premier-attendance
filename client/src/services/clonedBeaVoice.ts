@@ -77,6 +77,7 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
   'Employee record is inactive.': '/voices/bea/scan-error/employee-record-inactive.mp3',
   'Card scanned too recently. Please wait.': '/voices/bea/scan-error/card-scanned-too-recently.mp3',
   'Admin cards cannot check out bathroom keys.': '/voices/bea/scan-error/admin-card-not-allowed.mp3',
+  'Gender is not set for this card. Please ask an administrator.': '/voices/bea/scan-error/gender-not-set.mp3',
   'Admin card requires employee selection.': '/voices/bea/scan-error/admin-card-requires-selection.mp3',
   'Attendance is already completed for today.': '/voices/bea/scan-error/attendance-already-completed.mp3',
   'Attendance timed out after office hours and is pending manual correction.': '/voices/bea/scan-error/attendance-timed-out-correction.mp3',

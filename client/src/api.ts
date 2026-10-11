@@ -181,7 +181,8 @@ export function setupErrorFrom<T>(error: T, fallback: SetupErrorCode): SetupErro
     case 'SETUP_SESSION_EXPIRED':
       return { success: false, error: { code: 'SETUP_SESSION_EXPIRED', message: 'Your setup session expired. Unlock setup again to continue.' } };
     case 'INVALID_SETUP_PIN':
-      return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'The setup PIN is invalid.' } };
+    case 'INVALID_ADMIN_PIN':
+      return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'The administrator PIN or admin RFID card is invalid.' } };
     case 'ADMIN_DISABLED':
     case 'SETUP_DISABLED':
       return { success: false, error: { code: 'SETUP_DISABLED', message: 'Admin setup is disabled in the configuration.' } };
@@ -403,8 +404,8 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
       nativeAdminToken = response.token;
       nativeAdminExpiresAt = response.expiresAt;
       return { success: true, expiresAt: response.expiresAt };
-    } catch {
-      return { success: false, error: { message: 'The administrator PIN is invalid.' } };
+    } catch (error) {
+      return { success: false, error: { message: errorString(error) === 'ADMIN_DISABLED' ? pinResetMessages.ADMIN_DISABLED : 'The administrator PIN is invalid.' } };
     }
   }
   const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
@@ -511,10 +512,23 @@ export async function saveAdminUser<T extends object>(user: T, userId?: string):
   // SAFETY: Parsing admin user save response JSON
   return (await response.json()) as { success: boolean; error?: { message?: string } };
 }
-export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { message?: string } }> {
+const attendanceSaveMessages = {
+  ATTENDANCE_CONFLICT: 'This record was changed by another update. The list was reloaded — check the times and save again.',
+  ATTENDANCE_NOT_FOUND: 'This attendance record no longer exists. The list was reloaded.',
+  ADMIN_VALIDATION_ERROR: 'The date or time is not valid. Check the times and try again.',
+  ADMIN_AUTH_REQUIRED: 'Administrator session expired. Unlock admin to continue.',
+};
+
+export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { code?: string; message?: string } }> {
   if (runningInTauri()) {
-    // SAFETY: Backend update attendance returns success response
-    return (await tauriApi.adminUpdateAttendance(nativeAdminToken ?? '', attendanceId, payload)) as { success: boolean; error?: { message?: string } };
+    try {
+      // SAFETY: Backend update attendance returns success response
+      return (await tauriApi.adminUpdateAttendance(nativeAdminToken ?? '', attendanceId, payload)) as { success: boolean; error?: { message?: string } };
+    } catch (err) {
+      const raw = errorString(err);
+      const known = Object.entries(attendanceSaveMessages).find(([key]) => key === raw);
+      return { success: false, error: known ? { code: known[0], message: known[1] } : { message: raw || 'Unable to save attendance.' } };
+    }
   }
   const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   // SAFETY: Parsing admin attendance save response JSON
@@ -621,7 +635,12 @@ export async function generatePayrollPdf(request: PayrollPdfGenerateRequest): Pr
   if (runningInTauri()) {
     try {
       return await tauriApi.generatePayrollPdf(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd, request.payrollCutoffLabel ?? '', request.workerType.toUpperCase());
-    } catch { return { success: false, error: { message: 'Unable to generate the payroll PDF.' } }; }
+    } catch (error) {
+      const raw = errorString(error);
+      if (raw.startsWith('NO_PAYROLL_RECORDS')) return { success: false, error: { message: 'No payroll records exist for these cutoff dates. Generate the cutoff payroll first, then create the PDF.' } };
+      if (raw === 'ADMIN_AUTH_REQUIRED') return { success: false, error: { message: attendanceSaveMessages.ADMIN_AUTH_REQUIRED } };
+      return { success: false, error: { message: 'Unable to generate the payroll PDF.' } };
+    }
   }
   return { success: false, error: { message: 'Payroll PDFs are generated in the desktop application.' } };
 }
@@ -1106,6 +1125,13 @@ export async function submitBathroomScan(
   return (await response.json()) as BathroomScanResponse;
 }
 
+/** Native bathroom errors read "CODE: sentence"; split them so the UI shows only the sentence. */
+function bathroomError<T>(error: T): { code: string; message: string } {
+  const raw = errorString(error);
+  const match = /^([A-Z_]+):\s*(.+)$/s.exec(raw);
+  return match ? { code: match[1], message: match[2] } : { code: 'BATHROOM_ERROR', message: raw };
+}
+
 export async function bathroomTimeOut(
   userId: string,
   genderKey: 'MALE' | 'FEMALE',
@@ -1116,7 +1142,7 @@ export async function bathroomTimeOut(
       // SAFETY: Backend bathroom time out returns BathroomActionResponse
       return (await tauriApi.bathroomTimeOut(nativeAdminToken ?? '', userId, genderKey, notes)) as BathroomActionResponse;
     } catch (error) {
-      return { success: false, error: { code: 'BATHROOM_ERROR', message: errorString(error) } };
+      return { success: false, error: bathroomError(error) };
     }
   }
   const response = await fetch(apiUrl('/api/admin/bathroom/time-out'), {
@@ -1137,7 +1163,7 @@ export async function bathroomTimeIn(
       // SAFETY: Backend bathroom time in returns BathroomActionResponse
       return (await tauriApi.bathroomTimeIn(nativeAdminToken ?? '', logId, notes)) as BathroomActionResponse;
     } catch (error) {
-      return { success: false, error: { code: 'BATHROOM_ERROR', message: errorString(error) } };
+      return { success: false, error: bathroomError(error) };
     }
   }
   const response = await fetch(apiUrl('/api/admin/bathroom/time-in'), {
@@ -1157,7 +1183,7 @@ export async function updateBathroomLog(
     try {
       return await tauriApi.bathroomUpdateLog(nativeAdminToken ?? '', logId, request);
     } catch (error) {
-      return { success: false, error: { code: 'BATHROOM_ERROR', message: errorString(error) } };
+      return { success: false, error: bathroomError(error) };
     }
   }
   const response = await fetch(apiUrl(`/api/admin/bathroom/${encodeURIComponent(logId)}`), {

@@ -11,6 +11,7 @@ import {
   setNameManifest,
 } from './clonedBeaVoice';
 import { tauriApi } from '../tauri-api';
+import { buildScanErrorPhrase } from './ttsService';
 
 describe('clonedBeaVoice', () => {
   describe('getClonedBeaAudioUrl', () => {
@@ -22,6 +23,11 @@ describe('clonedBeaVoice', () => {
     it('returns mp3 URL for scan error phrase', () => {
       const url = getClonedBeaAudioUrl('Card scanned too recently. Please wait.');
       expect(url).toBe('/voices/bea/scan-error/card-scanned-too-recently.mp3');
+    });
+
+    it('has a Ma\'am Bea clip for the gender-not-set bathroom refusal', () => {
+      const url = getClonedBeaAudioUrl(buildScanErrorPhrase({ errorCode: 'GENDER_NOT_SET' }));
+      expect(url).toBe('/voices/bea/scan-error/gender-not-set.mp3');
     });
 
     it('returns null for unknown phrase', () => {

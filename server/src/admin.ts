@@ -461,7 +461,14 @@ export class AdminService {
       };
     }
 
-    const genderKey: 'MALE' | 'FEMALE' = user.gender === 'FEMALE' ? 'FEMALE' : 'MALE';
+    // A key the tapper already holds wins over the profile gender, so it can always be returned.
+    const genderKey = this.bathroomLogs.find((l) => l.status === 'OUT' && l.userId === user.userId)?.genderKey ?? user.gender;
+    if (!genderKey) {
+      return {
+        success: false,
+        error: { code: 'GENDER_NOT_SET', message: 'Gender is not set for this card. Ask an administrator to set it in Users and RFID.' },
+      };
+    }
     const active = this.bathroomLogs.find((l) => l.status === 'OUT' && l.genderKey === genderKey);
     const now = new Date();
     const nowIso = manilaTimestamp(now, this.config.timezone);

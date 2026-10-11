@@ -1381,3 +1381,34 @@ unchanged.
   CHECK: cargo check --tests (compiled); behaviour covered by CI-only lib tests.
 - [ ] M3 Admin RFID card IDs are no longer exported to the Google Sheets Users sheet (existing rows already in the sheet are not removed).
   CHECK: cargo check --tests (compiled).
+
+## User-manual audit fixes (2026-10-11)
+
+- [x] Kiosk bathroom tap refuses a card with Gender not set (GENDER_NOT_SET) instead of issuing the male key; a holder can always return the key they hold, even if their gender changed.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml bathroom_scan && npm test -w server && npm test -w client -- ttsService
+  EXPECT: unset-gender checkout returns GENDER_NOT_SET with no bathroom_log row; holder whose gender was cleared still gets RETURN; spoken phrase asks for an admin.
+  EVIDENCE: `cargo check --tests` compiles the extended `bathroom_rfid_scan_checkout_return_and_conflict` (steps 5-6); the lib test binary cannot start locally (documented 0xc0000139 loader fault) so CI executes it. ttsService GENDER_NOT_SET phrase test passes; server typecheck passes.
+- [x] Regenerating a cutoff never deletes FINALIZED payroll from the client; banner/confirm text match (drafts replaced, finalized kept, late-timeout days paid capped at 17:00).
+  CHECK: npm test -w client -- payroll.test.tsx
+  EXPECT: deletePayrollCutoff is called for DRAFT rows only; confirm text no longer says late-timeout attendance "will not be paid".
+  EVIDENCE: payroll.test.tsx 23/23 pass, including FINALIZED P-002 never deleted and the new late-timeout copy test.
+- [x] Users "Select all" selects only the rows visible under the current search.
+  CHECK: npm test -w client -- database-panel.test.tsx -t "Select all"
+  EXPECT: with a search filter active, Select all selects exactly the filtered users.
+  EVIDENCE: test lives in database-panel.test.tsx (UserEditor is rendered there): 'Users "Select all" selects only the users the search shows' passes (2 of 3 selected).
+- [x] Attendance-correction Save surfaces backend errors (ATTENDANCE_CONFLICT, ADMIN_VALIDATION_ERROR, ATTENDANCE_NOT_FOUND, session expiry) instead of failing silently; conflict reloads the list.
+  CHECK: npm test -w client -- api.test.ts
+  EXPECT: a rejected native update resolves to { success: false, error: { code, message } } with a readable message.
+  EVIDENCE: api.test.ts 25/25 pass, including ATTENDANCE_CONFLICT and ADMIN_VALIDATION_ERROR mapping.
+- [x] Friendly messages: kiosk Admin setup wrong PIN, /admin unlock ADMIN_DISABLED, payroll PDF NO_PAYROLL_RECORDS / session expiry, admin bathroom BATHROOM_KEY_ALREADY_CHECKED_OUT.
+  CHECK: npm test -w client -- api.test.ts
+  EXPECT: none of these surface a raw CODE string.
+  EVIDENCE: api.test.ts covers INVALID_ADMIN_PIN (setup), ADMIN_DISABLED (/admin), NO_PAYROLL_RECORDS, BATHROOM_KEY_ALREADY_CHECKED_OUT split.
+- [x] Repo gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml
+  EXPECT: all pass.
+  EVIDENCE: oxlint clean; typecheck clean; npm test 39 + 369 + 287 passed; cargo check --tests Finished. Full cargo test runs in CI (local loader fault).
+- [x] The GENDER_NOT_SET refusal plays a Ma'am Bea cloned clip, not Piper.
+  CHECK: npm test -w client -- clonedBeaVoice.test.ts && cargo check --manifest-path src-tauri/Cargo.toml
+  EXPECT: buildScanErrorPhrase('GENDER_NOT_SET') resolves to /voices/bea/scan-error/gender-not-set.mp3 in both lookup tables.
+  EVIDENCE: generated via local VoiceStudio profile "Ma'am Bea" (0b2d3e9f) with scripts/generate_cloned_voices.py; 41,324-byte MP3, 5.08 s, 24 kHz mono, copied to client/public and src-tauri/resources; both manifests identical; 97 tts/clone tests pass; cargo check Finished.

@@ -2,7 +2,7 @@
   "version": "7.0.0",
   "engine": "voicestudio-bea-cloned",
   "voice": "bea",
-  "voicestudio_profile_id": "1b3e828b",
+  "voicestudio_profile_id": "0b2d3e9f",
   "segments": {
     "good-morning": {
       "phrase": "Good morning,",
@@ -305,6 +305,13 @@
       "tauri_path": "voices/bea/scan-error/admin-card-not-allowed.mp3",
       "tone": "neutral"
     },
+    "gender-not-set": {
+      "phrase": "Gender is not set for this card. Please ask an administrator.",
+      "category": "scan-error",
+      "url": "/voices/bea/scan-error/gender-not-set.mp3",
+      "tauri_path": "voices/bea/scan-error/gender-not-set.mp3",
+      "tone": "neutral"
+    },
     "admin-card-requires-selection": {
       "phrase": "Admin card requires employee selection.",
       "category": "scan-error",
@@ -399,6 +406,7 @@
     "Employee record is inactive.": "/voices/bea/scan-error/employee-record-inactive.mp3",
     "Card scanned too recently. Please wait.": "/voices/bea/scan-error/card-scanned-too-recently.mp3",
     "Admin cards cannot check out bathroom keys.": "/voices/bea/scan-error/admin-card-not-allowed.mp3",
+    "Gender is not set for this card. Please ask an administrator.": "/voices/bea/scan-error/gender-not-set.mp3",
     "Admin card requires employee selection.": "/voices/bea/scan-error/admin-card-requires-selection.mp3",
     "Attendance is already completed for today.": "/voices/bea/scan-error/attendance-already-completed.mp3",
     "Attendance timed out after office hours and is pending manual correction.": "/voices/bea/scan-error/attendance-timed-out-correction.mp3",

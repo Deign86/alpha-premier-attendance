@@ -1,0 +1,1425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alpha Premier Attendance — User Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4; margin: 0; }
+  :root {
+    --gold: #b98a2e; --gold-2: #d9b45f; --gold-soft: #f6eedb; --ink: #1d1b17; --muted: #5d5850;
+    --line: #e3dccd; --night: #0d0c0a; --red: #b3412e; --red-soft: #fbece8; --blue: #2f5f8a; --blue-soft: #e9f1f8;
+    --green: #2e7a45; --green-soft: #e8f4ec;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #8a8a8a; }
+  body { font-family: 'Poppins', 'Segoe UI', sans-serif; color: var(--ink); font-size: 9.6pt; line-height: 1.5; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 210mm; height: 297mm; margin: 0 auto 8mm; background: #fff; position: relative; overflow: hidden; display: flex; flex-direction: column; break-after: page; counter-increment: pg; }
+  @media print { html, body { background: #fff; } .page { margin: 0; } }
+  .run { height: 13mm; flex: none; padding: 0 16mm; display: flex; align-items: flex-end; justify-content: space-between; font-size: 7.5pt; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .run b { color: var(--gold); font-weight: 600; }
+  .run::after { content: ""; position: absolute; left: 16mm; right: 16mm; top: 15mm; border-top: 1px solid var(--line); }
+  .page-body { flex: 1; padding: 6mm 16mm 0; overflow: hidden; }
+  .folio { height: 13mm; flex: none; padding: 0 16mm; display: flex; align-items: center; justify-content: space-between; font-size: 7.5pt; color: var(--muted); }
+  .folio::after { content: counter(pg); font-weight: 600; color: var(--ink); }
+
+  h1.chap { margin: 0 0 2mm; font-size: 22pt; line-height: 1.15; font-weight: 700; }
+  .chapno { font-family: 'Orbitron', sans-serif; font-size: 9pt; letter-spacing: .18em; color: var(--gold); text-transform: uppercase; font-weight: 600; }
+  .lede { font-size: 10.5pt; color: var(--muted); margin: 0 0 4mm; }
+  h2 { font-size: 12.5pt; margin: 4.5mm 0 1.5mm; font-weight: 600; border-left: 3px solid var(--gold); padding-left: 2.5mm; }
+  h3 { font-size: 10.2pt; margin: 3mm 0 1mm; font-weight: 600; }
+  p { margin: 0 0 2mm; }
+  ul, ol { margin: 0 0 2mm; padding-left: 5.5mm; }
+  li { margin: .5mm 0; }
+  code, .kbd { font-family: Consolas, 'Cascadia Mono', monospace; font-size: 8.6pt; background: #f3f0ea; padding: 0 1mm; border-radius: 2px; }
+  .kbd { border: 1px solid #cfc7b6; border-bottom-width: 2px; background: #faf8f4; }
+  .ui { font-weight: 600; }
+  .small { font-size: 8.2pt; color: var(--muted); }
+
+  ol.steps { list-style: none; padding: 0; counter-reset: st; }
+  ol.steps > li { counter-increment: st; position: relative; padding-left: 8mm; margin: 1.6mm 0; }
+  ol.steps > li::before { content: counter(st); position: absolute; left: 0; top: .2mm; width: 5.4mm; height: 5.4mm; border-radius: 50%; background: var(--ink); color: #fff; font-size: 7.8pt; font-weight: 600; display: grid; place-items: center; }
+
+  table { width: 100%; border-collapse: collapse; margin: 1.5mm 0 3mm; font-size: 8.6pt; }
+  th { text-align: left; background: var(--gold-soft); color: #6b5021; font-weight: 600; padding: 1.4mm 2mm; border-bottom: 1px solid var(--gold-2); }
+  td { padding: 1.3mm 2mm; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.n { width: 7mm; }
+
+  figure { margin: 2mm 0 3mm; }
+  .shot { position: relative; border-radius: 2mm; box-shadow: 0 0 0 1px #2b2820, 0 1.5mm 4mm rgba(0,0,0,.18); background: #0b0b0b; }
+  .shot img { display: block; width: 100%; border-radius: 2mm; }
+  .crop { overflow: hidden; aspect-ratio: 1280 / var(--h); }
+  .crop img { position: absolute; left: 0; top: calc(var(--y) / var(--h) * -100%); border-radius: 0; }
+  figcaption { font-size: 8pt; color: var(--muted); margin-top: 1.6mm; }
+  figcaption b { color: var(--ink); }
+  .pin { position: absolute; transform: translate(-50%, -50%); width: 5.6mm; height: 5.6mm; border-radius: 50%; background: #e0362c; color: #fff; font-weight: 700; font-size: 7.8pt; display: grid; place-items: center; box-shadow: 0 0 0 .5mm #fff, 0 .6mm 1.5mm rgba(0,0,0,.5); z-index: 2; }
+  .pinref { display: inline-grid; place-items: center; width: 4.6mm; height: 4.6mm; border-radius: 50%; background: #e0362c; color: #fff; font-weight: 700; font-size: 7pt; vertical-align: .2mm; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+  .two figure { margin-top: 0; }
+  .split { display: grid; grid-template-columns: 1.05fr 1fr; gap: 6mm; align-items: start; }
+
+  .note { border-radius: 1.5mm; padding: 2.2mm 3mm 2.2mm 11mm; margin: 2.5mm 0; position: relative; font-size: 8.8pt; }
+  .note::before { position: absolute; left: 3mm; top: 2.2mm; width: 5.2mm; height: 5.2mm; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 8pt; }
+  .note b:first-child { display: block; }
+  .tip { background: var(--green-soft); border-left: 3px solid var(--green); } .tip::before { content: "✓"; background: var(--green); }
+  .info { background: var(--blue-soft); border-left: 3px solid var(--blue); } .info::before { content: "i"; background: var(--blue); }
+  .warn { background: var(--red-soft); border-left: 3px solid var(--red); } .warn::before { content: "!"; background: var(--red); }
+
+  /* cover */
+  .cover { background: radial-gradient(120% 80% at 50% 25%, #1f1a10 0%, #0b0a08 60%); color: #f4ead5; }
+  .cover .page-body { padding: 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .cover .logo { width: 92mm; margin-top: 36mm; }
+  .cover .title { font-family: 'Orbitron', sans-serif; font-weight: 800; font-size: 26pt; letter-spacing: .04em; margin: 12mm 0 0; color: #fff; }
+  .cover .subtitle { font-size: 16pt; color: var(--gold-2); margin: 3mm 0 0; font-weight: 500; letter-spacing: .3em; text-transform: uppercase; }
+  .cover .rule { width: 40mm; border-top: 1px solid var(--gold); margin: 10mm 0; }
+  .cover .tag { font-size: 11pt; color: #cfc4ad; max-width: 130mm; }
+  .cover .meta { margin-top: auto; margin-bottom: 22mm; font-size: 9pt; color: #a99d84; line-height: 1.8; }
+  .cover .meta b { color: #f4ead5; font-weight: 600; }
+
+  .toc { list-style: none; padding: 0; margin: 4mm 0 0; }
+  .toc li { display: flex; align-items: baseline; gap: 2mm; margin: 0; padding: 1mm 0; }
+  .toc li.ch { font-weight: 600; font-size: 10.2pt; margin-top: 2.2mm; }
+  .toc li.sub { padding-left: 8mm; font-size: 9pt; color: #3d3a34; }
+  .toc .dots { flex: 1; border-bottom: 1px dotted #b9b1a1; transform: translateY(-1mm); }
+  .toc .pg { min-width: 7mm; text-align: right; font-weight: 600; }
+  .toc a { color: inherit; text-decoration: none; }
+  .toc .num { font-family: 'Orbitron', sans-serif; color: var(--gold); font-size: 8.5pt; width: 8mm; }
+
+  .diagram { width: 100%; }
+  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; margin: 2mm 0 3mm; }
+  .card { border: 1px solid var(--line); border-radius: 2mm; padding: 2.6mm 3mm; }
+  .card h3 { margin-top: 0; }
+  .qr { border: 2px solid var(--ink); border-radius: 3mm; padding: 4mm 5mm; margin-bottom: 4mm; }
+  .qr h2 { margin-top: 0; border: 0; padding: 0; font-size: 13pt; }
+  .badge { display: inline-block; font-size: 7.4pt; font-weight: 700; letter-spacing: .05em; border-radius: 10mm; padding: .2mm 2.2mm; border: 1px solid; }
+  .b-work { color: #8a6516; border-color: #c9a24e; background: #fbf4e2; }
+  .b-done { color: var(--green); border-color: #7fbf95; background: var(--green-soft); }
+  .b-late { color: var(--red); border-color: #e19a8c; background: var(--red-soft); }
+  .b-miss { color: #555; border-color: #aaa; background: #f2f2f2; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<section class="page cover" id="cover">
+  <div class="page-body">
+    <img class="logo" src="img/logo-name.png" alt="Alpha Premier Group of Companies logo">
+    <div class="title">ALPHA PREMIER<br>ATTENDANCE</div>
+    <div class="subtitle">User Manual</div>
+    <div class="rule"></div>
+    <div class="tag">RFID attendance kiosk, bathroom key log, live attendance viewer and intern payroll for the front desk.</div>
+    <div class="meta">
+      <b>Software version 0.2.14</b> · Windows 10 / 11<br>
+      Manual edition 2 · October 2026<br>
+      Unit 3104C, Tektite East Tower, Ortigas Center, Pasig
+    </div>
+  </div>
+</section>
+
+<!-- ============ ABOUT ============ -->
+<section class="page" id="about">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>About this manual</b></div>
+  <div class="page-body">
+    <h1 class="chap">About this manual</h1>
+    <p class="lede">How to use Alpha Premier Attendance every day and how to look after it. No technical knowledge is needed.</p>
+
+    <h2>Who should read which part</h2>
+    <table>
+      <tr><th style="width:34%">You are…</th><th>Read</th></tr>
+      <tr><td><b>An intern</b> tapping in and out</td><td>Chapter 4 (Recording attendance) and Chapter 5 (Bathroom keys).</td></tr>
+      <tr><td><b>Front-desk staff</b> looking after the kiosk</td><td>Chapters 1–6, 15 and the Quick Reference Card.</td></tr>
+      <tr><td><b>An administrator</b> (HR / office admin)</td><td>The whole manual, especially Chapters 7–14.</td></tr>
+      <tr><td><b>A manager</b> who only views attendance</td><td>Chapter 6 (Live attendance and the office viewer).</td></tr>
+    </table>
+
+    <h2>Conventions used in this manual</h2>
+    <table>
+      <tr><th style="width:34%">Shown as</th><th>Means</th></tr>
+      <tr><td><span class="ui">Bold text</span></td><td>A button, tab, menu or field name exactly as it appears on screen.</td></tr>
+      <tr><td><span class="kbd">1</span> <span class="kbd">Enter</span></td><td>A key on the keyboard.</td></tr>
+      <tr><td><span class="pinref">3</span></td><td>A numbered marker on a screenshot. The table or list next to the picture explains each number.</td></tr>
+      <tr><td><code>config.toml</code></td><td>A file name, folder or web address.</td></tr>
+      <tr><td>Admin → Payroll</td><td>Open <b>Admin</b>, then click the <b>Payroll</b> tab.</td></tr>
+    </table>
+
+    <div class="note tip" style="margin-top:1.5mm"><b>Tip</b>A shortcut or good habit that saves time.</div>
+    <div class="note info"><b>Note</b>Extra information that helps you understand what the system is doing.</div>
+    <div class="note warn"><b>Caution</b>An action that cannot be undone, or that can change pay. Read before you click.</div>
+
+    <h2>About the pictures</h2>
+    <p>Screenshots use made-up sample interns (for example "Alex Rivera", "DEMO-001") and a preview copy of the software, so a few status lines may differ slightly from the front-desk computer.</p>
+
+    <h2>Important notices</h2>
+    <ul>
+      <li>All times in the system use <b>Philippine time (Asia/Manila)</b>.</li>
+      <li>Attendance and payroll data are stored <b>only on the front-desk computer</b>. Make regular backups (Chapter 12).</li>
+      <li>Keep the administrator PIN and admin RFID cards private. Anyone with them can change attendance and payroll.</li>
+      <li>Do not copy or delete program files while the app is running; use the backup tools.</li>
+    </ul>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CONTENTS ============ -->
+<section class="page" id="contents">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>Contents</b></div>
+  <div class="page-body">
+    <h1 class="chap">Contents</h1>
+    <ul class="toc" id="toc">
+      <li class="ch"><span class="num">01</span><a href="#ch1">Introduction</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">02</span><a href="#ch2">Installing and starting the app</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">03</span><a href="#ch3">A tour of the kiosk screen</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">04</span><a href="#ch4">Recording attendance</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch4-msg">Messages after a tap</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch4-manual">Manual entry and forgotten cards</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">05</span><a href="#ch5">Bathroom key log (kiosk)</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">06</span><a href="#ch6">Live attendance and the office viewer</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">07</span><a href="#ch7">Administrator access</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch7-pin">Forgot PIN — resetting by email</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch7-layout">The admin screen at a glance</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">08</span><a href="#ch8">Users and RFID cards</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch8-form">Adding a user from the Users tab</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch8-manage">Editing, deactivating and deleting users</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">09</span><a href="#ch9">Attendance corrections</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch9-missed">Adding missed attendance</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">10</span><a href="#ch10">Payroll</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch10-review">Reviewing, adjusting and finalizing</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch10-pdf">Printing the payroll PDF</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">11</span><a href="#ch11">Bathroom key log (admin)</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">12</span><a href="#ch12">Data, backup and updates</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch12-move">Moving to a new computer, DTR sync and updates</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">13</span><a href="#ch13">Voice announcements</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">14</span><a href="#ch14">Attendance and pay rules</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">15</span><a href="#ch15">Troubleshooting</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch15-faq">Frequently asked questions</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">A</span><a href="#appA">Appendix A — On-screen messages</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">B</span><a href="#appB">Appendix B — Files, shortcuts and glossary</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="ch"><span class="num">★</span><a href="#qrc">Quick Reference Card</a><span class="dots"></span><span class="pg"></span></li>
+    </ul>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH1 ============ -->
+<section class="page" id="ch1">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>1 · Introduction</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 01</div>
+    <h1 class="chap">Introduction</h1>
+    <p class="lede">Alpha Premier Attendance replaces the paper logbook at the front desk. Interns tap an RFID card, the screen shows their photo and greets them, and the time is saved.</p>
+
+    <h2>What the system does</h2>
+    <div class="card-grid">
+      <div class="card"><h3>Attendance kiosk</h3>Records one <b>time in</b> and one <b>time out</b> per intern per day with a card tap. It shows the photo, name and time, and speaks a greeting.</div>
+      <div class="card"><h3>Bathroom key log</h3>Tracks who has the male or female restroom key, when they took it and how long it has been out.</div>
+      <div class="card"><h3>Live attendance</h3>Shows today's time-ins and time-outs on the kiosk and, read-only, on any phone or PC on the office Wi-Fi.</div>
+      <div class="card"><h3>Admin and payroll</h3>Register cards, fix mistakes, add missed days, build semi-monthly intern payroll and print one payroll PDF per cutoff.</div>
+    </div>
+
+    <h2>How it fits together</h2>
+    <svg class="diagram" viewBox="0 0 660 230" xmlns="http://www.w3.org/2000/svg" font-family="Poppins, Segoe UI, sans-serif">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#b98a2e"/></marker></defs>
+      <rect x="8" y="70" width="140" height="84" rx="10" fill="#f6eedb" stroke="#d9b45f"/>
+      <text x="78" y="102" text-anchor="middle" font-size="13" font-weight="600" fill="#1d1b17">RFID card</text>
+      <text x="78" y="122" text-anchor="middle" font-size="10.5" fill="#5d5850">+ USB reader</text>
+      <text x="78" y="138" text-anchor="middle" font-size="10.5" fill="#5d5850">(tap)</text>
+      <line x1="150" y1="112" x2="230" y2="112" stroke="#b98a2e" stroke-width="2" marker-end="url(#ar)"/>
+      <rect x="234" y="30" width="200" height="164" rx="12" fill="#0d0c0a"/>
+      <text x="334" y="60" text-anchor="middle" font-size="13" font-weight="600" fill="#f4ead5">Front-desk computer</text>
+      <text x="334" y="80" text-anchor="middle" font-size="10.5" fill="#d9b45f">Alpha Premier Attendance</text>
+      <rect x="256" y="94" width="156" height="26" rx="6" fill="#1f1c16" stroke="#3a342a"/>
+      <text x="334" y="111" text-anchor="middle" font-size="10" fill="#e9dfca">Kiosk · Admin · Payroll</text>
+      <rect x="256" y="128" width="156" height="26" rx="6" fill="#1f1c16" stroke="#3a342a"/>
+      <text x="334" y="145" text-anchor="middle" font-size="10" fill="#e9dfca">Local database (all records)</text>
+      <text x="334" y="178" text-anchor="middle" font-size="9.5" fill="#a99d84">Works without internet</text>
+      <line x1="436" y1="80" x2="508" y2="58" stroke="#b98a2e" stroke-width="2" marker-end="url(#ar)"/>
+      <line x1="436" y1="150" x2="508" y2="172" stroke="#b98a2e" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+      <rect x="512" y="18" width="140" height="80" rx="10" fill="#e9f1f8" stroke="#9bbbd6"/>
+      <text x="582" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#1d1b17">Office Wi-Fi</text>
+      <text x="582" y="64" text-anchor="middle" font-size="10" fill="#5d5850">Phones / PCs open the</text>
+      <text x="582" y="79" text-anchor="middle" font-size="10" fill="#5d5850">read-only live viewer</text>
+      <rect x="512" y="132" width="140" height="80" rx="10" fill="#e8f4ec" stroke="#97c7a6"/>
+      <text x="582" y="160" text-anchor="middle" font-size="12" font-weight="600" fill="#1d1b17">Google Sheets</text>
+      <text x="582" y="178" text-anchor="middle" font-size="10" fill="#5d5850">Optional copy of the</text>
+      <text x="582" y="193" text-anchor="middle" font-size="10" fill="#5d5850">DTR (needs internet)</text>
+    </svg>
+    <p class="small">Solid arrow: always on. Dashed arrow: optional; scans never wait for it.</p>
+
+    <h2>Who uses it</h2>
+    <table>
+      <tr><th style="width:24%">Role</th><th>What they do</th><th style="width:28%">Needs</th></tr>
+      <tr><td><b>Intern</b></td><td>Taps in and out; borrows and returns restroom keys.</td><td>A registered RFID card</td></tr>
+      <tr><td><b>Front desk</b></td><td>Keeps the kiosk running; helps with manual entry.</td><td>Access to the kiosk PC</td></tr>
+      <tr><td><b>Administrator</b></td><td>Registers cards, corrects attendance, runs payroll, makes backups.</td><td>Admin PIN or admin RFID card</td></tr>
+      <tr><td><b>Viewer</b> (manager)</td><td>Watches today's attendance from another device.</td><td>The office Wi-Fi and viewer link</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch1b">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>1 · Introduction</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Five things to know before you start</h2>
+    <ol class="steps">
+      <li><b>One tap in, one tap out.</b> The first tap of the day is the <b>time in</b>. The second is the <b>time out</b>. After that the card answers "Attendance is already complete for today."</li>
+      <li><b>The kiosk window must be in front.</b> The card reader works like a keyboard. If another program is in front, the taps go there instead. You do not need to click any box first.</li>
+      <li><b>No internet needed.</b> Every tap is saved on the front-desk computer straight away. The Google Sheets copy catches up later by itself.</li>
+      <li><b>Office hours are 8:00 AM to 5:00 PM.</b> Lunch (12:00–1:00 PM) is unpaid. Tapping out at 6:00 PM or later flags the day for correction (Chapter 14).</li>
+      <li><b>Closing the window does not stop it.</b> The X button hides the app to the system tray. Scanning keeps working whenever the window is shown again.</li>
+    </ol>
+
+    <h2>System requirements</h2>
+    <table>
+      <tr><th style="width:30%">Item</th><th>Requirement</th></tr>
+      <tr><td>Computer</td><td>Windows 10 or Windows 11, 64-bit.</td></tr>
+      <tr><td>Card reader</td><td>125 kHz EM4100 USB reader working in keyboard mode (sends 10 digits + Enter). This is the default reader.</td></tr>
+      <tr><td>Cards</td><td>One 125 kHz card per intern; at least one extra card to use as an <b>admin RFID card</b>.</td></tr>
+      <tr><td>Speakers</td><td>Optional, for spoken greetings.</td></tr>
+      <tr><td>Network</td><td>Optional. Office Wi-Fi for the live viewer; internet for updates, PIN-reset email and Google Sheets.</td></tr>
+      <tr><td>Installation rights</td><td>Windows administrator approval is needed once, when installing.</td></tr>
+    </table>
+
+    <h2>What's in this version</h2>
+    <p>Version 0.2.14 is for <b>interns only</b>. Every person you register is paid as an intern at <b>PHP 80.00 per day</b>. The only payroll document is the <b>Intern Payroll PDF</b>; older employee payslips and spreadsheet payroll exports are no longer part of the app.</p>
+
+    <div class="note info"><b>Note</b>The pay rules changed on <b>1 October 2026</b>: the old weekly 15-minute grace period was removed. Days before that date keep the old rules, so past pay never changes. See Chapter 14.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH2 ============ -->
+<section class="page" id="ch2">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>2 · Installing and starting</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 02</div>
+    <h1 class="chap">Installing and starting the app</h1>
+    <p class="lede">Do this once on the front-desk computer. It takes about 10 minutes.</p>
+
+    <h2>Install</h2>
+    <ol class="steps">
+      <li>Download the latest <code>Alpha Premier Attendance_…_x64-setup.exe</code> from the company's GitHub Releases page (ask IT for the link).</li>
+      <li>Double-click the file. Approve the Windows administrator prompt.</li>
+      <li>Follow the installer. It installs for all users and adds the WebView2 component if it is missing.</li>
+      <li>Plug the USB card reader into the computer. No driver is needed.</li>
+      <li>Open <b>Alpha Premier Attendance</b> from the Start menu. The kiosk screen appears (Chapter 3).</li>
+    </ol>
+
+    <h2>Starting, closing and the system tray</h2>
+    <table>
+      <tr><th style="width:36%">You do</th><th>What happens</th></tr>
+      <tr><td>Turn on / log in to Windows</td><td>The app starts by itself (this is on by default; you can turn it off in Admin → Data and backup or the tray menu).</td></tr>
+      <tr><td>Click the window's <b>X</b></td><td>The window hides to the tray. The app keeps running and saves an automatic backup.</td></tr>
+      <tr><td>Click the tray icon</td><td>The kiosk window comes back.</td></tr>
+      <tr><td>Open the app a second time</td><td>The window that is already running comes to the front. A second copy never starts.</td></tr>
+    </table>
+    <p>Right-click the tray icon (near the clock, bottom-right of the screen) for this menu:</p>
+    <table>
+      <tr><th style="width:36%">Menu item</th><th>Use</th></tr>
+      <tr><td><b>Show attendance app</b></td><td>Bring the kiosk window to the front.</td></tr>
+      <tr><td><b>Start on system startup</b></td><td>Tick or untick automatic start with Windows.</td></tr>
+      <tr><td><b>Check for updates…</b></td><td>Look for a newer version now (Chapter 12).</td></tr>
+      <tr><td><b>Exit application</b></td><td>Fully close the app. Cards will not register until it is opened again.</td></tr>
+    </table>
+
+    <h2>First-time setup checklist (administrator)</h2>
+    <ol class="steps">
+      <li><b>Get admin access.</b> A new installation has no PIN. Open <b>Admin</b>, click <b>Forgot PIN?</b> and set the first PIN with the emailed code (Chapter 7).</li>
+      <li><b>Register an admin RFID card</b> so you can unlock without the PIN (Chapter 8).</li>
+      <li><b>Register every intern's card</b>, with photo and gender (Chapter 8).</li>
+      <li><b>Test</b>: tap one intern card. You should see the photo and "Time In recorded successfully."</li>
+      <li><b>Make the first backup</b> (Chapter 12) and, if wanted, share the live viewer link (Chapter 6).</li>
+    </ol>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH3 ============ -->
+<section class="page" id="ch3">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>3 · Kiosk screen tour</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 03</div>
+    <h1 class="chap">A tour of the kiosk screen</h1>
+    <p class="lede">The kiosk is the screen the front desk sees all day. It waits for a card tap; nobody needs to touch the mouse.</p>
+    <figure>
+      <div class="shot"><img src="img/kiosk.png" alt="Kiosk screen waiting for a card">
+        <span class="pin" style="left:5.6%;top:5.3%">1</span>
+        <span class="pin" style="left:36.8%;top:5.4%">2</span>
+        <span class="pin" style="left:76.9%;top:5.4%">3</span>
+        <span class="pin" style="left:96.5%;top:9.6%">4</span>
+        <span class="pin" style="left:19.5%;top:40%">5</span>
+        <span class="pin" style="left:28.1%;top:54.1%">6</span>
+        <span class="pin" style="left:16.4%;top:87.1%">7</span>
+      </div>
+      <figcaption><b>Figure 3-1.</b> The kiosk waiting for a card ("ready" state).</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:30%">Part</th><th>What it shows or does</th></tr>
+      <tr><td><span class="pinref">1</span></td><td>Company and office</td><td>Alpha Premier logo and the office address.</td></tr>
+      <tr><td><span class="pinref">2</span></td><td>Mode tabs</td><td><b>1 Attendance</b> (normal) or <b>2 Bathroom Key Log</b>. Click a tab or press <span class="kbd">1</span> / <span class="kbd">2</span>.</td></tr>
+      <tr><td><span class="pinref">3</span></td><td>Reader status</td><td><b>Ready</b> (green) means taps will be read. See the table on the next page for other states.</td></tr>
+      <tr><td><span class="pinref">4</span></td><td>Date and clock</td><td>Current Philippine date and time.</td></tr>
+      <tr><td><span class="pinref">5</span></td><td>Greeting</td><td>"Good morning / afternoon / evening". Changes to "Reading card…" while a tap is processed.</td></tr>
+      <tr><td><span class="pinref">6</span></td><td>RFID reader box</td><td>Shows "Waiting for card…". It is locked on purpose — just tap the card on the reader.</td></tr>
+      <tr><td><span class="pinref">7</span></td><td>Bottom buttons</td><td>Manual entry, Live attendance, Admin and Admin setup (next page).</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch3b">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>3 · Kiosk screen tour</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">The bottom buttons</h2>
+    <figure>
+      <div class="shot crop" style="--y:530;--h:270"><img src="img/kiosk-bottom.png" alt="Kiosk bottom buttons">
+        <span class="pin" style="left:15%;top:20.4%">A</span>
+        <span class="pin" style="left:15%;top:40.4%">B</span>
+        <span class="pin" style="left:15%;top:60.4%">C</span>
+        <span class="pin" style="left:15%;top:80.4%">D</span>
+      </div>
+      <figcaption><b>Figure 3-2.</b> Bottom of the kiosk screen (scroll down if your screen is small).</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:30%">Button</th><th>Use</th></tr>
+      <tr><td><span class="pinref">A</span></td><td><b>Manual entry</b></td><td>Type a card number when the reader is not working (Chapter 4). Changes to <b>Use card reader</b> to switch back.</td></tr>
+      <tr><td><span class="pinref">B</span></td><td><b>Live attendance</b></td><td>Opens today's attendance list (Chapter 6).</td></tr>
+      <tr><td><span class="pinref">C</span></td><td><b>Admin</b></td><td>Opens the administrator area (Chapter 7). Needs the PIN or an admin card.</td></tr>
+      <tr><td><span class="pinref">D</span></td><td><b>Admin setup</b></td><td>Quick way to register a new card or change the person on a card (Chapter 8).</td></tr>
+    </table>
+
+    <h2>Reader status (top-right pill)</h2>
+    <table>
+      <tr><th style="width:26%">Shows</th><th>Meaning</th><th style="width:36%">What to do</th></tr>
+      <tr><td><b>Ready</b></td><td>Waiting for a card.</td><td>Nothing.</td></tr>
+      <tr><td><b>Scanning</b></td><td>A tap is being read.</td><td>Wait one second.</td></tr>
+      <tr><td><b>Connecting…</b></td><td>The app is starting the reader.</td><td>Wait a few seconds.</td></tr>
+      <tr><td><b>Offline</b> / <b>Error</b></td><td>The reader cannot be used right now.</td><td>Check the USB cable, then see Chapter 15. Use Manual entry meanwhile.</td></tr>
+    </table>
+    <p class="small">Hover the mouse over the pill to see more detail.</p>
+
+    <h2>Google Sheets (DTR) badge</h2>
+    <p>Next to the reader status a small badge reports the optional Google Sheets copy, for example <i>"No DTR items queued"</i>, <i>"3 queued"</i> or <i>"Sheet syncing paused; attendance recording continues."</i> Taps are always saved on the computer first, so these messages never mean an attendance was lost. If it says <i>"Attendance needs admin attention for DTR sync"</i>, tell an administrator (Chapter 12).</p>
+
+    <h2>Switching modes with the keyboard</h2>
+    <p>Press <span class="kbd">1</span> for Attendance or <span class="kbd">2</span> for Bathroom Key Log. The shortcut is ignored while you are typing in a box or while a window is open, so a card number is never mistaken for a mode change.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH4 ============ -->
+<section class="page" id="ch4">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>4 · Recording attendance</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 04</div>
+    <h1 class="chap">Recording attendance</h1>
+    <p class="lede">For interns. It takes about one second.</p>
+
+    <h2>To time in (arriving)</h2>
+    <ol class="steps">
+      <li>Check the kiosk shows <b>1 Attendance</b> and the green <b>Ready</b> pill.</li>
+      <li>Hold your card flat on the reader until it beeps.</li>
+      <li>Check the screen shows <b>your photo and name</b> and "<b>Time In recorded successfully.</b>" You will also hear a greeting.</li>
+      <li>Walk away. The screen returns to "ready" by itself after about 4 seconds.</li>
+    </ol>
+    <figure>
+      <div class="shot crop" style="--y:120;--h:540"><img src="img/kiosk-scan-success.png" alt="Kiosk showing a recorded time-in">
+        <span class="pin" style="left:38%;top:20%">1</span>
+        <span class="pin" style="left:34%;top:59.6%">2</span>
+        <span class="pin" style="left:39.5%;top:82.2%">3</span>
+        <span class="pin" style="left:37.5%;top:92.6%">4</span>
+      </div>
+      <figcaption><b>Figure 4-1.</b> A successful time-in. <span class="pinref">1</span> ID photo (an outline appears if no photo is on file) · <span class="pinref">2</span> name and result · <span class="pinref">3</span> type, action and time · <span class="pinref">4</span> automatic return to ready.</figcaption>
+    </figure>
+
+    <h2>To time out (leaving)</h2>
+    <p>Tap the same card again at the end of the day. The screen shows "<b>Time Out recorded successfully.</b>" and you hear "Goodbye, <i>name</i>".</p>
+
+    <div class="note warn"><b>Tap out before 6:00 PM</b>A time-out at 6:00 PM or later is saved as <span class="badge b-late">LATE TIMEOUT</span>. The kiosk still says "recorded successfully", but the voice warns that a manual correction is required and an administrator must fix the time (Chapter 9). The office does not pay overtime.</div>
+    <div class="note info"><b>One time in and one time out per day</b>A third tap shows "Attendance is already complete for today." If you tapped out by mistake, ask an administrator to correct it.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch4b">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>4 · Recording attendance</b></div>
+  <div class="page-body">
+    <figure style="margin-top:0">
+      <div class="shot crop" style="--y:120;--h:540"><img src="img/kiosk-repeat.png" alt="Kiosk showing a recorded time-out"></div>
+      <figcaption><b>Figure 4-2.</b> A successful time-out for the same intern later in the day.</figcaption>
+    </figure>
+
+    <h2>What the voice says</h2>
+    <table>
+      <tr><th style="width:30%">Situation</th><th>Announcement (example)</th></tr>
+      <tr><td>Time in</td><td>"Good morning, Alex Rivera. Your time in has been recorded." It may add "You are late." or "You are the first arrival today."</td></tr>
+      <tr><td>Time out</td><td>"Goodbye, Alex Rivera. Your time out has been recorded."</td></tr>
+      <tr><td>Time out at/after 6 PM</td><td>"Your time out was recorded after office hours. Manual correction is required."</td></tr>
+      <tr><td>Problem</td><td>For example "This card is not registered." or "Card scanned too recently. Please wait."</td></tr>
+    </table>
+    <p class="small">Voice can be turned off or adjusted by an administrator (Chapter 13).</p>
+
+    <h2>Good habits</h2>
+    <ul>
+      <li>Tap <b>once</b> and wait for the result. Tapping again within 10 seconds only shows "This card was scanned too recently."</li>
+      <li>Always look for <b>your own name</b> on the screen. If someone else's name appears, tell the front desk at once.</li>
+      <li>Never tap for another person. Each tap is logged against the card used.</li>
+      <li>Forgot your card? Ask an administrator for an <b>assisted</b> time in (page "Manual entry and forgotten cards").</li>
+    </ul>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch4-msg">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>4 · Recording attendance</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Messages after a tap</h2>
+    <p>If something is wrong, the screen shows a large message with a short code under it, then returns to ready after a few seconds.</p>
+    <div class="two">
+      <figure><div class="shot crop" style="--y:150;--h:300"><img src="img/kiosk-unknown.png" alt="Unknown card message"></div>
+        <figcaption><b>Figure 4-3.</b> Card not registered, with <b>Setup this card</b>.</figcaption></figure>
+      <figure><div class="shot crop" style="--y:150;--h:300"><img src="img/kiosk-duplicate.png" alt="Duplicate scan message"></div>
+        <figcaption><b>Figure 4-4.</b> The same card was tapped again too soon.</figcaption></figure>
+    </div>
+    <table>
+      <tr><th style="width:38%">Message (code)</th><th>Meaning and what to do</th></tr>
+      <tr><td>"This RFID card is not registered." <span class="small">(UNKNOWN RFID CARD)</span></td><td>The card is not linked to anyone. An administrator can click <b>Setup this card</b> to register it (Chapter 8).</td></tr>
+      <tr><td>"This card was scanned too recently." <span class="small">(DUPLICATE SCAN)</span></td><td>The card was tapped twice within 10 seconds. The first tap was saved. Do nothing.</td></tr>
+      <tr><td>"Attendance is already complete for today." <span class="small">(ATTENDANCE ALREADY COMPLETED)</span></td><td>Time in and time out are both done. Ask an administrator if a time is wrong.</td></tr>
+      <tr><td>"Attendance timed out after office hours and is pending manual correction."</td><td>Today was already flagged LATE TIMEOUT. An administrator must fix it.</td></tr>
+      <tr><td>"This user is inactive." <span class="small">(INACTIVE USER)</span></td><td>The person was set to Inactive. An administrator can reactivate them.</td></tr>
+      <tr><td>"Admin RFID cards cannot record attendance for themselves."</td><td>Admin cards are for unlocking and assisting only. In Attendance mode, tapping one opens the <b>Assisted Attendance</b> window.</td></tr>
+      <tr><td>"Card not recognized — check the reader format."</td><td>The reader sent something that is not a normal card number. Tap again; if it repeats, see Chapter 15.</td></tr>
+      <tr><td>"Attendance changed before the scan was saved." / "Attendance data is inconsistent." <span class="small">(ATTENDANCE DATA CONFLICT)</span></td><td>Rare timing clash. Tap again.</td></tr>
+      <tr><td>"Unable to save attendance." / "Unable to reach attendance service."</td><td>The app could not save. Tap again; if it repeats, restart the app and tell an administrator.</td></tr>
+    </table>
+    <p class="small">The full list of messages is in Appendix A.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch4-manual">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>4 · Recording attendance</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Manual entry (when the reader is not working)</h2>
+    <figure>
+      <div class="shot crop" style="--y:250;--h:500"><img src="img/kiosk-manual-entry.png" alt="Manual entry box">
+        <span class="pin" style="left:30%;top:42.2%">1</span>
+        <span class="pin" style="left:59.2%;top:50.8%">2</span>
+        <span class="pin" style="left:69.4%;top:50.8%">3</span>
+        <span class="pin" style="left:16.4%;top:89.2%">4</span>
+      </div>
+      <figcaption><b>Figure 4-5.</b> Manual card ID entry. <span class="pinref">1</span> card number (hidden as dots) · <span class="pinref">2</span> show/hide · <span class="pinref">3</span> <b>Record</b> · <span class="pinref">4</span> back to the reader.</figcaption>
+    </figure>
+    <ol class="steps">
+      <li>While the kiosk is ready, click <b>Manual entry</b> at the bottom.</li>
+      <li>Type the card number printed on the card (usually 10 digits).</li>
+      <li>Press <span class="kbd">Enter</span> or click <b>Record</b>. The result appears just like a tap.</li>
+      <li>Click <b>Use card reader</b> to go back to normal tapping. The reader is paused while manual entry is open.</li>
+    </ol>
+
+    <h2>Forgotten or broken card — assisted attendance</h2>
+    <p>An administrator can record attendance for an intern who has no working card.</p>
+    <ol class="steps">
+      <li>Make sure the kiosk is on <b>1 Attendance</b>. The administrator taps their <b>admin RFID card</b>.</li>
+      <li>The <b>Assisted Attendance</b> window opens. It closes by itself after <b>25 seconds</b> (see the "Auto-cancels in…" counter).</li>
+      <li>Search for the intern by name, ID or department and click their name.</li>
+      <li>Choose the <b>Reason for assisted scan</b>: <i>Forgot RFID card</i>, <i>Defective RFID card</i> or <i>Other reason…</i> (type the reason).</li>
+      <li>Click <b>Confirm attendance</b>. The kiosk shows the normal result plus "Assisted by <i>admin card</i>".</li>
+    </ol>
+    <div class="note info"><b>Audit trail</b>Assisted taps are marked <b>Assisted</b> in Attendance corrections with the admin card and reason, so they can be reviewed later.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH5 ============ -->
+<section class="page" id="ch5">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>5 · Bathroom key log</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 05</div>
+    <h1 class="chap">Bathroom key log (kiosk)</h1>
+    <p class="lede">There is one male and one female restroom key. The kiosk records who has each key, so the old handwritten sign-out sheet is no longer needed.</p>
+    <figure>
+      <div class="shot crop" style="--y:0;--h:480"><img src="img/bathroom-kiosk-2.png" alt="Bathroom key cards on the kiosk">
+        <span class="pin" style="left:29%;top:9.2%">1</span>
+        <span class="pin" style="left:40.6%;top:11%">2</span>
+        <span class="pin" style="left:50%;top:46.9%">3</span>
+        <span class="pin" style="left:86.5%;top:38%">4</span>
+        <span class="pin" style="left:28.1%;top:67.5%">5</span>
+      </div>
+      <figcaption><b>Figure 5-1.</b> Bathroom Key Log mode. <span class="pinref">1</span> key · <span class="pinref">2</span> <b>IN USE</b> or <b>AVAILABLE</b> · <span class="pinref">3</span> who has it, when they took it and the running timer · <span class="pinref">4</span> free key · <span class="pinref">5</span> reader.</figcaption>
+    </figure>
+    <h2>To take a key</h2>
+    <ol class="steps">
+      <li>Press <span class="kbd">2</span> or click <b>2 Bathroom Key Log</b> at the top of the kiosk.</li>
+      <li>Tap your card. The key that matches the <b>gender on your profile</b> is checked out to you ("Male floor key checked out").</li>
+      <li>Return within 15 minutes, as the voice reminds you.</li>
+    </ol>
+    <h2>To return a key</h2>
+    <ol class="steps">
+      <li>Put the key back and tap the <b>same card</b> again in Bathroom Key Log mode.</li>
+      <li>The screen shows "floor key returned" and how many minutes it was out.</li>
+      <li>Press <span class="kbd">1</span> to switch the kiosk back to Attendance.</li>
+    </ol>
+    <table>
+      <tr><th style="width:40%">Message</th><th>What to do</th></tr>
+      <tr><td>"The male bathroom key is currently in use by <i>name</i>."</td><td>Wait until that person returns it.</td></tr>
+      <tr><td>"Card not registered. Please enroll in Admin Setup."</td><td>Ask an administrator to register the card.</td></tr>
+      <tr><td>"Admin Assist cards cannot checkout bathroom keys."</td><td>Use a personal card.</td></tr>
+      <tr><td>"Gender is not set for this card. Ask an administrator…"</td><td>An administrator sets <b>Gender</b> on the profile (Chapter 8). Until then, the admin can check the key out by hand (Chapter 11).</td></tr>
+    </table>
+    <div class="note info"><b>The key follows your profile</b>The key is chosen from the Gender field on your profile, so every intern needs it set. If you are holding a key, tapping always returns that key.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH6 ============ -->
+<section class="page" id="ch6">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>6 · Live attendance</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 06</div>
+    <h1 class="chap">Live attendance and the office viewer</h1>
+    <p class="lede">See who is in today — on the kiosk itself, or on any phone or PC connected to the office Wi-Fi.</p>
+    <figure>
+      <div class="shot"><img src="img/live-attendance.png" alt="Live attendance screen">
+        <span class="pin" style="left:43.75%;top:19.3%">1</span>
+        <span class="pin" style="left:85.3%;top:14%">2</span>
+        <span class="pin" style="left:14.5%;top:29.6%">3</span>
+        <span class="pin" style="left:86.7%;top:36.8%">4</span>
+        <span class="pin" style="left:81.3%;top:72%">5</span>
+      </div>
+      <figcaption><b>Figure 6-1.</b> Live attendance on the kiosk (click <b>Live attendance</b> at the bottom of the kiosk).</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:28%">Part</th><th>Meaning</th></tr>
+      <tr><td><span class="pinref">1</span></td><td>Today's timing</td><td>Office, today's date and "Realtime Live Updates". The list refreshes after every tap and every 5 seconds.</td></tr>
+      <tr><td><span class="pinref">2</span></td><td>Scanner / Admin</td><td>Back to the kiosk, or to the admin area.</td></tr>
+      <tr><td><span class="pinref">3</span></td><td>Last updated</td><td>Time of the latest refresh. "Showing last successful update" means the newest data could not be loaded yet.</td></tr>
+      <tr><td><span class="pinref">4</span></td><td>LAN viewer panel</td><td>Lets other devices watch this list (next page).</td></tr>
+      <tr><td><span class="pinref">5</span></td><td>Status</td><td><span class="badge b-work">WORKING</span> timed in only · <span class="badge b-done">COMPLETED</span> in and out · <span class="badge b-late">LATE TIMEOUT</span> correction needed · <span class="badge b-miss">MISSED</span> no valid time in.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch6b">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>6 · Live attendance</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Sharing the list with the office (LAN viewer)</h2>
+    <p>The front-desk computer can show today's list to managers on the same Wi-Fi. They only need a web browser; nothing is installed. The viewer is <b>read-only</b>: it never shows admin pages, payroll, photos or edit buttons.</p>
+    <ol class="steps">
+      <li>On the kiosk, open <b>Live attendance</b>. The viewer starts automatically. If it shows <b>Stopped</b>, click <b>Start LAN viewer</b>.</li>
+      <li>When the panel shows <b>Running</b>, click <b>Copy URL</b>. The link looks like <code>http://192.168.1.25:4173/attendance</code>.</li>
+      <li>Send the link to the manager. They open it on a phone or PC connected to the <b>office Wi-Fi</b>.</li>
+      <li>Their page shows each time in and time out, newest first, with a status chip such as <b>Live — streaming</b>.</li>
+    </ol>
+    <p>Other buttons: <b>Open Local Viewer</b> (test the page on this computer), <b>Stop viewer</b>, <b>Refresh status</b>.</p>
+
+    <h3>If the office uses a viewer password</h3>
+    <p>When IT has turned on password mode, add <code>?token=</code> and the password to the end of the link, for example <code>http://192.168.1.25:4173/attendance?token=YourPassword</code>. Without it the page says "Viewer access required". The copied link does not include the password; add it yourself.</p>
+
+    <h3>Reading the panel facts</h3>
+    <table>
+      <tr><th style="width:30%">Fact</th><th>Good value</th><th style="width:38%">If not</th></tr>
+      <tr><td>LAN IP</td><td>An address such as 192.168.x.x</td><td>Connect the PC to the office Wi-Fi.</td></tr>
+      <tr><td>Network profile</td><td><b>Private — office-ready</b></td><td>"Public" blocks phones. Ask IT to set the Wi-Fi to Private (Chapter 15).</td></tr>
+      <tr><td>Firewall rule</td><td><b>Allow rule found</b></td><td>Ask IT to allow port 4173 (Chapter 15).</td></tr>
+      <tr><td>Local /api/health</td><td><b>Reachable locally</b></td><td>Restart the app.</td></tr>
+      <tr><td>Connected viewers</td><td>How many devices are watching</td><td>—</td></tr>
+    </table>
+    <div class="note info"><b>Who can open the link</b>Only devices on the office network. A phone on mobile data, or outside the allowed network, sees "Outside the office network". LAN settings (port, password, allowed networks) are changed by IT in <code>config.toml</code> and take effect after restarting the app.</div>
+    <div class="note tip"><b>If a manager's page stops updating</b>Their status chip shows "Reconnecting…" or "Offline". Refreshing the page or opening the link again fixes most cases.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH7 ============ -->
+<section class="page" id="ch7">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>7 · Administrator access</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 07</div>
+    <h1 class="chap">Administrator access</h1>
+    <p class="lede">The admin area is protected. Unlock it with the administrator PIN or a registered admin RFID card.</p>
+    <figure>
+      <div class="shot crop" style="--y:220;--h:360"><img src="img/admin-unlock.png" alt="Admin unlock screen">
+        <span class="pin" style="left:33.5%;top:60.6%">1</span>
+        <span class="pin" style="left:33.5%;top:77.2%">2</span>
+        <span class="pin" style="left:51.6%;top:69%">3</span>
+      </div>
+      <figcaption><b>Figure 7-1.</b> Unlock screen. <span class="pinref">1</span> PIN or card · <span class="pinref">2</span> <b>Unlock admin</b> · <span class="pinref">3</span> <b>Forgot PIN?</b></figcaption>
+    </figure>
+    <h2>To unlock</h2>
+    <ol class="steps">
+      <li>On the kiosk, click <b>Admin</b> at the bottom.</li>
+      <li>Either <b>tap your admin RFID card</b> on the reader (it fills the box and unlocks by itself), or type the <b>PIN</b> and click <b>Unlock admin</b>.</li>
+      <li>The admin screen opens on the <b>Users and RFID</b> tab.</li>
+    </ol>
+    <h2>Sessions and locking</h2>
+    <ul>
+      <li>An admin session lasts <b>15 minutes</b> from unlocking (it is not extended by activity). Afterwards you see "Admin session expired. Please unlock again."</li>
+      <li>Click <b>Lock</b> (top-right) when you are done. Always lock before leaving the desk.</li>
+      <li>If you go back to the kiosk and return to Admin, you may need to unlock again.</li>
+    </ul>
+    <h2>PIN rules</h2>
+    <ul>
+      <li>6 to 12 digits. Easy patterns such as 111111, 123456 or 654321 are refused.</li>
+      <li>A new installation has <b>no PIN</b>; use an admin card or set one with <b>Forgot PIN?</b></li>
+      <li>The PIN belongs to <b>this computer only</b>; it is not shared with other installations. Changing it does not affect admin cards.</li>
+      <li>A wrong PIN or unknown card shows "The administrator PIN is invalid."</li>
+    </ul>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch7-pin">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>7 · Administrator access</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Forgot PIN — resetting by email</h2>
+    <div class="split">
+      <figure style="margin-top:0"><div class="shot crop" style="--y:250;--h:300"><img src="img/admin-forgot-pin.png" alt="Forgot PIN panel"></div>
+        <figcaption><b>Figure 7-2.</b> The Forgot PIN panel.</figcaption></figure>
+      <div>
+        <p>A one-time 6-digit code is emailed to the company inbox <b>thealphapremiergroup@gmail.com</b>. The computer needs internet for this.</p>
+        <p class="small">The same <b>Forgot PIN?</b> link is in the kiosk's <b>Admin setup</b> window.</p>
+      </div>
+    </div>
+    <ol class="steps">
+      <li>On the unlock screen, click <b>Forgot PIN?</b>, then <b>Email reset code</b>.</li>
+      <li>The screen shows a <b>request ID</b>. Open the company inbox and find the email whose subject has the same request ID.</li>
+      <li>Type the <b>Reset code</b>, then the <b>New PIN</b> twice (<b>Confirm new PIN</b>).</li>
+      <li>Click <b>Set new PIN</b>. You see "Admin PIN updated. Unlock with the new PIN." Unlock with the new PIN.</li>
+    </ol>
+    <p>Already have a code from earlier? Click <b>I already have a code</b>. Need another? Click <b>Send a new code</b> — earlier codes then stop working.</p>
+    <h3>Reset rules</h3>
+    <ul>
+      <li>A code works for <b>15 minutes</b> and allows <b>5</b> wrong tries.</li>
+      <li>Wait <b>1 minute</b> between requests. After <b>10</b> wrong codes in 24 hours, resets are blocked until the next day.</li>
+      <li>Admin RFID cards keep working throughout — the easiest way back in.</li>
+    </ul>
+    <table>
+      <tr><th style="width:45%">Message</th><th>What to do</th></tr>
+      <tr><td>"That code is incorrect. Check the email and try again."</td><td>Use the code from the email with the matching request ID.</td></tr>
+      <tr><td>"That code expired or was entered wrong too many times."</td><td>Click <b>Send a new code</b>.</td></tr>
+      <tr><td>"A code was requested less than a minute ago…"</td><td>Use the newest email, or wait one minute.</td></tr>
+      <tr><td>"The reset email could not be sent…"</td><td>Check the internet connection; try again.</td></tr>
+      <tr><td>"The new PIN must be 6 to 12 digits and cannot be a repeated or sequential number…"</td><td>Choose a less predictable PIN.</td></tr>
+      <tr><td>"Too many wrong codes today…"</td><td>Use an admin card, wait until tomorrow, or ask IT.</td></tr>
+      <tr><td>"Administrator access is turned off on this kiosk."</td><td>IT has disabled admin access in the settings file. Contact IT.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch7-layout">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>7 · Administrator access</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">The admin screen at a glance</h2>
+    <figure>
+      <div class="shot"><img src="img/admin-users.png" alt="Admin screen layout">
+        <span class="pin" style="left:46.1%;top:14.4%">1</span>
+        <span class="pin" style="left:28.4%;top:24.5%">2</span>
+        <span class="pin" style="left:70.5%;top:12%">3</span>
+        <span class="pin" style="left:77.3%;top:12%">4</span>
+        <span class="pin" style="left:96%;top:12%">5</span>
+        <span class="pin" style="left:54.6%;top:35.6%">6</span>
+        <span class="pin" style="left:28.1%;top:44.1%">7</span>
+        <span class="pin" style="left:28.1%;top:55%">8</span>
+        <span class="pin" style="left:97.7%;top:52.8%">9</span>
+      </div>
+      <figcaption><b>Figure 7-3.</b> The admin screen, Users and RFID tab.</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:28%">Part</th><th>Use</th></tr>
+      <tr><td><span class="pinref">1</span></td><td>Manage attendance</td><td>You are in the admin area of this office.</td></tr>
+      <tr><td><span class="pinref">2</span></td><td>Mode switch</td><td><b>1 Attendance</b> shows the five tabs below; <b>2 Bathroom Key Log</b> shows the key log (Chapter 11). Keys <span class="kbd">1</span>/<span class="kbd">2</span> also work.</td></tr>
+      <tr><td><span class="pinref">3</span></td><td><b>Scanner</b></td><td>Back to the kiosk screen.</td></tr>
+      <tr><td><span class="pinref">4</span></td><td><b>Live view</b></td><td>Open Live attendance (Chapter 6).</td></tr>
+      <tr><td><span class="pinref">5</span></td><td><b>Lock</b></td><td>End the admin session now.</td></tr>
+      <tr><td><span class="pinref">6</span></td><td>Tabs</td><td><b>Users and RFID</b> (Ch. 8) · <b>Attendance corrections</b> (Ch. 9) · <b>Payroll</b> (Ch. 10) · <b>Data and backup</b> (Ch. 12) · <b>Voice announcements</b> (Ch. 13).</td></tr>
+      <tr><td><span class="pinref">7</span></td><td>Reader strip</td><td>Reader status: "Waiting for card", "Scan received", "Paused — this screen is typing", "Scanner unavailable" or "Scan error", with the last activity.</td></tr>
+      <tr><td><span class="pinref">8</span></td><td>Work area</td><td>Changes with the tab. Here: the user registration form.</td></tr>
+      <tr><td><span class="pinref">9</span></td><td>Lists and actions</td><td>Here: the user list with search, bulk actions and DTR sync.</td></tr>
+    </table>
+    <p class="small">The <b>Nuke &amp; resync Sheets</b> link in the picture appears only in developer copies of the app; it is not on the front-desk computer.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH8 ============ -->
+<section class="page" id="ch8">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>8 · Users and RFID cards</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 08</div>
+    <h1 class="chap">Users and RFID cards</h1>
+    <p class="lede">Every intern needs a profile linked to their card. There are two ways to register: the quick <b>Admin setup</b> window on the kiosk (best for tapping new cards), or the <b>Users and RFID</b> tab.</p>
+    <h2>Registering a card with Admin setup (recommended)</h2>
+    <div class="two">
+      <figure><div class="shot crop" style="--y:180;--h:440"><img src="img/setup-1-unlock.png" alt="Setup step 1 unlock"></div><figcaption><b>Figure 8-1.</b> Step 01 — unlock.</figcaption></figure>
+      <figure><div class="shot crop" style="--y:180;--h:440"><img src="img/setup-2-scan.png" alt="Setup step 2 scan card"></div><figcaption><b>Figure 8-2.</b> Step 02 — tap the card.</figcaption></figure>
+    </div>
+    <ol class="steps">
+      <li>On the kiosk, click <b>Admin setup</b> (or <b>Setup this card</b> after tapping an unknown card). The <b>Associate RFID card</b> window opens.</li>
+      <li><b>01 Unlock</b> — tap your admin card or type the PIN, then click <b>Unlock setup</b>.</li>
+      <li><b>02 Scan card</b> — tap the intern's card on the reader. The window shows <b>New card</b> (blank profile) or <b>Existing card</b> (current details).</li>
+      <li><b>03 Save user</b> — under <b>Register card as</b>, keep <b>Intern card</b> and fill in <b>User ID</b>, <b>Full name</b>, <b>Department / role</b>, <b>Status</b>, <b>Gender</b> and an optional <b>ID photo</b>.</li>
+      <li>Click <b>Save user</b>. You see "Card enrolled successfully." Click <b>Scan another card</b> for the next person, or <b>Lock setup</b> when finished.</li>
+    </ol>
+    <div class="note info"><b>Saving here never records attendance</b>Registering or updating a card only changes the user list. To make an <b>admin RFID card</b> instead, choose <b>Admin RFID card</b> in step 4, give it a label (for example "Front desk admin card #1") and click <b>Save admin card</b>.</div>
+    <p class="small">Close the window with <b>X</b>, <span class="kbd">Esc</span> or by clicking outside it. If unlocking Admin elsewhere replaces this session, you see "Your setup session expired or was replaced" — unlock again.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch8-form">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>8 · Users and RFID cards</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Adding a user from the Users tab</h2>
+    <figure>
+      <div class="shot crop" style="--y:0;--h:800"><img src="img/admin-users-2.png" alt="User registration form and list">
+        <span class="pin" style="left:30.2%;top:4.5%">1</span>
+        <span class="pin" style="left:30.2%;top:18.4%">2</span>
+        <span class="pin" style="left:30.2%;top:28.7%">3</span>
+        <span class="pin" style="left:30.2%;top:39%">4</span>
+        <span class="pin" style="left:30.2%;top:49.4%">5</span>
+        <span class="pin" style="left:30.2%;top:59.8%">6</span>
+        <span class="pin" style="left:30.2%;top:70%">7</span>
+        <span class="pin" style="left:30.2%;top:97.3%">8</span>
+        <span class="pin" style="left:64.5%;top:10%">9</span>
+        <span class="pin" style="left:83%;top:10%">10</span>
+      </div>
+      <figcaption><b>Figure 8-3.</b> Admin → Users and RFID: the form (left) and user list (right).</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:24%">Field</th><th>Rules</th></tr>
+      <tr><td><span class="pinref">1</span></td><td>Card assignment type</td><td><b>Intern card</b> for staff, <b>Admin RFID card</b> for unlock/assist cards (these never record their own attendance).</td></tr>
+      <tr><td><span class="pinref">2</span></td><td>User ID</td><td>Required; letters, numbers, dash, underscore, dot. Cannot be changed later.</td></tr>
+      <tr><td><span class="pinref">3</span></td><td>RFID UID</td><td>Required. The card number. Each card can belong to one person only.</td></tr>
+      <tr><td><span class="pinref">4</span></td><td>Full name</td><td>Required. Capitalised automatically.</td></tr>
+      <tr><td><span class="pinref">5</span></td><td>Department</td><td>Optional.</td></tr>
+      <tr><td><span class="pinref">6</span></td><td>Gender</td><td>Not set / Male / Female. Decides which restroom key the person gets; with "Not set" the kiosk refuses restroom keys.</td></tr>
+      <tr><td><span class="pinref">7</span></td><td>ID photo</td><td>Optional JPG, PNG or WebP under 25 MB; resized automatically. Enter the User ID first. Drag a file in or click <b>Browse files</b>.</td></tr>
+      <tr><td><span class="pinref">8</span></td><td>Status</td><td><b>Active</b> or <b>Inactive</b> (inactive cards are refused at the kiosk).</td></tr>
+      <tr><td><span class="pinref">9</span></td><td>Voice</td><td><b>Bea</b> = recorded name clip ready; <b>Queued</b>; <b>Piper</b> = the computer voice reads the name.</td></tr>
+      <tr><td><span class="pinref">10</span></td><td>Row actions</td><td><b>Regenerate</b> voice clip · <b>Sync DTR</b> · <b>Edit</b> · <b>Delete</b>.</td></tr>
+    </table>
+    <p>Fill in the fields and click <b>Save user</b> at the bottom of the form. "This RFID card or User ID is already assigned to another user." means the card or ID is taken.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch8-manage">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>8 · Users and RFID cards</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Editing, deactivating and deleting users</h2>
+    <figure>
+      <div class="shot crop" style="--y:390;--h:330"><img src="img/admin-user-edit.png" alt="Editing a user"></div>
+      <figcaption><b>Figure 8-4.</b> After clicking <b>Edit</b>, the form shows "Editing <i>name</i>" and the row is highlighted.</figcaption>
+    </figure>
+    <h3>Edit a user or replace a lost card</h3>
+    <ol class="steps">
+      <li>Find the person with the search box ("Search users by name, ID, RFID, or department…").</li>
+      <li>Click <b>Edit</b> on their row. Change the details — for a replacement card, type the new card number in <b>RFID UID</b>.</li>
+      <li>Click <b>Save user</b>. Click <b>Cancel edit</b> to leave without saving.</li>
+    </ol>
+    <h3>Someone leaves</h3>
+    <p>Set <b>Status</b> to <b>Inactive</b> and save. Their history and payroll stay; their card stops working.</p>
+    <div class="note warn"><b>Delete is permanent</b><b>Delete</b> removes the user <i>and all of their attendance, bathroom logs and payroll</i>. It cannot be undone. Prefer <b>Inactive</b>. Make a backup first if you must delete.</div>
+    <h3>Several users at once</h3>
+    <p>Tick the boxes on the left of the rows, then use <b>Set Active (n)</b>, <b>Set Inactive (n)</b> or <b>Delete selected (n)</b>. <b>Clear selection</b> unticks all.</p>
+    <div class="note tip"><b>Select only some users</b>Type in the search box first, then click <b>Select all</b>: only the users shown by the search are selected. The count ("2 of 12 user(s) selected") confirms it before a bulk action.</div>
+    <h3>Voice clips</h3>
+    <p>Each intern's name can be spoken in the cloned "Ma'am Bea" voice. Click <b>Regenerate</b> to make a fresh clip (up to 2 minutes; "Queued…" or "Cloning…" is shown). Until it is ready the computer voice says the name.</p>
+    <h3>Google Sheets DTR</h3>
+    <p><b>Sync DTR</b> (on a row) or <b>Sync Interns to DTR</b> (top of the list) copies interns to the "INTERN DTR" Google Sheet. Progress messages such as "Syncing intern 3 of 12" appear; it needs internet.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH9 ============ -->
+<section class="page" id="ch9">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>9 · Attendance corrections</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 09</div>
+    <h1 class="chap">Attendance corrections</h1>
+    <p class="lede">Admin → <b>Attendance corrections</b>. View any day, fix wrong times, add days that were missed, and export to CSV.</p>
+    <figure>
+      <div class="shot crop" style="--y:60;--h:690"><img src="img/admin-attendance-2.png" alt="Attendance corrections">
+        <span class="pin" style="left:88.2%;top:4.1%">1</span>
+        <span class="pin" style="left:15.3%;top:16.4%">2</span>
+        <span class="pin" style="left:40.4%;top:16.4%">3</span>
+        <span class="pin" style="left:59.6%;top:10%">4</span>
+        <span class="pin" style="left:77.4%;top:10%">5</span>
+        <span class="pin" style="left:39.7%;top:39.9%">6</span>
+        <span class="pin" style="left:54%;top:39.7%">7</span>
+        <span class="pin" style="left:80.5%;top:39.9%">8</span>
+        <span class="pin" style="left:95.7%;top:39.9%">9</span>
+        <span class="pin" style="left:1.2%;top:77.3%">10</span>
+      </div>
+      <figcaption><b>Figure 9-1.</b> Attendance corrections for one day.</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:25%">Part</th><th>Use</th></tr>
+      <tr><td><span class="pinref">1</span></td><td>Filter chips</td><td>All, Grace Period (GP), Late, Late Time-out, Working, Completed, Missed, Assisted, Backdated — each with a count. GP only applies before 1 Oct 2026.</td></tr>
+      <tr><td><span class="pinref">2</span></td><td>Date / Today</td><td>Choose the day to show.</td></tr>
+      <tr><td><span class="pinref">3</span></td><td>Employee, Department</td><td>Narrow the list by name/ID or department.</td></tr>
+      <tr><td><span class="pinref">4</span></td><td><b>Add missed attendance</b></td><td>Create a past day that was never tapped (next page).</td></tr>
+      <tr><td><span class="pinref">5</span></td><td><b>Export CSV</b></td><td>Save the rows currently shown to a spreadsheet file.</td></tr>
+      <tr><td><span class="pinref">6</span></td><td>Time in / Time out</td><td>Edit the times; the small <b>×</b> clears a time.</td></tr>
+      <tr><td><span class="pinref">7</span></td><td>Arrival</td><td>On time, Grace Period (GP) or Late (minutes).</td></tr>
+      <tr><td><span class="pinref">8</span></td><td>Status</td><td>Working, Completed, Late timeout or Missed.</td></tr>
+      <tr><td><span class="pinref">9</span></td><td><b>Save</b> / <b>Delete</b></td><td>Save the row's new times, or delete the record.</td></tr>
+      <tr><td><span class="pinref">10</span></td><td>Red banner</td><td>"Late time-out — manual correction required." The row below needs the official time-out.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch9b">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>9 · Attendance corrections</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">To correct a time (for example a late time-out)</h2>
+    <ol class="steps">
+      <li>Pick the <b>Date</b>. Click the <b>Late Time-out</b> chip to see only the rows that need fixing.</li>
+      <li>In the person's row, change <b>Time out</b> to the official time (for example 5:00 PM).</li>
+      <li>Click <b>Save</b> on that row. You see "Saved" and the status changes to <span class="badge b-done">COMPLETED</span>.</li>
+      <li>If you still enter a time at or after 6:00 PM, you see "Saved — time-out is still after office hours, correction remains required."</li>
+    </ol>
+    <p>Saving also re-prices that day's pay straight away. Times you do not touch keep their exact original seconds.</p>
+    <table>
+      <tr><th style="width:38%">Times saved</th><th>Status becomes</th></tr>
+      <tr><td>Time in and time out before 6:00 PM</td><td><span class="badge b-done">COMPLETED</span></td></tr>
+      <tr><td>Time out at or after 6:00 PM</td><td><span class="badge b-late">LATE TIMEOUT</span></td></tr>
+      <tr><td>Time in only</td><td><span class="badge b-work">WORKING</span></td></tr>
+      <tr><td>No times</td><td><span class="badge b-miss">MISSED</span></td></tr>
+    </table>
+    <div class="note info"><b>If Save shows a message</b>"This record was changed by another update…" means someone else saved this row first: the list reloads by itself, so check the times and click <b>Save</b> again. "The date or time is not valid" means a time box is incomplete.</div>
+
+    <h2>Deleting records</h2>
+    <p>Click <b>Delete</b> on a row and confirm "Delete attendance record?". To delete several, tick the rows and click <b>Delete selected (n)</b>.</p>
+    <div class="note warn"><b>Permanent</b>A deleted time-in/time-out cannot be brought back. If only a time is wrong, correct it instead.</div>
+
+    <h2>Exporting to CSV</h2>
+    <ol class="steps">
+      <li>Set the date and filters so the list shows what you need.</li>
+      <li>Click <b>Export CSV</b> (or tick rows and click <b>Export selected CSV (n)</b>).</li>
+      <li>A message confirms "Generated attendance-export-<i>date</i>.csv (<i>n</i> rows)." Open the file with Excel or Google Sheets (check the Downloads folder if no save window appears).</li>
+    </ol>
+    <p class="small">Columns: employee name and ID, department, date, time in, arrival, time out, status, total hours (whole hours, maximum 8, lunch not removed), source, recorded by, reason, recorded at, actual time in.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch9-missed">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>9 · Attendance corrections</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Adding missed attendance (backdated entry)</h2>
+    <p>Use this when an intern worked on a past day but no tap was saved — for example they forgot their card and nobody used assisted attendance.</p>
+    <figure>
+      <div class="shot crop" style="--y:60;--h:690"><img src="img/admin-missed.png" alt="Add missed attendance window">
+        <span class="pin" style="left:28.4%;top:30.9%">1</span>
+        <span class="pin" style="left:28.4%;top:43.5%">2</span>
+        <span class="pin" style="left:28.4%;top:56.5%">3</span>
+        <span class="pin" style="left:50.6%;top:56.5%">4</span>
+        <span class="pin" style="left:28.4%;top:69.3%">5</span>
+        <span class="pin" style="left:53.2%;top:91.6%">6</span>
+      </div>
+      <figcaption><b>Figure 9-2.</b> Add Missed Attendance. <span class="pinref">1</span> employee · <span class="pinref">2</span> past date · <span class="pinref">3</span> time in · <span class="pinref">4</span> time out (optional) · <span class="pinref">5</span> reason · <span class="pinref">6</span> save.</figcaption>
+    </figure>
+    <ol class="steps">
+      <li>Click <b>+ Add missed attendance</b>.</li>
+      <li>Choose the <b>Employee</b> (active interns only) and the <b>Attendance Date</b> — yesterday or earlier.</li>
+      <li>Enter <b>Time In</b> and, if known, <b>Time Out</b> (defaults are 8:00 AM and 5:00 PM).</li>
+      <li>Type the <b>Reason</b>, for example "Forgot RFID card; confirmed by supervisor at 8:00 AM". It is required.</li>
+      <li>Click <b>Add missed attendance</b>. The list jumps to that date and the row is marked <b>Backdated</b>.</li>
+    </ol>
+    <table>
+      <tr><th style="width:52%">If you see</th><th>Why</th></tr>
+      <tr><td>"Backdated attendance date must be strictly in the past."</td><td>Today cannot be backdated; use the kiosk or assisted attendance.</td></tr>
+      <tr><td>"An attendance record already exists for this employee on this date…"</td><td>Correct the existing row instead.</td></tr>
+      <tr><td>"…date falls within a finalized payroll cutoff."</td><td>That pay period is already finalized.</td></tr>
+      <tr><td>"Time-out cannot precede time-in."</td><td>Check AM/PM.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH10 ============ -->
+<section class="page" id="ch10">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>10 · Payroll</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 10</div>
+    <h1 class="chap">Payroll</h1>
+    <p class="lede">Admin → <b>Payroll</b>. Intern pay is calculated automatically from attendance, twice a month: the <b>1st–15th</b> and the <b>16th–last day</b>.</p>
+    <svg class="diagram" viewBox="0 0 660 66" xmlns="http://www.w3.org/2000/svg" font-family="Poppins, Segoe UI, sans-serif">
+      <g font-size="11.5" font-weight="600" text-anchor="middle">
+        <rect x="2" y="8" width="150" height="48" rx="8" fill="#f6eedb" stroke="#d9b45f"/><text x="77" y="30" fill="#1d1b17">1 · Fix attendance</text><text x="77" y="46" font-size="9.5" font-weight="400" fill="#5d5850">Chapter 9</text>
+        <rect x="170" y="8" width="150" height="48" rx="8" fill="#f6eedb" stroke="#d9b45f"/><text x="245" y="30" fill="#1d1b17">2 · Generate drafts</text><text x="245" y="46" font-size="9.5" font-weight="400" fill="#5d5850">this page</text>
+        <rect x="338" y="8" width="150" height="48" rx="8" fill="#f6eedb" stroke="#d9b45f"/><text x="413" y="30" fill="#1d1b17">3 · Review &amp; finalize</text><text x="413" y="46" font-size="9.5" font-weight="400" fill="#5d5850">next page</text>
+        <rect x="506" y="8" width="150" height="48" rx="8" fill="#0d0c0a"/><text x="581" y="30" fill="#f4ead5">4 · Print PDF</text><text x="581" y="46" font-size="9.5" font-weight="400" fill="#d9b45f">Intern Payroll PDF</text>
+      </g>
+    </svg>
+    <figure>
+      <div class="shot crop" style="--y:380;--h:420"><img src="img/admin-payroll.png" alt="Payroll workspace">
+        <span class="pin" style="left:11.5%;top:13.3%">1</span>
+        <span class="pin" style="left:22.7%;top:12.4%">2</span>
+        <span class="pin" style="left:39.1%;top:13.3%">3</span>
+        <span class="pin" style="left:63.7%;top:13.3%">4</span>
+        <span class="pin" style="left:20.5%;top:33.3%">5</span>
+        <span class="pin" style="left:97.6%;top:24.7%">6</span>
+        <span class="pin" style="left:11.3%;top:52.4%">7</span>
+        <span class="pin" style="left:78.4%;top:96.9%">8</span>
+      </div>
+      <figcaption><b>Figure 10-1.</b> <span class="pinref">1</span> month · <span class="pinref">2</span> half-month buttons · <span class="pinref">3</span> start/end dates · <span class="pinref">4</span> standard days · <span class="pinref">5</span> generate · <span class="pinref">6</span> PDF · <span class="pinref">7</span> payroll list · <span class="pinref">8</span> day-by-day breakdown.</figcaption>
+    </figure>
+    <h2>To generate a cutoff</h2>
+    <ol class="steps">
+      <li>Fix the period's attendance first: no <span class="badge b-late">LATE TIMEOUT</span> or missing time-outs left (Chapter 9).</li>
+      <li>Choose the <b>Cutoff month</b>, then click <b>1st–15th</b> or <b>16th–last day</b>. Start and end dates fill in.</li>
+      <li>Check <b>Standard days</b>. It counts Monday–Friday automatically. <b>Subtract holidays yourself</b> (half days allowed, e.g. 10.5).</li>
+      <li>Click <b>Generate from attendance</b> and confirm. You see "Payroll drafts were generated from completed attendance."</li>
+      <li>If a note says some records "could not be priced and were left out", fix those days and generate again.</li>
+    </ol>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch10-review">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>10 · Payroll</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">How each intern's pay is worked out</h2>
+    <ul>
+      <li>Only interns with at least one completed day in the period get a row.</li>
+      <li><b>Absent days</b> = standard days − days worked. Each absence: −PHP 80.00.</li>
+      <li><b>Late</b> and <b>undertime</b>: −PHP 10.00 per hour; <b>half days</b>: −PHP 40.00 (rules in Chapter 14).</li>
+      <li><b>Net Pay</b> is never below zero for any single day. Open <b>Calculation breakdown &amp; payslip detail</b> to see every deduction by date.</li>
+    </ul>
+    <p class="small">Columns such as HRA, SSS, PhilHealth, HDMF and Overtime are kept for the payroll sheet layout and are always PHP 0.00 for interns. Bank / A/C shows "CASH / 0000" when empty.</p>
+
+    <h2>Reviewing and adjusting a draft</h2>
+    <ol class="steps">
+      <li>Click <b>Edit</b> on the row. The window shows the attendance basic pay, late deduction and absent / half-day amounts.</li>
+      <li>Enter a <b>Manual Adjustment (PHP)</b> — positive to add, negative to deduct — and the required <b>Adjustment Reason</b>.</li>
+      <li>Check Total Earnings, Total Deductions and Net Pay, then click <b>Save Changes</b>.</li>
+    </ol>
+    <p class="small">Only the manual adjustment can be edited. To change days, late hours or half days, correct the attendance and generate again.</p>
+
+    <h2>Finalizing</h2>
+    <ol class="steps">
+      <li>When a row is correct, click <b>Finalize</b> and confirm "Finalize payroll?". Or tick rows and click <b>Finalize selected (n)</b>.</li>
+      <li>The row shows <b>Finalized</b> and can no longer be edited. Backdated attendance can no longer be added inside that period.</li>
+    </ol>
+    <div class="note info"><b>Regenerating keeps finalized pay</b>Clicking <b>Generate from attendance</b> again for the same cutoff rebuilds only the <b>draft</b> rows; finalized rows are kept as they are (the yellow banner says "finalized records are kept"). Late time-outs are paid up to 5:00 PM, as the confirmation window says.</div>
+    <div class="note warn"><b>To redo a finalized row</b>Delete that row on purpose (its <b>Delete</b> button stays available, for example when an intern leaves), then generate again. Make a backup first.</div>
+
+    <h2>Deleting payroll records</h2>
+    <p>Click <b>Delete</b> on a row, or <b>Delete all records for this cutoff (n)</b> in the yellow banner, or tick rows and click <b>Delete selected (n)</b>. Attendance is not affected; you can generate again afterwards.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch10-pdf">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>10 · Payroll</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Printing the payroll PDF</h2>
+    <figure>
+      <div class="shot crop" style="--y:140;--h:640"><img src="img/admin-payroll-scrolled.png" alt="Payroll PDF export and generated PDF list">
+        <span class="pin" style="left:72.5%;top:17.7%">1</span>
+        <span class="pin" style="left:1.6%;top:75.9%">2</span>
+      </div>
+      <figcaption><b>Figure 10-2.</b> <span class="pinref">1</span> <b>Generate Intern Payroll PDF</b> · <span class="pinref">2</span> <b>Generated payroll PDFs</b> list.</figcaption>
+    </figure>
+    <ol class="steps">
+      <li>Make sure the cutoff dates at the top are set to the period you want.</li>
+      <li>Click <b>Generate Intern Payroll PDF</b>. You see "Payroll PDF generated for <i>October 1-15, 2026</i>."</li>
+      <li>In <b>Generated payroll PDFs</b>, click <b>Open PDF</b> to view or print it, or <b>Show in Folder</b> to find the file.</li>
+    </ol>
+    <table>
+      <tr><th style="width:30%">The PDF contains</th><th>Details</th></tr>
+      <tr><td>Header</td><td>Company name, cutoff label, "Cut off 1-15th of the month / 16-31st".</td></tr>
+      <tr><td>One row per intern</td><td>Employee #, name, cut-off rate, daily rate, actual days, standard days, total compensation, late (10/hr), half day, undertime, absent, net compensation and a <b>Signature</b> column.</td></tr>
+      <tr><td>Grand Total</td><td>Sum of everyone's net pay, highlighted.</td></tr>
+      <tr><td>Layout</td><td>A4 landscape, up to 18 interns per page. Drafts and finalized rows are both included.</td></tr>
+    </table>
+    <p>Files are named like <code>payroll_2026-10-16_09-30-12_intern.pdf</code> and saved in the app's <b>exports</b> folder (Appendix B). The list shows period, number of interns and total for each file.</p>
+    <table>
+      <tr><th style="width:48%">If you see</th><th>Do this</th></tr>
+      <tr><td>"No payroll records to generate. Create and save a payroll first."</td><td>Generate the cutoff first (page "Payroll").</td></tr>
+      <tr><td>"No payroll records exist for these cutoff dates…"</td><td>Set the start/end dates to a cutoff you have generated, or generate it first.</td></tr>
+      <tr><td>"The file could not be found…"</td><td>The PDF was moved or deleted; generate it again.</td></tr>
+      <tr><td>"Administrator session expired…"</td><td>Unlock admin again.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH11 ============ -->
+<section class="page" id="ch11">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>11 · Bathroom key log (admin)</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 11</div>
+    <h1 class="chap">Bathroom key log (admin)</h1>
+    <p class="lede">Admin → click <b>2 Bathroom Key Log</b> (or press <span class="kbd">2</span>). Check keys in and out by hand, view any day's log and correct times.</p>
+    <figure>
+      <div class="shot"><img src="img/admin-bathroom-2.png" alt="Admin bathroom key log">
+        <span class="pin" style="left:86.7%;top:6%">1</span>
+        <span class="pin" style="left:25%;top:31.1%">2</span>
+        <span class="pin" style="left:18.2%;top:50.4%">3</span>
+        <span class="pin" style="left:52.6%;top:34.6%">4</span>
+        <span class="pin" style="left:52.6%;top:66.3%">5</span>
+        <span class="pin" style="left:47.4%;top:73.6%">6</span>
+      </div>
+      <figcaption><b>Figure 11-1.</b> <span class="pinref">1</span> date / Today · <span class="pinref">2</span> key in use, with timer · <span class="pinref">3</span> <b>Time In (Return Key)</b> · <span class="pinref">4</span> staff search · <span class="pinref">5</span> <b>Time Out (Check Out Key)</b> · <span class="pinref">6</span> the day's key log.</figcaption>
+    </figure>
+    <h3>Check a key out for someone</h3>
+    <ol class="steps">
+      <li>On the free key's panel, search for the person under <b>Assign Key to Staff</b> and click their name.</li>
+      <li>Click <b>Time Out (Check Out Key)</b>. You see "Checked out male key."</li>
+    </ol>
+    <h3>Return a key / correct a log</h3>
+    <ol class="steps">
+      <li>Click <b>Time In (Return Key)</b> on the panel of the key that is out.</li>
+      <li>To fix times, click <b>Edit</b> in the log table, change <b>Time Out (Checkout)</b>, <b>Time In (Return)</b> or <b>Notes / Reason</b>, and click <b>Save Changes</b>. Clearing the return time marks the key as OUT again.</li>
+    </ol>
+    <p class="small">Log columns: Employee, Time Out, Time In, Duration ("In Use" while out), Status (OUT / RETURNED). Return time cannot be earlier than checkout, and both must be on the log date.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH12 ============ -->
+<section class="page" id="ch12">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>12 · Data, backup and updates</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 12</div>
+    <h1 class="chap">Data, backup and updates</h1>
+    <p class="lede">Admin → <b>Data and backup</b>. All records live in one database on this computer. Back it up regularly.</p>
+    <figure>
+      <div class="shot crop" style="--y:395;--h:345"><img src="img/admin-data.png" alt="Data and backup tab">
+        <span class="pin" style="left:14.6%;top:52.8%">1</span>
+        <span class="pin" style="left:29.5%;top:52.8%">2</span>
+        <span class="pin" style="left:42.1%;top:52.8%">3</span>
+        <span class="pin" style="left:63.3%;top:52.8%">4</span>
+        <span class="pin" style="left:75.6%;top:52.8%">5</span>
+        <span class="pin" style="left:16%;top:80.3%">6</span>
+      </div>
+      <figcaption><b>Figure 12-1.</b> <span class="pinref">1</span> <b>Create backup now</b> · <span class="pinref">2</span> <b>Restore from backup file…</b> · <span class="pinref">3</span> <b>Open backups folder</b> · <span class="pinref">4</span> DTR sync on/off · <span class="pinref">5</span> <b>Sync Intern DTR now</b> · <span class="pinref">6</span> DTR sync status. (The red line appears only in the preview copy used for these pictures.)</figcaption>
+    </figure>
+    <p>The top of the tab shows the <b>Database file</b> location, <b>Storage mode</b> (Installed or Portable), number of <b>Saved backups</b> and any <b>Pending restore</b>.</p>
+    <h2>Make a backup</h2>
+    <ol class="steps">
+      <li>Click <b>Create backup now</b>. It is safe while the kiosk is running.</li>
+      <li>You see "Backup created: attendance-backup-<i>date-time</i>.apbackup". Use <b>Open folder</b> or <b>Copy path</b> to find it.</li>
+      <li>Copy the file to a USB drive or shared folder kept away from this computer.</li>
+    </ol>
+    <p class="small">A backup file contains the database, photos, exports, sync state and settings. The app keeps the newest 10, and also makes one automatically every time the window is closed.</p>
+    <h2>Restore a backup</h2>
+    <ol class="steps">
+      <li>Click <b>Restore from backup file…</b> and choose an <code>.apbackup</code> (or <code>.db</code>) file.</li>
+      <li>Confirm "Restore database from backup?". The app closes, restores and opens again.</li>
+    </ol>
+    <div class="note warn"><b>Restoring replaces the current data</b>Everything on this computer is replaced by the backup. A copy of the old database is saved first as <code>backups/pre-restore-*.db</code>, so it can be recovered by IT. If a restore fails you see "Restore didn't go through — your current data is safe" with <b>Try again…</b> and <b>Dismiss</b>.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch12-move">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>12 · Data, backup and updates</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Moving to a new front-desk computer</h2>
+    <ol class="steps">
+      <li>On the <b>old</b> computer: Admin → Data and backup → <b>Create backup now</b>.</li>
+      <li>Copy the <code>attendance-backup-*.apbackup</code> file to a USB drive.</li>
+      <li>On the <b>new</b> computer: install the app (Chapter 2), then Admin → Data and backup → <b>Restore from backup file…</b> and pick the file.</li>
+      <li>The app restarts with all users, attendance, payroll and settings. Set a PIN again if needed — PINs are per computer — and test one card.</li>
+    </ol>
+    <div class="note warn"><b>Never copy the database by hand while the app is open</b>Always use Create backup / Restore.</div>
+
+    <h2>Google Sheets DTR sync</h2>
+    <p>If the office uses the Google Sheets daily time record, each tap is queued and copied in the background when internet is available. Taps are never lost while waiting.</p>
+    <ul>
+      <li><b>Sync interns to DTR sheet on this device</b> — turn the copy on or off for this computer. When off, taps are kept in the queue and sent when it is turned back on.</li>
+      <li><b>Sync Intern DTR now</b> — send the queue immediately. If it stops part-way, a "Stopped at…" line appears with <b>Retry</b>.</li>
+      <li><b>DTR sync status</b> badge: <i>DTR idle</i> (all sent), <i>DTR pending</i>, <i>DTR paused</i>, <i>Syncing…</i> or <i>DTR attention</i>. "DTR sync failures: n" with <b>Retry sync now</b> means some items need another try.</li>
+    </ul>
+
+    <h2>Updates and automatic start</h2>
+    <figure>
+      <div class="shot crop" style="--y:265;--h:225"><img src="img/admin-data-2.png" alt="Software updates and system settings">
+        <span class="pin" style="left:79.6%;top:14.7%">1</span>
+        <span class="pin" style="left:3.6%;top:53.8%">2</span>
+        <span class="pin" style="left:3.6%;top:85.3%">3</span>
+      </div>
+      <figcaption><b>Figure 12-2.</b> <span class="pinref">1</span> <b>Check for updates now</b> · <span class="pinref">2</span> start with Windows · <span class="pinref">3</span> automatic update checks.</figcaption>
+    </figure>
+    <p>The app checks for a new version shortly after starting and every 8 hours. When one is ready, a banner says "Update available". Click <b>View &amp; install</b>, read the notes, then <b>Download &amp; restart</b> (or <b>Later</b>). Do not close the window while it says "Installing update…". Attendance data is kept.</p>
+    <div class="note tip"><b>Best time to update</b>Install updates outside office hours. Taps are not read while the app restarts.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH13 ============ -->
+<section class="page" id="ch13">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>13 · Voice announcements</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 13</div>
+    <h1 class="chap">Voice announcements</h1>
+    <p class="lede">Admin → <b>Voice announcements</b>. Control the spoken greetings. Everything runs on this computer; no internet is needed.</p>
+    <figure>
+      <div class="shot crop" style="--y:40;--h:570"><img src="img/admin-voice-2.png" alt="Voice announcements settings">
+        <span class="pin" style="left:22.7%;top:29.3%">1</span>
+        <span class="pin" style="left:42%;top:29.7%">2</span>
+        <span class="pin" style="left:65.6%;top:29.7%">3</span>
+        <span class="pin" style="left:96.9%;top:38.6%">4</span>
+        <span class="pin" style="left:84%;top:60.2%">5</span>
+        <span class="pin" style="left:25.8%;top:94.6%">6</span>
+      </div>
+      <figcaption><b>Figure 13-1.</b> Voice settings.</figcaption>
+    </figure>
+    <table>
+      <tr><th class="n">#</th><th style="width:28%">Control</th><th>Use</th></tr>
+      <tr><td><span class="pinref">1</span></td><td><b>Enable Voice Announcements</b></td><td>Turn greetings on or off.</td></tr>
+      <tr><td><span class="pinref">2</span></td><td><b>Speech Rate</b></td><td>0.5× to 2.0× (1.0× is normal).</td></tr>
+      <tr><td><span class="pinref">3</span></td><td><b>Volume</b></td><td>0% to 100%.</td></tr>
+      <tr><td><span class="pinref">4</span></td><td><b>VoiceStudio Server</b> + <b>Test Connection</b></td><td>Address of the PC that makes the cloned "Ma'am Bea" name clips. Leave as set by IT.</td></tr>
+      <tr><td><span class="pinref">5</span></td><td><b>Share PIN</b></td><td>6-digit PIN shown on the VoiceStudio PC, if it asks for one.</td></tr>
+      <tr><td><span class="pinref">6</span></td><td><b>Test Voice</b> / <b>Stop</b> / <b>Reset Defaults</b></td><td>Play a sample, stop playback, or restore normal settings.</td></tr>
+    </table>
+    <p>The status at the top shows the voice in use: <b>Ma'am Bea Ready</b>, <b>Piper TTS Ready</b>, <b>SAPI Ready</b> (Windows voice), <b>Voice Disabled</b> or <b>Offline TTS Unavailable</b>. Settings are saved on this computer.</p>
+    <div class="note tip"><b>No sound?</b>Click <b>Test Voice</b>. If you hear nothing, check the Windows volume and speakers. "Speech synthesis failed" means no voice engine is available — tell IT.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH14 ============ -->
+<section class="page" id="ch14">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>14 · Attendance and pay rules</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 14</div>
+    <h1 class="chap">Attendance and pay rules</h1>
+    <p class="lede">These rules apply to attendance from <b>1 October 2026</b>. The app applies them automatically; this chapter explains the numbers you see.</p>
+    <table>
+      <tr><th style="width:26%">Rule</th><th>How it works</th></tr>
+      <tr><td>Office hours</td><td>8:00 AM to 5:00 PM, Philippine time. A full day is 8 paid hours.</td></tr>
+      <tr><td>Lunch</td><td>12:00–1:00 PM is unpaid and never counted as work.</td></tr>
+      <tr><td>Daily rate</td><td>PHP 80.00 per day (PHP 10.00 per hour).</td></tr>
+      <tr><td>On time</td><td>Tapping in up to <b>8:00:59 AM</b>. Coming early earns nothing extra.</td></tr>
+      <tr><td>Late</td><td>From 8:01:00 AM, <b>every started hour</b> late costs PHP 10.00, counted from 8:00. 8:08 = 1 hour; 9:00:01 = 2 hours. There is no grace period.</td></tr>
+      <tr><td>Undertime</td><td>Each hour (or part) short of the 8-hour day costs PHP 10.00 — but hours already charged as late are not charged twice.</td></tr>
+      <tr><td>Half day</td><td>Arriving at <b>12:00 PM or later</b>, or leaving by 1:00 PM, counts as a half day: PHP 40.00 is deducted as undertime, not late.</td></tr>
+      <tr><td>Late time-out</td><td>Tapping out at <b>6:00 PM or later</b> marks the day LATE TIMEOUT for correction. Pay is worked out as if the time-out were 5:00 PM. No overtime.</td></tr>
+      <tr><td>Minimum</td><td>A day's pay never goes below PHP 0.00.</td></tr>
+      <tr><td>Absences</td><td>Each standard day not worked in the cutoff costs PHP 80.00.</td></tr>
+    </table>
+    <h2>Worked examples</h2>
+    <table>
+      <tr><th>Time in</th><th>Time out</th><th>Late</th><th>Undertime</th><th style="text-align:right">Day's pay</th></tr>
+      <tr><td>8:00 AM</td><td>5:00 PM</td><td>—</td><td>—</td><td style="text-align:right"><b>PHP 80.00</b></td></tr>
+      <tr><td>8:00:59 AM</td><td>5:00 PM</td><td>— (on time)</td><td>—</td><td style="text-align:right"><b>PHP 80.00</b></td></tr>
+      <tr><td>8:08 AM</td><td>5:00 PM</td><td>1 h (−10)</td><td>—</td><td style="text-align:right"><b>PHP 70.00</b></td></tr>
+      <tr><td>10:30 AM</td><td>5:00 PM</td><td>3 h (−30)</td><td>—</td><td style="text-align:right"><b>PHP 50.00</b></td></tr>
+      <tr><td>9:30 AM</td><td>4:00 PM</td><td>2 h (−20)</td><td>1 h (−10)</td><td style="text-align:right"><b>PHP 50.00</b></td></tr>
+      <tr><td>8:00 AM</td><td>4:00 PM</td><td>—</td><td>1 h (−10)</td><td style="text-align:right"><b>PHP 70.00</b></td></tr>
+      <tr><td>8:00 AM</td><td>12:00 PM</td><td>—</td><td>half day (−40)</td><td style="text-align:right"><b>PHP 40.00</b></td></tr>
+      <tr><td>12:30 PM</td><td>5:00 PM</td><td>— (afternoon)</td><td>half day (−40)</td><td style="text-align:right"><b>PHP 40.00</b></td></tr>
+      <tr><td>8:00 AM</td><td>6:30 PM</td><td>—</td><td>— (paid to 5:00 PM)</td><td style="text-align:right"><b>PHP 80.00</b> <span class="badge b-late">FIX</span></td></tr>
+    </table>
+    <p class="small">These examples match the payroll engine's official test cases.</p>
+    <div class="note info"><b>Days before 1 October 2026</b>Older days keep the previous rules: once per Monday–Sunday week, an arrival up to 8:15 AM was free ("Grace Period (GP)"), and later arrivals were rounded differently. The app remembers which rules priced each day, so past pay never changes.</div>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ CH15 ============ -->
+<section class="page" id="ch15">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>15 · Troubleshooting</b></div>
+  <div class="page-body">
+    <div class="chapno">Chapter 15</div>
+    <h1 class="chap">Troubleshooting</h1>
+    <p class="lede">Find the problem in the left column. Try the fixes in order.</p>
+    <table>
+      <tr><th style="width:28%">Problem</th><th style="width:28%">Likely cause</th><th>Fix</th></tr>
+      <tr><td>Tapping a card does nothing</td><td>The kiosk window is not in front, or the app is hidden in the tray.</td><td>Click once on the kiosk window (or the tray icon) and tap again. Close other programs in front of it.</td></tr>
+      <tr><td>Still nothing; pill shows Offline/Error</td><td>Reader unplugged or faulty.</td><td>Unplug and replug the USB reader; try another USB port. Use <b>Manual entry</b> meanwhile.</td></tr>
+      <tr><td>"Card not recognized — check the reader format."</td><td>The reader sends a different number format.</td><td>Tap again. If it keeps happening, IT must match the reader settings (<code>[scanner]</code> in <code>config.toml</code>).</td></tr>
+      <tr><td>Digits appear in another program (e.g. Notepad)</td><td>That program had the focus.</td><td>Delete the digits there, click the kiosk window and tap again.</td></tr>
+      <tr><td>Wrong person's name appears</td><td>The card is linked to the wrong profile.</td><td>Admin → Users and RFID → search the card number → <b>Edit</b>. Fix the day in Attendance corrections.</td></tr>
+      <tr><td>Intern tapped out by mistake</td><td>The second tap is always a time-out.</td><td>Admin → Attendance corrections → clear <b>Time out</b> with × → <b>Save</b>.</td></tr>
+      <tr><td>Forgot to tap out</td><td>Day stays WORKING.</td><td>Enter the real time-out in Attendance corrections and <b>Save</b>.</td></tr>
+      <tr><td>Kiosk says "Gender is not set for this card"</td><td>The profile has no gender.</td><td>Edit the user and set <b>Gender</b>.</td></tr>
+      <tr><td>Can't unlock admin</td><td>Wrong or no PIN.</td><td>Tap an admin card, or use <b>Forgot PIN?</b> (Chapter 7).</td></tr>
+      <tr><td>Kicked out of admin</td><td>The 15-minute session ended.</td><td>Unlock again. Save your work before 15 minutes.</td></tr>
+      <tr><td>"This record was changed by another update"</td><td>Someone saved the row first.</td><td>The list reloads; check the times and click <b>Save</b> again.</td></tr>
+      <tr><td>Payroll is missing an intern</td><td>No completed day in the cutoff.</td><td>Fix that intern's attendance, then generate again.</td></tr>
+      <tr><td>Payroll shows too many absences</td><td>Standard days include a holiday.</td><td>Lower <b>Standard days</b> and generate again (before finalizing).</td></tr>
+      <tr><td>No voice</td><td>Muted or voice disabled.</td><td>Check Windows volume, then Admin → Voice announcements → <b>Test Voice</b>.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<section class="page" id="ch15b">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>15 · Troubleshooting</b></div>
+  <div class="page-body">
+    <h2 style="margin-top:0">Live viewer problems (for IT)</h2>
+    <table>
+      <tr><th style="width:30%">Problem</th><th>Fix</th></tr>
+      <tr><td>Phones stay on "Connecting…"</td><td>Allow port 4173 in Windows Firewall. In PowerShell <b>as Administrator</b>:<br><code>netsh advfirewall firewall add rule name="Alpha Premier Live Attendance" dir=in action=allow protocol=TCP localport=4173</code></td></tr>
+      <tr><td>Network profile shows <b>Public</b></td><td>Windows Settings → Network &amp; internet → Wi-Fi → the office network → set <b>Private network</b>.</td></tr>
+      <tr><td>"No reachable office LAN IP was detected."</td><td>Connect the kiosk PC to the office Wi-Fi, then <b>Refresh status</b>.</td></tr>
+      <tr><td>"Port 4173 is already in use."</td><td>Another program uses the port. Restart the PC, or IT changes <code>[lan] port</code>.</td></tr>
+      <tr><td>"Outside the office network"</td><td>The device is not on the office Wi-Fi (or the guest Wi-Fi isolates devices). Join the main office network.</td></tr>
+      <tr><td>"Viewer access required"</td><td>Add <code>?token=</code> + the viewer password to the link.</td></tr>
+    </table>
+
+    <h2 id="ch15-faq">Frequently asked questions</h2>
+    <h3>Does the kiosk need internet?</h3>
+    <p>No. Taps, admin and payroll all work offline. Internet is only for updates, PIN-reset email, voice clip creation and Google Sheets.</p>
+    <h3>What happens if the power goes out?</h3>
+    <p>Every tap is saved the moment it is shown on screen. When the PC comes back, the app starts by itself (if automatic start is on).</p>
+    <h3>Can two computers record attendance?</h3>
+    <p>No. The front-desk computer is the only one that records. Other devices can only view through the live viewer.</p>
+    <h3>Can an intern see their own pay?</h3>
+    <p>Not in the app. Administrators print the Intern Payroll PDF and share it as the office decides.</p>
+    <h3>Why does a time show "Late (57m)" but only 1 hour deducted?</h3>
+    <p>The Arrival column shows minutes late; pay deducts per started hour (Chapter 14).</p>
+    <h3>We changed the pay rules. Will past pay change?</h3>
+    <p>No. Each day remembers the rules that priced it. New rules need a software update from IT.</p>
+    <h3>Where are my files?</h3>
+    <p>See Appendix B. In Admin, <b>Show in Folder</b> and <b>Open backups folder</b> take you straight there.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ APPENDIX A ============ -->
+<section class="page" id="appA">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>Appendix A · Messages</b></div>
+  <div class="page-body">
+    <div class="chapno">Appendix A</div>
+    <h1 class="chap">On-screen messages</h1>
+    <p class="lede">Messages not already explained in the chapters, in alphabetical order.</p>
+    <table>
+      <tr><th style="width:46%">Message</th><th>Meaning / action</th></tr>
+      <tr><td>Admin session expired. Please unlock again.</td><td>15 minutes passed. Unlock again.</td></tr>
+      <tr><td>Cannot create attendance for an inactive user.</td><td>Reactivate the user first.</td></tr>
+      <tr><td>Choose a JPEG, PNG, or WebP photo.</td><td>Use one of those picture types.</td></tr>
+      <tr><td>Enter the User ID before uploading a photo.</td><td>Fill in User ID first.</td></tr>
+      <tr><td>Gender is not set for this card. Ask an administrator to set it in Users and RFID.</td><td>Set Gender on the profile; then the restroom key works.</td></tr>
+      <tr><td>Live attendance is temporarily unavailable.</td><td>The list could not refresh; it keeps showing the last data and retries.</td></tr>
+      <tr><td>No attendance matches the active filters; nothing was exported.</td><td>Change the date or filters.</td></tr>
+      <tr><td>Photo file must be under 25 MB.</td><td>Use a smaller picture.</td></tr>
+      <tr><td>This photo could not be compressed below the 500 KB upload limit.</td><td>Crop or resize the picture and try again.</td></tr>
+      <tr><td>Select a cutoff period first. / Cutoff start must be on or before cutoff end.</td><td>Set the payroll dates correctly.</td></tr>
+      <tr><td>Setup session expired. Unlock again to continue.</td><td>Unlock the Admin setup window again.</td></tr>
+      <tr><td>That User ID or RFID card is already in use by another user.</td><td>Use a different ID, or edit the existing user.</td></tr>
+      <tr><td>The User ID may only contain letters, numbers, dashes, underscores, and dots.</td><td>Remove spaces and other symbols.</td></tr>
+      <tr><td>The administrator PIN or admin RFID card is invalid.</td><td>Shown in the kiosk Admin setup window; retype the PIN or tap a registered admin card.</td></tr>
+      <tr><td>The selected file is not a valid Alpha Premier attendance database.</td><td>Choose an <code>.apbackup</code> made by this app.</td></tr>
+      <tr><td>This key is currently in use. Please return it before checking out again.</td><td>Return the key first.</td></tr>
+      <tr><td>Time-out cannot precede time-in.</td><td>Check AM/PM and the order of times.</td></tr>
+      <tr><td>Unable to connect to the update server…</td><td>No internet; try again later.</td></tr>
+      <tr><td>Unable to load administrator data.</td><td>Reload the page or restart the app.</td></tr>
+      <tr><td>USER_HAS_RECORDS … Deactivate the user instead.</td><td>Set the user Inactive rather than deleting.</td></tr>
+      <tr><td>Voice regeneration failed.</td><td>Check the VoiceStudio connection (Chapter 13) and try again.</td></tr>
+      <tr><td>Messages in CAPITALS_WITH_UNDERSCORES</td><td>A technical code shown as-is. Note it down and tell IT; your data is usually unaffected.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ APPENDIX B ============ -->
+<section class="page" id="appB">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>Appendix B · Reference</b></div>
+  <div class="page-body">
+    <div class="chapno">Appendix B</div>
+    <h1 class="chap">Files, shortcuts and glossary</h1>
+    <h2>Where things are saved</h2>
+    <table>
+      <tr><th style="width:24%">Item</th><th>Normal installation</th></tr>
+      <tr><td>Database, photos</td><td><code>%LOCALAPPDATA%\com.alphapremier.attendance\</code> (<code>attendance.db</code>, <code>photos\</code>)</td></tr>
+      <tr><td>Backups</td><td><code>…\com.alphapremier.attendance\backups\</code></td></tr>
+      <tr><td>Payroll PDFs</td><td><code>…\com.alphapremier.attendance\exports\</code></td></tr>
+      <tr><td>Settings (IT)</td><td><code>%APPDATA%\com.alphapremier.attendance\config.toml</code></td></tr>
+    </table>
+    <p class="small">Portable copies (a <code>portable.dat</code> file next to the program) keep everything in a <code>Data\</code> folder beside the <code>.exe</code>. Paste a path into the File Explorer address bar to open it.</p>
+
+    <h2>Keyboard shortcuts</h2>
+    <table>
+      <tr><th style="width:24%">Key</th><th>Where</th><th>Action</th></tr>
+      <tr><td><span class="kbd">1</span></td><td>Kiosk, Admin</td><td>Attendance mode</td></tr>
+      <tr><td><span class="kbd">2</span></td><td>Kiosk, Admin</td><td>Bathroom Key Log mode</td></tr>
+      <tr><td><span class="kbd">Enter</span></td><td>Manual entry, unlock boxes</td><td>Record / unlock</td></tr>
+      <tr><td><span class="kbd">Esc</span></td><td>Pop-up windows</td><td>Close the window</td></tr>
+    </table>
+
+    <h2>Glossary</h2>
+    <table>
+      <tr><th style="width:24%">Term</th><th>Meaning</th></tr>
+      <tr><td>Admin RFID card</td><td>A card that unlocks admin and assists others; it never records its own attendance.</td></tr>
+      <tr><td>Assisted</td><td>Attendance recorded by an admin card for someone without a working card.</td></tr>
+      <tr><td>Backdated</td><td>A past day added with <b>Add missed attendance</b>, with a reason.</td></tr>
+      <tr><td>Cutoff</td><td>A pay period: 1st–15th or 16th–last day of the month.</td></tr>
+      <tr><td>DTR</td><td>Daily Time Record — the optional Google Sheets copy.</td></tr>
+      <tr><td>Draft / Finalized</td><td>Payroll that can still be edited / payroll that is frozen for editing.</td></tr>
+      <tr><td>Kiosk</td><td>The always-on tap screen at the front desk.</td></tr>
+      <tr><td>LAN viewer</td><td>The read-only attendance page for devices on the office Wi-Fi.</td></tr>
+      <tr><td>LWOP</td><td>Leave without pay (absent days) in the payroll table.</td></tr>
+      <tr><td>RFID UID</td><td>The number stored on a card, usually 10 digits.</td></tr>
+      <tr><td>Standard days</td><td>Working days expected in a cutoff (weekdays minus holidays).</td></tr>
+      <tr><td>Tray</td><td>The icons beside the Windows clock, where the hidden app lives.</td></tr>
+    </table>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<!-- ============ QUICK REFERENCE ============ -->
+<section class="page" id="qrc">
+  <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>Quick Reference Card</b></div>
+  <div class="page-body">
+    <h1 class="chap" style="margin-bottom:1mm">Quick Reference Card</h1>
+    <p class="lede">Print this page and keep it at the front desk.</p>
+    <div class="qr">
+      <h2>Interns — every day</h2>
+      <ol class="steps">
+        <li><b>Arrive:</b> tap your card once. Check your photo and "Time In recorded successfully."</li>
+        <li><b>Leave (before 6:00 PM):</b> tap again. Check "Time Out recorded successfully."</li>
+        <li><b>Restroom key:</b> press <span class="kbd">2</span>, tap to take the key, tap again to return it, press <span class="kbd">1</span>.</li>
+        <li><b>Forgot your card?</b> Ask an administrator for an assisted time in. Never use someone else's card.</li>
+      </ol>
+    </div>
+    <div class="qr">
+      <h2>Front desk — if something goes wrong</h2>
+      <table>
+        <tr><td style="width:40%"><b>Tap does nothing</b></td><td>Click the kiosk window, tap again. Replug the reader.</td></tr>
+        <tr><td><b>"Not registered"</b></td><td>Admin clicks <b>Setup this card</b>.</td></tr>
+        <tr><td><b>"Scanned too recently"</b></td><td>Already saved — do nothing.</td></tr>
+        <tr><td><b>Reader broken</b></td><td><b>Manual entry</b> → type card number → <span class="kbd">Enter</span>.</td></tr>
+        <tr><td><b>Window disappeared</b></td><td>Click the tray icon by the clock.</td></tr>
+      </table>
+    </div>
+    <div class="qr">
+      <h2>Administrators — routine</h2>
+      <table>
+        <tr><td style="width:40%"><b>Daily</b></td><td>Attendance corrections → <b>Late Time-out</b> chip → fix and <b>Save</b>. Lock when done.</td></tr>
+        <tr><td><b>Each cutoff (16th &amp; 1st)</b></td><td>Fix attendance → Payroll → month + half → adjust Standard days for holidays → <b>Generate</b> → review → <b>Finalize</b> → <b>Generate Intern Payroll PDF</b>.</td></tr>
+        <tr><td><b>Weekly</b></td><td>Data and backup → <b>Create backup now</b> → copy to USB.</td></tr>
+        <tr><td><b>New intern</b></td><td>Kiosk → <b>Admin setup</b> → unlock → tap card → fill details incl. gender → <b>Save user</b>.</td></tr>
+        <tr><td><b>Intern leaves</b></td><td>Users → <b>Edit</b> → Status <b>Inactive</b> → Save (don't delete).</td></tr>
+        <tr><td><b>Forgot PIN</b></td><td>Tap admin card, or <b>Forgot PIN?</b> → code from company inbox.</td></tr>
+      </table>
+    </div>
+    <p class="small">Office hours 8:00 AM–5:00 PM · Lunch 12–1 unpaid · PHP 80/day · Late &amp; undertime PHP 10/hour · Half day PHP 40 · Admin session 15 min.</p>
+  </div>
+  <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
+</section>
+
+<script>
+  // Fill the table of contents with the page number of each target section.
+  const pages = [...document.querySelectorAll('.page')];
+  for (const li of document.querySelectorAll('#toc li')) {
+    const target = document.querySelector(li.querySelector('a').getAttribute('href'));
+    const page = target && target.closest('.page');
+    li.querySelector('.pg').textContent = page ? String(pages.indexOf(page) + 1) : '?';
+  }
+</script>
+</body>
+</html>

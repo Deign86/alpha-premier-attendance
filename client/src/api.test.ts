@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, setupErrorFrom, submitScan, unlockAdmin, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
 afterEach(() => {
@@ -379,3 +379,52 @@ describe('pollVoiceClipReady', () => {
   });
 });
 
+
+describe('readable native errors (manual audit)', () => {
+  const desktop = () => Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+  afterEach(() => {
+    // SAFETY: test-only removal of the Tauri marker installed by desktop().
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it('maps a rejected attendance save to a coded, readable error instead of throwing', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'adminUpdateAttendance').mockRejectedValueOnce('ATTENDANCE_CONFLICT');
+    await expect(saveAdminAttendance('ATT-1', { timeOut: null })).resolves.toEqual({
+      success: false,
+      error: { code: 'ATTENDANCE_CONFLICT', message: expect.stringContaining('changed by another update') },
+    });
+    vi.spyOn(tauriApi, 'adminUpdateAttendance').mockRejectedValueOnce('ADMIN_VALIDATION_ERROR');
+    await expect(saveAdminAttendance('ATT-1', {})).resolves.toMatchObject({ error: { message: 'The date or time is not valid. Check the times and try again.' } });
+  });
+
+  it('shows a sentence, not INVALID_ADMIN_PIN, when the kiosk Admin setup unlock fails', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('INVALID_ADMIN_PIN');
+    await expect(unlockSetup('000000')).resolves.toMatchObject({ success: false, error: { message: 'The administrator PIN or admin RFID card is invalid.' } });
+  });
+
+  it('says admin access is off when config disables it', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_DISABLED');
+    await expect(unlockAdmin('123987')).resolves.toMatchObject({ success: false, error: { message: 'Administrator access is turned off on this kiosk.' } });
+  });
+
+  it('explains a payroll PDF request for a cutoff with no records', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'generatePayrollPdf').mockRejectedValueOnce('NO_PAYROLL_RECORDS: No intern payroll records for X. Create and save an intern payroll for this cutoff first.');
+    await expect(generatePayrollPdf({ cutoffStart: '2026-10-01', cutoffEnd: '2026-10-15', workerType: 'intern' })).resolves.toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('Generate the cutoff payroll first') },
+    });
+  });
+
+  it('splits the code off native bathroom errors so only the sentence is shown', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'bathroomUpdateLog').mockRejectedValueOnce('BATHROOM_KEY_ALREADY_CHECKED_OUT: The MALE bathroom key is currently checked out by Sam Santos.');
+    await expect(updateBathroomLog('bath-1', { timeOut: '2026-08-31T10:00:00+08:00', timeIn: null, notes: '' })).resolves.toEqual({
+      success: false,
+      error: { code: 'BATHROOM_KEY_ALREADY_CHECKED_OUT', message: 'The MALE bathroom key is currently checked out by Sam Santos.' },
+    });
+  });
+});

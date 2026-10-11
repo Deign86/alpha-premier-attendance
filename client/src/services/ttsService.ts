@@ -488,6 +488,10 @@ export function buildScanErrorPhrase({
     return 'Admin cards cannot check out bathroom keys.';
   }
 
+  if (errorCode === 'GENDER_NOT_SET') {
+    return 'Gender is not set for this card. Please ask an administrator.';
+  }
+
   if (errorCode === 'ADMIN_CARD_REQUIRES_SELECTION') {
     return 'Admin card requires employee selection.';
   }

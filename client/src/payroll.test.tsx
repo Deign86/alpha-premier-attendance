@@ -261,17 +261,31 @@ describe("PayrollWorkspace", () => {
     const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
     generatePayrollCutoffSpy.mockResolvedValueOnce({ success: true });
     const user = userEvent.setup();
-    renderWorkspace([record({ payrollId: "P-001", status: "DRAFT" })]);
+    renderWorkspace([
+      record({ payrollId: "P-001", status: "DRAFT" }),
+      record({ payrollId: "P-002", employeeId: "EMP-002", status: "FINALIZED" }),
+    ]);
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     expect(screen.getByRole("dialog", { name: "Regenerate cutoff payroll?" })).toBeInTheDocument();
-    expect(screen.getByText(/Generating new payroll will replace these existing records with fresh calculations/i)).toBeInTheDocument();
+    expect(screen.getByText(/replace the draft records with fresh calculations from latest attendance; finalized records are kept/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Confirm/i }));
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
       expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
     });
+    // Approved pay is never deleted by a regenerate.
+    expect(deletePayrollCutoffSpy).not.toHaveBeenCalledWith("P-002");
+  });
+
+  it("states that late time-outs are paid up to 17:00 when generating new drafts", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([]);
+    await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+    expect(screen.getByText(/late time-outs are paid up to 17:00/i)).toBeInTheDocument();
+    expect(screen.queryByText(/will not be paid/i)).not.toBeInTheDocument();
   });
 
   it("opens the edit dialog on a draft intern record and saves the manual adjustment", async () => {
