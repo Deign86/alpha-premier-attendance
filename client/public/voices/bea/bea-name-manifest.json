@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-09-14T14:51:14.879Z",
+  "generatedAt": "2026-10-12T02:32:03.496Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -313,6 +313,16 @@
       "audioFile": "/voices/bea/names/APG-2026-120.mp3",
       "generatedAt": "2026-09-14T14:51:14.879Z",
       "audioHash": "2b77a8a2c6cdd1663749ac25ba247be9637c8020a171380dfade54aee8771a18"
+    },
+    "APG-2026-121": {
+      "personId": "APG-2026-121",
+      "displayName": "Johnmare Raphael J. Rodriguez",
+      "normalizedSpeechText": "Johnmare Raphael Rodriguez",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-121.mp3",
+      "generatedAt": "2026-10-12T02:32:03.496Z",
+      "audioHash": "be9f664a1a2de63ff0c39286dc958153ff41adcc0c41bf1a9b840cc870fd79da"
     }
   }
 }
