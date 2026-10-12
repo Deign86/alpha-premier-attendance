@@ -73,6 +73,7 @@ export type BatchGeneratorOptions = {
 
 export const CUSTOM_PRONUNCIATION_OVERRIDES: Record<string, string> = {
   // 'PERSON_ID': 'Phonetic Spoken Name'
+  'APG-2026-121': 'John Ma-rey Raphael Rodriguez',
 };
 
 export function normalizePronunciation(rawName: string, personId?: string): string {
