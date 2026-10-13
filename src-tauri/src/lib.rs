@@ -473,7 +473,7 @@ async fn admin_upsert_user_inner(
     if should_enqueue_voice_job(card_type, employee_type, status) {
         crate::services::voice_pull::enqueue_voice_job(&state.db, &user_id, &full_name, &now).await;
     }
-    if employee_type.to_uppercase() == "INTERN" && status.to_uppercase() == "ACTIVE" {
+    if !is_assist && employee_type.to_uppercase() == "INTERN" && status.to_uppercase() == "ACTIVE" {
         let _ = sqlx::query(
             "INSERT INTO dtr_pending (user_id, full_name, first_seen, last_checked, attempts) VALUES (?, ?, ?, NULL, 0) ON CONFLICT(user_id) DO UPDATE SET full_name = excluded.full_name",
         )
@@ -7467,6 +7467,41 @@ mod tests {
         // Verify resolve_user_photo_url now returns None
         let resolved = super::resolve_user_photo_url(&state.data_dir, user_id, None);
         assert_eq!(resolved, None);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn admin_assist_registration_is_not_queued_for_dtr() {
+        let temp = std::env::temp_dir().join(format!("alpha-assist-dtr-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(temp.join("exports")).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        super::admin_upsert_user_inner(&state, serde_json::json!({ "rfidUid": "ADA001", "cardType": "ADMIN_ASSIST", "status": "ACTIVE" }))
+            .await
+            .unwrap();
+        super::admin_upsert_user_inner(&state, serde_json::json!({ "userId": "APG-T-1", "rfidUid": "INT001", "fullName": "Test Intern", "status": "ACTIVE" }))
+            .await
+            .unwrap();
+
+        let pending: Vec<String> = sqlx::query_scalar("SELECT user_id FROM dtr_pending ORDER BY user_id")
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(pending, vec!["APG-T-1".to_string()]);
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);

@@ -431,7 +431,7 @@ pub async fn run_reconciliation(state: &AppState, report_only: bool) -> Result<S
     let client = sheets_client();
 
     // Roster query: active interns
-    let interns = sqlx::query("SELECT user_id, full_name FROM users WHERE status = 'ACTIVE' AND employee_type = 'INTERN' ORDER BY full_name")
+    let interns = sqlx::query("SELECT user_id, full_name FROM users WHERE status = 'ACTIVE' AND employee_type = 'INTERN' AND (card_type IS NULL OR card_type != 'ADMIN_ASSIST') ORDER BY full_name")
         .fetch_all(&state.db)
         .await
         .map_err(|e| e.to_string())?;

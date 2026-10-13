@@ -1700,7 +1700,7 @@ fn tab_name_overlaps_user(tab_titles: &[String], full_name: &str) -> bool {
 /// calls, since roster state can change between enqueue and push).
 async fn user_is_active_intern(state: &AppState, user_id: &str) -> Result<bool, String> {
     let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT status, employee_type FROM users WHERE user_id = ?",
+        "SELECT status, employee_type FROM users WHERE user_id = ? AND (card_type IS NULL OR card_type != 'ADMIN_ASSIST')",
     )
     .bind(user_id)
     .fetch_optional(&state.db)
@@ -3094,7 +3094,7 @@ pub async fn manual_sync_intern_dtr(
     let roster = active_roster(state).await?;
 
     let interns: Vec<(String, String)> = if let Some(target_id) = target_user_id {
-        sqlx::query("SELECT user_id, full_name FROM users WHERE user_id = ? AND employee_type = 'INTERN' AND status = 'ACTIVE'")
+        sqlx::query("SELECT user_id, full_name FROM users WHERE user_id = ? AND employee_type = 'INTERN' AND status = 'ACTIVE' AND (card_type IS NULL OR card_type != 'ADMIN_ASSIST')")
             .bind(target_id)
             .fetch_all(&state.db)
             .await
@@ -3103,7 +3103,7 @@ pub async fn manual_sync_intern_dtr(
             .map(|r| (r.get("user_id"), r.get("full_name")))
             .collect()
     } else {
-        sqlx::query("SELECT user_id, full_name FROM users WHERE employee_type = 'INTERN' AND status = 'ACTIVE' ORDER BY full_name ASC")
+        sqlx::query("SELECT user_id, full_name FROM users WHERE employee_type = 'INTERN' AND status = 'ACTIVE' AND (card_type IS NULL OR card_type != 'ADMIN_ASSIST') ORDER BY full_name ASC")
             .fetch_all(&state.db)
             .await
             .map_err(|e| e.to_string())?
