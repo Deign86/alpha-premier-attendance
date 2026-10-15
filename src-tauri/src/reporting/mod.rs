@@ -155,6 +155,20 @@ mod tests {
         assert_eq!(intern_rows[0].gross_compensation_centavos, 87_000);
         // This fixture row carries only a late deduction (half-day is 0).
         assert_eq!(intern_rows[0].undertime_deduction_centavos, 0);
+        // Stored half-day deduction combines half-days and undertime: 2 half-days at
+        // PHP 80/day = PHP 80, leaving PHP 100 of undertime out of PHP 180.
+        sqlx::query(
+            "UPDATE payroll_cutoffs SET half_day_count = 2, half_day_deduction_centavos = 18000 \
+             WHERE payroll_id = 'P-INT'",
+        )
+        .execute(&db)
+        .await
+        .expect("half-day fixture");
+        let split_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "INTERN")
+            .await
+            .expect("intern sheet rows");
+        assert_eq!(split_rows[0].half_day_deduction_centavos, 8_000);
+        assert_eq!(split_rows[0].undertime_deduction_centavos, 10_000);
         let employee_rows = load_payroll_sheet_rows(&db, "2026-08-16", "2026-08-31", "EMPLOYEE")
             .await
             .expect("employee sheet rows");
@@ -2376,6 +2390,14 @@ pub async fn load_payroll_sheet_rows(
             let late_deduction_centavos = row.get::<i64, _>("late_deduction_centavos");
             let effective_late_deduction = late_deduction_centavos;
             let half_day_deduction_centavos = row.get::<i64, _>("half_day_deduction_centavos");
+            // The stored deduction is half-days (half the daily rate each) plus undertime;
+            // split it for the two sheet columns.
+            let half_day_only_centavos = ((daily_rate_centavos as f64
+                * row.get::<f64, _>("half_day_count")
+                * 0.5)
+                .round() as i64)
+                .clamp(0, half_day_deduction_centavos.max(0));
+            let undertime_deduction_centavos = half_day_deduction_centavos - half_day_only_centavos;
             let db_absent_days = row.get::<f64, _>("absent_days");
             let db_absence_deduction = row.get::<i64, _>("absence_deduction_centavos");
             let absent_days = if db_absent_days > 0.0 {
@@ -2417,8 +2439,8 @@ pub async fn load_payroll_sheet_rows(
                 basic_pay_centavos: row.get("basic_pay_centavos"),
                 total_compensation_centavos,
                 late_deduction_centavos: effective_late_deduction,
-                half_day_deduction_centavos,
-                undertime_deduction_centavos: half_day_deduction_centavos,
+                half_day_deduction_centavos: half_day_only_centavos,
+                undertime_deduction_centavos,
                 absence_deduction_centavos,
                 gross_compensation_centavos,
             }
