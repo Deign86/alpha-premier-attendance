@@ -811,8 +811,11 @@ describe('RFID kiosk', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.includes('/api/config')) {
+        // Long auto-submit delay: on a slow CI runner a 30ms gap mid-typing
+        // looked up "ABCD" early and sent "1234" into the User ID field. The
+        // test submits the card with Enter, so auto-submit must not fire.
         // SAFETY: Fetch returns config Response mock
-        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 5_000, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
       }
       if (url.includes('/api/setup/unlock')) {
         // SAFETY: Fetch returns unlock Response mock
