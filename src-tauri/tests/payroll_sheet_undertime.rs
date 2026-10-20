@@ -3,6 +3,8 @@
 // environment (the lib test binary fails to load native deps), so this
 // harness includes the reporting module directly, mirroring
 // intern_payroll_isolated.rs to avoid Tauri/WebView2 in the test process.
+// include!d app sources: items only the app (not this harness) uses are expected to be unused here.
+#[allow(dead_code)]
 mod config {
     #[derive(Debug, Clone)]
     pub struct OfficeConfig {
@@ -33,6 +35,8 @@ mod config {
     }
 }
 
+// include!d app sources: items only the app (not this harness) uses are expected to be unused here.
+#[allow(dead_code)]
 mod services {
     pub mod payroll {
         include!("../src/services/payroll.rs");
@@ -43,6 +47,8 @@ mod services {
     }
 }
 
+// include!d app sources: items only the app (not this harness) uses are expected to be unused here.
+#[allow(dead_code)]
 mod reporting {
     include!("../src/reporting/mod.rs");
 }

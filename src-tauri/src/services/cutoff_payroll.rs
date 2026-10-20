@@ -2,7 +2,6 @@
 pub struct CutoffInput {
     pub employee_id: String,
     pub employee_name: String,
-    pub employee_type: String,
     pub cutoff_start: String,
     pub cutoff_end: String,
     pub daily_rate: f64,
@@ -311,7 +310,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "e".into(),
             employee_name: "A".into(),
-            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-07-01".into(),
             cutoff_end: "2026-07-15".into(),
             daily_rate: 1000.0,
@@ -355,7 +353,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APGCO-25-013".into(),
             employee_name: "CHICO, JEAN ASHLEY".into(),
-            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-06-01".into(),
             cutoff_end: "2026-06-15".into(),
             daily_rate: 705.0,
@@ -412,7 +409,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-102".into(),
             employee_name: "Deign Grey O. Lazaro".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-16".into(),
             cutoff_end: "2026-08-31".into(),
             daily_rate: 80.0,
@@ -459,7 +455,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-103".into(),
             employee_name: "Alex Cruz".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-16".into(),
             cutoff_end: "2026-08-31".into(),
             daily_rate: 80.0,
@@ -506,7 +501,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-104".into(),
             employee_name: "Test Intern 10 Days".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-01".into(),
             cutoff_end: "2026-08-15".into(),
             daily_rate: 80.0,
@@ -554,7 +548,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-105".into(),
             employee_name: "Test Intern 12 Days".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-07-16".into(),
             cutoff_end: "2026-07-31".into(),
             daily_rate: 80.0,
@@ -603,7 +596,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-106".into(),
             employee_name: "Zero Attendance".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-01".into(),
             cutoff_end: "2026-08-15".into(),
             daily_rate: 80.0,
@@ -658,7 +650,6 @@ mod tests {
         let base = CutoffInput {
             employee_id: "X".into(),
             employee_name: "X".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-01".into(),
             cutoff_end: "2026-08-15".into(),
             daily_rate: 80.0,
@@ -703,7 +694,6 @@ mod tests {
             let result = calculate(&CutoffInput {
                 employee_id: "e".into(),
                 employee_name: "A".into(),
-                employee_type: "EMPLOYEE".into(),
                 cutoff_start: start.into(),
                 cutoff_end: end.into(),
                 daily_rate: 1000.0,
@@ -746,7 +736,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-119".into(),
             employee_name: "Melanie F. Garcia".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-09-16".into(),
             cutoff_end: "2026-09-17".into(),
             daily_rate: 80.0,
@@ -793,7 +782,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "INTERN-UNDERTIME".into(),
             employee_name: "Two Hour Undertime".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-09-01".into(),
             cutoff_end: "2026-09-15".into(),
             daily_rate: 80.0,
@@ -836,7 +824,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "EMP-HALF-DAY".into(),
             employee_name: "Half Day Employee".into(),
-            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-09-01".into(),
             cutoff_end: "2026-09-15".into(),
             daily_rate: 1_000.0,
@@ -879,7 +866,6 @@ mod tests {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-115".into(),
             employee_name: "Allaena Nicole E. Vizon".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-09-16".into(),
             cutoff_end: "2026-09-21".into(),
             daily_rate: 80.0,

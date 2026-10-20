@@ -72,16 +72,9 @@ pub fn start_single_instance_listener(
     });
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseBehavior {
-    HideToTray,
-    Exit,
-}
-
-pub fn should_hide_on_close(behavior: CloseBehavior, tray_available: bool) -> bool {
-    matches!(behavior, CloseBehavior::HideToTray)
-        && tray_available
-        && !EXIT_REQUESTED.load(Ordering::SeqCst)
+/// Closing the window hides it to the tray unless an exit was requested.
+pub fn should_hide_on_close(tray_available: bool) -> bool {
+    tray_available && !EXIT_REQUESTED.load(Ordering::SeqCst)
 }
 
 pub fn request_exit(app: &tauri::AppHandle) {
@@ -460,14 +453,13 @@ pub fn ensure_default_autostart(app: &tauri::AppHandle, config_dir: &std::path::
 mod tests {
     use super::{
         decide_autostart_action, expected_run_value, normalize_run_value, should_hide_on_close,
-        AutostartAction, CloseBehavior,
+        AutostartAction,
     };
 
     #[test]
     fn default_close_behavior_hides_only_when_tray_is_available() {
-        assert!(should_hide_on_close(CloseBehavior::HideToTray, true));
-        assert!(!should_hide_on_close(CloseBehavior::HideToTray, false));
-        assert!(!should_hide_on_close(CloseBehavior::Exit, true));
+        assert!(should_hide_on_close(true));
+        assert!(!should_hide_on_close(false));
     }
 
     #[test]

@@ -89,6 +89,8 @@ pub fn policy_for_date(attendance_date: &str) -> PolicyVersion {
     }
 }
 
+/// Test-only: the shared payroll fixtures replay weekly grace per date.
+#[cfg(test)]
 pub fn is_no_grace_date(attendance_date: &str) -> bool {
     policy_for_date(attendance_date) == PolicyVersion::V2NoGrace
 }

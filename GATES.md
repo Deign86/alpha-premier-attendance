@@ -1439,3 +1439,14 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo check --manifest-path src-tauri/Cargo.toml --tests
   EXPECT: all pass.
   EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (4 + 20 + 20 test files passed); cargo check --tests Finished, exit 0; Rust harnesses admin_pin_isolated 11, cutoff_freeze 18, intern_payroll_isolated 69, intern_payslips 38, payroll_hours_accuracy 52, payroll_sheet_undertime 27 — 215 passed, 0 failed.
+
+## Dead-code cleanup (2026-10-20)
+
+- [x] No compiler warnings from dead code; nothing live removed. Retired, unregistered employee export commands (`export_payroll_xlsx`, `generate_payroll_payslip_pdf`, `generate_payroll_register_pdf`) and the reporting code only they used are gone, plus unused payroll helpers, `CutoffInput.employee_type`, and `CloseBehavior`. `is_no_grace_date` is test-only (`#[cfg(test)]`); VoiceStudio status structs keep their camelCase JSON via `#[serde(rename_all = "camelCase")]`.
+  CHECK: cargo check --manifest-path src-tauri/Cargo.toml --tests --all-targets
+  EXPECT: no `warning:` lines except the local build-script note about the embedded Sheets key.
+  EVIDENCE: exit 0, only "embedded service-account fallback DISABLED" (was 19 lib warnings in the release build).
+- [x] Behaviour unchanged.
+  CHECK: cargo test (6 harnesses) && npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass; only tests of removed code dropped.
+  EVIDENCE: harnesses 11 + 18 + 69 + 34 + 52 + 23 = 207 passed (4 removed tests covered deleted employee payslip/workbook code); oxlint 0, typecheck 0; npm test 39 + 395 + 287 passed.

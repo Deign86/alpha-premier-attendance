@@ -1,5 +1,7 @@
 // Keep focused payroll tests runnable without loading the app's Tauri/WebView2
 // native dependencies into the Windows test process.
+// include!d app sources: items only the app (not this harness) uses are expected to be unused here.
+#[allow(dead_code)]
 mod services {
     pub mod payroll {
         include!("../src/services/payroll.rs");

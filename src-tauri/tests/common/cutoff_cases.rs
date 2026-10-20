@@ -19,7 +19,6 @@ pub fn to_cutoff_input(input: &Value) -> CutoffInput {
     CutoffInput {
         employee_id: string("employeeId"),
         employee_name: string("employeeName"),
-        employee_type: string("employeeType"),
         cutoff_start: string("cutoffStart"),
         cutoff_end: string("cutoffEnd"),
         daily_rate: number("dailyRate"),

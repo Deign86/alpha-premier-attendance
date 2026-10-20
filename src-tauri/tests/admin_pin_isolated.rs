@@ -1,4 +1,6 @@
 // Admin PIN reset rules, runnable on Windows without loading Tauri/WebView2.
+// include!d app sources: items only the app (not this harness) uses are expected to be unused here.
+#[allow(dead_code)]
 mod services {
     #[allow(dead_code)] // mailer helpers are exercised only by the app
     pub mod admin_pin {

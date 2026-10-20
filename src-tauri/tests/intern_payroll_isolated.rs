@@ -1,5 +1,7 @@
 // Keep focused payroll tests runnable without loading the app's Tauri/WebView2
 // native dependencies into the Windows test process.
+// include!d app sources: items only the app (not this harness) uses are expected to be unused here.
+#[allow(dead_code)]
 mod services {
     pub mod payroll {
         include!("../src/services/payroll.rs");
@@ -67,7 +69,7 @@ async fn september_cutoff_seed_persists_backend_calculations_to_sqlite() {
             .execute(&pool).await.unwrap();
     }
     let intern_cutoff = calculate(&CutoffInput {
-        employee_id: "INT-SEP".into(), employee_name: "September Intern".into(), employee_type: "INTERN".into(),
+        employee_id: "INT-SEP".into(), employee_name: "September Intern".into(),
         cutoff_start: "2026-09-01".into(), cutoff_end: "2026-09-15".into(), daily_rate: 80.0,
         standard_working_days: 11.0, actual_working_days: 10.0, basic_pay: None,
         special_holiday_days: 0.0, special_holiday_multiplier: 0.0, special_holiday_pay: None,
@@ -250,7 +252,6 @@ fn september_intern_time_seed_matches_fixed_nine_clamp_and_cutoff_cases() {
     let cutoff = calculate_cutoff(&CutoffInput {
         employee_id: "INT-SEP-SEED".into(),
         employee_name: "September Intern Seed".into(),
-        employee_type: "INTERN".into(),
         cutoff_start: "2026-09-01".into(),
         cutoff_end: "2026-09-15".into(),
         daily_rate: 80.0,
@@ -372,7 +373,6 @@ fn september_intern_edge_attendance_matches_weekly_grace_and_cutoff_totals() {
         let cutoff = services::cutoff_payroll::calculate(&services::cutoff_payroll::CutoffInput {
             employee_id: (*employee_id).into(),
             employee_name: "Intern edge set".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-09-01".into(),
             cutoff_end: "2026-09-15".into(),
             daily_rate: 80.0,

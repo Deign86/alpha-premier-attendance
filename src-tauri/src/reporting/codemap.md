@@ -11,9 +11,9 @@
 ## Flow
 - Export command in `lib.rs` loads attendance via `load_attendance_rows(db, date)` or payroll records via payroll loaders, then calls the appropriate generator with `OfficeConfig` and managed export path.
 - Attendance row loading computes paid hours through `services::lunch_break`; timestamps become Manila time before the XLSX writer adds metadata, headers, and rows.
-- Payroll export loads cutoff records, then generates registers, payslips, or payroll sheets in XLSX/PDF; caller tracks resulting artifact/job metadata.
+- Payroll export is intern-only: `load_payroll_sheet_rows` feeds `generate_payroll_sheet_pdf`, and `load_intern_payslips` feeds `write_intern_payslip_images`; the retired employee payroll workbook, register PDF, and employee payslip PDF generators no longer exist.
 
 ## Integration
 - Callers are Tauri export commands in `lib.rs`; persistence is read through the shared SQLx SQLite pool and office identity comes from `config::OfficeConfig`.
 - Output files live in the app's exports directory and are opened/downloaded by the WebView through Tauri file handling; tests exercise formatting and actual document output.
-- The embedded phoenix logo is compiled from `assets/logo_phoenix.png`, so PDF/workbook generation does not rely on runtime resource lookup.
+- The embedded phoenix logo is compiled from `assets/logo_phoenix.png`, so PDF generation does not rely on runtime resource lookup.

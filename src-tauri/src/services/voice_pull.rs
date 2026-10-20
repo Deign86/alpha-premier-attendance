@@ -221,25 +221,27 @@ pub struct VoiceConnectionStatus {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VoiceClipState {
-    pub personId: String,
-    pub workerClip: bool,
-    pub jobStatus: Option<String>,
+    pub person_id: String,
+    pub worker_clip: bool,
+    pub job_status: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VoiceWorkerStatus {
     pub active: i64,
     pub retry: i64,
-    pub lastPersonId: Option<String>,
-    pub lastCompletedAt: Option<String>,
-    pub lastSpokenText: Option<String>,
-    pub lastError: Option<String>,
+    pub last_person_id: Option<String>,
+    pub last_completed_at: Option<String>,
+    pub last_spoken_text: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct VoicePullSummary {
-    pub attemptedPersonId: Option<String>,
+    pub attempted_person_id: Option<String>,
     pub completed: bool,
 }
 
@@ -314,10 +316,10 @@ pub async fn worker_status(db: &SqlitePool) -> Result<VoiceWorkerStatus, String>
     Ok(VoiceWorkerStatus {
         active,
         retry,
-        lastPersonId: last_done.as_ref().map(|(id, _, _)| id.clone()),
-        lastSpokenText: last_done.as_ref().map(|(_, text, _)| text.clone()),
-        lastCompletedAt: last_done.map(|(_, _, at)| at),
-        lastError: last_error,
+        last_person_id: last_done.as_ref().map(|(id, _, _)| id.clone()),
+        last_spoken_text: last_done.as_ref().map(|(_, text, _)| text.clone()),
+        last_completed_at: last_done.map(|(_, _, at)| at),
+        last_error,
     })
 }
 
@@ -339,9 +341,9 @@ pub async fn clip_states(db: &SqlitePool, data_dir: &std::path::Path) -> Result<
                 .await
                 .map_err(|e| e.to_string())?;
         states.push(VoiceClipState {
-            workerClip: clip_path(data_dir, &person_id).is_file(),
-            jobStatus: job_status,
-            personId: person_id,
+            worker_clip: clip_path(data_dir, &person_id).is_file(),
+            job_status,
+            person_id,
         });
     }
     Ok(states)
@@ -396,7 +398,7 @@ pub async fn run_once(
     .await
     .map_err(|e| e.to_string())?;
     let Some(row) = row else {
-        return Ok(VoicePullSummary { attemptedPersonId: None, completed: false });
+        return Ok(VoicePullSummary { attempted_person_id: None, completed: false });
     };
     let person_id: String = row.get("person_id");
     let spoken_text: String = row.get("spoken_text");
@@ -411,7 +413,7 @@ pub async fn run_once(
     .await
     .map_err(|e| e.to_string())?;
     if claimed.rows_affected() != 1 {
-        return Ok(VoicePullSummary { attemptedPersonId: None, completed: false });
+        return Ok(VoicePullSummary { attempted_person_id: None, completed: false });
     }
 
     match pull_clip(db, data_dir, &person_id, &spoken_text).await {
@@ -428,9 +430,9 @@ pub async fn run_once(
             .await
             .map_err(|e| e.to_string())?;
             if done.rows_affected() == 0 {
-                return Ok(VoicePullSummary { attemptedPersonId: None, completed: false });
+                return Ok(VoicePullSummary { attempted_person_id: None, completed: false });
             }
-            Ok(VoicePullSummary { attemptedPersonId: Some(person_id), completed: true })
+            Ok(VoicePullSummary { attempted_person_id: Some(person_id), completed: true })
         }
         Err(error) => {
             let retry_at = chrono::Utc::now() + chrono::Duration::seconds(backoff_secs(attempts));
@@ -657,9 +659,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("alpha-voice-{}", uuid::Uuid::new_v4()));
         let states = clip_states(&db, &dir).await.unwrap();
         assert_eq!(states.len(), 1);
-        assert_eq!(states[0].personId, "APG-7");
-        assert!(!states[0].workerClip);
-        assert_eq!(states[0].jobStatus.as_deref(), Some("PENDING"));
+        assert_eq!(states[0].person_id, "APG-7");
+        assert!(!states[0].worker_clip);
+        assert_eq!(states[0].job_status.as_deref(), Some("PENDING"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -669,7 +671,7 @@ mod tests {
         let empty = worker_status(&db).await.unwrap();
         assert_eq!(empty.active, 0);
         assert_eq!(empty.retry, 0);
-        assert!(empty.lastPersonId.is_none());
+        assert!(empty.last_person_id.is_none());
         enqueue_voice_job(&db, "APG-7", "Ada", "2026-09-12T00:00:00Z").await;
         sqlx::query("UPDATE voice_jobs SET status = 'DONE', updated_at = '2026-09-12T01:00:00Z' WHERE person_id = 'APG-7'")
             .execute(&db)
@@ -682,14 +684,14 @@ mod tests {
         let status = worker_status(&db).await.unwrap();
         assert_eq!(status.active, 0);
         assert_eq!(status.retry, 1);
-        assert_eq!(status.lastError.as_deref(), Some("boom"));
+        assert_eq!(status.last_error.as_deref(), Some("boom"));
     }
 
     #[tokio::test]
     async fn run_once_is_noop_without_due_jobs() {
         let db = memory_db().await;
         let summary = run_once(&db, std::path::Path::new("/tmp")).await.unwrap();
-        assert!(summary.attemptedPersonId.is_none());
+        assert!(summary.attempted_person_id.is_none());
         assert!(!summary.completed);
     }
 
@@ -741,7 +743,7 @@ mod tests {
         enqueue_voice_job(&db, "APG-9", "Ma. Teresa Carandang", "2026-09-12T00:00:00Z").await;
         let dir = std::env::temp_dir().join(format!("alpha-voice-{}", uuid::Uuid::new_v4()));
         let summary = run_once(&db, &dir).await.unwrap();
-        assert_eq!(summary.attemptedPersonId.as_deref(), Some("APG-9"));
+        assert_eq!(summary.attempted_person_id.as_deref(), Some("APG-9"));
         assert!(summary.completed);
         let saved = std::fs::read(dir.join("voices").join("bea").join("names").join("APG-9.mp3")).unwrap();
         assert_eq!(saved.len(), 512);
@@ -813,7 +815,7 @@ mod tests {
             .unwrap();
         let dir = std::env::temp_dir().join(format!("alpha-voice-{}", uuid::Uuid::new_v4()));
         let summary = run_once(&db, &dir).await.unwrap();
-        assert_eq!(summary.attemptedPersonId.as_deref(), Some("APG-10"));
+        assert_eq!(summary.attempted_person_id.as_deref(), Some("APG-10"));
         assert!(summary.completed);
         let status: String =
             sqlx::query_scalar("SELECT status FROM voice_jobs WHERE person_id = 'APG-10'")

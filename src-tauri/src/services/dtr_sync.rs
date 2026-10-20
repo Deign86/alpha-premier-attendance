@@ -8,7 +8,7 @@
 //!   (`TOTAL HOURS`) and the `H:J` counters are formula territory.
 //! - Writes are idempotent: identical `B:E` cells are skipped (all four
 //!   cells are compared, so a WORKING → completed rewrite fills `E`).
-//! - DTR rows carry actual stamps only; payroll half-day (payroll.rs
+//! - DTR rows carry actual stamps only; payroll half-day (intern_payroll.rs
 //!   `is_half_day`) is derived separately from the same raw punches and
 //!   never feeds this row builder.
 //! - Interns with no tab yet are tracked in `dtr_pending`; the next
@@ -1053,7 +1053,7 @@ fn normalize_record(
 /// completed shift renders actual stamps grouped by morning/afternoon
 /// columns (`[in,out,'','']` if out<13:00, `['','',in,out]` if in>=12:00,
 /// else `[in,'','',out]`); working (no time-out) renders `[in,'','','']`.
-/// Payroll half-day (`is_half_day` in payroll.rs) is derived separately
+/// Payroll half-day (`is_half_day` in intern_payroll.rs) is derived separately
 /// from the same raw punches and must never feed this row builder.
 /// Late time-out auto-cap only: a clock-out at/after 18:00 Manila renders
 /// as 5:00 PM (overtime forbidden); everything before 18:00 renders actual.

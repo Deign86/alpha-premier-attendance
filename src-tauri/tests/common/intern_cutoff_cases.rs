@@ -19,7 +19,6 @@ pub fn run_intern_cutoff(scenario: &Value) -> Value {
     let cutoff = calculate(&CutoffInput {
         employee_id: "INT-GOLDEN".into(),
         employee_name: "Golden Intern".into(),
-        employee_type: "INTERN".into(),
         cutoff_start: scenario["cutoffStart"].as_str().expect("cutoffStart").into(),
         cutoff_end: scenario["cutoffEnd"].as_str().expect("cutoffEnd").into(),
         daily_rate: 80.0,

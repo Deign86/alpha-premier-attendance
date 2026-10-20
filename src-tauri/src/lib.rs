@@ -2761,7 +2761,6 @@ async fn payroll_generate_cutoff_impl(
         let input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: employee_id.clone(),
             employee_name: employee_name.clone(),
-            employee_type: employee_type.clone(),
             cutoff_start: cutoff_start.clone(),
             cutoff_end: cutoff_end.clone(),
             daily_rate: daily_rate_centavos as f64 / 100.0,
@@ -3438,11 +3437,6 @@ fn cutoff_input(value: &serde_json::Value) -> crate::services::cutoff_payroll::C
             .get("employeeName")
             .and_then(|v| v.as_str())
             .unwrap_or("")
-            .into(),
-        employee_type: value
-            .get("employeeType")
-            .and_then(|v| v.as_str())
-            .unwrap_or("EMPLOYEE")
             .into(),
         cutoff_start: value
             .get("cutoffStart")
@@ -4871,190 +4865,6 @@ async fn export_attendance_xlsx(
     Ok(serde_json::Value::Object(response))
 }
 
-#[tauri::command]
-async fn export_payroll_xlsx(
-    state: State<'_, AppState>,
-    token: String,
-    cutoff: Option<String>,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    let rows = crate::reporting::load_payroll_rows(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    let filtered = cutoff
-        .as_deref()
-        .map(|value| {
-            rows.iter()
-                .filter(|row| {
-                    row.cutoff_label == value
-                        || row.cutoff_start == value
-                        || row.cutoff_end == value
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or(rows);
-    let job_id = uuid::Uuid::new_v4().to_string();
-    let artifact_id = uuid::Uuid::new_v4().to_string();
-    let scope = cutoff.clone().unwrap_or_else(|| "all-cutoffs".to_string());
-    let file_name = crate::reporting::payroll_artifact_filename(&scope, &job_id[..8]);
-    let output_path = state.exports_dir.join(&file_name);
-    let relative_path = std::path::PathBuf::from("exports").join(&file_name);
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)")
-        .bind(&job_id).bind("PAYROLL_XLSX").bind(serde_json::json!({"cutoff":cutoff}).to_string()).bind("XLSX").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(filtered.len() as i64).bind(filtered.len() as i64).execute(&state.db).await.map_err(|e| e.to_string())?;
-    if let Err(error) = (|| {
-        std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
-            .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_workbook(&filtered, &scope, &state.office, &output_path)
-            .map_err(|e| e.to_string())
-    })() {
-        let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
-        return Err(error);
-    }
-    let bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let completed = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&job_id).bind("PAYROLL_XLSX").bind("XLSX").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    let metadata = generated_file_metadata(
-        &state,
-        &file_name,
-        &output_path,
-        "xlsx",
-        format!("Payroll workbook generated for {scope}."),
-    );
-    let mut response = metadata.as_object().cloned().unwrap_or_default();
-    response.insert("jobId".into(), serde_json::json!(job_id));
-    response.insert("artifactId".into(), serde_json::json!(artifact_id));
-    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
-    response.insert("sha256".into(), serde_json::json!(hash));
-    response.insert("rowCount".into(), serde_json::json!(filtered.len()));
-    Ok(serde_json::Value::Object(response))
-}
-
-#[tauri::command]
-async fn generate_payroll_payslip_pdf(
-    state: State<'_, AppState>,
-    token: String,
-    payroll_id: String,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    let payslip = crate::reporting::load_employee_payslip_by_id(&state.db, &payroll_id)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
-    let job_id = uuid::Uuid::new_v4().to_string();
-    let artifact_id = uuid::Uuid::new_v4().to_string();
-    let file_name = crate::reporting::payroll_pdf_filename(
-        &payslip.payroll_id,
-        &payslip.cutoff_label,
-        &job_id[..8],
-    );
-    let relative_path = std::path::PathBuf::from("exports").join(&file_name);
-    let output_path = state.exports_dir.join(&file_name);
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)").bind(&job_id).bind("PAYSLIP_PDF").bind(serde_json::json!({"payrollId":payroll_id}).to_string()).bind("PDF").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(1_i64).bind(1_i64).execute(&state.db).await.map_err(|e| e.to_string())?;
-    if let Err(error) = (|| {
-        std::fs::create_dir_all(output_path.parent().ok_or("EXPORT_PATH_ERROR")?)
-            .map_err(|e| e.to_string())?;
-        crate::reporting::generate_employee_payslip_document(
-            std::slice::from_ref(&payslip),
-            &payslip.cutoff_label,
-            &state.office,
-            &output_path,
-        )
-    })() {
-        let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
-        return Err(error);
-    }
-    let bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let completed = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&payslip.payroll_id).bind("PAYSLIP_PDF").bind("PDF").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    let metadata = generated_file_metadata(
-        &state,
-        &file_name,
-        &output_path,
-        "pdf",
-        format!("Payslip PDF generated for {}.", payslip.employee_name),
-    );
-    let mut response = metadata.as_object().cloned().unwrap_or_default();
-    response.insert("jobId".into(), serde_json::json!(job_id));
-    response.insert("artifactId".into(), serde_json::json!(artifact_id));
-    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
-    response.insert("sha256".into(), serde_json::json!(hash));
-    response.insert("status".into(), serde_json::json!(payslip.status));
-    Ok(serde_json::Value::Object(response))
-}
-
-#[tauri::command]
-async fn generate_payroll_register_pdf(
-    state: State<'_, AppState>,
-    token: String,
-    cutoff: Option<String>,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    let rows = crate::reporting::load_payroll_rows(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    let filtered = cutoff
-        .as_deref()
-        .map(|value| {
-            rows.iter()
-                .filter(|row| {
-                    row.cutoff_label == value
-                        || row.cutoff_start == value
-                        || row.cutoff_end == value
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or(rows);
-    let scope = cutoff.unwrap_or_else(|| "all-cutoffs".into());
-    let job_id = uuid::Uuid::new_v4().to_string();
-    let artifact_id = uuid::Uuid::new_v4().to_string();
-    let file_name = crate::reporting::payroll_register_pdf_filename(&scope, &job_id[..8]);
-    let output = state.exports_dir.join(&file_name);
-    let relative = std::path::PathBuf::from("exports").join(&file_name);
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO export_jobs (job_id,kind,scope_json,format,status,requested_at,app_version,row_count,progress_total) VALUES (?,?,?,?,?,?,?,?,?)").bind(&job_id).bind("PAYROLL_REGISTER_PDF").bind(serde_json::json!({"cutoff":scope}).to_string()).bind("PDF").bind("RUNNING").bind(&now).bind(env!("CARGO_PKG_VERSION")).bind(filtered.len() as i64).bind(filtered.len() as i64).execute(&state.db).await.map_err(|e| e.to_string())?;
-    if let Err(error) = (|| {
-        std::fs::create_dir_all(output.parent().ok_or("EXPORT_PATH_ERROR")?)
-            .map_err(|e| e.to_string())?;
-        crate::reporting::generate_payroll_register_pdf(&filtered, &scope, &state.office, &output)
-    })() {
-        let _ = sqlx::query("UPDATE export_jobs SET status='FAILED',completed_at=?,error_code='ARTIFACT_GENERATION_FAILED',error_message=? WHERE job_id=?").bind(chrono::Utc::now().to_rfc3339()).bind(&error).bind(&job_id).execute(&state.db).await;
-        return Err(error);
-    }
-    let bytes = std::fs::read(&output).map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let completed = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO generated_artifacts (artifact_id,job_id,document_id,kind,format,file_name,managed_relative_path,sha256,size_bytes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(&artifact_id).bind(&job_id).bind(&job_id).bind("PAYROLL_REGISTER_PDF").bind("PDF").bind(&file_name).bind(relative.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed).execute(&state.db).await.map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    let metadata = generated_file_metadata(
-        &state,
-        &file_name,
-        &output,
-        "pdf",
-        format!("Payroll register PDF generated for {scope}."),
-    );
-    let mut response = metadata.as_object().cloned().unwrap_or_default();
-    response.insert("jobId".into(), serde_json::json!(job_id));
-    response.insert("artifactId".into(), serde_json::json!(artifact_id));
-    response.insert("sizeBytes".into(), serde_json::json!(bytes.len()));
-    response.insert("sha256".into(), serde_json::json!(hash));
-    response.insert("rowCount".into(), serde_json::json!(filtered.len()));
-    Ok(serde_json::Value::Object(response))
-}
-
 /// A payroll sheet PDF is self-registered in the `payroll_pdfs` table (the
 /// Payroll tab history source) rather than `export_jobs`/`generated_artifacts`
 /// because `export_jobs.kind` is CHECK-constrained to the workbook/payslip
@@ -6349,7 +6159,7 @@ pub fn run() {
                         // Log-only: missing clips fall back to Piper speech.
                         Err(error) => log::warn!("voice pull pass failed: {error}"),
                         Ok(summary) => {
-                            if let Some(person_id) = summary.attemptedPersonId {
+                            if let Some(person_id) = summary.attempted_person_id {
                                 if summary.completed {
                                     log::info!("voice pull completed clip for {person_id}");
                                 }
@@ -6379,10 +6189,7 @@ pub fn run() {
                 let window_for_events = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        if !lifecycle::should_hide_on_close(
-                            lifecycle::CloseBehavior::HideToTray,
-                            true,
-                        ) {
+                        if !lifecycle::should_hide_on_close(true) {
                             return;
                         }
                         api.prevent_close();
@@ -7070,7 +6877,6 @@ mod tests {
         // One derivation, stored where the engine reads it.
         assert_eq!(input["employeeType"], "INTERN");
         let parsed = super::cutoff_input(&input);
-        assert_eq!(parsed.employee_type, "INTERN");
         // basic = 80/day x (1 actual + 10 absent) = 880; late=200 and absence=800
         // are separate deductions, while gross stays 880 (not net).
         let result = crate::services::cutoff_payroll::calculate(&parsed).expect("engine");
@@ -7084,7 +6890,6 @@ mod tests {
         let employee_input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: "EMP-1".into(),
             employee_name: "John Doe".into(),
-            employee_type: "EMPLOYEE".into(),
             cutoff_start: "2026-08-18".into(),
             cutoff_end: "2026-08-18".into(),
             daily_rate: 500.0,
@@ -7124,7 +6929,6 @@ mod tests {
         let intern_input = crate::services::cutoff_payroll::CutoffInput {
             employee_id: "INT-1".into(),
             employee_name: "Deign Grey O. Lazaro".into(),
-            employee_type: "INTERN".into(),
             cutoff_start: "2026-08-18".into(),
             cutoff_end: "2026-08-18".into(),
             daily_rate: 80.0,
