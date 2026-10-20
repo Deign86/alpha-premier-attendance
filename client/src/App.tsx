@@ -88,8 +88,10 @@ import {
   saveAdminUser,
   savePayrollCutoff,
   generatePayrollCutoff,
+  generateInternPayslipImages,
   generatePayrollPdf,
   loadPayrollPdfs,
+  openGeneratedDirectory,
   openGeneratedFile,
   revealGeneratedFile,
   startLanViewer,
@@ -5471,6 +5473,10 @@ export function PayrollWorkspace({
   const [pdfMessage, setPdfMessage] = useState("");
   const [generating, setGenerating] = useState(false);
   const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
+  const [payslipMessage, setPayslipMessage] = useState("");
+  const [payslipDirectory, setPayslipDirectory] = useState<string | null>(null);
+  const [payslipOpenMessage, setPayslipOpenMessage] = useState("");
+  const [generatingPayslips, setGeneratingPayslips] = useState(false);
 
   useEffect(() => {
     void loadPayrollPdfs().then((response) => {
@@ -5513,6 +5519,46 @@ export function PayrollWorkspace({
     } finally {
       setGenerating(false);
     }
+  };
+
+  const generatePayslips = async () => {
+    if (generatingPayslips) return;
+    setPayslipDirectory(null);
+    setPayslipOpenMessage("");
+    if (!selectedCutoff) {
+      setPayslipMessage(
+        "No payroll records to generate payslips for. Create and save a payroll first.",
+      );
+      return;
+    }
+    setGeneratingPayslips(true);
+    setPayslipMessage("");
+    try {
+      const response = await generateInternPayslipImages({
+        cutoffStart: selectedCutoff.cutoffStart,
+        cutoffEnd: selectedCutoff.cutoffEnd,
+        payrollCutoffLabel: selectedCutoff.label,
+      });
+      if (response.success) {
+        setPayslipDirectory(response.directoryPath);
+        setPayslipMessage(
+          `Saved ${response.fileCount} payslip image(s) for ${selectedCutoff.label}.`,
+        );
+      } else setPayslipMessage(response.error.message);
+    } catch (error) {
+      setPayslipMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate the payslips.",
+      );
+    } finally {
+      setGeneratingPayslips(false);
+    }
+  };
+
+  const openPayslipFolder = async (directoryPath: string) => {
+    const result = await openGeneratedDirectory(directoryPath);
+    setPayslipOpenMessage(result.ok ? "" : result.message);
   };
 
   return (
@@ -5602,6 +5648,25 @@ export function PayrollWorkspace({
             >
               {generating ? "Generating..." : "Generate Intern Payroll PDF"}
             </button>
+            <button
+              className="admin-button"
+              type="button"
+              onClick={() => void generatePayslips()}
+              disabled={generatingPayslips}
+            >
+              {generatingPayslips
+                ? "Generating payslips..."
+                : "Generate Intern Payslips"}
+            </button>
+            {payslipDirectory && (
+              <button
+                className="admin-button"
+                type="button"
+                onClick={() => void openPayslipFolder(payslipDirectory)}
+              >
+                Open payslip folder
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -5626,6 +5691,10 @@ export function PayrollWorkspace({
 
       {message && <p className="dashboard-alert">{message}</p>}
       {pdfMessage && <p className="dashboard-alert">{pdfMessage}</p>}
+      {payslipMessage && <p className="dashboard-alert">{payslipMessage}</p>}
+      {payslipOpenMessage && (
+        <p className="dashboard-alert">{payslipOpenMessage}</p>
+      )}
 
       <section className="payroll-table">
         <PayrollTable records={records} onFinalized={onSaved} />

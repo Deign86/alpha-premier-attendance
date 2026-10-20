@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { VoiceClipState } from '@rfid-attendance/shared';
+import type { InternPayslip, VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
+import * as payslipRenderer from './intern-payslip-image';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
 afterEach(() => {
@@ -426,5 +427,79 @@ describe('readable native errors (manual audit)', () => {
       success: false,
       error: { code: 'BATHROOM_KEY_ALREADY_CHECKED_OUT', message: 'The MALE bathroom key is currently checked out by Sam Santos.' },
     });
+  });
+});
+
+describe('generateInternPayslipImages', () => {
+  const request = { cutoffStart: '2026-10-01', cutoffEnd: '2026-10-15', payrollCutoffLabel: 'October 1-15, 2026' };
+  const payslip = (employeeId: string, employeeName: string): InternPayslip => ({
+    employeeId, employeeName, department: 'Marketing', designation: 'Intern', tin: '', bankName: '', accountNumber: '',
+    standardWorkingDays: 11, actualWorkingDays: 11, dailyRateCentavos: 50000, basicCentavos: 550000, grossSalaryCentavos: 550000,
+    adjustmentCentavos: 0, totalEarningsCentavos: 550000, absentCentavos: 0, lateCentavos: 0, halfdayCentavos: 0, undertimeCentavos: 0,
+    totalDeductionsCentavos: 0, netPayCentavos: 550000,
+  });
+  const saved = { success: true as const, directoryPath: 'C:/data/exports/payslips/October 1-15, 2026', fileCount: 2, fileNames: ['Ada Lovelace.png', 'Grace Hopper.png'], message: 'Saved.' };
+  const desktop = () => Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
+  afterEach(() => {
+    // SAFETY: test-only removal of the Tauri marker installed by desktop().
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it('renders every payslip in order and saves the images with the period label', async () => {
+    desktop();
+    const ada = payslip('INT-001', 'Ada Lovelace');
+    const grace = payslip('INT-002', 'Grace Hopper');
+    const data = { success: true as const, companyName: 'Alpha Premier', companyAddress: 'Makati City', payslips: [ada, grace] };
+    vi.spyOn(tauriApi, 'internPayslips').mockResolvedValueOnce(data);
+    const saveSpy = vi.spyOn(tauriApi, 'saveInternPayslipImages').mockResolvedValueOnce(saved);
+    const renderSpy = vi.spyOn(payslipRenderer, 'renderInternPayslipPng').mockImplementation(async (item) => `png-${item.employeeId}`);
+
+    await expect(generateInternPayslipImages(request)).resolves.toEqual(saved);
+
+    expect(tauriApi.internPayslips).toHaveBeenCalledWith('', '2026-10-01', '2026-10-15');
+    const header = { companyName: 'Alpha Premier', companyAddress: 'Makati City', periodLabel: 'October 1-15, 2026' };
+    expect(renderSpy.mock.calls).toEqual([[ada, header], [grace, header]]);
+    expect(saveSpy).toHaveBeenCalledWith('', 'October 1-15, 2026', [
+      { employeeId: 'INT-001', employeeName: 'Ada Lovelace', pngBase64: 'png-INT-001' },
+      { employeeId: 'INT-002', employeeName: 'Grace Hopper', pngBase64: 'png-INT-002' },
+    ]);
+  });
+
+  it('falls back to the cutoff dates when the label is blank', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'internPayslips').mockResolvedValueOnce({ success: true, companyName: 'Alpha Premier', companyAddress: '', payslips: [payslip('INT-001', 'Ada Lovelace')] });
+    const saveSpy = vi.spyOn(tauriApi, 'saveInternPayslipImages').mockResolvedValueOnce(saved);
+    vi.spyOn(payslipRenderer, 'renderInternPayslipPng').mockResolvedValue('png');
+
+    await generateInternPayslipImages({ ...request, payrollCutoffLabel: '  ' });
+
+    expect(saveSpy).toHaveBeenCalledWith('', '2026-10-01 to 2026-10-15', expect.any(Array));
+  });
+
+  it('explains a request for a cutoff with no payroll records', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'internPayslips').mockRejectedValueOnce('NO_PAYROLL_RECORDS: No intern payroll records for X.');
+    await expect(generateInternPayslipImages(request)).resolves.toEqual({
+      success: false,
+      error: { message: 'No payroll records exist for these cutoff dates. Generate the cutoff payroll first, then create the payslips.' },
+    });
+  });
+
+  it('tells the admin to unlock when the admin session has expired', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'internPayslips').mockRejectedValueOnce('ADMIN_AUTH_REQUIRED');
+    await expect(generateInternPayslipImages(request)).resolves.toMatchObject({ success: false, error: { message: expect.stringContaining('Administrator') } });
+  });
+
+  it('maps a rejected save to a generic message', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'internPayslips').mockResolvedValueOnce({ success: true, companyName: 'Alpha Premier', companyAddress: '', payslips: [payslip('INT-001', 'Ada Lovelace')] });
+    vi.spyOn(tauriApi, 'saveInternPayslipImages').mockRejectedValueOnce('PAYSLIP_WRITE_FAILED: disk full');
+    vi.spyOn(payslipRenderer, 'renderInternPayslipPng').mockResolvedValue('png');
+    await expect(generateInternPayslipImages(request)).resolves.toEqual({ success: false, error: { message: 'Unable to generate the payslips.' } });
+  });
+
+  it('returns a desktop-only message in web mode', async () => {
+    await expect(generateInternPayslipImages(request)).resolves.toEqual({ success: false, error: { message: 'Payslips are generated in the desktop application.' } });
   });
 });

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
+import type { AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
 
 export interface NativeHealthResponse {
   success: boolean;
@@ -69,6 +69,8 @@ export const tauriApi = {
   getHealth: () => invoke<NativeHealthResponse>('get_health'),
   generatePayrollPdf: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, workerType: string) => invoke<PayrollPdfGenerateResponse>('generate_payroll_pdf', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, workerType }),
   listPayrollPdfs: (token: string) => invoke<PayrollPdfListResponse>('list_payroll_pdfs', { token }),
+  internPayslips: (token: string, cutoffStart: string, cutoffEnd: string) => invoke<InternPayslipsResponse>('payroll_intern_payslips', { token, cutoffStart, cutoffEnd }),
+  saveInternPayslipImages: (token: string, payrollCutoffLabel: string, images: InternPayslipImage[]) => invoke<InternPayslipSaveResponse>('save_intern_payslip_images', { token, payrollCutoffLabel, images }),
   getAttendance: (date?: string) => invoke('get_attendance', { date }),
   bathroomGetStatus: (token?: string, date?: string) => invoke<BathroomStatusResponse>('bathroom_get_status', { token, date }),
   bathroomScanRfid: (rfidUid: string) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),

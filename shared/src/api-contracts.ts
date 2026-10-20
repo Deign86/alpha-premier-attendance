@@ -668,6 +668,47 @@ export type PayrollPdfGenerateResponse =
 export type PayrollPdfListResponse =
   | { success: true; payrollPdfs: PayrollPdfRecord[] }
   | { success: false; error: { message: string } };
+
+/**
+ * One intern payslip, built by the Tauri backend from the same payroll-sheet
+ * rows as the Intern Payroll PDF. Amounts are integer centavos.
+ */
+export type InternPayslip = {
+  employeeId: string;
+  employeeName: string;
+  department: string;
+  designation: string;
+  tin: string;
+  bankName: string;
+  accountNumber: string;
+  standardWorkingDays: number;
+  actualWorkingDays: number;
+  dailyRateCentavos: number;
+  /** Actual working days x daily rate; shown for reference, not summed (HR template). */
+  basicCentavos: number;
+  /** Standard working days x daily rate. */
+  grossSalaryCentavos: number;
+  /** Balances Total Earnings - Total Deductions to the stored net pay (manual adjustments, approved extra days). */
+  adjustmentCentavos: number;
+  totalEarningsCentavos: number;
+  absentCentavos: number;
+  lateCentavos: number;
+  halfdayCentavos: number;
+  undertimeCentavos: number;
+  totalDeductionsCentavos: number;
+  netPayCentavos: number;
+};
+
+export type InternPayslipsResponse =
+  | { success: true; companyName: string; companyAddress: string; payslips: InternPayslip[] }
+  | { success: false; error: { message: string } };
+
+/** One rendered payslip PNG sent to the backend; the backend picks the file name. */
+export type InternPayslipImage = { employeeId: string; employeeName: string; pngBase64: string };
+
+export type InternPayslipSaveResponse =
+  | { success: true; directoryPath: string; fileCount: number; fileNames: string[]; message: string }
+  | { success: false; error: { message: string } };
 export type AttendanceXlsxExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount: number } & GeneratedFileMetadata;
 export type ArtifactExportResponse = { success: true; jobId: string; artifactId: string; fileName: string; sizeBytes: number; sha256: string; rowCount?: number; status?: string } & GeneratedFileMetadata;
 export type PayrollCsvExportResponse = { success: true; fileName: string } & GeneratedFileMetadata;

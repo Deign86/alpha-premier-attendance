@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
+  InternPayslipSaveResponse,
   PayrollCutoffRecord,
   PayrollPdfRecord,
 } from "@rfid-attendance/shared";
@@ -73,6 +74,8 @@ function renderWorkspace(records: PayrollCutoffRecord[]) {
 describe("PayrollWorkspace", () => {
   let generatePayrollCutoffSpy: MockInstance;
   let generatePayrollPdfSpy: MockInstance;
+  let generateInternPayslipImagesSpy: MockInstance;
+  let openGeneratedDirectorySpy: MockInstance;
   let loadPayrollPdfsSpy: MockInstance;
 
   beforeEach(() => {
@@ -81,6 +84,8 @@ describe("PayrollWorkspace", () => {
     window.print = vi.fn();
     generatePayrollCutoffSpy = vi.spyOn(api, "generatePayrollCutoff");
     generatePayrollPdfSpy = vi.spyOn(api, "generatePayrollPdf");
+    generateInternPayslipImagesSpy = vi.spyOn(api, "generateInternPayslipImages");
+    openGeneratedDirectorySpy = vi.spyOn(api, "openGeneratedDirectory");
     loadPayrollPdfsSpy = vi.spyOn(api, "loadPayrollPdfs").mockResolvedValue({ success: true, payrollPdfs: [] });
   });
 
@@ -102,13 +107,13 @@ describe("PayrollWorkspace", () => {
     expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
   });
 
-  it("shows only the intern payroll PDF action and no print/export actions", () => {
+  it("shows the intern payroll PDF and payslip actions and no print/export actions", () => {
     renderWorkspace([record()]);
     expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Generate Employee Payroll PDF" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
-    // No payslip, register, CSV/XLSX, or browser print actions.
-    expect(screen.queryByRole("button", { name: /payslip/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payslips" })).toBeInTheDocument();
+    // No register, CSV/XLSX, or browser print actions.
     expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /register/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /print payroll$/i })).not.toBeInTheDocument();
@@ -206,6 +211,101 @@ describe("PayrollWorkspace", () => {
     ).toBeInTheDocument();
     expect(generatePayrollPdfSpy).not.toHaveBeenCalled();
     expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it("generates intern payslip images for the selected cutoff and opens the saved folder", async () => {
+    const directoryPath = "C:\\data\\exports\\payslips\\August 1-15, 2026 20260814-103000";
+    generateInternPayslipImagesSpy.mockResolvedValue({
+      success: true,
+      directoryPath,
+      fileCount: 2,
+      fileNames: ["Maria Santos.png", "Ada Lovelace.png"],
+      message: "Saved 2 payslips.",
+    });
+    openGeneratedDirectorySpy.mockResolvedValue({ ok: true, message: "" });
+    const user = userEvent.setup();
+    renderWorkspace([internRecord()]);
+    expect(screen.queryByRole("button", { name: "Open payslip folder" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+
+    await waitFor(() =>
+      expect(generateInternPayslipImagesSpy).toHaveBeenCalledWith({
+        cutoffStart: "2026-08-01",
+        cutoffEnd: "2026-08-15",
+        payrollCutoffLabel: "August 1-15, 2026",
+      }),
+    );
+    expect(
+      await screen.findByText("Saved 2 payslip image(s) for August 1-15, 2026."),
+    ).toBeInTheDocument();
+    expect(generatePayrollPdfSpy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Open payslip folder" }));
+    expect(openGeneratedDirectorySpy).toHaveBeenCalledWith(directoryPath);
+  });
+
+  it("shows why the payslip folder could not be opened", async () => {
+    generateInternPayslipImagesSpy.mockResolvedValue({
+      success: true,
+      directoryPath: "C:\\data\\exports\\payslips\\gone",
+      fileCount: 1,
+      fileNames: ["Maria Santos.png"],
+      message: "Saved 1 payslip.",
+    });
+    openGeneratedDirectorySpy.mockResolvedValue({
+      ok: false,
+      message: "The folder could not be found. It may have been moved or deleted.",
+    });
+    const user = userEvent.setup();
+    renderWorkspace([internRecord()]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    await user.click(await screen.findByRole("button", { name: "Open payslip folder" }));
+    expect(
+      await screen.findByText("The folder could not be found. It may have been moved or deleted."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows payslip generation errors and offers no folder button", async () => {
+    generateInternPayslipImagesSpy.mockResolvedValue({
+      success: false,
+      error: { message: "Unable to generate the payslips." },
+    });
+    const user = userEvent.setup();
+    renderWorkspace([internRecord()]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    expect(await screen.findByText("Unable to generate the payslips.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open payslip folder" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payslips" })).toBeEnabled();
+  });
+
+  it("disables the payslip button and shows progress while generating", async () => {
+    let finish: (value: InternPayslipSaveResponse) => void = () => {};
+    generateInternPayslipImagesSpy.mockReturnValue(
+      new Promise<InternPayslipSaveResponse>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    renderWorkspace([internRecord()]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+
+    const busyButton = screen.getByRole("button", { name: "Generating payslips..." });
+    expect(busyButton).toBeDisabled();
+    await user.click(busyButton);
+    expect(generateInternPayslipImagesSpy).toHaveBeenCalledTimes(1);
+
+    finish({ success: false, error: { message: "Unable to generate the payslips." } });
+    expect(await screen.findByRole("button", { name: "Generate Intern Payslips" })).toBeEnabled();
+  });
+
+  it("shows a message instead of generating payslips when there are no records", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([]);
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    expect(
+      screen.getByText("No payroll records to generate payslips for. Create and save a payroll first."),
+    ).toBeInTheDocument();
+    expect(generateInternPayslipImagesSpy).not.toHaveBeenCalled();
   });
 
   it("lists previously generated payroll PDFs with open and reveal actions", async () => {

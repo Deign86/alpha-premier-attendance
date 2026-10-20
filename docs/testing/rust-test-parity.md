@@ -15,6 +15,7 @@ directly to avoid loading the Tauri/WebView2 native dependencies:
 | `intern_payroll_isolated` | `services/{payroll,employee_payroll,lunch_break,intern_payroll,cutoff_payroll}.rs`, plus target-level payroll/SQLite contract cases |
 | `payroll_hours_accuracy` | `services/{payroll,employee_payroll,lunch_break,intern_payroll}.rs`, plus target-level Rust-hours contract vectors |
 | `payroll_sheet_undertime` | `reporting/mod.rs`, `services/{payroll,lunch_break}.rs`, plus the PDF undertime regression |
+| `intern_payslips` | `reporting/mod.rs`, `services/{payroll,lunch_break}.rs`, plus target-level cases on the real migrated SQLite schema (intern payslip numbers, last-name-first naming and ordering) and the payslip PNG writer |
 | `cutoff_freeze` | `services/cutoff_payroll.rs`, plus target-level cutoff contract cases |
 
 Each source module's `#[cfg(test)]` tests also compile when that module is

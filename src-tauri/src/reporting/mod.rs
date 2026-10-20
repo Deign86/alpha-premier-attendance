@@ -2345,10 +2345,103 @@ pub async fn load_employee_payslip_by_id(
     Ok(row.as_ref().map(map_employee_payslip_row))
 }
 
+/// Trailing name suffixes kept after the given names ("Juan Dela Cruz Jr.").
+const NAME_SUFFIXES: &[&str] = &["jr", "sr", "ii", "iii", "iv", "v"];
+/// Lowercase particles that belong to the surname ("De Guerto", "De Los Santos").
+const SURNAME_PARTICLES: &[&str] = &[
+    "de", "del", "dela", "della", "delos", "la", "las", "los", "san", "santa", "santo", "sta",
+    "sto", "van", "von", "der", "den", "di", "da", "du", "dos", "das",
+];
+
+fn name_words(text: &str) -> Vec<&str> {
+    text.split(|ch: char| ch == ',' || ch.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+fn word_in(word: &str, list: &[&str]) -> bool {
+    list.contains(&word.trim_end_matches('.').to_lowercase().as_str())
+}
+
+/// Index where the trailing suffix words start (always keeps one name word).
+fn suffix_start(words: &[&str]) -> usize {
+    let mut start = words.len();
+    while start > 1 && word_in(words[start - 1], NAME_SUFFIXES) {
+        start -= 1;
+    }
+    start
+}
+
+/// Splits a stored first-name-first name ("Juan Dela Cruz Jr.") into
+/// (surname, given names, suffix). A name that already has a comma is taken as
+/// "SURNAME, GIVEN" and split at the first comma.
+fn split_name_parts(full_name: &str) -> (String, String, String) {
+    let (before, after) = full_name.split_once(',').unwrap_or((full_name, ""));
+    let (before, after) = (name_words(before), name_words(after));
+    let (surname, given, suffix) = if !before.is_empty() && !after.is_empty() {
+        let mut given = after;
+        let suffix = given.split_off(suffix_start(&given));
+        (before, given, suffix)
+    } else {
+        let mut words = [before, after].concat();
+        let suffix = words.split_off(suffix_start(&words));
+        let mut start = words.len().saturating_sub(1);
+        while start > 1 && word_in(words[start - 1], SURNAME_PARTICLES) {
+            start -= 1;
+        }
+        let surname = words.split_off(start);
+        (surname, words, suffix)
+    };
+    (surname.join(" "), given.join(" "), suffix.join(" "))
+}
+
+fn join_nonempty(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .copied()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Last-name-first display for payroll output: "John Frederick Ruiz" becomes
+/// "RUIZ, JOHN FREDERICK"; a single word is just uppercased.
+pub fn surname_first_name(full_name: &str) -> String {
+    let (surname, given, suffix) = split_name_parts(full_name);
+    let display = if given.is_empty() {
+        join_nonempty(&[&surname, &suffix])
+    } else {
+        format!("{surname}, {}", join_nonempty(&[&given, &suffix]))
+    };
+    display.to_uppercase()
+}
+
+/// (surname, given names), lowercased, for alphabetical last-name ordering.
+pub fn surname_sort_key(full_name: &str) -> (String, String) {
+    let (surname, given, _) = split_name_parts(full_name);
+    (surname.to_lowercase(), given.to_lowercase())
+}
+
+/// Payroll row order: newest cutoff first, then last-name alphabetical, then
+/// employee id. Sorting with this key keeps the Payroll tab, the Intern
+/// Payroll PDF and the payslips in one consistent order.
+pub fn payroll_row_order_key(
+    cutoff_start: &str,
+    full_name: &str,
+    employee_id: &str,
+) -> (std::cmp::Reverse<String>, (String, String), String) {
+    (
+        std::cmp::Reverse(cutoff_start.to_string()),
+        surname_sort_key(full_name),
+        employee_id.to_string(),
+    )
+}
+
 /// Loads the payroll sheet rows for one cutoff, filtered to `worker_type`
 /// ("EMPLOYEE" keeps employees; anything else keeps interns). Payroll cutoff
 /// rows do not store an employee type column, so it is derived from the live
-/// Users register (defaulting to INTERN when the user is missing).
+/// Users register (defaulting to INTERN when the user is missing). Names come
+/// back as "SURNAME, GIVEN NAMES" and rows are ordered last-name alphabetical.
 pub async fn load_payroll_sheet_rows(
     db: &sqlx::SqlitePool,
     cutoff_start: &str,
@@ -2371,7 +2464,7 @@ pub async fn load_payroll_sheet_rows(
     .fetch_all(db)
     .await?;
     let keep_employee = worker_type == "EMPLOYEE";
-    Ok(rows
+    let mut sheet_rows: Vec<PayrollSheetRow> = rows
         .into_iter()
         .filter(|row| {
             let employee_type = row.get::<String, _>("employee_type");
@@ -2430,7 +2523,7 @@ pub async fn load_payroll_sheet_rows(
                 .unwrap_or(gross_compensation_centavos);
             PayrollSheetRow {
                 employee_id: row.get("employee_id"),
-                employee_name: row.get("employee_name"),
+                employee_name: surname_first_name(&row.get::<String, _>("employee_name")),
                 employee_type: row.get("employee_type"),
                 cutoff_rate_centavos,
                 daily_rate_centavos,
@@ -2445,7 +2538,219 @@ pub async fn load_payroll_sheet_rows(
                 gross_compensation_centavos,
             }
         })
+        .collect();
+    // Last-name alphabetical regardless of the SQL order above.
+    sheet_rows.sort_by_cached_key(|row| {
+        payroll_row_order_key(cutoff_start, &row.employee_name, &row.employee_id)
+    });
+    Ok(sheet_rows)
+}
+
+/// One intern payslip, derived from the payroll-sheet row so the payslip and
+/// the Intern Payroll PDF always agree. Amounts are centavos.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternPayslip {
+    pub employee_id: String,
+    pub employee_name: String,
+    pub department: String,
+    pub designation: String,
+    pub tin: String,
+    pub bank_name: String,
+    pub account_number: String,
+    pub standard_working_days: f64,
+    pub actual_working_days: f64,
+    pub daily_rate_centavos: i64,
+    pub basic_centavos: i64,
+    pub gross_salary_centavos: i64,
+    pub adjustment_centavos: i64,
+    pub total_earnings_centavos: i64,
+    pub absent_centavos: i64,
+    pub late_centavos: i64,
+    pub halfday_centavos: i64,
+    pub undertime_centavos: i64,
+    pub total_deductions_centavos: i64,
+    pub net_pay_centavos: i64,
+}
+
+/// Loads one payslip per intern for the cutoff. Every amount comes from
+/// `load_payroll_sheet_rows` (same ordering and filtering as the Intern
+/// Payroll PDF); only the identity/bank details are read separately.
+/// `adjustment_centavos` balances manual adjustments, approved extra days and
+/// the zero floor so that `total_earnings - total_deductions == net_pay`.
+pub async fn load_intern_payslips(
+    db: &sqlx::SqlitePool,
+    cutoff_start: &str,
+    cutoff_end: &str,
+) -> Result<Vec<InternPayslip>, sqlx::Error> {
+    let sheet_rows = load_payroll_sheet_rows(db, cutoff_start, cutoff_end, "INTERN").await?;
+    let details = sqlx::query(
+        "SELECT pc.employee_id, \
+         COALESCE(NULLIF(pc.department, ''), u.department, '') AS department, \
+         COALESCE(NULLIF(pc.designation, ''), NULLIF(u.designation, ''), 'INTERN') AS designation, \
+         COALESCE(NULLIF(pc.tin, ''), u.tin, '') AS tin, \
+         COALESCE(NULLIF(pc.bank_name, ''), NULLIF(u.bank_name, ''), 'CASH') AS bank_name, \
+         COALESCE(NULLIF(pc.account_number, ''), NULLIF(u.account_number, ''), '0000') AS account_number \
+         FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
+         WHERE pc.cutoff_start = ? AND pc.cutoff_end = ?",
+    )
+    .bind(cutoff_start)
+    .bind(cutoff_end)
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            row.get::<String, _>("employee_id"),
+            (
+                row.get::<String, _>("department"),
+                row.get::<String, _>("designation"),
+                row.get::<String, _>("tin"),
+                row.get::<String, _>("bank_name"),
+                row.get::<String, _>("account_number"),
+            ),
+        )
+    })
+    .collect::<std::collections::HashMap<_, _>>();
+
+    Ok(sheet_rows
+        .into_iter()
+        .map(|row| {
+            let (department, designation, tin, bank_name, account_number) =
+                details.get(&row.employee_id).cloned().unwrap_or_else(|| {
+                    (
+                        String::new(),
+                        "INTERN".into(),
+                        String::new(),
+                        "CASH".into(),
+                        "0000".into(),
+                    )
+                });
+            let basic_centavos =
+                (row.daily_rate_centavos as f64 * row.actual_working_days).round() as i64;
+            let gross_salary_centavos = row.cutoff_rate_centavos;
+            let total_deductions_centavos = row.absence_deduction_centavos
+                + row.late_deduction_centavos
+                + row.half_day_deduction_centavos
+                + row.undertime_deduction_centavos;
+            // `gross_compensation_centavos` on the sheet row is the stored net.
+            let net_pay_centavos = row.gross_compensation_centavos;
+            let adjustment_centavos =
+                net_pay_centavos - (gross_salary_centavos - total_deductions_centavos);
+            InternPayslip {
+                employee_id: row.employee_id,
+                employee_name: row.employee_name,
+                department,
+                designation,
+                tin,
+                bank_name,
+                account_number,
+                standard_working_days: row.standard_working_days,
+                actual_working_days: row.actual_working_days,
+                daily_rate_centavos: row.daily_rate_centavos,
+                basic_centavos,
+                gross_salary_centavos,
+                adjustment_centavos,
+                total_earnings_centavos: gross_salary_centavos + adjustment_centavos,
+                absent_centavos: row.absence_deduction_centavos,
+                late_centavos: row.late_deduction_centavos,
+                halfday_centavos: row.half_day_deduction_centavos,
+                undertime_centavos: row.undertime_deduction_centavos,
+                total_deductions_centavos,
+                net_pay_centavos,
+            }
+        })
         .collect())
+}
+
+/// A readable Windows-safe file stem for a payslip image: unlike
+/// `sanitize_filename_component` it keeps spaces, commas and non-ASCII letters,
+/// so "RUIZ, JOHN FREDERICK" stays as-is.
+pub fn payslip_display_file_stem(value: &str) -> String {
+    let cleaned = value
+        .chars()
+        .filter(|ch| {
+            !matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+                && (!ch.is_control() || ch.is_whitespace())
+        })
+        .collect::<String>();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let capped = collapsed.chars().take(120).collect::<String>();
+    let mut stem = capped.trim_end_matches(['.', ' ']).to_string();
+    if stem.is_empty() {
+        stem = "payslip".to_string();
+    }
+    let upper = stem.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            upper
+                .strip_prefix(prefix)
+                .is_some_and(|digit| matches!(digit.as_bytes(), [b'1'..=b'9']))
+        });
+    if reserved {
+        stem.push_str("-file");
+    }
+    stem
+}
+
+/// One rendered payslip PNG handed over by the WebView.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternPayslipImage {
+    pub employee_id: String,
+    pub employee_name: String,
+    pub png_base64: String,
+}
+
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+const MAX_PAYSLIP_IMAGES: usize = 1000;
+const MAX_PAYSLIP_IMAGE_BYTES: usize = 15 * 1024 * 1024;
+
+/// Writes one `{intern name}.png` per image into `dir` and returns the file
+/// names in input order. Everything is validated before the first byte is
+/// written, so a rejected batch leaves no folder behind. Names that collide
+/// (case-insensitively) get the employee id, then a counter, appended.
+pub fn write_intern_payslip_images(
+    dir: &std::path::Path,
+    images: &[InternPayslipImage],
+) -> Result<Vec<String>, String> {
+    use base64::Engine;
+    if images.is_empty() {
+        return Err("NO_PAYSLIP_IMAGES".into());
+    }
+    if images.len() > MAX_PAYSLIP_IMAGES {
+        return Err("TOO_MANY_PAYSLIP_IMAGES".into());
+    }
+    let mut taken = std::collections::HashSet::new();
+    let mut files = Vec::with_capacity(images.len());
+    for image in images {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(image.png_base64.trim())
+            .map_err(|_| "INVALID_PAYSLIP_IMAGE".to_string())?;
+        if !bytes.starts_with(&PNG_SIGNATURE) {
+            return Err("INVALID_PAYSLIP_IMAGE".into());
+        }
+        if bytes.len() > MAX_PAYSLIP_IMAGE_BYTES {
+            return Err("PAYSLIP_IMAGE_TOO_LARGE".into());
+        }
+        let mut stem = payslip_display_file_stem(&image.employee_name);
+        if taken.contains(&stem.to_lowercase()) {
+            stem = format!("{stem} ({})", payslip_display_file_stem(&image.employee_id));
+        }
+        let base = stem.clone();
+        let mut counter = 2;
+        while taken.contains(&stem.to_lowercase()) {
+            stem = format!("{base} ({counter})");
+            counter += 1;
+        }
+        taken.insert(stem.to_lowercase());
+        files.push((format!("{stem}.png"), bytes));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for (name, bytes) in &files {
+        std::fs::write(dir.join(name), bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(files.into_iter().map(|(name, _)| name).collect())
 }
 
 /// Formats a working-day count without a trailing `.0` ("11", "11.5").

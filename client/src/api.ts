@@ -7,6 +7,8 @@ import type {
   BathroomUpdateRequest,
   DatabaseBackupResponse,
   DatabaseInfoResponse,
+  InternPayslipImage,
+  InternPayslipSaveResponse,
   LanStatusResponse,
   OfficeIdentity,
   SafeConfigResponse,
@@ -36,6 +38,7 @@ import type {
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
+import { renderInternPayslipPng } from './intern-payslip-image';
 import { tauriApi } from './tauri-api';
 import type { ManualSyncReport, NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
 
@@ -643,6 +646,26 @@ export async function generatePayrollPdf(request: PayrollPdfGenerateRequest): Pr
     }
   }
   return { success: false, error: { message: 'Payroll PDFs are generated in the desktop application.' } };
+}
+/** Renders one payslip PNG per intern in the WebView, then hands them to the backend to save in one folder. */
+export async function generateInternPayslipImages(request: { cutoffStart: string; cutoffEnd: string; payrollCutoffLabel: string }): Promise<InternPayslipSaveResponse> {
+  if (!runningInTauri()) return { success: false, error: { message: 'Payslips are generated in the desktop application.' } };
+  const periodLabel = request.payrollCutoffLabel.trim() || `${request.cutoffStart} to ${request.cutoffEnd}`;
+  try {
+    const data = await tauriApi.internPayslips(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd);
+    if (!data.success) return data;
+    const images: InternPayslipImage[] = [];
+    for (const payslip of data.payslips) {
+      const pngBase64 = await renderInternPayslipPng(payslip, { companyName: data.companyName, companyAddress: data.companyAddress, periodLabel });
+      images.push({ employeeId: payslip.employeeId, employeeName: payslip.employeeName, pngBase64 });
+    }
+    return await tauriApi.saveInternPayslipImages(nativeAdminToken ?? '', periodLabel, images);
+  } catch (error) {
+    const raw = errorString(error);
+    if (raw.startsWith('NO_PAYROLL_RECORDS')) return { success: false, error: { message: 'No payroll records exist for these cutoff dates. Generate the cutoff payroll first, then create the payslips.' } };
+    if (raw === 'ADMIN_AUTH_REQUIRED') return { success: false, error: { message: attendanceSaveMessages.ADMIN_AUTH_REQUIRED } };
+    return { success: false, error: { message: 'Unable to generate the payslips.' } };
+  }
 }
 export async function loadInternPayrollReport(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string): Promise<InternPayrollReportResponse> {
   if (runningInTauri()) {

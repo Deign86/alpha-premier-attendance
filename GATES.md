@@ -1412,3 +1412,30 @@ unchanged.
   CHECK: npm test -w client -- clonedBeaVoice.test.ts && cargo check --manifest-path src-tauri/Cargo.toml
   EXPECT: buildScanErrorPhrase('GENDER_NOT_SET') resolves to /voices/bea/scan-error/gender-not-set.mp3 in both lookup tables.
   EVIDENCE: generated via local VoiceStudio profile "Ma'am Bea" (0b2d3e9f) with scripts/generate_cloned_voices.py; 41,324-byte MP3, 5.08 s, 24 kHz mono, copied to client/public and src-tauri/resources; both manifests identical; 97 tts/clone tests pass; cargo check Finished.
+
+## Intern payslip images (2026-10-20)
+
+- [x] Payslip numbers reuse the payroll-sheet computation (`load_payroll_sheet_rows`); Gross Salary = standard days x rate, Basic = actual days x rate, deductions = Absent + Late + Halfday + Undertime, and Total Earnings - Total Deductions = stored net pay (an Adjustment line balances manual adjustments / approved extra days). Employees are excluded.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
+  EXPECT: all pass, including the reference case (11 std / 10 actual / PHP 80 -> Basic 800, Gross 880, Absent 80, Net 800).
+  EVIDENCE: `intern_payslips` 38 passed / 0 failed (12 new + inherited module tests); reference case, adjustment balancing and employee exclusion included.
+- [x] Saving writes one PNG per intern into a single new folder under exports, named after the intern (Windows-safe, duplicates disambiguated by employee ID); non-PNG payloads and empty batches are rejected before anything is written.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
+  EXPECT: file-name, collision, PNG-signature and empty-batch tests pass.
+  EVIDENCE: same run, 38/38; non-PNG batch leaves no folder behind.
+- [x] Payroll output is last-name based and alphabetical (HR request): payroll sheet PDF rows and payslips show "SURNAME, GIVEN NAMES" (multi-word surnames like "De Guerto", suffixes like "Jr.") sorted by surname; the Payroll tab list is ordered by surname within each cutoff.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
+  EXPECT: surname parsing examples and ALTICHE < DE GUERTO < RUIZ ordering pass.
+  EVIDENCE: same run, 38/38; Payroll tab ordering uses the tested `payroll_row_order_key` (lib tests cannot start locally, compile-checked).
+- [x] Payslip renderer draws every template field (header, employee grid, earnings, deductions, totals, net pay, signatures, confidential) with company branding.
+  CHECK: npm test -w client -- intern-payslip-image
+  EXPECT: all pass.
+  EVIDENCE: renderer tests 14/14 (renderer agent); 2000x2428 PNGs rendered via Vite in the browser pane and inspected (reference case Net PHP 800.00, adjustment case 980.00 - 150.00 = 830.00).
+- [x] Payroll tab has a "Generate Intern Payslips" action for the selected cutoff that saves the images and offers Open folder; errors are friendly.
+  CHECK: npm test -w client -- payroll.test.tsx api.test.ts
+  EXPECT: all pass.
+  EVIDENCE: payroll 28 + api 31 passed (wiring agent run).
+- [x] Repo gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo check --manifest-path src-tauri/Cargo.toml --tests
+  EXPECT: all pass.
+  EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (4 + 20 + 20 test files passed); cargo check --tests Finished, exit 0; Rust harnesses admin_pin_isolated 11, cutoff_freeze 18, intern_payroll_isolated 69, intern_payslips 38, payroll_hours_accuracy 52, payroll_sheet_undertime 27 — 215 passed, 0 failed.

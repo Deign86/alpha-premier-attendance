@@ -2143,7 +2143,7 @@ async fn payroll_list_cutoffs(
     if !admin_authorized(&state, &token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
-    let rows = sqlx::query(
+    let mut rows = sqlx::query(
         "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, pc.payroll_profile_id, pc.payroll_cutoff_label, \
          pc.cutoff_start, pc.cutoff_end, pc.daily_rate_centavos, pc.standard_working_days, pc.actual_working_days, \
          pc.basic_pay_centavos, pc.special_holiday_days, pc.special_holiday_multiplier, pc.special_holiday_pay_centavos, \
@@ -2166,6 +2166,15 @@ async fn payroll_list_cutoffs(
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())?;
+    // Newest cutoff first; within a cutoff, last-name alphabetical (the
+    // displayed employeeName stays as stored).
+    rows.sort_by_cached_key(|row| {
+        crate::reporting::payroll_row_order_key(
+            &row.get::<String, _>("cutoff_start"),
+            &row.get::<String, _>("employee_name"),
+            &row.get::<String, _>("employee_id"),
+        )
+    });
     // Payroll cutoff rows do not store an employee type; derive intern vs
     // employee classification from the Users register so the printable
     // worksheet can apply the intern layout and labels.
@@ -5206,6 +5215,84 @@ async fn list_payroll_pdfs(
     Ok(serde_json::json!({"success": true, "payrollPdfs": payroll_pdfs}))
 }
 
+/// Payslip numbers for every intern in the cutoff, plus the letterhead the
+/// WebView draws on each PNG. Amounts are the payroll-sheet amounts (centavos).
+#[tauri::command]
+async fn payroll_intern_payslips(
+    state: State<'_, AppState>,
+    token: String,
+    cutoff_start: String,
+    cutoff_end: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    if !valid_cutoff_date(&cutoff_start)
+        || !valid_cutoff_date(&cutoff_end)
+        || cutoff_end < cutoff_start
+    {
+        return Err("INVALID_CUTOFF_PERIOD".into());
+    }
+    let payslips = crate::reporting::load_intern_payslips(&state.db, &cutoff_start, &cutoff_end)
+        .await
+        .map_err(|e| e.to_string())?;
+    if payslips.is_empty() {
+        return Err(format!(
+            "NO_PAYROLL_RECORDS: No intern payroll records for {cutoff_start} to {cutoff_end}. Generate the cutoff payroll first."
+        ));
+    }
+    Ok(serde_json::json!({
+        "success": true,
+        "companyName": state.office.company_name,
+        "companyAddress": state.office.display_full(),
+        "payslips": payslips,
+    }))
+}
+
+/// Saves the rendered payslip PNGs into one timestamped folder under
+/// `exports/payslips` (inside the data dir, so `open_generated_directory`
+/// can open it).
+#[tauri::command]
+async fn save_intern_payslip_images(
+    state: State<'_, AppState>,
+    token: String,
+    payroll_cutoff_label: String,
+    images: Vec<crate::reporting::InternPayslipImage>,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let label = match payroll_cutoff_label.trim() {
+        "" => "Payslips",
+        trimmed => trimmed,
+    };
+    let manila_now = chrono::Utc::now().with_timezone(&Manila);
+    let dir = state.exports_dir.join("payslips").join(format!(
+        "{} {}",
+        crate::reporting::payslip_display_file_stem(label),
+        manila_now.format("%Y-%m-%d %H-%M-%S")
+    ));
+    let existed = dir.exists();
+    let names = match crate::reporting::write_intern_payslip_images(&dir, &images) {
+        Ok(names) => names,
+        Err(error) => {
+            log::error!("intern payslip image save failed: {error}");
+            // Drop a half-written folder, never one that was already there.
+            if !existed && dir.exists() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            return Err(error);
+        }
+    };
+    Ok(serde_json::json!({
+        "success": true,
+        "directoryPath": dir.to_string_lossy(),
+        "fileCount": names.len(),
+        "fileNames": names,
+        "message": format!("Saved {} payslip image(s) for {label}.", names.len()),
+    }))
+}
+
 fn valid_cutoff_date(value: &str) -> bool {
     // P7: shape checks alone accepted Feb-30 and month 99 — parse a real
     // calendar day instead.
@@ -6366,6 +6453,8 @@ pub fn run() {
             export_attendance_xlsx,
             generate_payroll_pdf,
             list_payroll_pdfs,
+            payroll_intern_payslips,
+            save_intern_payslip_images,
             open_generated_file,
             reveal_generated_file,
             open_generated_directory,
