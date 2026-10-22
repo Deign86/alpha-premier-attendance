@@ -2740,7 +2740,6 @@ describe('Admin Attendance Corrections', () => {
       genderKey: 'MALE',
       employeeName: 'John Doe',
       personId: 'EMP-01',
-      remindReturnWindow: true,
     });
 
     // 2. Scan for return

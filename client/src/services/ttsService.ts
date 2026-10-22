@@ -279,8 +279,6 @@ export type BathroomPhraseOptions = {
   genderKey: BathroomGenderKey;
   employeeName?: string | null;
   personId?: string | null;
-  /** Kiosk self-service checkout: append the 15-minute return reminder (Bea clip). */
-  remindReturnWindow?: boolean;
 };
 
 export type AnnounceBathroomOptions = BathroomPhraseOptions & {
@@ -424,10 +422,6 @@ export function buildAttendancePhrase(
   return `Your ${assistedPrefix}time out has been recorded.`;
 }
 
-/** Static Bea carrier for the kiosk return-window reminder (played after checkout). */
-const RETURN_REMINDER_PHRASE =
-  'Your bathroom key has been checked out. Please return it within fifteen minutes.';
-
 /**
  * Generates bathroom key checkout or return announcement phrases.
  */
@@ -435,17 +429,15 @@ export function buildBathroomPhrase({
   action,
   genderKey,
   employeeName,
-  remindReturnWindow,
 }: BathroomPhraseOptions): string {
   const cleanName = sanitizeTextForSpeech(employeeName ?? '', 100);
   const genderLabel = genderKey === 'MALE' ? 'Male' : 'Female';
-  const reminder = remindReturnWindow === true ? ` ${RETURN_REMINDER_PHRASE}` : '';
 
   if (action === 'CHECKOUT') {
     if (cleanName.length > 0) {
-      return `${genderLabel} bathroom key checked out for ${cleanName}.${reminder}`;
+      return `${genderLabel} bathroom key checked out for ${cleanName}.`;
     }
-    return `${genderLabel} bathroom key checked out.${reminder}`;
+    return `${genderLabel} bathroom key checked out.`;
   }
 
   if (cleanName.length > 0) {
@@ -711,18 +703,6 @@ export async function announceBathroom(
       const genderLabel = options.genderKey === 'MALE' ? 'Male' : 'Female';
       const targetPersonId = options.personId;
 
-      // Bea-first return-window reminder for kiosk self-service checkout.
-      const playReturnReminder = async (): Promise<void> => {
-        if (options.remindReturnWindow !== true) return;
-        const reminderUrl = getClonedBeaAudioUrl(RETURN_REMINDER_PHRASE);
-        if (!reminderUrl) return;
-        try {
-          await playClonedBeaAudio(reminderUrl, activeSettings.volume, activeSettings.rate);
-        } catch (error) {
-          console.warn('Return-window reminder playback failed:', error);
-        }
-      };
-
       if (cleanName.length > 0) {
         if (options.action === 'CHECKOUT') {
           const prefixPhrase = `${genderLabel} bathroom key checked out for`;
@@ -748,8 +728,6 @@ export async function announceBathroom(
                 );
                 if (currentEpoch !== activePlaybackEpoch) return null;
                 if (namePlayed) {
-                  await playReturnReminder();
-                  if (currentEpoch !== activePlaybackEpoch) return null;
                   return { success: true, engineUsed: 'cloned-bea' };
                 }
               }
@@ -807,10 +785,6 @@ export async function announceBathroom(
             const played = await playClonedBeaAudio(staticUrl, activeSettings.volume, activeSettings.rate);
             if (currentEpoch !== activePlaybackEpoch) return null;
             if (played) {
-              if (options.action === 'CHECKOUT') {
-                await playReturnReminder();
-                if (currentEpoch !== activePlaybackEpoch) return null;
-              }
               return { success: true, engineUsed: 'cloned-bea' };
             }
           } catch (error) {

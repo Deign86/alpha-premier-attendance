@@ -149,7 +149,6 @@ import {
   loadNameManifest,
   previewVoiceClip,
   resolveVoiceSlot,
-  type AnnounceBathroomOptions,
 } from "./services/ttsService";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
@@ -859,16 +858,12 @@ export default function App() {
           if (document.visibilityState === "hidden" || !document.hasFocus()) {
             void notifyScanSuccess(response.user.fullName).catch(() => undefined);
           }
-          const bathroomAnnouncement: AnnounceBathroomOptions = {
+          void announceBathroom({
             action: response.action,
             genderKey: response.genderKey,
             employeeName: response.user.fullName,
             personId: response.user.userId,
-          };
-          if (response.action === 'CHECKOUT') {
-            bathroomAnnouncement.remindReturnWindow = true;
-          }
-          void announceBathroom(bathroomAnnouncement);
+          });
         } else {
           void announceScanError({
             errorCode: response.error.code,

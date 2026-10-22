@@ -52,7 +52,6 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
   'Your assisted time out was recorded after office hours. Manual correction is required.': '/voices/bea/attendance/time-out-assisted-late-timeout.mp3',
 
   // 3. Bathroom (Warm Tone)
-  'Your bathroom key has been checked out. Please return it within fifteen minutes.': '/voices/bea/bathroom/bathroom-key-checked-out-15min.mp3',
   'Male bathroom key checked out.': '/voices/bea/bathroom/checkout-male.mp3',
   'Female bathroom key checked out.': '/voices/bea/bathroom/checkout-female.mp3',
   'Male bathroom key checked out for': '/voices/bea/bathroom/checkout-male-for.mp3',

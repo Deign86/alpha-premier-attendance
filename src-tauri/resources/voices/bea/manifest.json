@@ -158,13 +158,6 @@
       "tauri_path": "voices/bea/attendance/time-out-assisted-late-timeout.mp3",
       "tone": "main"
     },
-    "bathroom-key-checked-out-15min": {
-      "phrase": "Your bathroom key has been checked out. Please return it within fifteen minutes.",
-      "category": "bathroom",
-      "url": "/voices/bea/bathroom/bathroom-key-checked-out-15min.mp3",
-      "tauri_path": "voices/bea/bathroom/bathroom-key-checked-out-15min.mp3",
-      "tone": "warm"
-    },
     "checkout-male": {
       "phrase": "Male bathroom key checked out.",
       "category": "bathroom",
@@ -385,7 +378,6 @@
     "Your time out was recorded after office hours. Manual correction is required.": "/voices/bea/attendance/time-out-late-timeout.mp3",
     "Your assisted time out has been recorded.": "/voices/bea/attendance/time-out-assisted-standard.mp3",
     "Your assisted time out was recorded after office hours. Manual correction is required.": "/voices/bea/attendance/time-out-assisted-late-timeout.mp3",
-    "Your bathroom key has been checked out. Please return it within fifteen minutes.": "/voices/bea/bathroom/bathroom-key-checked-out-15min.mp3",
     "Male bathroom key checked out.": "/voices/bea/bathroom/checkout-male.mp3",
     "Male bathroom key checked out for": "/voices/bea/bathroom/checkout-male-for.mp3",
     "Female bathroom key checked out.": "/voices/bea/bathroom/checkout-female.mp3",
