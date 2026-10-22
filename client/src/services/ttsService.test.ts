@@ -309,19 +309,6 @@ describe('ttsService', () => {
         }),
       ).toBe('Female bathroom key returned.');
     });
-
-    it('appends the return-window reminder to checkout phrases when requested', () => {
-      expect(
-        buildBathroomPhrase({
-          action: 'CHECKOUT',
-          genderKey: 'MALE',
-          employeeName: 'John Doe',
-          remindReturnWindow: true,
-        }),
-      ).toBe(
-        'Male bathroom key checked out for John Doe. Your bathroom key has been checked out. Please return it within fifteen minutes.',
-      );
-    });
   });
 
   describe('buildScanErrorPhrase', () => {
@@ -653,37 +640,6 @@ describe('ttsService', () => {
       expect(playSpy).toHaveBeenCalledTimes(2);
       expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/checkout-male-for.mp3', 1.0, 1.0);
       expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.mp3', 1.0, 1.0);
-      expect(backendSpy).not.toHaveBeenCalled();
-      expect(result).toEqual({
-        success: true,
-        engineUsed: 'cloned-bea',
-      });
-    });
-
-    it('appends the Bea return-window reminder to kiosk checkout without Piper', async () => {
-      const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
-
-      const result = await announceBathroom({
-        action: 'CHECKOUT',
-        genderKey: 'MALE',
-        employeeName: 'Deign Lazaro',
-        personId: 'APG-2026-102',
-        remindReturnWindow: true,
-        settings: {
-          enabled: true,
-          engine: 'cloned-bea',
-          voiceModel: 'en_US-amy-medium',
-          rate: 1.0,
-          volume: 1.0,
-        },
-      });
-
-      // Checkout plays 3 Bea segments (prefix + name + 15-minute reminder)
-      expect(playSpy).toHaveBeenCalledTimes(3);
-      expect(playSpy).toHaveBeenNthCalledWith(1, '/voices/bea/bathroom/checkout-male-for.mp3', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(2, '/voices/bea/names/APG-2026-102.mp3', 1.0, 1.0);
-      expect(playSpy).toHaveBeenNthCalledWith(3, '/voices/bea/bathroom/bathroom-key-checked-out-15min.mp3', 1.0, 1.0);
       expect(backendSpy).not.toHaveBeenCalled();
       expect(result).toEqual({
         success: true,

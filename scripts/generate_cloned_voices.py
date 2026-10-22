@@ -162,12 +162,6 @@ PHRASE_CATALOG = [
     # --- 3. Bathroom Key Logging (Single Static Files) ---
     {
         "category": "bathroom",
-        "slug": "bathroom-key-checked-out-15min",
-        "phrase": "Your bathroom key has been checked out. Please return it within fifteen minutes.",
-        "tone": "warm",
-    },
-    {
-        "category": "bathroom",
         "slug": "checkout-male",
         "phrase": "Male bathroom key checked out.",
         "tone": "warm",
