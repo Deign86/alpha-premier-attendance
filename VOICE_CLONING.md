@@ -156,9 +156,9 @@ The script automatically applies Philippine phonetics rules via `normalizePronun
 
 | Raw Database Name | Normalized Spoken Text | Transformation Rule |
 | :--- | :--- | :--- |
-| `Ma. Ellaine Zapico` | `Maria Ellaine Zapico` | Expands abbreviation `"Ma."` to `"Maria"` |
+| `Ma. Clara Santos` | `Maria Clara Santos` | Expands abbreviation `"Ma."` to `"Maria"` |
 | `Deign Grey O. Lazaro` | `Deign Grey Lazaro` | Cleans middle initial dot to prevent awkward `"dot"` pauses |
-| `Ar-jee Felizarte` | `Arjee Felizarte` | Removes hyphens in compound first names |
+| `Ar-jay Reyes` | `Arjay Reyes` | Removes hyphens in compound first names |
 | `Juan Dela Cruz, Jr.` | `Juan Dela Cruz Junior` | Expands suffix `"Jr."` / `"Sr."` to full spoken words |
 
 ### Adding Custom Pronunciation Overrides

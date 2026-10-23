@@ -63,8 +63,8 @@ Amounts below are written in terms of the payroll rates rather than pesos: **D**
   CHECK: npm test -w server -- intern-payroll.test.ts cutoff-payroll.test.ts && cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated
   EXPECT: deductions and net pay agree across both engines; no late hour is subtracted twice.
   EVIDENCE: Full JS suite passed: shared 36, client 284, server 213; focused Rust isolated suite passed 35 tests.
-- [x] Reinterpret Maricon's Sept 24/25 note under the authoritative one-grace-per-week rule.
-  CHECK: npm test -w server -- intern-payroll.test.ts -t "Maricon second weekly grace is late"
+- [x] Reinterpret an intern's Sept 24/25 note under the authoritative one-grace-per-week rule.
+  CHECK: npm test -w server -- intern-payroll.test.ts -t "second weekly grace is late"
   EXPECT: Sept 24 and 25 map to week starting Sept 21; first grace is free, second charges L (not two free grace days).
   EVIDENCE: Rule 3 overrides QA's two-free-graces total: one free grace and one L late charge means L less than QA's total on the same baseline. Tests confirm first grace free, second late by one hour; full `npm test`, lint, typecheck, and MCP 7/7 pass.
 
@@ -376,15 +376,15 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
 - [x] Tabs aligned to roster names; new interns get tabs auto-created (no owner step, no conflicts).
   CHECK: 11 live renames match roster verbatim; scratch intern scan → tab auto-created from template → history backfilled → artifacts removed
   EXPECT: exact-name tabs; overlap/invalid/duplicate races stay pending, never twin tabs; employees never mint tabs
-  EVIDENCE: PROVEN LIVE 2026-09-05 — 11 tabs renamed via API (roster-verbatim, trailing spaces gone); scratch intern E2e Testling Two scanned → tab auto-created (23 tabs) → 9/5 row backfilled WORKING form → pending empty → all artifacts removed (user+attendance+queue+tab). 10 orphan ex-intern tabs intentionally untouched. Rona Pacada (real, tab-less) auto-creates on her next scan.
-- [x] Allaena + Mitchi matched via ID cards (RFID blank/placeholder — MUST enroll real cards).
+  EVIDENCE: PROVEN LIVE 2026-09-05 — 11 tabs renamed via API (roster-verbatim, trailing spaces gone); scratch intern E2e Testling Two scanned → tab auto-created (23 tabs) → 9/5 row backfilled WORKING form → pending empty → all artifacts removed (user+attendance+queue+tab). 10 orphan ex-intern tabs intentionally untouched. One real intern without a tab auto-creates it on their next scan.
+- [x] Two interns (Intern A, Intern B) matched via ID cards (RFID blank/placeholder — MUST enroll real cards).
   CHECK: tabs renamed to ID names; roster rows resolve MATCH; rfid_uid currently = user_id placeholder
   EXPECT: no scan possible until real card UIDs replace placeholders via setup enrollment
-  EVIDENCE: 2026-09-05 — IDs read (Allaena Nicole E. Vizon APG-2026-115, Mitchi Hashidate APG-2026-106, Marketing Associates); tabs ALLAENA→Allaena Nicole E. Vizon, HASHIDATE MITCHI→Mitchi Hashidate via API; roster rows inserted ACTIVE/INTERN (department Marketing, designation Marketing Associate) with rfid_uid=user_id placeholder (schema NOT NULL + owner deferred card pairing); resolve MATCH on both. PLACEHOLDER RISK: scans with these IDs impossible (no card maps to them); on card arrival, replace rfid_uid with the real UID (unique) — do NOT create duplicate user rows.
-- [x] RFID pairing for Allaena + Mitchi once the kiosk database file arrives.
+  EVIDENCE: 2026-09-05 — IDs read (Intern A APG-2026-115, Intern B APG-2026-106, Marketing Associates); both tabs renamed from short names to the roster-verbatim full names via API; roster rows inserted ACTIVE/INTERN (department Marketing, designation Marketing Associate) with rfid_uid=user_id placeholder (schema NOT NULL + owner deferred card pairing); resolve MATCH on both. PLACEHOLDER RISK: scans with these IDs impossible (no card maps to them); on card arrival, replace rfid_uid with the real UID (unique) — do NOT create duplicate user rows.
+- [x] RFID pairing for Intern A + Intern B once the kiosk database file arrives.
   CHECK: owner supplies DB file with real card UIDs → UPDATE users SET rfid_uid (single row each, keep user_id/full_name) → test scan per intern → tab fills
   EXPECT: placeholder UIDs replaced in place (no duplicate rows); first real scans push to their tabs
-  EVIDENCE: CLOSED 2026-09-08 via office parity restore — Mitchi row APG-2026-106 carries real card UID 1259859579 (in DB since 08-21); Allaena already paired (1259587435). Full-roster sweep: 16/17 interns MATCH (incl. Rona, whose tab the owner created, and Ruiz/Timkang/Diola realigned to roster-verbatim: John Frederick Ruiz, Khemuel Rosh Timkang, Noeme P. Diola). Only Joseph Amandy (new intern, no tab) is NO_MATCH by design → auto-creates on his next scan. Stray empty tab Sheet2 observed, left alone.
+  EVIDENCE: CLOSED 2026-09-08 via office parity restore — Intern B row APG-2026-106 carries its real card UID (in DB since 08-21); Intern A already paired. Full-roster sweep: 16/17 interns MATCH (incl. the tab-less intern above, whose tab the owner created, and three tabs realigned to their roster-verbatim names). Only one new intern without a tab is NO_MATCH by design → auto-creates on their next scan. Stray empty tab Sheet2 observed, left alone.
 
 ## Tauri IPC casing + verification skill refresh gates
 
@@ -840,7 +840,7 @@ Scope decisions locked by the owner before implementation:
   EXPECT: `executePush` accepts only non-skip plans; `sync-intern-dtr.ts` has no
   `plan.reason.startsWith` / `!== 'already in sync'` string gate left; every existing planPush
   assertion is retargeted to `kind`+code with no behavior flip; in-sync plans still paint.
-  EVIDENCE: 71 tests in intern-dtr-sync.test.ts pass; server typecheck clean; sync-intern-dtr.ts string gates replaced with kind/reason codes; writes unchanged (`{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '', '', '5:00:00 PM'] }`).
+  EVIDENCE: 71 tests in intern-dtr-sync.test.ts pass; server typecheck clean; sync-intern-dtr.ts string gates replaced with kind/reason codes; writes unchanged (`{ tab: 'DELA CRUZ JUAN', row: 2, values: ['7:24:00 AM', '', '', '5:00:00 PM'] }`).
 
 - [x] N10 `month_block_range` tri-state (behavior-frozen).
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --profile fast --lib dtr_sync
@@ -1430,9 +1430,9 @@ unchanged.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
   EXPECT: file-name, collision, PNG-signature and empty-batch tests pass.
   EVIDENCE: same run, 38/38; non-PNG batch leaves no folder behind.
-- [x] Payroll output is last-name based and alphabetical (HR request): payroll sheet PDF rows and payslips show "SURNAME, GIVEN NAMES" (multi-word surnames like "De Guerto", suffixes like "Jr.") sorted by surname; the Payroll tab list is ordered by surname within each cutoff.
+- [x] Payroll output is last-name based and alphabetical (HR request): payroll sheet PDF rows and payslips show "SURNAME, GIVEN NAMES" (multi-word surnames like "Dela Cruz", suffixes like "Jr.") sorted by surname; the Payroll tab list is ordered by surname within each cutoff.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
-  EXPECT: surname parsing examples and ALTICHE < DE GUERTO < RUIZ ordering pass.
+  EXPECT: surname parsing examples and surname-first alphabetical ordering (including a multi-word "De" surname) pass.
   EVIDENCE: same run, 38/38; Payroll tab ordering uses the tested `payroll_row_order_key` (lib tests cannot start locally, compile-checked).
 - [x] Payslip renderer draws every template field (header, employee grid, earnings, deductions, totals, net pay, signatures, confidential) with company branding.
   CHECK: npm test -w client -- intern-payslip-image

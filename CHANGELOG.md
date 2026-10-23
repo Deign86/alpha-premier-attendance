@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.73] - 2026-09-14
 
 ### Added
-- **Cloned Bea Voice for Jhon Yhonan Regaspi (`APG-2026-120`)**: Generated and bundled high-fidelity cloned voice name clip using Ma'am Bea's voice profile with audio denoising (AC and air noise filtered) from attendance backup `attendance-backup-20260914-083751.apbackup`.
+- **Cloned Bea Voice for a new intern (`APG-2026-120`)**: Generated and bundled high-fidelity cloned voice name clip using Ma'am Bea's voice profile with audio denoising (AC and air noise filtered) from attendance backup `attendance-backup-20260914-083751.apbackup`.
 
 ## [0.1.72] - 2026-09-14
 
@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.66] - 2026-09-14
 
 ### Added
-- **Ma'am Bea Cloned Voice Name Clips (APG-2026-117 through 119)**: Pre-rendered zero-latency cloned voice clips and manifest entries for new interns Jennirille Lhoize Cordova, Sophia Marielle Urbano, and Melanie Garcia.
+- **Ma'am Bea Cloned Voice Name Clips (APG-2026-117 through 119)**: Pre-rendered zero-latency cloned voice clips and manifest entries for three new interns.
 
 ### Fixed
 - **Intern DTR sync error reporting & feedback**: Surfaced detailed error messages and row sync notices in both global database panel and per-user editor; `manual_sync_intern_dtr` reports failure whenever error list is non-empty.
@@ -163,14 +163,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Auto-Enqueued DTR Pending**: Automatically enroll newly created or updated active interns into `dtr_pending` when saved through the Admin Panel.
 
 ### Fixed
-- **Middle Initial DTR Tab Overlap Collision**: Fixed false-positive overlap matches in `tab_name_overlaps_user` (Rust) and `hasTabOverlap` (TypeScript) caused by single-character name tokens (e.g. `"C."` in `Maricon C. Danao` colliding with `"C."` in existing tab `Raineer C. Rosado`), which prevented tabs from being auto-provisioned.
+- **Middle Initial DTR Tab Overlap Collision**: Fixed false-positive overlap matches in `tab_name_overlaps_user` (Rust) and `hasTabOverlap` (TypeScript) caused by single-character name tokens (e.g. the `"C."` in a new intern's name colliding with the `"C."` in an existing intern's tab that shares the middle initial), which prevented tabs from being auto-provisioned.
 
 ---
 
 ## [0.1.55] - 2026-09-08
 
 ### Added
-- **New Intern Voice Profile**: Pre-rendered and bundled Ma'am Bea cloned voice announcement (`APG-2026-116.mp3`) for newly registered intern Maricon C. Danao (spoken name: "Maricon Danao").
+- **New Intern Voice Profile**: Pre-rendered and bundled Ma'am Bea cloned voice announcement (`APG-2026-116.mp3`) for a newly registered intern (spoken without the middle initial).
 - **Automatic Phonics Normalization**: Added Philippine phonetics normalization (`normalizePronunciation`) in batch voice generation scripts to strip middle initial dots (e.g. "C.") and expand abbreviations (e.g. "Ma." -> "Maria").
 - **Direct Backup Voice Loading**: Added `--backup <path>` and `--db <path>` flags to `generate_existing_intern_names.ts` to directly extract and discover personnel from `.apbackup` archives.
 

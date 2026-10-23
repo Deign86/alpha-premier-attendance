@@ -34,7 +34,7 @@ Preconditions:
 
 - **Read Key Status**: `bathroom_get_status` (token optional/unused).
   *Observable result*: Returns `{ success, date, maleActive, femaleActive,
-  maleLogs, femaleLogs, fetchedAt }` (live: female held by Melanie F. Garcia
+  maleLogs, femaleLogs, fetchedAt }` (live: female held by an intern
   since 2026-09-16).
 
 - **RFID Scan** (no token): `bathroom_scan_rfid` with `{ "rfidUid": "..." }`.
