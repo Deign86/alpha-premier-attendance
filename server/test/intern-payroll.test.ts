@@ -20,21 +20,21 @@ type SeptemberAttendanceFixture = {
 };
 
 const SEPTEMBER_ATTENDANCE: SeptemberAttendanceFixture[] = [
-  { attendanceDate: '2026-09-01', userId: 'APG-2026-116', fullName: 'Maricon', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-02', userId: 'APG-2026-116', fullName: 'Maricon', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
-  { attendanceDate: '2026-09-03', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:00:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-04', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:00:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-01', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '09:00:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
-  { attendanceDate: '2026-09-02', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '08:00:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 10, dailyPay: 70 } },
-  { attendanceDate: '2026-09-03', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '08:00:00', timeOut: '15:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 20, dailyPay: 60 } },
-  { attendanceDate: '2026-09-04', userId: 'APG-2026-119', fullName: 'Melanie', timeIn: '08:30:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
-  { attendanceDate: '2026-09-07', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-08', userId: 'APG-2026-117', fullName: 'Lhoize', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
-  { attendanceDate: '2026-09-09', userId: 'APG-2026-118', fullName: 'Sophia', timeIn: '08:15:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-10', userId: 'APG-2026-118', fullName: 'Sophia', timeIn: '08:15:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
-  { attendanceDate: '2026-09-11', userId: 'APG-2026-118', fullName: 'Sophia', timeIn: '08:16:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
-  { attendanceDate: '2026-09-14', userId: 'APG-2026-118', fullName: 'Sophia', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
-  { attendanceDate: '2026-09-15', userId: 'APG-2026-118', fullName: 'Sophia', timeIn: '08:30:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
+  { attendanceDate: '2026-09-01', userId: 'APG-2026-116', fullName: 'Marissa', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-02', userId: 'APG-2026-116', fullName: 'Marissa', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
+  { attendanceDate: '2026-09-03', userId: 'APG-2026-117', fullName: 'Lyn', timeIn: '08:00:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-04', userId: 'APG-2026-117', fullName: 'Lyn', timeIn: '08:00:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-01', userId: 'APG-2026-119', fullName: 'Melissa', timeIn: '09:00:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
+  { attendanceDate: '2026-09-02', userId: 'APG-2026-119', fullName: 'Melissa', timeIn: '08:00:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 10, dailyPay: 70 } },
+  { attendanceDate: '2026-09-03', userId: 'APG-2026-119', fullName: 'Melissa', timeIn: '08:00:00', timeOut: '15:00:00', expected: { graceUsed: false, lateHours: 0, lateDeduction: 0, halfDayDeduction: 20, dailyPay: 60 } },
+  { attendanceDate: '2026-09-04', userId: 'APG-2026-119', fullName: 'Melissa', timeIn: '08:30:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
+  { attendanceDate: '2026-09-07', userId: 'APG-2026-117', fullName: 'Lyn', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-08', userId: 'APG-2026-117', fullName: 'Lyn', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
+  { attendanceDate: '2026-09-09', userId: 'APG-2026-118', fullName: 'Andrea', timeIn: '08:15:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-10', userId: 'APG-2026-118', fullName: 'Andrea', timeIn: '08:15:01', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
+  { attendanceDate: '2026-09-11', userId: 'APG-2026-118', fullName: 'Andrea', timeIn: '08:16:00', timeOut: '17:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 0, dailyPay: 70 } },
+  { attendanceDate: '2026-09-14', userId: 'APG-2026-118', fullName: 'Andrea', timeIn: '08:08:00', timeOut: '17:00:00', expected: { graceUsed: true, lateHours: 0, lateDeduction: 0, halfDayDeduction: 0, dailyPay: 80 } },
+  { attendanceDate: '2026-09-15', userId: 'APG-2026-118', fullName: 'Andrea', timeIn: '08:30:00', timeOut: '16:00:00', expected: { graceUsed: false, lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 } },
 ];
 
 function fixtureTimestamp(date: string, time: string): string {
@@ -170,23 +170,23 @@ describe('intern payroll policy', () => {
     });
   });
 
-  it('QA Sept 24 Lhoize APG-2026-117: one late hour plus one separate undertime hour is PHP 20', () => {
+  it('QA Sept 24 Lyn APG-2026-117: one late hour plus one separate undertime hour is PHP 20', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-09-24', actualTimeIn: '2026-09-24T08:30:00+08:00', actualTimeOut: '2026-09-24T16:00:00+08:00', graceAvailable: false });
     expect(result).toMatchObject({ lateHours: 1, lateDeduction: 10, halfDayDeduction: 10, dailyPay: 60 });
     expect(result.lateDeduction + result.halfDayDeduction).toBe(20);
   });
 
-  it('QA Sept 24 Melanie APG-2026-119: one late hour plus one separate undertime hour is PHP 20', () => {
+  it('QA Sept 24 Melissa APG-2026-119: one late hour plus one separate undertime hour is PHP 20', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-09-24', actualTimeIn: '2026-09-24T08:30:00+08:00', actualTimeOut: '2026-09-24T16:00:00+08:00', graceAvailable: false });
     expect(result.lateDeduction + result.halfDayDeduction).toBe(20);
   });
 
-  it('QA Sept 22 Sophia APG-2026-118: one late hour plus one separate undertime hour is PHP 20', () => {
+  it('QA Sept 22 Andrea APG-2026-118: one late hour plus one separate undertime hour is PHP 20', () => {
     const result = calculateInternPayroll({ attendanceDate: '2026-09-22', actualTimeIn: '2026-09-22T08:30:00+08:00', actualTimeOut: '2026-09-22T16:00:00+08:00', graceAvailable: false });
     expect(result.lateDeduction + result.halfDayDeduction).toBe(20);
   });
 
-  it('Maricon second weekly grace is late', () => {
+  it('Marissa second weekly grace is late', () => {
     expect(['2026-09-22', '2026-09-24', '2026-09-25'].map(getManilaWeekStart)).toEqual([
       '2026-09-21', '2026-09-21', '2026-09-21',
     ]);

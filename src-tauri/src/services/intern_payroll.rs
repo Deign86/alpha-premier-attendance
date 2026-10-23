@@ -499,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn maricon_second_weekly_grace_is_late() {
+    fn marissa_second_weekly_grace_is_late() {
         for (index, date) in ["2026-09-24", "2026-09-25"].iter().enumerate() {
             let result = calculate(
                 date,

@@ -352,7 +352,7 @@ mod tests {
     fn computes_cutoff_with_all_editable_earnings_and_deductions() {
         let result = calculate(&CutoffInput {
             employee_id: "APGCO-25-013".into(),
-            employee_name: "CHICO, JEAN ASHLEY".into(),
+            employee_name: "CASTILLO, GRACE ANN".into(),
             cutoff_start: "2026-06-01".into(),
             cutoff_end: "2026-06-15".into(),
             daily_rate: 705.0,
@@ -735,7 +735,7 @@ mod tests {
         // Intern who worked 7 hours (left at 3 PM) incurs 10 pesos (1000 centavos) undertime deduction
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-119".into(),
-            employee_name: "Melanie F. Garcia".into(),
+            employee_name: "Melissa F. Gomez".into(),
             cutoff_start: "2026-09-16".into(),
             cutoff_end: "2026-09-17".into(),
             daily_rate: 80.0,
@@ -865,7 +865,7 @@ mod tests {
     fn intern_half_day_deduction_computed_when_passed_as_zero() {
         let result = calculate(&CutoffInput {
             employee_id: "APG-2026-115".into(),
-            employee_name: "Allaena Nicole E. Vizon".into(),
+            employee_name: "Alyssa Joy E. Villanueva".into(),
             cutoff_start: "2026-09-16".into(),
             cutoff_end: "2026-09-21".into(),
             daily_rate: 80.0,

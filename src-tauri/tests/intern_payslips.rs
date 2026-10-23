@@ -171,7 +171,7 @@ async fn payslips(db: &sqlx::SqlitePool) -> Vec<InternPayslip> {
 async fn reference_payslip_matches_the_hr_template() {
     let db = migrated_db().await;
     insert_user(&db, "INT-1", "INTERN", "IT").await;
-    let mut row = cutoff("INT-1", "John Frederick Ruiz");
+    let mut row = cutoff("INT-1", "John Patrick Rubio");
     row.actual_days = 10.0;
     row.absent_days = 1.0;
     row.absence = 8_000;
@@ -182,7 +182,7 @@ async fn reference_payslip_matches_the_hr_template() {
         payslips(&db).await,
         vec![InternPayslip {
             employee_id: "INT-1".into(),
-            employee_name: "RUIZ, JOHN FREDERICK".into(),
+            employee_name: "RUBIO, JOHN PATRICK".into(),
             department: "IT".into(),
             designation: "INTERN".into(),
             tin: String::new(),
@@ -404,16 +404,16 @@ async fn payslips_serialize_with_the_camel_case_contract_keys() {
 #[test]
 fn surname_first_name_formats_stored_first_name_first_names() {
     for (stored, expected) in [
-        ("John Frederick Ruiz", "RUIZ, JOHN FREDERICK"),
+        ("John Patrick Rubio", "RUBIO, JOHN PATRICK"),
         ("Deign Grey O. Lazaro", "LAZARO, DEIGN GREY O."),
-        ("Kizziah Ishi De Guerto", "DE GUERTO, KIZZIAH ISHI"),
-        ("Ma. Ellaine Zapico", "ZAPICO, MA. ELLAINE"),
-        ("Ar-jee Felizarte", "FELIZARTE, AR-JEE"),
-        ("Allaena Nicole E. Vizon", "VIZON, ALLAENA NICOLE E."),
+        ("Karla Ines De Vera", "DE VERA, KARLA INES"),
+        ("Ma. Clarisse Zamora", "ZAMORA, MA. CLARISSE"),
+        ("Ar-jay Fernandez", "FERNANDEZ, AR-JAY"),
+        ("Alyssa Joy E. Villanueva", "VILLANUEVA, ALYSSA JOY E."),
         ("Juan Dela Cruz Jr.", "DELA CRUZ, JUAN JR."),
         ("Maria de los Santos", "DE LOS SANTOS, MARIA"),
         ("Madonna", "MADONNA"),
-        ("Ruiz, John", "RUIZ, JOHN"),
+        ("Rubio, John", "RUBIO, JOHN"),
         ("  Ana   Maria   Reyes  ", "REYES, ANA MARIA"),
         ("Pedro Penduko III", "PENDUKO, PEDRO III"),
         ("Jose Rizal Sr", "RIZAL, JOSE SR"),
@@ -433,15 +433,15 @@ fn surname_first_name_formats_stored_first_name_first_names() {
         surname_first_name("DELA CRUZ, JUAN JR."),
         "DELA CRUZ, JUAN JR."
     );
-    // "Ruiz," has no given names, so it is just the surname.
-    assert_eq!(surname_first_name("Ruiz,"), "RUIZ");
+    // "Rubio," has no given names, so it is just the surname.
+    assert_eq!(surname_first_name("Rubio,"), "RUBIO");
 }
 
 #[test]
 fn surname_sort_key_orders_last_name_first_then_given_then_id() {
     assert_eq!(
-        surname_sort_key("Kizziah Ishi De Guerto"),
-        ("de guerto".to_string(), "kizziah ishi".to_string())
+        surname_sort_key("Karla Ines De Vera"),
+        ("de vera".to_string(), "karla ines".to_string())
     );
     // The suffix is not part of the key; display and stored forms agree.
     assert_eq!(
@@ -449,12 +449,12 @@ fn surname_sort_key_orders_last_name_first_then_given_then_id() {
         surname_sort_key("DELA CRUZ, JUAN JR.")
     );
     let mut rows = [
-        ("Zed Ruiz", "INT-9"),
-        ("John Frederick Ruiz", "INT-3"),
-        ("Allan Altiche", "INT-5"),
-        ("Kizziah Ishi De Guerto", "INT-4"),
-        ("Allan Altiche", "INT-2"),
-        ("Ar-jee Felizarte", "INT-6"),
+        ("Zed Rubio", "INT-9"),
+        ("John Patrick Rubio", "INT-3"),
+        ("Allan Alcantara", "INT-5"),
+        ("Karla Ines De Vera", "INT-4"),
+        ("Allan Alcantara", "INT-2"),
+        ("Ar-jay Fernandez", "INT-6"),
     ];
     rows.sort_by_cached_key(|(name, id)| payroll_row_order_key(START, name, id));
     assert_eq!(
@@ -463,19 +463,19 @@ fn surname_sort_key_orders_last_name_first_then_given_then_id() {
     );
     // Newest cutoff first, then names within a cutoff.
     let mut cutoffs = [
-        ("2026-09-01", "Zed Ruiz"),
-        ("2026-09-16", "Zed Ruiz"),
-        ("2026-09-16", "Allan Altiche"),
-        ("2026-09-01", "Allan Altiche"),
+        ("2026-09-01", "Zed Rubio"),
+        ("2026-09-16", "Zed Rubio"),
+        ("2026-09-16", "Allan Alcantara"),
+        ("2026-09-01", "Allan Alcantara"),
     ];
     cutoffs.sort_by_cached_key(|(start, name)| payroll_row_order_key(start, name, "INT-1"));
     assert_eq!(
         cutoffs,
         [
-            ("2026-09-16", "Allan Altiche"),
-            ("2026-09-16", "Zed Ruiz"),
-            ("2026-09-01", "Allan Altiche"),
-            ("2026-09-01", "Zed Ruiz"),
+            ("2026-09-16", "Allan Alcantara"),
+            ("2026-09-16", "Zed Rubio"),
+            ("2026-09-01", "Allan Alcantara"),
+            ("2026-09-01", "Zed Rubio"),
         ]
     );
 }
@@ -487,9 +487,9 @@ async fn sheet_rows_and_payslips_are_last_name_alphabetical() {
         insert_user(&db, id, "INTERN", "IT").await;
     }
     // Inserted out of order on purpose (and first-name-first, as stored).
-    insert_cutoff(&db, &cutoff("INT-1", "John Frederick Ruiz")).await;
-    insert_cutoff(&db, &cutoff("INT-2", "Allan Altiche")).await;
-    insert_cutoff(&db, &cutoff("INT-3", "Kizziah Ishi De Guerto")).await;
+    insert_cutoff(&db, &cutoff("INT-1", "John Patrick Rubio")).await;
+    insert_cutoff(&db, &cutoff("INT-2", "Allan Alcantara")).await;
+    insert_cutoff(&db, &cutoff("INT-3", "Karla Ines De Vera")).await;
 
     let sheet = load_payroll_sheet_rows(&db, START, END, "INTERN")
         .await
@@ -500,9 +500,9 @@ async fn sheet_rows_and_payslips_are_last_name_alphabetical() {
             .map(|row| row.employee_name.as_str())
             .collect::<Vec<_>>(),
         [
-            "ALTICHE, ALLAN",
-            "DE GUERTO, KIZZIAH ISHI",
-            "RUIZ, JOHN FREDERICK"
+            "ALCANTARA, ALLAN",
+            "DE VERA, KARLA INES",
+            "RUBIO, JOHN PATRICK"
         ]
     );
     assert_eq!(
@@ -512,9 +512,9 @@ async fn sheet_rows_and_payslips_are_last_name_alphabetical() {
             .map(|slip| slip.employee_name.as_str())
             .collect::<Vec<_>>(),
         [
-            "ALTICHE, ALLAN",
-            "DE GUERTO, KIZZIAH ISHI",
-            "RUIZ, JOHN FREDERICK"
+            "ALCANTARA, ALLAN",
+            "DE VERA, KARLA INES",
+            "RUBIO, JOHN PATRICK"
         ]
     );
 }
@@ -522,8 +522,8 @@ async fn sheet_rows_and_payslips_are_last_name_alphabetical() {
 #[test]
 fn display_file_stem_is_readable_and_windows_safe() {
     assert_eq!(
-        payslip_display_file_stem("RUIZ, JOHN FREDERICK"),
-        "RUIZ, JOHN FREDERICK"
+        payslip_display_file_stem("RUBIO, JOHN PATRICK"),
+        "RUBIO, JOHN PATRICK"
     );
     assert_eq!(
         payslip_display_file_stem("DE LA CRUZ, MA. ÑOÑA (JR.)"),
@@ -538,12 +538,12 @@ fn display_file_stem_is_readable_and_windows_safe() {
         "ABCDEFGHIJ"
     );
     assert_eq!(
-        payslip_display_file_stem("  RUIZ,\t JOHN \n  FREDERICK  "),
-        "RUIZ, JOHN FREDERICK"
+        payslip_display_file_stem("  RUBIO,\t JOHN \n  PATRICK  "),
+        "RUBIO, JOHN PATRICK"
     );
     assert_eq!(payslip_display_file_stem("A : B"), "A B");
-    assert_eq!(payslip_display_file_stem("RUIZ, JOHN..."), "RUIZ, JOHN");
-    assert_eq!(payslip_display_file_stem("RUIZ, JOHN . ."), "RUIZ, JOHN");
+    assert_eq!(payslip_display_file_stem("RUBIO, JOHN..."), "RUBIO, JOHN");
+    assert_eq!(payslip_display_file_stem("RUBIO, JOHN . ."), "RUBIO, JOHN");
     assert_eq!(payslip_display_file_stem("A\u{0007}B"), "AB");
     assert_eq!(payslip_display_file_stem("con"), "con-file");
     assert_eq!(payslip_display_file_stem("NUL."), "NUL-file");
@@ -592,10 +592,10 @@ fn writes_one_png_per_intern_with_collision_safe_names() {
     let names = write_intern_payslip_images(
         &dir,
         &[
-            image_for("INT-1", "RUIZ, JOHN FREDERICK", &png),
+            image_for("INT-1", "RUBIO, JOHN PATRICK", &png),
             image_for("INT-2", "Maria Santos", &png),
-            image_for("INT-3", "ruiz, john frederick", &png),
-            image_for("INT-3", "RUIZ, JOHN FREDERICK", &png),
+            image_for("INT-3", "rubio, john patrick", &png),
+            image_for("INT-3", "RUBIO, JOHN PATRICK", &png),
             image_for("INT-4", "con", &png),
         ],
     )
@@ -603,10 +603,10 @@ fn writes_one_png_per_intern_with_collision_safe_names() {
     assert_eq!(
         names,
         [
-            "RUIZ, JOHN FREDERICK.png",
+            "RUBIO, JOHN PATRICK.png",
             "Maria Santos.png",
-            "ruiz, john frederick (INT-3).png",
-            "RUIZ, JOHN FREDERICK (INT-3) (2).png",
+            "rubio, john patrick (INT-3).png",
+            "RUBIO, JOHN PATRICK (INT-3) (2).png",
             "con-file.png",
         ]
     );

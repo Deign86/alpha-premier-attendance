@@ -207,13 +207,13 @@ describe('DatabasePanel', () => {
     const syncInternDtrSpy = vi.spyOn(api, 'syncInternDtr').mockResolvedValueOnce({
       success: true,
       internsChecked: 1,
-      tabsCreated: ['Maricon C. Danao'],
+      tabsCreated: ['Marissa C. Dalisay'],
       rowsSynced: 4,
       details: [
         {
           userId: 'APG-2026-116',
-          fullName: 'Maricon C. Danao',
-          tab: 'Maricon C. Danao',
+          fullName: 'Marissa C. Dalisay',
+          tab: 'Marissa C. Dalisay',
           tabCreated: true,
           rowsSynced: 4,
           status: 'SYNCED',
@@ -229,7 +229,7 @@ describe('DatabasePanel', () => {
     await user.click(syncBtn);
 
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Maricon C\. Danao\)\./i)).toBeInTheDocument();
+    expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Marissa C\. Dalisay\)\./i)).toBeInTheDocument();
   });
 
   it('shows the stopped tab and retries from that intern, keeping resumed progress until completion', async () => {
@@ -402,7 +402,7 @@ describe('DatabasePanel', () => {
       ],
       errors: [
         'BACKFILL_FAILED: Juan Dela Cruz (APG-2026-103): Google Sheets write failed',
-        'BACKFILL_FAILED: Maricon Danao (APG-2026-116): permission denied',
+        'BACKFILL_FAILED: Marissa Dalisay (APG-2026-116): permission denied',
       ],
     };
     const invokeSpy = vi.fn(async (_command: string, _args: DtrInvokeArgs | undefined) => partialFailure);
@@ -417,7 +417,7 @@ describe('DatabasePanel', () => {
 
     const errorsAlert = await screen.findByRole('alert');
     expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Juan Dela Cruz \(APG-2026-103\): Google Sheets write failed/i);
-    expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Maricon Danao \(APG-2026-116\): permission denied/i);
+    expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Marissa Dalisay \(APG-2026-116\): permission denied/i);
     expect(screen.getByText(/Synced 2 row\(s\), but encountered errors:/i)).toBeInTheDocument();
   });
 
@@ -497,7 +497,7 @@ describe('DatabasePanel', () => {
         deadLetter: 0,
         byTable: [{ tableName: 'attendance', pending: 2 }],
         dtrPendingCount: 1,
-        dtrPendingItems: [{ userId: 'APG-2026-116', fullName: 'Maricon C. Danao', attempts: 1, lastChecked: null }],
+        dtrPendingItems: [{ userId: 'APG-2026-116', fullName: 'Marissa C. Dalisay', attempts: 1, lastChecked: null }],
         lastSyncedAt: '2026-08-15T00:00:00Z',
         lastError: null,
         throttledUntil: null,
@@ -517,7 +517,7 @@ describe('DatabasePanel', () => {
     expect(screen.getByText('2 pending')).toBeInTheDocument();
     expect(screen.getByText('InternDtr tabs')).toBeInTheDocument();
     expect(screen.getByText('1 pending')).toBeInTheDocument();
-    expect(screen.getByText(/Waiting for a tab: Maricon C\. Danao/)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for a tab: Marissa C\. Dalisay/)).toBeInTheDocument();
     expect(loadDtrSyncHealthSpy).toHaveBeenCalled();
   });
 

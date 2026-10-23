@@ -186,9 +186,9 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
 
   it('allows only one grace period across three 08:05 arrivals in the same Manila week', () => {
     const rows = [
-      { attendanceId: '1', userId: 'MARICON', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:05:00+08:00' },
-      { attendanceId: '2', userId: 'MARICON', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:05:00+08:00' },
-      { attendanceId: '3', userId: 'MARICON', attendanceDate: '2026-08-26', timeIn: '2026-08-26T08:05:00+08:00' },
+      { attendanceId: '1', userId: 'MARISSA', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:05:00+08:00' },
+      { attendanceId: '2', userId: 'MARISSA', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:05:00+08:00' },
+      { attendanceId: '3', userId: 'MARISSA', attendanceDate: '2026-08-26', timeIn: '2026-08-26T08:05:00+08:00' },
     ];
     const results = evaluateAttendanceArrivals(rows);
     expect(rows.map(({ attendanceId }) => results.get(attendanceId)?.arrivalStatus)).toEqual([

@@ -2,9 +2,9 @@
  * Live intern-DTR sync logic (INTERN DTR 2026 human sheet).
  *
  * Tab-naming reality: roster stores `FIRST [middle…] LAST`
- * (e.g. `Raineer C. Rosado`) while tabs are `LAST FIRST`
- * (`ROSADO RAINEER`), single first-names, or multi-word surnames
- * (`DE GUERTO ISHI`). Resolution rule: a tab belongs to a user iff
+ * (e.g. `Ramil C. Roque`) while tabs are `LAST FIRST`
+ * (`ROQUE RAMIL`), single first-names, or multi-word surnames
+ * (`DE VERA INES`). Resolution rule: a tab belongs to a user iff
  * every normalized tab token appears in the user's tokens AND the tab
  * includes the user's last token. Surnames are unique in the roster,
  * so the last-token requirement keeps matches unique; anything else
@@ -204,7 +204,7 @@ function foldDiacritic(c: string): string {
   }
 }
 
-/** Lowercase + strip everything but a-z0-9 (`Ar-jee`→`arjee`, `Ma.`→`ma`). */
+/** Lowercase + strip everything but a-z0-9 (`Ar-jay`→`arjay`, `Ma.`→`ma`). */
 export function normalizeDtrToken(token: string): string {
   return [...token.trim().toLowerCase()].map(foldDiacritic).join('').replace(/[^a-z0-9]/g, '');
 }
@@ -264,7 +264,7 @@ export function resolveUserTab(
     if (isSkippableTitle(title)) continue;
     const tabToks = dtrTokens(title);
     if (tabToks.length === 1) {
-      // Single-name tab (ELLAINE, KURT, …): matches when the token sits
+      // Single-name tab (CLARISSE, DARIO, …): matches when the token sits
       // anywhere in exactly one roster user's tokens.
       if (!userToks.includes(tabToks[0])) continue;
       const collides = allUsers.some(

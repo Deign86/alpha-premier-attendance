@@ -512,13 +512,13 @@ mod tests {
     #[test]
     fn spoken_text_expands_ma_prefix() {
         assert_eq!(spoken_text_for_voice("Ma. Teresa Carandang"), "Maria Teresa Carandang");
-        assert_eq!(spoken_text_for_voice("Ma Ellaine Zapico"), "Maria Ellaine Zapico");
+        assert_eq!(spoken_text_for_voice("Ma Clarisse Zamora"), "Maria Clarisse Zamora");
     }
 
     #[test]
     fn spoken_text_drops_middle_initials_and_dehyphenates() {
         assert_eq!(spoken_text_for_voice("Deign Grey O. Lazaro"), "Deign Grey Lazaro");
-        assert_eq!(spoken_text_for_voice("Ar-jee Felizarte"), "Arjee Felizarte");
+        assert_eq!(spoken_text_for_voice("Ar-jee Fernandez"), "Arjee Fernandez");
     }
 
     #[test]

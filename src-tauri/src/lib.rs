@@ -8674,7 +8674,7 @@ mod tests {
             &state.db,
             "EMP_01",
             "CARD_01",
-            "Raineer C. Rosado",
+            "Ramil C. Roque",
             Some("IT"),
             "ACTIVE",
             "EMPLOYEE",
@@ -8689,7 +8689,7 @@ mod tests {
         .expect("user row for FK");
         let now_utc = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES ('LOG-1', '2026-08-31', 'EMP_01', 'Raineer C. Rosado', 'IT', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', ?, ?)",
+            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES ('LOG-1', '2026-08-31', 'EMP_01', 'Ramil C. Roque', 'IT', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', ?, ?)",
         )
         .bind(&now_utc)
         .bind(&now_utc)
@@ -8748,7 +8748,7 @@ mod tests {
             &state.db,
             "EMP_01",
             "CARD_01",
-            "Raineer C. Rosado",
+            "Ramil C. Roque",
             Some("IT/ Marketing Associate"),
             "ACTIVE",
             "EMPLOYEE",
@@ -8767,7 +8767,7 @@ mod tests {
         let now_utc = chrono::Utc::now().to_rfc3339();
 
         sqlx::query(
-            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES (?, '2026-08-31', 'EMP_01', 'Raineer C. Rosado', 'IT/ Marketing Associate', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', ?, ?)",
+            "INSERT INTO bathroom_log (log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at) VALUES (?, '2026-08-31', 'EMP_01', 'Ramil C. Roque', 'IT/ Marketing Associate', 'MALE', '2026-08-31T10:00:00+08:00', NULL, NULL, 'OUT', '', ?, ?)",
         )
         .bind(&log_id)
         .bind(&now_utc)
