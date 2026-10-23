@@ -3413,8 +3413,8 @@ mod tests {
     fn users() -> Vec<(String, String)> {
         vec![
             ("u1".to_string(), "Deign Grey O. Lazaro".to_string()),
-            ("u2".to_string(), "Kyle Ricio".to_string()),
-            ("u3".to_string(), "Elaizah Altiche".to_string()),
+            ("u2".to_string(), "Nico Rimando".to_string()),
+            ("u3".to_string(), "Erika Alcantara".to_string()),
         ]
     }
 
@@ -3532,11 +3532,11 @@ mod tests {
 
     #[test]
     fn resolves_single_first_name_tab() {
-        let titles = vec!["KYLE".to_string()];
-        // "kyle" sits in exactly one roster user → match.
+        let titles = vec!["NICO".to_string()];
+        // "nico" sits in exactly one roster user → match.
         assert_eq!(
-            resolve_user_tab(&titles, "u2", "Kyle Ricio", &users()),
-            Some("KYLE".to_string())
+            resolve_user_tab(&titles, "u2", "Nico Rimando", &users()),
+            Some("NICO".to_string())
         );
     }
 
@@ -4748,12 +4748,12 @@ mod tests {
             resolve_user_tab(&titles, "u8", "María Peña", &roster),
             Some("PENA".to_string())
         );
-        // …but the folded form must be spelled the same: FREDERIK (k)
-        // never matches Frederick (ck) — exact-token rule, fail closed.
-        let titles = vec!["RUIZ FREDERIK".to_string()];
-        let roster = vec![("u9".to_string(), "John Frederick Ruiz".to_string())];
+        // …but the folded form must be spelled the same: PATRIK (k)
+        // never matches Patrick (ck) — exact-token rule, fail closed.
+        let titles = vec!["RUBIO PATRIK".to_string()];
+        let roster = vec![("u9".to_string(), "John Patrick Rubio".to_string())];
         assert_eq!(
-            resolve_user_tab(&titles, "u9", "John Frederick Ruiz", &roster),
+            resolve_user_tab(&titles, "u9", "John Patrick Rubio", &roster),
             None
         );
     }
@@ -4936,7 +4936,7 @@ mod tests {
     #[test]
     fn tab_name_validity_rejects_sheet_illegal_titles() {
         assert!(dtr_tab_name_valid("Deign Grey O. Lazaro"));
-        assert!(dtr_tab_name_valid("Ma. Ellaine Zapico"));
+        assert!(dtr_tab_name_valid("Ma. Clarisse Zamora"));
         assert!(!dtr_tab_name_valid(""));
         assert!(!dtr_tab_name_valid("   "));
         assert!(!dtr_tab_name_valid("A:B"));
@@ -4980,16 +4980,16 @@ mod tests {
         // No shared token: clean miss, auto-create may proceed.
         assert!(!tab_name_overlaps_user(
             &titles,
-            "Rona Khristelle Angelique Pacada"
+            "Rina Kristine Angeline Pascual"
         ));
         // Template-only titles never count as overlap.
         assert!(!tab_name_overlaps_user(
             &["COPY OF TEMPLATE".to_string()],
-            "Rona Khristelle Angelique Pacada"
+            "Rina Kristine Angeline Pascual"
         ));
         // Single-character tokens (e.g. middle initials like "C.") do not trigger false-positive overlap.
-        let titles_with_initial = vec!["Raineer C. Rosado".to_string()];
-        assert!(!tab_name_overlaps_user(&titles_with_initial, "Maricon C. Danao"));
+        let titles_with_initial = vec!["Ramil C. Roque".to_string()];
+        assert!(!tab_name_overlaps_user(&titles_with_initial, "Marissa C. Dalisay"));
         // Degenerate names never auto-create.
         assert!(tab_name_overlaps_user(&[], ""));
     }

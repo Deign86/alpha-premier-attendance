@@ -337,7 +337,7 @@ describe('admin and live attendance API', () => {
 
 describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () => {
   const adminConfig = { timezone: 'Asia/Manila' as const };
-  const INTERN: DtrSyncUser = { userId: 'APG-2026-108', fullName: 'Raineer C. Rosado' };
+  const INTERN: DtrSyncUser = { userId: 'APG-2026-108', fullName: 'Ramil C. Roque' };
 
   function makeDtrClient(valuesByTab: Record<string, string[][]>): SheetsClient {
     return {
@@ -371,12 +371,12 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
   it('backdated second-late-in-week inside :15 stays actual; first-late pushes actual', async () => {
     // 2026-08-31 is the Monday of the week containing 09-01 (first late) and 09-03 (backdated 2nd late).
     const sheets = new InMemorySheetsService([
-      { userId: 'APG-2026-108', fullName: 'Raineer C. Rosado', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' },
+      { userId: 'APG-2026-108', fullName: 'Ramil C. Roque', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' },
     ], [
-      { attendanceId: 'att-1', attendanceDate: '2026-09-01', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Raineer C. Rosado', department: null, timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+      { attendanceId: 'att-1', attendanceDate: '2026-09-01', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Ramil C. Roque', department: null, timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
     ]);
     const valuesByTab: Record<string, string[][]> = {
-      'ROSADO RAINEER': dtrRowsFor(['2026-09-01', '2026-09-03', '2026-09-10']),
+      'ROQUE RAMIL': dtrRowsFor(['2026-09-01', '2026-09-03', '2026-09-10']),
     };
     const svc = new AdminService(sheets, adminConfig, undefined, {
       client: makeDtrClient(valuesByTab),
@@ -391,7 +391,7 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
       timeOut: '2026-09-03T17:00:00+08:00',
       reason: 'Forgot card; seen on CCTV',
     });
-    expect(valuesByTab['ROSADO RAINEER']).toContainEqual(['9/3/2026', '8:05:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
+    expect(valuesByTab['ROQUE RAMIL']).toContainEqual(['9/3/2026', '8:05:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
 
     // First-late in a fresh week (2026-09-10, Thursday of its own week) stays actual.
     await svc.createBackdatedAttendance({
@@ -401,17 +401,17 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
       timeOut: '2026-09-10T17:00:00+08:00',
       reason: 'Traffic on 09-10',
     });
-    expect(valuesByTab['ROSADO RAINEER']).toContainEqual(['9/10/2026', '8:10:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
+    expect(valuesByTab['ROQUE RAMIL']).toContainEqual(['9/10/2026', '8:10:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
   });
 
   it('admin backdate API writes the revised DTR row', async () => {
     const sheets = new InMemorySheetsService([
-      { userId: 'APG-2026-108', fullName: 'Raineer C. Rosado', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' },
+      { userId: 'APG-2026-108', fullName: 'Ramil C. Roque', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' },
     ], [
-      { attendanceId: 'att-1', attendanceDate: '2026-09-01', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Raineer C. Rosado', department: null, timeIn: '2026-09-01T08:08:00+08:00', timeOut: '2026-09-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+      { attendanceId: 'att-1', attendanceDate: '2026-09-01', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Ramil C. Roque', department: null, timeIn: '2026-09-01T08:08:00+08:00', timeOut: '2026-09-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
     ]);
     const valuesByTab: Record<string, string[][]> = {
-      'ROSADO RAINEER': dtrRowsFor(['2026-09-01', '2026-09-03']),
+      'ROQUE RAMIL': dtrRowsFor(['2026-09-01', '2026-09-03']),
     };
     const app = createApp({ sheets, config, logger: false, internDtrClient: makeDtrClient(valuesByTab) });
     const agent = request.agent(app);
@@ -421,19 +421,19 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
       timeIn: '2026-09-03T08:08:00+08:00', timeOut: '2026-09-03T17:00:00+08:00',
       reason: 'API DTR sync validation',
     }).expect(200);
-    expect(valuesByTab['ROSADO RAINEER']).toContainEqual(['9/3/2026', '8:08:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
+    expect(valuesByTab['ROQUE RAMIL']).toContainEqual(['9/3/2026', '8:08:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
   });
 
   it('correction into a second-late-in-week inside :15 keeps actual AM-IN', async () => {
     // Existing 09-03 row recorded as on-time returns after a first-late on 09-01.
     const sheets = new InMemorySheetsService([
-      { userId: 'APG-2026-108', fullName: 'Raineer C. Rosado', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' },
+      { userId: 'APG-2026-108', fullName: 'Ramil C. Roque', rfidUid: 'AABB', department: null, active: true, employeeType: 'INTERN' },
     ], [
-      { attendanceId: 'att-late', attendanceDate: '2026-09-01', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Raineer C. Rosado', department: null, timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
-      { attendanceId: 'att-3', attendanceDate: '2026-09-03', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Raineer C. Rosado', department: null, timeIn: '2026-09-03T08:00:00+08:00', timeOut: '2026-09-03T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+      { attendanceId: 'att-late', attendanceDate: '2026-09-01', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Ramil C. Roque', department: null, timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
+      { attendanceId: 'att-3', attendanceDate: '2026-09-03', userId: 'APG-2026-108', rfidUid: 'AABB', fullName: 'Ramil C. Roque', department: null, timeIn: '2026-09-03T08:00:00+08:00', timeOut: '2026-09-03T17:00:00+08:00', status: 'COMPLETED', source: 'RFID', notes: '' },
     ]);
     const valuesByTab: Record<string, string[][]> = {
-      'ROSADO RAINEER': dtrRowsFor(['2026-09-01', '2026-09-03']),
+      'ROQUE RAMIL': dtrRowsFor(['2026-09-01', '2026-09-03']),
     };
     const svc = new AdminService(sheets, adminConfig, undefined, {
       client: makeDtrClient(valuesByTab),
@@ -447,17 +447,17 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
       expectedTimeIn: '2026-09-03T08:00:00+08:00',
       expectedTimeOut: '2026-09-03T17:00:00+08:00',
     });
-    expect(valuesByTab['ROSADO RAINEER']).toContainEqual(['9/3/2026', '8:05:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
+    expect(valuesByTab['ROQUE RAMIL']).toContainEqual(['9/3/2026', '8:05:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '']);
   });
 
   it('does not push DTR for employees or when no DTR client is wired', async () => {
     const sheets = new InMemorySheetsService([
-      { userId: 'APGCO-0013', fullName: 'CHICO, JEAN ASHLEY', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705 },
+      { userId: 'APGCO-0013', fullName: 'CASTILLO, GRACE ANN', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705 },
     ]);
-    const valuesByTab: Record<string, string[][]> = { 'CHICO JEAN': dtrRowsFor(['2026-09-03']) };
+    const valuesByTab: Record<string, string[][]> = { 'CASTILLO JEAN': dtrRowsFor(['2026-09-03']) };
     const svc = new AdminService(sheets, adminConfig, undefined, {
       client: makeDtrClient(valuesByTab),
-      users: [{ userId: 'APGCO-0013', fullName: 'CHICO, JEAN ASHLEY' }],
+      users: [{ userId: 'APGCO-0013', fullName: 'CASTILLO, GRACE ANN' }],
     });
     await svc.createBackdatedAttendance({
       userId: 'APGCO-0013',
@@ -466,6 +466,6 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
       timeOut: '2026-09-03T17:00:00+08:00',
       reason: 'Employee backdate — no DTR push expected',
     });
-    expect(valuesByTab['CHICO JEAN']).toEqual(dtrRowsFor(['2026-09-03']));
+    expect(valuesByTab['CASTILLO JEAN']).toEqual(dtrRowsFor(['2026-09-03']));
   });
 });

@@ -89,7 +89,7 @@ function rightEdge(entry: DrawnText): number {
 
 const payslip: InternPayslip = {
   employeeId: "APG-2026-113",
-  employeeName: "RUIZ, JOHN FREDERICK",
+  employeeName: "RUBIO, JOHN PATRICK",
   department: "MARKETING",
   designation: "INTERN",
   tin: "",
@@ -166,7 +166,7 @@ describe("drawInternPayslip", () => {
       "PHP 800.00",
     ]));
     expect(canvas.after("Employee ID").text).toBe("APG-2026-113");
-    expect(canvas.after("Employee Name").text).toBe("RUIZ, JOHN FREDERICK");
+    expect(canvas.after("Employee Name").text).toBe("RUBIO, JOHN PATRICK");
     expect(canvas.after("Department").text).toBe("MARKETING");
     expect(canvas.after("Designation").text).toBe("INTERN");
     expect(canvas.after("Bank Name").text).toBe("CASH");

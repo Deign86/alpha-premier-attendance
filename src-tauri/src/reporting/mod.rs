@@ -347,7 +347,7 @@ mod tests {
         let intern_rows = vec![
             PayrollSheetRow {
                 employee_id: "APG-2026-108".into(),
-                employee_name: "Raineer C. Rosado".into(),
+                employee_name: "Ramil C. Roque".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -379,7 +379,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-113".into(),
-                employee_name: "Ar-jee Felizarte".into(),
+                employee_name: "Ar-jay Fernandez".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -395,7 +395,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-111".into(),
-                employee_name: "Ma. Ellaine Zapico".into(),
+                employee_name: "Ma. Clarisse Zamora".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -411,7 +411,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-109".into(),
-                employee_name: "Elaizah Jane Altiche".into(),
+                employee_name: "Erika Jane Alcantara".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -427,7 +427,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-110".into(),
-                employee_name: "Bianca Marie Antoy".into(),
+                employee_name: "Patricia Marie Aquino".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -443,7 +443,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-112".into(),
-                employee_name: "John Frederick Ruiz".into(),
+                employee_name: "John Patrick Rubio".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -459,7 +459,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-099".into(),
-                employee_name: "Jeremy Bugarin".into(),
+                employee_name: "Carlo Bautista".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -475,7 +475,7 @@ mod tests {
             },
             PayrollSheetRow {
                 employee_id: "APG-2026-100".into(),
-                employee_name: "Kylle Ricio".into(),
+                employee_name: "Nicco Rimando".into(),
                 employee_type: "INTERN".into(),
                 cutoff_rate_centavos: 3_300_00,
                 daily_rate_centavos: 300_00,
@@ -888,7 +888,7 @@ pub struct PayrollSheetRow {
 
 /// Trailing name suffixes kept after the given names ("Juan Dela Cruz Jr.").
 const NAME_SUFFIXES: &[&str] = &["jr", "sr", "ii", "iii", "iv", "v"];
-/// Lowercase particles that belong to the surname ("De Guerto", "De Los Santos").
+/// Lowercase particles that belong to the surname ("De Vera", "De Los Santos").
 const SURNAME_PARTICLES: &[&str] = &[
     "de", "del", "dela", "della", "delos", "la", "las", "los", "san", "santa", "santo", "sta",
     "sto", "van", "von", "der", "den", "di", "da", "du", "dos", "das",
@@ -945,8 +945,8 @@ fn join_nonempty(parts: &[&str]) -> String {
         .join(" ")
 }
 
-/// Last-name-first display for payroll output: "John Frederick Ruiz" becomes
-/// "RUIZ, JOHN FREDERICK"; a single word is just uppercased.
+/// Last-name-first display for payroll output: "John Patrick Rubio" becomes
+/// "RUBIO, JOHN PATRICK"; a single word is just uppercased.
 pub fn surname_first_name(full_name: &str) -> String {
     let (surname, given, suffix) = split_name_parts(full_name);
     let display = if given.is_empty() {
@@ -1206,7 +1206,7 @@ pub async fn load_intern_payslips(
 
 /// A readable Windows-safe file stem for a payslip image: unlike
 /// `sanitize_filename_component` it keeps spaces, commas and non-ASCII letters,
-/// so "RUIZ, JOHN FREDERICK" stays as-is.
+/// so "RUBIO, JOHN PATRICK" stays as-is.
 pub fn payslip_display_file_stem(value: &str) -> String {
     let cleaned = value
         .chars()

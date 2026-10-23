@@ -7,7 +7,7 @@ import { calculateInternPayroll } from '../src/intern-payroll.js';
 import { InMemorySheetsService } from '../src/sheets.js';
 
 const jeanInput = {
-  employeeId: 'APGCO-0013', employeeName: 'CHICO, JEAN ASHLEY', employeeType: 'EMPLOYEE' as const, payrollProfileId: 'JEAN_TENURED', payrollCutoffLabel: 'July 1-15, 2026', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15', payrollFrequency: 'SEMI_MONTHLY' as const,
+  employeeId: 'APGCO-0013', employeeName: 'CASTILLO, GRACE ANN', employeeType: 'EMPLOYEE' as const, payrollProfileId: 'JEAN_TENURED', payrollCutoffLabel: 'July 1-15, 2026', cutoffStart: '2026-07-01', cutoffEnd: '2026-07-15', payrollFrequency: 'SEMI_MONTHLY' as const,
   dailyRate: 705, standardWorkingDays: 11, actualWorkingDays: 11, specialHolidayDays: 1, specialHolidayMultiplier: 0.3, regularHolidayDays: 0, regularHolidayMultiplier: 1,
   incentivesAllowance: 6600, specialAllowance: 150, lateUnits: 0, lateDeduction: 0, halfDayCount: 0, halfDayFraction: 0.5, absentDays: 0, overtimeHours: 0, overtimeRate: 0, manualAdjustment: 0, adjustmentReason: null,
   signaturePlaceholder: '', approvedWorkingDayOverage: false, status: 'DRAFT' as const,
@@ -184,7 +184,7 @@ describe('cutoff payroll calculator', () => {
   it('uses precomputed halfDayDeduction for intern undertime', () => {
     const undertimeInternInput = {
       ...jeanInput,
-      employeeId: 'INT-004', employeeName: 'Melanie Garcia', employeeType: 'INTERN' as const, payrollProfileId: 'INTERN_STANDARD',
+      employeeId: 'INT-004', employeeName: 'Melissa Gomez', employeeType: 'INTERN' as const, payrollProfileId: 'INTERN_STANDARD',
       dailyRate: 80, standardWorkingDays: 11, actualWorkingDays: 2,
       specialHolidayDays: 0, specialHolidayMultiplier: 0, regularHolidayDays: 0, regularHolidayMultiplier: 0,
       incentivesAllowance: 0, specialAllowance: 0, lateUnits: 0, lateDeduction: 0,
@@ -277,7 +277,7 @@ describe('cutoff payroll calculator', () => {
   it('computes intern half-day deductions when halfDayCount is positive even if halfDayDeduction was passed as zero', () => {
     const internResult = calculateCutoffPayroll({
       employeeId: 'APG-2026-115',
-      employeeName: 'Allaena Nicole E. Vizon',
+      employeeName: 'Alyssa Joy E. Villanueva',
       employeeType: 'INTERN',
       payrollProfileId: 'INTERN_STANDARD',
       payrollCutoffLabel: 'September 16-21, 2026',

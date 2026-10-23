@@ -35,20 +35,20 @@ import {
 } from '../src/intern-dtr-sync.js';
 
 const ROSTER: DtrSyncUser[] = [
-  { userId: 'APG-2026-108', fullName: 'Raineer C. Rosado' },
+  { userId: 'APG-2026-108', fullName: 'Ramil C. Roque' },
   { userId: 'APG-2026-102', fullName: 'Deign Grey O. Lazaro' },
-  { userId: 'APG-2026-111', fullName: 'Ma. Ellaine Zapico' },
-  { userId: 'APG-2026-112', fullName: 'John Frederick Ruiz' },
-  { userId: 'APG-2026-104', fullName: 'Kizziah Ishi De Guerto' },
+  { userId: 'APG-2026-111', fullName: 'Ma. Clarisse Zamora' },
+  { userId: 'APG-2026-112', fullName: 'John Patrick Rubio' },
+  { userId: 'APG-2026-104', fullName: 'Karla Ines De Vera' },
 ];
 
 const TABS = [
   'COPY OF TEMPLATE',
-  'ROSADO RAINEER',
+  'ROQUE RAMIL',
   'LAZARO DEIGN ',
-  'ELLAINE ',
-  'RUIZ FREDERIK',
-  'DE GUERTO ISHI ',
+  'CLARISSE ',
+  'RUBIO PATRIK',
+  'DE VERA INES ',
 ];
 
 function makeClient(valuesByTab: Record<string, string[][]>): SheetsClient & { writes: { tab: string; row: number; values: string[] }[]; paints: FormatRequest[]; created: string[] } {
@@ -93,7 +93,7 @@ function makeClient(valuesByTab: Record<string, string[][]>): SheetsClient & { w
 
 const DAY: AttendanceDay = {
   userId: 'APG-2026-108',
-  fullName: 'Raineer C. Rosado',
+  fullName: 'Ramil C. Roque',
   attendanceDate: '2026-09-05',
   timeIn: '2026-09-05T07:24:00+08:00',
   timeOut: '2026-09-05T17:00:00+08:00',
@@ -102,7 +102,7 @@ const DAY: AttendanceDay = {
 
 describe('normalizeDtrToken', () => {
   it('strips hyphens/dots and lowercases', () => {
-    expect(normalizeDtrToken('Ar-jee')).toBe('arjee');
+    expect(normalizeDtrToken('Ar-jay')).toBe('arjay');
     expect(normalizeDtrToken('Ma.')).toBe('ma');
     expect(normalizeDtrToken('C.')).toBe('c');
   });
@@ -111,12 +111,12 @@ describe('normalizeDtrToken', () => {
     expect(normalizeDtrToken('José')).toBe('jose');
     expect(dtrTokens('María Peña')).toEqual(['maria', 'pena']);
   });
-  it('folded spelling still fails closed (FREDERIK vs Frederick)', () => {
-    expect(normalizeDtrToken('FREDERIK')).not.toBe(normalizeDtrToken('Frederick'));
+  it('folded spelling still fails closed (PATRIK vs Patrick)', () => {
+    expect(normalizeDtrToken('PATRIK')).not.toBe(normalizeDtrToken('Patrick'));
   });
   it('tokenizes multi-word surnames', () => {
-    expect(dtrTokens('DE GUERTO ISHI ')).toEqual(['de', 'guerto', 'ishi']);
-    expect(userLastToken('Raineer C. Rosado')).toBe('rosado');
+    expect(dtrTokens('DE VERA INES ')).toEqual(['de', 'vera', 'ines']);
+    expect(userLastToken('Ramil C. Roque')).toBe('roque');
   });
   it('strips generational suffixes for the last token', () => {
     expect(userLastToken('Juan Dela Cruz Jr')).toBe('cruz');
@@ -132,31 +132,31 @@ describe('normalizeDtrToken', () => {
 
 describe('resolveUserTab', () => {
   it('LAST FIRST pair with middle initial', () => {
-    expect(resolveUserTab(TABS, ROSTER[0], ROSTER)).toEqual({ status: 'MATCH', tab: 'ROSADO RAINEER' });
+    expect(resolveUserTab(TABS, ROSTER[0], ROSTER)).toEqual({ status: 'MATCH', tab: 'ROQUE RAMIL' });
   });
   it('LAST FIRST pair with middle names + trailing space', () => {
     expect(resolveUserTab(TABS, ROSTER[1], ROSTER)).toEqual({ status: 'MATCH', tab: 'LAZARO DEIGN ' });
   });
   it('single middle-name token', () => {
-    expect(resolveUserTab(TABS, ROSTER[2], ROSTER)).toEqual({ status: 'MATCH', tab: 'ELLAINE ' });
+    expect(resolveUserTab(TABS, ROSTER[2], ROSTER)).toEqual({ status: 'MATCH', tab: 'CLARISSE ' });
   });
   it('multi-word surname LASTS FIRST(middle)', () => {
-    expect(resolveUserTab(TABS, ROSTER[4], ROSTER)).toEqual({ status: 'MATCH', tab: 'DE GUERTO ISHI ' });
+    expect(resolveUserTab(TABS, ROSTER[4], ROSTER)).toEqual({ status: 'MATCH', tab: 'DE VERA INES ' });
   });
-  it('name variant fails closed (FREDERIK vs Frederick)', () => {
+  it('name variant fails closed (PATRIK vs Patrick)', () => {
     expect(resolveUserTab(TABS, ROSTER[3], ROSTER)).toEqual({ status: 'NO_MATCH', tab: null });
   });
-  it('correctly spelled LAST FIRST matches (rename target RUIZ FREDERICK)', () => {
-    const tabs = [...TABS.filter((t) => t !== 'RUIZ FREDERIK'), 'RUIZ FREDERICK'];
-    expect(resolveUserTab(tabs, ROSTER[3], ROSTER)).toEqual({ status: 'MATCH', tab: 'RUIZ FREDERICK' });
+  it('correctly spelled LAST FIRST matches (rename target RUBIO PATRICK)', () => {
+    const tabs = [...TABS.filter((t) => t !== 'RUBIO PATRIK'), 'RUBIO PATRICK'];
+    expect(resolveUserTab(tabs, ROSTER[3], ROSTER)).toEqual({ status: 'MATCH', tab: 'RUBIO PATRICK' });
   });
   it('ambiguous when two users share coverage', () => {
     const users: DtrSyncUser[] = [
-      { userId: 'A', fullName: 'Ellaine Reyes' },
-      { userId: 'B', fullName: 'Ellaine Zapico' },
+      { userId: 'A', fullName: 'Clarisse Reyes' },
+      { userId: 'B', fullName: 'Clarisse Zamora' },
     ];
-    // 'ELLAINE ' sits in both token sets → AMBIGUOUS, never first-hit-wins.
-    expect(resolveUserTab(['ELLAINE '], users[0], users).status).toBe('AMBIGUOUS');
+    // 'CLARISSE ' sits in both token sets → AMBIGUOUS, never first-hit-wins.
+    expect(resolveUserTab(['CLARISSE '], users[0], users).status).toBe('AMBIGUOUS');
     // Shared surname tab covering both → AMBIGUOUS.
     const users2: DtrSyncUser[] = [
       { userId: 'A', fullName: 'Juan Dela Cruz' },
@@ -379,15 +379,15 @@ describe('planPush', () => {
     ['9/5/2026', '', '', '', '', '0'],
   ];
   it('plans a B:E write at the right 1-based row', async () => {
-    const client = makeClient({ 'ROSADO RAINEER': baseRows });
+    const client = makeClient({ 'ROQUE RAMIL': baseRows });
     const plan = await planPush(client, DAY, ROSTER);
     expect(plan.kind).toBe('write');
     if (plan.kind !== 'write') throw new Error('expected write plan');
-    expect(plan.tab).toBe('ROSADO RAINEER');
+    expect(plan.tab).toBe('ROQUE RAMIL');
     expect(plan.row1Based).toBe(2);
     expect(plan.values).toEqual(['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
     await executePush(client, plan);
-    expect(client.writes).toEqual([{ tab: 'ROSADO RAINEER', row: 2, values: ['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM'] }]);
+    expect(client.writes).toEqual([{ tab: 'ROQUE RAMIL', row: 2, values: ['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM'] }]);
   });
   it('computes weekly grace exhaustion from history; re-push converges and Monday resets', async () => {
     const mondayDate = '2026-09-07';
@@ -412,7 +412,7 @@ describe('planPush', () => {
       },
     ];
     const client = makeClient({
-      'ROSADO RAINEER': [
+      'ROQUE RAMIL': [
         baseRows[0],
         ['9/1/2026', '', '', '', '', '0'],
         ['9/3/2026', '', '', '', '', '0'],
@@ -445,7 +445,7 @@ describe('planPush', () => {
     };
     const late0930: AttendanceDay = { ...next08, timeIn: '2026-09-03T09:30:00+08:00' };
     const lateFractionalGraceEnd: AttendanceDay = { ...next08, timeIn: '2026-09-03T08:15:00.500+08:00' };
-    const client = makeClient({ 'ROSADO RAINEER': [baseRows[0], ['9/1/2026'], ['9/3/2026']] });
+    const client = makeClient({ 'ROQUE RAMIL': [baseRows[0], ['9/1/2026'], ['9/3/2026']] });
     const graceStillAvailable = await planPush(client, next08, ROSTER, [priorOutsideWindow, next08]);
     const actual0930 = await planPush(client, late0930, ROSTER, [priorOutsideWindow, late0930]);
     const actualFractional = await planPush(client, lateFractionalGraceEnd, ROSTER, [lateFractionalGraceEnd]);
@@ -461,7 +461,7 @@ describe('planPush', () => {
       timeOut: '2026-10-01T17:00:00+08:00',
     };
     const client = makeClient({
-      'ROSADO RAINEER': [
+      'ROQUE RAMIL': [
         baseRows[0],
         ['DATE-October', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
         ['10/1/2026', '', '', '', '', '0'],
@@ -486,7 +486,7 @@ describe('planPush', () => {
     };
     const history = [firstLate, backdatedSecondLate];
     const client = makeClient({
-      'ROSADO RAINEER': [
+      'ROQUE RAMIL': [
         baseRows[0],
         ['9/1/2026', '', '', '', '', '0'],
         ['9/3/2026', '', '', '', '', '0'],
@@ -503,13 +503,13 @@ describe('planPush', () => {
       baseRows[0],
       ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
     ];
-    const client = makeClient({ 'ROSADO RAINEER': synced });
+    const client = makeClient({ 'ROQUE RAMIL': synced });
     const plan = await planPush(client, DAY, ROSTER);
     expect(plan.kind).toBe('in-sync');
     if (plan.kind !== 'in-sync') throw new Error('expected in-sync plan');
     // P1-B contract: in-sync plans still carry tab+row so the CLI paint
     // pass can white/clear them (Rust InSync branch parity).
-    expect(plan.tab).toBe('ROSADO RAINEER');
+    expect(plan.tab).toBe('ROQUE RAMIL');
     expect(plan.row1Based).toBe(2);
     expect(plan.values).toEqual(['7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM']);
     await executePush(client, plan);
@@ -520,7 +520,7 @@ describe('planPush', () => {
       baseRows[0],
       ['9/5/2026', '09:00 AM', '12:00 PM', '01:00 PM', '05:00 PM', '8'],
     ];
-    const client = makeClient({ 'ROSADO RAINEER': variant });
+    const client = makeClient({ 'ROQUE RAMIL': variant });
     const arrival: AttendanceDay = {
       ...DAY,
       timeIn: '2026-09-05T09:00:00+08:00',
@@ -533,33 +533,33 @@ describe('planPush', () => {
     expect(client.writes).toEqual([]);
   });
   it('skips NO_MATCH tabs with reason', async () => {
-    const client = makeClient({ 'RUIZ FREDERIK': baseRows });
-    const ruiz: AttendanceDay = { ...DAY, userId: 'APG-2026-112', fullName: 'John Frederick Ruiz' };
-    const plan = await planPush(client, ruiz, ROSTER);
+    const client = makeClient({ 'RUBIO PATRIK': baseRows });
+    const rubio: AttendanceDay = { ...DAY, userId: 'APG-2026-112', fullName: 'John Patrick Rubio' };
+    const plan = await planPush(client, rubio, ROSTER);
     expect(plan.kind).toBe('skip');
     if (plan.kind !== 'skip') throw new Error('expected skip plan');
     expect(plan.reason).toBe('tab-no-match');
     expect(plan.detail).toMatch(/NO_MATCH/);
   });
   it('skips an ambiguous tab resolution instead of pushing to a shared tab', async () => {
-    const client = makeClient({ RAINEER: baseRows });
-    const user: DtrSyncUser = { userId: 'USER-A', fullName: 'Raineer Rosado' };
-    const rival: DtrSyncUser = { userId: 'USER-B', fullName: 'Raineer Santos' };
+    const client = makeClient({ RAMIL: baseRows });
+    const user: DtrSyncUser = { userId: 'USER-A', fullName: 'Ramil Roque' };
+    const rival: DtrSyncUser = { userId: 'USER-B', fullName: 'Ramil Santos' };
     const plan = await planPush(client, { ...DAY, userId: user.userId, fullName: user.fullName }, [user, rival]);
     expect(plan).toMatchObject({
       kind: 'skip',
       reason: 'tab-ambiguous',
-      detail: 'tab AMBIGUOUS for Raineer Rosado',
+      detail: 'tab AMBIGUOUS for Ramil Roque',
     });
   });
   it('skips records without a time-in before reading sheet values', async () => {
-    const client = makeClient({ 'ROSADO RAINEER': baseRows });
+    const client = makeClient({ 'ROQUE RAMIL': baseRows });
     const plan = await planPush(client, { ...DAY, timeIn: null, timeOut: null }, ROSTER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'no-time-in', detail: 'no time-in yet' });
   });
   it('skips when a tab has month headers but no matching month block', async () => {
     const client = makeClient({
-      'ROSADO RAINEER': [
+      'ROQUE RAMIL': [
         ['DATE-October', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
         ['10/5/2026', '', '', '', '', '0'],
       ],
@@ -570,7 +570,7 @@ describe('planPush', () => {
     expect(plan.detail).toMatch(/no September block/);
   });
   it('skips missing date rows with reason', async () => {
-    const client = makeClient({ 'ROSADO RAINEER': [baseRows[0]] });
+    const client = makeClient({ 'ROQUE RAMIL': [baseRows[0]] });
     const plan = await planPush(client, DAY, ROSTER);
     expect(plan.kind).toBe('skip');
     if (plan.kind !== 'skip') throw new Error('expected skip plan');
@@ -578,7 +578,7 @@ describe('planPush', () => {
     expect(plan.detail).toMatch(/not found/);
   });
   it('throws on duplicate date rows (fail closed)', async () => {
-    const client = makeClient({ 'ROSADO RAINEER': [...baseRows, ['9/5/2026', '', '', '', '', '0']] });
+    const client = makeClient({ 'ROQUE RAMIL': [...baseRows, ['9/5/2026', '', '', '', '', '0']] });
     await expect(planPush(client, DAY, ROSTER)).rejects.toThrow(/duplicate date rows/);
   });
   it('writes a local working record over a completed sheet row (system wins)', async () => {
@@ -586,7 +586,7 @@ describe('planPush', () => {
       baseRows[0],
       ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
     ];
-    const client = makeClient({ 'ROSADO RAINEER': completed });
+    const client = makeClient({ 'ROQUE RAMIL': completed });
     const working: AttendanceDay = { ...DAY, timeOut: null };
     const plan = await planPush(client, working, ROSTER);
     expect(plan.kind).toBe('write');
@@ -599,7 +599,7 @@ describe('planPush', () => {
       baseRows[0],
       ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM', '8'],
     ];
-    const client = makeClient({ 'ROSADO RAINEER': completed });
+    const client = makeClient({ 'ROQUE RAMIL': completed });
     const older: AttendanceDay = { ...DAY, timeOut: '2026-09-05T16:00:00+08:00' };
     const plan = await planPush(client, older, ROSTER);
     expect(plan.kind).toBe('write');
@@ -613,7 +613,7 @@ describe('planPush', () => {
       baseRows[0],
       ['9/5/2026', '7:24:00 AM', '12:00:00 PM', '1:00:00 PM', '4:00:00 PM', '8'],
     ];
-    const client = makeClient({ 'ROSADO RAINEER': older });
+    const client = makeClient({ 'ROQUE RAMIL': older });
     const plan = await planPush(client, DAY, ROSTER);
     expect(plan.kind).toBe('write');
   });
@@ -723,7 +723,7 @@ describe('red paint planner', () => {
       ['SEPTEMBER'],
       ['9/1/2026', '', '', '', ''],
     ];
-    const client = makeClient({ 'ROSADO RAINEER': rows });
+    const client = makeClient({ 'ROQUE RAMIL': rows });
     const half: AttendanceDay = { ...DAY, timeOut: '2026-09-05T12:30:00+08:00' };
     const rec: AttendanceDay = { ...half, attendanceDate: '2026-09-01', timeIn: '2026-09-01T08:04:00+08:00', timeOut: '2026-09-01T12:30:00+08:00' };
     const plan = await planPush(client, rec, ROSTER);
@@ -746,7 +746,7 @@ describe('red paint planner', () => {
 });
 
 describe('auto-create tab alignment', () => {
-  const RONA: DtrSyncUser = { userId: 'INTERN-999', fullName: 'Rona Khristelle Angelique Pacada' };
+  const RINA: DtrSyncUser = { userId: 'INTERN-999', fullName: 'Rina Kristine Angeline Pascual' };
   it('picks the live template tab, else the known gid', () => {
     expect(pickTemplateSheet([{ title: 'X', sheetId: 1 }, { title: 'COPY OF TEMPLATE', sheetId: 42 }])).toEqual({
       title: 'COPY OF TEMPLATE',
@@ -781,24 +781,24 @@ describe('auto-create tab alignment', () => {
   });
   it('overlap gate blocks ambiguous creates, allows clean misses', () => {
     expect(hasTabOverlap(['MARY', 'COPY OF TEMPLATE'], 'Mary Jane Santos')).toBe(true);
-    expect(hasTabOverlap(['MARY', 'COPY OF TEMPLATE'], 'Rona Khristelle Angelique Pacada')).toBe(false);
-    expect(hasTabOverlap(['COPY OF TEMPLATE'], 'Rona Khristelle Angelique Pacada')).toBe(false);
+    expect(hasTabOverlap(['MARY', 'COPY OF TEMPLATE'], 'Rina Kristine Angeline Pascual')).toBe(false);
+    expect(hasTabOverlap(['COPY OF TEMPLATE'], 'Rina Kristine Angeline Pascual')).toBe(false);
     // Single-character middle initial "C." must not collide between distinct people
-    expect(hasTabOverlap(['Raineer C. Rosado'], 'Maricon C. Danao')).toBe(false);
+    expect(hasTabOverlap(['Ramil C. Roque'], 'Marissa C. Dalisay')).toBe(false);
     expect(hasTabOverlap([], '')).toBe(true);
     expect(hasTabOverlap(['COPY OF TEMPLATE', '---'], 'J.')).toBe(true);
-    expect(hasTabOverlap(['JR'], 'Rona Pacada Jr')).toBe(false);
+    expect(hasTabOverlap(['JR'], 'Rina Pascual Jr')).toBe(false);
   });
   it('creates a missing tab and resolves it', async () => {
     const client = makeClient({ 'COPY OF TEMPLATE': [] });
-    const tab = await ensurePersonTab(client, RONA, [RONA]);
-    expect(tab).toBe('Rona Khristelle Angelique Pacada');
-    expect(client.created).toEqual(['Rona Khristelle Angelique Pacada']);
+    const tab = await ensurePersonTab(client, RINA, [RINA]);
+    expect(tab).toBe('Rina Kristine Angeline Pascual');
+    expect(client.created).toEqual(['Rina Kristine Angeline Pascual']);
   });
   it('returns existing tabs without creating', async () => {
-    const client = makeClient({ 'Raineer C. Rosado': [] });
+    const client = makeClient({ 'Ramil C. Roque': [] });
     const tab = await ensurePersonTab(client, ROSTER[0], ROSTER);
-    expect(tab).toBe('Raineer C. Rosado');
+    expect(tab).toBe('Ramil C. Roque');
     expect(client.created).toEqual([]);
   });
   it('returns null on overlap instead of minting a second tab', async () => {
@@ -811,7 +811,7 @@ describe('auto-create tab alignment', () => {
   });
   it('does not attempt to create a tab with an invalid Sheets title', async () => {
     const client = makeClient({ 'COPY OF TEMPLATE': [] });
-    const invalid: DtrSyncUser = { userId: 'INVALID', fullName: 'Rona/Pacada' };
+    const invalid: DtrSyncUser = { userId: 'INVALID', fullName: 'Rina/Pascual' };
     await expect(ensurePersonTab(client, invalid, [invalid])).resolves.toBeNull();
     expect(client.created).toEqual([]);
   });
@@ -822,14 +822,14 @@ describe('auto-create tab alignment', () => {
       duplicateAttempts += 1;
       return null;
     };
-    await expect(ensurePersonTab(client, RONA, [RONA])).resolves.toBeNull();
+    await expect(ensurePersonTab(client, RINA, [RINA])).resolves.toBeNull();
     expect(duplicateAttempts).toBe(1);
     expect(client.created).toEqual([]);
   });
   it('returns null if the duplicate call succeeds but the tab cannot be re-resolved', async () => {
     const client = makeClient({ 'COPY OF TEMPLATE': [] });
     client.duplicateTemplate = async (_sourceSheetId, newTitle) => ({ title: newTitle, sheetId: 900 });
-    await expect(ensurePersonTab(client, RONA, [RONA])).resolves.toBeNull();
+    await expect(ensurePersonTab(client, RINA, [RINA])).resolves.toBeNull();
   });
 });
 
@@ -1030,7 +1030,7 @@ describe('auto-provision upcoming month blocks', () => {
 
   it('planPush triggers client.ensureMonthBlock when month block is missing', async () => {
     const tabs: Record<string, string[][]> = {
-      'ROSADO RAINEER': [
+      'ROQUE RAMIL': [
         ['DATE-September', 'TIME IN MORNING', 'OUT LUNCH', 'TIME IN AFTERNOON', 'TIME OUT', 'TOTAL HOURS'],
         ['9/5/2026', '', '', '', '', '0'],
         ['', '', '', '', 'TOTAL HOURS', '0'],
@@ -1040,7 +1040,7 @@ describe('auto-provision upcoming month blocks', () => {
     let provisioned = false;
     client.ensureMonthBlock = async (tab, date) => {
       provisioned = true;
-      expect(tab).toBe('ROSADO RAINEER');
+      expect(tab).toBe('ROQUE RAMIL');
       expect(date).toBe('2026-11-05');
       // Simulate appending November block
       tabs[tab]?.push(
@@ -1053,7 +1053,7 @@ describe('auto-provision upcoming month blocks', () => {
 
     const novDay: AttendanceDay = {
       userId: 'APG-2026-108',
-      fullName: 'Raineer C. Rosado',
+      fullName: 'Ramil C. Roque',
       attendanceDate: '2026-11-05',
       timeIn: '2026-11-05T08:00:00+08:00',
       timeOut: '2026-11-05T17:00:00+08:00',
