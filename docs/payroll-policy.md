@@ -18,7 +18,7 @@ anywhere else.
 | Late-hour rounding | floor of clamped hours, minimum 1 | ceil of actual hours from 08:00, minimum 1 | `PolicyRules::late_rounding` |
 | Clock-in must be on `attendanceDate` (Manila) | not enforced | required | `PolicyRules::require_same_manila_date` |
 
-Not date-gated (identical in every version): daily rate PHP 80.00, arrival at or
+Not date-gated (identical in every version): the intern daily rate, arrival at or
 after 12:00 is half-day undertime and never late, 18:00+ time-out caps to 17:00,
 lunch break exclusion, undertime ceil per hour.
 

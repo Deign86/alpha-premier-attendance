@@ -1,10 +1,14 @@
 # CI/release fix acceptance gates
 
+Amounts below are written in terms of the payroll rates rather than pesos: **D** is the intern daily rate, **L** the intern hourly late/undertime deduction (D ÷ 8) and **E** an employee daily rate. Centavo values in test output are the same expressions in centavos.
+
+Amounts below are written in terms of the payroll rates rather than pesos: **D** is the intern daily rate, **L** the intern hourly late/undertime deduction (D ÷ 8) and **E** an employee daily rate. Centavo values in test output are the same expressions in centavos.
+
 ## 08:00 minute late-penalty boundary
 
 - [x] The full 08:00 minute is on time; late/grace handling starts at 08:01:00.
   CHECK: npm test -w shared -- api-contracts.test.ts && npm test -w server -- intern-payroll.test.ts && cargo test --manifest-path src-tauri/Cargo.toml intern_payroll
-  EXPECT: 08:00:00 through 08:00:59 incur no late deduction and consume no grace; 08:01:00 follows the applicable grace/no-grace policy, including a PHP 10 late deduction for interns on/after the no-grace cutoff.
+  EXPECT: 08:00:00 through 08:00:59 incur no late deduction and consume no grace; 08:01:00 follows the applicable grace/no-grace policy, including a one-hour (L) late deduction for interns on/after the no-grace cutoff.
   EVIDENCE: `npm test` passed shared arrival regressions; Rust `intern_payroll_isolated` passed 64/64 and `payroll_hours_accuracy` passed 46/46, including the 08:00:59/08:01:00 boundary policy.
 
 ## Intern-only scope migration
@@ -30,12 +34,12 @@
   EVIDENCE: One data-driven test processes 14 Sept 1–15 rows across all four named IDs; exact-time and grace cases pass.
 - [x] Grace boundary/exhaustion and Monday reset are verified in each represented Manila week.
   CHECK: npm test -w server -- intern-payroll.test.ts -t "September 2026 seeded attendance"
-  EXPECT: first 08:08 is free, second same-week 08:08 charges ₱10, 08:15:00 is eligible only while grace remains, 08:15:01/08:16/08:30 charge ₱10 (08:30+ is ceil-hour), and Monday Sep 7 / Sep 14 start new budgets.
+  EXPECT: first 08:08 is free, second same-week 08:08 charges L, 08:15:00 is eligible only while grace remains, 08:15:01/08:16/08:30 charge L (08:30+ is ceil-hour), and Monday Sep 7 / Sep 14 start new budgets.
   EVIDENCE: Focused gate passed: 1 test passed, 26 unrelated intern-payroll cases skipped; first/second grace and Sept 7/14 resets pass.
 - [x] Late-hour ceiling and non-overlapping undertime are covered through Sep 15.
   CHECK: npm test -w server -- intern-payroll.test.ts -t "September 2026 seeded attendance"
-  EXPECT: 09:00:01 charges two late hours; 16:00 and 15:00 outs deduct ₱10/₱20; late+early deductions exclude already charged late hours and daily pay stays at/above zero.
-  EVIDENCE: Focused fixture passed assertions for ₱80 base, ₱10/₱20 undertime, 2-hour late ceiling, combined ₱20 deduction without overlap.
+  EXPECT: 09:00:01 charges two late hours; 16:00 and 15:00 outs deduct L/2L; late+early deductions exclude already charged late hours and daily pay stays at/above zero.
+  EVIDENCE: Focused fixture passed assertions for D base, L/2L undertime, 2-hour late ceiling, combined 2L deduction without overlap.
 - [x] Required repo lint, typecheck, and server test suite pass.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test -w server
   EXPECT: all commands exit 0.
@@ -43,26 +47,26 @@
 
 ## Authoritative intern payroll policy gates (2026-09-28)
 
-- [x] Late hours ceil to the next hour; with weekly grace exhausted, 08:08 computes to 09:00 and charges exactly ₱10 late.
+- [x] Late hours ceil to the next hour; with weekly grace exhausted, 08:08 computes to 09:00 and charges exactly L late.
   CHECK: npm test -w server -- intern-payroll.test.ts -t "weekly grace exhausted 08:08 rounds to 09:00"
-  EXPECT: computedTimeIn is 09:00, lateDeduction is ₱10, and late is not counted again as undertime.
-  EVIDENCE: TypeScript and Rust late-ceil regressions pass: computed-in 09:00, one late unit, ₱10 late, zero undertime on a 17:00 clock-out.
+  EXPECT: computedTimeIn is 09:00, lateDeduction is L, and late is not counted again as undertime.
+  EVIDENCE: TypeScript and Rust late-ceil regressions pass: computed-in 09:00, one late unit, L late, zero undertime on a 17:00 clock-out.
 - [x] Only one 08:00–08:15 grace is allowed per intern per Manila Monday-week; second same-week grace-window arrival is late.
   CHECK: npm test -w server -- payroll.test.ts -t "one grace per Manila week"
   EXPECT: first qualifying arrival is free; second is LATE and charged after ceil-hour rounding.
   EVIDENCE: `PayrollService` integration verifies consecutive Sept 21/22 grace-window arrivals; Rust tests one grace across three weekly arrivals.
-- [x] Undertime is charged at ₱10 per short hour, excluding late hours already charged through lateDeduction.
+- [x] Undertime is charged at L per short hour, excluding late hours already charged through lateDeduction.
   CHECK: npm test -w server -- intern-payroll.test.ts -t "undertime excludes late hours"
   EXPECT: late and undertime components are non-overlapping and sum to the actual payroll deduction.
-  EVIDENCE: TypeScript asserts one late hour alone is ₱10; a separate short hour adds exactly ₱10; Rust uses the same overlap subtraction.
+  EVIDENCE: TypeScript asserts one late hour alone is L; a separate short hour adds exactly L; Rust uses the same overlap subtraction.
 - [x] TS/Rust daily payroll and cutoff breakdown use the same late + non-overlapping undertime components.
   CHECK: npm test -w server -- intern-payroll.test.ts cutoff-payroll.test.ts && cargo test --manifest-path src-tauri/Cargo.toml --test intern_payroll_isolated
   EXPECT: deductions and net pay agree across both engines; no late hour is subtracted twice.
   EVIDENCE: Full JS suite passed: shared 36, client 284, server 213; focused Rust isolated suite passed 35 tests.
 - [x] Reinterpret Maricon's Sept 24/25 note under the authoritative one-grace-per-week rule.
   CHECK: npm test -w server -- intern-payroll.test.ts -t "Maricon second weekly grace is late"
-  EXPECT: Sept 24 and 25 map to week starting Sept 21; first grace is free, second charges ₱10 (not two free grace days).
-  EVIDENCE: Rule 3 overrides QA's ₱520/two-free-graces total: one free grace and one ₱10 late charge means ₱510 on the same baseline. Tests confirm first grace free, second late by one hour; full `npm test`, lint, typecheck, and MCP 7/7 pass.
+  EXPECT: Sept 24 and 25 map to week starting Sept 21; first grace is free, second charges L (not two free grace days).
+  EVIDENCE: Rule 3 overrides QA's two-free-graces total: one free grace and one L late charge means L less than QA's total on the same baseline. Tests confirm first grace free, second late by one hour; full `npm test`, lint, typecheck, and MCP 7/7 pass.
 
 ## Auto-Provisioning Upcoming Months Acceptance Gates
 
@@ -175,11 +179,11 @@
 - [x] Time-outs before 5:00 PM (17:00 Manila time) with > 4 worked hours are not classified as half-day; instead unrendered hours (< 8 hours) are deducted for both employees and interns.
   CHECK: npx vitest run server/test/employee-payroll.test.ts server/test/intern-payroll.test.ts
   EXPECT: all tests pass
-  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: 525`, `halfDayDeduction: 75` for Employee 08:00–16:00 shift (600 daily rate). Verified: `isHalfDay: false`, `dailyPay: 70`, `halfDayDeduction: 10` for Intern 08:00–16:00 shift (80 daily rate).
+  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: E − E/8`, `halfDayDeduction: E/8` for Employee 08:00–16:00 shift (daily rate E). Verified: `isHalfDay: false`, `dailyPay: D − L`, `halfDayDeduction: L` for Intern 08:00–16:00 shift (daily rate D).
 - [x] Shifts completing at or after 5:00 PM with 8 worked hours receive full day pay.
   CHECK: npx vitest run server/test/employee-payroll.test.ts server/test/intern-payroll.test.ts
   EXPECT: all tests pass
-  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: 600`, `halfDayDeduction: 0` for employee 08:00–17:00 shift, and `isHalfDay: false`, `dailyPay: 80`, `halfDayDeduction: 0` for intern.
+  EVIDENCE: Verified: `isHalfDay: false`, `dailyPay: E`, `halfDayDeduction: 0` for employee 08:00–17:00 shift, and `isHalfDay: false`, `dailyPay: D`, `halfDayDeduction: 0` for intern.
 - [x] TypeScript stack and Rust desktop backend employee and intern payroll services match half-day and undertime calculation logic.
   CHECK: npm run lint:oxlint && npm run typecheck
   EXPECT: all checks exit 0
@@ -300,7 +304,7 @@ Live evidence: kiosk render OK, tab switch via new testid OK, bathroom AVAILABLE
 - [x] T10 mediums batch pt.1 (data-corruption class) — DONE: P4 inverted-order rejection (TS daily + Rust intern), P6 offset-less ISO rejection at engine boundary, P7 calendar-date validation (TS validDate + Rust NaiveDate parse). EVIDENCE: server 80/80, Rust P4/P7 targeted green, repo oxlint gate 0.
 - [x] T10 mediums batch pt.2 — DONE: wedge-drop operator hint + NaN clamp (App.tsx), sync drain-until-empty + remaining count (admin_sync_now), ceil_hour sub-second canonicalization (both stacks), bathroom conditional writes + constraint-mapped conflicts (4 sites) + join! race test. PIN-shape finding closed as safe-by-design (backend unifies PIN/card, no lockout); centavos half-day verified convergent (TS float == Rust int value). EVIDENCE: client 223/223, server 80/80, Rust 163/163, oxlint 0, typecheck clean, live 150%-equivalent screenshots.
 - [x] Residual: submitUnified merge (arm/releaseScanPipeline shared by both paths), assisted-timer/Esc/backdrop pause while busy, nuke read-before-wipe staging, overnight-lunch docs — ALL DONE parent-side (subagents 429-locked). EVIDENCE: client 224/224 (incl. B1 routing regression test), oxlint 0, tsc clean.
-- [x] Independent reviewer pass (fresh Spark worker) + all 5 findings fixed: TS intern gross no longer subtracts deductions (800/880/960 expectations corrected), Rust cutoff NaiveDate guard, ceil_hour truncate parity both stacks, time_in rows_affected guard, coverage tests added. EVIDENCE: server 81/81, Rust 165/165, client 224/224.
+- [x] Independent reviewer pass (fresh Spark worker) + all 5 findings fixed: TS intern gross no longer subtracts deductions (10D/11D/12D expectations corrected), Rust cutoff NaiveDate guard, ceil_hour truncate parity both stacks, time_in rows_affected guard, coverage tests added. EVIDENCE: server 81/81, Rust 165/165, client 224/224.
 
 ## Release v0.1.49 (audit remediation bundle)
 - [x] Fix batch + version sync committed and pushed to main.
@@ -870,12 +874,12 @@ Scope decisions locked by the owner before implementation:
 - [x] Early clock-outs (>4 hours worked before 17:00) no longer automatically deduct to half day; unrendered hours deducted proportionally.
   CHECK: npm test -- server/test/employee-payroll.test.ts server/test/intern-payroll.test.ts
   EXPECT: 08:00 to 16:00 shift deducts 1 hour unrendered pay instead of 50% half-day penalty across both TypeScript and Rust payroll services.
-  EVIDENCE: Measured: Employee (600 daily rate, 08:00-16:00) yields isHalfDay: false, workedHours: 7, halfDayDeduction: 75, dailyPay: 525. Intern (80 base rate, 08:00-16:00) yields isHalfDay: false, workedHours: 7, halfDayDeduction: 10, dailyPay: 70. Both stacks match parity.
+  EVIDENCE: Measured: Employee (daily rate E, 08:00-16:00) yields isHalfDay: false, workedHours: 7, halfDayDeduction: E/8, dailyPay: E − E/8. Intern (base rate D, 08:00-16:00) yields isHalfDay: false, workedHours: 7, halfDayDeduction: L, dailyPay: D − L. Both stacks match parity.
 
 - [x] Half-day classification retained for shifts <= 4 hours rendered or afternoon arrivals (>= 12:00).
   CHECK: npm test -- shared server
   EXPECT: 08:00 to 12:00 shift or >=12:00 arrival flags isHalfDay/is_half_day as true.
-  EVIDENCE: Measured: Intern (08:00-12:00) yields isHalfDay: true, workedHours: 4, halfDayDeduction: 40, dailyPay: 40. Employee (13:00-17:00 arrival) yields isHalfDay: true, workedHours: 4, halfDayDeduction: 300, dailyPay: 300. Full-day 08:00-17:00 yields isHalfDay: false, deduction: 0, dailyPay: 600 / 80.
+  EVIDENCE: Measured: Intern (08:00-12:00) yields isHalfDay: true, workedHours: 4, halfDayDeduction: D/2, dailyPay: D/2. Employee (13:00-17:00 arrival) yields isHalfDay: true, workedHours: 4, halfDayDeduction: E/2, dailyPay: E/2. Full-day 08:00-17:00 yields isHalfDay: false, deduction: 0, dailyPay: E / D.
 
 - [x] Repository gates: oxlint, typecheck, client/server/shared tests pass.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
@@ -893,7 +897,7 @@ Scope decisions locked by the owner before implementation:
 
 Context: CHANGELOG 0.1.74 made pay strictly `hourly_rate x actual_hours_worked`
 (`worked_hours = min(8, ceil((out-in)/3600))`, no 12:00-13:00 subtraction;
-intern PHP 80/day -> 1000 centavos/hour). Four Rust assertions still encoded the
+intern D/day -> L per hour). Four Rust assertions still encoded the
 pre-0.1.74 lunch-subtracted values while the passing TypeScript twins
 (`server/test/intern-payroll.test.ts`, `server/test/intern-dtr-sync.test.ts`,
 `server/test/lunch-break.test.ts`) already pinned the 1:1 rule. Fix updates only
@@ -907,20 +911,23 @@ comment (text only, no behaviour change). No production payroll math touched.
   four exact inputs and diffs every asserted field against the Rust values.
   EXPECT: `16 field comparisons, 0 mismatches`, exit 0.
   EVIDENCE: exit 0, `16 field comparisons, 0 mismatches` — measured:
-  09:30-17:00 grace=false -> lateHours 2 / lateDeduction 2000 / workedHours 8 / halfDayDeduction 0 / dailyPay 8000.
-  12:00-17:00 -> isHalfDay true / workedHours 5 / halfDayDeduction 3000 / dailyPay 5000.
-  08:00-15:00 grace=true -> isHalfDay false / workedHours 7 / halfDayDeduction 1000 / dailyPay 7000.
-  12:30-17:00 -> isHalfDay true / workedHours 5 / halfDayDeduction 3000.
+  09:30-17:00 grace=false -> lateHours 2 / lateDeduction 2L / workedHours 8 / halfDayDeduction 0 / dailyPay D.
+  12:00-17:00 -> isHalfDay true / workedHours 5 / halfDayDeduction 3L / dailyPay 5L.
+  08:00-15:00 grace=true -> isHalfDay false / workedHours 7 / halfDayDeduction L / dailyPay 7L.
+  12:30-17:00 -> isHalfDay true / workedHours 5 / halfDayDeduction 3L.
   The values were derived by hand from the formula first and then confirmed by the engine; they
   were not copied from the failing CI output.
 
   ```js
   const { calculateInternPayroll } = await import('./server/dist/intern-payroll.js');
+  const { INTERN_DAILY_RATE_PHP } = await import('./shared/dist/api-contracts.js');
+  const D = INTERN_DAILY_RATE_PHP * 100; // centavos
+  const L = D / 8;
   const cases = [
-    ['09:30', '17:00', false, { lateHours: 2, lateDeduction: 2000, workedHours: 8, halfDayDeduction: 0, dailyPay: 8000 }],
-    ['12:00', '17:00', false, { isHalfDay: true, workedHours: 5, halfDayDeduction: 3000, dailyPay: 5000 }],
-    ['08:00', '15:00', true, { isHalfDay: false, workedHours: 7, halfDayDeduction: 1000, dailyPay: 7000 }],
-    ['12:30', '17:00', false, { isHalfDay: true, workedHours: 5, halfDayDeduction: 3000 }],
+    ['09:30', '17:00', false, { lateHours: 2, lateDeduction: 2 * L, workedHours: 8, halfDayDeduction: 0, dailyPay: D }],
+    ['12:00', '17:00', false, { isHalfDay: true, workedHours: 5, halfDayDeduction: 3 * L, dailyPay: 5 * L }],
+    ['08:00', '15:00', true, { isHalfDay: false, workedHours: 7, halfDayDeduction: L, dailyPay: 7 * L }],
+    ['12:30', '17:00', false, { isHalfDay: true, workedHours: 5, halfDayDeduction: 3 * L }],
   ];
   let mismatches = 0;
   let comparisons = 0;
@@ -992,10 +999,10 @@ comment (text only, no behaviour change). No production payroll math touched.
 
 - [x] The 08:00-15:00 self-contradiction between the two Rust suites is closed.
   CHECK: read both suites' expectations for that input.
-  EXPECT: both assert worked 7 / deduction 1000 / pay 7000.
+  EXPECT: both assert worked 7 / deduction L / pay 7L.
   EVIDENCE: `intern_payroll::tests::early_clock_out_before_5pm_is_undertime_not_half_day` and
   `dtr_sync::tests::eight_to_three_keeps_actuals_while_payroll_has_undertime` now assert the
-  same 7/1000/7000. Before the change they disagreed on identical input, which is what exposed
+  same 7/L/7L. Before the change they disagreed on identical input, which is what exposed
   the staleness.
 
 - [x] Independent adversarial review could not refute the diagnosis.
@@ -1007,7 +1014,7 @@ comment (text only, no behaviour change). No production payroll math touched.
   `reporting::elapsed_hours`) — was examined and rejected as a *product* objection: both engines
   faithfully implement the released, changelogged spec, and reverting them would break the passing
   TypeScript twins on both stacks. It also confirmed the old values are *exactly* the pre-0.1.74
-  lunch-net arithmetic (7.5h - 1h lunch = 6.5 -> 7; 7h - 1h = 6 -> 2000/6000; 4.5h - 0.5h = 4 -> 4000).
+  lunch-net arithmetic (7.5h - 1h lunch = 6.5 -> 7; 7h - 1h = 6 -> 2L/6L; 4.5h - 0.5h = 4 -> 4L).
 
 - [x] Independent diff audit found no cheating, no scope creep, no false comments.
   CHECK: delegated lane `diff-audit` (reviewer, high thinking, read-only) audited the diff for
@@ -1052,9 +1059,9 @@ unrelated to the change; CI (`windows-latest`, MSVC) runs the same 296 tests suc
 
 ## Strictly-by-the-hour worked hours fix (anti-rounding bugfix)
 
-- [x] Shifts with fractional hours (e.g. 08:00–12:30, 4.5h) pay strictly for completed whole hours (4h -> ₱40) without ceiling to 5h (₱50).
+- [x] Shifts with fractional hours (e.g. 08:00–12:30, 4.5h) pay strictly for completed whole hours (4h -> 4L) without ceiling to 5h (5L).
   CHECK: `npm test -w server -- test/intern-payroll.test.ts test/employee-payroll.test.ts test/lunch-break.test.ts`
-  EXPECT: all tests pass; 08:00–12:00 and 08:00–12:30 both yield 4 worked hours and ₱40 daily pay.
+  EXPECT: all tests pass; 08:00–12:00 and 08:00–12:30 both yield 4 worked hours and 4L daily pay.
   EVIDENCE: All 48 tests across the three payroll suites pass. Parity check across TypeScript and Rust engines passes with 0 mismatches.
 
 
@@ -1171,12 +1178,12 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   CHECK: focused Rust, server, and client tests above; `npm run lint:oxlint && npm run typecheck`
   EXPECT: no stale fixed-09:00-only clamp; 09:03 has one late hour; 09:16→10:00 has two late hours; payroll/DTR/display agree.
   EVIDENCE: Rust isolated suite 76 passed; server focused suite 158 passed and server typecheck passed; client full suite 299 passed and clamp suite 12 passed; root lint and typecheck passed. Boundary tests cover 08:15:00.000000001 as outside weekly grace and 09:15:00.000000001 clamping to 10:00.
-  EVIDENCE: Payroll sheet register adds Undertime Hours for EMPLOYEE and INTERN exports, derived as half-day pesos ÷ hourly rate (daily ÷ 8) to 1 decimal so production rows with whole-number counts still feed real data (e.g. PHP 176.56 at PHP 80/day → 17.7h); Halfday peso deduction unchanged. Column rebalanced to 20mm within the 273mm page.
+  EVIDENCE: Payroll sheet register adds Undertime Hours for EMPLOYEE and INTERN exports, derived as half-day pesos ÷ hourly rate (daily ÷ 8) to 1 decimal so production rows with whole-number counts still feed real data (e.g. a half-day deduction of 17.656 × L → 17.7h); Halfday peso deduction unchanged. Column rebalanced to 20mm within the 273mm page.
   EVIDENCE: `cargo test --manifest-path src-tauri/Cargo.toml --test payroll_sheet_undertime` passes 27/27 on Windows (new proof test asserting a real generated PDF contains the Undertime header, plus the full reporting suite via the same harness; also fixed the inner loader test's minimal `payroll_cutoffs` schema to include `half_day_count`).
 
 ## Intern no-grace cutover (2026-10-01)
 
-- [x] Intern arrivals from 2026-10-01 have no grace; late deduction is `ceil(hours late) × PHP 10` and computed/DTR time-in stays actual (early arrivals floor to 08:00 for payable hours).
+- [x] Intern arrivals from 2026-10-01 have no grace; late deduction is `ceil(hours late) × L` and computed/DTR time-in stays actual (early arrivals floor to 08:00 for payable hours).
   CHECK: `npm test -w server -- intern-payroll.test.ts`
   CHECK: `npm test -w server -- intern-dtr-sync.test.ts`
   CHECK: `npm test --prefix client -- App.test.tsx`
@@ -1188,7 +1195,7 @@ deps, no `VITE_` key, no dotenv changes, no edits to `tools/jev/*` or the skill.
   EXPECT: Oct. 1–5 claims are rejected; Sep. 30 remains valid; the payroll writer is the sole current production caller supplying the Google adapter's attendance date; historical imports remain exempt.
   EVIDENCE: `server/src/sheets.ts` requires a write date, validates the InMemory row, and documents Google writer trust; `server/src/payroll.ts` is the sole current production caller passing its attendance row date. This is not an adapter-enforced caller restriction. `docs/migration-cutover.md` exempts historical `--execute` imports from the live-claim guard.
 - [x] Accepted residuals remain bounded and documented.
-  EVIDENCE: Google Sheets adapter does not reread Attendance for claim authorization; direct callers must pass the verified attendance date (`server/src/sheets.ts`, `server/src/payroll.ts`). RESOLVED — the Sep. 5 `server/test/intern-dtr-sync.test.ts:819` expectation was stale: 11:30→14:30 implies 2.5h undertime, but commit `9a51919` locks whole-hour ceiling, so `ceil(2.5) × ₱10 = ₱30`; ₱80 − ₱40 late − ₱30 undertime = ₱10 daily pay. CHECK: `npm test -w server -- test/intern-dtr-sync.test.ts -t "sub-4h first late arrival"`.
+  EVIDENCE: Google Sheets adapter does not reread Attendance for claim authorization; direct callers must pass the verified attendance date (`server/src/sheets.ts`, `server/src/payroll.ts`). RESOLVED — the Sep. 5 `server/test/intern-dtr-sync.test.ts:819` expectation was stale: 11:30→14:30 implies 2.5h undertime, but commit `9a51919` locks whole-hour ceiling, so `ceil(2.5) × L = 3L`; D − 4L late − 3L undertime = L daily pay (D = 8L). CHECK: `npm test -w server -- test/intern-dtr-sync.test.ts -t "sub-4h first late arrival"`.
 - [x] Phase 3 full TypeScript suite sweep and client verification complete.
   CHECK: `npm test -w server`
   CHECK: `npm test -w shared`
@@ -1265,7 +1272,7 @@ without human approval):
   `calculateCutoffPayroll`, exact toBe per hard-coded literal +
   toMatchSnapshot of the money projection): rounds-to-cents basicPay /
   gross / net 100.01; half-day whole + fractional-count halfDayDeduction
-  50.01; BUG-PAY-02 totalAllowance 0, gross 880, net 0; intern floor
+  50.01; BUG-PAY-02 totalAllowance 0, gross 11D, net 0; intern floor
   gross 0, net 0; holidays special 30 / regular 100 / gross 130; manual
   adjustment 12.34 / gross 112.34 / net 112.34; errors throw containing
   "valid cutoff dates", "Payroll values", "approval",
@@ -1280,7 +1287,7 @@ without human approval):
 Rust `src-tauri/tests/cutoff_freeze.rs` (`include!` pattern, sync tests,
 fully self-contained — all 11 inputs hard-coded as CutoffInput literals,
 no fixture reads): same 11 cases through `cutoff_payroll::calculate`,
-peso values ×100 (10001; 5001; 5001; 0/88000/0; 0/0; 3000/10000/13000;
+peso values ×100 (10001; 5001; 5001; 0/11D/0; 0/0; 3000/10000/13000;
 1234/11234/11234); error cases is_err with messages derived from Rust
 validate fns (read source). Both files carry the same PINNED_SHA256 with
 a binding comment (TS enforces it by test; Rust documents it — no hash
@@ -1316,11 +1323,11 @@ Gates:
 
 ## Half-day afternoon-arrival rule (bugfix 2026-10-01)
 
-Report: intern 12:00→17:00 marked late, ₱10 instead of ₱40. Reproduced:
-engine booked late 4 / ₱40 late + ₱0 half-day (isHalfDay true) and the
-breakdown rendered a "Late" item — composition defect confirmed; a ₱10
-total was not reproducible on any path (all yield ₱40), likely a misread
-of the ₱10/hr rate. Rule (user-prescribed): arrival at/after 12:00
+Report: intern 12:00→17:00 marked late, L instead of 4L. Reproduced:
+engine booked late 4 / 4L late + 0 half-day (isHalfDay true) and the
+breakdown rendered a "Late" item — composition defect confirmed; an L
+total was not reproducible on any path (all yield 4L), likely a misread
+of the L/hr rate. Rule (user-prescribed): arrival at/after 12:00
 renders the afternoon half — late_hours forced 0, quarter clamp skipped,
 shortfall books as half-day undertime; payable/worked hours untouched.
 Changed (prod): `server/src/intern-payroll.ts` (both branches),
@@ -1417,7 +1424,7 @@ unchanged.
 
 - [x] Payslip numbers reuse the payroll-sheet computation (`load_payroll_sheet_rows`); Gross Salary = standard days x rate, Basic = actual days x rate, deductions = Absent + Late + Halfday + Undertime, and Total Earnings - Total Deductions = stored net pay (an Adjustment line balances manual adjustments / approved extra days). Employees are excluded.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
-  EXPECT: all pass, including the reference case (11 std / 10 actual / PHP 80 -> Basic 800, Gross 880, Absent 80, Net 800).
+  EXPECT: all pass, including the reference case (11 std / 10 actual / daily rate D -> Basic 10D, Gross 11D, Absent D, Net 10D).
   EVIDENCE: `intern_payslips` 38 passed / 0 failed (12 new + inherited module tests); reference case, adjustment balancing and employee exclusion included.
 - [x] Saving writes one PNG per intern into a single new folder under exports, named after the intern (Windows-safe, duplicates disambiguated by employee ID); non-PNG payloads and empty batches are rejected before anything is written.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips
@@ -1430,7 +1437,7 @@ unchanged.
 - [x] Payslip renderer draws every template field (header, employee grid, earnings, deductions, totals, net pay, signatures, confidential) with company branding.
   CHECK: npm test -w client -- intern-payslip-image
   EXPECT: all pass.
-  EVIDENCE: renderer tests 14/14 (renderer agent); 2000x2428 PNGs rendered via Vite in the browser pane and inspected (reference case Net PHP 800.00, adjustment case 980.00 - 150.00 = 830.00).
+  EVIDENCE: renderer tests 14/14 (renderer agent); 2000x2428 PNGs rendered via Vite in the browser pane and inspected (reference case Net 10D, and an adjustment case whose earnings minus deductions equal the stored net pay).
 - [x] Payroll tab has a "Generate Intern Payslips" action for the selected cutoff that saves the images and offers Open folder; errors are friendly.
   CHECK: npm test -w client -- payroll.test.tsx api.test.ts
   EXPECT: all pass.

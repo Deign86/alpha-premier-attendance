@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.75] - 2026-09-17
 
 ### Fixed
-- **Strictly-by-the-hour Payroll Math**: Replaced `Math.ceil` / `ceiling_hours` with `Math.floor` / `floor_hours` across TypeScript and Rust engines. Shift durations with partial hours (e.g. 08:00–12:30, 4.5h) now pay strictly for completed whole hours (4h -> ₱40) without rounding up to the next whole hour (5h -> ₱50).
+- **Strictly-by-the-hour Payroll Math**: Replaced `Math.ceil` / `ceiling_hours` with `Math.floor` / `floor_hours` across TypeScript and Rust engines. Shift durations with partial hours (e.g. 08:00–12:30, 4.5h) now pay strictly for completed whole hours (4 hours of pay) without rounding up to the next whole hour (5 hours of pay).
 
 ## [0.1.74] - 2026-09-15
 

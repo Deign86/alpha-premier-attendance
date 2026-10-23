@@ -50,7 +50,7 @@ The B5 worker flagged 2 more files with the same stale "lunch not subtracted" co
 - `intern_payroll.rs:118-120` — says "the 12:00–13:00 lunch hour is no longer subtracted from paid hours" (false)
 
 ### 3. Fix Printed Register Column (Optional, Cosmetic)
-B2 worker flagged: `load_payroll_sheet_rows` still puts the raw late_deduction in `PayrollSheetRow.late_deduction_centavos`, so the PDF sheet shows Late ₱10 + Halfday ₱10 while only ₱10 is subtracted from gross. One-line fix: use `effective_late_deduction` for the row field too (reporting/mod.rs around L2306).
+B2 worker flagged: `load_payroll_sheet_rows` still puts the raw late_deduction in `PayrollSheetRow.late_deduction_centavos`, so the PDF sheet shows one hour of Late plus one hour of Halfday while only one hour is subtracted from gross. One-line fix: use `effective_late_deduction` for the row field too (reporting/mod.rs around L2306).
 
 ### 4. Push, PR, Merge
 ```bash
@@ -72,7 +72,7 @@ gh pr create --base main --head fix/payroll-audit-bugs \
 - JS tests unaffected (no TS changes)
 
 ## Audit Evidence
-- Intern with 1 late day (08:16→17:00): cutoff now ₱870 (was ₱860, matching Σ daily_pay)
+- Intern with 1 late day (08:16→17:00): cutoff now one hourly rate higher than before (matching Σ daily_pay)
 - LATE_TIMEOUT day (18:05 clock-out): now produces payroll row capped at 17:00 (was silently unpaid)
 - DTR safety: 0 InternDtr rows written during entire audit"
 
