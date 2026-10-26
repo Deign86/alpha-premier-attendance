@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-10-12T02:41:18.000Z",
+  "generatedAt": "2026-10-26T03:42:10.038Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -323,6 +323,26 @@
       "audioFile": "/voices/bea/names/APG-2026-121.mp3",
       "generatedAt": "2026-10-12T02:41:18.000Z",
       "audioHash": "758a173ecd63b58f9378df042b89ce012f34c89972f995f46733eac5b328a79e"
+    },
+    "APG-2026-122": {
+      "personId": "APG-2026-122",
+      "displayName": "Christopher Joseph V. Aureo",
+      "normalizedSpeechText": "Christopher Joseph Aureo",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-122.mp3",
+      "generatedAt": "2026-10-26T03:41:58.427Z",
+      "audioHash": "9369ef3b3592e34ba39d8dc8f91f7119a11b2871e83b19d37ec483e0b8a2e6cf"
+    },
+    "APG-2026-123": {
+      "personId": "APG-2026-123",
+      "displayName": "Lord L. Bartolome",
+      "normalizedSpeechText": "Lord Bartolome",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-1b3e828b-v1",
+      "audioFile": "/voices/bea/names/APG-2026-123.mp3",
+      "generatedAt": "2026-10-26T03:42:10.038Z",
+      "audioHash": "34e56152be3dd1fd5a6fe170e2931cc6cd99fa09a3d1cc342548852ba1f96fae"
     }
   }
 }
