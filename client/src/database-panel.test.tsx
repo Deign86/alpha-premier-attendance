@@ -183,6 +183,77 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/Restore scheduled/i)).toBeInTheDocument();
   });
 
+  it('restores a listed backup from its row after confirmation', async () => {
+    requestDatabaseRestoreSpy.mockResolvedValueOnce({
+      success: true,
+      message: 'Restore scheduled. The application is restarting to apply the backup.',
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    await user.click(await screen.findByRole('button', { name: /^restore$/i }));
+    expect(await screen.findByText('Restore database from backup?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /confirm/i }));
+
+    expect(requestDatabaseRestoreSpy).toHaveBeenCalledWith(mockDbInfo.backups[0].filePath);
+    expect(pickRestoreBackupFileSpy).not.toHaveBeenCalled();
+  });
+
+  it('downloads a copy of a listed backup from its row', async () => {
+    const saveBackupCopySpy = vi.spyOn(api, 'saveBackupCopy').mockResolvedValueOnce({
+      ok: true,
+      message: 'Backup saved to E:\\attendance-backup-20260815-000000.apbackup.',
+    });
+
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    await user.click(await screen.findByRole('button', { name: /^download$/i }));
+
+    expect(saveBackupCopySpy).toHaveBeenCalledWith(mockDbInfo.backups[0].filePath, mockDbInfo.backups[0].fileName);
+    expect(await screen.findByText(/Backup saved to E:/i)).toBeInTheDocument();
+  });
+
+  it('groups existing backups into one fold per month, newest month open', async () => {
+    const backup = (stamp: string, modifiedAt: string) => ({
+      fileName: `attendance-backup-${stamp}.apbackup`,
+      filePath: `C:\\backups\\attendance-backup-${stamp}.apbackup`,
+      sizeBytes: 114688,
+      modifiedAt,
+    });
+    loadDatabaseInfoSpy.mockResolvedValue({
+      ...mockDbInfo,
+      backups: [
+        backup('20261020-120000', '2026-10-20T04:00:00Z'),
+        backup('20261012-120000', '2026-10-12T04:00:00Z'),
+        backup('20260910-120000', '2026-09-10T04:00:00Z'),
+      ],
+    });
+
+    render(<DatabasePanel />);
+
+    const october = (await screen.findByText(/October 2026/)).closest('details');
+    const september = screen.getByText(/September 2026/).closest('details');
+    expect(october).toHaveAttribute('open');
+    expect(september).not.toHaveAttribute('open');
+    expect(october).toHaveTextContent('attendance-backup-20261020-120000.apbackup');
+    expect(october).toHaveTextContent('attendance-backup-20261012-120000.apbackup');
+    expect(september).toHaveTextContent('attendance-backup-20260910-120000.apbackup');
+  });
+
+  it('opens and closes the move-to-a-new-PC guide', async () => {
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    expect(screen.queryByRole('dialog', { name: /moving to the new front-desk pc/i })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: /how to move to a new pc/i }));
+    expect(screen.getByRole('dialog', { name: /moving to the new front-desk pc/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /got it/i }));
+    expect(screen.queryByRole('dialog', { name: /moving to the new front-desk pc/i })).not.toBeInTheDocument();
+  });
+
   it('allows canceling the restore dialog without scheduling', async () => {
     pickRestoreBackupFileSpy.mockResolvedValueOnce('C:\\backups\\test.apbackup');
 
@@ -1045,6 +1116,48 @@ describe('DatabasePanel', () => {
     expect(screen.getByText('2 of 3 user(s) selected')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete selected (2)' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Select all users' })).toBeChecked();
+  });
+
+  it('caps the users list to the registration card height, with See all to lift the cap', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    class FakeResizeObserver {
+      observe(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    // Registration card is 600px tall; the user rows need 900px but only 500px fit.
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600);
+    vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(900);
+    vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(500);
+    const intern = (userId: string, fullName: string) => ({
+      userId, rfidUid: `${userId}-UID`, fullName, department: null, status: 'ACTIVE' as const,
+      employeeType: 'INTERN' as const, gender: null, dailyRate: null,
+    });
+
+    try {
+      render(
+        <UserEditor
+          users={[intern('A-1', 'Alex Rivera'), intern('S-2', 'Sam Santos'), intern('A-3', 'Alex Cruz')]}
+          editing={null}
+          setEditing={() => {}}
+          onSaved={() => {}}
+        />,
+      );
+
+      const usersSection = screen.getByRole('searchbox', { name: 'Search users' }).closest('section');
+      expect(usersSection).toHaveClass('is-capped');
+      expect(usersSection).toHaveStyle({ maxHeight: '600px' });
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'See all (3)' }));
+      expect(usersSection).not.toHaveClass('is-capped');
+      expect(usersSection).not.toHaveStyle({ maxHeight: '600px' });
+
+      await user.click(screen.getByRole('button', { name: 'Show less' }));
+      expect(usersSection).toHaveClass('is-capped');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('shared guard disables Data Sync-now, Users bulk and per-row buttons while progress advances (task 9)', async () => {

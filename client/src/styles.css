@@ -249,7 +249,6 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .status-hint { color: var(--danger); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .arrival-badge { display: inline-flex; align-items: center; padding: 3px 8px; font-size: .66rem; font-weight: 700; border-radius: var(--radius-sm); letter-spacing: .02em; white-space: nowrap; }
 .badge-ontime { color: var(--success); background: rgba(82, 196, 126, .1); border: 1px solid rgba(82, 196, 126, .25); }
-.badge-gp { color: var(--gold-bright); background: rgba(198, 162, 84, .12); border: 1px solid var(--gold-soft); }
 .badge-late { color: var(--danger); background: rgba(239, 170, 146, .1); border: 1px solid rgba(239, 170, 146, .3); }
 .badge-none { color: var(--quiet); }
 .admin-attention-row td { padding: 0; }
@@ -333,6 +332,12 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .lan-facts strong { color: var(--ink); font-size: .78rem; font-weight: 600; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .lan-facts { grid-template-columns: 1fr 1fr; } .lan-panel-head { flex-direction: column; } }
 .db-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* Long DB path: one line, trimmed at the front so the file name stays visible (full path on hover) */
+.lan-facts strong.db-path-value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; overflow-wrap: normal; }
+/* Backup buttons and DTR sync controls as two separate groups */
+.db-actions { flex-wrap: wrap; justify-content: space-between; row-gap: 12px; }
+.db-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.db-sync-group { gap: 14px; padding-left: 16px; border-left: 1px solid var(--line); }
 .db-notice { color: var(--success, #7fb069); }
 .sync-health { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); display: grid; gap: 8px; }
 .sync-health-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -359,12 +364,36 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .db-steps { margin: 4px 0 8px; padding-left: 18px; display: grid; gap: 6px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
 .db-steps li::marker { color: var(--gold-bright); font-weight: 700; }
 .db-steps strong { color: var(--ink); }
-.db-backup-list { margin-top: 14px; }
-.db-backup-list h3 { margin: 0 0 8px; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; }
-.db-backup-list ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.db-backup-list li { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); font-size: .76rem; }
+.db-backup-list { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); }
+.db-backup-list summary { display: flex; align-items: center; gap: 8px; padding: 11px 14px; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; cursor: pointer; list-style: none; }
+.db-backup-list summary::-webkit-details-marker { display: none; }
+.db-backup-list summary::before { content: "▸"; color: var(--gold-bright); transition: transform 160ms ease; }
+.db-backup-list[open] > summary::before, .db-backup-month[open] > summary::before { transform: rotate(90deg); }
+.db-backup-list summary:hover { color: var(--gold-bright); }
+.db-backup-list summary:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+.db-backup-count { padding: 1px 8px; color: var(--gold-bright); font-family: 'Orbitron', monospace; font-size: .68rem; border: 1px solid var(--line-bright); border-radius: 999px; }
+/* One fold per month inside Existing backups */
+.db-backup-months { display: grid; gap: 4px; padding: 0 10px 10px; }
+.db-backup-month { border-top: 1px solid var(--line); }
+.db-backup-month > summary { padding: 9px 4px; color: var(--muted); font-family: inherit; font-size: .76rem; }
+.db-backup-list ul { margin: 0; padding: 0 0 6px; list-style: none; display: grid; gap: 6px; }
+.db-backup-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 16px; padding: 6px 6px 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); font-size: .76rem; }
 .db-backup-list code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--gold-bright); overflow-wrap: anywhere; }
-.db-backup-list li span { margin-left: auto; color: var(--quiet); white-space: nowrap; }
+.db-backup-list li span { color: var(--quiet); white-space: nowrap; }
+.db-backup-actions { display: flex; gap: 6px; }
+.db-backup-actions .admin-button { min-height: 32px; padding: 4px 10px; }
+@media (max-width: 900px) {
+  .db-backup-list li { grid-template-columns: auto auto minmax(0, 1fr); row-gap: 6px; }
+  .db-backup-list li code { grid-column: 1 / -1; }
+  .db-backup-actions { justify-self: end; }
+}
+/* Below this width the two action groups wrap onto separate lines, where the divider would dangle */
+@media (max-width: 1100px) { .db-sync-group { padding-left: 0; border-left: 0; } }
+/* "How to move to a new PC" guide popup */
+.db-guide-button { flex: none; }
+.confirm-dialog.db-guide-dialog { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
+.db-guide-dialog .db-steps { margin: 12px 0; }
+.db-guide-dialog code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: .76rem; color: var(--gold-bright); overflow-wrap: anywhere; }
 .file-result-card { display: grid; gap: 8px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line-bright); border-radius: var(--radius-sm); background: var(--surface); }
 .file-result-label { margin: 0; color: var(--quiet); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 .file-result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .92rem; font-weight: 600; }
@@ -376,8 +405,6 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .file-result-notice { display: flex; align-items: center; gap: 6px; margin: 0; font-size: .74rem; }
 .file-result-notice.is-success { color: var(--success, #6fbf73); }
 .file-result-notice.is-error { color: var(--danger, #e06c5c); }
-.payroll-detail td { background: var(--surface-input); }
-.payroll-detail p { color: var(--muted); line-height: 1.55; }
 .checkbox-label { display: flex !important; align-items: center; gap: 10px; }
 .checkbox-label input { width: 20px; height: 20px; }
 .profile-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
@@ -424,12 +451,21 @@ button:active:not(:disabled), a:active { transform: translateY(1px); }
 
 /* Shared admin shell */
 .dashboard-shell { width: min(var(--page-width), calc(100% - 48px)); padding: 38px 0 52px; }
+/* Reserve the scrollbar's space on dashboard pages so switching between a short and a long tab never shifts the layout sideways. */
+html:has(.dashboard-shell) { scrollbar-gutter: stable; }
 .dashboard-header { align-items: center; padding-bottom: 20px; }
 .dashboard-header h1 { margin: 6px 0 0; font-size: clamp(2rem, 4vw, 3.15rem); line-height: 1.05; }
 .dashboard-header nav { gap: 8px; }
 .dashboard-header nav a, .dashboard-header nav button { min-height: 38px; padding: 8px 11px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .78rem; }
 .dashboard-header nav a:hover, .dashboard-header nav button:hover { background: var(--surface-raised); border-color: var(--line-bright); }
 .dashboard-header nav a { color: var(--gold-bright); text-decoration: none; }
+.dashboard-header nav button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+/* Title block breathing room: brand, kicker, title, address and mode switcher each get their own line of space. */
+.dashboard-header .dashboard-brand { margin-bottom: 14px; }
+.dashboard-header .section-kicker { margin-bottom: 4px; }
+.dashboard-header h1 { margin-bottom: 10px; }
+.dashboard-header h1 + .section-description { margin-bottom: 4px; }
+.dashboard-header .admin-mode-switcher { margin-top: 18px; }
 .dashboard-status { margin: 17px 0 12px; font-size: .76rem; }
 .dashboard-alert { margin: 14px 0; padding: 11px 13px; border: 1px solid var(--line-bright); border-left: 3px solid var(--danger); background: var(--surface); font-size: .78rem; }
 .table-wrap { border-radius: var(--radius-md); box-shadow: 0 10px 32px rgba(0, 0, 0, .14); }
@@ -477,6 +513,9 @@ td small { font-size: .7rem; }
 .scanner-diag-state.is-offline, .scanner-diag-state.is-error { color: var(--danger); } .scanner-diag-state.is-offline i, .scanner-diag-state.is-error i { background: var(--danger); }
 .scanner-diag-mode, .scanner-diag-detail { color: var(--quiet); font-size: .7rem; }
 .scanner-diag-activity { color: var(--muted); font-size: .7rem; }
+/* Subtle vertical dividers between status, reader, activity and hint; dropped once the strip wraps on narrow screens. */
+.scanner-diag > span + span { padding-left: 18px; border-left: 1px solid var(--line); }
+@media (max-width: 900px) { .scanner-diag > span + span { padding-left: 0; border-left: 0; } }
 .admin-grid { grid-template-columns: minmax(280px, 350px) minmax(0, 1fr); gap: 24px; }
 .admin-form { padding: 20px; border-radius: var(--radius-md); box-shadow: 0 10px 32px rgba(0, 0, 0, .14); }
 .admin-form h2 { margin-bottom: 15px; font-size: 1rem; }
@@ -492,13 +531,6 @@ td small { font-size: .7rem; }
 .payroll-actions-cell { min-width: 150px; }
 .text-button:hover { background: var(--surface-raised); }
 .danger-button:hover { background: #2a1b18; }
-
-/* Full Landscape Dashboard Shell for Payroll */
-.dashboard-shell-payroll {
-  width: min(calc(100% - 32px), 1920px);
-  max-width: 100%;
-  padding: 24px 0 40px;
-}
 
 /* Payroll Header Toolbar & Panels */
 .payroll-toolbar {
@@ -520,7 +552,7 @@ td small { font-size: .7rem; }
 }
 
 .payroll-pdf-actions-panel {
-  flex: 0 1 360px;
+  flex: 0 1 300px;
   min-width: 280px;
   background: var(--surface);
   border: 1px solid var(--line-bright);
@@ -541,11 +573,39 @@ td small { font-size: .7rem; }
   letter-spacing: 0.03em;
 }
 
-.payroll-generate-controls {
+/* The generate button sits in the panel's title row, so the inputs get one full row with no stray button line. */
+.payroll-generate-panel .payroll-panel-heading {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.payroll-generate-panel .payroll-panel-heading h2 {
+  margin: 0;
+}
+
+/* Controls stretch to fill the panel: [month + half-month presets] | start | end | standard days. */
+.payroll-generate-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 14px;
+}
+
+.payroll-generate-controls > * {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.payroll-generate-controls > .cutoff-period {
+  flex: 2 1 330px;
+}
+
+.payroll-generate-controls > .payroll-standard-days {
+  flex: 0 1 100px;
 }
 
 .payroll-generate-controls label {
@@ -558,6 +618,8 @@ td small { font-size: .7rem; }
 }
 
 .payroll-generate-controls input {
+  box-sizing: border-box;
+  width: 100%;
   height: 38px;
   padding: 0 10px;
   font-size: 0.76rem;
@@ -567,23 +629,45 @@ td small { font-size: .7rem; }
   border-radius: var(--radius-sm);
 }
 
+/* The half-month presets belong to the month: they sit flush against it, and a divider separates this group from the date range. */
 .cutoff-period {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  padding-right: 14px;
+  border-right: 1px solid var(--line);
+}
+
+.cutoff-period label {
+  flex: 1 1 auto;
+  min-width: 150px;
 }
 
 .cutoff-fill-buttons {
-  display: flex;
-  gap: 6px;
+  display: inline-flex;
+  gap: 0;
+  height: 38px;
+  border: 1px solid var(--gold-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
 .cutoff-fill-buttons .admin-button {
-  height: 38px;
-  padding: 0 10px;
+  min-height: 0;
+  height: 36px;
+  padding: 0 12px;
   font-size: 0.72rem;
   white-space: nowrap;
+  border: 0;
+  border-radius: 0;
+}
+
+.cutoff-fill-buttons .admin-button + .admin-button {
+  border-left: 1px solid var(--gold-soft);
+}
+
+.cutoff-fill-buttons .admin-button:hover:not(:disabled) {
+  background: rgba(198, 162, 84, 0.12);
 }
 
 .payroll-generate-submit {
@@ -593,6 +677,10 @@ td small { font-size: .7rem; }
   font-weight: 600;
   white-space: nowrap;
   align-self: flex-end;
+}
+
+@media (max-width: 900px) {
+  .payroll-generate-controls > .cutoff-period { flex-basis: 100%; padding-right: 0; border-right: 0; }
 }
 
 .payroll-pdf-actions-panel .payroll-actions {
@@ -622,6 +710,10 @@ td small { font-size: .7rem; }
 
 .payroll-table .table-wrap {
   overflow-x: auto;
+  /* Long cutoffs scroll inside the table; the heading row stays pinned (below). */
+  overflow-y: auto;
+  max-height: min(70vh, 720px);
+  overscroll-behavior: contain;
   width: 100%;
   border: 1px solid var(--line-bright);
   border-radius: var(--radius-md);
@@ -648,7 +740,6 @@ td small { font-size: .7rem; }
 
 .payroll-table table {
   width: 100%;
-  min-width: 1980px;
   border-collapse: collapse;
   font-size: 0.75rem;
   table-layout: auto;
@@ -674,12 +765,6 @@ td small { font-size: .7rem; }
 .payroll-table th.payroll-select-col { width: 38px; min-width: 38px; max-width: 38px; }
 .payroll-table th:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }
 .payroll-table th:nth-child(3) { width: 130px; min-width: 130px; max-width: 130px; }
-.payroll-table th:nth-child(4) { min-width: 95px; }
-.payroll-table th:nth-child(5) { min-width: 95px; }
-.payroll-table th:nth-child(6) { min-width: 75px; }
-.payroll-table th:nth-child(7) { min-width: 65px; }
-.payroll-table th:nth-child(8) { min-width: 65px; }
-.payroll-table th:nth-child(9) { min-width: 60px; }
 
 .payroll-table td:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }
 .payroll-table td:nth-child(3) { width: 130px; min-width: 130px; max-width: 130px; }
@@ -692,6 +777,18 @@ td small { font-size: .7rem; }
 .payroll-table th.payroll-select-col,
 .payroll-table th:nth-child(2),
 .payroll-table th:nth-child(3) { background: var(--surface-raised); z-index: 2; }
+/* Attendance corrections: capped like payroll, scrolling inside with the headings pinned */
+.attendance-table-wrap { max-height: min(70vh, 720px); overflow-y: auto; overscroll-behavior: contain; }
+.attendance-table-wrap > table > thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+/* "See all" lifts the height cap on the payroll, attendance corrections and users tables */
+.payroll-table .table-wrap.is-expanded,
+.attendance-table-wrap.is-expanded { max-height: none; }
+.see-all-toggle { min-height: 0; padding: 2px 8px; font-weight: 700; }
+/* Pin the main heading row while the table scrolls (not the breakdown tables inside rows). */
+.payroll-table .table-wrap > table > thead th { position: sticky; top: 0; z-index: 2; }
+.payroll-table .table-wrap > table > thead th.payroll-select-col,
+.payroll-table .table-wrap > table > thead th:nth-child(2),
+.payroll-table .table-wrap > table > thead th:nth-child(3) { z-index: 3; }
 .payroll-table th.payroll-select-col,
 .payroll-table td.payroll-select-cell { left: 0; }
 .payroll-table th:nth-child(2),
@@ -818,6 +915,15 @@ tr.selected-row td:first-child::before,
   border-top-right-radius: 0;
 }
 
+/* Users and RFID: the users list is capped to the registration card's height
+   (measured in UserEditor) and scrolls inside, with the column headings pinned.
+   The card keeps its natural height so the measurement isn't just the stretched grid row. */
+.admin-grid > .admin-form:has(+ .users-table-section) { align-self: start; }
+.users-table-section.is-capped { display: flex; flex-direction: column; }
+.users-table-section.is-capped > * { flex: none; }
+.users-table-section.is-capped > .table-wrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.users-table-section.is-capped thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+
 .table-batch-actions,
 .payroll-batch-actions {
   display: inline-flex;
@@ -895,6 +1001,22 @@ tr.selected-row td:first-child::before,
   background: rgba(198, 162, 84, 0.04);
 }
 
+/* The pinned columns (checkbox, Employee #, Name) must stay solid when a row is hovered or
+   selected: paint the same tint over the opaque surface so cells scrolled underneath never
+   show through. Extra `.table-wrap` outranks the see-through rules above. */
+.payroll-table .table-wrap tr:hover td.payroll-select-cell,
+.payroll-table .table-wrap tr:hover td:nth-child(2),
+.payroll-table .table-wrap tr:hover td:nth-child(3) {
+  background: linear-gradient(rgba(198, 162, 84, 0.04), rgba(198, 162, 84, 0.04)), var(--surface);
+}
+.payroll-table .table-wrap tr.selected-row td.payroll-select-cell,
+.payroll-table .table-wrap tr.selected-row td:nth-child(2),
+.payroll-table .table-wrap tr.selected-row td:nth-child(3) {
+  background: linear-gradient(rgba(198, 162, 84, 0.08), rgba(198, 162, 84, 0.08)), var(--surface) !important;
+}
+/* `tr.selected-row td:first-child { position: relative }` would un-pin the checkbox cell. */
+.payroll-table .table-wrap tr.selected-row td.payroll-select-cell { position: sticky; }
+
 .payroll-row-actions {
   display: inline-flex;
   flex-wrap: wrap;
@@ -917,32 +1039,28 @@ tr.selected-row td:first-child::before,
   font-size: 0.7rem;
 }
 
-.payroll-detail td {
-  background: var(--surface-input);
-  text-align: left;
-  white-space: normal;
-  padding: 10px 14px;
-  position: static !important;
-}
-
-.payroll-detail details {
-  cursor: pointer;
-}
-
-.payroll-detail summary {
-  color: var(--gold-bright);
-  font-weight: 600;
-  font-size: 0.74rem;
-  margin-bottom: 6px;
-  user-select: none;
-}
-
-.payroll-detail p {
-  color: var(--muted);
-  line-height: 1.55;
-  margin: 6px 0 0;
-  font-size: 0.76rem;
-}
+/* Breakdown popup (opened from a payroll row's Breakdown button) */
+.confirm-dialog.payroll-breakdown-dialog { width: min(820px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
+.payroll-breakdown-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.confirm-dialog .payroll-breakdown-head h2 { margin: 0; }
+.confirm-dialog p.payroll-breakdown-net { display: inline-flex; align-items: center; gap: 8px; font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; }
+.payroll-breakdown-net strong { padding: 4px 10px; color: var(--gold-bright); background: rgba(198, 162, 84, .15); border: 1px solid var(--gold-soft); border-radius: var(--radius-sm); font-size: .9rem; letter-spacing: .02em; text-transform: none; font-variant-numeric: tabular-nums; }
+/* Every payslip field in three groups: Employee, Earnings, Deductions */
+.payroll-breakdown-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.payroll-breakdown-fields section { padding: 10px 12px; background: var(--surface-raised); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.payroll-breakdown-fields h3 { margin: 0 0 8px; color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: .66rem; letter-spacing: .05em; text-transform: uppercase; }
+.payroll-breakdown-fields dl { display: grid; gap: 4px; margin: 0; }
+.payroll-breakdown-fields dl > div { display: flex; justify-content: space-between; gap: 10px; font-size: .74rem; }
+.payroll-breakdown-fields dt { color: var(--muted); }
+.payroll-breakdown-fields dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+/* Earnings and Deductions end in their total */
+.payroll-breakdown-fields section + section dl > div:last-child { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); font-weight: 700; }
+@media (max-width: 760px) { .payroll-breakdown-fields { grid-template-columns: 1fr; } }
+/* Out-rank the generic `.confirm-dialog p` so the breakdown keeps its own text styles */
+.payroll-breakdown-dialog .payroll-breakdown-formula p { font-size: .76rem; line-height: 1.6; }
+.payroll-breakdown-dialog p.payroll-deductions-note { margin-top: 10px; font-size: .75rem; line-height: 1.5; }
+.payroll-breakdown-dialog p.payroll-deductions-none { margin-top: 10px; color: var(--success); font-size: .75rem; }
+.payroll-breakdown-dialog p.payroll-cutoff-status { margin-top: 12px; color: var(--quiet); font-size: .74rem; }
 
 .payroll-breakdown-formula {
   background: var(--surface);
@@ -1202,6 +1320,18 @@ tr.selected-row td:first-child::before,
 .date-filter label:nth-of-type(3) { min-width: 176px; }
 .date-filter label:nth-of-type(4) { min-width: 164px; }
 .date-filter small { align-self: center; color: var(--muted); }
+/* Labels sit above their controls (like the other admin forms) so every control lines up on one baseline. */
+.date-filter label { display: grid; gap: 6px; color: var(--muted); font-size: .72rem; font-weight: 600; }
+/* One height and corner radius for every control in the bar: date, Today, search, department and the two actions. */
+.date-filter input,
+.date-filter select,
+.date-filter .filter-preset-btn,
+.date-filter .admin-button,
+.date-filter .admin-button-primary { box-sizing: border-box; height: 44px; min-height: 44px; border-radius: var(--radius-sm); }
+.date-filter input { width: 100%; padding: 0 12px; font-size: .8rem; }
+.date-filter select { width: 100%; padding: 0 36px 0 12px; font-size: .8rem; background-position: right 12px center; }
+.date-filter .filter-preset-btn { padding: 0 16px; }
+.date-filter .admin-button, .date-filter .admin-button-primary { padding: 0 16px; }
 
 @media (max-width: 920px) {
   .dashboard-header { align-items: flex-start; flex-direction: column; gap: 16px; }
@@ -1278,7 +1408,9 @@ tr.selected-row td:first-child::before,
 }
 
 .kiosk-hero h1 {
-  font-size: clamp(3.2rem, 6.4vw, 5.5rem);
+  /* "Good afternoon" stays on one line on the kiosk screen */
+  max-width: 24ch;
+  font-size: clamp(2.4rem, 4.4vw, 3.8rem);
   line-height: 1.02;
   letter-spacing: .025em;
 }
@@ -1307,6 +1439,8 @@ tr.selected-row td:first-child::before,
   justify-content: space-between;
   margin-bottom: 10px;
 }
+
+.scan-console-toggle { min-height: 0; padding: 2px 6px; font-size: .7rem; font-weight: 700; }
 
 .scan-console-title {
   color: var(--ink);
@@ -1371,6 +1505,8 @@ tr.selected-row td:first-child::before,
 }
 
 .kiosk-actions {
+  /* grid (not the earlier flex) so the options sit 4 across instead of one full-width bar each */
+  display: grid;
   width: min(860px, calc(100% - (var(--kiosk-gutter) * 2)));
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
@@ -1385,6 +1521,13 @@ tr.selected-row td:first-child::before,
   font-size: .72rem;
   white-space: nowrap;
 }
+
+/* Keep the reader card and the options together (attendance and bathroom key modes):
+   the stage and the options stack right under the top bar, with the same top spacing in
+   both modes, instead of the options being pinned to the bottom of the screen. */
+.kiosk-shell { display: flex; flex-direction: column; }
+.kiosk-shell > * { flex-shrink: 0; }
+.kiosk-shell > .kiosk-stage { padding-bottom: clamp(36px, 6vh, 64px); }
 
 @media (max-width: 600px) {
   .kiosk-topbar {
@@ -1745,6 +1888,121 @@ input[type="checkbox"]:disabled {
   margin: 0;
 }
 
+/* Voice panel: compact on/off row at the top of the Audio Settings card */
+.voice-enable-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.voice-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  color: var(--ink);
+  font-size: .8rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Qualified with input[type="checkbox"] to outrank the global checkbox look */
+input[type="checkbox"].voice-switch {
+  display: inline-block;
+  flex: none;
+  width: 38px;
+  min-width: 38px;
+  height: 22px;
+  min-height: 22px;
+  background: var(--surface-input);
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  box-shadow: none;
+  transform: none;
+}
+
+input[type="checkbox"].voice-switch::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  background: var(--muted);
+  border: 0;
+  border-radius: 50%;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+input[type="checkbox"].voice-switch:hover:not(:disabled) { border-color: var(--gold); box-shadow: none; transform: none; }
+input[type="checkbox"].voice-switch:checked { background: var(--gold-soft); border-color: var(--gold); box-shadow: none; }
+input[type="checkbox"].voice-switch:checked::before { width: 14px; height: 14px; background: var(--gold-bright); border: 0; transform: translateX(16px); }
+
+/* Voice panel: Audio Settings + VoiceStudio Server cards */
+.voice-settings-card { justify-content: flex-start; gap: 14px; }
+
+.voice-card-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 700;
+}
+
+.voice-slider-row, .voice-field { display: grid; gap: 8px; }
+.voice-slider-row input[type="range"] { width: 100%; margin: 0; }
+.voice-slider-row + .voice-slider-row { margin-top: 18px; }
+.voice-slider-row.is-disabled { opacity: .5; }
+.voice-label-with-tip { display: inline-flex; align-items: center; gap: 4px; }
+.voice-settings-card .voice-control-header { flex-wrap: wrap; }
+.voice-card-title, .voice-test-connection { white-space: nowrap; }
+.voice-test-connection { min-height: 32px; padding: 4px 10px; }
+
+/* Info icon with a hover/focus help bubble */
+.info-tip { position: relative; display: inline-flex; }
+
+.info-tip-button {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--quiet);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: help;
+}
+
+.info-tip-button:hover, .info-tip-button:focus-visible { color: var(--gold-bright); }
+.info-tip-button:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 1px; }
+
+.info-tip-bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: -10px;
+  z-index: 20;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .45);
+  font-size: .72rem;
+  font-weight: 500;
+  line-height: 1.45;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 140ms ease, visibility 140ms ease;
+}
+
+.info-tip:hover .info-tip-bubble, .info-tip:focus-within .info-tip-bubble { opacity: 1; visibility: visible; }
+
 /* ==========================================================================
    Software Updater Component Styles (Obsidian & Gold)
    ========================================================================== */
@@ -2081,33 +2339,6 @@ input[type="checkbox"]:disabled {
   border-top: 1px solid var(--line);
 }
 
-/* Card Type Toggle & Segmented Controls */
-.card-type-toggle {
-  display: grid;
-  gap: 8px;
-  margin: 12px 0 16px;
-}
-
-.segmented-control {
-  display: flex;
-  gap: 4px;
-  background: var(--surface-input);
-  padding: 4px;
-  border: 1px solid var(--line-bright);
-  border-radius: var(--radius-sm);
-}
-
-.segment-option {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 18px;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-}
-
 .version-tag {
   display: grid;
   gap: 3px;
@@ -2284,28 +2515,41 @@ input[type="checkbox"]:disabled {
 }
 
 .segmented-control {
-  display: flex;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
   background: var(--surface-input);
-  padding: 4px;
+  padding: 6px;
   border: 1px solid var(--line-bright);
   border-radius: var(--radius-sm);
 }
 
-.segment-option {
-  flex: 1;
+/* Scoped under .segmented-control so `.admin-form label` (grid, 16px margins) can't stack the icon over the text. */
+.segmented-control .segment-option {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 12px;
+  min-height: 64px;
+  margin: 0;
+  padding: 12px 10px;
+  text-align: center;
   font-size: .78rem;
   font-weight: 600;
+  line-height: 1.2;
   color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
   cursor: pointer;
-  border-radius: 2px;
-  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
   user-select: none;
+}
+
+.segment-option svg {
+  flex: none;
 }
 
 .segment-option input[type="radio"] {
@@ -2316,14 +2560,32 @@ input[type="checkbox"]:disabled {
   margin: 0;
 }
 
-.segment-option.is-selected {
+.segmented-control .segment-option:hover {
+  color: var(--ink);
   background: var(--surface-raised);
-  color: var(--gold-bright);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  border-color: var(--line-bright);
 }
 
-.segment-option.is-selected.is-admin-card {
+.segmented-control .segment-option:active {
+  transform: translateY(1px);
+}
+
+.segmented-control .segment-option:has(input:focus-visible) {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+
+.segmented-control .segment-option.is-selected {
+  color: var(--gold-bright);
+  background: var(--surface-raised);
+  border-color: var(--gold-soft);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(225, 196, 119, 0.08);
+}
+
+.segmented-control .segment-option.is-selected.is-admin-card {
   color: #8cb8e6;
+  border-color: rgba(140, 184, 230, 0.45);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(140, 184, 230, 0.08);
 }
 
 .field-hint {
@@ -2641,6 +2903,23 @@ textarea.input {
 
 .search-input-wrap input {
   padding-left: 40px;
+}
+
+/* Users list: toolbar, search and table read as one framed panel with the same border and side padding. */
+.table-with-bar .user-search-row {
+  padding: 10px 14px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-bright);
+  border-top-color: var(--line);
+  border-bottom: none;
+}
+
+.table-with-bar .user-search-row .input {
+  height: 40px;
+}
+
+.user-search-row + .table-wrap {
+  border-color: var(--line-bright);
 }
 
 .employee-picker-list {

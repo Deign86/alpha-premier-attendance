@@ -939,6 +939,64 @@ describe('hidden-window scan notification', () => {
 });
 
 describe('Admin Attendance Corrections', () => {
+  it('caps the corrections table and lets See all lift the cap', async () => {
+    window.history.pushState({}, '', '/admin');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Fetch mock attendance list
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+            ],
+            fetchedAt: '2026-07-28T10:00:00+08:00',
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch fallback (users, payroll)
+      return { ok: true, json: async () => ({ success: true, users: [], profiles: [], payroll: [] }) } as Response;
+    });
+    class FakeResizeObserver {
+      observe(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    // Pretend the rows need more height than the capped table shows.
+    vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(1200);
+    vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(560);
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+
+      const tableBox = (await screen.findByRole('checkbox', { name: 'Select all attendance records' })).closest('.table-wrap');
+      expect(tableBox).toHaveClass('attendance-table-wrap');
+      expect(tableBox).not.toHaveClass('is-expanded');
+
+      await user.click(await screen.findByRole('button', { name: /^See all \(\d+\)$/ }));
+      expect(tableBox).toHaveClass('is-expanded');
+
+      await user.click(screen.getByRole('button', { name: 'Show less' }));
+      expect(tableBox).not.toHaveClass('is-expanded');
+    } finally {
+      vi.unstubAllGlobals();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('allows clearing time-in and time-out with clear buttons and saving', async () => {
     window.history.pushState({}, '', '/admin');
     let patchedBody: {
@@ -3107,6 +3165,7 @@ describe('Weekly-grace clamp display extension', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       const chip = await screen.findByTestId('clamped-payroll-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
       expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
@@ -3397,6 +3456,7 @@ describe('hourly late clamp', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       // The payroll details use the same hourly display clamp.
       expect(await screen.findByTestId('clamped-payroll-time-in')).toHaveTextContent('10:00 AM');
     } finally {
@@ -3434,9 +3494,10 @@ describe('Payroll total-deductions fallback', () => {
     const row = screen.getByRole('row', { name: /Legacy Row/ });
     // 10 late + 80 absent + 0 statutory = 90, not PHP 0.00 beside a reduced net.
     expect(within(row).getByText('PHP 90.00')).toBeInTheDocument();
-    // SAFETY: the single derived total sits in the Total Deductions cell (index 25)
+    // The derived total sits in the Total Deductions column (its position varies as empty columns hide).
+    const headings = screen.getAllByRole('columnheader').map((cell) => cell.textContent);
     const cells = within(row).getAllByRole('cell');
-    expect(cells[25]?.textContent).toBe('PHP 90.00');
+    expect(cells[headings.indexOf('Total Deductions')]?.textContent).toBe('PHP 90.00');
   });
 
   it('keeps the backend-authoritative total deductions when present', () => {
