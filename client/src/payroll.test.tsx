@@ -608,9 +608,9 @@ describe("PayrollWorkspace", () => {
 
     renderWorkspace([internWithDeductions]);
 
-    // Expand calculation breakdown
-    const summary = screen.getByText(/Calculation breakdown & payslip detail/i);
-    await user.click(summary);
+    // Open the calculation breakdown popup
+    await user.click(screen.getByRole("button", { name: "Breakdown" }));
+    const breakdown = screen.getByRole("dialog", { name: /Calculation breakdown — Maria Santos/i });
 
     // Verify transparent deduction table heading and contents
     expect(screen.getByText(/Transparent Deductions Breakdown \(2 items\):/i)).toBeInTheDocument();
@@ -619,8 +619,13 @@ describe("PayrollWorkspace", () => {
     expect(screen.getByText(/Fri, Sep 4, 2026/i)).toBeInTheDocument();
     expect(screen.getByText(/Incomplete hours: 4 hrs worked of 8 hrs \(4 hrs short\), 08:00 AM – 12:00 PM/i)).toBeInTheDocument();
 
-    // Verify formula renders net pay correctly: 880 - 120 = 760 (not = 880)
-    expect(screen.getAllByText(/PHP 760.00/i)).toHaveLength(2);
+    // Verify formula renders net pay correctly: 880 - 120 = 760 (not = 880),
+    // once in the popup header and once in the formula; the table keeps its Net Pay cell.
+    expect(within(breakdown).getAllByText(/PHP 760.00/i)).toHaveLength(2);
+    expect(within(screen.getByRole("row", { name: /Maria Santos/ })).getByText("PHP 760.00")).toBeInTheDocument();
+
+    await user.click(within(breakdown).getByRole("button", { name: /Close/i }));
+    expect(screen.queryByRole("dialog", { name: /Calculation breakdown/i })).not.toBeInTheDocument();
   });
 
   it("renders backend payroll total deductions and net pay without recomputing them", () => {
@@ -686,9 +691,65 @@ describe("PayrollWorkspace", () => {
 
     renderWorkspace([cleanIntern]);
 
-    const summary = screen.getByText(/Calculation breakdown & payslip detail/i);
-    await user.click(summary);
+    await user.click(screen.getByRole("button", { name: "Breakdown" }));
 
     expect(screen.getByText(/No attendance deductions incurred for this cutoff period/i)).toBeInTheDocument();
+  });
+
+  it("hides all-zero columns in the table but always lists every field in the Breakdown popup", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderWorkspace([
+      internRecord(),
+      internRecord({ payrollId: "P-INT-002", employeeId: "INT-002", employeeName: "Jose Reyes" }),
+    ]);
+
+    for (const heading of ["HRA", "Incentives", "Overtime", "SSS", "PhilHealth", "HDMF", "Advance", "TIN #", "Bank / A/C", "Dept / Role"]) {
+      expect(screen.queryByRole("columnheader", { name: heading })).not.toBeInTheDocument();
+    }
+    for (const heading of ["Employee Name", "Paid Days", "Basic Pay", "Absent", "Net Pay"]) {
+      expect(screen.getByRole("columnheader", { name: heading })).toBeInTheDocument();
+    }
+
+    await user.click(screen.getAllByRole("button", { name: "Breakdown" })[0]);
+    const breakdown = screen.getByRole("dialog", { name: /Calculation breakdown — Maria Santos/i });
+    for (const field of ["HRA", "Incentives", "Overtime", "SSS", "PhilHealth", "HDMF", "Advance", "TIN #", "Bank / A/C", "Dept / Role"]) {
+      expect(within(breakdown).getByText(field, { selector: "dt" })).toBeInTheDocument();
+    }
+    unmount();
+
+    // No See all while every row fits (jsdom has no layout, so nothing overflows).
+    expect(screen.queryByRole("button", { name: /See all/ })).not.toBeInTheDocument();
+
+    // One row with an SSS amount brings back just the SSS column.
+    renderWorkspace([internRecord(), internRecord({ payrollId: "P-INT-003", employeeId: "INT-003", sss: 450 })]);
+    expect(screen.getByRole("columnheader", { name: "SSS" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "PhilHealth" })).not.toBeInTheDocument();
+  });
+
+  it("shows See all when payroll rows overflow the capped table, and lifts the cap", async () => {
+    class FakeResizeObserver {
+      observe(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(1200);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(560);
+    try {
+      const user = userEvent.setup();
+      renderWorkspace([
+        internRecord(),
+        internRecord({ payrollId: "P-INT-002", employeeId: "INT-002", employeeName: "Jose Reyes" }),
+      ]);
+      const tableBox = screen.getByRole("table").closest(".table-wrap");
+      expect(tableBox).not.toHaveClass("is-expanded");
+
+      await user.click(screen.getByRole("button", { name: "See all (2)" }));
+      expect(tableBox).toHaveClass("is-expanded");
+
+      await user.click(screen.getByRole("button", { name: "Show less" }));
+      expect(tableBox).not.toHaveClass("is-expanded");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

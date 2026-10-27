@@ -126,6 +126,7 @@ export const tauriApi = {
   dbRestoreRequest: (token: string, sourcePath: string) => invoke<{ success: true; message: string }>('db_restore_request', { token, sourcePath }),
   dbDismissRestoreFailure: (token: string) => invoke<{ success: true; message: string }>('db_dismiss_restore_failure', { token }),
   dbOpenBackupsDir: (token: string) => invoke<{ success: true; message: string }>('db_open_backups_dir', { token }),
+  dbSaveBackupCopy: (token: string, sourcePath: string, destinationPath: string) => invoke<{ success: true; message: string }>('db_save_backup_copy', { token, sourcePath, destinationPath }),
   ttsSpeak: (text: string, options?: TtsSpeakOptions) => invoke<TtsSpeakResult>('tts_speak', { text, options }),
   ttsStop: () => invoke<void>('tts_stop'),
   ttsStatus: () => invoke<TtsStatusResponse>('tts_status'),

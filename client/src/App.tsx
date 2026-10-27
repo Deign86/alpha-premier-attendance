@@ -1,6 +1,7 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  BookOpen,
   CalendarPlus,
   Check,
   CircleAlert,
@@ -81,6 +82,7 @@ import {
   nukeSheetsResync,
   syncInternDtr,
   openDatabaseBackupsFolder,
+  saveBackupCopy,
   openViewerUrl,
   photoSource,
   requestDatabaseRestore,
@@ -1429,15 +1431,6 @@ export default function App() {
           </div>
         )}
 
-        {/* DYNAMIC BATHROOM STATUS & HISTORY (ALWAYS VISIBLE IN MODE 2) */}
-        {kioskMode === "bathroom" && (
-          <BathroomKioskView
-            status={bathroomStatus}
-            timezone={config.timezone}
-            nowMs={now.getTime()}
-          />
-        )}
-
         {((kioskMode === "attendance" && (state === "ready" || state === "processing")) ||
           (kioskMode === "bathroom" && (manualMode || !bathroomScanResult))) && (
           <div
@@ -1448,6 +1441,19 @@ export default function App() {
               <span className="scan-console-title">
                 {manualMode ? "Manual card ID" : "RFID reader"}
               </span>
+              {kioskMode === "bathroom" && (
+                <button
+                  className="text-button scan-console-toggle"
+                  data-testid="kiosk-manual-toggle"
+                  type="button"
+                  onClick={toggleManualMode}
+                  disabled={state !== "ready"}
+                  aria-pressed={manualMode}
+                >
+                  {manualMode ? <CreditCard size={14} /> : <Keyboard size={14} />}
+                  {manualMode ? "Use card reader" : "Manual entry"}
+                </button>
+              )}
             </div>
             <div className="input-row">
               {!manualMode && (
@@ -1516,6 +1522,15 @@ export default function App() {
           </div>
         )}
 
+        {/* DYNAMIC BATHROOM STATUS & HISTORY (ALWAYS VISIBLE IN MODE 2), below the reader */}
+        {kioskMode === "bathroom" && (
+          <BathroomKioskView
+            status={bathroomStatus}
+            timezone={config.timezone}
+            nowMs={now.getTime()}
+          />
+        )}
+
         {(state === "success" || state === "error") && (
           <p className="reset-hint">
             Returning to ready mode in a few seconds…
@@ -1523,37 +1538,40 @@ export default function App() {
         )}
       </section>
 
-      <footer className="kiosk-actions">
-        <button
-          className="kiosk-action"
-          data-testid="kiosk-manual-toggle"
-          type="button"
-          onClick={toggleManualMode}
-          disabled={state !== "ready"}
-          aria-pressed={manualMode}
-        >
-          {manualMode ? <CreditCard size={16} /> : <Keyboard size={16} />}
-          {manualMode ? "Use card reader" : "Manual entry"}
-        </button>
-        <a className="kiosk-action" data-testid="kiosk-link-live" href="/attendance">
-          Live attendance
-        </a>
-        {config.enableAdmin && (
-          <a className="kiosk-action" data-testid="kiosk-link-admin" href="/admin">
-            Admin
-          </a>
-        )}
-        {config.enableCardSetup && (
+      {/* The options row is attendance-only; bathroom mode keeps Manual entry inside the reader card. */}
+      {kioskMode === "attendance" && (
+        <footer className="kiosk-actions">
           <button
             className="kiosk-action"
-            data-testid="kiosk-setup-open"
+            data-testid="kiosk-manual-toggle"
             type="button"
-            onClick={() => openSetup()}
+            onClick={toggleManualMode}
+            disabled={state !== "ready"}
+            aria-pressed={manualMode}
           >
-            <LockKeyhole size={15} /> Admin setup
+            {manualMode ? <CreditCard size={16} /> : <Keyboard size={16} />}
+            {manualMode ? "Use card reader" : "Manual entry"}
           </button>
-        )}
-      </footer>
+          <a className="kiosk-action" data-testid="kiosk-link-live" href="/attendance">
+            Live attendance
+          </a>
+          {config.enableAdmin && (
+            <a className="kiosk-action" data-testid="kiosk-link-admin" href="/admin">
+              Admin
+            </a>
+          )}
+          {config.enableCardSetup && (
+            <button
+              className="kiosk-action"
+              data-testid="kiosk-setup-open"
+              type="button"
+              onClick={() => openSetup()}
+            >
+              <LockKeyhole size={15} /> Admin setup
+            </button>
+          )}
+        </footer>
+      )}
 
       {setupDialogOpen && (
         <SetupDialog
@@ -1839,9 +1857,10 @@ function SetupDialog(props: SetupDialogProps) {
                     checked={props.form.cardType === "EMPLOYEE"}
                     onChange={() => props.onFormChange("cardType", "EMPLOYEE")}
                   />
-                  Intern card
+                  <UserRound size={16} aria-hidden="true" />
+                  <span>Intern card</span>
                 </label>
-                <label className={`segment-option ${props.form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
+                <label className={`segment-option is-admin-card ${props.form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
                   <input
                     type="radio"
                     name="cardType"
@@ -1849,7 +1868,8 @@ function SetupDialog(props: SetupDialogProps) {
                     checked={props.form.cardType === "ADMIN_ASSIST"}
                     onChange={() => props.onFormChange("cardType", "ADMIN_ASSIST")}
                   />
-                  Admin RFID card
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  <span>Admin RFID card</span>
                 </label>
               </div>
             </div>
@@ -2382,6 +2402,25 @@ function localDate(timezone = "Asia/Manila") {
  * (admin, live attendance) and resumes it when the kiosk comes back, so
  * operator keystrokes are never misread as card scans.
  */
+/**
+ * True while a capped, scrolling list holds more than fits in its box, so a
+ * "See all" toggle is worth showing. `enabled` re-arms it once the box renders.
+ */
+function useVerticalOverflow(ref: React.RefObject<HTMLElement | null>, enabled: boolean): boolean {
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const box = ref.current;
+    if (!enabled || !box || !("ResizeObserver" in window)) return;
+    const measure = () => setOverflowing(box.scrollHeight > box.clientHeight + 1);
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    if (box.firstElementChild) observer.observe(box.firstElementChild);
+    measure();
+    return () => observer.disconnect();
+  }, [ref, enabled]);
+  return overflowing;
+}
+
 function useScannerPause(paused: boolean) {
   useEffect(() => {
     void setScannerPaused(paused).catch(() => {
@@ -3246,9 +3285,7 @@ function AdminPanel() {
       </main>
     );
   return (
-    <main
-      className={`dashboard-shell ${adminMode === "attendance" && tab === "payroll" ? "dashboard-shell-payroll" : ""}`}
-    >
+    <main className="dashboard-shell">
       <header className="dashboard-header">
         <div>
           <DashboardBrand />
@@ -3302,6 +3339,7 @@ function AdminPanel() {
               setSessionExpiresAt("");
             }}
           >
+            <LockKeyhole size={14} aria-hidden="true" />
             Lock
           </button>
         </nav>
@@ -3511,6 +3549,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     null,
   );
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [dismissingRestore, setDismissingRestore] = useState(false);
   const [syncState, setSyncState] = useState<SyncHealthState>({ kind: "loading" });
   const [dtrProgress, setDtrProgress] = useState<DtrSyncProgress | null>(null);
@@ -3758,6 +3797,15 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     if (!outcome.ok) setError(outcome.message);
   };
 
+  const downloadBackup = async (filePath: string, fileName: string) => {
+    setError("");
+    setNotice("");
+    const outcome = await saveBackupCopy(filePath, fileName);
+    if (outcome === null) return;
+    if (outcome.ok) setNotice(outcome.message);
+    else setError(outcome.message);
+  };
+
   const formatSize = (bytes: number) =>
     bytes > 1024 * 1024
       ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -3777,6 +3825,18 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         });
   };
 
+  // One fold per calendar month; backups arrive newest-first, so the first month is the latest.
+  const backupMonths: { label: string; backups: DatabaseInfoResponse["backups"] }[] = [];
+  for (const backup of info?.backups ?? []) {
+    const date = backup.modifiedAt ? new Date(backup.modifiedAt) : null;
+    const label = date && !Number.isNaN(date.getTime())
+      ? date.toLocaleString("en-PH", { month: "long", year: "numeric" })
+      : "Unknown date";
+    const month = backupMonths.find((group) => group.label === label);
+    if (month) month.backups.push(backup);
+    else backupMonths.push({ label, backups: [backup] });
+  }
+
   return (
     <section className="lan-panel" aria-label="Database and backup">
       <div className="lan-panel-head">
@@ -3784,11 +3844,14 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           <p className="section-kicker">Data and backup</p>
           <h2>Move the attendance database to a new computer</h2>
         </div>
+        <button className="admin-button db-guide-button" type="button" onClick={() => setGuideOpen(true)}>
+          <BookOpen size={15} aria-hidden="true" /> How to move to a new PC
+        </button>
       </div>
       <div className="lan-facts db-facts">
         <span>
           Database file{" "}
-          <strong title={info?.dbPath}>{info?.dbPath ?? "—"}</strong>
+          <strong className="db-path-value" title={info?.dbPath}><bdi>{info?.dbPath ?? "—"}</bdi></strong>
         </span>
         <span>
           Storage mode{" "}
@@ -3847,49 +3910,53 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           </div>
         );
       })()}
-      <div className="lan-actions">
-        <button
-          className="admin-button file-action-primary"
-          type="button"
-          disabled={busy}
-          onClick={() => void createBackup()}
-        >
-          {busy ? "Working…" : "Create backup now"}
-        </button>
-        <button
-          className="admin-button"
-          type="button"
-          disabled={busy}
-          onClick={() => void restore()}
-        >
-          Restore from backup file…
-        </button>
-        <button
-          className="admin-button"
-          type="button"
-          onClick={() => void openBackups()}
-        >
-          Open backups folder
-        </button>
-        <label className="sync-toggle" title="Per-device kill switch: OFF on this PC never affects deployment. While OFF, punches queue locally and manual sync refuses.">
-          <input
-            type="checkbox"
-            checked={dtrSyncEnabled ?? true}
-            disabled={dtrSyncEnabled === null || dtrToggleBusy || busy}
-            onChange={() => void toggleDtrSync()}
-            aria-label="Sync intern attendance to the DTR sheet on this device"
-          />
-          Sync interns to DTR sheet on this device{dtrSyncEnabled === false ? " (OFF — queuing only)" : ""}
-        </label>
-        <button
-          className="admin-button"
-          type="button"
-          data-testid="dtr-sync-now"
-          disabled={busy || dtrSyncActive}
-          onClick={() => void syncInterns()}
-        >
-          Sync Intern DTR now
-        </button>
+      <div className="lan-actions db-actions">
+        <div className="db-action-group">
+          <button
+            className="admin-button file-action-primary"
+            type="button"
+            disabled={busy}
+            onClick={() => void createBackup()}
+          >
+            {busy ? "Working…" : "Create backup now"}
+          </button>
+          <button
+            className="admin-button"
+            type="button"
+            disabled={busy}
+            onClick={() => void restore()}
+          >
+            Restore from backup file…
+          </button>
+          <button
+            className="admin-button"
+            type="button"
+            onClick={() => void openBackups()}
+          >
+            Open backups folder
+          </button>
+        </div>
+        <div className="db-action-group db-sync-group">
+          <button
+            className="admin-button"
+            type="button"
+            data-testid="dtr-sync-now"
+            disabled={busy || dtrSyncActive}
+            onClick={() => void syncInterns()}
+          >
+            Sync Intern DTR now
+          </button>
+          <label className="sync-toggle" title="Per-device kill switch: OFF on this PC never affects deployment. While OFF, punches queue locally and manual sync refuses.">
+            <input
+              type="checkbox"
+              checked={dtrSyncEnabled ?? true}
+              disabled={dtrSyncEnabled === null || dtrToggleBusy || busy}
+              onChange={() => void toggleDtrSync()}
+              aria-label="Sync intern attendance to the DTR sheet on this device"
+            />
+            Sync interns to DTR sheet on this device{dtrSyncEnabled === false ? " (OFF — queuing only)" : ""}
+          </label>
+        </div>
       </div>
       {stoppedDtrSync && (
         <p className="dashboard-alert db-notice" role="status">
@@ -4031,52 +4098,91 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       </div>
       <AdminUpdatesCard onManualCheck={props.onManualUpdateCheck ?? (() => {})} />
       <GeneratedFileActions result={backupResult} label="Latest backup" />
-      <div className="lan-guidance">
-        <p>
-          <strong>Moving to the new front-desk PC</strong> (no data loss, no
-          manual SQL):
-        </p>
-        <ol className="db-steps">
-          <li>
-            On the <strong>old PC</strong>: open Admin → Data and backup and
-            press <strong>Create backup now</strong>. The app writes a
-            consistent copy of the entire database (SQLite online backup — safe
-            even while the app is running) and keeps the newest 10.
-          </li>
-          <li>
-            Copy the <code>attendance-backup-*.apbackup</code> file to a USB drive (or
-            the office network) and plug it into the <strong>new PC</strong>.
-          </li>
-          <li>
-            On the <strong>new PC</strong>: open Admin → Data and backup, press{" "}
-            <strong>Restore from backup file…</strong>, select the copied file,
-            and confirm. The app closes, restores the database on the next
-            launch, and starts with all users, attendance, payroll, and settings
-            intact.
-          </li>
-        </ol>
-        <p>
-          A backup is also written automatically every time the app closes
-          cleanly. If the new PC already has data, restoring replaces it — the
-          previous database is saved first under{" "}
-          <code>backups/pre-restore-*.db</code> so the restore can always be
-          rolled back. The database file location is configurable in{" "}
-          <code>config.toml</code> (<code>[database] path</code>) — see
-          docs/database-migration.md.
-        </p>
-      </div>
       {info && info.backups.length > 0 && (
-        <div className="db-backup-list">
-          <h3>Existing backups</h3>
-          <ul>
-            {info.backups.map((backup) => (
-              <li key={backup.filePath}>
-                <code>{backup.fileName}</code>
-                <span>{formatSize(backup.sizeBytes)}</span>
-                <span>{formatWhen(backup.modifiedAt)}</span>
-              </li>
+        <details className="db-backup-list">
+          <summary>
+            Existing backups <span className="db-backup-count">{info.backups.length}</span>
+          </summary>
+          <div className="db-backup-months">
+            {backupMonths.map((month, index) => (
+              <details key={month.label} className="db-backup-month" open={index === 0}>
+                <summary>
+                  {month.label} <span className="db-backup-count">{month.backups.length}</span>
+                </summary>
+                <ul>
+                  {month.backups.map((backup) => (
+                    <li key={backup.filePath}>
+                      <code>{backup.fileName}</code>
+                      <span>{formatSize(backup.sizeBytes)}</span>
+                      <span>{formatWhen(backup.modifiedAt)}</span>
+                      <div className="db-backup-actions">
+                        <button
+                          className="admin-button"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setRestoreFile(backup.filePath)}
+                        >
+                          <History size={14} aria-hidden="true" /> Restore
+                        </button>
+                        <button
+                          className="admin-button"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void downloadBackup(backup.filePath, backup.fileName)}
+                        >
+                          <Download size={14} aria-hidden="true" /> Download
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             ))}
-          </ul>
+          </div>
+        </details>
+      )}
+      {guideOpen && (
+        <div className="confirm-backdrop" role="presentation">
+          <section className="confirm-dialog db-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="db-guide-heading">
+            <BookOpen size={22} aria-hidden="true" />
+            <h2 id="db-guide-heading">Moving to the new front-desk PC</h2>
+            <p>No data loss, no manual SQL:</p>
+            <ol className="db-steps">
+              <li>
+                On the <strong>old PC</strong>: open Admin → Data and backup and
+                press <strong>Create backup now</strong>. The app writes a
+                consistent copy of the entire database (SQLite online backup — safe
+                even while the app is running) and keeps the newest 10.
+              </li>
+              <li>
+                Copy the <code>attendance-backup-*.apbackup</code> file to a USB drive (or
+                the office network) — <strong>Download</strong> next to it under Existing
+                backups saves a copy wherever you choose — and plug it into the{" "}
+                <strong>new PC</strong>.
+              </li>
+              <li>
+                On the <strong>new PC</strong>: open Admin → Data and backup, press{" "}
+                <strong>Restore from backup file…</strong>, select the copied file,
+                and confirm. The app closes, restores the database on the next
+                launch, and starts with all users, attendance, payroll, and settings
+                intact.
+              </li>
+            </ol>
+            <p>
+              A backup is also written automatically every time the app closes
+              cleanly. If the new PC already has data, restoring replaces it — the
+              previous database is saved first under{" "}
+              <code>backups/pre-restore-*.db</code> so the restore can always be
+              rolled back. The database file location is configurable in{" "}
+              <code>config.toml</code> (<code>[database] path</code>) — see
+              docs/database-migration.md.
+            </p>
+            <div className="confirm-actions">
+              <button className="submit-button" type="button" onClick={() => setGuideOpen(false)}>
+                <Check size={16} /> Got it
+              </button>
+            </div>
+          </section>
         </div>
       )}
       <ConfirmDialog
@@ -4347,6 +4453,23 @@ export function UserEditor({
     setPhotoBuster(Date.now());
   }, [editing]);
 
+  // Cap the users list to the registration card's height; the rest scrolls inside the list.
+  const userFormRef = useRef<HTMLElement>(null);
+  const [usersCap, setUsersCap] = useState<number | null>(null);
+  useEffect(() => {
+    const formEl = userFormRef.current;
+    if (!formEl || !("ResizeObserver" in window)) return;
+    const observer = new ResizeObserver(() => setUsersCap(formEl.offsetHeight));
+    observer.observe(formEl);
+    setUsersCap(formEl.offsetHeight);
+    return () => observer.disconnect();
+  }, []);
+  // "See all users" lifts the cap; the toggle only shows when some users are scrolled out of view.
+  const usersWrapRef = useRef<HTMLDivElement>(null);
+  const [showAllUsers, setShowAllUsers] = useState(false);
+  const usersOverflowing = useVerticalOverflow(usersWrapRef, usersCap !== null);
+  const usersCapped = usersCap !== null && !showAllUsers;
+
   const handlePhotoUpload = async (file: File) => {
     if (!form.userId.trim()) {
       setMessage("Enter the User ID before uploading a photo.");
@@ -4454,7 +4577,7 @@ export function UserEditor({
   };
   return (
     <div className="admin-grid">
-      <section className="admin-form">
+      <section className="admin-form" ref={userFormRef}>
         <div className="editor-heading">
           <div>
             <p className="section-kicker">User registration</p>
@@ -4502,7 +4625,8 @@ export function UserEditor({
                   checked={form.cardType !== "ADMIN_ASSIST"}
                   onChange={() => setForm({ ...form, cardType: "EMPLOYEE" })}
                 />
-                Intern card
+                <UserRound size={16} aria-hidden="true" />
+                <span>Intern card</span>
               </label>
               <label className={`segment-option is-admin-card ${form.cardType === "ADMIN_ASSIST" ? "is-selected" : ""}`}>
                 <input
@@ -4518,7 +4642,8 @@ export function UserEditor({
                     })
                   }
                 />
-                <ShieldCheck size={14} /> Admin RFID card
+                <ShieldCheck size={16} aria-hidden="true" />
+                <span>Admin RFID card</span>
               </label>
             </div>
           </div>
@@ -4806,7 +4931,10 @@ export function UserEditor({
           </button>
         </form>
       </section>
-      <section className="table-with-bar">
+      <section
+        className={`table-with-bar users-table-section ${usersCapped ? "is-capped" : ""}`}
+        style={usersCapped ? { maxHeight: usersCap } : undefined}
+      >
         <div className="table-header-bar">
           <div className="table-selection-count">
             {selectedUserIds.size > 0 ? (
@@ -4815,6 +4943,16 @@ export function UserEditor({
               <span>Showing {filteredUsers.length} of {safeUsers.length} users</span>
             ) : (
               <span>Total users: {safeUsers.length}</span>
+            )}
+            {(showAllUsers || usersOverflowing) && (
+              <button
+                className="text-button see-all-toggle"
+                type="button"
+                aria-expanded={showAllUsers}
+                onClick={() => setShowAllUsers((current) => !current)}
+              >
+                {showAllUsers ? "Show less" : `See all (${filteredUsers.length})`}
+              </button>
             )}
             <VoiceWorkerChip refreshKey={safeUsers.length} />
           </div>
@@ -4918,7 +5056,7 @@ export function UserEditor({
             </div>
           </div>
         )}
-        <div className="user-search-row" style={{ padding: "8px 14px" }}>
+        <div className="user-search-row">
           <div className="search-input-wrap">
             <Search size={15} />
             <input
@@ -4931,7 +5069,7 @@ export function UserEditor({
             />
           </div>
         </div>
-        <div className="table-wrap">
+        <div className="table-wrap" ref={usersWrapRef}>
           <table>
             <thead>
               <tr>
@@ -5562,6 +5700,13 @@ export function PayrollWorkspace({
         <form className="payroll-generate-panel" onSubmit={save}>
           <div className="payroll-panel-heading">
             <h2>Generate cutoff payroll</h2>
+            <button
+              className="submit-button payroll-generate-submit"
+              type="submit"
+              disabled={saving || !form.cutoffStart || !form.cutoffEnd}
+            >
+              {saving ? "Generating..." : "Generate from attendance"}
+            </button>
           </div>
           <div className="payroll-generate-controls">
             <div className="cutoff-period">
@@ -5608,7 +5753,7 @@ export function PayrollWorkspace({
                 onChange={(event) => handleCutoffDateChange("cutoffEnd", event.target.value)}
               />
             </label>
-            <label>
+            <label className="payroll-standard-days">
               Standard days
               <input
                 required
@@ -5620,13 +5765,6 @@ export function PayrollWorkspace({
                 onChange={(event) => update("standardWorkingDays", event.target.value)}
               />
             </label>
-            <button
-              className="submit-button payroll-generate-submit"
-              type="submit"
-              disabled={saving || !form.cutoffStart || !form.cutoffEnd}
-            >
-              {saving ? "Generating..." : "Generate from attendance"}
-            </button>
           </div>
         </form>
 
@@ -6154,6 +6292,237 @@ function EditPayrollDialog({
   );
 }
 
+type PayrollAmountColumn = { label: string; value: (row: PayrollCutoffRecord) => number };
+
+// Money fields that are ₱0 for interns. The table hides each one while every row is ₱0;
+// the Breakdown popup always lists them.
+const PAYROLL_OPTIONAL_EARNINGS: PayrollAmountColumn[] = [
+  { label: "HRA", value: (row) => row.hra ?? 0 },
+  { label: "Incentives", value: (row) => row.incentivesAllowance },
+  { label: "Special Allow.", value: (row) => row.specialAllowance },
+  { label: "Total Allow.", value: (row) => row.totalAllowance },
+  { label: "Reg. Hol.", value: (row) => row.regularHolidayPay },
+  { label: "Spec. Hol.", value: (row) => row.specialHolidayPay },
+  { label: "Overtime", value: (row) => row.overtimePay },
+];
+const PAYROLL_OPTIONAL_DEDUCTIONS: PayrollAmountColumn[] = [
+  { label: "SSS", value: (row) => row.sss ?? 0 },
+  { label: "PhilHealth", value: (row) => row.phic ?? 0 },
+  { label: "HDMF", value: (row) => row.hdmf ?? 0 },
+  { label: "Advance", value: (row) => row.salaryAdvance ?? 0 },
+];
+
+function payrollDeptRole(row: PayrollCutoffRecord): string {
+  return row.department || row.designation
+    ? `${row.department ?? ""}${row.department && row.designation ? " — " : ""}${row.designation ?? ""}`
+    : "—";
+}
+
+function payrollBankAccount(row: PayrollCutoffRecord): string {
+  return row.bankName || row.accountNumber
+    ? `${row.bankName ?? "CASH"} / ${row.accountNumber ?? "0000"}`
+    : "CASH / 0000";
+}
+
+/** The full calculation and payslip detail for one payroll row, shown in the Breakdown popup. */
+function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
+  const sss = row.sss ?? 0;
+  const phic = row.phic ?? 0;
+  const hdmf = row.hdmf ?? 0;
+  const advance = row.salaryAdvance ?? 0;
+  const parsedBreakdown = parseCalculationBreakdown(row.calculationBreakdown);
+  const totalDeductions = payrollTotalDeductions(row);
+  const netPay = row.netPay;
+  // Every payslip field, including the ones the table hides while they are ₱0.
+  const fieldGroups: { title: string; fields: [string, string][] }[] = [
+    {
+      title: "Employee",
+      fields: [
+        ["Employee #", row.employeeId],
+        ["Dept / Role", payrollDeptRole(row)],
+        ["Bank / A/C", payrollBankAccount(row)],
+        ["TIN #", row.tin || "—"],
+        ["Standard days", String(row.standardWorkingDays)],
+        ["Paid days", String(row.actualWorkingDays)],
+        ["LWOP", String(row.absentDays)],
+        ["Daily rate", php(row.dailyRate)],
+      ],
+    },
+    {
+      title: "Earnings",
+      fields: [
+        ["Basic pay", php(row.basicPay)],
+        ...PAYROLL_OPTIONAL_EARNINGS.map((column): [string, string] => [column.label, php(column.value(row))]),
+        ["Total earnings", php(row.grossCompensation)],
+      ],
+    },
+    {
+      title: "Deductions",
+      fields: [
+        ...PAYROLL_OPTIONAL_DEDUCTIONS.map((column): [string, string] => [column.label, php(column.value(row))]),
+        ["Absent", php(row.absenceDeduction)],
+        ["Late / Halfday", php(row.lateDeduction + row.halfDayDeduction)],
+        ["Total deductions", php(totalDeductions)],
+      ],
+    },
+  ];
+  return (
+    <>
+      <div className="payroll-breakdown-fields">
+        {fieldGroups.map((group) => (
+          <section key={group.title}>
+            <h3>{group.title}</h3>
+            <dl>
+              {group.fields.map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ))}
+      </div>
+      {row.employeeType === "INTERN" ? (
+        <div className="payroll-breakdown-formula">
+          <p>
+            <strong>Cutoff Rate:</strong> {php(row.totalCompensation || row.basicPay)} ({row.standardWorkingDays} std days at {php(INTERN_DAILY_RATE_PHP)}/day)
+            {row.manualAdjustment !== 0
+              ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
+              : ""}
+            {" = "}
+            <strong>{php(row.grossCompensation)}</strong> (Gross Earnings).
+            <br />
+            <strong>Total Deductions:</strong>{" "}
+            {php(row.absenceDeduction)} absent ({row.absentDays} day(s))
+            {row.lateDeduction > 0 ? ` + ${php(row.lateDeduction)} late (${row.lateUnits} hr(s) at ${php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)` : ""}
+            {row.halfDayDeduction > 0 ? ` + ${php(row.halfDayDeduction)} half-day / undertime (${row.halfDayCount} day(s))` : ""}
+            {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 ? "None" : ""}
+            {" = "}
+            <strong className="payroll-deductions-total">{php(totalDeductions)}</strong>.
+            <br />
+            <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+            <strong className="payroll-net-pay-pill">
+              {php(netPay)}
+            </strong>
+          </p>
+        </div>
+      ) : (
+        <div className="payroll-breakdown-formula">
+          <p>
+            <strong>Earnings:</strong> {php(row.basicPay)} basic +{" "}
+            {php(row.hra ?? 0)} HRA +{" "}
+            {php(row.incentivesAllowance)} incentives +{" "}
+            {php(row.specialAllowance)} special allow. +{" "}
+            {php(row.regularHolidayPay)} reg. hol. +{" "}
+            {php(row.specialHolidayPay)} spec. hol. +{" "}
+            {php(row.overtimePay)} overtime ={" "}
+            <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
+            <br />
+            <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
+            <strong className="payroll-deductions-total">{php(totalDeductions)}</strong> (Total Deductions).
+            <br />
+            <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+            <strong className="payroll-net-pay-pill">
+              {php(netPay)}
+            </strong>
+          </p>
+        </div>
+      )}
+
+      {parsedBreakdown?.deductions && parsedBreakdown.deductions.length > 0 ? (
+        <div className="payroll-deductions-container">
+          <div className="payroll-deductions-header">
+            <h4 className="payroll-deductions-heading">
+              Transparent Deductions Breakdown ({parsedBreakdown.deductions.length} item{parsedBreakdown.deductions.length === 1 ? "" : "s"}):
+            </h4>
+          </div>
+          <div className="payroll-deductions-table-wrap">
+            <table className="payroll-deductions-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Attendance Time</th>
+                  <th>Cause / Details</th>
+                  <th className="payroll-col-amount">Deduction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => {
+                  const clampedPayrollTimeIn =
+                    row.employeeType === "INTERN" &&
+                    !isNoGraceDate(item.date) &&
+                    item.category === "LATE" &&
+                    Boolean(item.timeIn && shouldClampHour(item.timeIn)) &&
+                    item.amount > 0;
+                  return (
+                  <tr key={`${item.date}-${item.category}-${idx}`}>
+                    <td className="payroll-deduction-date">
+                      {formatDeductionDate(item.date)}
+                    </td>
+                    <td>
+                      <span className={`deduction-badge badge-${item.category.toLowerCase()}`}>
+                        {item.label}
+                      </span>
+                    </td>
+                    <td className="payroll-deduction-time">
+                      {item.timeIn || item.timeOut ? (
+                        <>
+                          {clampedPayrollTimeIn ? (
+                            <span
+                              className="clamped-time-in-chip clamped-time-in-static"
+                              data-testid="clamped-payroll-time-in"
+                              title={`Actual scan: ${item.timeIn} (payable time clamped)`}
+                            >
+                              {clampedTimeLabel(item.timeIn ?? "")}
+                            </span>
+                          ) : (
+                            item.timeIn ?? "—"
+                          )}
+                          {" – "}
+                          {item.timeOut ?? "—"}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="payroll-deduction-details">{item.details}</td>
+                    <td className="payroll-deduction-amount">
+                      {php(item.amount)}
+                    </td>
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        (row.absenceDeduction > 0 || row.lateDeduction > 0 || row.halfDayDeduction > 0) ? (
+          <p className="payroll-deductions-note">
+            Summary of deductions: {row.absenceDeduction > 0 ? `${row.absentDays} day(s) absent (${php(row.absenceDeduction)}). ` : ""}
+            {row.lateDeduction > 0 ? `${row.lateUnits} hr(s) late (${php(row.lateDeduction)}). ` : ""}
+            {row.halfDayDeduction > 0 ? `${row.halfDayCount} half-day / undertime day(s) (${php(row.halfDayDeduction)}). ` : ""}
+            <em>(Full date-by-date breakdown will be shown on next generation from attendance).</em>
+          </p>
+        ) : (
+          <p className="payroll-deductions-none">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span>No attendance deductions incurred for this cutoff period.</span>
+          </p>
+        )
+      )}
+
+      <p className="payroll-cutoff-status">
+        Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({row.cutoffStart} to {row.cutoffEnd}).
+      </p>
+    </>
+  );
+}
+
 function PayrollTable({
   records,
   onFinalized,
@@ -6164,6 +6533,7 @@ function PayrollTable({
   const [message, setMessage] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editTarget, setEditTarget] = useState<PayrollCutoffRecord | null>(null);
+  const [breakdownTarget, setBreakdownTarget] = useState<PayrollCutoffRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [finalizeTarget, setFinalizeTarget] = useState<PayrollCutoffRecord | null>(null);
@@ -6171,6 +6541,9 @@ function PayrollTable({
   const [finalizing, setFinalizing] = useState(false);
   const [deletingBatch, setDeletingBatch] = useState(false);
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
+  const payrollWrapRef = useRef<HTMLDivElement>(null);
+  const [showAllPayroll, setShowAllPayroll] = useState(false);
+  const payrollOverflowing = useVerticalOverflow(payrollWrapRef, records.length > 0);
 
   const allSelected = records.length > 0 && selectedIds.size === records.length;
   const someSelected = selectedIds.size > 0 && selectedIds.size < records.length;
@@ -6330,6 +6703,14 @@ function PayrollTable({
       <div className="empty-state">No cutoff payroll has been created.</div>
     );
 
+  // Hide columns that are blank or ₱0 on every row; they reappear once any row has a value,
+  // and the Breakdown popup always shows them.
+  const showDept = records.some((r) => r.department || r.designation);
+  const showBank = records.some((r) => (r.bankName && r.bankName !== "CASH") || (r.accountNumber && r.accountNumber !== "0000"));
+  const showTin = records.some((r) => r.tin);
+  const visibleEarnings = PAYROLL_OPTIONAL_EARNINGS.filter((column) => records.some((r) => column.value(r) !== 0));
+  const visibleDeductions = PAYROLL_OPTIONAL_DEDUCTIONS.filter((column) => records.some((r) => column.value(r) !== 0));
+
   return (
     <div className="payroll-table-with-bar">
       <div className="payroll-table-header-bar">
@@ -6338,6 +6719,16 @@ function PayrollTable({
             <span className="table-selection-badge">{selectedIds.size} of {records.length} payroll record(s) selected</span>
           ) : (
             <span>Total records: {records.length}</span>
+          )}
+          {(showAllPayroll || payrollOverflowing) && (
+            <button
+              className="text-button see-all-toggle"
+              type="button"
+              aria-expanded={showAllPayroll}
+              onClick={() => setShowAllPayroll((current) => !current)}
+            >
+              {showAllPayroll ? "Show less" : `See all (${records.length})`}
+            </button>
           )}
         </div>
         <div className="payroll-batch-actions">
@@ -6390,7 +6781,7 @@ function PayrollTable({
         </div>
       </div>
 
-      <div className="table-wrap">
+      <div className={`table-wrap ${showAllPayroll ? "is-expanded" : ""}`} ref={payrollWrapRef}>
         <table>
           <thead>
             <tr>
@@ -6405,26 +6796,17 @@ function PayrollTable({
               </th>
               <th>Employee #</th>
               <th>Employee Name</th>
-              <th>Dept / Role</th>
-              <th>Bank / A/C</th>
-              <th>TIN #</th>
+              {showDept && <th>Dept / Role</th>}
+              {showBank && <th>Bank / A/C</th>}
+              {showTin && <th>TIN #</th>}
               <th>Standard</th>
               <th>Paid Days</th>
               <th>LWOP</th>
               <th>Daily Rate</th>
               <th>Basic Pay</th>
-              <th>HRA</th>
-              <th>Incentives</th>
-              <th>Special Allow.</th>
-              <th>Total Allow.</th>
-              <th>Reg. Hol.</th>
-              <th>Spec. Hol.</th>
-              <th>Overtime</th>
+              {visibleEarnings.map((column) => <th key={column.label}>{column.label}</th>)}
               <th>Total Earnings</th>
-              <th>SSS</th>
-              <th>PhilHealth</th>
-              <th>HDMF</th>
-              <th>Advance</th>
+              {visibleDeductions.map((column) => <th key={column.label}>{column.label}</th>)}
               <th>Absent</th>
               <th>Late / Halfday</th>
               <th>Total Deductions</th>
@@ -6434,262 +6816,132 @@ function PayrollTable({
           </thead>
           <tbody>
             {records.map((row) => {
-              const sss = row.sss ?? 0;
-              const phic = row.phic ?? 0;
-              const hdmf = row.hdmf ?? 0;
-              const advance = row.salaryAdvance ?? 0;
-              const parsedBreakdown = parseCalculationBreakdown(row.calculationBreakdown);
               const totalDeductions = payrollTotalDeductions(row);
 
               const netPay = row.netPay;
 
               return (
-                <Fragment key={row.payrollId}>
-                  <tr key={row.payrollId} className={selectedIds.has(row.payrollId) ? "selected-row" : ""}>
-                    <td className="payroll-select-cell">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(row.payrollId)}
-                        onChange={() => toggleSelectRow(row.payrollId)}
-                        aria-label={`Select payroll for ${row.employeeName}`}
-                      />
-                    </td>
-                    <td>{row.employeeId}</td>
-                    <td>
-                      <strong>
-                        {row.employeeType === "INTERN"
-                          ? `${row.employeeName} (Intern)`
-                          : row.employeeName}
-                      </strong>
-                    </td>
-                    <td>
-                      {row.department || row.designation
-                        ? `${row.department ?? ""}${row.department && row.designation ? " — " : ""}${row.designation ?? ""}`
-                        : "—"}
-                    </td>
-                    <td>
-                      {row.bankName || row.accountNumber
-                        ? `${row.bankName ?? "CASH"} / ${row.accountNumber ?? "0000"}`
-                        : "CASH / 0000"}
-                    </td>
-                    <td>{row.tin || "—"}</td>
-                    <td>{row.standardWorkingDays}</td>
-                    <td>{row.actualWorkingDays}</td>
-                    <td>{row.absentDays}</td>
-                    <td>{php(row.dailyRate)}</td>
-                    <td>{php(row.basicPay)}</td>
-                    <td>{php(row.hra ?? 0)}</td>
-                    <td>{php(row.incentivesAllowance)}</td>
-                    <td>{php(row.specialAllowance)}</td>
-                    <td>{php(row.totalAllowance)}</td>
-                    <td>{php(row.regularHolidayPay)}</td>
-                    <td>{php(row.specialHolidayPay)}</td>
-                    <td>{php(row.overtimePay)}</td>
-                    <td>
-                      <strong>{php(row.grossCompensation)}</strong>
-                    </td>
-                    <td>{php(sss)}</td>
-                    <td>{php(phic)}</td>
-                    <td>{php(hdmf)}</td>
-                    <td>{php(advance)}</td>
-                    <td>{php(row.absenceDeduction)}</td>
-                    <td>{php(row.lateDeduction + row.halfDayDeduction)}</td>
-                    <td>
-                      <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>
-                    </td>
-                    <td style={{ backgroundColor: "#fef08a" }}>
-                      <strong style={{ color: "#854d0e" }}>{php(netPay)}</strong>
-                    </td>
-                    <td className="payroll-actions-cell">
-                      {row.status === "DRAFT" ? (
-                        <span className="payroll-row-actions">
-                          <button
-                            className="text-button"
-                            type="button"
-                            onClick={() => setEditTarget(row)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="text-button"
-                            type="button"
-                            disabled={finalizing}
-                            onClick={() => setFinalizeTarget(row)}
-                          >
-                            Finalize
-                          </button>
-                          <button
-                            className="text-button danger-button"
-                            type="button"
-                            onClick={() => setDeleteTarget(row)}
-                          >
-                            Delete
-                          </button>
-                        </span>
-                      ) : (
-                        <span className="payroll-row-actions">
-                          <span className="payroll-finalized-label">Finalized</span>
-                          <button
-                            className="text-button danger-button"
-                            type="button"
-                            onClick={() => setDeleteTarget(row)}
-                          >
-                            Delete
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                  <tr key={`${row.payrollId}-details`} className="payroll-detail">
-                    <td colSpan={28}>
-                      <details>
-                        <summary>Calculation breakdown & payslip detail</summary>
-                        {row.employeeType === "INTERN" ? (
-                          <div className="payroll-breakdown-formula">
-                            <p>
-                              <strong>Cutoff Rate:</strong> {php(row.totalCompensation || row.basicPay)} ({row.standardWorkingDays} std days at {php(INTERN_DAILY_RATE_PHP)}/day)
-                              {row.manualAdjustment !== 0
-                                ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
-                                : ""}
-                              {" = "}
-                              <strong>{php(row.grossCompensation)}</strong> (Gross Earnings).
-                              <br />
-                              <strong>Total Deductions:</strong>{" "}
-                              {php(row.absenceDeduction)} absent ({row.absentDays} day(s))
-                              {row.lateDeduction > 0 ? ` + ${php(row.lateDeduction)} late (${row.lateUnits} hr(s) at ${php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)` : ""}
-                              {row.halfDayDeduction > 0 ? ` + ${php(row.halfDayDeduction)} half-day / undertime (${row.halfDayCount} day(s))` : ""}
-                              {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 ? "None" : ""}
-                              {" = "}
-                              <strong className="payroll-deductions-total">{php(totalDeductions)}</strong>.
-                              <br />
-                              <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
-                              <strong className="payroll-net-pay-pill">
-                                {php(netPay)}
-                              </strong>
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="payroll-breakdown-formula">
-                            <p>
-                              <strong>Earnings:</strong> {php(row.basicPay)} basic +{" "}
-                              {php(row.hra ?? 0)} HRA +{" "}
-                              {php(row.incentivesAllowance)} incentives +{" "}
-                              {php(row.specialAllowance)} special allow. +{" "}
-                              {php(row.regularHolidayPay)} reg. hol. +{" "}
-                              {php(row.specialHolidayPay)} spec. hol. +{" "}
-                              {php(row.overtimePay)} overtime ={" "}
-                              <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
-                              <br />
-                              <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
-                              <strong className="payroll-deductions-total">{php(totalDeductions)}</strong> (Total Deductions).
-                              <br />
-                              <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
-                              <strong className="payroll-net-pay-pill">
-                                {php(netPay)}
-                              </strong>
-                            </p>
-                          </div>
-                        )}
-
-                        {parsedBreakdown?.deductions && parsedBreakdown.deductions.length > 0 ? (
-                          <div className="payroll-deductions-container">
-                            <div className="payroll-deductions-header">
-                              <h4 className="payroll-deductions-heading">
-                                Transparent Deductions Breakdown ({parsedBreakdown.deductions.length} item{parsedBreakdown.deductions.length === 1 ? "" : "s"}):
-                              </h4>
-                            </div>
-                            <div className="payroll-deductions-table-wrap">
-                              <table className="payroll-deductions-table">
-                                <thead>
-                                  <tr>
-                                    <th>Date</th>
-                                    <th>Type</th>
-                                    <th>Attendance Time</th>
-                                    <th>Cause / Details</th>
-                                    <th className="payroll-col-amount">Deduction</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => {
-                                    const clampedPayrollTimeIn =
-                                      row.employeeType === "INTERN" &&
-                                      !isNoGraceDate(item.date) &&
-                                      item.category === "LATE" &&
-                                      Boolean(item.timeIn && shouldClampHour(item.timeIn)) &&
-                                      item.amount > 0;
-                                    return (
-                                    <tr key={`${item.date}-${item.category}-${idx}`}>
-                                      <td className="payroll-deduction-date">
-                                        {formatDeductionDate(item.date)}
-                                      </td>
-                                      <td>
-                                        <span className={`deduction-badge badge-${item.category.toLowerCase()}`}>
-                                          {item.label}
-                                        </span>
-                                      </td>
-                                      <td className="payroll-deduction-time">
-                                        {item.timeIn || item.timeOut ? (
-                                          <>
-                                            {clampedPayrollTimeIn ? (
-                                              <span
-                                                className="clamped-time-in-chip clamped-time-in-static"
-                                                data-testid="clamped-payroll-time-in"
-                                                title={`Actual scan: ${item.timeIn} (payable time clamped)`}
-                                              >
-                                                {clampedTimeLabel(item.timeIn ?? "")}
-                                              </span>
-                                            ) : (
-                                              item.timeIn ?? "—"
-                                            )}
-                                            {" – "}
-                                            {item.timeOut ?? "—"}
-                                          </>
-                                        ) : (
-                                          "—"
-                                        )}
-                                      </td>
-                                      <td className="payroll-deduction-details">{item.details}</td>
-                                      <td className="payroll-deduction-amount">
-                                        {php(item.amount)}
-                                      </td>
-                                    </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        ) : (
-                          (row.absenceDeduction > 0 || row.lateDeduction > 0 || row.halfDayDeduction > 0) ? (
-                            <p className="payroll-deductions-note">
-                              Summary of deductions: {row.absenceDeduction > 0 ? `${row.absentDays} day(s) absent (${php(row.absenceDeduction)}). ` : ""}
-                              {row.lateDeduction > 0 ? `${row.lateUnits} hr(s) late (${php(row.lateDeduction)}). ` : ""}
-                              {row.halfDayDeduction > 0 ? `${row.halfDayCount} half-day / undertime day(s) (${php(row.halfDayDeduction)}). ` : ""}
-                              <em>(Full date-by-date breakdown will be shown on next generation from attendance).</em>
-                            </p>
-                          ) : (
-                            <p className="payroll-deductions-none">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                              <span>No attendance deductions incurred for this cutoff period.</span>
-                            </p>
-                          )
-                        )}
-
-                        <p className="payroll-cutoff-status">
-                          Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({row.cutoffStart} to {row.cutoffEnd}).
-                        </p>
-                      </details>
-                    </td>
-                  </tr>
-                </Fragment>
+                <tr key={row.payrollId} className={selectedIds.has(row.payrollId) ? "selected-row" : ""}>
+                  <td className="payroll-select-cell">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(row.payrollId)}
+                      onChange={() => toggleSelectRow(row.payrollId)}
+                      aria-label={`Select payroll for ${row.employeeName}`}
+                    />
+                  </td>
+                  <td>{row.employeeId}</td>
+                  <td>
+                    <strong>
+                      {row.employeeType === "INTERN"
+                        ? `${row.employeeName} (Intern)`
+                        : row.employeeName}
+                    </strong>
+                  </td>
+                  {showDept && <td>{payrollDeptRole(row)}</td>}
+                  {showBank && <td>{payrollBankAccount(row)}</td>}
+                  {showTin && <td>{row.tin || "—"}</td>}
+                  <td>{row.standardWorkingDays}</td>
+                  <td>{row.actualWorkingDays}</td>
+                  <td>{row.absentDays}</td>
+                  <td>{php(row.dailyRate)}</td>
+                  <td>{php(row.basicPay)}</td>
+                  {visibleEarnings.map((column) => <td key={column.label}>{php(column.value(row))}</td>)}
+                  <td>
+                    <strong>{php(row.grossCompensation)}</strong>
+                  </td>
+                  {visibleDeductions.map((column) => <td key={column.label}>{php(column.value(row))}</td>)}
+                  <td>{php(row.absenceDeduction)}</td>
+                  <td>{php(row.lateDeduction + row.halfDayDeduction)}</td>
+                  <td>
+                    <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>
+                  </td>
+                  <td style={{ backgroundColor: "#fef08a" }}>
+                    <strong style={{ color: "#854d0e" }}>{php(netPay)}</strong>
+                  </td>
+                  <td className="payroll-actions-cell">
+                    {row.status === "DRAFT" ? (
+                      <span className="payroll-row-actions">
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => setBreakdownTarget(row)}
+                        >
+                          Breakdown
+                        </button>
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => setEditTarget(row)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="text-button"
+                          type="button"
+                          disabled={finalizing}
+                          onClick={() => setFinalizeTarget(row)}
+                        >
+                          Finalize
+                        </button>
+                        <button
+                          className="text-button danger-button"
+                          type="button"
+                          onClick={() => setDeleteTarget(row)}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="payroll-row-actions">
+                        <span className="payroll-finalized-label">Finalized</span>
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => setBreakdownTarget(row)}
+                        >
+                          Breakdown
+                        </button>
+                        <button
+                          className="text-button danger-button"
+                          type="button"
+                          onClick={() => setDeleteTarget(row)}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                </tr>
               );
             })}
           </tbody>
         </table>
       </div>
       {message && <p className="dashboard-alert">{message}</p>}
+      {breakdownTarget && (
+        <div className="confirm-backdrop" role="presentation">
+          <section
+            className="confirm-dialog payroll-breakdown-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payroll-breakdown-heading"
+          >
+            <div className="payroll-breakdown-head">
+              <h2 id="payroll-breakdown-heading">Calculation breakdown — {breakdownTarget.employeeName}</h2>
+              <p className="payroll-breakdown-net">
+                Net pay <strong>{php(breakdownTarget.netPay)}</strong>
+              </p>
+            </div>
+            <PayrollBreakdownDetail row={breakdownTarget} />
+            <div className="confirm-actions">
+              <button className="submit-button" type="button" onClick={() => setBreakdownTarget(null)}>
+                <Check size={16} /> Close
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       <EditPayrollDialog
         record={editTarget}
         open={Boolean(editTarget)}
@@ -7141,15 +7393,12 @@ function AdminAttendance({
   );
 
   const counts = useMemo(() => {
-    let gpCount = 0;
     let lateCount = 0;
     for (const info of arrivalMap.values()) {
-      if (info.arrivalStatus === "GRACE_PERIOD") gpCount++;
-      else if (info.arrivalStatus === "LATE") lateCount++;
+      if (info.arrivalStatus === "LATE") lateCount++;
     }
     return {
       all: activeRows.length,
-      gracePeriod: gpCount,
       late: lateCount,
       lateTimeout: activeRows.filter((r) => r.status === "LATE_TIMEOUT").length,
       working: activeRows.filter((r) => r.status === "WORKING").length,
@@ -7176,9 +7425,6 @@ function AdminAttendance({
       return false;
     }
     if (!statusFilter) return true;
-    if (statusFilter === "GRACE_PERIOD") {
-      return arrivalMap.get(row.attendanceId)?.arrivalStatus === "GRACE_PERIOD";
-    }
     if (statusFilter === "LATE") {
       return arrivalMap.get(row.attendanceId)?.arrivalStatus === "LATE";
     }
@@ -7197,6 +7443,9 @@ function AdminAttendance({
   const [batchDeleteAttendanceOpen, setBatchDeleteAttendanceOpen] = useState(false);
   const [batchDeletingAttendance, setBatchDeletingAttendance] = useState(false);
   const masterAttendanceCheckboxRef = useRef<HTMLInputElement>(null);
+  const attendanceWrapRef = useRef<HTMLDivElement>(null);
+  const [showAllAttendance, setShowAllAttendance] = useState(false);
+  const attendanceOverflowing = useVerticalOverflow(attendanceWrapRef, true);
 
   const allAttendanceSelected = filteredRows.length > 0 && selectedAttendanceIds.size === filteredRows.length;
   const someAttendanceSelected = selectedAttendanceIds.size > 0 && selectedAttendanceIds.size < filteredRows.length;
@@ -7308,18 +7557,6 @@ function AdminAttendance({
               All <span className="filter-pill-count">{counts.all}</span>
             </button>
             <button
-              className={`filter-pill ${statusFilter === "GRACE_PERIOD" ? "is-active" : ""}`}
-              type="button"
-              onClick={() =>
-                setStatusFilter(
-                  statusFilter === "GRACE_PERIOD" ? "" : "GRACE_PERIOD",
-                )
-              }
-            >
-              Grace Period (GP){" "}
-              <span className="filter-pill-count">{counts.gracePeriod}</span>
-            </button>
-            <button
               className={`filter-pill ${statusFilter === "LATE" ? "is-active" : ""}`}
               type="button"
               onClick={() =>
@@ -7415,7 +7652,6 @@ function AdminAttendance({
           <button
             type="button"
             className="filter-preset-btn"
-            style={{ height: 42, alignSelf: "flex-end" }}
             onClick={() => setDate(localDate())}
             disabled={date === localDate()}
           >
@@ -7477,6 +7713,16 @@ function AdminAttendance({
           ) : (
             <span>Total records: {filteredRows.length}</span>
           )}
+          {(showAllAttendance || attendanceOverflowing) && (
+            <button
+              className="text-button see-all-toggle"
+              type="button"
+              aria-expanded={showAllAttendance}
+              onClick={() => setShowAllAttendance((current) => !current)}
+            >
+              {showAllAttendance ? "Show less" : `See all (${filteredRows.length})`}
+            </button>
+          )}
         </div>
         <div className="table-batch-actions">
           {selectedAttendanceIds.size > 0 ? (
@@ -7525,7 +7771,10 @@ function AdminAttendance({
         </div>
       </div>
 
-      <div className="table-wrap">
+      <div
+        className={`table-wrap attendance-table-wrap ${showAllAttendance ? "is-expanded" : ""}`}
+        ref={attendanceWrapRef}
+      >
         <table>
           <thead>
             <tr>
@@ -7864,9 +8113,9 @@ function exportAttendanceCsv(
   };
   const getArrivalText = (row: AttendanceListItem) => {
     const info = arrivalMap.get(row.attendanceId);
-    if (!info || info.arrivalStatus === "NONE") return "";
+    // Grace-period arrivals are left blank, matching the table.
+    if (!info || info.arrivalStatus === "NONE" || info.arrivalStatus === "GRACE_PERIOD") return "";
     if (info.arrivalStatus === "ON_TIME") return "On time";
-    if (info.arrivalStatus === "GRACE_PERIOD") return "Grace Period (GP)";
     return `Late (${info.minutesLate}m)`;
   };
   // Clamped rows export their hourly payable Manila time-in in the
@@ -8004,21 +8253,16 @@ function AttendanceEditRow({
   };
 
   const renderArrival = () => {
-    if (!arrivalInfo || arrivalInfo.arrivalStatus === "NONE") {
+    // Grace-period arrivals show no label in the table; payroll still treats them as grace-period days.
+    if (
+      !arrivalInfo ||
+      arrivalInfo.arrivalStatus === "NONE" ||
+      arrivalInfo.arrivalStatus === "GRACE_PERIOD"
+    ) {
       return <span className="arrival-badge badge-none">—</span>;
     }
     if (arrivalInfo.arrivalStatus === "ON_TIME") {
       return <span className="arrival-badge badge-ontime">On time</span>;
-    }
-    if (arrivalInfo.arrivalStatus === "GRACE_PERIOD") {
-      return (
-        <span
-          className="arrival-badge badge-gp"
-          title="8:00 - 8:15 AM (1 weekly grace period applied)"
-        >
-          Grace Period (GP)
-        </span>
-      );
     }
     return (
       <span

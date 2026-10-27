@@ -24,13 +24,15 @@ describe('VoiceSettingsPanel', () => {
     await act(async () => {
       render(<VoiceSettingsPanel />);
     });
-    expect(screen.getByRole('heading', { name: 'Voice Announcements' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Voice Announcements' })).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable Voice Announcements/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Speech Rate/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Volume/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Test Voice' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/VoiceStudio Server/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Audio Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'VoiceStudio Server' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Server address/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Test Connection' })).toBeInTheDocument();
   });
 
@@ -55,13 +57,39 @@ describe('VoiceSettingsPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps the stopped message when Stop cancels Test Voice', async () => {
+    let finishTest: (value: null) => void = () => undefined;
+    vi.spyOn(ttsService, 'testVoice').mockReturnValue(
+      new Promise((resolve) => {
+        finishTest = resolve;
+      }),
+    );
+    vi.spyOn(ttsService, 'stopSpeech').mockResolvedValue(undefined);
+
+    await act(async () => {
+      render(<VoiceSettingsPanel />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Test Voice' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    });
+    await act(async () => {
+      finishTest(null);
+    });
+
+    expect(screen.getByText('Playback stopped.')).toBeInTheDocument();
+    expect(screen.queryByText(/Speech synthesis failed/i)).not.toBeInTheDocument();
+  });
+
   it('updates the VoiceStudio host address', async () => {
     const onChange = vi.fn();
     await act(async () => {
       render(<VoiceSettingsPanel onSettingsChange={onChange} />);
     });
 
-    const hostInput = screen.getByLabelText(/VoiceStudio Server/i);
+    const hostInput = screen.getByLabelText(/Server address/i);
     await act(async () => {
       fireEvent.change(hostInput, { target: { value: 'http://192.168.1.50:3900' } });
     });
@@ -180,7 +208,7 @@ describe('VoiceSettingsPanel', () => {
     });
 
     // SAFETY: Input element resolved by aria label
-    const hostInput = screen.getByLabelText(/VoiceStudio Server/i) as HTMLInputElement;
+    const hostInput = screen.getByLabelText(/Server address/i) as HTMLInputElement;
     // SAFETY: Input element resolved by aria label
     const pinInput = screen.getByLabelText(/Share PIN/i) as HTMLInputElement;
 

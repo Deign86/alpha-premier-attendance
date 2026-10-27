@@ -3854,6 +3854,41 @@ async fn db_open_backups_dir(
 }
 
 #[tauri::command]
+/// Copy one saved backup (must live in the backups folder) to a destination
+/// the operator picked in the save dialog, e.g. a USB drive for the new PC.
+async fn db_save_backup_copy(
+    state: State<'_, AppState>,
+    token: String,
+    source_path: String,
+    destination_path: String,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(&state, &token).await {
+        return Err("ADMIN_AUTH_REQUIRED".into());
+    }
+    let source = crate::paths::canonical_within(
+        &state.backups_dir,
+        Path::new(&source_path),
+        "BACKUP_DIR_UNAVAILABLE",
+        "FILE_NOT_FOUND",
+        "PATH_OUTSIDE_BACKUPS",
+    )?;
+    if !source.is_file() {
+        return Err("FILE_NOT_FOUND".into());
+    }
+    let destination = std::path::PathBuf::from(destination_path.trim());
+    if destination.as_os_str().is_empty() {
+        return Err("DESTINATION_REQUIRED".into());
+    }
+    // Saving onto the backup itself would truncate it before the copy reads it.
+    if std::fs::canonicalize(&destination).is_ok_and(|existing| existing == source) {
+        return Err("DESTINATION_IS_SOURCE".into());
+    }
+    std::fs::copy(&source, &destination)
+        .map_err(|error| format!("BACKUP_COPY_FAILED: {error}"))?;
+    Ok(serde_json::json!({"success": true, "message": "Backup copied."}))
+}
+
+#[tauri::command]
 /// Read-only status of the LAN attendance viewer for the Live Attendance panel.
 async fn lan_status(
     state: State<'_, AppState>,
@@ -6271,6 +6306,7 @@ pub fn run() {
             db_restore_request,
             db_dismiss_restore_failure,
             db_open_backups_dir,
+            db_save_backup_copy,
             setup_unlock,
             setup_lock,
             admin_pin_reset_request,
