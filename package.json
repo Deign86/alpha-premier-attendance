@@ -2,7 +2,7 @@
   "name": "rfid-time-in-out",
   "private": true,
   "type": "module",
-  "version": "0.2.23",
+  "version": "0.2.24",
   "workspaces": [
     "client",
     "server",
