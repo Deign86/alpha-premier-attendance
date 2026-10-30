@@ -40,7 +40,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
           ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
-        run: npx tauri build --target universal-apple-darwin
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tauri build --target universal-apple-darwin 2>&1 | tee build.log
+
+      # Surface the failure tail as an annotation, readable via the API
+      # without downloading the full log.
+      - name: Report build failure tail
+        if: failure()
+        shell: bash
+        run: |
+          tail -n 80 build.log | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}' > tail.txt
+          echo "::error title=tauri build tail::$(cat tail.txt)"
 
       - uses: actions/upload-artifact@v4
         with:
