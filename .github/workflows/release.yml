@@ -99,15 +99,23 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-  # Native macOS (universal: Apple Silicon + Intel) .app/.dmg attached to the
-  # same release. Runs after Windows so it builds the bumped tag, and
-  # tauri-action merges the darwin entries into the release's latest.json.
+  # Native macOS .app/.dmg (one per arch) attached to the same release. Runs
+  # after Windows so it builds the bumped tag, and tauri-action merges the
+  # darwin entries into the release's latest.json. Per-arch rather than
+  # universal-apple-darwin: the universal bundler only lipo-merges the main
+  # binary and then fails to copy the extra `migrate_from_sheets` bin.
+  # max-parallel 1 keeps the two latest.json merges from racing.
   build-macos:
     needs: build-windows
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -123,12 +131,13 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies and target artifacts
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "src-tauri"
+          key: ${{ matrix.target }}
 
       - name: Install dependencies and build frontend
         run: |
@@ -149,4 +158,4 @@ jobs:
           releaseName: 'Alpha Premier Attendance ${{ needs.build-windows.outputs.tag }}'
           releaseDraft: false
           prerelease: false
-          args: --target universal-apple-darwin
+          args: --target ${{ matrix.target }}
