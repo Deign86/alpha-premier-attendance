@@ -1,0 +1,49 @@
+# Manual macOS build: produces a universal (Apple Silicon + Intel) .dmg as a
+# workflow artifact without publishing a release. Actions tab -> "macOS Build"
+# -> Run workflow, then download "macos-dmg" from the run summary.
+name: macOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+
+      - name: Install dependencies and build frontend
+        run: |
+          npm ci
+          npm run build:fast
+
+      - name: Build universal .app / .dmg
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
+          ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+        run: npx tauri build --target universal-apple-darwin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error

@@ -71,11 +71,11 @@ export function AdminUpdatesCard({ onManualCheck }: AdminUpdatesCardProps) {
             disabled={autostartBusy}
             onChange={(e) => void toggleAutostart(e.target.checked)}
           />
-          <span>Start Alpha Premier Attendance automatically on Windows startup</span>
+          <span>Start Alpha Premier Attendance automatically when you log in</span>
         </label>
         <p className="reset-hint" style={{ width: '100%', margin: '0' }}>
           {autostartEnabled
-            ? 'The application starts automatically in kiosk mode when Windows logs in.'
+            ? 'The application starts automatically in kiosk mode when you log in to this computer.'
             : 'Automatic startup is currently turned off. You can also toggle this from the system tray menu.'}
         </p>
 
