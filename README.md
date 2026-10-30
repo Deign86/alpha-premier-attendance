@@ -67,6 +67,7 @@ Paper logbooks and generic HR tools assume someone is watching the door. This ap
 | Platform | Download |
 | --- | --- |
 | Windows 10/11 x64 | [Setup.exe on GitHub Releases](https://github.com/Deign86/alpha-premier-attendance/releases) |
+| macOS 10.15+ (Apple Silicon + Intel) | [`.dmg` on GitHub Releases](https://github.com/Deign86/alpha-premier-attendance/releases) |
 
 > The NSIS package bundles the WebView2 bootstrapper and installs machine-wide (admin approval required). The portable `.exe` needs WebView2 already installed — prefer the NSIS package for fresh machines.
 >
@@ -217,6 +218,29 @@ office_display_full = "Unit 3104C, Tektite East Tower, Ortigas Center, Pasig, Me
 ```
 
 Leave `bind_address` unset to auto-detect the office Wi-Fi IP. Secrets stay on the laptop and are never committed. Office identity defaults to the real Tektite East Tower address even with no config file. Full reference: [docs/deployment.md](docs/deployment.md), [docs/google-sheets-setup.md](docs/google-sheets-setup.md).
+
+### macOS
+
+Open the `.dmg`, drag **Alpha Premier Attendance** into Applications. The build is not notarized, so the first launch needs **right-click → Open** (or `xattr -cr "/Applications/Alpha Premier Attendance.app"`). Allow incoming connections when macOS asks, so the LAN viewer is reachable.
+
+| Item | macOS location |
+| --- | --- |
+| `config.toml` | `~/Library/Application Support/com.alphapremier.attendance/` |
+| Database, exports, backups | `~/Library/Application Support/com.alphapremier.attendance/` |
+| Sheets service-account key (local builds) | `~/.rfid-attendance/attendance-sheets-key.json` |
+
+Google Sheets sync, RFID (USB keyboard-wedge readers), payroll, reports, LAN viewer, tray, auto-start at login, and the updater work as on Windows. Voice: the Ma'am Bea cloned clips play natively; the bundled Piper engine is Windows-only, so the fallback voice is the macOS system voice (`say`).
+
+Build on a Mac (Xcode Command Line Tools, Node 22, Rust):
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm ci && npm run build:fast
+npx tauri build --target universal-apple-darwin
+# -> src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+```
+
+Updater artifacts need `TAURI_SIGNING_PRIVATE_KEY` set; for a quick local build add `--config '{"bundle":{"createUpdaterArtifacts":false}}'`. CI: the release workflow attaches the `.dmg` to every release, and **Actions → macOS Build → Run workflow** produces one on demand.
 
 ### Windows packaging
 

@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version_step.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -96,3 +98,55 @@ jobs:
           releaseName: 'Alpha Premier Attendance v__VERSION__'
           releaseDraft: false
           prerelease: false
+
+  # Native macOS (universal: Apple Silicon + Intel) .app/.dmg attached to the
+  # same release. Runs after Windows so it builds the bumped tag, and
+  # tauri-action merges the darwin entries into the release's latest.json.
+  build-macos:
+    needs: build-windows
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-windows.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust dependencies and target artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+
+      - name: Install dependencies and build frontend
+        run: |
+          npm ci
+          npm run build:fast
+
+      - name: Build Tauri app and attach to release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
+          ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+          ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
+        with:
+          tagName: ${{ needs.build-windows.outputs.tag }}
+          releaseName: 'Alpha Premier Attendance ${{ needs.build-windows.outputs.tag }}'
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin

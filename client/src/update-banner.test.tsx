@@ -171,7 +171,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
 
       const autostartCheckbox = screen.getByRole('checkbox', {
-        name: /Start Alpha Premier Attendance automatically on Windows startup/i,
+        name: /Start Alpha Premier Attendance automatically when you log in/i,
       });
       expect(autostartCheckbox).toBeInTheDocument();
 
