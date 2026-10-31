@@ -1,71 +1,107 @@
-# Orchestrated mode: leaves as fresh agents
+# Orchestrated mode
 
-For tree depth 4+ or any build clearly beyond one sitting. The core insight:
-the stall-at-80-percent failure is an end-of-long-context disease. Attention,
-not time, is the scarce resource, and a fresh subagent per leaf resets it.
+Use orchestrated mode when one context cannot hold the task and its verification at full attention. Keep the driver responsible for planning, dispatch, independent verification, integration, and the root report.
 
-## The driver loop
+## Declare states and paths
 
-You (the main session) are the driver. You do not implement leaves; you
-plan, dispatch, verify, and integrate.
+Use these leaf states only:
 
-1. **Plan.** Write PLAN.md (contract, tree, gates file per leaf and branch)
-   from templates/PLAN.md. This is the only step where the whole task must
-   fit in one head.
-2. **Dispatch one leaf.** Spawn a subagent whose entire brief is:
-   - the contract section of PLAN.md (not the whole file, not your history)
-   - its own gates file, verbatim
-   - the instruction: work the four passes until every gate is met with
-     evidence, then stop; if a gate is impossible, ABANDON it with a reason.
-3. **Verify, never trust.** When the leaf returns, re-run its checks
-   yourself: `node <skill-dir>/scripts/gate-check.mjs --status gates/leaf-x.md`
-   and rerun a spot-check of the CHECK commands. A leaf that checked its own
-   boxes without evidence gets sent back with the specific unmet gates named.
-   This is the layer that makes self-certification worthless.
-4. **Log and advance.** Append one line to PLAN.md's status log. Dispatch the
-   next leaf. When all children of a branch are verified, work the branch's
-   integration gates yourself (or dispatch an integration leaf for it).
-5. **Report.** Only when the root's gates are met. Paste the ledger, N of N,
-   with every ABANDON line surfaced, and re-measure every number you state.
+- `WAITING`: one or more ids in `Needs` are not yet `VERIFIED`
+- `READY`: dependencies are verified and ownership is available
+- `IN-FLIGHT`: dispatched and not yet independently verified
+- `VERIFIED`: parent re-verification passed and manual gates were reviewed
+- `ABANDONED`: at least one required gate has a recorded handoff; never treat this as full completion
 
-## Parallelism
+Use `OPEN`, `VERIFIED`, or `ABANDONED` for branches. Store leaf ledgers as `gates/leaf-<id>.md` and integration ledgers as `gates/node-<id>.md`. Do not label a branch path as `leaf-*`.
 
-Leaves whose file ownership is disjoint (the contract guarantees this) can
-run concurrently if the harness supports parallel subagents. Parallelism
-buys wall-clock time, not token savings; do not use it as an excuse to skip
-per-leaf verification. If two leaves ever need the same file, fix the plan,
-do not coordinate through hope.
+## Driver loop
+
+1. **Plan before fan-out.** Reread the original request and current amendments. Create `.unlazy/<scope>/PLAN.md`, `.unlazy/<scope>/GATES.md`, and one ledger per leaf and branch from the templates. Inventory every independently omittable outcome and acceptance-changing constraint with a stable id, owner, observing gate or manual review, disposition, and revision. Fix interfaces, naming, toolchain, dependencies, and exact ownership before dispatch.
+2. **Inspect and approve checks.** Run `gate-check --status` on every inherited ledger. Review each `CHECK:`, `EXPECT:`, and `CWD:`, including called scripts. Determine the shell and inherited `PATH`; a new oracle with no exact approval prints its resolved values during a normal run without executing. Use `--approve` only after inspection, and do not treat normal mode as a dry run once approval exists.
+3. **Claim every concurrent leaf.** Run:
+
+   ```text
+   node <skill-dir>/scripts/gate-check.mjs --scope <scope> --leaf leaf-1.2.1 --claim
+   ```
+
+   A refused claim means the split is not safe for concurrent dispatch. Change the plan or run the work sequentially; never bypass the refusal.
+4. **Launch each ready wave.** Give each leaf only the shared contract, its exact ownership and dependencies, its own ledger, and the four-pass completion rule. Open a dispatch wave for the independent `READY` leaves, call the host's native nonblocking launch once per leaf, record every host handle, and seal the wave before the first wait or result read. Follow [dispatch.md](dispatch.md); do not leak unrelated leaf histories.
+5. **Verify each return independently.** Record the native return in its wave, then re-run the returned leaf's runnable gates, including already checked gates:
+
+   ```text
+   node <skill-dir>/scripts/gate-check.mjs --root . --cwd . --reverify .unlazy/<scope>/gates/leaf-1.2.1.md
+   ```
+
+   `--status` alone is not re-verification. If an approved oracle changed, inspect it and approve the new oracle before continuing. Review manual gates directly and try to refute at least one passed gate.
+6. **Append status and roll forward.** Record the result without rewriting history:
+
+   ```text
+   node <skill-dir>/scripts/gate-check.mjs --scope <scope> --log "leaf-1.2.1 verified"
+   ```
+
+   Mark the leaf `VERIFIED`, release that exact leaf lease, and record the release before promotion:
+
+   ```text
+   node <skill-dir>/scripts/gate-check.mjs --scope <scope> --leaf leaf-1.2.1 --release
+   node <skill-dir>/scripts/gate-check.mjs --scope <scope> --log "leaf-1.2.1 lease released"
+   ```
+
+   Only then promote newly unblocked leaves from `WAITING` to `READY` and dispatch them without waiting for unrelated in-flight leaves.
+7. **Integrate bottom-up.** Work each `node-*.md` ledger only after all named children return. Reverify the children, then run interface, end-to-end, and regression checks.
+8. **Reconcile, release, and report.** Reread the current request and review every current contract row. Missing/stale ownership or observation, abandonment, deferment, and owner decisions are non-completion. Release the whole scope only after every leaf has settled, every dispatch wave is terminal, branch and root ledgers have been reverified, and final aggregate verification has run. Scope-wide release before that point is reserved for explicit recovery after verifying the recorded owner is gone, never normal promotion. Report only when both the inventory and root ledger are met, then remeasure every reported count.
+
+## Check concurrency
+
+Gate checks run sequentially by default (`--jobs 1`). This is the easiest transcript to debug and is the compatibility behavior.
+
+Use `--jobs <N>` only when runnable gates are independent and parallel execution reduces wall-clock time:
+
+```text
+node <skill-dir>/scripts/gate-check.mjs --root . --cwd . --reverify --jobs 4 .unlazy/<scope>/gates/leaf-1.1.1.md .unlazy/<scope>/gates/leaf-1.1.2.md
+```
+
+The limit is rolling: start another check when one finishes instead of waiting for a fixed batch. Output and file updates remain deterministic in ledger order. `--jobs` controls command execution, not subagent dispatch and not dependency readiness. Use [dispatch waves](dispatch.md) for native agent concurrency.
+
+## Rolling dispatch
+
+Treat dispatch as a loop:
+
+```text
+while an unverified leaf remains:
+  collect the independent READY leaves up to the host concurrency limit
+  open a dispatch wave for that exact set
+  launch every native agent and record every returned host handle
+  seal the wave before the first wait
+  wait for the next leaf to return
+  record that return in its dispatch wave
+  reverify that leaf and review its manual evidence
+  append status and mark it VERIFIED
+  release that exact leaf lease and record the release
+  promote each WAITING leaf whose Needs are all VERIFIED
+```
+
+Do not invent a dependency during dispatch. Add it to `PLAN.md`, correct the affected states, and record the change. A user amendment increments the contract revision and must be reconciled before more completion credit. Prefer independent leaves, but do not force independence where an interface must be established first.
 
 ## Verification hierarchy
 
-Three layers, weakest to strongest, each catching what the layer below
-misses:
+1. **Leaf self-check:** catches ordinary incompleteness but remains self-certification.
+2. **Parent `--reverify`:** executes each runnable oracle again instead of trusting old or manually written evidence.
+3. **Branch integration:** catches locally correct children that do not compose.
+4. **Optional Stop hook:** blocks the driver from ending while its resolved pipeline has unmet ledgers or incomplete dispatch waves. It does not execute checks or validate their meaning.
 
-1. **Leaf self-check**: gate-check run by the leaf itself. Catches honest
-   incompleteness, misses self-deception.
-2. **Parent re-run**: the driver re-executes the checks. Catches
-   self-deception and environment differences.
-3. **Stop-hook** (Claude Code, optional): structurally blocks a session from
-   ending while gates are unmet. Catches the driver itself drifting into
-   report mode.
+The parent must use the same required toolchain and declared shell. If the environment differs, record and resolve the mismatch instead of accepting old evidence.
 
-Prose discipline is layer zero and it is the weakest; that is the lesson v2
-is built on. Prefer moving any repeated judgment call up this hierarchy:
-if you find yourself re-checking the same thing twice by reading, write a
-CHECK command for it.
+## Manual gates
 
-## Model and effort tiering
+Automation cannot prove every user-facing or judgment-heavy outcome. For each manual gate:
 
-Where the harness allows choosing a model or reasoning effort per subagent,
-tier by leaf type. Mechanical leaves (rename sweeps, fixture generation,
-applying a decided pattern across files) go to a cheaper model or lower
-effort. Design leaves, integration branches, and every verification pass
-stay on the strong model. The driver stays on the strong model always; a
-weak driver invalidates every verification above layer one.
+- cite the exact artifact, location, measurement, or reviewer decision
+- review consequences, not only visual polish
+- obtain independent review for high-risk outcomes when feasible
+- keep the gate unmet if evidence is ambiguous
 
-## When NOT to orchestrate
+Do not call a leaf `VERIFIED` merely because every runnable gate passed.
 
-Below roughly half an hour of real work, subagent overhead (context
-re-establishment per leaf) costs more than it buys. Stay solo: one GATES.md,
-one session, same discipline. The gates still do their job; you just skip
-the dispatch machinery.
+## When not to orchestrate
+
+Stay solo when one focused context can implement and verify the task without hiding independent deliverables. Orchestration has planning and integration overhead; use it for attention isolation, not ceremony.

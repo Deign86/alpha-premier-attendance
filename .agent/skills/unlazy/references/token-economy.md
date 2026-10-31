@@ -1,57 +1,48 @@
 # Token economy
 
-Thoroughness and cost discipline are not opposites; the six-run test that
-motivated v2 measured both. The tree runs produced deeper work at 1.6 to
-3.9 times the output tokens, but their input-side cost ballooned to tens of
-millions of cached-context tokens because one ever-growing context carried
-everything. These rules keep v2's enforcement nearly free and its deep runs
-affordable.
+Spend model attention on implementation and judgment. Move repeated, deterministic verification into commands and keep orchestration context narrow.
 
-## Enforcement should cost almost nothing
+## Keep enforcement cheap
 
-- **Checks are shell commands, not re-reading.** Every CHECK line converts
-  "model re-derives whether this is true" (thousands of tokens, fallible)
-  into a subprocess (zero tokens, repeatable). If you notice yourself
-  re-verifying something by reading, that is a missing CHECK line.
-- **The stop-hook is a regex scan, not a model call.** Blocking early stops
-  costs milliseconds and zero tokens. Structural enforcement is the cheapest
-  enforcement there is.
-- **Evidence is capped.** The deciding tail of output, roughly five lines,
-  never a full log. A gates file should stay readable in one screen per
-  leaf, because it gets re-read often.
+- **Use runnable checks.** External command execution does not itself require model inference. The agent still spends context on the command, returned output, failure interpretation, and evidence review.
+- **Cap evidence.** Store resolved environment facts plus the automatic output fingerprint, never raw successful output or a full build log.
+- **Keep the Stop hook scan-only.** The hook itself does not call a model. A block causes another agent continuation, which does consume model work, so keep the six-block no-progress guard and make each block actionable.
+- **Use sequential checks by default.** Raise `--jobs` only for independent checks when wall-clock savings justify harder failure diagnosis.
 
-## Context hygiene for long runs
+## Keep contexts focused
 
-- **Lean leaf briefs.** A dispatched leaf receives the contract plus its own
-  gates file. It never receives the driver's transcript, the other leaves'
-  outputs, or the full PLAN.md. Measured baseline: a monolithic deep run
-  consumed roughly 58 million cached input tokens; leaf isolation caps each
-  context at what its work needs.
-- **Append, never rewrite.** PLAN.md's status log is append-only. Rewriting
-  a file's head invalidates prompt cache for everything after it; appending
-  keeps the stable prefix stable. The same goes for gates files: gate-check
-  edits lines in place rather than regenerating the file.
-- **Progressive disclosure.** This skill keeps its core small and loads
-  references only when the mode needs them. Extend it the same way: task
-  documents split into a small always-loaded core and on-demand details.
+- Give a leaf the shared contract and its own ledger, not the driver's transcript or unrelated leaf outputs.
+- Keep `SKILL.md` limited to the core workflow. Load method, gate, orchestration, and parallel references only when the selected mode needs them.
+- Append events to `status.log`. Do not repeatedly regenerate a large plan when one line records the event.
+- Keep failure logs local and summarize only non-sensitive decisive facts when a manual report needs them; automatic success evidence already contains a digest and byte count.
 
-## Spend where it compounds
+## Mark leaf reasoning needs without inventing host controls
 
-- **Tier models by leaf type** (see orchestration.md): cheap model for
-  mechanical leaves, strong model for design, integration and every
-  verification pass.
-- **Do not orchestrate small tasks.** Under roughly half an hour of work,
-  each subagent's context re-establishment outweighs the attention gain.
-  Solo mode with a gates file gives you most of the discipline at a fraction
-  of the cost.
-- **Depth is not a spend dial.** Measured: within one context, deeper trees
-  cost about the same and redistribute effort toward verification. What
-  multiplies cost is orchestration, and it should multiply it, because each
-  leaf buys a fresh context. Choose depth by the leaf-size rule in
-  method.md, then let the mode decision (solo vs orchestrated) set the
-  budget honestly.
-- **Verification is the last thing to cut.** In the motivating test, the
-  cheapest run's only hard failure (content invisible in background tabs)
-  was precisely a missing verification pass, and the fix cost its siblings
-  a few hundred tokens of checking. Cut narration, cut recap, cut log
-  pasting; never cut the check that would have caught the bug.
+`Tier` is planner metadata for execution leaves, not a model name or a routing
+guarantee:
+
+- Use `judgment` when the leaf's own artifact needs design, security or
+  compatibility reasoning, consequential manual review, or non-mechanical
+  verification.
+- Use `mechanical` only when the transformation pattern and acceptance gates are
+  already fixed.
+
+If the host exposes a documented model or reasoning control, the driver may map
+these tiers through that host-specific control at launch. If no such control is
+available, retain the tier as a briefing and review requirement and do not claim
+that a particular model or reasoning level was selected.
+
+Driver and branch duties are not leaf tiers. Contract and architecture work,
+dispatch decisions, parent re-verification, branch integration, and the final
+claim audit remain judgment responsibilities even when every execution leaf is
+mechanical.
+
+## Avoid false economy
+
+Do not save time by skipping approval, negative controls, parent re-verification, or integration gates. Those checks exist because a fast false completion costs more than a direct failure.
+
+Do not orchestrate a task that one focused session can implement and verify cleanly. Conversely, do not keep an entire build in one context merely to avoid subagent overhead when independent leaves and contracts are clear.
+
+## Measurement claims
+
+Earlier unlazy documentation gave exact token and effort ratios from a six-run exploratory comparison. The raw prompts, traces, outputs, and scoring records are not present in this repository, so those numbers are not reproducible here. Do not use them as product guarantees. A protocol for a future reproducible rerun is in [../research/validation-protocol.md](../research/validation-protocol.md).

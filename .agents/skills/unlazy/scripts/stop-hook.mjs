@@ -1,115 +1,211 @@
 #!/usr/bin/env node
-// stop-hook.mjs : Claude Code Stop hook for the unlazy skill (v2).
-//
-// Structurally blocks ending the turn while GATES.md / gates/*.md contain
-// unmet gates. Zero tokens: this is a file scan, not a model call.
-//
-// Behavior:
-//   - No gate files in cwd            -> allow (skill not active here)
-//   - All gates met or abandoned      -> allow
-//   - Unmet gates, progress happening -> block with a one-line reason
-//   - Unmet gates, NO progress after MAX_BLOCKS consecutive blocks -> allow
-//     with a warning (never traps a genuinely stuck agent; Claude Code
-//     additionally force-releases after 8 consecutive blocks)
-//
-// Progress = the combined content of the gate files changed since last block.
-// State lives in .unlazy-hook-state.json next to the gates (add to .gitignore).
-//
-// Contract (docs: code.claude.com/docs/en/hooks):
-//   stdin  JSON with { cwd, stop_hook_active, ... }
-//   stdout {"decision":"block","reason":"..."} + exit 0 to block; exit 0 silent to allow.
+// Claude Code Stop hook for one unlazy pipeline. Zero dependencies. Node 16+.
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { readFileSync, unlinkSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  UNLAZY_DIR, gateState, hookStatePath, parseGates, qualify, readStableRegularFile,
+  resolveTarget, sha256, validateScopeId, withFileLock, writeAtomic,
+} from "./lib/gates.mjs";
+import { dispatchStatus } from "./lib/dispatch.mjs";
 
 const MAX_BLOCKS = 6;
+const MAX_GATE_LEDGER_BYTES = 8 * 1024 * 1024;
+const MAX_HOOK_STATE_BYTES = 1024 * 1024;
+const safeHostText = (value, max = 500) => String(value)
+  .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .slice(0, max);
 
-function readStdin() {
-  try { return readFileSync(0, "utf8"); } catch { return "{}"; }
+function normalizeHookState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schema !== 1 ||
+      !value.sessions || typeof value.sessions !== "object" || Array.isArray(value.sessions)) {
+    return { schema: 1, sessions: {} };
+  }
+  const sessions = {};
+  for (const [key, current] of Object.entries(value.sessions)) {
+    if (!/^[a-f0-9]{24}$/.test(key) || !current || typeof current !== "object" || Array.isArray(current) ||
+        !/^[a-f0-9]{24}$/.test(String(current.hash || "")) ||
+        !Number.isInteger(current.blocks) || current.blocks < 0 ||
+        typeof current.updatedAt !== "string" || Number.isNaN(Date.parse(current.updatedAt))) continue;
+    sessions[key] = current;
+  }
+  return { schema: 1, sessions };
+}
+
+function readHookState(path, root) {
+  let text;
+  try {
+    text = readStableRegularFile(path, {
+      root, maxBytes: MAX_HOOK_STATE_BYTES, label: "hook state",
+    });
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return { missing: true, state: { schema: 1, sessions: {} } };
+    }
+    throw error;
+  }
+  try { return { missing: false, state: normalizeHookState(JSON.parse(text)) }; }
+  catch { return { missing: false, state: { schema: 1, sessions: {} } }; }
+}
+
+const args = process.argv.slice(2);
+const scopeIndex = args.indexOf("--scope");
+const scopeArg = scopeIndex === -1 ? null : args[scopeIndex + 1];
+
+const allow = (message) => {
+  if (message) console.log(JSON.stringify({ systemMessage: message }));
+  process.exit(0);
+};
+
+if (scopeIndex !== -1 && (!scopeArg || validateScopeId(scopeArg))) {
+  allow("unlazy: installed hook has an invalid --scope value; not blocking.");
 }
 
 let payload = {};
-try { payload = JSON.parse(readStdin() || "{}"); } catch { /* stay permissive */ }
-const cwd = payload.cwd || process.cwd();
+try { payload = JSON.parse(readFileSync(0, "utf8") || "{}"); }
+catch { allow(null); }
 
-function gateFiles(dir) {
-  const found = [];
-  const top = join(dir, "GATES.md");
-  if (existsSync(top)) found.push(top);
-  const gdir = join(dir, "gates");
-  if (existsSync(gdir)) {
-    try {
-      for (const f of readdirSync(gdir)) if (f.endsWith(".md")) found.push(join(gdir, f));
-    } catch { /* ignore */ }
+const root = resolve(typeof payload.cwd === "string" && payload.cwd ? payload.cwd : process.cwd());
+const sessionId = payload.session_id || payload.sessionId || "anonymous";
+const target = resolveTarget({ root, scope: scopeArg, sessionId });
+
+if (target.ambiguous) {
+  allow("unlazy: " + target.ambiguous.length + " pipelines under " + UNLAZY_DIR +
+    "/ (" + target.ambiguous.join(", ") + ") and none bound to this session; not blocking.");
+}
+if (target.error && !target.ambiguous) allow("unlazy: " + safeHostText(target.error) + "; not blocking.");
+
+const discoveryErrors = target.discoveryErrors || [];
+// An invalid named scope cannot safely hold its own hook-state file. Keep its
+// bounded loop-guard state at the real repository root and include the target
+// identity in the session key so it cannot collide with another scope.
+const statePath = hookStatePath(root, discoveryErrors.length ? null : target.scope);
+const sessionKey = sha256(String(sessionId) + "\0" + String(target.scope || "unscoped")).slice(0, 24);
+
+async function clearSessionState() {
+  try { if (readHookState(statePath, root).missing) return; }
+  catch { return; }
+  try {
+    await withFileLock(root, statePath, () => {
+      const loaded = readHookState(statePath, root);
+      if (loaded.missing) return;
+      const state = loaded.state;
+      delete state.sessions[sessionKey];
+      if (!Object.keys(state.sessions).length) {
+        try { unlinkSync(statePath); } catch { /* already absent */ }
+      } else writeAtomic(statePath, JSON.stringify(state, null, 2) + "\n", { root });
+    }, { timeoutMs: 10000 });
+  } catch {
+    // State cleanup must never trap a session after the gates are complete.
   }
-  return found;
 }
 
-const files = gateFiles(cwd);
-if (!files.length) process.exit(0); // no gates, nothing to enforce
+// Do not even open dispatch state through a scope path already proven unsafe.
+const dispatch = discoveryErrors.length
+  ? { blocking: [], abandoned: [], resolved: [] }
+  : dispatchStatus(root, target.scope);
 
-const GATE_RE = /^- \[( |x|X)\] (.*)$/;
-const EVIDENCE_RE = /^\s+EVIDENCE:\s?(.*)$/;
-const ABANDON_RE = /^ABANDON:\s*(\S+)/;
+if (!target.files.length && !discoveryErrors.length && !dispatch.blocking.length && !dispatch.abandoned.length) {
+  await clearSessionState();
+  allow(null);
+}
 
-let combined = "";
-const unmet = [];
-
-for (const file of files) {
-  let text = "";
-  try { text = readFileSync(file, "utf8"); } catch { continue; }
-  combined += text;
-  const lines = text.split(/\r?\n/);
-  const abandoned = new Set(
-    lines.map(l => (l.match(ABANDON_RE) || [])[1]).filter(Boolean).map(s => s.replace(/:$/, ""))
-  );
-  let cur = null; // { id, checked, evidence }
-  const flush = () => {
-    if (!cur || abandoned.has(cur.id)) { cur = null; return; }
-    const pending = cur.evidence === null || /^pending$/i.test(cur.evidence);
-    if (!cur.checked || pending) unmet.push(cur.id);
-    cur = null;
-  };
-  for (const line of lines) {
-    const g = line.match(GATE_RE);
-    if (g) {
-      flush();
-      cur = {
-        checked: g[1].toLowerCase() === "x",
-        id: (g[2].match(/^(\S+?):/) || [null, g[2].trim().slice(0, 24)])[1],
-        evidence: null,
-      };
-      continue;
-    }
-    const ev = cur && line.match(EVIDENCE_RE);
-    if (ev) cur.evidence = ev[1].trim();
+const unmet = [...dispatch.blocking];
+const invalid = discoveryErrors.map((error) => "discovery:PARSE " + safeHostText(error));
+const handoffs = [...dispatch.abandoned];
+const handoffMessage = () => {
+  if (!handoffs.length) return "";
+  const shown = handoffs.slice(0, 5).join(", ") +
+    (handoffs.length > 5 ? ", +" + (handoffs.length - 5) + " more" : "");
+  return " HANDOFF REQUIRED: " + handoffs.length + " abandoned item(s): " + safeHostText(shown) + ".";
+};
+// The loop guard compares resolved gate state between stops, not raw bytes.
+// Byte comparison counted any edit as progress: a comment, a reflowed line, or
+// the checker rewriting an evidence line with a fresh PATH hash. That rearmed
+// the guard indefinitely, so the six-block release could only ever fire for an
+// agent doing literally nothing, which is the one case least in need of it.
+// Dispatch issue strings encode only canonical state and counts, not raw JSON
+// bytes or timestamps, so metadata-only edits do not reset the same guard.
+const resolved = [...dispatch.resolved];
+if (discoveryErrors.length) resolved.push("discovery:PARSE=invalid");
+for (const file of [...target.files].sort()) {
+  let text;
+  try {
+    text = readStableRegularFile(file, {
+      root, maxBytes: MAX_GATE_LEDGER_BYTES, label: "gate ledger",
+    });
   }
-  flush();
+  catch (error) {
+    invalid.push(qualify(file, "PARSE") + " unreadable: " + safeHostText(error.message));
+    resolved.push(qualify(file, "PARSE") + "=unreadable");
+    continue;
+  }
+  const doc = parseGates(text);
+  if (doc.errors.length) {
+    invalid.push(qualify(file, "PARSE") + " " + doc.errors.slice(0, 2).map((error) => safeHostText(error)).join("; "));
+    // Record only that the ledger is invalid. Diagnostic text carries line
+    // numbers, which shift on an unrelated edit and would restore byte coupling.
+    resolved.push(qualify(file, "PARSE") + "=invalid");
+    continue;
+  }
+  for (const gate of doc.gates) {
+    const state = gateState(gate, doc.abandoned);
+    resolved.push(qualify(file, gate.id) + "=" + state);
+    if (state === "abandoned") handoffs.push(qualify(file, gate.id));
+    else if (state !== "met") unmet.push(qualify(file, gate.id));
+  }
 }
 
-if (!unmet.length) process.exit(0); // everything met or honestly abandoned
-
-// Progress-aware loop guard.
-const statePath = join(cwd, ".unlazy-hook-state.json");
-const hash = createHash("sha256").update(combined).digest("hex").slice(0, 16);
-let state = { hash: "", blocks: 0 };
-try { state = JSON.parse(readFileSync(statePath, "utf8")); } catch { /* fresh */ }
-if (state.hash !== hash) state = { hash, blocks: 0 }; // progress -> reset counter
-state.blocks += 1;
-try { writeFileSync(statePath, JSON.stringify(state)); } catch { /* non-fatal */ }
-
-if (state.blocks > MAX_BLOCKS) {
-  // No progress across MAX_BLOCKS consecutive stops: release rather than trap.
-  console.log(JSON.stringify({
-    systemMessage: `unlazy: releasing after ${MAX_BLOCKS} blocks without gate progress; ${unmet.length} gates remain unmet (${unmet.slice(0, 4).join(", ")}).`,
-  }));
-  process.exit(0);
+if (!unmet.length && !invalid.length) {
+  await clearSessionState();
+  if (!handoffs.length) allow(null);
+  const where = target.scope ? " [scope " + target.scope + "]" : "";
+  allow("unlazy" + where + ":" + handoffMessage());
 }
 
-const list = unmet.slice(0, 5).join(", ") + (unmet.length > 5 ? `, +${unmet.length - 5} more` : "");
+const progressHash = sha256(resolved.sort().join("\0")).slice(0, 24);
+let sessionState;
+try {
+  sessionState = await withFileLock(root, statePath, () => {
+    const state = readHookState(statePath, root).state;
+    let current = state.sessions[sessionKey];
+    if (!current || current.hash !== progressHash) current = { hash: progressHash, blocks: 0 };
+    current.blocks += 1;
+    current.updatedAt = new Date().toISOString();
+    state.sessions[sessionKey] = current;
+    // Bound abandoned session debris without mixing counters between sessions.
+    const entries = Object.entries(state.sessions).sort((a, b) => String(b[1].updatedAt).localeCompare(String(a[1].updatedAt)));
+    state.sessions = Object.fromEntries(entries.slice(0, 64));
+    writeAtomic(statePath, JSON.stringify(state, null, 2) + "\n", { root });
+    return current;
+  }, { timeoutMs: 10000 });
+} catch (error) {
+  if (discoveryErrors.length) {
+    console.log(JSON.stringify({
+      decision: "block",
+      reason: "unlazy: invalid named scope input must be repaired before Stop: " +
+        safeHostText(discoveryErrors[0]),
+    }));
+    process.exit(0);
+  }
+  allow("unlazy: could not update the serialized hook state (" + safeHostText(error.message) + "); not blocking to avoid a trap.");
+}
+
+const where = target.scope ? " [scope " + target.scope + "]" : "";
+const outstanding = [...invalid, ...unmet].map((item) => safeHostText(item));
+if (sessionState.blocks > MAX_BLOCKS) {
+  allow("unlazy: releasing after " + MAX_BLOCKS + " blocks without gate progress" + where +
+    "; " + outstanding.length + " item(s) remain (" + outstanding.slice(0, 4).join(", ") + ")." +
+    handoffMessage());
+}
+
+const list = outstanding.slice(0, 5).join(", ") + (outstanding.length > 5 ? ", +" + (outstanding.length - 5) + " more" : "");
 console.log(JSON.stringify({
   decision: "block",
-  reason: `unlazy: ${unmet.length} gate(s) unmet: ${list}. Work the next unchecked gate (run gate-check.mjs to execute CHECK lines), or add "ABANDON: <id> <reason>" if one is genuinely impossible. Done means every box checked with evidence.`,
+  reason: "unlazy" + where + ": " + outstanding.length + " gate/ledger/dispatch item(s) need work: " + list +
+    ". Run gate-check.mjs --status to inspect without execution. To run inherited CHECK lines, inspect them and use --approve. " +
+    "Use ABANDON: <id> <non-blank reason> only when a gate is genuinely impossible." + handoffMessage(),
 }));
 process.exit(0);
