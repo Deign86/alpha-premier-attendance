@@ -4045,7 +4045,7 @@ textarea.input {
    opacity only, and is switched off by the reduced-motion setting.
    ========================================================================== */
 
-.kiosk-shell {
+.kiosk-shell, .live-shell {
   --glass: linear-gradient(180deg, rgba(36, 33, 25, .6), rgba(15, 14, 11, .55));
   --glass-blur: blur(18px) saturate(140%);
   --glass-edge: rgba(198, 162, 84, .2);
@@ -4053,6 +4053,9 @@ textarea.input {
   --ease-soft: cubic-bezier(.2, .7, .2, 1);
   position: relative;
   isolation: isolate;
+}
+/* The Live attendance page is a centred column, so its gold light goes on the page body instead. */
+.kiosk-shell, body:has(.live-shell) {
   background-color: #080807;
   background-image:
     radial-gradient(ellipse 60% 45% at 15% -10%, rgba(198, 162, 84, .16), transparent 70%),
@@ -4062,13 +4065,13 @@ textarea.input {
 }
 
 /* Backdrop texture: pinstripes in two corners, like the company ID card, and a fine film grain. */
-.kiosk-shell::before, .kiosk-shell::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
-.kiosk-shell::before {
+.kiosk-shell::before, .kiosk-shell::after, .live-shell::before, .live-shell::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+.kiosk-shell::before, .live-shell::before {
   background: repeating-linear-gradient(135deg, rgba(198, 162, 84, .1) 0 1px, transparent 1px 16px);
   -webkit-mask-image: radial-gradient(ellipse 42% 55% at 100% 100%, #000, transparent 75%), radial-gradient(ellipse 32% 45% at 0 0, #000, transparent 75%);
   mask-image: radial-gradient(ellipse 42% 55% at 100% 100%, #000, transparent 75%), radial-gradient(ellipse 32% 45% at 0 0, #000, transparent 75%);
 }
-.kiosk-shell::after {
+.kiosk-shell::after, .live-shell::after {
   opacity: .05;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
   background-size: 180px;
@@ -4108,7 +4111,8 @@ textarea.input {
 @media (max-width: 360px) { .kiosk-topbar { width: calc(100% - 16px); padding: 10px; } }
 
 /* Every glass panel catches a thin gold gleam along its top edge. */
-.kiosk-topbar::before, .scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before {
+.kiosk-topbar::before, .scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before,
+.live-shell .dashboard-header::before, .live-shell .lan-panel::before, .live-shell .table-wrap::before {
   content: ""; position: absolute; top: 0; left: 14%; right: 14%; height: 1px; background: linear-gradient(90deg, transparent, var(--edge-light, rgba(225, 196, 119, .8)), transparent); pointer-events: none;
 }
 
@@ -4136,7 +4140,7 @@ textarea.input {
 .kiosk-hero .hero-icon::before, .kiosk-hero .hero-icon::after { content: ""; position: absolute; inset: -1px; border: 1px solid rgba(225, 196, 119, .5); border-radius: 50%; opacity: 0; pointer-events: none; }
 .state-ready .kiosk-hero .hero-icon::before, .state-ready .kiosk-hero .hero-icon::after { animation: kiosk-ripple 3.2s var(--ease-soft) infinite; }
 .state-ready .kiosk-hero .hero-icon::after { animation-delay: 1.6s; }
-.kiosk-hero h1 { background: linear-gradient(180deg, #fffdf6 25%, #ead9ad 80%, #d8bc78); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 4px 28px rgba(198, 162, 84, .16)); }
+.kiosk-hero h1, .live-shell .dashboard-header h1 { background: linear-gradient(180deg, #fffdf6 25%, #ead9ad 80%, #d8bc78); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 4px 28px rgba(198, 162, 84, .16)); }
 .kiosk-shell .hero-sub { color: var(--gold); }
 .kiosk-shell .hero-sub::before { content: ""; display: block; width: 72px; height: 1px; margin: 2px auto 12px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
 .mode-bathroom .hero-sub::before { margin-bottom: 8px; }
@@ -4153,10 +4157,10 @@ textarea.input {
 
 /* Options: glass buttons, gold icons and white labels; they lift slightly on hover. */
 .kiosk-actions { border-top: 1px solid transparent; border-image: linear-gradient(90deg, transparent, rgba(198, 162, 84, .3) 20%, rgba(198, 162, 84, .3) 80%, transparent) 1; }
-.kiosk-shell .kiosk-action { color: var(--ink); background-color: transparent; background-image: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .015)); border-color: rgba(198, 162, 84, .4); border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
-.kiosk-shell .kiosk-action svg { color: var(--gold-bright); }
-.kiosk-shell .kiosk-action:hover:not(:disabled) { color: var(--gold-bright); background-color: rgba(198, 162, 84, .1); border-color: var(--gold); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 8px 24px rgba(198, 162, 84, .14); transform: translateY(-2px); }
-.kiosk-shell .kiosk-action:active:not(:disabled) { transform: translateY(0); }
+.kiosk-shell .kiosk-action, .live-shell .dashboard-header nav a { color: var(--ink); background-color: transparent; background-image: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .015)); border-color: rgba(198, 162, 84, .4); border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
+.kiosk-shell .kiosk-action svg, .live-shell .dashboard-header nav a svg { color: var(--gold-bright); }
+.kiosk-shell .kiosk-action:hover:not(:disabled), .live-shell .dashboard-header nav a:hover { color: var(--gold-bright); background-color: rgba(198, 162, 84, .1); border-color: var(--gold); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 8px 24px rgba(198, 162, 84, .14); transform: translateY(-2px); }
+.kiosk-shell .kiosk-action:active:not(:disabled), .live-shell .dashboard-header nav a:active { transform: translateY(0); }
 .kiosk-shell .kiosk-action[aria-pressed="true"] { color: #11100c; background-image: linear-gradient(180deg, #ecd28c, var(--gold)); border-color: var(--gold-bright); }
 .kiosk-shell .kiosk-action[aria-pressed="true"] svg { color: currentColor; }
 
@@ -4217,5 +4221,123 @@ textarea.input {
 
 /* Reduced motion: the global rule shortens animations; this also drops the start delays so nothing waits hidden. */
 @media (prefers-reduced-motion: reduce) {
-  .kiosk-shell *, .kiosk-shell *::before, .kiosk-shell *::after { animation-delay: 0s !important; }
+  .kiosk-shell *, .kiosk-shell *::before, .kiosk-shell *::after,
+  .live-shell *, .live-shell *::before, .live-shell *::after { animation-delay: 0s !important; }
+}
+
+/* ==========================================================================
+   UI revamp, design pass (live attendance): the kiosk's glass look on the
+   Live attendance page. Same data, actions and refresh cycle; the LAN viewer
+   folds into a toggle. Every rule is scoped to .live-shell so Admin and the
+   other dashboard pages keep their look. The long table uses a near-opaque
+   fill instead of blur so scrolling stays cheap.
+   ========================================================================== */
+
+/* index.html paints the body #0e0c09 inline so there is no white flash before CSS loads; the page needs the kiosk's darker base. */
+body:has(.live-shell) { background-color: #080807 !important; }
+
+/* Header: a glass card with the logo in a lit ring and an Orbitron, champagne-tinted title. */
+.live-shell .dashboard-header { position: relative; padding: 22px clamp(18px, 2.4vw, 32px); background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 20px; box-shadow: var(--glass-shadow); animation: kiosk-enter 600ms var(--ease-soft) backwards; }
+.live-shell .dashboard-brand-mark { box-sizing: border-box; width: 30px; height: 30px; padding: 4px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; }
+.live-shell .dashboard-brand-name { font-size: .875rem; }
+.live-shell .dashboard-header .section-kicker { font-size: .875rem; letter-spacing: .14em; }
+.live-shell .dashboard-header h1 { font-family: 'Orbitron', sans-serif; font-size: clamp(1.75rem, 1rem + 2.6vw, 2.75rem); font-weight: 600; line-height: 1.1; letter-spacing: .02em; text-wrap: balance; }
+.live-shell .dashboard-header .section-description { max-width: none; font-size: .9375rem; }
+/* Scanner and Admin: outlined glass buttons with icons (the kiosk option-button look, shared above). */
+.live-shell .dashboard-header nav a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 18px; font-size: .875rem; font-weight: 700; }
+.live-shell .dashboard-header nav a:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; }
+
+/* Toolbar: today's counts, the live status and the LAN viewer toggle on one wrapping row. */
+.live-shell .dashboard-alert { margin: 18px 0 0; padding: 12px 16px; background: rgba(40, 20, 16, .55); border-radius: 12px; font-size: .875rem; }
+.live-shell .live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 18px 0 14px; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
+.live-shell .live-counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.live-shell .live-counts .is-alert { color: var(--danger); border-color: rgba(239, 170, 146, .5); }
+.live-shell .dashboard-status { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 0 auto; padding: 6px 12px; color: var(--muted); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .875rem; font-variant-numeric: tabular-nums; }
+.live-shell .dashboard-status::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.live-shell .dashboard-status[data-state="ready"]::before { background: var(--gold-bright); box-shadow: 0 0 10px rgba(225, 196, 119, .7); animation: kiosk-breathe 2.4s ease-in-out infinite alternate; }
+.live-shell .dashboard-status[data-state="stale"]::before { background: var(--danger); }
+.live-shell .live-lan-toggle { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; min-height: 44px; padding: 6px 12px 6px 14px; color: var(--ink); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .3); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .875rem; font-weight: 600; cursor: pointer; transition: border-color 180ms ease-out, background-color 180ms ease-out; }
+.live-shell .live-lan-toggle > svg:first-child { color: var(--gold-bright); }
+.live-shell .live-lan-toggle:hover, .live-shell .live-lan-toggle[aria-expanded="true"] { background-color: rgba(198, 162, 84, .08); border-color: var(--gold); }
+.live-shell .live-lan-toggle:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; }
+.live-shell .live-lan-toggle .lan-state { padding: 0; border: 0; font-size: inherit; }
+.live-shell .live-lan-toggle.is-attention { border-color: rgba(239, 170, 146, .55); box-shadow: 0 0 0 3px rgba(239, 170, 146, .08); }
+.live-shell .live-lan-flag { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); }
+.live-shell .live-lan-chevron { color: var(--muted); transition: transform 200ms var(--ease-soft); }
+.live-shell .live-lan-toggle[aria-expanded="true"] .live-lan-chevron { transform: rotate(180deg); }
+
+/* LAN viewer drawer: the same panel as before, in glass, rising in when opened. No display rule, so [hidden] wins. */
+.live-shell .live-lan-drawer { margin: 0 0 14px; }
+.live-shell .live-lan-drawer .lan-panel { position: relative; margin: 0; padding: 20px 22px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); animation: kiosk-enter 320ms var(--ease-soft) backwards; }
+/* The toggle already shows the state, so the panel's own chip is hidden. */
+.live-shell .lan-panel-head > .lan-state { display: none; }
+.live-shell .lan-panel-head h2 { font-size: 1.125rem; }
+.live-shell .lan-panel :is(.section-kicker, .lan-note, .lan-error, .lan-guidance p, .lan-guidance code, .lan-code) { font-size: .875rem; }
+.live-shell .lan-url { border-radius: 10px; font-size: .9375rem; }
+.live-shell .lan-guidance { background: rgba(0, 0, 0, .22); border-radius: 10px; }
+.live-shell .lan-actions { flex-wrap: wrap; }
+.live-shell .lan-panel :is(.admin-button, .text-button) { min-height: 44px; padding: 8px 14px; border-radius: 12px; font-size: .875rem; }
+.live-shell .lan-facts span { font-size: .875rem; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.live-shell .lan-facts strong { font-size: .9375rem; }
+
+/* Table: a near-opaque glass panel; names and times in Orbitron, time in gold. */
+.live-shell .table-wrap { position: relative; margin: 0; background: linear-gradient(180deg, rgba(30, 28, 22, .86), rgba(13, 12, 10, .9)); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
+.live-shell .table-wrap th { padding: 16px 20px; color: var(--gold); background: rgba(0, 0, 0, .18); border-bottom-color: rgba(198, 162, 84, .22); font-size: .875rem; font-weight: 600; letter-spacing: .1em; }
+.live-shell .table-wrap td { padding: 14px 20px; border-bottom-color: rgba(198, 162, 84, .1); font-size: .9375rem; }
+.live-shell tbody tr:last-child td { border-bottom: 0; }
+.live-shell tbody tr:hover td { background: rgba(198, 162, 84, .05); }
+.live-shell td strong { font-family: 'Orbitron', sans-serif; font-size: .9375rem; font-weight: 600; letter-spacing: .01em; }
+.live-shell td:first-child small { font-size: .875rem; }
+.live-shell .table-wrap td:is(:nth-child(3), :nth-child(4)) { font-family: 'Orbitron', sans-serif; font-weight: 500; white-space: nowrap; }
+.live-shell .table-wrap td:nth-child(3) { color: var(--gold-bright); }
+.live-shell .clamped-time-in-static { border-radius: 8px; font-size: .875rem; }
+.live-shell .status-pill { padding: 5px 12px; font-size: .875rem; letter-spacing: .06em; white-space: nowrap; }
+.live-shell .status-working { background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .5); }
+.live-shell .status-completed { background: rgba(152, 210, 168, .07); border-color: rgba(152, 210, 168, .4); }
+.live-shell .status-missed { border-color: rgba(239, 170, 146, .4); }
+.live-shell .status-hint { margin-top: 6px; font-size: .875rem; }
+.live-shell .empty-state { margin: 0; padding: 48px 24px; background: linear-gradient(180deg, rgba(30, 28, 22, .7), rgba(13, 12, 10, .75)); border: 1px dashed rgba(198, 162, 84, .3); border-radius: 18px; font-size: .9375rem; animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
+
+/* Tablets and phones: each row becomes a small card so time in, time out and status always show.
+   Cells are placed by position, matching AttendanceTable's columns:
+   1 employee, 2 department, 3 time in, 4 time out, 5 status. */
+@media (max-width: 900px) {
+  .live-shell table { min-width: 0; }
+  .live-shell table, .live-shell tbody { display: block; }
+  .live-shell thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* Two equal halves keep Time out lined up from card to card; only a wider "LATE TIMEOUT" row may widen its own half. */
+  .live-shell tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(max-content, 1fr); grid-template-areas: "emp status" "dept dept" "in out"; gap: 8px 16px; padding: 16px 18px; border-bottom: 1px solid rgba(198, 162, 84, .1); }
+  .live-shell tbody tr:last-child { border-bottom: 0; }
+  .live-shell .table-wrap td { padding: 0; border: 0; }
+  .live-shell tbody tr:hover td { background: none; }
+  .live-shell tbody td:nth-child(1) { grid-area: emp; }
+  .live-shell tbody td:nth-child(2) { grid-area: dept; color: var(--muted); }
+  .live-shell tbody td:nth-child(3) { grid-area: in; }
+  .live-shell tbody td:nth-child(4) { grid-area: out; }
+  .live-shell tbody td:nth-child(5) { grid-area: status; justify-self: end; text-align: right; }
+  .live-shell tbody td:nth-child(3)::before { content: "Time in"; }
+  .live-shell tbody td:nth-child(4)::before { content: "Time out"; }
+  .live-shell tbody td:is(:nth-child(3), :nth-child(4))::before { display: block; margin-bottom: 2px; color: var(--quiet); font-family: 'Poppins', 'Segoe UI', sans-serif; font-size: .875rem; font-weight: 600; }
+}
+/* Tablets: one two-line row per person, with the times and status lined up in columns like the table. */
+@media (min-width: 601px) and (max-width: 900px) {
+  /* A fixed status column (fits "LATE TIMEOUT") keeps the time columns aligned from row to row. */
+  .live-shell tbody tr { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 11rem; grid-template-areas: "emp in out status" "dept in out status"; align-items: center; gap: 4px 16px; }
+}
+@media (max-width: 600px) {
+  .live-shell .dashboard-header { padding: 18px 16px; border-radius: 16px; }
+  .live-shell .dashboard-header nav a { padding: 10px 12px; }
+  .live-shell .dashboard-status, .live-shell .live-lan-toggle { flex: 1 1 auto; justify-content: center; margin-left: 0; }
+  .live-shell .table-wrap { border-radius: 16px; }
+  /* A little less padding so "COMPLETED" fits half a card at 390px and Time out stays lined up. */
+  .live-shell tbody tr { padding-inline: 14px; }
+  .live-shell .status-pill { padding: 4px 10px; letter-spacing: .04em; }
+}
+/* Narrow phones (under 390px): name on its own line, status under it. */
+@media (max-width: 389px) {
+  .live-shell tbody tr { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "emp emp" "status status" "dept dept" "in out"; padding: 14px 16px; }
+  .live-shell tbody td:nth-child(5) { justify-self: start; text-align: left; }
+  /* The decorative Wi-Fi icon goes so "LAN viewer · Needs attention" and its arrow stay on one line. */
+  .live-shell .live-lan-toggle { gap: 6px; }
+  .live-shell .live-lan-toggle > svg:first-child { display: none; }
 }

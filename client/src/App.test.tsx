@@ -3096,6 +3096,87 @@ describe('N6 LiveAttendance ordering', () => {
   });
 });
 
+describe('Live attendance revamp', () => {
+  function mockLiveFetch() {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url === '/api/attendance') {
+        // SAFETY: Fetch returns attendance Response mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            fetchedAt: '2026-07-28T10:00:00+08:00',
+            attendance: [
+              { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T18:55:00+08:00', status: 'LATE_TIMEOUT' },
+              { attendanceId: 'a2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              // An admin correction that clears the time in leaves a MISSED row with an empty timeIn.
+              { attendanceId: 'a3', attendanceDate: '2026-07-28', userId: 'u3', fullName: 'Alan Turing', department: 'Engineering', timeIn: '', timeOut: null, status: 'MISSED' },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch returns fallback success Response mock
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+  }
+
+  it('header links read as buttons with icons', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      render(<App />);
+      const scanner = await screen.findByRole('link', { name: 'Scanner' });
+      const admin = screen.getByRole('link', { name: 'Admin' });
+      expect(scanner).toHaveAttribute('href', '/');
+      expect(admin).toHaveAttribute('href', '/admin');
+      expect(scanner.querySelector('svg')).not.toBeNull();
+      expect(admin.querySelector('svg')).not.toBeNull();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('LAN viewer is collapsed by default but still auto-starts', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      const startLan = vi.spyOn(api, 'startLanViewer');
+      render(<App />);
+      const toggle = await screen.findByRole('button', { name: /lan viewer/i });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByRole('region', { name: 'LAN viewer' })).not.toBeInTheDocument();
+      expect(startLan).toHaveBeenCalled();
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('region', { name: 'LAN viewer' })).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows at-a-glance counts from the loaded rows', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      render(<App />);
+      expect(screen.queryByRole('list', { name: 'Today at a glance' })).not.toBeInTheDocument();
+      const counts = await screen.findByRole('list', { name: 'Today at a glance' });
+      expect(within(counts).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['0 in office', '2 timed out', '2 timed in', '1 need correction']);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
 describe('N7 concurrent voice regen ownership', () => {
   it('resolving A first after starting B keeps B loader and writes no A message', async () => {
     window.history.pushState({}, '', '/admin');

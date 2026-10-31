@@ -5,6 +5,7 @@ import {
   BookOpen,
   CalendarPlus,
   Check,
+  ChevronDown,
   CircleAlert,
   Clock,
   CloudOff,
@@ -29,6 +30,7 @@ import {
   UserCheck,
   UserRound,
   Users,
+  Wifi,
   WifiOff,
   X,
 } from "lucide-react";
@@ -2587,6 +2589,7 @@ function LiveAttendance() {
   const [attendance, setAttendance] = useState<LiveAttendanceState>({ kind: "loading" });
   const [lan, setLan] = useState<LanStatusResponse | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
+  const [lanOpen, setLanOpen] = useState(false);
   const [tableUsers, setTableUsers] = useState<AdminUser[]>([]);
   const [clampHistory, setClampHistory] = useState<AttendanceListItem[]>([]);
   const clampHistoryWeekRef = useRef("");
@@ -2727,37 +2730,73 @@ function LiveAttendance() {
     setLan(await stopLanViewer());
     setLanBusy(false);
   };
+  const liveRows: AttendanceListItem[] = attendance.kind === "loading" ? [] : attendance.rows;
+  const inOffice = liveRows.filter((row) => row.status === "WORKING").length;
+  // Same truthiness checks as AttendanceTable's cells (a MISSED row can lack a valid time in).
+  const timedIn = liveRows.filter((row) => Boolean(row.timeIn)).length;
+  const timedOut = liveRows.filter((row) => Boolean(row.timeOut)).length;
+  const needsCorrection = liveRows.filter((row) => row.status === "LATE_TIMEOUT").length;
+  // Running but likely unreachable from other devices: flag it on the collapsed LAN toggle.
+  const lanNeedsCheck = lan !== null && lan.state === "running" && (lan.networkProfile === "public" || lan.localHealthOk === false);
   return (
-    <main className="dashboard-shell">
+    <main className="dashboard-shell live-shell">
       <header className="dashboard-header">
         <div>
           <DashboardBrand />
           <p className="section-kicker">Live attendance</p>
           <h1>Today’s timing</h1>
           <p className="section-description">
-            {resolveOfficeDisplay(office, "short")} · {localDate()} · Realtime Live Updates
+            {resolveOfficeDisplay(office, "short")} · {formatDeductionDate(localDate())}
           </p>
         </div>
         <nav>
-          <a href="/">Scanner</a>
-          <a href="/admin">Admin</a>
+          <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
+          <a href="/admin"><LayoutDashboard size={16} aria-hidden="true" /> Admin</a>
         </nav>
       </header>
       {attendance.kind === "stale" && <p className="dashboard-alert">{attendance.message}</p>}
-      <div className="dashboard-status">
-        {attendance.kind === "stale"
-          ? "Showing last successful update"
-          : attendance.kind === "ready"
-            ? `Last updated ${attendance.fetchedAt ? formatTime(attendance.fetchedAt, "Asia/Manila") : "just now"}`
-            : "Loading live attendance…"}
+      <div className="live-bar">
+        {liveRows.length > 0 && (
+          <ul className="live-counts" aria-label="Today at a glance">
+            <li className="office-count"><Users size={16} aria-hidden="true" /><strong>{inOffice}</strong> in office</li>
+            <li className="office-count"><LogOut size={16} aria-hidden="true" /><strong>{timedOut}</strong> timed out</li>
+            <li className="office-count"><LogIn size={16} aria-hidden="true" /><strong>{timedIn}</strong> timed in</li>
+            {needsCorrection > 0 && (
+              <li className="office-count is-alert"><CircleAlert size={16} aria-hidden="true" /><strong>{needsCorrection}</strong> need correction</li>
+            )}
+          </ul>
+        )}
+        <div className="dashboard-status" data-state={attendance.kind}>
+          {attendance.kind === "stale"
+            ? "Showing last successful update"
+            : attendance.kind === "ready"
+              ? `Last updated ${attendance.fetchedAt ? formatTime(attendance.fetchedAt, "Asia/Manila") : "just now"}`
+              : "Loading live attendance…"}
+        </div>
+        <button
+          type="button"
+          className={lanNeedsCheck ? "live-lan-toggle is-attention" : "live-lan-toggle"}
+          aria-expanded={lanOpen}
+          aria-controls="live-lan-drawer"
+          onClick={() => setLanOpen((open) => !open)}
+        >
+          <Wifi size={16} aria-hidden="true" />
+          LAN viewer
+          <span className={`lan-state lan-state-${lan ? lan.state : "starting"}`}><i />{lan ? LAN_STATE_LABEL[lan.state] : "Checking…"}</span>
+          {lanNeedsCheck && <span className="live-lan-flag"><CircleAlert size={14} aria-hidden="true" />Check setup</span>}
+          <ChevronDown className="live-lan-chevron" size={16} aria-hidden="true" />
+        </button>
       </div>
-      <LanViewerPanel
-        status={lan}
-        busy={lanBusy}
-        onStart={() => void startNow()}
-        onStop={() => void stopNow()}
-        onRefresh={() => void refreshLan()}
-      />
+      {/* `hidden` keeps the panel mounted, so its copy state and the auto-start above are unaffected. */}
+      <div id="live-lan-drawer" className="live-lan-drawer" hidden={!lanOpen}>
+        <LanViewerPanel
+          status={lan}
+          busy={lanBusy}
+          onStart={() => void startNow()}
+          onStop={() => void stopNow()}
+          onRefresh={() => void refreshLan()}
+        />
+      </div>
       {attendance.kind === "loading" ? null : (
         <AttendanceTable
           rows={attendance.rows}
@@ -2769,6 +2808,14 @@ function LiveAttendance() {
     </main>
   );
 }
+
+const LAN_STATE_LABEL = {
+  starting: "Starting",
+  running: "Running",
+  stopped: "Stopped",
+  disabled: "Disabled",
+  error: "Needs attention",
+} satisfies Record<LanStatusResponse["state"], string>;
 
 function lanProfileLabel(profile: LanStatusResponse["networkProfile"]): string {
   switch (profile) {
@@ -2827,13 +2874,6 @@ function LanViewerPanel({
       </section>
     );
   const running = status.state === "running";
-  const stateLabel = {
-    starting: "Starting",
-    running: "Running",
-    stopped: "Stopped",
-    disabled: "Disabled",
-    error: "Needs attention",
-  } satisfies Record<LanStatusResponse["state"], string>;
   const copyUrl = async () => {
     if (!status.viewerUrl) return;
     setCopied(await copyText(status.viewerUrl));
@@ -2867,7 +2907,7 @@ function LanViewerPanel({
         </div>
         <span className={`lan-state lan-state-${status.state}`}>
           <i />
-          {stateLabel[status.state]}
+          {LAN_STATE_LABEL[status.state]}
         </span>
       </div>
       {running && status.viewerUrl ? (
@@ -2931,7 +2971,9 @@ function LanViewerPanel({
       ) : (
         <>
           <p className="lan-note">
-            {status.state === "disabled"
+            {status.issue === "not_tauri" && status.configError
+              ? status.configError
+              : status.state === "disabled"
               ? "The LAN viewer is disabled by configuration."
               : status.state === "starting"
                 ? "The LAN viewer is starting…"

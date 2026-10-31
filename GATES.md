@@ -1556,3 +1556,32 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass.
   EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 414 + 297.
+
+## UI revamp batch 2: Live attendance (client only; App.tsx, styles.css, App.test.tsx)
+
+- [x] Existing Live attendance tests still pass unchanged.
+  CHECK (client/): npx vitest run src/App.test.tsx -t "live attendance view|newest snapshot when overlapping|Live Attendance table|on the live table|in the live table"
+  EXPECT: 6 passed.
+  EVIDENCE: 6 passed (run together with the 3 new tests: 9 passed).
+- [x] LAN viewer collapsed by default yet still auto-started; header links are buttons with icons; at-a-glance counts from loaded rows.
+  CHECK (client/): npx vitest run src/App.test.tsx -t "Live attendance revamp"
+  EXPECT: 3 passed.
+  EVIDENCE: 3 passed. The counts fixture includes a MISSED row with an empty time in (review finding): counts read 0 in office / 2 timed out / 2 timed in / 1 need correction.
+- [x] Phones and tablets show Time in, Time out and Status for every row; no sideways scroll.
+  EVIDENCE: no sideways scroll and 0 cells past the edge at 320, 375, 381, 389, 390, 414, 430, 480, 600, 601, 700, 768, 820, 900, 1366, 1920, 2560 (16 rows). Time in/Time out columns sit at one x-position per width from 320 to 900 (review finding: per-row auto tracks shifted them; fixed with equal halves on phones and an 11rem status column on tablets). Injected LATE TIMEOUT + hint row: no overlap at 320-600.
+- [x] Scanner/Admin read as buttons; 14px text floor inside the page.
+  EVIDENCE: both links 44px tall with border rgba(198, 162, 84, 0.4) at rest and an svg, at 1366 and 390; 0 visible text nodes under 14px inside .live-shell at 1366 and 390.
+- [x] Workflow unchanged: LAN viewer still started on page open; attendance still polled every 5 s; week history requested once.
+  CHECK: grep -c "void startLanViewer().then(setLan)" client/src/App.tsx
+  EXPECT: 1 (inside LiveAttendance).
+  EVIDENCE: 1; over 31 s on /attendance: /api/attendance 7 requests, ?date= history 5 requests for 5 distinct days (once each).
+- [x] No look change on kiosk or Admin; new CSS scoped to .live-shell.
+  EVIDENCE: kiosk keeps 3 fixed radial lights, glass topbar blur(18px) saturate(1.4), body background-image none; /admin (login, no session) renders the original card and has no .live-shell; every new rule in the live block starts with .live-shell or body:has(.live-shell). Review finding fixed: the inline body color in index.html beat the live base color; body:has(.live-shell) now computes rgb(8, 8, 7).
+- [x] Client only: no new server, src-tauri or shared changes.
+  CHECK: git diff --stat -- server src-tauri shared
+  EXPECT: unchanged from before this batch (3 files, +25 -7: the temporary demo-seed hooks only).
+  EVIDENCE: 3 files changed, 25 insertions(+), 7 deletions(-).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 417 + 297.
