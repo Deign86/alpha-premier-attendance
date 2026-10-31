@@ -67,7 +67,7 @@ Paper logbooks and generic HR tools assume someone is watching the door. This ap
 | Platform | Download |
 | --- | --- |
 | Windows 10/11 x64 | [Setup.exe on GitHub Releases](https://github.com/Deign86/alpha-premier-attendance/releases) |
-| macOS 10.15+ (Apple Silicon + Intel) | [`.dmg` on GitHub Releases](https://github.com/Deign86/alpha-premier-attendance/releases) |
+| macOS 10.15+ | [`_aarch64.dmg` (Apple Silicon) / `_x64.dmg` (Intel) on GitHub Releases](https://github.com/Deign86/alpha-premier-attendance/releases) |
 
 > The NSIS package bundles the WebView2 bootstrapper and installs machine-wide (admin approval required). The portable `.exe` needs WebView2 already installed — prefer the NSIS package for fresh machines.
 >
@@ -234,10 +234,10 @@ Google Sheets sync, RFID (USB keyboard-wedge readers), payroll, reports, LAN vie
 Build on a Mac (Xcode Command Line Tools, Node 22, Rust):
 
 ```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
 npm ci && npm run build:fast
-npx tauri build --target universal-apple-darwin
-# -> src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+npx tauri build            # host arch
+# -> src-tauri/target/release/bundle/dmg/*.dmg
+# Other arch: rustup target add x86_64-apple-darwin && npx tauri build --target x86_64-apple-darwin
 ```
 
 Updater artifacts need `TAURI_SIGNING_PRIVATE_KEY` set; for a quick local build add `--config '{"bundle":{"createUpdaterArtifacts":false}}'`. CI: the release workflow attaches the `.dmg` to every release, and **Actions → macOS Build → Run workflow** produces one on demand.
