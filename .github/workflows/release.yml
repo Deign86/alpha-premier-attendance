@@ -26,6 +26,7 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.version_step.outputs.tag }}
+      version: ${{ steps.version_step.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -143,6 +144,16 @@ jobs:
         run: |
           npm ci
           npm run build:fast
+
+      # The release tag points at the pre-bump commit, so stamp the bumped
+      # version; otherwise the Mac bundle and the merged latest.json carry
+      # the previous version and break auto-update for every platform.
+      - name: Stamp release version
+        env:
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          node -e 'const fs=require("fs"),f="src-tauri/tauri.conf.json",c=JSON.parse(fs.readFileSync(f,"utf8"));c.version=process.env.VERSION;fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+          grep '"version"' src-tauri/tauri.conf.json
 
       - name: Build Tauri app and attach to release
         uses: tauri-apps/tauri-action@v0
