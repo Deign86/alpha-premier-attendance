@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   ArrowRight,
   BookOpen,
   CalendarPlus,
   Check,
   CircleAlert,
   Clock,
+  CloudOff,
   CreditCard,
   Download,
   History,
   ImagePlus,
   Keyboard,
   KeyRound,
+  LayoutDashboard,
   LoaderCircle,
   LockKeyhole,
+  LogIn,
+  LogOut,
   Nfc,
   Plus,
   PlusCircle,
@@ -23,6 +28,8 @@ import {
   Upload,
   UserCheck,
   UserRound,
+  Users,
+  WifiOff,
   X,
 } from "lucide-react";
 import type {
@@ -157,7 +164,7 @@ import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
-import { BathroomKeyLogPanel } from "./bathroom-key-log";
+import { BathroomKeyLogPanel, getAvatarInitials } from "./bathroom-key-log";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 
 function toErrorMessage(cause: unknown, fallback: string): string {
@@ -347,6 +354,35 @@ export default function App() {
     const timer = window.setInterval(fetchBathroomStatus, 5_000);
     return () => window.clearInterval(timer);
   }, [kioskMode, fetchBathroomStatus]);
+
+  // Front-desk headcount: people timed in today who have not timed out yet (null until it first loads).
+  const [inOfficeCount, setInOfficeCount] = useState<number | null>(null);
+  const fetchInOfficeCount = useCallback(async () => {
+    try {
+      const data = await loadAttendance();
+      if (Array.isArray(data.attendance)) setInOfficeCount(data.attendance.filter((row) => row.status === "WORKING").length);
+    } catch (error) {
+      // Background refresh: keep the last count, log for diagnostics.
+      console.warn("In-office count refresh failed.", error);
+    }
+  }, []);
+
+  // Every minute, for scans on other devices; and right after a scan is recorded here.
+  useEffect(() => {
+    void fetchInOfficeCount();
+    const timer = window.setInterval(fetchInOfficeCount, 60_000);
+    return () => window.clearInterval(timer);
+  }, [fetchInOfficeCount]);
+
+  useEffect(() => {
+    if (kioskMode === "attendance" && state === "success") void fetchInOfficeCount();
+  }, [kioskMode, state, fetchInOfficeCount]);
+
+  // Manual entry is for typing, so put the cursor in the field when it opens.
+  const scannerInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (manualMode) scannerInputRef.current?.focus();
+  }, [manualMode]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -880,8 +916,8 @@ export default function App() {
 
         if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
         bathroomResetTimer.current = setTimeout(() => {
-          setBathroomScanResult(null);
-          setState("ready");
+          // Same reset as attendance, so the reader box is cleared too.
+          resetToReady();
         }, config.resultResetDelayMs);
       } catch {
         setState("error");
@@ -895,14 +931,14 @@ export default function App() {
         });
         if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
         bathroomResetTimer.current = setTimeout(() => {
-          setBathroomScanResult(null);
-          setState("ready");
+          // Same reset as attendance, so the reader box is cleared too.
+          resetToReady();
         }, config.resultResetDelayMs);
       } finally {
         releaseScanPipeline(controller);
       }
     },
-    [config.resultResetDelayMs, fetchBathroomStatus],
+    [config.resultResetDelayMs, fetchBathroomStatus, resetToReady],
   );
 
   const handleManualKeyDown = (
@@ -1125,6 +1161,14 @@ export default function App() {
     day: "numeric",
     year: "numeric",
   }).format(now);
+  // "Sat, Oct 31, 2026": shown on mid-size screens so the clock side of the header stays within its half.
+  const displayDateShort = new Intl.DateTimeFormat("en-PH", {
+    timeZone: config.timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(now);
   const displayTime = new Intl.DateTimeFormat("en-PH", {
     timeZone: config.timezone,
     hour: "numeric",
@@ -1135,6 +1179,10 @@ export default function App() {
 
   const success = result?.success ? result : null;
   const error = result && !result.success ? result : null;
+  const errorCopy = error ? friendlyScanError(error.error.code, error.error.message) : null;
+  const bathroomErrorCopy = bathroomScanResult && !bathroomScanResult.success
+    ? friendlyScanError(bathroomScanResult.error.code, bathroomScanResult.error.message)
+    : null;
 
   // Scanner readiness for the compact status pill. Falls back to a neutral
   // state when the native layer is unavailable (browser dev mode).
@@ -1193,21 +1241,21 @@ export default function App() {
           : "Tap your card on the reader";
 
   return (
-    <main className={`kiosk-shell state-${state}`}>
+    <main className={`kiosk-shell state-${state} mode-${kioskMode}`}>
       <header className="kiosk-topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             <img src={logoPhoenix} alt="" />
           </div>
           <div className="brand-text">
-            <p className="brand-name">ALPHA PREMIER</p>
+            <p className="brand-name">ALPHA PREMIER REALTY</p>
             <p className="brand-subtitle">
               {resolveOfficeDisplay(config.office, "short")}
             </p>
           </div>
         </div>
 
-        <div className="kiosk-mode-switcher" role="tablist" aria-label="Kiosk scanning mode">
+        <div className="kiosk-mode-switcher" role="tablist" aria-label="Kiosk scanning mode" data-active={kioskMode}>
           <button
             type="button"
             role="tab"
@@ -1231,13 +1279,19 @@ export default function App() {
         </div>
 
         <div className="topbar-cluster">
+          {inOfficeCount !== null && (
+            <span className="office-count" data-testid="kiosk-in-office" title="Timed in today and not yet timed out">
+              <Users size={16} aria-hidden="true" />
+              <strong>{inOfficeCount}</strong> in office
+            </span>
+          )}
           <span
             className={`scanner-pill is-${scannerPill.state}`}
             role="status"
             title={scannerPill.detail}
           >
             <i aria-hidden="true" />
-            {scannerPill.label}
+            <span className="scanner-pill-label">{scannerPill.label}</span>
           </span>
           {syncSnapshot && (
             <span className={`sync-badge ${syncSnapshot.needsAttention > 0 || syncSnapshot.dead > 0 ? "attention" : syncSnapshot.queued > 0 ? "pending" : "idle"}`} role="status" aria-label="Intern DTR sync health">
@@ -1248,7 +1302,8 @@ export default function App() {
             className="clock"
             aria-label={`Current time in ${config.timezone}`}
           >
-            <span>{displayDate}</span>
+            <span className="clock-date-long">{displayDate}</span>
+            <span className="clock-date-short">{displayDateShort}</span>
             <strong>{displayTime}</strong>
           </div>
         </div>
@@ -1263,45 +1318,68 @@ export default function App() {
             role="status"
             aria-live="polite"
           >
-            {success.user.photoUrl ? (
-              <img
-                className="result-photo result-photo-full"
-                src={photoSource(success.user.photoUrl)}
-                alt={`${success.user.fullName} ID`}
-              />
-            ) : (
-              <div
-                className="result-photo result-photo-fallback"
-                aria-label="ID photo unavailable"
-              >
-                <UserRound size={72} />
-              </div>
-            )}
-            <h2 className="result-name">{success.user.fullName}</h2>
-            <p className="result-message">{success.message}</p>
-            <p className="result-user-id">
-              {success.user.userId}
-              {success.user.department ? ` · ${success.user.department}` : ""}
-            </p>
-            <div className="result-meta">
-              <span
-                className={`employee-badge${success.user.employeeType === "INTERN" ? " intern-badge" : ""}`}
-              >
-                {success.user.employeeType}
-              </span>
-              {success.attendance.source === "ADMIN_ASSISTED_SCAN" && (
-                <span className="badge badge-assisted">
-                  Assisted by {success.attendance.recordedBy || "Admin"}
+            <div className={`result-card ${success.action === "TIME_IN" ? "is-in" : "is-out"}`}>
+              <ResultPortrait photoUrl={success.user.photoUrl} fullName={success.user.fullName} />
+              <div className="result-body">
+                <span className="result-status">
+                  {success.action === "TIME_IN" ? <LogIn size={15} aria-hidden="true" /> : <LogOut size={15} aria-hidden="true" />}
+                  {success.action === "TIME_IN" ? "Timed in" : "Timed out"}
                 </span>
-              )}
-              <span>{formatAction(success.action)}</span>
-              <span>
-                {formatTime(
-                  success.attendance.timeOut ?? success.attendance.timeIn,
-                  config.timezone,
+                <h2 className="result-name">{success.user.fullName}</h2>
+                <p className="result-user-id">
+                  {success.user.userId}
+                  {success.user.department ? ` · ${success.user.department}` : ""}
+                </p>
+                <dl className="result-times">
+                  {success.action === "TIME_OUT" && success.attendance.timeIn && (
+                    <div className="result-time is-secondary">
+                      <dt>Time in</dt>
+                      <dd>{formatTime(success.attendance.timeIn, config.timezone)}</dd>
+                    </div>
+                  )}
+                  <div className="result-time">
+                    <dt>{formatAction(success.action)}</dt>
+                    <dd>
+                      {formatTime(
+                        success.attendance.timeOut ?? success.attendance.timeIn,
+                        config.timezone,
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+                {!isStockScanMessage(success.message) && (
+                  <p className="result-message">{success.message}</p>
                 )}
-              </span>
+                <div className="result-meta">
+                  <span
+                    className={`employee-badge${success.user.employeeType === "INTERN" ? " intern-badge" : ""}`}
+                  >
+                    {success.user.employeeType === "INTERN" ? "Intern" : "Employee"}
+                  </span>
+                  {success.attendance.source === "ADMIN_ASSISTED_SCAN" && (
+                    <span className="badge badge-assisted">
+                      Assisted by {success.attendance.recordedBy || "Admin"}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* ATTENDANCE SAVED OFFLINE: the scan is queued and will sync later */}
+        {kioskMode === "attendance" && state === "success" && !result && (
+          <div
+            className="kiosk-result is-notice"
+            data-testid="kiosk-result-offline"
+            role="status"
+            aria-live="polite"
+          >
+            <CloudOff className="result-notice-icon" size={42} aria-hidden="true" />
+            <h2 className="result-name">Saved offline</h2>
+            <p className="result-message">
+              Your scan is saved on this computer and will sync automatically when the connection is back.
+            </p>
           </div>
         )}
 
@@ -1313,52 +1391,64 @@ export default function App() {
             role="status"
             aria-live="polite"
           >
-            {bathroomScanResult.user.photoUrl ? (
-              <img
-                className="result-photo result-photo-full"
-                src={photoSource(bathroomScanResult.user.photoUrl)}
-                alt={`${bathroomScanResult.user.fullName} ID`}
-              />
-            ) : (
-              <div
-                className="result-photo result-photo-fallback"
-                aria-label="ID photo unavailable"
-              >
-                <UserRound size={72} />
-              </div>
-            )}
-            <h2 className="result-name">{bathroomScanResult.user.fullName}</h2>
-            <p className="result-message">
-              {bathroomScanResult.action === "CHECKOUT"
-                ? `${bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} floor key checked out`
-                : `${bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} floor key returned`}
-            </p>
-            <p className="result-user-id">
-              {bathroomScanResult.user.userId}
-              {bathroomScanResult.user.department ? ` · ${bathroomScanResult.user.department}` : ""}
-            </p>
-            <div className="result-meta">
-              <span className={`key-badge ${bathroomScanResult.genderKey.toLowerCase()}`}>
-                {bathroomScanResult.genderKey} KEY
-              </span>
-              <span>{bathroomScanResult.action}</span>
-              <span>
-                {formatTime(
-                  bathroomScanResult.timeOut ?? bathroomScanResult.timeIn ?? bathroomScanResult.timestamp,
-                  config.timezone,
-                )}
-              </span>
-              {bathroomScanResult.durationSeconds !== null && bathroomScanResult.durationSeconds !== undefined && (
-                <span className="badge badge-duration">
-                  Duration: {Math.max(1, Math.round(bathroomScanResult.durationSeconds / 60))}m
+            <div className={`result-card ${bathroomScanResult.action === "CHECKOUT" ? "is-in" : "is-out"}`}>
+              <ResultPortrait photoUrl={bathroomScanResult.user.photoUrl} fullName={bathroomScanResult.user.fullName} />
+              <div className="result-body">
+                <span className="result-status">
+                  <KeyRound size={15} aria-hidden="true" />
+                  {bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} key {bathroomScanResult.action === "CHECKOUT" ? "checked out" : "returned"}
                 </span>
-              )}
+                <h2 className="result-name">{bathroomScanResult.user.fullName}</h2>
+                <p className="result-user-id">
+                  {bathroomScanResult.user.userId}
+                  {bathroomScanResult.user.department ? ` · ${bathroomScanResult.user.department}` : ""}
+                </p>
+                <dl className="result-times">
+                  {bathroomScanResult.action === "RETURN" && (
+                    <div className="result-time is-secondary">
+                      <dt>Taken</dt>
+                      <dd>{formatTime(bathroomScanResult.timeOut, config.timezone)}</dd>
+                    </div>
+                  )}
+                  <div className="result-time">
+                    <dt>{bathroomScanResult.action === "CHECKOUT" ? "Taken" : "Returned"}</dt>
+                    <dd>
+                      {formatTime(
+                        (bathroomScanResult.action === "CHECKOUT" ? bathroomScanResult.timeOut : bathroomScanResult.timeIn) ?? bathroomScanResult.timestamp,
+                        config.timezone,
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+                {bathroomScanResult.durationSeconds !== null && bathroomScanResult.durationSeconds !== undefined && (
+                  <div className="result-meta">
+                    <span className="badge badge-duration">
+                      Out for {Math.max(1, Math.round(bathroomScanResult.durationSeconds / 60))} min
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {/* ATTENDANCE SCAN ERROR */}
-        {kioskMode === "attendance" && state === "error" && error && (
+        {kioskMode === "attendance" && state === "error" && error && error.error.code === "DUPLICATE_SCAN" && (
+          <div
+            className="kiosk-result is-notice"
+            data-testid="kiosk-result-error"
+            role="status"
+            aria-live="polite"
+          >
+            <CreditCard className="result-notice-icon" size={42} aria-hidden="true" />
+            <h2 className="result-name">Already scanned</h2>
+            <p className="result-message">
+              This card was just tapped. Please wait a few seconds before tapping again.
+            </p>
+          </div>
+        )}
+
+        {kioskMode === "attendance" && state === "error" && error && error.error.code !== "DUPLICATE_SCAN" && (
           <div
             className="kiosk-result is-error"
             data-testid="kiosk-result-error"
@@ -1370,10 +1460,8 @@ export default function App() {
               size={42}
               aria-hidden="true"
             />
-            <h2 className="result-name">{error.error.message}</h2>
-            <p className="error-code">
-              {error.error.code.replaceAll("_", " ")}
-            </p>
+            <h2 className="result-name">{errorCopy?.title}</h2>
+            {errorCopy?.hint && <p className="result-message">{errorCopy.hint}</p>}
             {error.error.code === "UNKNOWN_RFID_CARD" &&
               config.enableCardSetup && (
                 <button
@@ -1382,9 +1470,23 @@ export default function App() {
                   type="button"
                   onClick={() => openSetup(uid)}
                 >
-                  <ShieldCheck size={17} /> Setup this card
+                  <ShieldCheck size={17} /> Set up this card
                 </button>
               )}
+          </div>
+        )}
+
+        {/* ATTENDANCE SERVICE UNREACHABLE: no answer came back for the scan */}
+        {kioskMode === "attendance" && state === "error" && !result && (
+          <div
+            className="kiosk-result is-error"
+            data-testid="kiosk-result-unreachable"
+            role="alert"
+            aria-live="assertive"
+          >
+            <WifiOff className="result-error-icon" size={42} aria-hidden="true" />
+            <h2 className="result-name">Can&apos;t reach the system</h2>
+            <p className="result-message">We couldn&apos;t confirm your scan. Please tap your card again.</p>
           </div>
         )}
 
@@ -1401,10 +1503,8 @@ export default function App() {
               size={42}
               aria-hidden="true"
             />
-            <h2 className="result-name">{bathroomScanResult.error.message}</h2>
-            <p className="error-code">
-              {bathroomScanResult.error.code.replaceAll("_", " ")}
-            </p>
+            <h2 className="result-name">{bathroomErrorCopy?.title}</h2>
+            {bathroomErrorCopy?.hint && <p className="result-message">{bathroomErrorCopy.hint}</p>}
             {bathroomScanResult.activeHolder && (
               <p className="result-holder-detail">
                 Currently with <strong>{bathroomScanResult.activeHolder.fullName}</strong> ({bathroomScanResult.activeHolder.department}) since {formatTime(bathroomScanResult.activeHolder.timeOut, config.timezone)}
@@ -1462,6 +1562,7 @@ export default function App() {
                 </span>
               )}
               <input
+                ref={scannerInputRef}
                 id="scanner-uid"
                 data-testid="scanner-uid"
                 aria-label={manualMode ? "Manual card ID" : "Scanner card ID"}
@@ -1505,13 +1606,7 @@ export default function App() {
                   fallback when the reader is unavailable
                 </>
               ) : (
-                <>
-                  <span className="scan-live">
-                    <i aria-hidden="true" />
-                    Locked
-                  </span>{" "}
-                  — tap your card, or use Manual entry to type an ID
-                </>
+                <>No card? Use Manual entry to type the ID.</>
               )}
             </p>
             {scanNotice && (
@@ -1532,9 +1627,10 @@ export default function App() {
         )}
 
         {(state === "success" || state === "error") && (
-          <p className="reset-hint">
-            Returning to ready mode in a few seconds…
-          </p>
+          <div className="reset-progress" role="progressbar" aria-label="Returning to ready mode">
+            {/* Keyed per scan so the bar restarts when a new result replaces the last one. */}
+            <span key={result?.requestId ?? (bathroomScanResult?.success ? bathroomScanResult.timestamp : state)} style={{ animationDuration: `${config.resultResetDelayMs}ms` }} />
+          </div>
         )}
       </section>
 
@@ -1553,11 +1649,11 @@ export default function App() {
             {manualMode ? "Use card reader" : "Manual entry"}
           </button>
           <a className="kiosk-action" data-testid="kiosk-link-live" href="/attendance">
-            Live attendance
+            <Activity size={16} /> Live attendance
           </a>
           {config.enableAdmin && (
             <a className="kiosk-action" data-testid="kiosk-link-admin" href="/admin">
-              Admin
+              <LayoutDashboard size={16} /> Admin
             </a>
           )}
           {config.enableCardSetup && (
@@ -1631,6 +1727,39 @@ export default function App() {
 
 function formatAction(action: ScanSuccessResponse["action"]) {
   return action === "TIME_IN" ? "Time in" : "Time out";
+}
+
+/** The action band already says what was recorded, so the backend's stock confirmation is not repeated. */
+function isStockScanMessage(message: string): boolean {
+  return /^time (in|out) recorded( successfully)?\.?$/i.test(message.trim());
+}
+
+/** What the kiosk says for a failed scan: a title and, when people can act on it, a next step. */
+type ScanErrorCopy = { title: string; hint: string | null };
+
+/** Plain words and a next step for the scan errors people can act on; any other error keeps the system's own message. */
+function friendlyScanError(code: string, message: string): ScanErrorCopy {
+  switch (code) {
+    case "UNKNOWN_RFID_CARD":
+    case "USER_NOT_FOUND":
+      return { title: "Card not registered", hint: "Please ask an admin to set up this card." };
+    case "INACTIVE_USER":
+    case "USER_INACTIVE":
+      return { title: "Card inactive", hint: "Please see an admin to turn this card back on." };
+    default:
+      return { title: message, hint: null };
+  }
+}
+
+/** The ID photo when there is one; otherwise the same initials circle the bathroom key cards use. */
+function ResultPortrait({ photoUrl, fullName }: { photoUrl?: string | null; fullName: string }) {
+  return photoUrl ? (
+    <img className="result-photo result-photo-full" src={photoSource(photoUrl)} alt={`${fullName} ID`} />
+  ) : (
+    <div className="result-avatar" aria-label="ID photo unavailable">
+      {getAvatarInitials(fullName)}
+    </div>
+  );
 }
 
 type SetupDialogProps = {
@@ -2997,7 +3126,7 @@ function DashboardBrand() {
         alt=""
         aria-hidden="true"
       />
-      <span className="dashboard-brand-name">ALPHA PREMIER</span>
+      <span className="dashboard-brand-name">ALPHA PREMIER REALTY</span>
     </div>
   );
 }

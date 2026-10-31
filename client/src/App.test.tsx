@@ -516,7 +516,7 @@ describe('RFID kiosk', () => {
     });
     render(<App />);
     act(() => emitRfidScan('UNREGISTERED'));
-    expect(await screen.findByText('This RFID card is not registered.')).toBeInTheDocument();
+    expect(await screen.findByText('Card not registered')).toBeInTheDocument();
     expect(ttsService.announceScanError).toHaveBeenCalledWith({
       errorCode: 'UNKNOWN_RFID_CARD',
       message: 'This RFID card is not registered.',
@@ -551,6 +551,10 @@ describe('RFID kiosk', () => {
       if (String(input) === '/api/config') {
         // SAFETY: Fetch returns config Response mock
         return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (String(input) === '/api/attendance') {
+        // SAFETY: Fetch returns an empty day for the in-office headcount
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [], fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
       }
       scanCalls(String(input));
       return new Promise<Response>((resolve) => { resolveScan = resolve; });
@@ -627,9 +631,120 @@ describe('RFID kiosk', () => {
     // Let the config load so the (mocked) short reset delay is in effect.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     act(() => emitRfidScan('DEADBEEF'));
-    expect(await screen.findByText('Card is not registered.')).toBeInTheDocument();
+    expect(await screen.findByText('Card not registered')).toBeInTheDocument();
+    expect(screen.getByText('Please ask an admin to set up this card.')).toBeInTheDocument();
+    expect(screen.queryByText('UNKNOWN RFID CARD')).not.toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument(), { timeout: 1_000 });
+  });
+
+  it('explains an inactive card in plain words with a next step', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-inactive',
+      error: { code: 'INACTIVE_USER', message: 'This user is inactive.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Card inactive')).toBeInTheDocument();
+    expect(screen.getByText('Please see an admin to turn this card back on.')).toBeInTheDocument();
+    expect(screen.queryByText('INACTIVE USER')).not.toBeInTheDocument();
+  });
+
+  it('keeps showing the system message for errors without a plain-word version', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-rate',
+      error: { code: 'RATE_LIMITED', message: 'Too many scans. Please wait a moment.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Too many scans. Please wait a moment.')).toBeInTheDocument();
+    expect(screen.queryByText('RATE LIMITED')).not.toBeInTheDocument();
+  });
+
+  it('shows how many people are in the office (timed in, not yet out) in the header', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === '/api/attendance') {
+        // SAFETY: Fetch returns today's attendance for the headcount
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            fetchedAt: '2026-07-28T09:00:00+08:00',
+            attendance: [{ status: 'WORKING' }, { status: 'WORKING' }, { status: 'COMPLETED' }, { status: 'LATE_TIMEOUT' }],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch returns mock Response for config and other requests
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+    });
+    render(<App />);
+    expect(await screen.findByTestId('kiosk-in-office')).toHaveTextContent('2 in office');
+  });
+
+  it('puts the cursor in the field when Manual entry opens', async () => {
+    const user = userEvent.setup();
+    mockFetch();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-manual-toggle'));
+    await waitFor(() => expect(screen.getByLabelText('Manual card ID')).toHaveFocus());
+  });
+
+  it('shows what was recorded in an action band instead of the stock confirmation', async () => {
+    mockFetch({ ...successResponse, message: 'Time In recorded successfully.' });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    const result = await screen.findByTestId('kiosk-result-success');
+    expect(within(result).getByText('Time in')).toBeInTheDocument();
+    expect(within(result).getByText(/9:00/)).toBeInTheDocument();
+    expect(within(result).queryByText('Time In recorded successfully.')).not.toBeInTheDocument();
+  });
+
+  it('keeps a server message that says more than the stock confirmation', async () => {
+    mockFetch({ ...successResponse, message: 'Lunch break started. Tap again when you are back.' });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Lunch break started. Tap again when you are back.')).toBeInTheDocument();
+  });
+
+  it('shows initials when the intern has no ID photo', async () => {
+    mockFetch({ ...successResponse, user: { ...successResponse.user, photoUrl: null } });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByLabelText('ID photo unavailable')).toHaveTextContent('AL');
+  });
+
+  it('explains a repeat tap in plain words instead of an error code', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-dup',
+      error: { code: 'DUPLICATE_SCAN', message: 'This card was scanned too recently.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Already scanned')).toBeInTheDocument();
+    expect(screen.queryByText('DUPLICATE SCAN')).not.toBeInTheDocument();
+  });
+
+  it('shows a saved-offline card for a queued scan', async () => {
+    mockFetch({
+      success: true,
+      offlineQueued: true,
+      message: 'Attendance saved offline. Will automatically sync when reconnected.',
+    });
+    render(<App />);
+    act(() => emitRfidScan('OFFLINE01'));
+    expect(within(await screen.findByTestId('kiosk-result-offline')).getByText('Saved offline')).toBeInTheDocument();
+  });
+
+  it('shows a cannot-reach card when the scan gets no answer', async () => {
+    mockFetch();
+    vi.spyOn(api, 'submitScan').mockRejectedValue(new Error('network down'));
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(within(await screen.findByTestId('kiosk-result-unreachable')).getByText("Can't reach the system")).toBeInTheDocument();
   });
 
   it('handles offline queued scans and returns to ready after reset delay', async () => {
@@ -2736,6 +2851,39 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByTestId('kiosk-mode-attendance'));
     expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active');
     expect(screen.queryByTestId('bathroom-kiosk-view')).not.toBeInTheDocument();
+  });
+
+  it('clears the reader box when a bathroom result goes back to ready', async () => {
+    window.history.pushState({}, '', '/');
+    const user = userEvent.setup();
+    const checkout: BathroomScanResponse = {
+      success: true,
+      action: 'CHECKOUT',
+      genderKey: 'FEMALE',
+      user: { userId: 'EMP-02', fullName: 'Jane Smith', department: 'Finance', photoUrl: null, gender: 'FEMALE' },
+      timeOut: '2026-08-28T10:00:00+08:00',
+      message: 'Female floor key checked out',
+      timestamp: '2026-08-28T10:00:00+08:00',
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config with a short reset delay
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 300 }) } as Response;
+      }
+      if (url.includes('/bathroom/scan')) {
+        // SAFETY: Mock bathroom scan response
+        return { ok: true, json: async () => checkout } as Response;
+      }
+      // SAFETY: Bathroom status and other requests get an empty day
+      return { ok: true, json: async () => ({ success: true, date: '2026-08-28', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-28T10:00:00Z' }) } as Response;
+    });
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    act(() => emitRfidScan('FEMALE-CARD-01'));
+    expect(await screen.findByText('Jane Smith')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/scanner card id/i)).toHaveValue(''), { timeout: 1_500 });
   });
 
   it('announces bathroom key checkout, return, and in-use errors in bathroom kiosk mode', async () => {

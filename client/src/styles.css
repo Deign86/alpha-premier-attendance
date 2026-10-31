@@ -120,19 +120,59 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .kiosk-result { display: grid; justify-items: center; gap: 8px; text-align: center; width: min(640px, 100%); }
 .result-photo { display: block; width: min(250px, 44vw); margin: 0 0 8px; border: 3px solid var(--gold); border-radius: 12px; background: var(--surface-raised); }
 .result-photo-full { height: auto; aspect-ratio: auto; object-fit: contain; }
-.result-photo-fallback { display: grid; place-items: center; aspect-ratio: 1; color: var(--gold-bright); background: var(--surface-raised); }
 .result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(1.7rem, 4vw, 2.5rem); font-weight: 600; line-height: 1.15; text-wrap: balance; overflow-wrap: anywhere; }
-.result-message { margin: 2px 0 0; color: var(--muted); font-size: .95rem; }
-.result-user-id { margin: 2px 0 0; color: var(--gold-bright); font-size: .8rem; }
-.result-meta { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; color: var(--ink); font-size: .76rem; }
+.result-message { margin: 2px 0 0; max-width: 42ch; color: var(--muted); font-size: .95rem; text-wrap: pretty; }
+.result-user-id { margin: 2px 0 0; color: var(--gold-bright); font-size: .95rem; }
+
+/* Scan result as an ID card: portrait beside the details, gold kept to a hairline, the status and the time. */
+.result-card { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: clamp(20px, 3vw, 32px); width: min(720px, 100%); padding: clamp(20px, 3vw, 32px); text-align: left; background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
+.result-card.is-out { border-top-color: var(--line-bright); }
+.result-card .result-photo, .result-avatar { width: clamp(120px, 15vw, 168px); aspect-ratio: 3 / 4; margin: 0; border: 2px solid var(--gold); border-radius: var(--radius-lg); background: var(--surface-raised); object-fit: cover; object-position: center top; }
+/* No ID photo on file: initials in the same 3:4 frame, so the card keeps its shape. */
+.result-avatar { display: grid; place-items: center; color: var(--gold-bright); font-size: clamp(2rem, 4vw, 2.6rem); font-weight: 600; }
+.result-body { display: grid; justify-items: start; gap: 6px; min-width: 0; }
+.result-status { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 4px; padding: 5px 12px; color: var(--gold-bright); background: rgba(198, 162, 84, .12); border: 1px solid rgba(198, 162, 84, .32); border-radius: 999px; font-size: .82rem; font-weight: 600; }
+.result-card.is-out .result-status { color: var(--ink); background: rgba(246, 242, 233, .06); border-color: rgba(246, 242, 233, .16); }
+.result-card .result-name { font-size: clamp(1.5rem, 3vw, 2.1rem); }
+.result-times { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 36px; width: 100%; margin: 12px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.result-time { display: grid; gap: 2px; }
+.result-time dt { color: var(--quiet); font-size: .8rem; font-weight: 600; }
+/* Times use the header clock's face. */
+.result-time dd { margin: 0; color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.result-card.is-out .result-time dd { color: var(--ink); }
+.result-time.is-secondary dd, .result-card.is-out .result-time.is-secondary dd { color: var(--muted); font-size: clamp(1.05rem, 2vw, 1.3rem); }
+.result-card .result-meta { justify-content: flex-start; margin-top: 8px; }
+.result-card .result-message { text-align: left; }
+
+/* Notices and errors share the card frame, centred, with the icon in a soft disc. */
+.kiosk-result.is-notice, .kiosk-result.is-error { gap: 10px; width: min(560px, 100%); padding: clamp(24px, 4vw, 36px); background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
+.kiosk-result.is-error { border-top-color: var(--danger); }
+.kiosk-result.is-success { width: min(720px, 100%); }
+.kiosk-result.is-notice ~ .reset-progress, .kiosk-result.is-error ~ .reset-progress { width: min(560px, 100%); }
+.kiosk-result.is-notice .result-name, .kiosk-result.is-error .result-name { font-size: clamp(1.4rem, 3vw, 1.9rem); font-weight: 600; }
+.result-notice-icon, .result-error-icon { box-sizing: content-box; width: 26px; height: 26px; margin-bottom: 4px; padding: 14px; border-radius: 50%; }
+.result-notice-icon { color: var(--gold-bright); background: rgba(198, 162, 84, .12); }
+
+@media (max-width: 600px) {
+  .result-card { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .result-body { justify-items: center; }
+  .result-times, .result-card .result-meta { justify-content: center; }
+  .result-card .result-message { text-align: center; }
+  .result-card .result-photo, .result-avatar { width: 128px; }
+}
+.result-meta { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; color: var(--ink); font-size: .82rem; }
 .result-meta span { padding: 7px 12px; border: 1px solid var(--line-bright); background: #211d13; border-radius: 999px; }
 .employee-badge { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright) !important; font-weight: 700; }
 .intern-badge { color: var(--gold-bright); background: #211d13; border-color: var(--gold-soft) !important; }
-.result-error-icon { color: var(--danger); }
+.result-error-icon { color: var(--danger); background: rgba(239, 170, 146, .12); }
 .error-code { margin: 2px 0 0; color: var(--danger); text-transform: uppercase; font-size: .68rem; font-weight: 700; letter-spacing: .06em; }
 .setup-card-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; margin-top: 14px; padding: 10px 16px; color: #11100c; background: var(--gold); border: 1px solid var(--gold-bright); border-radius: 3px; font-size: .76rem; font-weight: 700; }
 .setup-card-button:hover { background: var(--gold-bright); }
 .reset-hint { margin: 0; color: var(--quiet); font-size: .72rem; }
+/* Drains over resultResetDelayMs (set inline) so people can see when the kiosk is ready again. */
+.reset-progress { width: min(720px, 100%); height: 2px; overflow: hidden; background: var(--line); border-radius: 999px; }
+.reset-progress span { display: block; height: 100%; background: var(--gold); transform-origin: left center; animation: reset-countdown linear forwards; }
+@keyframes reset-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
 .input-row { display: flex; gap: 10px; }
 .input-row input { min-width: 0; flex: 1; height: 48px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: 2px solid transparent; outline-offset: 2px; padding: 0 14px; font-size: .95rem; }
@@ -1482,6 +1522,8 @@ tr.selected-row td:first-child::before,
 }
 
 .input-row input {
+  /* Basis auto keeps the 52px height when the row stacks into a column on phones. */
+  flex: 1 0 auto;
   height: 52px;
   min-width: 0;
   border: 0;
@@ -1495,6 +1537,18 @@ tr.selected-row td:first-child::before,
   border: 0;
   box-shadow: none;
 }
+
+/* Record sits inside the field's frame with an even 4px inset, so it is centred and never crosses the border. */
+.input-row .submit-button {
+  align-self: stretch;
+  width: auto;
+  height: auto;
+  min-height: 44px;
+  margin: 4px;
+  padding: 0 20px;
+}
+
+.input-row .submit-button:hover:not(:disabled) { transform: none; }
 
 .input-hint {
   min-height: 20px;
@@ -3908,4 +3962,260 @@ textarea.input {
   .admin-login { align-content: start; padding-top: 40px; }
   .lan-facts { grid-template-columns: 1fr 1fr; }
   .lan-note, .lan-guidance p { font-size: .72rem; }
+}
+
+/* ==========================================================================
+   UI revamp, Stage 2: kiosk idle screen. Last in the file so it settles the
+   layered kiosk rules above. Behaviour is unchanged; only fit and finish.
+   ========================================================================== */
+
+/* "In office now" headcount for the front desk, styled like the reader pill. */
+.office-count { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; color: var(--gold-bright); border: 1px solid var(--gold-soft); border-radius: 999px; font-size: .875rem; font-weight: 600; white-space: nowrap; }
+.office-count strong { font-family: 'Orbitron', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Readable from a step back: kiosk text no smaller than 14px. */
+.kiosk-shell .scanner-pill { font-size: .875rem; }
+.scan-console-title, .input-hint { font-size: .875rem; }
+/* The hint wraps as one sentence instead of splitting into two flex columns. */
+.input-hint { display: block; text-align: center; text-wrap: pretty; }
+.input-hint svg { margin-right: 6px; vertical-align: -2px; }
+.kiosk-shell .kiosk-action { font-size: .875rem; }
+
+/* Laptops have room for a larger brand line, address and clock (below 1280px the header uses two rows). */
+@media (min-width: 901px) {
+  .kiosk-shell .brand-name { font-size: .9rem; }
+  .kiosk-shell .brand-subtitle { font-size: .875rem; }
+  .kiosk-shell .clock span { font-size: .875rem; }
+  .kiosk-shell .clock strong { font-size: 1.2rem; }
+  .kiosk-mode-tab { font-size: .875rem; }
+}
+
+/* Tall screens: centre the greeting, reader and options as one group instead of
+   leaving the bottom third empty. The options still sit right under the reader. */
+.kiosk-shell > .kiosk-stage { margin-top: auto; }
+.kiosk-shell > .kiosk-actions, .kiosk-shell > .kiosk-stage:not(:has(+ .kiosk-actions)) { margin-bottom: auto; }
+
+/* Tablets and phones: the mode switch moves to its own full-width row so nothing runs off screen. */
+@media (max-width: 900px) {
+  .kiosk-topbar { flex-wrap: wrap; row-gap: 12px; min-height: 0; padding: 14px 0; }
+  .kiosk-topbar .topbar-cluster { margin-left: auto; }
+  .kiosk-mode-switcher { order: 3; width: 100%; }
+  /* With a row of their own the tabs get their full size back (the zoom rule above shrinks them). */
+  .kiosk-mode-tab { flex: 1 1 0; justify-content: center; padding: 7px 14px; font-size: .875rem; }
+  .mode-shortcut-badge { width: 20px; height: 20px; font-size: .72rem; }
+}
+
+/* Phones: logo only, and the reader pill shrinks to its dot (phones have no reader), so the count and clock fit. */
+@media (max-width: 600px) {
+  .kiosk-topbar .brand-text { display: none; }
+  .kiosk-shell .scanner-pill { padding: 7px; }
+  .scanner-pill-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .kiosk-mode-tab { font-size: .875rem; }
+  /* The reader icon, field and Record button stay on one line instead of stacking. */
+  .input-row { flex-direction: row; }
+  .input-row input { flex: 1 1 0; }
+}
+
+/* Very small phones (about 320px): tighter mode tabs so "Bathroom Key Log" stays on screen. */
+@media (max-width: 360px) {
+  .kiosk-mode-tab { gap: 5px; padding: 6px 8px; font-size: .8rem; }
+  .kiosk-topbar .topbar-cluster { gap: 8px; }
+}
+
+/* ==========================================================================
+   UI revamp, Stage 3: kiosk finish.
+   ========================================================================== */
+
+/* Bathroom Key Log: a compact title and small key icon, so both key cards (who has the key,
+   since when) are on screen without scrolling on a laptop. */
+.kiosk-shell.mode-bathroom > .kiosk-stage { gap: clamp(16px, 2.5vh, 28px); padding-top: clamp(20px, 3vh, 40px); }
+.mode-bathroom .kiosk-hero { gap: 6px; }
+.mode-bathroom .kiosk-hero .hero-icon { width: 56px; height: 56px; margin-bottom: 2px; }
+.mode-bathroom .kiosk-hero .hero-icon svg { width: 28px; height: 28px; }
+.mode-bathroom .kiosk-hero h1 { font-size: clamp(1.8rem, 3vw, 2.6rem); }
+
+/* The Manual entry switch in the reader card follows the 14px floor. */
+.scan-console-toggle { font-size: .875rem; }
+
+/* ==========================================================================
+   UI revamp, design pass (kiosk): an executive-lobby look in black, gold and
+   white. Panels are frosted glass over a still backdrop of gold light, ID-card
+   pinstripes and fine grain. The backdrop never moves, so the blur stays cheap
+   on the kiosk PC; motion is limited to small elements, uses transform and
+   opacity only, and is switched off by the reduced-motion setting.
+   ========================================================================== */
+
+.kiosk-shell {
+  --glass: linear-gradient(180deg, rgba(36, 33, 25, .6), rgba(15, 14, 11, .55));
+  --glass-blur: blur(18px) saturate(140%);
+  --glass-edge: rgba(198, 162, 84, .2);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px rgba(0, 0, 0, .5);
+  --ease-soft: cubic-bezier(.2, .7, .2, 1);
+  position: relative;
+  isolation: isolate;
+  background-color: #080807;
+  background-image:
+    radial-gradient(ellipse 60% 45% at 15% -10%, rgba(198, 162, 84, .16), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 90% 5%, rgba(225, 196, 119, .07), transparent 70%),
+    radial-gradient(ellipse 60% 40% at 50% 110%, rgba(198, 162, 84, .1), transparent 70%);
+  background-attachment: fixed;
+}
+
+/* Backdrop texture: pinstripes in two corners, like the company ID card, and a fine film grain. */
+.kiosk-shell::before, .kiosk-shell::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+.kiosk-shell::before {
+  background: repeating-linear-gradient(135deg, rgba(198, 162, 84, .1) 0 1px, transparent 1px 16px);
+  -webkit-mask-image: radial-gradient(ellipse 42% 55% at 100% 100%, #000, transparent 75%), radial-gradient(ellipse 32% 45% at 0 0, #000, transparent 75%);
+  mask-image: radial-gradient(ellipse 42% 55% at 100% 100%, #000, transparent 75%), radial-gradient(ellipse 32% 45% at 0 0, #000, transparent 75%);
+}
+.kiosk-shell::after {
+  opacity: .05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 180px;
+}
+
+/* Header: a floating glass bar, nearly full width with steady side margins. */
+.kiosk-topbar { position: relative; width: min(1760px, calc(100% - 2 * clamp(16px, 2.5vw, 40px))); margin: 14px auto 0; padding: 0 clamp(18px, 2vw, 32px); min-height: 76px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); }
+/* 1280px and up: one row. Brand and clock get equal side columns, so the mode switch sits in the exact
+   centre of the screen; a side only grows past its half when its content needs the room. */
+.kiosk-topbar .clock-date-short { display: none; }
+@media (min-width: 1280px) {
+  .kiosk-topbar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); column-gap: clamp(14px, 1.6vw, 28px); }
+  .kiosk-topbar .brand-lockup { justify-self: start; }
+  .kiosk-topbar .topbar-cluster { justify-self: end; }
+}
+/* 1280-1499px: the short date and tighter chips keep the clock side within its half. */
+@media (min-width: 1280px) and (max-width: 1499px) {
+  .kiosk-topbar .topbar-cluster { gap: 12px; }
+  .kiosk-topbar .clock-date-long { display: none; }
+  .kiosk-topbar .clock-date-short { display: inline; }
+}
+/* Below 1280px: two rows. Brand and status on top, the mode switch centred on its own row. */
+@media (max-width: 1279px) {
+  .kiosk-topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; padding-block: 12px; }
+  .kiosk-topbar .topbar-cluster { justify-self: end; margin-left: 0; }
+  .kiosk-mode-switcher { grid-column: 1 / -1; grid-row: 2; justify-self: center; width: min(100%, 460px); }
+}
+@media (min-width: 601px) and (max-width: 1279px) {
+  .kiosk-mode-tab { gap: 7px; padding: 7px 14px; font-size: .875rem; }
+  .mode-shortcut-badge { width: 20px; height: 20px; font-size: .72rem; }
+}
+@media (min-width: 901px) and (max-width: 1279px) { .kiosk-topbar .brand-subtitle { display: block; } }
+/* Short screens with the two-row header (about 1024x768): less air above the key cards so both still fit. */
+@media (max-width: 1279px) and (max-height: 800px) { .kiosk-shell.mode-bathroom > .kiosk-stage { gap: 14px; padding-top: 12px; } }
+@media (max-width: 900px) { .kiosk-topbar { padding: 12px 16px; } }
+@media (max-width: 600px) { .kiosk-topbar { width: calc(100% - 24px); margin-top: 12px; padding: 10px 12px; border-radius: 16px; } }
+@media (max-width: 360px) { .kiosk-topbar { width: calc(100% - 16px); padding: 10px; } }
+
+/* Every glass panel catches a thin gold gleam along its top edge. */
+.kiosk-topbar::before, .scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before {
+  content: ""; position: absolute; top: 0; left: 14%; right: 14%; height: 1px; background: linear-gradient(90deg, transparent, var(--edge-light, rgba(225, 196, 119, .8)), transparent); pointer-events: none;
+}
+
+/* Logo in a lit gold ring; quiet chips; a hairline before the clock on wide screens. */
+.kiosk-topbar .brand-mark { box-sizing: border-box; padding: 5px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; box-shadow: 0 0 18px rgba(198, 162, 84, .14); }
+.office-count, .kiosk-shell .scanner-pill { background: rgba(0, 0, 0, .22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
+.office-count { border-color: rgba(198, 162, 84, .4); }
+@media (min-width: 901px) { .kiosk-topbar .clock { padding-left: 16px; border-left: 1px solid rgba(198, 162, 84, .2); } }
+
+/* Mode switch: two equal tabs and one polished gold thumb that slides between them. */
+.kiosk-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 4px; background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 162, 84, .26); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .04); isolation: isolate; }
+.kiosk-mode-switcher::before { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; z-index: -1; width: calc((100% - 8px) / 2); background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .2), 0 4px 16px rgba(198, 162, 84, .3); transition: transform 340ms var(--ease-soft); }
+.kiosk-mode-switcher[data-active="bathroom"]::before { transform: translateX(100%); }
+.kiosk-mode-tab, .kiosk-mode-tab.active { justify-content: center; background: transparent; border-color: transparent; box-shadow: none; transition: color 200ms ease-out; }
+.kiosk-mode-tab:hover { color: var(--ink); background: transparent; }
+.kiosk-mode-tab.active, .kiosk-mode-tab.active:hover { color: #11100c; }
+.mode-shortcut-badge { transition: color 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out; }
+.kiosk-mode-tab:not(.active) .mode-shortcut-badge { color: var(--gold-bright); background: transparent; border-color: rgba(198, 162, 84, .45); }
+.kiosk-mode-tab.active .mode-shortcut-badge { color: #11100c; background: rgba(17, 16, 12, .14); border-color: rgba(17, 16, 12, .28); }
+/* Phones have no number keys for the 1/2 shortcuts; dropping the badges keeps "Bathroom Key Log" inside its half. */
+@media (max-width: 600px) { .mode-shortcut-badge { display: none; } }
+
+/* Greeting: a glass orb with two soft "tap here" ripples, a champagne-tinted title and a short gold rule. */
+.kiosk-hero .hero-icon { position: relative; background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .2), rgba(198, 162, 84, .04) 70%); border: 1px solid rgba(225, 196, 119, .5); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 0 44px rgba(198, 162, 84, .14), 0 18px 44px rgba(0, 0, 0, .45); }
+.kiosk-hero .hero-icon::before, .kiosk-hero .hero-icon::after { content: ""; position: absolute; inset: -1px; border: 1px solid rgba(225, 196, 119, .5); border-radius: 50%; opacity: 0; pointer-events: none; }
+.state-ready .kiosk-hero .hero-icon::before, .state-ready .kiosk-hero .hero-icon::after { animation: kiosk-ripple 3.2s var(--ease-soft) infinite; }
+.state-ready .kiosk-hero .hero-icon::after { animation-delay: 1.6s; }
+.kiosk-hero h1 { background: linear-gradient(180deg, #fffdf6 25%, #ead9ad 80%, #d8bc78); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 4px 28px rgba(198, 162, 84, .16)); }
+.kiosk-shell .hero-sub { color: var(--gold); }
+.kiosk-shell .hero-sub::before { content: ""; display: block; width: 72px; height: 1px; margin: 2px auto 12px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+.mode-bathroom .hero-sub::before { margin-bottom: 8px; }
+
+/* Reader: a glass card; a breathing dot shows it is listening and a faint light passes along the slot. */
+.scan-console { position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); }
+.scan-console-title { display: inline-flex; align-items: center; gap: 8px; letter-spacing: .12em; }
+.scan-console:not(.is-manual) .scan-console-title::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-bright); box-shadow: 0 0 10px rgba(225, 196, 119, .7); }
+.state-ready .scan-console:not(.is-manual) .scan-console-title::before { animation: kiosk-breathe 2.4s ease-in-out infinite alternate; }
+.input-row { position: relative; background: rgba(5, 5, 4, .6); border-color: rgba(198, 162, 84, .24); border-radius: 12px; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .55); }
+.state-ready .scan-console:not(.is-manual) .input-row::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; background: linear-gradient(90deg, transparent, rgba(225, 196, 119, .1), transparent); transform: translateX(-100%); animation: kiosk-sweep 5s ease-in-out infinite; pointer-events: none; }
+.scan-input-icon { background: rgba(198, 162, 84, .07); border-right-color: rgba(198, 162, 84, .18); }
+.input-row .submit-button { border-radius: 8px; }
+
+/* Options: glass buttons, gold icons and white labels; they lift slightly on hover. */
+.kiosk-actions { border-top: 1px solid transparent; border-image: linear-gradient(90deg, transparent, rgba(198, 162, 84, .3) 20%, rgba(198, 162, 84, .3) 80%, transparent) 1; }
+.kiosk-shell .kiosk-action { color: var(--ink); background-color: transparent; background-image: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .015)); border-color: rgba(198, 162, 84, .4); border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
+.kiosk-shell .kiosk-action svg { color: var(--gold-bright); }
+.kiosk-shell .kiosk-action:hover:not(:disabled) { color: var(--gold-bright); background-color: rgba(198, 162, 84, .1); border-color: var(--gold); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 8px 24px rgba(198, 162, 84, .14); transform: translateY(-2px); }
+.kiosk-shell .kiosk-action:active:not(:disabled) { transform: translateY(0); }
+.kiosk-shell .kiosk-action[aria-pressed="true"] { color: #11100c; background-image: linear-gradient(180deg, #ecd28c, var(--gold)); border-color: var(--gold-bright); }
+.kiosk-shell .kiosk-action[aria-pressed="true"] svg { color: currentColor; }
+
+/* Results and messages: the same glass, rising in; the details follow one after another and
+   a soft light passes across the card once. */
+.result-card, .kiosk-result.is-notice, .kiosk-result.is-error { position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 20px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 460ms var(--ease-soft) backwards; }
+.result-card { overflow: hidden; }
+.result-card.is-out { border-color: var(--glass-edge); --edge-light: rgba(246, 242, 233, .7); }
+.kiosk-result.is-error { --edge-light: var(--danger); }
+.result-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 35%, rgba(255, 240, 205, .07) 50%, transparent 65%); transform: translateX(-100%); animation: kiosk-sheen 1.4s ease-out 320ms backwards; pointer-events: none; }
+.result-card > :not(.result-body), .result-body > *, .kiosk-result.is-notice > *, .kiosk-result.is-error > * { animation: kiosk-enter 480ms var(--ease-soft) backwards; }
+.result-card > :first-child, .kiosk-result:is(.is-notice, .is-error) > :nth-child(1) { animation-delay: 80ms; }
+.result-body > :nth-child(1), .kiosk-result:is(.is-notice, .is-error) > :nth-child(2) { animation-delay: 140ms; }
+.result-body > :nth-child(2), .kiosk-result:is(.is-notice, .is-error) > :nth-child(3) { animation-delay: 190ms; }
+.result-body > :nth-child(3), .kiosk-result:is(.is-notice, .is-error) > :nth-child(n+4) { animation-delay: 240ms; }
+.result-body > :nth-child(4) { animation-delay: 290ms; }
+.result-body > :nth-child(n+5) { animation-delay: 340ms; }
+.result-photo, .result-avatar { box-shadow: 0 0 0 6px rgba(198, 162, 84, .07), 0 18px 40px rgba(0, 0, 0, .5); }
+.result-time dd { text-shadow: 0 0 28px rgba(225, 196, 119, .28); }
+.result-notice-icon { box-shadow: 0 0 0 1px rgba(225, 196, 119, .35), 0 0 28px rgba(198, 162, 84, .18); }
+.result-error-icon { box-shadow: 0 0 0 1px rgba(239, 170, 146, .35); }
+.reset-progress span { background: linear-gradient(90deg, var(--gold-soft), var(--gold-bright)); }
+
+/* Greeting, reader and options arrive one after another; the same happens when the mode changes. */
+.kiosk-hero > *, .scan-console { animation: kiosk-enter 600ms var(--ease-soft) backwards; }
+.kiosk-hero > :nth-child(2) { animation-delay: 70ms; }
+.kiosk-hero > :nth-child(3) { animation-delay: 140ms; }
+.scan-console { animation-delay: 210ms; }
+.mode-bathroom .kiosk-hero > *, .mode-bathroom .scan-console { animation-name: kiosk-enter-alt; }
+.kiosk-actions > * { animation: kiosk-enter 600ms var(--ease-soft) 280ms backwards; }
+.kiosk-actions > :nth-child(2) { animation-delay: 320ms; }
+.kiosk-actions > :nth-child(3) { animation-delay: 360ms; }
+.kiosk-actions > :nth-child(4) { animation-delay: 400ms; }
+
+/* Bathroom key cards: glass; the key in use has a gold edge that slowly breathes. */
+.bathroom-kiosk-card, .bathroom-kiosk-card.is-available { --edge-light: rgba(225, 196, 119, .35); position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid rgba(198, 162, 84, .16); border-radius: 18px; box-shadow: var(--glass-shadow); transition: border-color 240ms ease-out; animation: kiosk-enter 560ms var(--ease-soft) 240ms backwards; }
+.bathroom-kiosk-card + .bathroom-kiosk-card { animation-delay: 320ms; }
+.bathroom-kiosk-card.is-in-use { --edge-light: var(--gold-bright); background: linear-gradient(180deg, rgba(52, 44, 26, .62), rgba(20, 18, 13, .55)); border-color: rgba(198, 162, 84, .6); }
+.bathroom-kiosk-card.is-in-use::after { content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: inherit; box-shadow: 0 0 0 1px rgba(225, 196, 119, .3), 0 0 28px rgba(198, 162, 84, .22); opacity: 0; animation: kiosk-breathe 3.6s ease-in-out infinite alternate; pointer-events: none; }
+.gender-icon-bubble, .gender-icon-bubble.female { color: var(--gold-bright); background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .18), rgba(198, 162, 84, .04) 70%); border: 1px solid rgba(225, 196, 119, .45); border-radius: 12px; }
+.active-holder-box { background: rgba(0, 0, 0, .28); border: 1px solid rgba(198, 162, 84, .26); border-radius: 14px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
+.available-prompt-box { padding: 22px 20px; background: rgba(0, 0, 0, .2); border: 1px dashed rgba(152, 210, 168, .28); border-radius: 14px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
+.available-icon { box-sizing: content-box; padding: 10px; border-radius: 50%; background: rgba(152, 210, 168, .08); box-shadow: 0 0 0 1px rgba(152, 210, 168, .22); }
+.holder-avatar { background: linear-gradient(180deg, #ecd28c, #b8944a); box-shadow: 0 0 0 3px rgba(198, 162, 84, .14); }
+.holder-avatar.female { color: var(--gold-bright); background: #211d13; border: 1px solid var(--gold-soft); }
+.elapsed-timer-container { flex-wrap: wrap; gap: 6px 16px; background: rgba(0, 0, 0, .35); border-color: rgba(198, 162, 84, .16); border-radius: 10px; }
+/* On narrow cards the two stats wrap as whole lines instead of breaking "Time Out:" apart. */
+.elapsed-stat { white-space: nowrap; }
+
+@keyframes kiosk-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+/* The same motion under a second name: switching names replays it when the kiosk changes mode. */
+@keyframes kiosk-enter-alt { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes kiosk-card-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes kiosk-ripple { from { opacity: .6; transform: scale(1); } 70%, to { opacity: 0; transform: scale(1.8); } }
+@keyframes kiosk-breathe { from { opacity: .35; } to { opacity: 1; } }
+@keyframes kiosk-sweep { from { transform: translateX(-100%); } 55%, to { transform: translateX(290%); } }
+@keyframes kiosk-sheen { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* Reduced motion: the global rule shortens animations; this also drops the start delays so nothing waits hidden. */
+@media (prefers-reduced-motion: reduce) {
+  .kiosk-shell *, .kiosk-shell *::before, .kiosk-shell *::after { animation-delay: 0s !important; }
 }

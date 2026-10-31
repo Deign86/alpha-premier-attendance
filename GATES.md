@@ -1457,3 +1457,102 @@ unchanged.
   CHECK: cargo test (6 harnesses) && npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass; only tests of removed code dropped.
   EVIDENCE: harnesses 11 + 18 + 69 + 34 + 52 + 23 = 207 passed (4 removed tests covered deleted employee payslip/workbook code); oxlint 0, typecheck 0; npm test 39 + 395 + 287 passed.
+
+## UI revamp Stage 1: kiosk scan result (client only; K1, K2, K3, K4, K5)
+
+- [x] Time In and Time Out are told apart at a glance: an action band with the action and recorded time (filled gold for In, gold outline for Out); the generic "recorded successfully" sentence is gone, any other server message still shows.
+  CHECK: npm test -w client -- App.test.tsx
+  EXPECT: existing kiosk tests pass unchanged (name, photo class, error heading); new assertions find "Time in"/"Time out" bands with the formatted time.
+  EVIDENCE: 80/80 (74 existing unchanged + 6 new: action band, non-stock message kept, initials, repeat tap, offline card, can't-reach card). Screenshots after-laptop-time-in/out show filled vs outline bands.
+- [x] No-photo results show an initials circle (~120px) instead of the 250px silhouette; real ID photos are unchanged.
+  CHECK: screenshots at 1366x768, 1920x1080, 768x1024, 390x844 with `npm run dev:seed`
+  EXPECT: initials circle visible; photo path untouched in code.
+  EVIDENCE: initials circle in all four sizes; photo branch still renders `result-photo result-photo-full` (existing photo test passes).
+- [x] A 4-second progress bar replaces "Returning to ready mode in a few seconds..."; reset timing is unchanged (`resultResetDelayMs`).
+  CHECK: npm test -w client
+  EXPECT: reset-to-ready tests pass unchanged.
+  EVIDENCE: bar visible mid-drain in every after screenshot; existing reset tests pass.
+- [x] Offline-saved and can't-reach scans show a card instead of a blank stage; a repeat tap (DUPLICATE_SCAN) reads "Already scanned" in plain words. No backend files change in this stage.
+  CHECK: git diff --stat -- client/src/App.tsx client/src/App.test.tsx client/src/styles.css
+  EXPECT: Stage 1 touches only these client files (plus GATES.md); client tests cover the three cards.
+  EVIDENCE: 3 client files, 175 insertions / 63 deletions; server/ diff is the earlier demo-seed work only, untouched this stage.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 409 + 295 passed.
+- [x] Revision after review: the solid gold band was too heavy. The result is now an ID-style card (3:4 portrait beside name, status chip, times; gold limited to a 2px top line, the chip and the time text); notices and errors share the card frame. Demo interns get faceless placeholder portraits (demo seed only).
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test; screenshots v2-* at 1366x768, 1920x1080, 768x1024, 390x844
+  EXPECT: all pass; card stacks to one column under 600px.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 409 + 295; v2 screenshots show card layout on all four sizes, single column on phone; 40/40 demo interns have portraits via /api/admin/users.
+- [x] Second revision: Orbitron name and times, gold employee line and gold photo frame restored; a featured real person (photo + details) can be shown from git-ignored credentials/demo.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test; git check-ignore credentials/demo/featured-person.jpg
+  EXPECT: all pass; private files ignored; card 3000000000 shows the featured person.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 409 + 297 (2 new seed tests); check-ignore matches; /api/admin/users first row is the featured person with a JPEG photo; screenshots v3-*.
+
+## UI revamp Stage 2: kiosk idle screen (client only; K7, K9, D5, L2 kiosk part)
+
+- [x] Header fits every screen: one row on wide screens, mode switch on its own row at 900px and below, logo-only brand and a dot-only reader pill at 600px and below.
+  CHECK: headless check of header elements past the viewport edge at 1366, 1280, 1024, 768, 390 and 320px
+  EXPECT: 0 elements past the edge and no horizontal page scroll at every width.
+  EVIDENCE: 0 / no overflow at all six widths (320px needed a tighter-tab rule, added).
+- [x] "In office now" count from today's attendance (timed in, not timed out), refreshed every minute and after each recorded scan; no backend change.
+  CHECK: npm test -w client -- App.test.tsx; live check after timing in 14 demo interns
+  EXPECT: chip shows the WORKING count; "2 in office" for 2 WORKING + 2 finished rows in the test.
+  EVIDENCE: new test passes; live header read "14 in office" (API: 14 WORKING of 16 rows today).
+- [x] Kiosk text at least 14px; Admin and Admin setup quieter but in place; Manual entry focuses its field; greeting, reader and options centred on tall screens; reader row and hint no longer break on phones.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test; screenshots s2-before-* vs s2-after-*
+  EXPECT: all pass; focus lands on #scanner-uid.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 411 + 297 (2 new: headcount, manual focus; one existing test now answers the headcount request separately); activeElement is scanner-uid.
+- [x] Review follow-up: Admin and Admin setup outlines restored (quiet style removed).
+  CHECK: footer crop of s2-9-after; npm test -w client -- App.test.tsx
+  EXPECT: four outlined buttons; tests pass.
+  EVIDENCE: crop shows four gold-outlined buttons; 82/82.
+
+## UI revamp Stage 3: kiosk finish (client only; K6, K8, X5, D5)
+
+- [x] Plain-word errors: "Card not registered" / "Card inactive" with a next step; raw error codes hidden; other errors keep the system message; voice unchanged.
+  CHECK: npm test -w client -- App.test.tsx
+  EXPECT: new tests for inactive and an unmapped error pass; updated unknown-card tests pass; announceScanError still receives the original message.
+  EVIDENCE: 85/85 App tests.
+- [x] Bathroom Key Log fits 1366x768 and the reader box clears after a bathroom result.
+  CHECK: headless measurement of key-card blocks and #scanner-uid value after reset
+  EXPECT: key status blocks end inside 768px; reader value "" after reset (was "••••••••••").
+  EVIDENCE: cards start at 444px (was 590), status blocks end at 701px; reader value "" after reset.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0 (after naming the ScanErrorCopy type for the anti-slop rule), typecheck 0, npm test 39 + 414 + 297.
+
+## UI revamp: kiosk design pass and glass revision (client only, styles.css + two footer icons)
+
+- [x] Switch highlight slides instead of jumping; mode change replays a short fade.
+  CHECK: headless sampling of the switch thumb transform and the hero title opacity after clicking Bathroom
+  EXPECT: thumb x rises through middle values to the second tab; title opacity climbs from 0 to 1.
+  EVIDENCE: thumb 0 → 148 → 189px; title opacity 0 → .17 → .88 → 1 within about 0.8 seconds.
+- [x] Entrance animations end fully visible; glass and grain are active.
+  CHECK: computed opacity of greeting, reader and 4th footer button 4.5s after load; backdrop-filter of the reader; ::after background of the shell
+  EXPECT: opacity 1 for all three; blur(18px) saturate(1.4); grain data URI present.
+  EVIDENCE: "1", "1", "1"; blur(18px) saturate(1.4); url("data:image/svg+xml,...").
+- [x] No sideways overflow; Bathroom Key Log still fits a laptop.
+  CHECK: headless count of kiosk elements past the right edge at 1920, 1366, 768, 390, 320 (both modes) and the lowest card bottom at 1366x768
+  EXPECT: 0 past the edge, no page scroll sideways; bathroom cards end inside 768px.
+  EVIDENCE: 0 everywhere after hiding the 1/2 badges on phones (390px Bathroom tab overflowed its half before that); cards end at 737px.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 414 + 297.
+
+## UI revamp: kiosk header width and centring (client only)
+
+- [x] Mode switch centred on screen; header wider with side margins; nothing spills out.
+  CHECK: headless measurement at 2560, 1920, 1600, 1536, 1440, 1366, 1280, 1279, 1180, 1100, 1024, 960, 901, 768, 600, 390, 320px: switch centre minus screen centre, header items past the bar edge, sideways page scroll
+  EXPECT: 0px off-centre and 0 items past the edge at every width; no sideways scroll.
+  EVIDENCE: 0px everywhere (was -57px at 1366 and up to -113px at 1024-1100); 0 past the edge (was 3 at 1280, 4 at 901-960); no sideways scroll. Bar margins 16-40px (80px at 1920, capped at 1760px wide).
+- [x] Bathroom Key Log still fits short laptop screens with the two-row header.
+  CHECK: lowest key-card edge in Bathroom mode at 1024x768, 1180x800 and 1366x768
+  EXPECT: inside the screen height.
+  EVIDENCE: 761 of 768 (782 before the short-screen spacing rule), 765 of 800, 737 of 768.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 414 + 297.
