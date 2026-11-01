@@ -3750,7 +3750,7 @@ describe('Weekly-grace clamp display extension', () => {
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
       // The record's Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
-      fireEvent.click(screen.getByRole('button', { name: 'Show all cutoffs (1)' }));
+      fireEvent.click(screen.getByRole('button', { name: 'All cutoffs' }));
       fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       const chip = await screen.findByTestId('clamped-payroll-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
@@ -4042,7 +4042,7 @@ describe('hourly late clamp', () => {
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
       // The record's Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
-      fireEvent.click(screen.getByRole('button', { name: 'Show all cutoffs (1)' }));
+      fireEvent.click(screen.getByRole('button', { name: 'All cutoffs' }));
       fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       // The payroll details use the same hourly display clamp.
       expect(await screen.findByTestId('clamped-payroll-time-in')).toHaveTextContent('10:00 AM');
@@ -4073,7 +4073,7 @@ describe('Payroll total-deductions fallback', () => {
     vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
     const view = render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
     // The rows' Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
-    fireEvent.click(screen.getByRole('button', { name: `Show all cutoffs (${records.length})` }));
+    fireEvent.click(screen.getByRole('button', { name: 'All cutoffs' }));
     return view;
   }
 

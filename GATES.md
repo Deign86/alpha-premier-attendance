@@ -1744,3 +1744,31 @@ unchanged.
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 534 tests passed (run with 2 workers; the PC was low on memory).
 - [x] Review (3 lenses, 17 verified findings, 8 distinct problems fixed): the reminder asks nothing on other days, after Later or once a backup covers the day, reads backups before attendance, and the App tests pin a Thursday clock so they pass on Fridays; it is due when the newest backup is older than the last intern time-out; one backup at a time with a shared "Saving backup…" state; the card reader shows the real last scan from today's attendance; the startup setting is read back after a change; backup and upload actions have separate busy states; upload wording in plain words; Sync now is disabled while uploads are off.
+
+## UI revamp fix round: Payroll done properly (client only; audit P1, P2, P4-P10)
+
+- [x] P1: three steps that say their status in words (Make payroll / Check and finalize / Export; circles: done gold tick, current filled gold, upcoming grey outline; about 640px, left-aligned) and one Next line holding the page's one gold button: no payroll → Generate from attendance; drafts → Finalize all (N) with Generate again · Delete all records; all finalized without PDF → Make payroll PDF (+ Make payslips); done → "Done. PDF made …" with Open PDF · Show in folder · Make payslips · Make PDF again. The yellow banner, the finalized line and the Export panel are gone; Generate's pop-up only mentions drafts when there are drafts.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: tests for each step state and Next line (no records / drafts / all finalized no PDF / done) and for Finalize all pass.
+  EVIDENCE: payroll.test.tsx 52/52 passed (was 43; new: step words per state, loading/failed words, one Next line per state, Finalize all + partial failure, all-finalized Generate pop-up, PDF open failure, selection bar, switch, row layout).
+- [x] P2: the PDF and payslips can't be made while any draft of the cutoff is left ("Finalize all N drafts first.").
+  CHECK: cd client && npx vitest run src/payroll.test.tsx -t "blocks the payroll PDF"
+  EXPECT: no export call is made while drafts exist.
+  EVIDENCE: passes; the buttons appear only once every record is finalized and say "Loading payroll…" while the list reloads.
+- [x] P4/P5: Net Pay bold gold text (no #fef08a/#854d0e), Total Deductions plain bold ink; rows: Employee = name with the ID under it, a Status column with a dot and a word, actions on one line, money right-aligned with tabular numbers.
+  CHECK: grep -c "fef08a\|854d0e" client/src/App.tsx client/src/styles.css
+  EXPECT: 0 and 0.
+  EVIDENCE: 0 and 0. Measured at 1366: rows 53px (a name over ~180px wraps to 70px), table 1235/1235px with no sideways scroll in the drafts state.
+- [x] P6/P7: "Make payroll PDF" / "Make payslips"; a made PDF opens straight away; only the latest PDF in the Next line; history is a closed "Past payroll PDFs" fold (by month), newest copy per cutoff tagged "Latest", no Type column, money column "Total earnings".
+- [x] P8/P9: table bar "Oct 16–31, 2026 · 37 records", See all without a number, a sliding "This cutoff | All cutoffs" switch, header tick box only, selection bar "3 selected · Clear | Finalize selected · Delete selected"; cutoff picker keeps month + half with a read-only "Oct 16–31, 2026 · 11 working days" line and a "Change dates" link for start, end and standard days; labels sent to the server unchanged.
+- [x] P10: payroll rows become cards at 900px and below; no sideways page scroll at 320–1920; screenshots of the four states at 1366x768, 1024 and 390 in the scratchpad folder shots-fixpay.
+  EVIDENCE: 28 width/state checks (320, 390, 600, 768, 1024, 1366, 1920 × 4 states, folds open and All cutoffs on): page width never above the window; 12 screenshots saved (made-up data, temporary harness deleted).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 543 tests passed (an earlier run hit two 5s timeouts in unrelated Users/Corrections tests while the PC had ~180 MB free; both pass alone and the rerun was clean).
+- [x] Review fixes (A–G): a PDF counts as current only with the cutoff's headcount and made after the last finalize (Date.parse; older or other-headcount PDFs show "Ready · PDF out of date" and "Next: the payroll changed since the last PDF. Make a new payroll PDF.", and lose "Latest"); loading/failed say so with no gold button; payslip folder and notes reset when the dates change; Net Pay pinned beside the pinned actions, and Standard, Daily rate, Basic pay, Absent, Late / Halfday step aside at 901–1300px (and 1301–1600px with extra columns); standard days outside 0–31 or not whole/half refused before generating; focus moves to the new gold button (or the Next sentence) when an action removes the focused one, Next sentence is aria-live; steps stack at 680px and below.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: all pass, including out-of-date PDF (older than finalizedAt, headcount mismatch), loading/failed Next line, 45 days refused, payslip folder reset, focus after Finalize all.
+  EVIDENCE: 56/56 passed. Headless layout checks: Net Pay fully visible beside the actions at window widths 901, 1024, 1093, 1300, 1349, 1366, 1440, 1600 (drafts, drafts with All cutoffs, done with All cutoffs); steps text never under a hairline from 601 to 900px.
+- [x] Test stability: client/vite.config.ts sets testTimeout 15000, because full admin flows passed 5 s on the busy front-desk PC (one test took 6.6 s on its own); full suite 26 files / 547 tests passed with 2 workers.

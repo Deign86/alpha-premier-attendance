@@ -525,114 +525,15 @@ td small { font-size: .7rem; }
 .user-photo, .user-photo-fallback { display: inline-grid; place-items: center; width: 34px; height: 34px; margin: 0 9px 5px 0; vertical-align: middle; border-radius: 50%; object-fit: cover; color: var(--gold-bright); background: var(--surface-raised); border: 1px solid var(--line-bright); }
 .admin-form .submit-button { width: 100%; margin-top: 5px; }
 .text-button { min-height: 36px; padding: 6px 9px; border-radius: var(--radius-sm); }
-.payroll-row-actions { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 .payroll-actions-cell { min-width: 150px; }
 .text-button:hover { background: var(--surface-raised); }
 .danger-button:hover { background: #2a1b18; }
 
-/* Payroll Header Toolbar & Panels */
-.payroll-toolbar {
-  display: flex;
-  gap: 16px;
-  align-items: stretch;
-  justify-content: space-between;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
-
-.payroll-generate-panel {
-  flex: 1 1 660px;
-  background: var(--surface);
-  border: 1px solid var(--line-bright);
-  border-radius: var(--radius-md);
-  padding: 14px 18px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, .12);
-}
-
-.payroll-pdf-actions-panel {
-  flex: 0 1 300px;
-  min-width: 280px;
-  background: var(--surface);
-  border: 1px solid var(--line-bright);
-  border-radius: var(--radius-md);
-  padding: 14px 18px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, .12);
-  display: flex;
-  flex-direction: column;
-}
-
-.payroll-panel-heading h2 {
-  margin: 0 0 12px;
-  font-family: 'Orbitron', sans-serif;
-  font-size: 0.92rem;
-  font-weight: 600;
-  color: var(--ink);
-  letter-spacing: 0.03em;
-}
-
-/* The generate button sits in the panel's title row, so the inputs get one full row with no stray button line. */
-.payroll-generate-panel .payroll-panel-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.payroll-generate-panel .payroll-panel-heading h2 {
-  margin: 0;
-}
-
-/* Controls stretch to fill the panel: [month + half-month presets] | start | end | standard days. */
-.payroll-generate-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px 14px;
-}
-
-.payroll-generate-controls > * {
-  flex: 1 1 130px;
-  min-width: 0;
-}
-
-.payroll-generate-controls > .cutoff-period {
-  flex: 2 1 330px;
-}
-
-.payroll-generate-controls > .payroll-standard-days {
-  flex: 0 1 100px;
-}
-
-.payroll-generate-controls label {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  color: var(--ink);
-  font-size: 0.74rem;
-  font-weight: 500;
-}
-
-.payroll-generate-controls input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 38px;
-  padding: 0 10px;
-  font-size: 0.76rem;
-  background: var(--surface-input);
-  border: 1px solid var(--line-bright);
-  color: var(--ink);
-  border-radius: var(--radius-sm);
-}
-
-/* The half-month presets belong to the month: they sit flush against it, and a divider separates this group from the date range. */
+/* The half-month presets belong to the month: they sit flush against it. */
 .cutoff-period {
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  padding-right: 14px;
-  border-right: 1px solid var(--line);
 }
 
 .cutoff-period label {
@@ -656,28 +557,6 @@ td small { font-size: .7rem; }
   white-space: nowrap;
   border: 0;
   border-radius: 0;
-}
-
-.payroll-generate-submit {
-  height: 38px;
-  padding: 0 18px;
-  font-size: 0.76rem;
-  font-weight: 600;
-  white-space: nowrap;
-  align-self: flex-end;
-}
-
-@media (max-width: 900px) {
-  .payroll-generate-controls > .cutoff-period { flex-basis: 100%; padding-right: 0; border-right: 0; }
-}
-
-.payroll-pdf-actions-panel .admin-button {
-  height: 38px;
-  padding: 0 12px;
-  font-size: 0.74rem;
-  width: 100%;
-  text-align: center;
-  white-space: nowrap;
 }
 
 /* Full Landscape Draft Payroll Table */
@@ -742,20 +621,13 @@ td small { font-size: .7rem; }
 }
 
 .payroll-table th.payroll-select-col { width: 38px; min-width: 38px; max-width: 38px; }
-.payroll-table th:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }
-.payroll-table th:nth-child(3) { width: 130px; min-width: 130px; max-width: 130px; }
-
-.payroll-table td:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }
-.payroll-table td:nth-child(3) { width: 130px; min-width: 130px; max-width: 130px; }
+/* The tick box and Employee columns stay put while the money columns scroll sideways. */
 .payroll-table th.payroll-select-col,
 .payroll-table td.payroll-select-cell,
 .payroll-table th:nth-child(2),
-.payroll-table td:nth-child(2),
-.payroll-table th:nth-child(3),
-.payroll-table td:nth-child(3) { position: sticky; z-index: 1; background: var(--surface); }
+.payroll-table td:nth-child(2) { position: sticky; z-index: 1; background: var(--surface); }
 .payroll-table th.payroll-select-col,
-.payroll-table th:nth-child(2),
-.payroll-table th:nth-child(3) { background: var(--surface-raised); z-index: 2; }
+.payroll-table th:nth-child(2) { background: var(--surface-raised); z-index: 2; }
 /* Attendance corrections: capped like payroll, scrolling inside with the headings pinned */
 .attendance-table-wrap { max-height: min(70vh, 720px); overflow-y: auto; overscroll-behavior: contain; }
 .attendance-table-wrap > table > thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
@@ -766,14 +638,11 @@ td small { font-size: .7rem; }
 /* Pin the main heading row while the table scrolls (not the breakdown tables inside rows). */
 .payroll-table .table-wrap > table > thead th { position: sticky; top: 0; z-index: 2; }
 .payroll-table .table-wrap > table > thead th.payroll-select-col,
-.payroll-table .table-wrap > table > thead th:nth-child(2),
-.payroll-table .table-wrap > table > thead th:nth-child(3) { z-index: 3; }
+.payroll-table .table-wrap > table > thead th:nth-child(2) { z-index: 3; }
 .payroll-table th.payroll-select-col,
 .payroll-table td.payroll-select-cell { left: 0; }
 .payroll-table th:nth-child(2),
 .payroll-table td:nth-child(2) { left: 38px; }
-.payroll-table th:nth-child(3),
-.payroll-table td:nth-child(3) { left: 128px; border-right: 1px solid var(--line-bright); }
 
 .payroll-table td {
   padding: 8px 8px;
@@ -802,27 +671,6 @@ td small { font-size: .7rem; }
   margin: 0;
   accent-color: var(--gold);
   vertical-align: middle;
-}
-
-.payroll-table td:nth-child(2),
-.payroll-table td:nth-child(3),
-.payroll-table td:nth-child(4),
-.payroll-table td:nth-child(5),
-.payroll-table td:nth-child(6) {
-  text-align: left;
-  white-space: normal;
-}
-
-.payroll-table td:nth-child(7),
-.payroll-table td:nth-child(8),
-.payroll-table td:nth-child(9) {
-  text-align: center;
-  white-space: nowrap;
-}
-
-.payroll-table td:last-child {
-  text-align: center;
-  white-space: nowrap;
 }
 
 .payroll-table th.payroll-select-col,
@@ -874,8 +722,7 @@ tr.selected-row td:first-child::before,
   background: var(--gold);
 }
 
-.table-header-bar,
-.payroll-table-header-bar {
+.table-header-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -903,50 +750,43 @@ tr.selected-row td:first-child::before,
 .users-table-section.is-capped > .table-wrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .users-table-section.is-capped thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
 
-.table-batch-actions,
-.payroll-batch-actions {
+.table-batch-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.table-batch-actions .admin-button,
-.payroll-batch-actions .admin-button {
+.table-batch-actions .admin-button {
   min-height: 32px;
   padding: 4px 12px;
   font-size: 0.72rem;
   border-radius: 4px;
 }
 
-.table-batch-actions .admin-button.danger-button,
-.payroll-batch-actions .admin-button.danger-button {
+.table-batch-actions .admin-button.danger-button {
   background: rgba(239, 107, 74, 0.1);
   border-color: rgba(239, 107, 74, 0.35);
   color: #ff8b73;
 }
 
-.table-batch-actions .admin-button.danger-button:hover:not(:disabled),
-.payroll-batch-actions .admin-button.danger-button:hover:not(:disabled) {
+.table-batch-actions .admin-button.danger-button:hover:not(:disabled) {
   background: rgba(239, 107, 74, 0.2);
   border-color: #ff8b73;
   box-shadow: 0 0 10px rgba(239, 107, 74, 0.25);
 }
 
-.table-batch-actions .text-button,
-.payroll-batch-actions .text-button {
+.table-batch-actions .text-button {
   font-size: 0.73rem;
   color: var(--muted);
   padding: 4px 8px;
 }
 
-.table-batch-actions .text-button:hover,
-.payroll-batch-actions .text-button:hover {
+.table-batch-actions .text-button:hover {
   color: var(--gold-bright);
 }
 
-.table-selection-count,
-.payroll-selection-count {
+.table-selection-count {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -956,52 +796,23 @@ tr.selected-row td:first-child::before,
   font-weight: 500;
 }
 
-.cutoff-existing-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 10px 16px;
-  margin: 12px 0;
-  background: rgba(234, 179, 8, 0.08);
-  border: 1px solid rgba(234, 179, 8, 0.28);
-  border-radius: var(--radius-md);
-  color: var(--gold-bright);
-  font-size: 0.8rem;
-}
-
-.cutoff-existing-actions {
-  display: inline-flex;
-  gap: 8px;
-}
-
 .payroll-table tr:hover td:not(.payroll-detail td) {
   background: rgba(198, 162, 84, 0.04);
 }
 
-/* The pinned columns (checkbox, Employee #, Name) must stay solid when a row is hovered or
+/* The pinned columns (tick box, Employee) must stay solid when a row is hovered or
    selected: paint the same tint over the opaque surface so cells scrolled underneath never
    show through. Extra `.table-wrap` outranks the see-through rules above. */
 .payroll-table .table-wrap tr:hover td.payroll-select-cell,
-.payroll-table .table-wrap tr:hover td:nth-child(2),
-.payroll-table .table-wrap tr:hover td:nth-child(3) {
+.payroll-table .table-wrap tr:hover td:nth-child(2) {
   background: linear-gradient(rgba(198, 162, 84, 0.04), rgba(198, 162, 84, 0.04)), var(--surface);
 }
 .payroll-table .table-wrap tr.selected-row td.payroll-select-cell,
-.payroll-table .table-wrap tr.selected-row td:nth-child(2),
-.payroll-table .table-wrap tr.selected-row td:nth-child(3) {
+.payroll-table .table-wrap tr.selected-row td:nth-child(2) {
   background: linear-gradient(rgba(198, 162, 84, 0.08), rgba(198, 162, 84, 0.08)), var(--surface) !important;
 }
 /* `tr.selected-row td:first-child { position: relative }` would un-pin the checkbox cell. */
 .payroll-table .table-wrap tr.selected-row td.payroll-select-cell { position: sticky; }
-
-.payroll-row-actions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: center;
-}
 
 .payroll-actions-cell {
   min-width: 110px;
@@ -1011,11 +822,6 @@ tr.selected-row td:first-child::before,
   min-height: 26px;
   padding: 3px 8px;
   font-size: 0.66rem;
-}
-
-.payroll-finalized-label {
-  color: var(--quiet);
-  font-size: 0.7rem;
 }
 
 /* Breakdown popup (opened from a payroll row's Breakdown button) */
@@ -1276,7 +1082,7 @@ tr.selected-row td:first-child::before,
 .edit-payroll-summary .summary-item { display: flex; flex-direction: column; gap: 2px; }
 .edit-payroll-summary .summary-label { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .edit-payroll-summary .summary-value { font-weight: 700; font-size: .95rem; }
-.edit-payroll-summary .net-pay-box { background: #fef08a; color: #854d0e; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 1.1rem; font-weight: 800; }
+.edit-payroll-summary .net-pay-box { padding: 6px 14px; border-radius: var(--radius-sm); font-size: 1.1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .edit-payroll-attendance-box { margin-bottom: 16px; padding: 12px 16px; background: rgba(212, 160, 23, .08); border: 1px solid var(--gold-soft); border-radius: var(--radius-sm); display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
 .edit-payroll-attendance-box .attendance-stat { display: flex; flex-direction: column; gap: 2px; }
 .edit-payroll-attendance-box .attendance-label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -1341,7 +1147,6 @@ tr.selected-row td:first-child::before,
   .admin-form { padding: 17px; }
   .table-wrap { margin-right: -1px; }
   .empty-state { padding: 30px 18px; }
-  .payroll-actions .admin-button { width: 100%; padding: 8px 6px; font-size: .68rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3713,11 +3518,9 @@ textarea.input {
 /* #14 Voice cards: description text wraps instead of clipping */
 .voice-control-card { min-height: 0; }
 .voice-control-card .form-help { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
-/* #11 Attendance controls + #12 Payroll panels: explicit single-column stack.
+/* #11 Attendance controls: explicit single-column stack.
    1100px (not 920px) so it fires at 125% zoom (~1024 CSS px) as well as 150%. */
 @media (max-width: 1100px) {
-  .payroll-toolbar { flex-direction: column; }
-  .payroll-generate-panel, .payroll-pdf-actions-panel { flex: 1 1 auto; min-width: 0; }
   /* Narrow kiosk topbar (high zoom): compact switcher + clock so brand, tabs,
      status, and time all fit without clipping. */
   .kiosk-topbar { gap: 10px; }
@@ -4960,96 +4763,6 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 /* Phones: the two key cards never ask for more than the screen's width (380px cards overflowed a 390px phone). */
 .bathroom-panels-grid { grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
 
-/* --- Payroll: step bar, ready cutoff, export beside its PDFs ----------------------------------------------------- */
-/* 1 Cutoff · 2 Review · 3 Finalize · 4 Export, one slim 32px line on the page (display only): the current step in
-   gold, done steps with a tick, upcoming steps muted, joined by hairlines that turn gold once a step is done. */
-.admin-shell .payroll-steps { display: flex; align-items: center; min-width: 0; margin: 0 0 12px; padding: 0; list-style: none; }
-.admin-shell .payroll-steps li { display: flex; flex: 1 1 0; align-items: center; gap: 8px; min-width: 0; height: 32px; color: var(--quiet); font-size: .78rem; font-weight: 600; white-space: nowrap; transition: color 200ms ease-out; }
-.admin-shell .payroll-steps li:last-child { flex: none; }
-.admin-shell .payroll-steps li:not(:last-child)::after { content: ""; flex: 1 1 auto; min-width: 10px; height: 1px; margin: 0 6px 0 4px; background: rgba(198, 162, 84, .2); transition: background-color 200ms ease-out; }
-.admin-shell .payroll-steps li.is-done::after { background: rgba(198, 162, 84, .55); }
-.admin-shell .payroll-step-mark { display: inline-grid; flex: none; place-items: center; width: 20px; height: 20px; color: var(--quiet); border: 1px solid rgba(198, 162, 84, .3); border-radius: 5px; font-size: .68rem; font-variant-numeric: tabular-nums; transition: color 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out; }
-.admin-shell .payroll-steps li.is-done { color: var(--muted); }
-.admin-shell .payroll-steps li.is-done .payroll-step-mark { color: var(--gold-bright); background: rgba(198, 162, 84, .14); border-color: rgba(225, 196, 119, .5); }
-.admin-shell .payroll-steps li.is-current { color: var(--gold-bright); }
-.admin-shell .payroll-steps li.is-current .payroll-step-mark { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); border-color: transparent; }
-/* Small phones: only the current step keeps its word; the others are numbers or ticks (still read out). */
-@media (max-width: 380px) {
-  .admin-shell .payroll-steps li:not(.is-current) .payroll-step-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-}
-
-/* The two panels: compact 34px controls with 6px corners, like the rest of admin. No wrapping, so stacked panels
-   (tablets and phones) take the page's width instead of their widest row's and never push the page sideways. */
-.admin-shell .payroll-toolbar { flex-wrap: nowrap; gap: 12px; margin-bottom: 12px; }
-.admin-shell :is(.payroll-generate-panel, .payroll-pdf-actions-panel) { padding: 14px 16px; border-radius: 8px; }
-.admin-shell .payroll-panel-heading h2 { font-size: .86rem; }
-.admin-shell .payroll-generate-controls { gap: 10px 12px; }
-.admin-shell .payroll-generate-controls input { height: 34px; border-radius: 6px; font-size: .78rem; }
-.admin-shell .payroll-generate-submit { height: 34px; padding: 0 14px; border-radius: 6px; font-size: .78rem; }
-.admin-shell .payroll-generate-submit:disabled { color: rgba(246, 242, 233, .5); background: rgba(198, 162, 84, .1); border-color: rgba(198, 162, 84, .25); cursor: not-allowed; }
-.admin-shell .payroll-pdf-actions-panel .admin-button { min-height: 34px; height: 34px; border-radius: 6px; font-size: .78rem; }
-.admin-shell .payroll-pdf-actions-panel .admin-button:disabled { opacity: .5; cursor: not-allowed; }
-
-/* The half-month presets: one 34px pill pair whose soft gold thumb slides to the half the dates match, and hides
-   when the dates were typed by hand. */
-.admin-shell .cutoff-fill-buttons { position: relative; isolation: isolate; display: grid; grid-template-columns: 1fr 1fr; height: 34px; border-color: rgba(198, 162, 84, .3); border-radius: 6px; }
-.admin-shell .cutoff-fill-buttons .admin-button:focus-visible { outline-offset: -2px; border-radius: 5px; }
-.admin-shell .cutoff-fill-buttons::before { content: ""; position: absolute; inset: 0 auto 0 0; z-index: -1; width: 50%; background: rgba(198, 162, 84, .16); box-shadow: inset 0 0 0 1px rgba(225, 196, 119, .6); border-radius: 5px; opacity: 0; transition: transform 320ms var(--ease-soft, ease), opacity 160ms ease-out; pointer-events: none; }
-.admin-shell .cutoff-fill-buttons:has([aria-pressed="true"])::before { opacity: 1; }
-.admin-shell .cutoff-fill-buttons:has(> :last-child[aria-pressed="true"])::before { transform: translateX(100%); }
-.admin-shell .cutoff-fill-buttons .admin-button { height: 32px; color: var(--muted); background: transparent; font-size: .76rem; transition: color 200ms ease-out; }
-.admin-shell .cutoff-fill-buttons .admin-button + .admin-button { border-left: 0; }
-.admin-shell .cutoff-fill-buttons .admin-button:not([aria-pressed="true"]):hover:not(:disabled) { color: var(--ink); background: transparent; }
-.admin-shell .cutoff-fill-buttons .admin-button[aria-pressed="true"] { color: var(--gold-bright); background: transparent; }
-/* Phones: the presets go under the month, full width. */
-@media (max-width: 560px) {
-  .admin-shell .payroll-generate-controls .cutoff-period { flex-wrap: wrap; gap: 8px; }
-  .admin-shell .payroll-generate-controls .cutoff-period > * { flex: 1 1 100%; min-width: 0; }
-}
-
-/* Why a button is off: one short muted line under it (under Generate at the right, under the export buttons). */
-.admin-shell .payroll-generate-panel .payroll-panel-heading { align-items: flex-start; }
-.admin-shell .payroll-generate-panel .payroll-panel-heading h2 { line-height: 34px; }
-.admin-shell .payroll-generate-action { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.admin-shell .payroll-reason { margin: 0; color: var(--quiet); font-size: .72rem; line-height: 1.35; }
-.admin-shell .payroll-pdf-actions-panel .payroll-reason { margin-top: 6px; }
-
-/* Laptops and up (side by side): a wider Export panel keeps its two buttons on one row, and the cutoff month with its
-   presets takes the generate panel's first row and the dates the second, so the two panels end at about one height. */
-@media (min-width: 1101px) {
-  .admin-shell .payroll-pdf-actions-panel { flex: 0 1 380px; }
-  .admin-shell .payroll-generate-controls > .cutoff-period { flex-basis: 100%; padding-right: 0; border-right: 0; }
-  .admin-shell .payroll-generate-controls .cutoff-period label { flex: 0 1 220px; }
-}
-
-/* Export: the two buttons side by side, then the chosen cutoff's PDFs (newest first) as quiet rows. */
-.admin-shell .payroll-pdf-actions-panel .payroll-panel-heading h2 { margin-bottom: 10px; }
-.admin-shell .payroll-pdf-actions-panel .payroll-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px; margin: 0; }
-.admin-shell .payroll-cutoff-pdfs { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(198, 162, 84, .14); }
-.admin-shell .payroll-cutoff-pdfs h3 { margin: 0 0 4px; color: var(--muted); font-family: inherit; font-size: .74rem; font-weight: 600; letter-spacing: 0; text-transform: none; }
-.admin-shell .payroll-cutoff-pdfs ul { max-height: 6.6rem; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
-.admin-shell .payroll-cutoff-pdfs li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 8px; padding: 3px 0; color: var(--ink); font-size: .76rem; font-variant-numeric: tabular-nums; }
-.admin-shell .payroll-cutoff-pdfs li + li { border-top: 1px solid rgba(198, 162, 84, .08); }
-.admin-shell .payroll-cutoff-pdfs .payroll-pdf-actions { display: inline-flex; gap: 2px; }
-.admin-shell .payroll-cutoff-pdfs .text-button { min-height: 26px; padding: 2px 6px; color: var(--gold-bright); background: none; border: 0; border-radius: 6px; font-size: .72rem; font-weight: 600; white-space: nowrap; }
-.admin-shell .payroll-cutoff-pdfs .text-button:hover { color: var(--ink); background: rgba(198, 162, 84, .1); }
-/* The list scrolls, so its focus ring sits inside the button instead of being cut off. */
-.admin-shell .payroll-cutoff-pdfs .text-button:focus-visible { outline-offset: -2px; }
-.admin-shell .payroll-cutoff-pdfs-empty { margin: 0; color: var(--quiet); font-size: .74rem; }
-
-/* Every record of the cutoff finalized: one calm muted line with a quiet coral Delete all instead of the banner. */
-.admin-shell .cutoff-finalized-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin: 0 0 4px; color: var(--muted); font-size: .78rem; }
-.admin-shell .cutoff-finalized-line .text-button { min-height: 28px; padding: 2px 8px; color: var(--danger); background: none; border: 0; border-radius: 6px; font-size: .76rem; font-weight: 600; }
-.admin-shell .cutoff-finalized-line .text-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
-/* The table's own cutoff only, or every cutoff with a Period column. */
-.admin-shell .payroll-empty { display: grid; justify-items: center; gap: 8px; }
-.admin-shell .payroll-table .see-all-toggle + .see-all-toggle { margin-left: 4px; }
-.admin-shell .payroll-table td.payroll-period-cell { white-space: nowrap; overflow-wrap: normal; }
-
-@media (prefers-reduced-motion: reduce) {
-  .admin-shell :is(.payroll-steps li, .payroll-steps li::after, .payroll-step-mark, .cutoff-fill-buttons::before, .cutoff-fill-buttons .admin-button) { transition: none; }
-}
-
 /* --- Data and backup, System, Friday backup reminder ------------------------------------------------------------ */
 /* Six section tabs and the mode switch still share one row at 1366px: slightly tighter tab and switch buttons
    (narrower screens already give the tabs a row of their own). */
@@ -5147,4 +4860,242 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 @media (prefers-reduced-motion: reduce) {
   .backup-reminder { animation: none; }
   .admin-shell .tech-details summary::before { transition: none; }
+}
+
+/* --- Payroll: one flow card, three steps, the Next line, calm rows ------------------------------------------------ */
+/* One card holds the chosen cutoff (month and half, the dates read back in words, "Change dates" for custom ones),
+   three steps that say their status in words, and the Next line with the page's one gold button. */
+.admin-shell .payroll-flow { display: grid; gap: 14px; margin-bottom: 16px; padding: 16px 18px; background: linear-gradient(180deg, rgba(30, 28, 22, .88), rgba(13, 12, 10, .92)); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
+.admin-shell .payroll-flow > .notice { margin: 0; }
+.admin-shell .payroll-cutoff { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px; margin: 0; padding-bottom: 14px; border-bottom: 1px solid rgba(198, 162, 84, .12); }
+.admin-shell .payroll-cutoff .cutoff-period { flex: 0 1 auto; gap: 8px; }
+.admin-shell .payroll-cutoff label { display: grid; gap: 5px; margin: 0; color: var(--muted); font-size: .72rem; font-weight: 600; }
+.admin-shell .payroll-cutoff .cutoff-period label { flex: 0 1 190px; min-width: 150px; }
+.admin-shell .payroll-cutoff input { box-sizing: border-box; width: 100%; height: 34px; padding: 0 10px; color: var(--ink); background: rgba(5, 5, 4, .6); border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; font-size: .78rem; }
+.admin-shell .payroll-cutoff input:focus { border-color: var(--gold-bright); outline: none; box-shadow: 0 0 0 3px rgba(198, 162, 84, .16); }
+.admin-shell .payroll-cutoff-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-height: 34px; margin: 0; color: var(--ink); font-size: .8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.admin-shell .payroll-cutoff-summary .text-button { min-height: 28px; padding: 2px 8px; color: var(--gold-bright); background: none; border: 0; border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-shell .payroll-cutoff-summary .text-button:hover { color: var(--ink); background: rgba(198, 162, 84, .1); }
+.admin-shell .payroll-cutoff-summary .payroll-reason { color: var(--danger); font-size: .76rem; font-weight: 500; }
+.admin-shell .payroll-cutoff-dates { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 10px 12px; animation: admin-fade 200ms ease-out; }
+.admin-shell .payroll-cutoff-dates label { flex: 0 1 180px; min-width: 140px; }
+.admin-shell .payroll-cutoff-dates .payroll-standard-days { flex-basis: 110px; min-width: 96px; }
+.admin-shell .payroll-reason { margin: 0; color: var(--quiet); font-size: .72rem; line-height: 1.35; }
+
+/* The half-month presets: one 34px pair whose soft gold thumb slides to the half the dates match, and hides when the
+   dates were typed by hand. */
+.admin-shell .cutoff-fill-buttons { position: relative; isolation: isolate; display: grid; flex: none; grid-template-columns: 1fr 1fr; width: 220px; height: 34px; border-color: rgba(198, 162, 84, .3); border-radius: 6px; }
+.admin-shell .cutoff-fill-buttons .admin-button:focus-visible { outline-offset: -2px; border-radius: 5px; }
+.admin-shell .cutoff-fill-buttons::before { content: ""; position: absolute; inset: 0 auto 0 0; z-index: -1; width: 50%; background: rgba(198, 162, 84, .16); box-shadow: inset 0 0 0 1px rgba(225, 196, 119, .6); border-radius: 5px; opacity: 0; transition: transform 320ms var(--ease-soft, ease), opacity 160ms ease-out; pointer-events: none; }
+.admin-shell .cutoff-fill-buttons:has([aria-pressed="true"])::before { opacity: 1; }
+.admin-shell .cutoff-fill-buttons:has(> :last-child[aria-pressed="true"])::before { transform: translateX(100%); }
+.admin-shell .cutoff-fill-buttons .admin-button { height: 32px; color: var(--muted); background: transparent; font-size: .76rem; transition: color 200ms ease-out; }
+.admin-shell .cutoff-fill-buttons .admin-button + .admin-button { border-left: 0; }
+.admin-shell .cutoff-fill-buttons .admin-button:not([aria-pressed="true"]):hover:not(:disabled) { color: var(--ink); background: transparent; }
+.admin-shell .cutoff-fill-buttons .admin-button[aria-pressed="true"] { color: var(--gold-bright); background: transparent; }
+
+/* Three steps, about 640px, left-aligned: a circle (done = gold tick, current = filled gold, upcoming = grey outline),
+   the step's name and its status in small words under it, joined by hairlines that turn gold once a step is done. */
+.admin-shell .payroll-steps { display: flex; max-width: 640px; margin: 0; padding: 0; list-style: none; }
+.admin-shell .payroll-steps li { display: flex; flex: 1 1 0; align-items: flex-start; gap: 8px; min-width: 0; }
+.admin-shell .payroll-steps li:last-child { flex: none; }
+.admin-shell .payroll-steps li:not(:last-child)::after { content: ""; flex: 1 1 auto; min-width: 16px; height: 1px; margin: 11px 12px 0 4px; background: rgba(198, 162, 84, .2); transition: background-color 200ms ease-out; }
+.admin-shell .payroll-steps li.is-done::after { background: rgba(198, 162, 84, .55); }
+.admin-shell .payroll-step-mark { display: inline-grid; flex: none; place-items: center; width: 22px; height: 22px; color: var(--quiet); border: 1px solid rgba(154, 150, 140, .5); border-radius: 50%; font-size: .68rem; font-weight: 700; font-variant-numeric: tabular-nums; transition: color 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out; }
+.admin-shell .payroll-steps li.is-done .payroll-step-mark { color: var(--gold-bright); background: rgba(198, 162, 84, .12); border-color: rgba(225, 196, 119, .6); }
+.admin-shell .payroll-steps li.is-current .payroll-step-mark { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); border-color: transparent; }
+.admin-shell .payroll-step-text { display: grid; gap: 1px; min-width: 0; padding-top: 1px; }
+.admin-shell .payroll-step-label { color: var(--muted); font-size: .8rem; font-weight: 600; line-height: 1.3; white-space: nowrap; }
+.admin-shell .payroll-steps li.is-done .payroll-step-label { color: var(--ink); }
+.admin-shell .payroll-steps li.is-current .payroll-step-label { color: var(--gold-bright); }
+.admin-shell .payroll-step-detail { color: var(--quiet); font-size: .72rem; line-height: 1.3; font-variant-numeric: tabular-nums; }
+
+/* Next: the sentence, then the state's buttons (gold first, sized to their words), Generate again and Delete all
+   (coral) as quiet links at the right. */
+.admin-shell .payroll-next { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.admin-shell .payroll-next-text { margin: 0; color: var(--ink); font-size: .84rem; line-height: 1.45; }
+.admin-shell .payroll-next-text strong { color: var(--gold-bright); font-weight: 700; }
+/* Focused only by the page when no button is left to take the focus; it isn't a control, so no ring. */
+.admin-shell .payroll-next-text:focus { outline: none; }
+.admin-shell .payroll-next-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.admin-shell .payroll-next-more { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-left: auto; }
+.admin-shell .payroll-next-reason { flex: 1 1 100%; }
+.admin-shell .payroll-next :is(.submit-button, .admin-button) { box-sizing: border-box; width: auto; min-height: 34px; height: 34px; margin: 0; padding: 0 14px; border-radius: 6px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
+.admin-shell .payroll-next .submit-button { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); border-color: transparent; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); }
+.admin-shell .payroll-next .submit-button:hover:not(:disabled) { background: linear-gradient(180deg, #ecd28c, #cfac5e); transform: none; }
+.admin-shell .payroll-next .submit-button:disabled { color: rgba(246, 242, 233, .5); background: rgba(198, 162, 84, .1); border-color: rgba(198, 162, 84, .25); box-shadow: none; cursor: not-allowed; }
+.admin-shell .payroll-next .admin-button { color: var(--ink); background: transparent; border: 1px solid rgba(198, 162, 84, .28); font-weight: 600; }
+.admin-shell .payroll-next .admin-button:hover:not(:disabled) { color: var(--gold-bright); background: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); }
+.admin-shell .payroll-next .text-button { min-height: 30px; padding: 3px 8px; color: var(--gold-bright); background: none; border: 0; border-radius: 6px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .payroll-next .text-button:hover:not(:disabled) { color: var(--ink); background: rgba(198, 162, 84, .1); }
+.admin-shell .payroll-next .text-button.danger-button { color: var(--danger); }
+.admin-shell .payroll-next .text-button.danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
+.admin-shell .payroll-next :is(.admin-button, .text-button):disabled { opacity: .5; cursor: not-allowed; }
+
+/* The table: one framed panel (solid, so the pinned tick box and Employee columns match it when the money columns
+   scroll); the bar and the table sit inside without boxes of their own. */
+.admin-shell section.payroll-table { margin: 0 0 18px; overflow: hidden; background: #13120e; border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
+.admin-shell .payroll-table .table-wrap { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.admin-shell .payroll-table .table-header-bar { padding: 8px 14px; background: transparent; border: 0; border-bottom: 1px solid rgba(198, 162, 84, .12); border-radius: 0; }
+.admin-shell .payroll-table .empty-state { margin: 0; border: 0; border-radius: 0; background: transparent; }
+.admin-shell .payroll-empty { display: grid; justify-items: center; gap: 10px; }
+
+/* The bar holds two layers in one grid cell: the cutoff and its count, See all and the switch, and while rows are
+   ticked the selection bar (how many, Clear | Finalize selected, Delete selected). The cell keeps the taller layer's
+   height, so the rows never move; the one not showing is hidden (and inert, set in PayrollTable). */
+.admin-shell .payroll-list-bar { display: grid; grid-template-columns: minmax(0, 1fr); transition: background-color 200ms ease-out; }
+.admin-shell .payroll-list-bar:has(> .payroll-selection-bar:not([aria-hidden="true"])) { background: rgba(198, 162, 84, .07); }
+.admin-shell .payroll-bar-layer { display: flex; grid-area: 1 / 1; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; transition: opacity 200ms var(--ease-soft), transform 200ms var(--ease-soft), visibility 0s; }
+.admin-shell .payroll-bar-layer[aria-hidden="true"] { visibility: hidden; opacity: 0; transform: translateY(4px); transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0s linear 120ms; }
+.admin-shell .payroll-list-bar .table-selection-count { min-height: 34px; gap: 4px 10px; color: var(--muted); font-size: .78rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.admin-shell .payroll-list-bar .table-selection-badge { color: var(--gold-bright); font-size: .78rem; font-weight: 600; }
+.admin-shell .payroll-list-bar .see-all-toggle { min-height: 26px; padding: 2px 8px; color: var(--gold-bright); border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-shell .payroll-list-bar .table-batch-actions { gap: 6px; }
+.admin-shell .payroll-selection-bar .table-batch-actions > button { box-sizing: border-box; min-height: 34px; padding: 6px 12px; color: var(--ink); background: transparent; border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .payroll-selection-bar .table-batch-actions > button:hover:not(:disabled) { color: var(--gold-bright); background: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); box-shadow: none; }
+.admin-shell .payroll-selection-bar .table-batch-actions > .danger-button { color: var(--danger); border-color: rgba(239, 170, 146, .35); }
+.admin-shell .payroll-selection-bar .table-batch-actions > .danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .7); }
+.admin-shell .payroll-selection-bar .text-button { min-height: 0; padding: 2px 8px; color: var(--muted); border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-shell .payroll-selection-bar .text-button:hover { color: var(--ink); background: rgba(198, 162, 84, .07); }
+.admin-shell .payroll-selection-bar button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* This cutoff | All cutoffs: two quiet options and a soft gold thumb that slides to the chosen one (placed from
+   PayrollTable); without the thumb the chosen option carries the same look itself. */
+.admin-shell .payroll-scope-switch { position: relative; isolation: isolate; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; }
+.admin-shell .payroll-scope-switch button { min-height: 28px; padding: 3px 12px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; font-size: .76rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color 200ms ease-out; }
+.admin-shell .payroll-scope-switch button:hover { color: var(--ink); }
+.admin-shell .payroll-scope-switch button.is-active { color: var(--gold-bright); background: rgba(198, 162, 84, .16); box-shadow: inset 0 0 0 1px rgba(225, 196, 119, .6); }
+.admin-shell .payroll-scope-switch:has(.payroll-scope-thumb) button.is-active { background: transparent; box-shadow: none; }
+.admin-shell .payroll-scope-switch button:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: -2px; }
+.payroll-scope-thumb { position: absolute; top: 0; left: 0; z-index: -1; background: rgba(198, 162, 84, .16); box-shadow: inset 0 0 0 1px rgba(225, 196, 119, .6); border-radius: 5px; transition: transform 320ms var(--ease-soft, ease), width 320ms var(--ease-soft, ease); pointer-events: none; }
+
+/* Rows: about 56px, like Attendance corrections. Small gold headings (they may wrap to two lines); the name with the
+   ID under it; the status as a dot and a word; numbers right-aligned in tabular figures; Net Pay in bold gold over a
+   faint gold tint, Total Deductions in plain bold; the actions as quiet text on one line, Delete coral and last. */
+.admin-shell .payroll-table table { min-width: 0; font-size: .78rem; }
+.admin-shell .payroll-table :is(th, td) { overflow-wrap: normal; }
+.admin-shell .payroll-table th { padding: 9px 8px; color: var(--gold); background: #17150f; border-bottom-color: rgba(198, 162, 84, .2); font-size: .62rem; font-weight: 600; letter-spacing: .06em; text-align: left; white-space: normal; }
+.admin-shell .payroll-table td { padding: 9px 8px; color: var(--ink); border-bottom-color: rgba(198, 162, 84, .08); font-size: .78rem; text-align: left; }
+.admin-shell .payroll-table tbody tr:last-child td { border-bottom: 0; }
+.admin-shell .payroll-table td:is(.payroll-select-cell, .payroll-employee-cell) { background: #13120e; }
+.admin-shell .payroll-table .table-wrap tr:hover td:is(.payroll-select-cell, .payroll-employee-cell) { background: linear-gradient(rgba(198, 162, 84, .04), rgba(198, 162, 84, .04)), #13120e; }
+.admin-shell .payroll-table .table-wrap tr.selected-row td:is(.payroll-select-cell, .payroll-employee-cell) { background: linear-gradient(rgba(198, 162, 84, .08), rgba(198, 162, 84, .08)), #13120e !important; }
+/* Tight number cells leave the name room for one line at 1366px (a long name wraps rather than push the page). */
+.admin-shell .payroll-table :is(th, td).payroll-num { padding-inline: 5px; text-align: right; font-variant-numeric: tabular-nums; }
+.admin-shell .payroll-table :is(th, td).payroll-net-cell { padding-inline: 8px; }
+.admin-shell .payroll-table :is(th, td) input[type="checkbox"] { width: 16px; height: 16px; min-width: 16px; min-height: 16px; padding: 0; }
+.admin-shell .payroll-table td.payroll-employee-cell { min-width: 192px; max-width: 240px; padding-inline: 4px 6px; white-space: normal; }
+.admin-shell .payroll-table td.payroll-status-cell { padding-inline: 4px; }
+.admin-shell .payroll-employee-cell strong { font-family: 'Orbitron', sans-serif; font-size: .78rem; font-weight: 600; letter-spacing: .01em; line-height: 1.3; }
+.admin-shell .payroll-employee-cell small { margin-top: 3px; color: var(--quiet); font-size: .7rem; letter-spacing: .02em; }
+.admin-shell .payroll-status { display: inline-flex; align-items: center; gap: 6px; font-size: .76rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .payroll-status::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.admin-shell .payroll-status.is-draft { color: var(--gold-bright); }
+.admin-shell .payroll-status.is-finalized { color: var(--success); }
+.admin-shell .payroll-table td strong { font-weight: 700; }
+.admin-shell .payroll-table th.payroll-net-cell { background: linear-gradient(rgba(198, 162, 84, .08), rgba(198, 162, 84, .08)), #17150f; }
+.admin-shell .payroll-table td.payroll-net-cell strong { color: var(--gold-bright); }
+.admin-shell .payroll-table td.payroll-period-cell { white-space: nowrap; }
+.admin-shell .payroll-table td.payroll-actions-cell { width: 1%; min-width: 0; padding-inline: 3px 4px; white-space: nowrap; }
+.admin-shell .payroll-row-actions { display: inline-flex; flex-wrap: nowrap; gap: 0; }
+.admin-shell .payroll-row-actions .text-button { min-height: 28px; padding: 3px 5px; color: var(--gold-bright); background: none; border: 0; border-radius: 6px; font-size: .74rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .payroll-row-actions .text-button:hover:not(:disabled) { color: var(--ink); background: rgba(198, 162, 84, .12); }
+.admin-shell .payroll-row-actions .danger-button { color: var(--danger); }
+.admin-shell .payroll-row-actions .danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
+/* Narrow laptops, where the amounts scroll sideways: the actions stay pinned at the right, like the name at the left. */
+.admin-shell .payroll-table :is(td.payroll-actions-cell, thead th:last-child) { position: sticky; right: 0; z-index: 1; }
+.admin-shell .payroll-table .table-wrap > table > thead th:last-child { z-index: 3; }
+.admin-shell .payroll-table td.payroll-actions-cell { background: #13120e; }
+.admin-shell .payroll-table .table-wrap tr:hover td.payroll-actions-cell { background: linear-gradient(rgba(198, 162, 84, .04), rgba(198, 162, 84, .04)), #13120e; }
+.admin-shell .payroll-table .table-wrap tr.selected-row td.payroll-actions-cell { background: linear-gradient(rgba(198, 162, 84, .08), rgba(198, 162, 84, .08)), #13120e !important; }
+/* Net Pay is pinned just left of the actions (their width is set from PayrollTable), solid so nothing shows through. */
+.admin-shell .payroll-table :is(th, td).payroll-net-cell { position: sticky; right: var(--payroll-actions-width, 0px); z-index: 1; }
+.admin-shell .payroll-table .table-wrap > table > thead th.payroll-net-cell { z-index: 3; }
+.admin-shell .payroll-table td.payroll-net-cell { background: linear-gradient(rgba(198, 162, 84, .06), rgba(198, 162, 84, .06)), #13120e; }
+.admin-shell .payroll-table .table-wrap tr:hover td.payroll-net-cell { background: linear-gradient(rgba(198, 162, 84, .1), rgba(198, 162, 84, .1)), #13120e; }
+.admin-shell .payroll-table .table-wrap tr.selected-row td.payroll-net-cell { background: linear-gradient(rgba(198, 162, 84, .14), rgba(198, 162, 84, .14)), #13120e !important; }
+/* Narrow laptops (1024, or 1366 at 125% zoom), and laptops showing extra columns (All cutoffs' Period): Standard,
+   Daily rate, Basic pay, Absent and Late / Halfday step aside (Breakdown lists them), so Net Pay stays in view. */
+@media (min-width: 901px) and (max-width: 1300px) {
+  .admin-shell .payroll-table .payroll-extra { display: none; }
+}
+@media (min-width: 1301px) and (max-width: 1600px) {
+  .admin-shell .payroll-table table.is-wide .payroll-extra { display: none; }
+}
+
+/* Past payroll PDFs: one closed fold under the table, opened by its heading; months inside as before, with the
+   newest copy of each cutoff tagged "Latest". */
+.admin-shell .payroll-pdf-section { margin-top: 0; }
+.admin-shell .payroll-pdf-section h2 { margin: 0 0 10px; font-size: inherit; }
+.admin-shell .payroll-pdf-section h2 > button { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 8px 4px 6px; color: var(--ink); background: none; border: 0; border-radius: 6px; font-family: 'Orbitron', sans-serif; font-size: .88rem; font-weight: 600; letter-spacing: .02em; cursor: pointer; }
+.admin-shell .payroll-pdf-section h2 > button::before { content: "▸"; color: var(--gold-bright); font-family: 'Poppins', 'Segoe UI', sans-serif; transition: transform 160ms ease; }
+.admin-shell .payroll-pdf-section h2 > button[aria-expanded="true"]::before { transform: rotate(90deg); }
+.admin-shell .payroll-pdf-section h2 > button:hover { color: var(--gold-bright); background: rgba(198, 162, 84, .07); }
+.admin-shell .payroll-pdf-section h2 > button:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+/* Positioned, so the hidden "Actions" heading stays inside the scrolling box instead of widening a phone's page. */
+.admin-shell .payroll-pdf-section .table-wrap { position: relative; }
+.admin-shell .payroll-pdf-period { color: var(--ink); font-weight: 600; }
+.admin-shell .payroll-pdf-latest { display: inline-block; margin-left: 8px; padding: 1px 6px; color: var(--gold-bright); border: 1px solid rgba(198, 162, 84, .45); border-radius: 4px; font-size: .64rem; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
+
+/* Tablets and phones: each payroll record becomes a small card like Attendance corrections: the name and ID with the
+   status at the right, the period (all cutoffs only), Paid days and Net pay, then the actions. The other amounts stay
+   in Breakdown. The heading row shrinks to the tick box, "Employee" and "Status". */
+@media (max-width: 900px) {
+  .admin-shell .payroll-table table, .admin-shell .payroll-table tbody { display: block; min-width: 0; }
+  .admin-shell .payroll-table thead { display: block; position: sticky; top: 0; z-index: 2; background: #17150f; border-bottom: 1px solid rgba(198, 162, 84, .2); }
+  .admin-shell .payroll-table thead tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 0 12px; align-items: center; padding: 8px 14px; }
+  .admin-shell .payroll-table thead th { display: none; }
+  .admin-shell .payroll-table .table-wrap > table > thead th:is(:nth-child(1), :nth-child(2), :nth-child(3)) { display: block; position: static; width: auto; min-width: 0; max-width: none; padding: 0; background: none; border: 0; }
+  .admin-shell .payroll-table thead th:nth-child(3) { justify-self: end; }
+  .admin-shell .payroll-table tbody tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "sel emp status" ". paid net" ". act act"; gap: 6px 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid rgba(198, 162, 84, .08); }
+  .admin-shell .payroll-table tbody tr:has(> td.payroll-period-cell) { grid-template-areas: "sel emp status" ". period period" ". paid net" ". act act"; }
+  .admin-shell .payroll-table tbody td { display: none; }
+  .admin-shell .payroll-table tbody td:is(.payroll-select-cell, .payroll-employee-cell, .payroll-status-cell, .payroll-period-cell, .payroll-paid-cell, .payroll-net-cell, .payroll-actions-cell) { display: block; position: static; width: auto; min-width: 0; max-width: none; padding: 0; text-align: left; background: none; border: 0; }
+  .admin-shell .payroll-table td.payroll-select-cell { grid-area: sel; align-self: start; }
+  .admin-shell .payroll-table td.payroll-employee-cell { grid-area: emp; }
+  .admin-shell .payroll-table td.payroll-status-cell { grid-area: status; justify-self: end; align-self: start; }
+  .admin-shell .payroll-table td.payroll-period-cell { grid-area: period; color: var(--muted); }
+  .admin-shell .payroll-table td.payroll-paid-cell { grid-area: paid; }
+  .admin-shell .payroll-table td.payroll-net-cell { grid-area: net; }
+  .admin-shell .payroll-table td:is(.payroll-paid-cell, .payroll-net-cell)::before { display: block; margin-bottom: 2px; color: var(--quiet); font-size: .7rem; font-weight: 600; }
+  .admin-shell .payroll-table td.payroll-paid-cell::before { content: "Paid days"; }
+  .admin-shell .payroll-table td.payroll-net-cell::before { content: "Net pay"; }
+  .admin-shell .payroll-table td.payroll-actions-cell { grid-area: act; margin-left: -6px; white-space: normal; }
+  .admin-shell .payroll-row-actions { flex-wrap: wrap; }
+  /* A ticked card tints as one piece with the gold edge on its left, not cell by cell. */
+  .admin-shell .payroll-table tbody tr.selected-row { background: rgba(198, 162, 84, .08); box-shadow: inset 3px 0 0 var(--gold); }
+  .admin-shell .payroll-table tbody tr.selected-row td, .admin-shell .payroll-table .table-wrap tr:is(:hover, .selected-row) td:is(.payroll-select-cell, .payroll-employee-cell) { background: none !important; }
+  .admin-shell .payroll-table tbody tr.selected-row td:first-child::before { content: none; }
+  .admin-shell .payroll-table tbody tr:hover td { background: none; }
+}
+
+/* Small tablets and phones: the steps put their circles on one line with the words under each (side by side, "Check
+   and finalize" and a PDF time no longer fit beside the hairlines). */
+@media (max-width: 680px) {
+  .admin-shell .payroll-steps { max-width: none; }
+  .admin-shell .payroll-steps li, .admin-shell .payroll-steps li:last-child { position: relative; flex: 1 1 0; flex-direction: column; gap: 6px; }
+  .admin-shell .payroll-steps li:not(:last-child)::after { position: absolute; top: 11px; left: 30px; right: 8px; min-width: 0; margin: 0; }
+  .admin-shell .payroll-step-text { padding-right: 6px; }
+  .admin-shell .payroll-step-label { white-space: normal; }
+  /* The Done line's links wrap under the sentence: line their words up with it. */
+  .admin-shell .payroll-next-actions:has(> .text-button:first-child) { flex-basis: 100%; margin-left: -8px; }
+}
+/* Phones: the month and the half take the full width; buttons grow to a 40px touch size and Generate again / Delete
+   all start a line of their own. */
+@media (max-width: 600px) {
+  .admin-shell .payroll-flow { padding: 14px; }
+  .admin-shell .payroll-next :is(.submit-button, .admin-button) { min-height: 40px; height: 40px; }
+  .admin-shell .payroll-next-more { flex-basis: 100%; margin-left: -8px; }
+}
+@media (max-width: 560px) {
+  .admin-shell .payroll-cutoff .cutoff-period { flex: 1 1 100%; flex-wrap: wrap; }
+  .admin-shell .payroll-cutoff .cutoff-period > * { flex: 1 1 100%; width: auto; min-width: 0; }
+  /* The dates in words on one line, "Change dates" under them, lined up with the words. */
+  .admin-shell .payroll-cutoff-summary { flex-direction: column; align-items: flex-start; }
+  .admin-shell .payroll-cutoff-summary .text-button { margin-left: -8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-shell :is(.payroll-steps li::after, .payroll-step-mark, .cutoff-fill-buttons::before, .cutoff-fill-buttons .admin-button, .payroll-list-bar, .payroll-bar-layer, .payroll-bar-layer[aria-hidden="true"], .payroll-scope-switch button), .payroll-scope-thumb { transition: none; }
+  .admin-shell .payroll-cutoff-dates { animation: none; }
 }

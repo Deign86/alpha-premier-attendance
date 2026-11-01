@@ -6086,24 +6086,57 @@ function lastEndedCutoff(): HalfMonthCutoff {
   return { month: month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`, half: "second" };
 }
 
-const PAYROLL_STEPS = ["Cutoff", "Review", "Finalize", "Export"] as const;
+/** One payroll step: its name, its status in words ("12 of 37 finalized") and whether it is finished. */
+type PayrollStep = { label: string; detail: string; done: boolean };
 type PayrollStepState = "done" | "current" | "upcoming";
 
-/** Where the chosen cutoff stands, worked out on this PC from its dates, records and PDFs. Display only. */
-function PayrollSteps({ states }: { states: readonly PayrollStepState[] }) {
+/**
+ * Where the chosen cutoff stands, worked out on this PC from its records and PDFs. Display only. The current step
+ * is the first one not done; the steps after it wait.
+ */
+function PayrollSteps({ steps }: { steps: readonly PayrollStep[] }) {
+  const current = steps.findIndex((step) => !step.done);
   return (
     <ol className="payroll-steps" aria-label="Payroll steps">
-      {PAYROLL_STEPS.map((label, index) => (
-        <li key={label} className={`is-${states[index]}`} aria-current={states[index] === "current" ? "step" : undefined}>
-          <span className="payroll-step-mark" aria-hidden="true">
-            {states[index] === "done" ? <Check size={12} strokeWidth={3} /> : index + 1}
-          </span>
-          <span className="payroll-step-label">{label}</span>
-          {states[index] === "done" && <span className="visually-hidden"> (done)</span>}
-        </li>
-      ))}
+      {steps.map((step, index) => {
+        const state: PayrollStepState = current === -1 || index < current ? "done" : index === current ? "current" : "upcoming";
+        return (
+          <li key={step.label} className={`is-${state}`} aria-current={state === "current" ? "step" : undefined}>
+            <span className="payroll-step-mark" aria-hidden="true">
+              {state === "done" ? <Check size={12} strokeWidth={3} /> : index + 1}
+            </span>
+            <span className="payroll-step-text">
+              <span className="payroll-step-label">{step.label}</span>
+              <span className="payroll-step-detail">{step.detail}</span>
+            </span>
+            {state === "done" && <span className="visually-hidden"> (done)</span>}
+          </li>
+        );
+      })}
     </ol>
   );
+}
+
+/**
+ * Whether a payroll PDF still matches its cutoff's approved pay: every record finalized, the same headcount, and made
+ * after the last finalize (Date.parse, since finalizedAt is UTC and generatedAt Manila time). A PDF made from drafts,
+ * or before a regenerate or a delete, is out of date.
+ */
+function pdfMatchesPayroll(pdf: PayrollPdfRecord, records: readonly PayrollCutoffRecord[]): boolean {
+  const cutoff = records.filter((record) => record.cutoffStart === pdf.cutoffStart && record.cutoffEnd === pdf.cutoffEnd);
+  if (cutoff.length === 0 || cutoff.length !== pdf.employeeCount || cutoff.some((record) => record.status !== "FINALIZED")) return false;
+  const made = Date.parse(pdf.generatedAt);
+  return cutoff.every((record) => !record.finalizedAt || made >= Date.parse(record.finalizedAt));
+}
+
+/** Finalizes the payroll records one by one; returns the ids that could not be finalized. */
+async function finalizeEach(ids: readonly string[]): Promise<string[]> {
+  const failed: string[] = [];
+  for (const id of ids) {
+    const finalized = await finalizePayrollCutoff(id).then((response) => response.success, () => false);
+    if (!finalized) failed.push(id);
+  }
+  return failed;
 }
 
 export function PayrollWorkspace({
@@ -6128,6 +6161,8 @@ export function PayrollWorkspace({
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [cutoffMonth, setCutoffMonth] = useState(() => form.cutoffStart.slice(0, 7));
+  // Start, end and standard days stay folded under "Change dates": the month and half fill them.
+  const [datesOpen, setDatesOpen] = useState(false);
 
   // Keep the browser print header (if any) on-brand instead of the generic kiosk title.
   useEffect(() => {
@@ -6169,8 +6204,11 @@ export function PayrollWorkspace({
 
   const [clearCutoffOpen, setClearCutoffOpen] = useState(false);
   const [clearingCutoff, setClearingCutoff] = useState(false);
+  const [finalizeAllOpen, setFinalizeAllOpen] = useState(false);
+  const [finalizingAll, setFinalizingAll] = useState(false);
   // The table shows the chosen cutoff's records unless every cutoff is asked for.
   const [showAllCutoffs, setShowAllCutoffs] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   // The picked cutoff as people read it ("Aug 1–15, 2026"); the label saved with the payroll is unchanged.
   const cutoffRange = formatCutoffRange(form.cutoffStart, form.cutoffEnd);
 
@@ -6183,30 +6221,48 @@ export function PayrollWorkspace({
     );
   }, [records, form.cutoffStart, form.cutoffEnd]);
 
-  // Why Generate is off, shown under it: the dates, or the payroll list not loaded (its confirmation must know whether
-  // payroll exists). The export buttons add that the cutoff needs payroll first.
+  // Why Generate is off: the dates or standard days (said beside them; the folded fields can't show the browser's own
+  // check), or the payroll list not loaded (its confirmation must know whether payroll exists). The exports also wait
+  // until the cutoff has payroll and no drafts are left.
+  const standardDays = Number(form.standardWorkingDays);
   const datesReason =
     !form.cutoffStart || !form.cutoffEnd
       ? "Pick a cutoff start and end date."
       : form.cutoffStart > form.cutoffEnd
         ? "End date must be on or after the start date."
-        : null;
-  const generateReason =
-    datesReason ??
-    (loadStatus === "loading" ? "Loading payroll…" : loadStatus === "failed" ? "Payroll didn't load. Select Retry below." : null);
-  const exportReason = generateReason ?? (existingCutoffRecords.length > 0 ? null : "Generate payroll for this cutoff first.");
+        : !form.standardWorkingDays.trim() || !(standardDays >= 0 && standardDays <= 31) || !Number.isInteger(standardDays * 2)
+          ? "Standard days must be 0 to 31 (whole or half days)."
+          : null;
+  const listReason = loadStatus === "loading" ? "Loading payroll…" : loadStatus === "failed" ? "Payroll didn't load. Select Retry below." : null;
+  const generateReason = datesReason ?? listReason;
+  // The line that says why a button is off: beside the dates for a date problem, otherwise in the Next line.
+  const reasonId = datesReason ? "payroll-dates-reason" : "payroll-next-reason";
+  const recordCount = existingCutoffRecords.length;
+  const draftCount = existingCutoffRecords.filter((record) => record.status !== "FINALIZED").length;
+  const finalizedCount = recordCount - draftCount;
+  const exportReason =
+    generateReason ??
+    (recordCount === 0
+      ? "Generate payroll for this cutoff first."
+      : draftCount === 1
+        ? "Finalize the draft first."
+        : draftCount > 1
+          ? `Finalize all ${draftCount} drafts first.`
+          : null);
   // The label saved with the payroll: the preset's ("August 1-15, 2026") when the dates are a half-month of the
   // cutoff month, otherwise "<start> to <end>". PDFs and payslips keep the label their payroll was saved with.
   const cutoffLabel = preset?.payrollCutoffLabel ?? `${form.cutoffStart} to ${form.cutoffEnd}`;
   const exportLabel = existingCutoffRecords[0]?.payrollCutoffLabel || cutoffLabel;
-  const draftCount = existingCutoffRecords.filter((record) => record.status !== "FINALIZED").length;
-  const finalizedCount = existingCutoffRecords.length - draftCount;
 
-  const save = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const startGenerate = () => {
     if (generateReason) return;
     setMessage(null);
     setConfirmOpen(true);
+  };
+  // Enter in a date field asks to generate, as before.
+  const save = (event: React.FormEvent) => {
+    event.preventDefault();
+    startGenerate();
   };
 
   const confirmGenerate = async () => {
@@ -6273,6 +6329,21 @@ export function PayrollWorkspace({
     }
   };
 
+  // Finalize all: every draft of the chosen cutoff, the same way as Finalize selected.
+  const finalizeAll = async () => {
+    const draftIds = existingCutoffRecords.filter((record) => record.status !== "FINALIZED").map((record) => record.payrollId);
+    if (finalizingAll || draftIds.length === 0) return;
+    setFinalizingAll(true);
+    try {
+      const failed = await finalizeEach(draftIds);
+      showResult(batchOutcome(draftIds.length - failed.length, draftIds.length, "Finalized", "payroll record(s)"), setMessage);
+      onSaved();
+    } finally {
+      setFinalizingAll(false);
+      setFinalizeAllOpen(false);
+    }
+  };
+
   const [pdfMessage, setPdfMessage] = useState<Notice | null>(null);
   const [generating, setGenerating] = useState(false);
   const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
@@ -6287,23 +6358,76 @@ export function PayrollWorkspace({
     });
   }, []);
 
-  // The chosen cutoff's PDFs, newest first, listed beside the export buttons.
-  const cutoffPdfs = useMemo(
+  // Notes and the payslip folder belong to the cutoff they were made for, so another cutoff starts without them.
+  useEffect(() => {
+    setMessage(null);
+    setPdfMessage(null);
+    setPayslipMessage(null);
+    setPayslipOpenMessage(null);
+    setPayslipDirectory(null);
+  }, [form.cutoffStart, form.cutoffEnd]);
+
+  // The chosen cutoff's newest PDF, and whether it still matches the approved pay (it may predate a regenerate, a
+  // delete or the last finalize). Only a current one finishes Export and shows in the Done line.
+  const latestPdf = useMemo(
     () =>
       payrollPdfs
         .filter((pdf) => pdf.cutoffStart === form.cutoffStart && pdf.cutoffEnd === form.cutoffEnd)
-        .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt)),
+        .reduce<PayrollPdfRecord | null>((newest, pdf) => (!newest || Date.parse(pdf.generatedAt) > Date.parse(newest.generatedAt) ? pdf : newest), null),
     [payrollPdfs, form.cutoffStart, form.cutoffEnd],
   );
 
-  // Cutoff is done once its dates are set; Review and Finalize once every record is finalized (Review stays current
-  // while any draft exists or nothing is generated); Export once a PDF exists for the finalized cutoff. The current
-  // step is the first one not done, and the steps after it are upcoming whatever their own check says.
-  const allFinalized = existingCutoffRecords.length > 0 && draftCount === 0;
-  const currentStep = [!datesReason, allFinalized, allFinalized, allFinalized && cutoffPdfs.length > 0].indexOf(false);
-  const stepStates = PAYROLL_STEPS.map((_, index): PayrollStepState =>
-    currentStep === -1 || index < currentStep ? "done" : index === currentStep ? "current" : "upcoming",
-  );
+  // Make payroll is done once the cutoff has records, Check and finalize once no drafts are left, Export once a
+  // current payroll PDF exists for the finalized cutoff. Payslips have no history, so they never tick a step.
+  const allFinalized = recordCount > 0 && draftCount === 0;
+  const currentPdf = latestPdf && pdfMatchesPayroll(latestPdf, existingCutoffRecords) ? latestPdf : null;
+  const exported = allFinalized && currentPdf !== null;
+  const people = existingCutoffRecords.every((record) => record.employeeType === "INTERN") ? "intern" : "record";
+  const steps: PayrollStep[] = [
+    {
+      label: "Make payroll",
+      done: recordCount > 0,
+      detail:
+        recordCount > 0
+          ? `Made · ${recordCount} ${people}${recordCount === 1 ? "" : "s"}`
+          : loadStatus === "loading"
+            ? "Loading…"
+            : loadStatus === "failed"
+              ? "Didn't load"
+              : "Not made yet",
+    },
+    {
+      label: "Check and finalize",
+      done: allFinalized,
+      detail: recordCount === 0 ? "Waiting" : allFinalized && recordCount > 1 ? `All ${recordCount} finalized` : `${finalizedCount} of ${recordCount} finalized`,
+    },
+    {
+      label: "Export",
+      done: exported,
+      detail: !allFinalized
+        ? "Waiting"
+        : currentPdf
+          ? `PDF made ${formatDateTime(currentPdf.generatedAt)}`
+          : latestPdf
+            ? "Ready · PDF out of date"
+            : "Ready",
+    },
+  ];
+  // Which Next line shows: its change moves the keyboard focus (below) when the clicked button went away.
+  const nextState =
+    recordCount === 0 ? (listReason ? "loading" : "make") : draftCount > 0 ? "finalize" : exported ? "done" : "export";
+  const nextRef = useRef<HTMLDivElement>(null);
+  const shownNextState = useRef(nextState);
+  // After an action changes the Next line, the focus goes to its new gold button (or its sentence) instead of the
+  // page, but only when the focus fell to the page and no pop-up is open, and never as payroll first loads.
+  useLayoutEffect(() => {
+    const previous = shownNextState.current;
+    shownNextState.current = nextState;
+    if (previous === nextState || previous === "loading") return;
+    if (document.activeElement !== document.body || document.querySelector("[aria-modal='true']")) return;
+    const next = nextRef.current;
+    (next?.querySelector<HTMLElement>(".payroll-next-primary:not(:disabled)") ?? next?.querySelector<HTMLElement>(".payroll-next-text"))?.focus();
+  }, [nextState]);
 
   const generatePdf = async () => {
     if (generating || exportReason) return;
@@ -6323,7 +6447,10 @@ export function PayrollWorkspace({
             (item) => item.payrollPdfId !== response.pdf.payrollPdfId,
           ),
         ]);
-        showToast(`Payroll PDF generated for ${cutoffRange}.`);
+        showToast(`Payroll PDF made for ${cutoffRange}.`);
+        // The new PDF opens straight away; the Done line keeps Open PDF and Show in folder for later.
+        const opened = await openGeneratedFile(response.pdf.filePath);
+        if (!opened.ok) setPdfMessage({ tone: "error", text: opened.message });
       } else setPdfMessage({ tone: "error", text: response.error.message });
     } catch (error) {
       setPdfMessage({ tone: "error", text: error instanceof Error ? error.message : "Unable to generate the payroll PDF." });
@@ -6360,183 +6487,235 @@ export function PayrollWorkspace({
     setPayslipOpenMessage(result.ok ? null : { tone: "error", text: result.message });
   };
 
+  // Make payroll PDF and Make payslips: a gold button and an outline one before the first PDF, quiet links after it.
+  // They show only once every record is finalized; exportReason still guards them (and says why while payroll loads).
+  const pdfButton = (className: string, label: string) => (
+    <button
+      className={className}
+      type="button"
+      onClick={() => void generatePdf()}
+      disabled={generating || Boolean(exportReason)}
+      aria-describedby={exportReason ? reasonId : undefined}
+    >
+      {generating ? "Making PDF…" : label}
+    </button>
+  );
+  const payslipButton = (className: string) => (
+    <button
+      className={className}
+      type="button"
+      onClick={() => void generatePayslips()}
+      disabled={generatingPayslips || Boolean(exportReason)}
+      aria-describedby={exportReason ? reasonId : undefined}
+    >
+      {generatingPayslips ? "Making payslips…" : "Make payslips"}
+    </button>
+  );
+  const workingDays = form.standardWorkingDays.trim();
+
   return (
     <section className="payroll-workspace">
-      <PayrollSteps states={stepStates} />
-      <div className="payroll-toolbar">
-        <form className="payroll-generate-panel" onSubmit={save}>
-          <div className="payroll-panel-heading">
-            <h2>Generate cutoff payroll</h2>
-            <div className="payroll-generate-action">
-              <button
-                className="submit-button payroll-generate-submit"
-                type="submit"
-                disabled={saving || Boolean(generateReason)}
-                aria-describedby={generateReason ? "payroll-generate-reason" : undefined}
-              >
-                {saving ? "Generating..." : "Generate from attendance"}
-              </button>
-              {generateReason && (
-                <p className="payroll-reason" id="payroll-generate-reason">
-                  {generateReason}
-                </p>
-              )}
-            </div>
-          </div>
-          <div className="payroll-generate-controls">
-            <div className="cutoff-period">
-              <label>
-                Cutoff month
-                <input
-                  type="month"
-                  value={cutoffMonth}
-                  onChange={(event) => changeCutoffMonth(event.target.value)}
-                />
-              </label>
-              <div className="cutoff-fill-buttons">
-                <button
-                  className="admin-button"
-                  type="button"
-                  aria-pressed={activeHalf === "first"}
-                  disabled={!cutoffMonth}
-                  onClick={() => applyCutoffHalf("first")}
-                >
-                  1st&ndash;15th
-                </button>
-                <button
-                  className="admin-button"
-                  type="button"
-                  aria-pressed={activeHalf === "second"}
-                  disabled={!cutoffMonth}
-                  onClick={() => applyCutoffHalf("second")}
-                >
-                  16th&ndash;last day
-                </button>
-              </div>
-            </div>
+      {/* One card: which cutoff, where it stands (three steps) and the one next thing to do (the page's gold button). */}
+      <div className="payroll-flow">
+        <form className="payroll-cutoff" onSubmit={save}>
+          <div className="cutoff-period">
             <label>
-              Cutoff start
+              Cutoff month
               <input
-                required
-                type="date"
-                value={form.cutoffStart}
-                onChange={(event) => handleCutoffDateChange("cutoffStart", event.target.value)}
+                type="month"
+                value={cutoffMonth}
+                onChange={(event) => changeCutoffMonth(event.target.value)}
               />
             </label>
-            <label>
-              Cutoff end
-              <input
-                required
-                type="date"
-                value={form.cutoffEnd}
-                onChange={(event) => handleCutoffDateChange("cutoffEnd", event.target.value)}
-              />
-            </label>
-            <label className="payroll-standard-days">
-              Standard days
-              <input
-                required
-                type="number"
-                min="0"
-                max="31"
-                step="0.5"
-                value={form.standardWorkingDays}
-                onChange={(event) => update("standardWorkingDays", event.target.value)}
-              />
-            </label>
-          </div>
-        </form>
-
-        <div className="payroll-pdf-actions-panel">
-          <div className="payroll-panel-heading">
-            <h2>Export payroll</h2>
-          </div>
-          <div className="payroll-actions">
-            <button
-              className="admin-button"
-              type="button"
-              onClick={() => void generatePdf()}
-              disabled={generating || Boolean(exportReason)}
-              aria-describedby={exportReason ? "payroll-export-reason" : undefined}
-            >
-              {generating ? "Generating..." : "Download payroll PDF"}
-            </button>
-            <button
-              className="admin-button"
-              type="button"
-              onClick={() => void generatePayslips()}
-              disabled={generatingPayslips || Boolean(exportReason)}
-              aria-describedby={exportReason ? "payroll-export-reason" : undefined}
-            >
-              {generatingPayslips
-                ? "Generating payslips..."
-                : "Download payslips"}
-            </button>
-            {payslipDirectory && (
+            <div className="cutoff-fill-buttons">
               <button
                 className="admin-button"
                 type="button"
-                onClick={() => void openPayslipFolder(payslipDirectory)}
+                aria-pressed={activeHalf === "first"}
+                disabled={!cutoffMonth}
+                onClick={() => applyCutoffHalf("first")}
               >
+                1st&ndash;15th
+              </button>
+              <button
+                className="admin-button"
+                type="button"
+                aria-pressed={activeHalf === "second"}
+                disabled={!cutoffMonth}
+                onClick={() => applyCutoffHalf("second")}
+              >
+                16th&ndash;last day
+              </button>
+            </div>
+          </div>
+          {/* The chosen dates read back in words; a date problem shows here instead, with the fields kept open. */}
+          <p className="payroll-cutoff-summary">
+            {datesReason ? (
+              <span className="payroll-reason" id="payroll-dates-reason">
+                {datesReason}
+              </span>
+            ) : (
+              <>
+                <span>
+                  {cutoffRange}
+                  {workingDays && ` · ${workingDays} working ${workingDays === "1" ? "day" : "days"}`}
+                </span>
+                <button
+                  className="text-button"
+                  type="button"
+                  aria-expanded={datesOpen}
+                  aria-controls="payroll-cutoff-dates"
+                  onClick={() => setDatesOpen((open) => !open)}
+                >
+                  {datesOpen ? "Hide dates" : "Change dates"}
+                </button>
+              </>
+            )}
+          </p>
+          {(datesOpen || datesReason) && (
+            <div className="payroll-cutoff-dates" id="payroll-cutoff-dates">
+              <label>
+                Cutoff start
+                <input
+                  required
+                  type="date"
+                  value={form.cutoffStart}
+                  onChange={(event) => handleCutoffDateChange("cutoffStart", event.target.value)}
+                />
+              </label>
+              <label>
+                Cutoff end
+                <input
+                  required
+                  type="date"
+                  value={form.cutoffEnd}
+                  onChange={(event) => handleCutoffDateChange("cutoffEnd", event.target.value)}
+                />
+              </label>
+              <label className="payroll-standard-days">
+                Standard days
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  max="31"
+                  step="0.5"
+                  value={form.standardWorkingDays}
+                  onChange={(event) => update("standardWorkingDays", event.target.value)}
+                />
+              </label>
+            </div>
+          )}
+        </form>
+
+        <PayrollSteps steps={steps} />
+
+        {/* Next: one sentence and the one gold button for this state; Generate again and Delete all stay quiet. */}
+        <div className="payroll-next" ref={nextRef}>
+          {/* Read out when it changes; focusable so the focus can land here when no button is left to take it. */}
+          <p className="payroll-next-text" aria-live="polite" tabIndex={-1}>
+            {nextState === "loading" ? (
+              listReason
+            ) : nextState === "make" ? (
+              <>
+                <strong>Next:</strong>{" "}
+                {datesReason ? "fix the cutoff above, then make payroll from attendance." : `make payroll for ${cutoffRange} from attendance.`}
+              </>
+            ) : nextState === "finalize" ? (
+              <>
+                <strong>Next:</strong> check the drafts below, then finalize. Finalized pay is locked.
+              </>
+            ) : currentPdf ? (
+              <>
+                <strong>Done.</strong> PDF made {formatDateTime(currentPdf.generatedAt)}.
+              </>
+            ) : latestPdf ? (
+              <>
+                <strong>Next:</strong> the payroll changed since the last PDF. Make a new payroll PDF.
+              </>
+            ) : (
+              <>
+                <strong>Next:</strong> make the payroll PDF and payslips.
+              </>
+            )}
+          </p>
+          <div className="payroll-next-actions">
+            {nextState === "loading" ? null : nextState === "make" ? (
+              <button
+                className="submit-button payroll-next-primary"
+                type="button"
+                disabled={saving || Boolean(generateReason)}
+                aria-describedby={generateReason ? reasonId : undefined}
+                onClick={startGenerate}
+              >
+                {saving ? "Generating..." : "Generate from attendance"}
+              </button>
+            ) : nextState === "finalize" ? (
+              <button
+                className="submit-button payroll-next-primary"
+                type="button"
+                disabled={finalizingAll}
+                onClick={() => setFinalizeAllOpen(true)}
+              >
+                Finalize all ({draftCount})
+              </button>
+            ) : currentPdf ? (
+              <>
+                <PayrollPdfButtons filePath={currentPdf.filePath} onResult={setPdfMessage} />
+                {payslipButton("text-button")}
+                {pdfButton("text-button", "Make PDF again")}
+              </>
+            ) : (
+              <>
+                {pdfButton("submit-button payroll-next-primary", "Make payroll PDF")}
+                {payslipButton("admin-button")}
+              </>
+            )}
+            {payslipDirectory && (
+              <button className="text-button" type="button" onClick={() => void openPayslipFolder(payslipDirectory)}>
                 Open payslip folder
               </button>
             )}
           </div>
-          {exportReason && (
-            <p className="payroll-reason" id="payroll-export-reason">
-              {exportReason}
+          {recordCount > 0 && (
+            <div className="payroll-next-more">
+              <button
+                className="text-button"
+                type="button"
+                disabled={saving || Boolean(generateReason)}
+                aria-describedby={generateReason ? reasonId : undefined}
+                onClick={startGenerate}
+              >
+                {saving ? "Generating..." : "Generate again"}
+              </button>
+              <button
+                className="text-button danger-button"
+                type="button"
+                disabled={clearingCutoff || saving}
+                onClick={() => setClearCutoffOpen(true)}
+              >
+                Delete all records
+              </button>
+            </div>
+          )}
+          {generateReason && !datesReason && recordCount > 0 && (
+            <p className="payroll-reason payroll-next-reason" id="payroll-next-reason">
+              {generateReason}
             </p>
           )}
-          <CutoffPdfList pdfs={cutoffPdfs} heading={datesReason ? "PDFs for this cutoff" : `PDFs for ${cutoffRange}`} />
         </div>
+
+        <NoticeLine notice={message} />
+        <NoticeLine notice={pdfMessage} />
+        <NoticeLine notice={payslipMessage} />
+        <NoticeLine notice={payslipOpenMessage} />
       </div>
-
-      {/* Drafts: what regenerating does, and Delete all. All finalized: one calm line; the delete asks for DELETE. */}
-      {draftCount > 0 ? (
-        <div className="cutoff-existing-banner" role="status">
-          <span>
-            Payroll already exists for this cutoff ({existingCutoffRecords.length} record(s)). Generating from attendance will replace draft records; finalized records are kept.
-          </span>
-          <div className="cutoff-existing-actions">
-            <button
-              className="admin-button danger-button"
-              type="button"
-              disabled={clearingCutoff || saving}
-              onClick={() => setClearCutoffOpen(true)}
-            >
-              Delete all records for this cutoff ({existingCutoffRecords.length})
-            </button>
-          </div>
-        </div>
-      ) : (
-        allFinalized && (
-          <p className="cutoff-finalized-line" role="status">
-            <span>
-              {existingCutoffRecords.length === 1
-                ? "The one record for this cutoff is finalized."
-                : `All ${existingCutoffRecords.length} records for this cutoff are finalized.`}
-            </span>
-            <button
-              className="text-button danger-button"
-              type="button"
-              disabled={clearingCutoff || saving}
-              onClick={() => setClearCutoffOpen(true)}
-            >
-              Delete all records
-            </button>
-          </p>
-        )
-      )}
-
-      <NoticeLine notice={message} />
-      <NoticeLine notice={pdfMessage} />
-      <NoticeLine notice={payslipMessage} />
-      <NoticeLine notice={payslipOpenMessage} />
 
       <section className="payroll-table">
         <PayrollTable
           records={showAllCutoffs ? records : existingCutoffRecords}
           allCount={records.length}
+          scopeLabel={cutoffRange}
           showingAll={showAllCutoffs}
           onShowAllChange={setShowAllCutoffs}
           onFinalized={onSaved}
@@ -6545,23 +6724,40 @@ export function PayrollWorkspace({
         />
       </section>
 
+      {/* Every PDF made, by month, folded away: the chosen cutoff's latest is in the Done line. */}
       <section className="payroll-pdf-section" aria-labelledby="payroll-pdf-history-heading">
-        <h2 id="payroll-pdf-history-heading">Generated payroll PDFs</h2>
-        <PayrollPdfList pdfs={payrollPdfs} />
+        <h2 id="payroll-pdf-history-heading">
+          <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>
+            Past payroll PDFs <span className="db-backup-count">{payrollPdfs.length}</span>
+          </button>
+        </h2>
+        {historyOpen && <PayrollPdfList pdfs={payrollPdfs} records={records} />}
       </section>
 
+      {/* Only drafts are replaced, so the pop-up mentions them only when there are drafts. */}
       <ConfirmDialog
         open={confirmOpen}
         busy={saving}
-        title={existingCutoffRecords.length > 0 ? "Regenerate cutoff payroll?" : "Generate payroll drafts?"}
+        title={draftCount > 0 ? "Regenerate cutoff payroll?" : recordCount > 0 ? "Generate again?" : "Generate payroll drafts?"}
         message={
-          existingCutoffRecords.length > 0
-            ? `Payroll already exists for ${cutoffRange} (${existingCutoffRecords.length} record(s)). Generating new payroll will replace the draft records with fresh calculations from latest attendance; finalized records are kept. Continue?`
-            : `This will generate payroll records for ${cutoffRange} from completed attendance. Days without a time-out are not paid; late time-outs are paid up to 17:00. Continue?`
+          draftCount > 0
+            ? `Payroll already exists for ${cutoffRange} (${recordCount} record(s)). Generating new payroll will replace the draft records with fresh calculations from latest attendance; finalized records are kept. Continue?`
+            : recordCount > 0
+              ? `All ${recordCount} record(s) for ${cutoffRange} are finalized and stay as they are. Generating again only adds payroll, from completed attendance, for people not in this cutoff yet. Continue?`
+              : `This will generate payroll records for ${cutoffRange} from completed attendance. Days without a time-out are not paid; late time-outs are paid up to 17:00. Continue?`
         }
-        confirmLabel={existingCutoffRecords.length > 0 ? "Regenerate payroll" : "Generate payroll"}
+        confirmLabel={draftCount > 0 ? "Regenerate payroll" : recordCount > 0 ? "Generate again" : "Generate payroll"}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => void confirmGenerate()}
+      />
+      <ConfirmDialog
+        open={finalizeAllOpen}
+        busy={finalizingAll}
+        title="Finalize all drafts?"
+        message={`This will finalize all ${draftCount} draft payroll record(s) for ${cutoffRange}. Values will be locked from further edits.`}
+        confirmLabel="Finalize payrolls"
+        onCancel={() => setFinalizeAllOpen(false)}
+        onConfirm={() => void finalizeAll()}
       />
       <ConfirmDialog
         open={clearCutoffOpen}
@@ -6570,8 +6766,8 @@ export function PayrollWorkspace({
         title="Delete cutoff records?"
         message={
           finalizedCount > 0
-            ? `This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for ${cutoffRange}, including ${finalizedCount} finalized (approved) record(s). This cannot be undone.`
-            : `This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for ${cutoffRange}. Continue?`
+            ? `This will permanently delete all ${recordCount} payroll record(s) for ${cutoffRange}, including ${finalizedCount} finalized (approved) record(s). This cannot be undone.`
+            : `This will permanently delete all ${recordCount} payroll record(s) for ${cutoffRange}. Continue?`
         }
         confirmLabel="Delete cutoff records"
         requireText={finalizedCount > 0 ? "DELETE" : undefined}
@@ -6889,9 +7085,7 @@ function EditPayrollDialog({
               </div>
               <div className="summary-item">
                 <span className="summary-label">Total Deductions</span>
-                <span className="summary-value" style={{ color: "var(--danger)" }}>
-                  {php(totalDeductions)}
-                </span>
+                <span className="summary-value">{php(totalDeductions)}</span>
               </div>
               <div className="summary-item">
                 <span className="summary-label">Net Pay</span>
@@ -7043,9 +7237,7 @@ function EditPayrollDialog({
               </div>
               <div className="summary-item">
                 <span className="summary-label">Total Deductions</span>
-                <span className="summary-value" style={{ color: "var(--danger)" }}>
-                  {php(totalDeductions)}
-                </span>
+                <span className="summary-value">{php(totalDeductions)}</span>
               </div>
               <div className="summary-item">
                 <span className="summary-label">Net Pay</span>
@@ -7313,6 +7505,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
 function PayrollTable({
   records,
   allCount,
+  scopeLabel,
   showingAll,
   onShowAllChange,
   onFinalized,
@@ -7321,8 +7514,10 @@ function PayrollTable({
 }: {
   /** The rows shown: the chosen cutoff's, or every cutoff's. Selection and batch actions apply to these. */
   records: PayrollCutoffRecord[];
-  /** How many records every cutoff has together, for "Show all cutoffs (74)". */
+  /** How many records every cutoff has together: the This cutoff | All cutoffs switch shows only when it matters. */
   allCount: number;
+  /** The chosen cutoff as people read it ("Oct 16–31, 2026"), for the bar above the rows. */
+  scopeLabel: string;
   showingAll: boolean;
   onShowAllChange: (showAll: boolean) => void;
   onFinalized: () => void;
@@ -7346,15 +7541,52 @@ function PayrollTable({
   const payrollWrapRef = useRef<HTMLDivElement>(null);
   const [showAllPayroll, setShowAllPayroll] = useState(false);
   const payrollOverflowing = useVerticalOverflow(payrollWrapRef, loadStatus !== "loading" && records.length > 0);
+  // Net Pay is pinned just left of the pinned actions when the amounts scroll sideways, so it needs their width.
+  const actionsHeadRef = useRef<HTMLTableCellElement>(null);
+  useLayoutEffect(() => {
+    const head = actionsHeadRef.current;
+    const wrap = payrollWrapRef.current;
+    if (!head || !wrap) return;
+    const place = () => wrap.style.setProperty("--payroll-actions-width", `${head.offsetWidth}px`);
+    place();
+    if (!("ResizeObserver" in window)) return;
+    const observer = new ResizeObserver(place);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [records.length, loadStatus]);
 
   const allSelected = records.length > 0 && selectedIds.size === records.length;
   const someSelected = selectedIds.size > 0 && selectedIds.size < records.length;
+  const selecting = selectedIds.size > 0;
+  const listBarRef = useRef<HTMLDivElement>(null);
+  const selectionBarRef = useRef<HTMLDivElement>(null);
+  // The selection-bar button that started the last action, so the focus can come back after the bar hides.
+  const barActionFrom = useRef<HTMLButtonElement | null>(null);
+  // The switch shows only when it would change the rows; it moves into the empty message when the cutoff has none.
+  const showScopeSwitch = showingAll || allCount > records.length;
+  const scopeRef = useRef<HTMLDivElement>(null);
+  const scopeThumb = useActiveThumb(scopeRef, `${showingAll}:${showScopeSwitch}:${records.length > 0}:${loadStatus}`);
 
   useEffect(() => {
     if (masterCheckboxRef.current) {
       masterCheckboxRef.current.indeterminate = someSelected;
     }
   }, [someSelected]);
+
+  // The bar that isn't showing can't be clicked or tabbed into (React 18 has no inert prop).
+  useLayoutEffect(() => {
+    listBarRef.current?.toggleAttribute("inert", selecting);
+    selectionBarRef.current?.toggleAttribute("inert", !selecting);
+  }, [selecting, records.length, loadStatus]);
+
+  // When an action from the selection bar ends with the bar hidden, the focus goes to the header tick box instead of
+  // the page (only if it fell to the page or is still in the hidden bar, and never while a pop-up is open).
+  useLayoutEffect(() => {
+    if (!barActionFrom.current || selecting || finalizing || deletingBatch || document.querySelector("[aria-modal='true']")) return;
+    barActionFrom.current = null;
+    const focus = document.activeElement;
+    if (focus === document.body || selectionBarRef.current?.contains(focus)) masterCheckboxRef.current?.focus({ preventScroll: true });
+  }, [selecting, finalizing, deletingBatch]);
 
   // Clean up selectedIds when records change
   useEffect(() => {
@@ -7469,11 +7701,7 @@ function PayrollTable({
     setBatchFinalizeOpen(false);
     setFinalizing(true);
     try {
-      const failed: string[] = [];
-      for (const id of draftIds) {
-        const finalized = await finalizePayrollCutoff(id).then((response) => response.success, () => false);
-        if (!finalized) failed.push(id);
-      }
+      const failed = await finalizeEach(draftIds);
       setSelectedIds(new Set(failed));
       showResult(batchOutcome(draftIds.length - failed.length, draftIds.length, "Finalized", "payroll record(s)"), setMessage);
       onFinalized();
@@ -7495,18 +7723,32 @@ function PayrollTable({
       </div>
     );
   const failedLine = loadStatus === "failed" && onRetry ? <LoadFailed what="payroll" onRetry={onRetry} /> : null;
-  // Switches between the chosen cutoff's rows and every cutoff's (shown only when it would change the rows).
-  const scopeToggle = (showingAll || allCount > records.length) && (
-    <button className="text-button see-all-toggle" type="button" onClick={() => onShowAllChange(!showingAll)}>
-      {showingAll ? "Show this cutoff only" : `Show all cutoffs (${allCount})`}
-    </button>
+  // This cutoff | All cutoffs: two options and a soft gold thumb that slides between them, like the admin tabs'.
+  const scopeSwitch = showScopeSwitch && (
+    <div className="payroll-scope-switch" role="group" aria-label="Cutoffs shown" ref={scopeRef}>
+      {scopeThumb && (
+        <span
+          className="payroll-scope-thumb"
+          aria-hidden="true"
+          style={{ width: scopeThumb.width, height: scopeThumb.height, transform: `translate(${scopeThumb.x}px, ${scopeThumb.y}px)` }}
+        />
+      )}
+      <button type="button" className={showingAll ? "" : "is-active"} aria-pressed={!showingAll} onClick={() => onShowAllChange(false)}>
+        This cutoff
+      </button>
+      <button type="button" className={showingAll ? "is-active" : ""} aria-pressed={showingAll} onClick={() => onShowAllChange(true)}>
+        All cutoffs
+      </button>
+    </div>
   );
   if (!records.length)
     return (
       failedLine ?? (
         <div className="empty-state payroll-empty">
-          <span>No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance.</span>
-          {scopeToggle}
+          <span>
+            {showingAll ? "No payroll yet." : "No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance."}
+          </span>
+          {scopeSwitch}
         </div>
       )
     );
@@ -7522,77 +7764,78 @@ function PayrollTable({
   return (
     <div className="payroll-table-with-bar">
       {failedLine}
-      <div className="payroll-table-header-bar">
-        <div className="payroll-selection-count">
-          {selectedIds.size > 0 ? (
-            <span className="table-selection-badge">{selectedIds.size} of {records.length} payroll record(s) selected</span>
-          ) : (
-            <span>Total records: {records.length}</span>
-          )}
-          {(showAllPayroll || payrollOverflowing) && (
-            <button
-              className="text-button see-all-toggle"
-              type="button"
-              aria-expanded={showAllPayroll}
-              onClick={() => setShowAllPayroll((current) => !current)}
-            >
-              {showAllPayroll ? "Show less" : `See all (${records.length})`}
-            </button>
-          )}
-          {scopeToggle}
+      {/* While rows are ticked the selection bar takes the list bar's place. Both stay in one grid cell (the bar keeps
+          the taller one's height, so the rows never move); the one not showing is hidden and inert, and they cross-fade. */}
+      <div className="table-header-bar payroll-list-bar">
+        <div className="payroll-bar-layer" ref={listBarRef} aria-hidden={selecting}>
+          <div className="table-selection-count">
+            <span>{`${showingAll ? "All cutoffs" : scopeLabel} · ${records.length} ${records.length === 1 ? "record" : "records"}`}</span>
+            {(showAllPayroll || payrollOverflowing) && (
+              <button
+                className="text-button see-all-toggle"
+                type="button"
+                aria-expanded={showAllPayroll}
+                onClick={() => setShowAllPayroll((current) => !current)}
+              >
+                {showAllPayroll ? "Show less" : "See all"}
+              </button>
+            )}
+          </div>
+          {scopeSwitch}
         </div>
-        <div className="payroll-batch-actions">
-          {selectedIds.size > 0 ? (
-            <>
-              {selectedIds.size < records.length && (
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => setSelectedIds(new Set(records.map((r) => r.payrollId)))}
-                >
-                  Select all ({records.length})
-                </button>
-              )}
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => setSelectedIds(new Set())}
-              >
-                Clear selection
-              </button>
-              {selectedDraftsCount > 0 && (
-                <button
-                  className="admin-button"
-                  type="button"
-                  disabled={finalizing}
-                  onClick={() => setBatchFinalizeOpen(true)}
-                >
-                  Finalize selected ({selectedDraftsCount})
-                </button>
-              )}
-              <button
-                className="admin-button danger-button"
-                type="button"
-                disabled={deletingBatch}
-                onClick={() => setBatchDeleteOpen(true)}
-              >
-                Delete selected ({selectedIds.size})
-              </button>
-            </>
-          ) : (
+        <div
+          className="payroll-bar-layer payroll-selection-bar"
+          role="group"
+          aria-label="Selected payroll records"
+          ref={selectionBarRef}
+          aria-hidden={!selecting}
+        >
+          <div className="table-selection-count">
+            <span className="table-selection-badge">{selectedIds.size} selected</span>
             <button
               className="text-button"
               type="button"
-              onClick={() => setSelectedIds(new Set(records.map((r) => r.payrollId)))}
+              onClick={(event) => {
+                barActionFrom.current = event.currentTarget;
+                setSelectedIds(new Set());
+              }}
             >
-              Select all
+              Clear
             </button>
-          )}
+          </div>
+          <div className="table-batch-actions">
+            {selectedDraftsCount > 0 && (
+              <button
+                className="admin-button"
+                type="button"
+                disabled={finalizing}
+                onClick={(event) => {
+                  barActionFrom.current = event.currentTarget;
+                  setBatchFinalizeOpen(true);
+                }}
+              >
+                Finalize selected
+              </button>
+            )}
+            <button
+              className="admin-button danger-button"
+              type="button"
+              disabled={deletingBatch}
+              onClick={(event) => {
+                barActionFrom.current = event.currentTarget;
+                setBatchDeleteOpen(true);
+              }}
+            >
+              Delete selected
+            </button>
+          </div>
         </div>
       </div>
 
       <div className={`table-wrap ${showAllPayroll ? "is-expanded" : ""}`} ref={payrollWrapRef}>
-        <table>
+        {/* "is-wide" when extra columns show (Period or non-zero optional amounts): on narrower laptops the "payroll-
+            extra" columns, which Breakdown also lists, step aside so Net Pay stays in view beside the actions. */}
+        <table className={showingAll || showDept || showBank || showTin || visibleEarnings.length + visibleDeductions.length > 0 ? "is-wide" : undefined}>
           <thead>
             <tr>
               <th className="payroll-select-col">
@@ -7604,33 +7847,34 @@ function PayrollTable({
                   aria-label="Select all payroll records"
                 />
               </th>
-              <th>Employee #</th>
-              <th>Employee Name</th>
+              <th>Employee</th>
+              <th>Status</th>
               {showingAll && <th>Period</th>}
               {showDept && <th>Dept / Role</th>}
               {showBank && <th>Bank / A/C</th>}
               {showTin && <th>TIN #</th>}
-              <th>Standard</th>
-              <th>Paid Days</th>
-              <th>LWOP</th>
-              <th>Daily Rate</th>
-              <th>Basic Pay</th>
-              {visibleEarnings.map((column) => <th key={column.label}>{column.label}</th>)}
-              <th>Total Earnings</th>
-              {visibleDeductions.map((column) => <th key={column.label}>{column.label}</th>)}
-              <th>Absent</th>
-              <th>Late / Halfday</th>
-              <th>Total Deductions</th>
-              <th>Net Pay</th>
-              <th>Actions</th>
+              <th className="payroll-num payroll-extra">Standard</th>
+              <th className="payroll-num">Paid Days</th>
+              <th className="payroll-num">LWOP</th>
+              <th className="payroll-num payroll-extra">Daily Rate</th>
+              <th className="payroll-num payroll-extra">Basic Pay</th>
+              {visibleEarnings.map((column) => <th key={column.label} className="payroll-num">{column.label}</th>)}
+              <th className="payroll-num">Total Earnings</th>
+              {visibleDeductions.map((column) => <th key={column.label} className="payroll-num">{column.label}</th>)}
+              <th className="payroll-num payroll-extra">Absent</th>
+              <th className="payroll-num payroll-extra">Late / Halfday</th>
+              <th className="payroll-num">Total Deductions</th>
+              <th className="payroll-num payroll-net-cell">Net Pay</th>
+              <th ref={actionsHeadRef}>
+                <span className="visually-hidden">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
+            {/* Calm rows like Attendance corrections: the name with the ID under it, a dot and a word for the status,
+                numbers right-aligned, and the actions as quiet text on one line (Delete last). */}
             {records.map((row) => {
-              const totalDeductions = payrollTotalDeductions(row);
-
-              const netPay = row.netPay;
-
+              const draft = row.status === "DRAFT";
               return (
                 <tr key={row.payrollId} className={selectedIds.has(row.payrollId) ? "selected-row" : ""}>
                   <td className="payroll-select-cell">
@@ -7641,88 +7885,54 @@ function PayrollTable({
                       aria-label={`Select payroll for ${row.employeeName}`}
                     />
                   </td>
-                  <td>{row.employeeId}</td>
-                  <td>
-                    <strong>
-                      {row.employeeType === "INTERN"
-                        ? `${row.employeeName} (Intern)`
-                        : row.employeeName}
-                    </strong>
+                  <td className="payroll-employee-cell">
+                    <strong>{row.employeeName}</strong>
+                    <small>{row.employeeId}</small>
+                  </td>
+                  <td className="payroll-status-cell">
+                    <span className={`payroll-status ${draft ? "is-draft" : "is-finalized"}`}>{draft ? "Draft" : "Finalized"}</span>
                   </td>
                   {showingAll && <td className="payroll-period-cell">{formatCutoffRange(row.cutoffStart, row.cutoffEnd)}</td>}
                   {showDept && <td>{payrollDeptRole(row)}</td>}
                   {showBank && <td>{payrollBankAccount(row)}</td>}
                   {showTin && <td>{row.tin || "—"}</td>}
-                  <td>{row.standardWorkingDays}</td>
-                  <td>{row.actualWorkingDays}</td>
-                  <td>{row.absentDays}</td>
-                  <td>{php(row.dailyRate)}</td>
-                  <td>{php(row.basicPay)}</td>
-                  {visibleEarnings.map((column) => <td key={column.label}>{php(column.value(row))}</td>)}
-                  <td>
+                  <td className="payroll-num payroll-extra">{row.standardWorkingDays}</td>
+                  <td className="payroll-num payroll-paid-cell">{row.actualWorkingDays}</td>
+                  <td className="payroll-num">{row.absentDays}</td>
+                  <td className="payroll-num payroll-extra">{php(row.dailyRate)}</td>
+                  <td className="payroll-num payroll-extra">{php(row.basicPay)}</td>
+                  {visibleEarnings.map((column) => <td key={column.label} className="payroll-num">{php(column.value(row))}</td>)}
+                  <td className="payroll-num">
                     <strong>{php(row.grossCompensation)}</strong>
                   </td>
-                  {visibleDeductions.map((column) => <td key={column.label}>{php(column.value(row))}</td>)}
-                  <td>{php(row.absenceDeduction)}</td>
-                  <td>{php(row.lateDeduction + row.halfDayDeduction)}</td>
-                  <td>
-                    <strong style={{ color: "var(--danger)" }}>{php(totalDeductions)}</strong>
+                  {visibleDeductions.map((column) => <td key={column.label} className="payroll-num">{php(column.value(row))}</td>)}
+                  <td className="payroll-num payroll-extra">{php(row.absenceDeduction)}</td>
+                  <td className="payroll-num payroll-extra">{php(row.lateDeduction + row.halfDayDeduction)}</td>
+                  <td className="payroll-num">
+                    <strong>{php(payrollTotalDeductions(row))}</strong>
                   </td>
-                  <td style={{ backgroundColor: "#fef08a" }}>
-                    <strong style={{ color: "#854d0e" }}>{php(netPay)}</strong>
+                  <td className="payroll-num payroll-net-cell">
+                    <strong>{php(row.netPay)}</strong>
                   </td>
                   <td className="payroll-actions-cell">
-                    {row.status === "DRAFT" ? (
-                      <span className="payroll-row-actions">
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => setBreakdownTarget(row)}
-                        >
-                          Breakdown
-                        </button>
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => setEditTarget(row)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="text-button"
-                          type="button"
-                          disabled={finalizing}
-                          onClick={() => setFinalizeTarget(row)}
-                        >
-                          Finalize
-                        </button>
-                        <button
-                          className="text-button danger-button"
-                          type="button"
-                          onClick={() => setDeleteTarget(row)}
-                        >
-                          Delete
-                        </button>
-                      </span>
-                    ) : (
-                      <span className="payroll-row-actions">
-                        <span className="payroll-finalized-label">Finalized</span>
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => setBreakdownTarget(row)}
-                        >
-                          Breakdown
-                        </button>
-                        <button
-                          className="text-button danger-button"
-                          type="button"
-                          onClick={() => setDeleteTarget(row)}
-                        >
-                          Delete
-                        </button>
-                      </span>
-                    )}
+                    <span className="payroll-row-actions">
+                      <button className="text-button" type="button" onClick={() => setBreakdownTarget(row)}>
+                        Breakdown
+                      </button>
+                      {draft && (
+                        <>
+                          <button className="text-button" type="button" onClick={() => setEditTarget(row)}>
+                            Edit
+                          </button>
+                          <button className="text-button" type="button" disabled={finalizing} onClick={() => setFinalizeTarget(row)}>
+                            Finalize
+                          </button>
+                        </>
+                      )}
+                      <button className="text-button danger-button" type="button" onClick={() => setDeleteTarget(row)}>
+                        Delete
+                      </button>
+                    </span>
                   </td>
                 </tr>
               );
@@ -7867,17 +8077,23 @@ function parseCalculationBreakdown(
  * offers Open PDF (system default viewer) and Show in Folder actions backed by
  * the existing opener commands; nothing is ever printed from the browser.
  */
-function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
+function PayrollPdfList({ pdfs, records }: { pdfs: PayrollPdfRecord[]; records: readonly PayrollCutoffRecord[] }) {
   const [actionMessage, setActionMessage] = useState<Notice | null>(null);
   // Months opened or closed by hand; the latest month starts open and older months start closed.
   const [toggledMonths, setToggledMonths] = useState<ReadonlySet<string>>(new Set());
-  const sorted = [...pdfs].sort((a, b) =>
-    b.generatedAt.localeCompare(a.generatedAt),
-  );
+  const sorted = [...pdfs].sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
   if (!sorted.length)
     return (
-      <div className="empty-state">No PDFs yet. Finalize the cutoff, then Download payroll PDF.</div>
+      <div className="empty-state">No PDFs yet. Finalize the cutoff, then select Make payroll PDF.</div>
     );
+  // "Latest" marks each cutoff's newest copy, and only while it still matches that cutoff's approved pay.
+  const latestIds = new Set<string>();
+  const seenCutoffs = new Set<string>();
+  for (const pdf of sorted) {
+    const cutoff = `${pdf.cutoffStart}|${pdf.cutoffEnd}`;
+    if (!seenCutoffs.has(cutoff) && pdfMatchesPayroll(pdf, records)) latestIds.add(pdf.payrollPdfId);
+    seenCutoffs.add(cutoff);
+  }
   // One fold per cutoff month, newest month first; PDFs inside stay newest-generated first.
   const months: { key: string; label: string; pdfs: PayrollPdfRecord[] }[] = [];
   for (const pdf of sorted) {
@@ -7905,11 +8121,12 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
           <thead>
             <tr>
               <th>Period</th>
-              <th>Type</th>
               <th>Generated</th>
               <th>Interns</th>
-              <th>Total</th>
-              <th>Actions</th>
+              <th>Total earnings</th>
+              <th>
+                <span className="visually-hidden">Actions</span>
+              </th>
             </tr>
           </thead>
           {months.map((month, index) => {
@@ -7917,7 +8134,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
             return (
               <tbody key={month.key} className="payroll-pdf-month">
                 <tr>
-                  <th colSpan={6} scope="rowgroup">
+                  <th colSpan={5} scope="rowgroup">
                     <button type="button" aria-expanded={open} onClick={() => toggleMonth(month.key)}>
                       {month.label} <span className="db-backup-count">{month.pdfs.length}</span>
                     </button>
@@ -7926,10 +8143,9 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
                 {open && month.pdfs.map((pdf) => (
                   <tr key={pdf.payrollPdfId}>
                     <td>
-                      <strong>{pdf.payrollCutoffLabel}</strong>
-                      <small>{formatCutoffRange(pdf.cutoffStart, pdf.cutoffEnd)}</small>
+                      <span className="payroll-pdf-period">{pdf.payrollCutoffLabel}</span>
+                      {latestIds.has(pdf.payrollPdfId) && <span className="payroll-pdf-latest">Latest</span>}
                     </td>
-                    <td>Intern</td>
                     <td>{formatDateTime(pdf.generatedAt)}</td>
                     <td>{pdf.employeeCount}</td>
                     <td>
@@ -7950,7 +8166,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   );
 }
 
-/** Open PDF and Show in Folder for one generated payroll PDF; a file that can't be opened reports why. */
+/** Open PDF and Show in folder for one generated payroll PDF; a file that can't be opened reports why. */
 function PayrollPdfButtons({ filePath, onResult }: { filePath: string; onResult: (notice: Notice | null) => void }) {
   const run = async (action: (filePath: string) => Promise<FileActionResult>) => {
     const result = await action(filePath);
@@ -7962,34 +8178,9 @@ function PayrollPdfButtons({ filePath, onResult }: { filePath: string; onResult:
         Open PDF
       </button>
       <button className="text-button" type="button" onClick={() => void run(revealGeneratedFile)}>
-        Show in Folder
+        Show in folder
       </button>
     </>
-  );
-}
-
-/** The chosen cutoff's PDFs beside the export buttons, newest first; the full history stays at the bottom. */
-function CutoffPdfList({ pdfs, heading }: { pdfs: PayrollPdfRecord[]; heading: string }) {
-  const [actionMessage, setActionMessage] = useState<Notice | null>(null);
-  return (
-    <div className="payroll-cutoff-pdfs">
-      <h3 id="payroll-cutoff-pdfs-heading">{heading}</h3>
-      {pdfs.length ? (
-        <ul aria-labelledby="payroll-cutoff-pdfs-heading">
-          {pdfs.map((pdf) => (
-            <li key={pdf.payrollPdfId}>
-              <span>{formatDateTime(pdf.generatedAt)}</span>
-              <span className="payroll-pdf-actions">
-                <PayrollPdfButtons filePath={pdf.filePath} onResult={setActionMessage} />
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="payroll-cutoff-pdfs-empty">No PDF for this cutoff yet.</p>
-      )}
-      <NoticeLine notice={actionMessage} />
-    </div>
   );
 }
 
