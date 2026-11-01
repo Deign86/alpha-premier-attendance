@@ -968,7 +968,10 @@ describe('RFID kiosk', () => {
     await user.keyboard('{Enter}');
     await screen.findByText('ABCD1234');
     expect(screen.getByLabelText(/^user id/i)).toHaveFocus();
+    expect(screen.getByLabelText(/^user id/i)).toHaveAttribute('placeholder', 'e.g. APG-2026-001');
     await user.type(screen.getByLabelText(/^user id/i), 'EMP-002');
+    // Not the usual intern format: a quiet hint under the field, and Save still works below.
+    expect(screen.getByText('Usual format: APG-YYYY-NNN')).toBeInTheDocument();
     await user.type(screen.getByLabelText(/full name/i), '  grace   hopper  ');
     fireEvent.blur(screen.getByLabelText(/full name/i));
     expect(screen.getByLabelText(/full name/i)).toHaveValue('Grace Hopper');
@@ -981,6 +984,35 @@ describe('RFID kiosk', () => {
         body: expect.stringContaining('"fullName":"Grace Hopper"'),
       }),
     );
+  });
+
+  it('shows no User ID format hint for an existing card saved with another ID style', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config Response mock (long auto-submit delay: the card is submitted with Enter)
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 5_000, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      }
+      if (url.includes('/api/setup/unlock')) {
+        // SAFETY: Fetch returns unlock Response mock
+        return { ok: true, json: async () => ({ success: true, setupToken: 'setup-token', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/setup/card')) {
+        // SAFETY: Fetch returns an existing demo card
+        return { ok: true, json: async () => ({ success: true, rfidUid: 'DEMO0002', user: { userId: 'APG-DEMO-002', fullName: 'Juan Dela Cruz', department: 'IT', status: 'ACTIVE', rfidUid: 'DEMO0002', cardType: 'EMPLOYEE', gender: null, dailyRate: null, photoUrl: null } }) } as Response;
+      }
+      // SAFETY: Fetch returns fallback Response mock
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.click(screen.getByRole('button', { name: /unlock setup/i }));
+    await user.type(await screen.findByLabelText(/setup card id/i), 'DEMO0002{enter}');
+    expect(await screen.findByLabelText(/^user id/i)).toHaveValue('APG-DEMO-002');
+    expect(screen.queryByText('Usual format: APG-YYYY-NNN')).not.toBeInTheDocument();
   });
 
   it('supports drag and drop photo upload in setup dialog', async () => {
@@ -1667,16 +1699,16 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
 
-      expect(await screen.findByText('Total users: 2')).toBeInTheDocument();
+      expect(await screen.findByText('2 users')).toBeInTheDocument();
       const masterCheckbox = screen.getByRole('checkbox', { name: /select all users/i });
       expect(masterCheckbox).not.toBeChecked();
 
       await user.click(masterCheckbox);
       expect(masterCheckbox).toBeChecked();
-      expect(await screen.findByText('2 of 2 user(s) selected')).toBeInTheDocument();
+      const selectionBar = await screen.findByRole('group', { name: 'Selected users' });
+      expect(within(selectionBar).getByText('2 selected')).toBeInTheDocument();
 
-      const batchDeleteBtn = screen.getByRole('button', { name: /delete selected \(2\)/i });
-      await user.click(batchDeleteBtn);
+      await user.click(within(selectionBar).getByRole('button', { name: 'Delete' }));
 
       expect(screen.getByRole('dialog', { name: /delete selected users\?/i })).toBeInTheDocument();
       expect(screen.getByText('Are you sure you want to delete 2 selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
@@ -1734,7 +1766,7 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
 
-      expect(await screen.findByText('Total users: 2')).toBeInTheDocument();
+      expect(await screen.findByText('2 users')).toBeInTheDocument();
       expect(screen.getByRole('columnheader', { name: 'Voice' })).toBeInTheDocument();
       // Ada has a bundled manifest clip: Bea badge + Play + Regenerate.
       const adaRow = (await screen.findByText('Ada Lovelace')).closest('tr');

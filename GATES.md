@@ -1685,3 +1685,15 @@ unchanged.
   EXPECT: all pass; server, src-tauri, shared and client/src/api.ts untouched by this batch.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 24 files / 460 tests passed.
 - [x] Review (3 lenses, each finding verified, 10 distinct problems fixed): earlier coral errors now clear when a later action succeeds; Attendance corrections drops the old date's rows, count, selection and export while a new date loads or fails; batch actions report partial failures inline instead of a success note; the backup list shows the reason and no futile Retry in the browser; payroll See all survives Retry; the update's release date uses Manila time; notes sit above the update banner; the users load error has margins; the note region no longer re-reads every note; dead CSS removed.
+
+## UI revamp batch 6: Users and RFID (client only; U6, U7)
+
+- [x] U6: one count ("41 users" / "39 of 41 match"), See all / Show fewer without a number, the header tick box selects the rows shown (half-ticked when some are), and ticking rows swaps the list bar for "N selected · Clear" with Set active, Set inactive and Delete (existing batch handlers; partial failures inline); focus returns to the tick box when the bar hides; Sync DTR has no batch version, so it stays as "Sync Interns to DTR" on the normal bar.
+  EVIDENCE: live shots b6-after-list, b6-after-selected (1366) and b6-after-selected-390; tests for the bar, Clear, Delete confirm and Set inactive pass.
+- [x] U7: User ID placeholder "e.g. APG-2026-001" in the registration pop-up and the kiosk card setup; a muted "Usual format: APG-YYYY-NNN" hint while the value doesn't match, never blocking Save (demo IDs still save); off for admin cards and edit mode.
+  EVIDENCE: shots b6-after-add-hint and b6-after-kiosk-hint; pop-up 860x591 and kiosk dialog 677px at 1366x768, no scrolling.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 24 files / 469 tests passed.
+- [x] Review (3 lenses, each finding verified, 7 distinct problems fixed): the kiosk hint shows only for new cards; both bar layers share one grid cell so the list never jumps (measured equal heights at 320, 390, 430, 480, 540, 768, 1366); a search unticks rows it hides and the count and actions use shown rows only; focus hand-off only when the bar started the action and never behind a pop-up; kiosk 24px row gap only above 600px; the hint is a description (aria-describedby), not part of the field name; focus returns to the bar after a partial failure.

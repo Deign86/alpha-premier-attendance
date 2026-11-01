@@ -1816,8 +1816,26 @@ function SetupSteps({ current }: { current: 1 | 2 | 3 }) {
   );
 }
 
+/** Intern User IDs usually look like APG-2026-001. Only a nudge while typing: demo IDs and others still save. */
+const USUAL_USER_ID = /^APG-\d{4}-\d{3}$/i;
+function unusualUserId(userId: string): boolean {
+  const value = userId.trim();
+  return value !== "" && !USUAL_USER_ID.test(value);
+}
+/** Under the User ID field. Kept out of the field's name (aria-hidden); the field reads it as its description. */
+function UserIdFormatHint({ id }: { id: string }) {
+  return (
+    <small id={id} className="user-id-hint" aria-hidden="true">
+      Usual format: APG-YYYY-NNN
+    </small>
+  );
+}
+
 function SetupDialog(props: SetupDialogProps) {
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  // New cards only: an existing card keeps the ID it was saved with.
+  const userIdHintId = useId();
+  const showUserIdHint = !props.user && unusualUserId(props.form.userId);
   // The save step puts the cursor in its first field once, when it opens for a card (not on card-type switches).
   const saveFormRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
@@ -2040,9 +2058,11 @@ function SetupDialog(props: SetupDialogProps) {
               </div>
             ) : (
               <div className="setup-fields" key="intern-card">
-                <label>
+                <label className="user-id-field">
                   <span className="field-label">User ID</span>
                   <input
+                    placeholder="e.g. APG-2026-001"
+                    aria-describedby={showUserIdHint ? userIdHintId : undefined}
                     value={props.form.userId}
                     onChange={(event) =>
                       props.onFormChange("userId", event.target.value.toUpperCase())
@@ -2053,6 +2073,7 @@ function SetupDialog(props: SetupDialogProps) {
                     autoComplete="off"
                     required
                   />
+                  {showUserIdHint && <UserIdFormatHint id={userIdHintId} />}
                 </label>
                 <label>
                   <span className="field-label">Full name</span>
@@ -4746,9 +4767,16 @@ export function UserEditor({
   }, [safeUsers, userSearch]);
   const isUserFiltering = userSearch.trim().length > 0;
 
-  // "Select all" acts on the rows the search currently shows, never on hidden users.
-  const allUsersSelected = filteredUsers.length > 0 && filteredUsers.every((u) => selectedUserIds.has(u.userId));
-  const someUsersSelected = selectedUserIds.size > 0 && !allUsersSelected;
+  // Ticks belong to the rows on screen: the header tick box, the count and the batch actions all work from the rows
+  // the search shows, and a search that hides a ticked user unticks it (below), so nothing acts on unseen users.
+  const tickedUsers = filteredUsers.filter((u) => selectedUserIds.has(u.userId));
+  const allUsersSelected = filteredUsers.length > 0 && tickedUsers.length === filteredUsers.length;
+  const someUsersSelected = tickedUsers.length > 0 && !allUsersSelected;
+  const usersSelecting = tickedUsers.length > 0;
+  const listBarRef = useRef<HTMLDivElement>(null);
+  const selectionBarRef = useRef<HTMLDivElement>(null);
+  // The selection-bar button that started the last action, so the focus can come back after it is disabled or hidden.
+  const barActionFrom = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (masterUserCheckboxRef.current) {
@@ -4756,18 +4784,44 @@ export function UserEditor({
     }
   }, [someUsersSelected]);
 
+  // The bar that isn't showing can't be clicked or tabbed into (React 18 has no inert prop).
+  useLayoutEffect(() => {
+    listBarRef.current?.toggleAttribute("inert", usersSelecting);
+    selectionBarRef.current?.toggleAttribute("inert", !usersSelecting);
+  }, [usersSelecting]);
+
+  // When an action started from the selection bar ends, put the focus somewhere sensible if the bar dropped it: the
+  // header tick box once the bar hides, else back on the button (it was disabled while the action ran). Only when the
+  // focus fell to the page or is still in the hidden bar, and never while a pop-up is open.
+  useLayoutEffect(() => {
+    const from = barActionFrom.current;
+    if (!from || batchUpdatingUsers || document.querySelector("[aria-modal='true']")) return;
+    barActionFrom.current = null;
+    const focus = document.activeElement;
+    if (!usersSelecting) {
+      if (focus === document.body || selectionBarRef.current?.contains(focus)) {
+        masterUserCheckboxRef.current?.focus({ preventScroll: true });
+      }
+    } else if (focus === document.body) {
+      const target = from.disabled || !from.isConnected
+        ? selectionBarRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+        : from;
+      target?.focus({ preventScroll: true });
+    }
+  }, [usersSelecting, batchUpdatingUsers]);
+
   useEffect(() => {
     setSelectedUserIds((prev) => {
-      const valid = new Set(safeUsers.map((u) => u.userId));
+      const shown = new Set(filteredUsers.map((u) => u.userId));
       let changed = false;
       const next = new Set<string>();
       for (const id of prev) {
-        if (valid.has(id)) next.add(id);
+        if (shown.has(id)) next.add(id);
         else changed = true;
       }
       return changed ? next : prev;
     });
-  }, [safeUsers]);
+  }, [filteredUsers]);
 
   const toggleSelectAllUsers = () => {
     if (allUsersSelected) {
@@ -4787,10 +4841,10 @@ export function UserEditor({
   };
 
   const removeBatchUsers = async () => {
-    if (selectedUserIds.size === 0) return;
+    if (tickedUsers.length === 0) return;
     setBatchDeleteUsersOpen(false);
     setBatchUpdatingUsers(true);
-    const ids = Array.from(selectedUserIds);
+    const ids = tickedUsers.map((u) => u.userId);
     const failed: string[] = [];
     for (const id of ids) {
       const deleted = await deleteAdminUser(id).then((res) => res.success, () => false);
@@ -4811,9 +4865,9 @@ export function UserEditor({
   };
 
   const setStatusBatchUsers = async (status: "ACTIVE" | "INACTIVE") => {
-    if (selectedUserIds.size === 0) return;
+    if (tickedUsers.length === 0) return;
     setBatchUpdatingUsers(true);
-    const targetUsers = safeUsers.filter((u) => selectedUserIds.has(u.userId));
+    const targetUsers = tickedUsers;
     const failed: string[] = [];
     for (const u of targetUsers) {
       const saved = await saveAdminUser({ ...u, status }, u.userId).then((res) => res.success, () => false);
@@ -4844,6 +4898,9 @@ export function UserEditor({
   const userFormRef = useRef<HTMLElement>(null);
   const [formOpen, setFormOpen] = useState(Boolean(editing));
   const formDirty = formOpen && (photoUploading || userFormChanged(form, editing ?? blankUser));
+  // Not while editing: the ID is locked then, and older IDs are fine as they are.
+  const userIdHintId = useId();
+  const showUserIdHint = !editing && unusualUserId(form.userId);
   // Bumped whenever the form is reset or switched, so a photo upload that finishes later can tell it is stale.
   const formSession = useRef(0);
   // The record being edited right now (delete and batch actions read it after their awaits).
@@ -5151,11 +5208,13 @@ export function UserEditor({
             </Fragment>
           ) : (
             <Fragment key="intern-card">
-              <label>
+              <label className="user-id-field">
                 User ID
                 <input
                   required
                   disabled={Boolean(editing)}
+                  placeholder="e.g. APG-2026-001"
+                  aria-describedby={showUserIdHint ? userIdHintId : undefined}
                   value={form.userId}
                   onChange={(e) =>
                     setForm({ ...form, userId: e.target.value.toUpperCase() })
@@ -5167,6 +5226,7 @@ export function UserEditor({
                     }))
                   }
                 />
+                {showUserIdHint && <UserIdFormatHint id={userIdHintId} />}
               </label>
               <label>
                 RFID UID
@@ -5376,99 +5436,101 @@ export function UserEditor({
       </div>
       )}
       <section className={`table-with-bar users-table-section ${usersCapped ? "is-capped" : ""}`}>
-        <div className="table-header-bar">
-          <div className="table-selection-count">
-            {selectedUserIds.size > 0 ? (
-              <span className="table-selection-badge">{selectedUserIds.size} of {safeUsers.length} user(s) selected</span>
-            ) : isUserFiltering ? (
-              <span>Showing {filteredUsers.length} of {safeUsers.length} users</span>
-            ) : (
-              <span>Total users: {safeUsers.length}</span>
-            )}
-            {(showAllUsers || usersOverflowing) && (
+        {/* While rows are ticked the selection bar takes the list bar's place. Both stay mounted in the same spot (the
+            voice chip keeps polling, and the bar keeps the taller one's height so the list never moves); the one not
+            showing is hidden and inert, and the two cross-fade. */}
+        <div className="table-header-bar users-list-bar">
+          <div className="users-bar-layer" ref={listBarRef} aria-hidden={usersSelecting}>
+            <div className="table-selection-count">
+              <span>
+                {isUserFiltering
+                  ? `${filteredUsers.length} of ${safeUsers.length} match`
+                  : `${safeUsers.length} ${safeUsers.length === 1 ? "user" : "users"}`}
+              </span>
+              {(showAllUsers || usersOverflowing) && (
+                <button
+                  className="text-button see-all-toggle"
+                  type="button"
+                  aria-expanded={showAllUsers}
+                  onClick={() => setShowAllUsers((current) => !current)}
+                >
+                  {showAllUsers ? "Show fewer" : "See all"}
+                </button>
+              )}
+              <VoiceWorkerChip refreshKey={safeUsers.length} />
+            </div>
+            <div className="table-batch-actions">
               <button
-                className="text-button see-all-toggle"
+                className="admin-button"
                 type="button"
-                aria-expanded={showAllUsers}
-                onClick={() => setShowAllUsers((current) => !current)}
+                data-testid="dtr-sync-bulk"
+                disabled={Boolean(syncingDtrUserId) || dtrSyncActive}
+                onClick={() => void handleSyncDtr()}
               >
-                {showAllUsers ? "Show less" : `See all (${filteredUsers.length})`}
+                {syncingDtrUserId === "ALL" ? "Syncing DTR…" : "Sync Interns to DTR"}
               </button>
-            )}
-            <VoiceWorkerChip refreshKey={safeUsers.length} />
+              {/* Stays on the page under the pop-up, so focus can come back to it when the form closes. */}
+              <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
+                <Plus size={15} aria-hidden="true" /> Add user
+              </button>
+            </div>
           </div>
-          <div className="table-batch-actions">
-            {selectedUserIds.size > 0 ? (
-              <>
-                {!allUsersSelected && (
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => setSelectedUserIds(new Set(filteredUsers.map((u) => u.userId)))}
-                  >
-                    Select all ({filteredUsers.length})
-                  </button>
-                )}
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => setSelectedUserIds(new Set())}
-                >
-                  Clear selection
-                </button>
-                <button
-                  className="admin-button"
-                  type="button"
-                  disabled={batchUpdatingUsers}
-                  onClick={() => void setStatusBatchUsers("ACTIVE")}
-                >
-                  Set Active ({selectedUserIds.size})
-                </button>
-                <button
-                  className="admin-button"
-                  type="button"
-                  disabled={batchUpdatingUsers}
-                  onClick={() => void setStatusBatchUsers("INACTIVE")}
-                >
-                  Set Inactive ({selectedUserIds.size})
-                </button>
-                <button
-                  className="admin-button danger-button"
-                  type="button"
-                  disabled={batchUpdatingUsers}
-                  onClick={() => setBatchDeleteUsersOpen(true)}
-                >
-                  Delete selected ({selectedUserIds.size})
-                </button>
-                {/* Stays on the page under the pop-up, so focus can come back to it when the form closes. */}
-                <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
-                  <Plus size={15} aria-hidden="true" /> Add user
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => setSelectedUserIds(new Set(filteredUsers.map((u) => u.userId)))}
-                >
-                  Select all
-                </button>
-                <button
-                  className="admin-button"
-                  type="button"
-                  data-testid="dtr-sync-bulk"
-                  disabled={Boolean(syncingDtrUserId) || dtrSyncActive}
-                  onClick={() => void handleSyncDtr()}
-                >
-                  {syncingDtrUserId === "ALL" ? "Syncing DTR…" : "Sync Interns to DTR"}
-                </button>
-                {/* Stays on the page under the pop-up, so focus can come back to it when the form closes. */}
-                <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
-                  <Plus size={15} aria-hidden="true" /> Add user
-                </button>
-              </>
-            )}
+          {/* No Sync DTR here: DTR sync runs for one intern or for all, never for a picked few. */}
+          <div
+            className="users-bar-layer users-selection-bar"
+            role="group"
+            aria-label="Selected users"
+            ref={selectionBarRef}
+            aria-hidden={!usersSelecting}
+          >
+            <div className="table-selection-count">
+              <span className="table-selection-badge">{tickedUsers.length} selected</span>
+              <button
+                className="text-button"
+                type="button"
+                onClick={(event) => {
+                  barActionFrom.current = event.currentTarget;
+                  setSelectedUserIds(new Set());
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="table-batch-actions">
+              <button
+                className="admin-button"
+                type="button"
+                disabled={batchUpdatingUsers}
+                onClick={(event) => {
+                  barActionFrom.current = event.currentTarget;
+                  void setStatusBatchUsers("ACTIVE");
+                }}
+              >
+                Set active
+              </button>
+              <button
+                className="admin-button"
+                type="button"
+                disabled={batchUpdatingUsers}
+                onClick={(event) => {
+                  barActionFrom.current = event.currentTarget;
+                  void setStatusBatchUsers("INACTIVE");
+                }}
+              >
+                Set inactive
+              </button>
+              <button
+                className="admin-button danger-button"
+                type="button"
+                disabled={batchUpdatingUsers}
+                onClick={(event) => {
+                  barActionFrom.current = event.currentTarget;
+                  setBatchDeleteUsersOpen(true);
+                }}
+              >
+                Delete
+              </button>
+            </div>
           </div>
         </div>
         {syncingDtrUserId !== null && (
@@ -5665,9 +5727,13 @@ export function UserEditor({
         busy={batchUpdatingUsers}
         tone="danger"
         title="Delete selected users?"
-        message={`Are you sure you want to delete ${selectedUserIds.size} selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.`}
+        message={`Are you sure you want to delete ${tickedUsers.length} selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.`}
         confirmLabel="Delete users"
-        onCancel={() => setBatchDeleteUsersOpen(false)}
+        onCancel={() => {
+          // Focus goes back to Delete by itself; nothing for the bar to restore.
+          barActionFrom.current = null;
+          setBatchDeleteUsersOpen(false);
+        }}
         onConfirm={() => void removeBatchUsers()}
       />
       <ConfirmDialog

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DatabasePanel, UserEditor } from './App';
 import { Toasts } from './toasts';
@@ -1151,26 +1151,195 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText('DTR idle')).toBeInTheDocument();
   });
 
-  it('Users "Select all" selects only the users the search shows', async () => {
-    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+  const threeInterns = () => {
     const intern = (userId: string, fullName: string) => ({
       userId, rfidUid: `${userId}-UID`, fullName, department: null, status: 'ACTIVE' as const,
       employeeType: 'INTERN' as const, gender: null, dailyRate: null,
     });
+    return [intern('A-1', 'Alex Rivera'), intern('S-2', 'Sam Santos'), intern('A-3', 'Alex Cruz')];
+  };
+
+  it('Users header tick box selects only the users the search shows, with one count', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
     const user = userEvent.setup();
-    render(
-      <UserEditor
-        users={[intern('A-1', 'Alex Rivera'), intern('S-2', 'Sam Santos'), intern('A-3', 'Alex Cruz')]}
-        editing={null}
-        setEditing={() => {}}
-        onSaved={() => {}}
-      />,
-    );
+    render(<UserEditor users={threeInterns()} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    expect(screen.getByText('3 users')).toBeInTheDocument();
+    // The tick box is the only "select all": no separate text button.
+    expect(screen.queryByRole('button', { name: /select all/i })).not.toBeInTheDocument();
+
     await user.type(screen.getByRole('searchbox', { name: 'Search users' }), 'Alex');
-    await user.click(screen.getByRole('button', { name: 'Select all' }));
-    expect(screen.getByText('2 of 3 user(s) selected')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete selected (2)' })).toBeInTheDocument();
+    expect(screen.getByText('2 of 3 match')).toBeInTheDocument();
+    const master = screen.getByRole('checkbox', { name: 'Select all users' });
+    await user.click(master);
+    expect(master).toBeChecked();
+    expect(within(screen.getByRole('group', { name: 'Selected users' })).getByText('2 selected')).toBeInTheDocument();
+
+    // Unticking one leaves the header tick box half-ticked.
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Alex Cruz' }));
+    expect(master).not.toBeChecked();
+    expect(master).toHaveProperty('indeterminate', true);
+  });
+
+  it('Users selection bar shows only while rows are ticked, and Clear empties it', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<UserEditor users={threeInterns()} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    expect(screen.queryByRole('group', { name: 'Selected users' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add user/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Alex Rivera' }));
+    const bar = screen.getByRole('group', { name: 'Selected users' });
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+    for (const name of ['Set active', 'Set inactive', 'Delete', 'Clear']) {
+      expect(within(bar).getByRole('button', { name })).toBeInTheDocument();
+    }
+    // The selection bar takes the list bar's place.
+    expect(screen.queryByRole('button', { name: /add user/i })).not.toBeInTheDocument();
+
+    await user.click(within(bar).getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByRole('group', { name: 'Selected users' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select user Alex Rivera' })).not.toBeChecked();
+    expect(screen.getByText('3 users')).toBeInTheDocument();
+    // Focus moves to the header tick box instead of being lost with the hidden bar.
+    expect(screen.getByRole('checkbox', { name: 'Select all users' })).toHaveFocus();
+  });
+
+  it('Users selection bar Delete confirms before deleting the ticked users', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const deleteSpy = vi.spyOn(api, 'deleteAdminUser').mockResolvedValue({ success: true });
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<UserEditor users={threeInterns()} editing={null} setEditing={() => {}} onSaved={onSaved} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Alex Rivera' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Sam Santos' }));
+
+    await user.click(within(screen.getByRole('group', { name: 'Selected users' })).getByRole('button', { name: 'Delete' }));
+    expect(screen.getByRole('dialog', { name: 'Delete selected users?' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(within(screen.getByRole('group', { name: 'Selected users' })).getByText('2 selected')).toBeInTheDocument();
+
+    await user.click(within(screen.getByRole('group', { name: 'Selected users' })).getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Delete users' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(deleteSpy.mock.calls.map(([id]) => id)).toEqual(['A-1', 'S-2']);
+    expect(screen.queryByRole('group', { name: 'Selected users' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select all users' })).toHaveFocus();
+  });
+
+  it('Users selection bar Set inactive saves each ticked user with the new status', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const saveSpy = vi.spyOn(api, 'saveAdminUser').mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    render(<UserEditor users={threeInterns()} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Sam Santos' }));
+    await user.click(within(screen.getByRole('group', { name: 'Selected users' })).getByRole('button', { name: 'Set inactive' }));
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: 'S-2', status: 'INACTIVE' }), 'S-2'));
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Selected users' })).not.toBeInTheDocument());
+  });
+
+  it('Users search unticks users it hides, so batch actions only reach rows on screen', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const saveSpy = vi.spyOn(api, 'saveAdminUser').mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    render(<UserEditor users={threeInterns()} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Select all users' }));
+    expect(within(screen.getByRole('group', { name: 'Selected users' })).getByText('3 selected')).toBeInTheDocument();
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search users' }), 'Alex');
+    expect(within(screen.getByRole('group', { name: 'Selected users' })).getByText('2 selected')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Select all users' })).toBeChecked();
+    await user.click(within(screen.getByRole('group', { name: 'Selected users' })).getByRole('button', { name: 'Set inactive' }));
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(2));
+    expect(saveSpy.mock.calls.map(([, id]) => id)).toEqual(['A-1', 'A-3']);
+
+    // Clearing the search does not bring Sam's tick back.
+    await user.clear(screen.getByRole('searchbox', { name: 'Search users' }));
+    expect(screen.getByRole('checkbox', { name: 'Select user Sam Santos' })).not.toBeChecked();
+  });
+
+  it('Users selection bar puts focus back on its button when a batch action partly fails', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(api, 'deleteAdminUser').mockImplementation(async (id) => ({ success: id !== 'S-2' }));
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<UserEditor users={threeInterns()} editing={null} setEditing={() => {}} onSaved={onSaved} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Alex Rivera' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Sam Santos' }));
+    const del = within(screen.getByRole('group', { name: 'Selected users' })).getByRole('button', { name: 'Delete' });
+    await user.click(del);
+    // The confirmation closes while Delete is disabled, so the focus first falls to the page.
+    await user.click(screen.getByRole('button', { name: 'Delete users' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+
+    // Sam could not be deleted and stays ticked for another try; the keyboard is back on Delete.
+    expect(within(screen.getByRole('group', { name: 'Selected users' })).getByText('1 selected')).toBeInTheDocument();
+    expect(del).toBeEnabled();
+    expect(del).toHaveFocus();
+  });
+
+  it('Users selection keeps the focus where it is when the bar did not hold it', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const people = threeInterns();
+    const user = userEvent.setup();
+    const { rerender } = render(<UserEditor users={people} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Select user Sam Santos' }));
+    act(() => screen.getByRole('checkbox', { name: 'Select user Sam Santos' }).blur());
+
+    // Sam is removed elsewhere and the list reloads: the bar hides, but nothing pulls the focus to the tick box.
+    rerender(<UserEditor users={people.filter((p) => p.userId !== 'S-2')} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    expect(await screen.findByText('2 users')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Selected users' })).not.toBeInTheDocument();
+    expect(document.body).toHaveFocus();
+  });
+
+  it('User ID shows the example and a quiet format hint while typing, without blocking Save', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const saveSpy = vi.spyOn(api, 'saveAdminUser').mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    render(<UserEditor users={[]} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    await user.click(screen.getByRole('button', { name: /add user/i }));
+    const userId = screen.getByLabelText(/^user id/i);
+    expect(userId).toHaveAttribute('placeholder', 'e.g. APG-2026-001');
+    expect(screen.queryByText('Usual format: APG-YYYY-NNN')).not.toBeInTheDocument();
+
+    await user.type(userId, 'apg-2');
+    expect(userId).toHaveValue('APG-2');
+    expect(screen.getByText('Usual format: APG-YYYY-NNN')).toBeInTheDocument();
+    // Read as the field's description, not as part of its name.
+    expect(userId).toHaveAccessibleName('User ID');
+    expect(userId).toHaveAccessibleDescription('Usual format: APG-YYYY-NNN');
+    await user.type(userId, '026-001');
+    expect(screen.queryByText('Usual format: APG-YYYY-NNN')).not.toBeInTheDocument();
+    expect(userId).not.toHaveAttribute('aria-describedby');
+
+    // A demo ID keeps the hint but still saves.
+    await user.clear(userId);
+    await user.type(userId, 'APG-DEMO-002');
+    expect(screen.getByText('Usual format: APG-YYYY-NNN')).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/rfid uid/i), 'RFID-9');
+    await user.type(screen.getByLabelText(/full name/i), 'Juan Dela Cruz');
+    await user.click(screen.getByRole('button', { name: 'Save user' }));
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: 'APG-DEMO-002' }), undefined));
+  });
+
+  it('User ID hint stays off for admin RFID cards and for a record being edited', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const [alex] = threeInterns();
+    const user = userEvent.setup();
+    const { unmount } = render(<UserEditor users={[]} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    await user.click(screen.getByRole('button', { name: /add user/i }));
+    await user.click(screen.getByRole('radio', { name: /admin rfid card/i }));
+    await user.type(screen.getByLabelText(/identifier \/ user id/i), 'FRONT-DESK');
+    expect(screen.queryByText('Usual format: APG-YYYY-NNN')).not.toBeInTheDocument();
+    unmount();
+
+    // A-1 is not the usual format, but an existing ID is locked and fine as it is.
+    render(<UserEditor users={[alex]} editing={alex} setEditing={() => {}} onSaved={() => {}} />);
+    expect(await screen.findByLabelText(/^user id/i)).toHaveValue('A-1');
+    expect(screen.queryByText('Usual format: APG-YYYY-NNN')).not.toBeInTheDocument();
   });
 
   it('caps the users list, with See all to lift the cap', async () => {
@@ -1202,10 +1371,11 @@ describe('DatabasePanel', () => {
       expect(usersSection).toHaveClass('is-capped');
 
       const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'See all (3)' }));
+      // The toggle no longer repeats the count shown beside it.
+      await user.click(screen.getByRole('button', { name: 'See all' }));
       expect(usersSection).not.toHaveClass('is-capped');
 
-      await user.click(screen.getByRole('button', { name: 'Show less' }));
+      await user.click(screen.getByRole('button', { name: 'Show fewer' }));
       expect(usersSection).toHaveClass('is-capped');
     } finally {
       vi.unstubAllGlobals();

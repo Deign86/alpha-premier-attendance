@@ -4544,7 +4544,6 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .admin-shell .users-table-section .user-search-row { padding: 10px 14px; }
 .admin-shell .users-table-section .user-search-row .input { height: 38px; font-size: .82rem; background-color: rgba(5, 5, 4, .55); border-color: rgba(198, 162, 84, .24); border-radius: 6px; }
 .admin-shell .users-table-section .user-search-row .input:focus { border-color: var(--gold-bright); }
-.admin-shell .users-table-section .table-batch-actions .admin-button { min-height: 32px; padding: 5px 12px; border-radius: 6px; }
 .admin-shell .users-table-section .add-user-button { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); border-color: transparent; }
 .admin-shell .users-table-section .add-user-button:hover:not(:disabled) { color: #11100c; background: linear-gradient(180deg, #ecd28c, #cfac5e); }
 
@@ -4577,10 +4576,9 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .admin-shell .users-table-section td .text-button.danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
 
 /* Tablets and phones: each user becomes a small card (cells placed by position:
-   1 select, 2 user, 3 RFID, 4 status, 5 voice, 6 actions); the visible "Select all" covers the head checkbox. */
+   1 select, 2 user, 3 RFID, 4 status, 5 voice, 6 actions); the heading row shrinks to the tick box (end of file). */
 @media (max-width: 900px) {
   .admin-shell .users-table-section table, .admin-shell .users-table-section tbody { display: block; }
-  .admin-shell .users-table-section thead { display: none; }
   .admin-shell .users-table-section tbody tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "sel user status" ". rfid rfid" ". voice voice" ". act act"; gap: 6px 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid rgba(198, 162, 84, .08); }
   .admin-shell .users-table-section tbody tr:has(> td[colspan]) { display: block; }
   .admin-shell .users-table-section td, .admin-shell .users-table-section td.table-select-cell { width: auto; min-width: 0; max-width: none; padding: 0; border: 0; }
@@ -4917,4 +4915,54 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 
 @media (prefers-reduced-motion: reduce) {
   .toast, .loading-bar { animation: none; }
+}
+
+/* --- Users and RFID: one count, the header tick box and a selection bar ------------------------------------- */
+/* The list's bar holds two layers stacked in one grid cell: its own (the count, See all, the voice chip | Sync,
+   Add user) and, while rows are ticked, the selection bar (how many, Clear | Set active, Set inactive, Delete).
+   The cell takes the taller layer's height, so the list below never moves when they swap; the one not showing is
+   hidden (and inert, set in UserEditor) and the two cross-fade. Buttons match the header's: 34px, 6px corners. */
+.admin-shell .users-list-bar { display: grid; grid-template-columns: minmax(0, 1fr); transition: background-color 200ms ease-out; }
+.admin-shell .users-list-bar:has(> .users-selection-bar:not([aria-hidden="true"])) { background: rgba(198, 162, 84, .07); }
+.admin-shell .users-bar-layer { display: flex; grid-area: 1 / 1; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; transition: opacity 200ms var(--ease-soft), transform 200ms var(--ease-soft), visibility 0s; }
+.admin-shell .users-bar-layer[aria-hidden="true"] { visibility: hidden; opacity: 0; transform: translateY(4px); transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0s linear 120ms; }
+.admin-shell .users-list-bar .table-selection-count { min-height: 34px; color: var(--muted); font-size: .78rem; font-weight: 500; }
+.admin-shell .users-list-bar .table-selection-badge { color: var(--gold-bright); font-size: .78rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.admin-shell .users-list-bar .table-batch-actions { gap: 6px; }
+.admin-shell .users-list-bar .table-batch-actions > button { box-sizing: border-box; min-height: 34px; padding: 6px 12px; border-radius: 6px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .users-selection-bar .admin-button { color: var(--ink); background: transparent; border: 1px solid rgba(198, 162, 84, .28); }
+.admin-shell .users-selection-bar .admin-button:hover:not(:disabled) { color: var(--gold-bright); background: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); }
+.admin-shell .users-selection-bar .admin-button.danger-button { color: var(--danger); background: transparent; border-color: rgba(239, 170, 146, .35); }
+.admin-shell .users-selection-bar .admin-button.danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .7); box-shadow: none; }
+.admin-shell .users-selection-bar .text-button { min-height: 0; padding: 2px 8px; color: var(--muted); border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-shell .users-selection-bar .text-button:hover { color: var(--ink); background: rgba(198, 162, 84, .07); }
+.admin-shell .users-selection-bar button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Tablets and phones: the heading row stays as one slim line with the tick box (selects every row shown) over the
+   cards' tick boxes, the "User" heading and "Status" at the right, like the top line of each card. */
+@media (max-width: 900px) {
+  .admin-shell .users-table-section thead { display: block; position: sticky; top: 0; z-index: 2; background: #17150f; border-bottom: 1px solid rgba(198, 162, 84, .2); }
+  .admin-shell .users-table-section thead tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 0 12px; align-items: center; padding: 8px 14px; }
+  .admin-shell .users-table-section thead th { display: none; }
+  .admin-shell .users-table-section thead th:is(:nth-child(1), :nth-child(2), :nth-child(4)) { display: block; position: static; width: auto; min-width: 0; max-width: none; padding: 0; background: none; border: 0; }
+  .admin-shell .users-table-section thead th:nth-child(4) { justify-self: end; }
+  /* A ticked card tints as one piece with the gold edge on its left, not cell by cell. */
+  .admin-shell .users-table-section tbody tr.selected-row { background: rgba(198, 162, 84, .08); box-shadow: inset 3px 0 0 var(--gold); }
+  .admin-shell .users-table-section tr.selected-row td { background: none !important; }
+  .admin-shell .users-table-section tr.selected-row td:first-child::before { content: none; }
+}
+
+/* User ID: a muted "Usual format" line under the field while the typed ID doesn't look like APG-2026-001. It sits
+   in room kept under the field, so nothing moves while typing: in the pop-up under that row only; in the kiosk
+   dialog wider gaps on larger screens (its three rows keep one height) and that row only on phones. */
+.user-id-field { position: relative; }
+.user-id-hint { position: absolute; top: calc(100% + 2px); left: 0; color: var(--quiet); font-size: .7rem; font-weight: 400; line-height: 1.15; white-space: nowrap; }
+.admin-shell .user-form-dialog label.user-id-field { margin-bottom: 8px; }
+.admin-shell .user-form-dialog form > label { align-self: start; }
+.card-setup-dialog .user-id-hint { font-size: .75rem; line-height: 1.15; }
+@media (min-width: 601px) { .card-setup-dialog .setup-form-save .setup-fields { row-gap: 24px; } }
+@media (max-width: 600px) { .card-setup-dialog .setup-fields label.user-id-field { margin-bottom: 12px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-shell .users-list-bar, .admin-shell .users-bar-layer, .admin-shell .users-bar-layer[aria-hidden="true"] { transition: none; }
 }
