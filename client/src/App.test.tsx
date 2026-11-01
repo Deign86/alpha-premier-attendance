@@ -1121,6 +1121,21 @@ describe('ScannerDiagnostics', () => {
     expect(screen.getByText(/Reader: Keyboard-mode RFID reader/)).toBeInTheDocument();
     expect(screen.getByText(/Keep the attendance window focused before scanning\./)).toBeInTheDocument();
     expect(screen.getByText(/Waiting for card/)).toBeInTheDocument();
+    // No time is made up from when the page opened: without a scan today there is no time line.
+    expect(screen.queryByText(/Last (activity|scan)/)).not.toBeInTheDocument();
+  });
+
+  it("shows the last scan from today's attendance in the details", async () => {
+    vi.spyOn(tauriApi, 'getScannerStatus').mockResolvedValue({
+      state: 'connected',
+      message: 'Keyboard-mode RFID reader ready',
+      detail: null,
+      mode: 'keyboard',
+      paused: false,
+    });
+    render(<ScannerDiagnostics lastScanAt="2026-10-30T16:52:00+08:00" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reader ready' }));
+    expect(screen.getByText('Last scan: 4:52 PM')).toBeInTheDocument();
   });
 
   it('shows a grey Browser mode state instead of checking forever in a web browser', async () => {
@@ -3072,9 +3087,9 @@ describe('Admin Attendance Corrections', () => {
       expect(inHeader.getByRole('link', { name: 'Live view' })).toHaveAttribute('href', '/attendance');
       expect(inHeader.getByRole('button', { name: 'Lock' })).toBeInTheDocument();
 
-      // Below the header, one row with two separate bars: the five section tabs, then the mode switch.
-      // Attendance corrections comes first and is where the admin page opens.
-      const tabNames = ['Attendance corrections', 'Users and RFID', 'Payroll', 'Data and backup', 'Voice announcements'];
+      // Below the header, one row with two separate bars: the six section tabs, then the mode switch.
+      // Attendance corrections comes first and is where the admin page opens; System comes last.
+      const tabNames = ['Attendance corrections', 'Users and RFID', 'Payroll', 'Data and backup', 'Voice announcements', 'System'];
       const tabs = screen.getByRole('button', { name: 'Payroll' }).parentElement;
       expect(within(tabs!).getAllByRole('button').map((tab) => tab.textContent)).toEqual(tabNames);
       expect(within(tabs!).getByRole('button', { name: 'Attendance corrections' })).toHaveAttribute('aria-current', 'page');
@@ -4664,6 +4679,12 @@ describe('Attendance corrections: rows open on Edit', () => {
       await user.click(screen.getByRole('button', { name: 'Keep editing' }));
       expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveAttribute('aria-current', 'page');
       expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // The System tab, last in the bar, asks the same way.
+      await user.click(screen.getByRole('button', { name: 'System' }));
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByRole('button', { name: 'System' })).not.toHaveAttribute('aria-current');
 
       // The 2 key asks too, even with focus on the row's Save button.
       const save = within(juan).getByRole('button', { name: 'Save' });

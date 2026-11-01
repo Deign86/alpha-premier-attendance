@@ -27,6 +27,7 @@ import {
   PlusCircle,
   RefreshCcw,
   Search,
+  Settings,
   ShieldAlert,
   ShieldCheck,
   Upload,
@@ -75,7 +76,6 @@ import {
 import {
   DEFAULT_CONFIG,
   checkAdminSession,
-  createDatabaseBackup,
   deletePayrollCutoff,
   deleteAdminAttendance,
   deleteAdminUser,
@@ -172,6 +172,7 @@ import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
+import { createBackupNow, FridayBackupReminder, LastBackupLine, manilaDay, useBackupCreated, useBackupRunning } from "./backup-reminder";
 import { BathroomKeyLogPanel, getAvatarInitials } from "./bathroom-key-log";
 import { formatCutoffRange, formatDate, formatDateTime, formatDuration, formatLateMinutes, formatMonth, formatTime } from "./format";
 import { useDialogKeys } from "./use-dialog-keys";
@@ -3159,23 +3160,22 @@ function LanViewerPanel({
   );
 }
 
-/** Card reader status for the admin header: a coloured dot and a short word; the details open on click. */
-export function ScannerDiagnostics() {
+type ReaderState = {
+  status: ScannerStatus | null;
+  browserMode: boolean;
+  /** The dot's colour, the header's word and the System tab's shorter word. */
+  reader: { tone: string; word: string; short: string };
+};
+
+/** The card reader's live status, shared by the header dot and the System tab. */
+function useReaderStatus(): ReaderState {
   const [status, setStatus] = useState<ScannerStatus | null>(null);
-  const [lastActivity, setLastActivity] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const detailsId = useId();
   // The browser build has no desktop layer, so no reader status ever arrives there.
   const browserMode = !("__TAURI_INTERNALS__" in window);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listenForScannerStatus((nextStatus) => {
-        setStatus(nextStatus);
-        setLastActivity(new Date().toISOString());
-      })
+    void listenForScannerStatus((nextStatus) => setStatus(nextStatus))
       .then((cleanup) => {
         unlisten = cleanup;
       })
@@ -3183,15 +3183,35 @@ export function ScannerDiagnostics() {
         /* web mode */
       });
     void getScannerStatus()
-      .then((nextStatus) => {
-        setStatus(nextStatus);
-        setLastActivity(new Date().toISOString());
-      })
+      .then((nextStatus) => setStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
     return () => unlisten?.();
   }, []);
+
+  const reader = !status
+    ? browserMode
+      ? { tone: "browser", word: "Browser mode", short: "Only in the desktop app" }
+      : { tone: "checking", word: "Checking…", short: "Checking…" }
+    : status.state === "offline"
+      ? { tone: "missing", word: "Reader missing", short: "Not found" }
+      : status.state === "error"
+        ? { tone: "error", word: "Reader error", short: "Not working" }
+        : { tone: "ready", word: "Reader ready", short: "Ready" };
+  return { status, browserMode, reader };
+}
+
+/**
+ * Card reader status for the admin header: a coloured dot and a short word; the details open on click.
+ * `lastScanAt` is the newest time-in or time-out in today's attendance (the reader itself reports no scan times).
+ */
+export function ScannerDiagnostics({ lastScanAt = null }: { lastScanAt?: string | null }) {
+  const { status, browserMode, reader } = useReaderStatus();
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const detailsId = useId();
 
   // Escape, or a click or keyboard focus anywhere else, closes the details. Escape only brings focus back to the
   // button when focus was on it, so an Escape typed elsewhere on the page never pulls focus up to the header.
@@ -3215,16 +3235,6 @@ export function ScannerDiagnostics() {
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
-
-  const reader = !status
-    ? browserMode
-      ? { tone: "browser", word: "Browser mode" }
-      : { tone: "checking", word: "Checking…" }
-    : status.state === "offline"
-      ? { tone: "missing", word: "Reader missing" }
-      : status.state === "error"
-        ? { tone: "error", word: "Reader error" }
-        : { tone: "ready", word: "Reader ready" };
 
   const stateLabel = {
     connected: "Waiting for card",
@@ -3254,9 +3264,7 @@ export function ScannerDiagnostics() {
                 {status.paused ? "Paused — this screen is typing" : stateLabel[status.state]}
               </p>
               <p>Reader: Keyboard-mode RFID reader</p>
-              <p>
-                Last activity: {lastActivity ? formatTime(lastActivity, "Asia/Manila") : "Not yet recorded"}
-              </p>
+              {lastScanAt && <p>Last scan: {formatTime(lastScanAt)}</p>}
               <p>Keep the attendance window focused before scanning.</p>
               {status.detail && status.detail !== "Keep the attendance window focused before scanning" && (
                 <p>{status.detail}</p>
@@ -3273,6 +3281,18 @@ export function ScannerDiagnostics() {
         </div>
       )}
     </div>
+  );
+}
+
+/** System's card reader line: "Card reader: ● Ready · Last scan 4:52 PM" (the newest time in today's attendance). */
+function ReaderStatusLine({ lastScanAt }: { lastScanAt: string | null }) {
+  const { browserMode, reader } = useReaderStatus();
+  return (
+    <p className={`system-reader is-${reader.tone}`}>
+      Card reader: <i aria-hidden="true" />
+      <strong>{reader.short}</strong>
+      {!browserMode && lastScanAt && <span>{` · Last scan ${formatTime(lastScanAt)}`}</span>}
+    </p>
   );
 }
 
@@ -3380,15 +3400,17 @@ function AttendanceTable({
   );
 }
 
-type AdminTab = "users" | "attendance" | "payroll" | "data" | "voice";
+type AdminTab = "users" | "attendance" | "payroll" | "data" | "voice" | "system";
 
-// Attendance corrections first: it is the main reason an admin opens this page.
+// Attendance corrections first: it is the main reason an admin opens this page. System (updates, startup, the reader
+// and technical details) last: it is rarely needed.
 const ADMIN_TABS = [
   { id: "attendance", label: "Attendance corrections", Icon: ClipboardCheck },
   { id: "users", label: "Users and RFID", Icon: Users },
   { id: "payroll", label: "Payroll", Icon: Wallet },
   { id: "data", label: "Data and backup", Icon: Database },
   { id: "voice", label: "Voice announcements", Icon: Volume2 },
+  { id: "system", label: "System", Icon: Settings },
 ] satisfies { id: AdminTab; label: string; Icon: LucideIcon }[];
 
 type ActiveThumb = { x: number; y: number; width: number; height: number };
@@ -3418,6 +3440,17 @@ function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey
     return () => observer.disconnect();
   }, [ref, activeKey]);
   return thumb;
+}
+
+/** The newest time-in or time-out among the rows; null when there is none. */
+function newestPunchAt(rows: readonly AttendanceListItem[]): string | null {
+  let newest: string | null = null;
+  for (const row of rows) {
+    for (const at of [row.timeIn, row.timeOut]) {
+      if (at && (!newest || Date.parse(at) > Date.parse(newest))) newest = at;
+    }
+  }
+  return newest;
 }
 
 function AdminPanel() {
@@ -3575,6 +3608,12 @@ function AdminPanel() {
   const usersList = useListLoad(fetchUsers, [], unlocked);
   const rowsList = useListLoad(fetchRows, [], unlocked);
   const cutoffsList = useListLoad(fetchCutoffs, [], unlocked);
+  // The reader's "last scan" (it reports no scan times itself): the newest time in today's rows. It stays while
+  // another date is open, so looking at an older day doesn't hide it.
+  const [lastScanAt, setLastScanAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (date === localDate() && rowsList.status === "ready") setLastScanAt(newestPunchAt(rowsList.data));
+  }, [date, rowsList.status, rowsList.data]);
   const users = usersList.data;
   // After a save or delete every list refreshes in place (names and pay can change with it).
   const refreshUsers = usersList.refresh;
@@ -3682,7 +3721,7 @@ function AdminPanel() {
           </p>
         </div>
         <div className="admin-header-actions">
-          <ScannerDiagnostics />
+          <ScannerDiagnostics lastScanAt={lastScanAt} />
           <nav>
             <a href="/" onClick={leaveLink}><Nfc size={16} aria-hidden="true" /> Scanner</a>
             <a href="/attendance" onClick={leaveLink}><Activity size={16} aria-hidden="true" /> Live view</a>
@@ -3714,6 +3753,7 @@ function AdminPanel() {
           </nav>
         </div>
       </header>
+      <FridayBackupReminder users={users} />
       {/* Two separate glass bars on one row: the section tabs (Attendance mode only) and the mode switch. */}
       <div className="admin-toolbar">
         {adminMode === "attendance" && (
@@ -3797,8 +3837,10 @@ function AdminPanel() {
             />
           ) : tab === "voice" ? (
             <VoiceSettingsPanel />
+          ) : tab === "system" ? (
+            <SystemPanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} lastScanAt={lastScanAt} />
           ) : (
-            <DatabasePanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} />
+            <DatabasePanel />
           )}
         </>
       )}
@@ -3946,37 +3988,118 @@ type SyncHealthState =
 
 type StoppedDtrSync = { tab: string; userId: string | null };
 
-function dtrHealthCopy(health: DtrSyncHealth | null, stale: boolean): string | null {
-  if (stale) return "DTR status update delayed";
-  const dtr = health?.dtr;
-  if (!dtr) return null;
-  if (dtr.activity === "unavailable") return "DTR status unavailable. Attendance continues to save locally.";
-  if (dtr.retryablePending > 0) {
-    const eligibility = dtr.nextRetryEligibleAt
-      ? ` Next retry eligibility: ${formatDateTime(dtr.nextRetryEligibleAt)}.`
-      : "";
-    return `${dtr.retryablePending} punches are waiting for retry. Retry attempts are bounded.${eligibility}`;
-  }
-  if (!dtr.enabled || dtr.activity === "disabled") return "Sheet syncing paused; attendance recording continues.";
-  if (dtr.dead > 0) return `Some punches need admin help (${dtr.dead} permanently failed).`;
-  if (dtr.needsAttention > 0) return "Punches need admin attention before they can sync.";
-  if (dtr.persistenceFailure || dtr.currentIssue === "persistence") return "An attendance punch could not be queued for DTR sync; notify an administrator.";
-  if (dtr.currentIssue === "auth_config" || dtr.currentIssue === "unresolved_layout") return "Punches need admin attention before they can sync.";
-  if (dtr.activity === "throttled") return "Google Sheets is rate-limiting sync. Punches are safe and waiting.";
-  if (dtr.activity === "retrying") return "DTR retry attempts are in progress; attempts are bounded.";
-  if (dtr.activity === "offline") return "DTR connection unavailable.";
-  if (dtr.retryablePending > 0 || dtr.activity === "queued" || dtr.queued > 0) return "Punches are waiting in the DTR queue.";
-  return null;
+/** "12:50 PM" for today, "Oct 29, 2026, 12:50 PM" for another day (office time). */
+function clockTime(value: string): string {
+  return manilaDay(new Date(value)) === manilaDay(new Date()) ? formatTime(value) : formatDateTime(value);
 }
 
-export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) {
-  // Results that need reading stay on the page; routine ones (backup created, saved a copy) show as toasts.
-  const [message, setMessage] = useState<Notice | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [stoppedDtrSync, setStoppedDtrSync] = useState<StoppedDtrSync | null>(null);
-  const [backupResult, setBackupResult] = useState<GeneratedFileResult | null>(
-    null,
+type SheetsStatus = { tone: "ok" | "waiting" | "failed" | "quiet"; text: string };
+
+/** "1 record", "12 records". */
+function recordCount(count: number): string {
+  return `${count} record${count === 1 ? "" : "s"}`;
+}
+
+/** What uploading off means, shown under the tick box and as the toast when it is turned off. */
+const UPLOAD_OFF_TEXT = "Uploading is off for this PC. Attendance is kept here and uploads when it's turned back on.";
+
+/**
+ * The Google Sheets upload in plain words, one line in one colour: green when up to date, gold while records wait,
+ * coral only when something really failed, grey when there is nothing to tell yet (checking, paused, unavailable).
+ * The waiting count is every intern DTR record not uploaded yet, the same numbers "Details for support" lists.
+ */
+function sheetsStatus(state: SyncHealthState, health: DtrSyncHealth | null, uploadOn: boolean | null): SheetsStatus {
+  if (state.kind === "syncing") return { tone: "waiting", text: "Uploading…" };
+  if (state.kind === "loading") return { tone: "quiet", text: "Checking…" };
+  const dtr = health?.dtr;
+  if (!health || !dtr) return { tone: "quiet", text: "Status unavailable" };
+  if (dtr.persistenceFailure || dtr.currentIssue === "persistence") {
+    return { tone: "failed", text: "An attendance record couldn't be saved for upload. Tell an administrator." };
+  }
+  // Sync now is off while uploading is off, so it is only suggested while it can be used.
+  if (dtr.dead > 0) {
+    return { tone: "failed", text: `${recordCount(dtr.dead)} couldn't upload.${uploadOn === false ? "" : " Use Sync now to try again."}` };
+  }
+  if (dtr.needsAttention > 0) {
+    const one = dtr.needsAttention === 1;
+    return { tone: "failed", text: `${recordCount(dtr.needsAttention)} ${one ? "needs" : "need"} an administrator before ${one ? "it" : "they"} can upload.` };
+  }
+  if (dtr.activity === "unavailable") return { tone: "quiet", text: "Status unavailable. Attendance keeps saving on this PC." };
+  if (!dtr.enabled || dtr.activity === "disabled" || uploadOn === false) return { tone: "quiet", text: "Paused on this PC" };
+  const waiting = dtr.queued + dtr.retrying + dtr.processing + dtr.retryablePending;
+  const nextTry = dtr.nextRetryEligibleAt ?? health.throttledUntil;
+  const nextTryText = nextTry ? ` · next try ${clockTime(nextTry)}` : "";
+  if (waiting > 0) return { tone: "waiting", text: `${recordCount(waiting)} waiting${nextTryText}` };
+  if (dtr.currentIssue === "auth_config" || dtr.currentIssue === "unresolved_layout") {
+    return { tone: "failed", text: "Google Sheets needs an administrator before uploads can continue." };
+  }
+  if (dtr.activity === "offline") return { tone: "waiting", text: "Can't reach Google Sheets right now" };
+  if (dtr.activity === "throttled") return { tone: "waiting", text: `Google Sheets asked to slow down${nextTryText}` };
+  const lastUpload = dtr.lastSuccessfulWriteAt ?? health.lastSyncedAt;
+  return { tone: "ok", text: `Up to date${lastUpload ? ` · last upload ${clockTime(lastUpload)}` : ""}` };
+}
+
+/** The database status for Data and backup and the System tab; throws when it can't be read (or in a browser). */
+async function fetchDatabaseInfo(): Promise<DatabaseInfoResponse | null> {
+  const response = await loadDatabaseInfo();
+  if (!response.success) throw new Error(response.error.message);
+  return response;
+}
+
+/**
+ * System: one flat "This PC" card. The version beside Check for updates now, two plain tick boxes, one card reader
+ * line, and the file paths for support folded under a closed "Technical details (for support)" line.
+ */
+export function SystemPanel({ onManualUpdateCheck, lastScanAt = null }: { onManualUpdateCheck: () => void; lastScanAt?: string | null }) {
+  const infoList = useListLoad(fetchDatabaseInfo, null);
+  const info = infoList.data;
+  return (
+    <section className="lan-panel system-panel" aria-labelledby="system-heading">
+      <h2 id="system-heading">This PC</h2>
+      <AdminUpdatesCard onManualCheck={onManualUpdateCheck} />
+      <ReaderStatusLine lastScanAt={lastScanAt} />
+      <details className="tech-details">
+        <summary>Technical details (for support)</summary>
+        <dl>
+          <div>
+            <dt>Database file</dt>
+            <dd><bdi>{info?.dbPath ?? "—"}</bdi></dd>
+          </div>
+          <div>
+            <dt>Data folder</dt>
+            <dd><bdi>{info?.dataDir ?? "—"}</bdi></dd>
+          </div>
+          <div>
+            <dt>Backups folder</dt>
+            <dd><bdi>{info?.backupDir ?? "—"}</bdi></dd>
+          </div>
+          <div>
+            <dt>Storage mode</dt>
+            <dd>{info ? (info.isPortableMode ? "Portable — next to the .exe" : "Installed — app data folder") : "—"}</dd>
+          </div>
+          {infoList.status === "failed" && (
+            <div>
+              <dt>Database status</dt>
+              <dd>{infoList.error ?? "Unavailable."}</dd>
+            </div>
+          )}
+        </dl>
+      </details>
+    </section>
   );
+}
+
+export function DatabasePanel() {
+  // Results that need reading stay in their section; routine ones (backup created, saved a copy) show as toasts.
+  const [backupMessage, setBackupMessage] = useState<Notice | null>(null);
+  const [syncMessage, setSyncMessage] = useState<Notice | null>(null);
+  // Backups and uploads lock only their own buttons: a restore being scheduled, or a backup being made anywhere
+  // (here or from the Friday reminder), locks the backup buttons; an upload locks Sync now and its tick box.
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const backupRunning = useBackupRunning();
+  const backupBusy = restoreBusy || backupRunning;
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [stoppedDtrSync, setStoppedDtrSync] = useState<StoppedDtrSync | null>(null);
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
   const [dismissingRestore, setDismissingRestore] = useState(false);
@@ -3990,18 +4113,6 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     syncState.kind === "ready" || syncState.kind === "refreshing" || syncState.kind === "stale"
       ? syncState.health
       : null;
-  const dtrDead = syncHealth?.dtr?.dead ?? 0;
-  const syncBadge = (() => {
-    if (syncState.kind === "syncing") return { label: "Syncing", className: "sync-badge pending" };
-    if (syncState.kind === "error") return { label: "DTR status unavailable", className: "sync-badge idle" };
-    if (syncState.kind === "stale") return { label: "DTR status delayed", className: "sync-badge idle" };
-    if (!syncHealth?.dtr) return { label: "DTR status unavailable", className: "sync-badge idle" };
-    if (syncHealth.dtr.dead > 0 || syncHealth.dtr.needsAttention > 0) return { label: "DTR attention", className: "sync-badge attention" };
-    if (syncHealth.dtr.activity === "queued" || syncHealth.dtr.queued > 0 || syncHealth.dtr.retryablePending > 0 || syncHealth.dtr.retrying > 0 || syncHealth.dtr.processing > 0) return { label: "DTR pending", className: "sync-badge pending" };
-    if (syncHealth.dtr.activity === "disabled") return { label: "DTR paused", className: "sync-badge idle" };
-    return { label: "DTR idle", className: "sync-badge idle" };
-  })();
-
   const syncHealthSeq = useRef(0);
   const refreshSyncHealth = useCallback(async (releaseSyncing = false) => {
     setSyncState((prev) =>
@@ -4077,13 +4188,11 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     };
   }, [refreshSyncHealth]);
 
-  const fetchInfo = useCallback(async (): Promise<DatabaseInfoResponse | null> => {
-    const response = await loadDatabaseInfo();
-    if (!response.success) throw new Error(response.error.message);
-    return response;
-  }, []);
-  const infoList = useListLoad(fetchInfo, null);
+  const infoList = useListLoad(fetchDatabaseInfo, null);
   const info = infoList.data;
+  // A backup made anywhere (here or from the Friday reminder) shows in the list and the Last backup line at once.
+  const refreshInfo = infoList.refresh;
+  useBackupCreated(useCallback(() => void refreshInfo(), [refreshInfo]));
   const guideRef = useRef<HTMLElement>(null);
   useDialogKeys(guideRef, () => setGuideOpen(false), { open: guideOpen });
 
@@ -4091,28 +4200,28 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     if (dtrSyncEnabled === null || dtrToggleBusy) return;
     const next = !dtrSyncEnabled;
     setDtrToggleBusy(true);
-    setMessage(null);
+    setSyncMessage(null);
     const response = await setInternDtrSync(next);
     if (response.success) {
       setDtrSyncEnabled(response.enabled);
       void refreshDtrSyncHealth(() => refreshSyncHealth());
-      showToast(response.enabled ? "Intern DTR sync turned on for this device." : "Intern DTR sync turned off for this device. Queued punches are kept.");
+      showToast(response.enabled ? "Uploading to Google Sheets is on for this PC." : UPLOAD_OFF_TEXT);
     } else {
-      setMessage({ tone: "error", text: response.error?.message ?? "DTR sync toggle failed." });
+      setSyncMessage({ tone: "error", text: "Couldn't change the upload setting." });
     }
     setDtrToggleBusy(false);
   };
 
   const syncInterns = async (startFromUserId?: string) => {
     if (dtrSyncActive) {
-      setMessage({ tone: "info", text: "Sync already running." });
+      setSyncMessage({ tone: "info", text: "Sync already running." });
       return;
     }
-    setBusy(true);
+    setSyncBusy(true);
     setSyncState({ kind: "syncing" });
     setDtrSyncActive(true);
     setDtrProgress(null);
-    setMessage(null);
+    setSyncMessage(null);
     try {
       const response = await syncInternDtr(undefined, startFromUserId);
       const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
@@ -4131,23 +4240,21 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         setStoppedDtrSync(null);
       }
       if (response.success && !hasErrors) {
-        const createdCount = response.tabsCreated?.length ?? 0;
-        const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
-        setMessage({ tone: "success", text: `DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.` });
+        setSyncMessage({ tone: "success", text: `Upload finished: ${recordCount(response.rowsSynced ?? 0)} sent.` });
       } else {
         const errDetail = hasErrors
           ? response.errors.join("; ")
-          : response.error?.message || "DTR sync failed.";
+          : response.error?.message || "Upload failed.";
         if (isDtrSyncAlreadyRunning(errDetail)) {
-          setMessage({ tone: "info", text: "Sync already running." });
+          setSyncMessage({ tone: "info", text: "Sync already running." });
         } else if (response.rowsSynced > 0) {
-          setMessage({ tone: "error", text: `Synced ${response.rowsSynced} row(s), but encountered errors: ${errDetail}` });
+          setSyncMessage({ tone: "error", text: `${recordCount(response.rowsSynced)} sent, but some didn't upload: ${errDetail}` });
         } else {
-          setMessage({ tone: "error", text: errDetail });
+          setSyncMessage({ tone: "error", text: errDetail });
         }
       }
     } finally {
-      setBusy(false);
+      setSyncBusy(false);
       setDtrSyncActive(false);
       setDtrProgress(null);
     }
@@ -4158,26 +4265,15 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
   };
 
   const createBackup = async () => {
-    setBusy(true);
-    setMessage(null);
-    const response = await createDatabaseBackup();
-    setBusy(false);
-    if (response.success) {
-      showToast(`Backup created: ${response.fileName}`);
-      setBackupResult({
-        filePath: null,
-        directoryPath: response.directoryPath,
-        fileName: response.fileName,
-        fileKind: response.fileKind,
-        isPortableMode: response.isPortableMode,
-      });
-      void infoList.refresh();
-    } else setMessage({ tone: "error", text: response.error.message });
+    setBackupMessage(null);
+    // A toast says it worked and the Last backup line moves to now; only a problem stays on the page.
+    const response = await createBackupNow();
+    if (!response.success) setBackupMessage({ tone: "error", text: response.error.message });
   };
 
   const restore = async () => {
     if (!("__TAURI_INTERNALS__" in window)) {
-      setMessage({ tone: "error", text: "Restore is available in the desktop application." });
+      setBackupMessage({ tone: "error", text: "Restore is available in the desktop application." });
       return;
     }
     try {
@@ -4185,7 +4281,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       if (!selected) return;
       setRestoreFile(selected);
     } catch {
-      setMessage({ tone: "error", text: "Unable to open the file picker." });
+      setBackupMessage({ tone: "error", text: "Unable to open the file picker." });
     }
   };
 
@@ -4193,13 +4289,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     if (!restoreFile) return;
     const file = restoreFile;
     setRestoreFile(null);
-    setBusy(true);
-    setMessage(null);
+    setRestoreBusy(true);
+    setBackupMessage(null);
     const response = await requestDatabaseRestore(file);
-    setBusy(false);
+    setRestoreBusy(false);
     // A scheduled restore closes the app, so it stays on the page rather than in a toast.
-    if (response.success) setMessage({ tone: "success", text: response.message });
-    else setMessage({ tone: "error", text: response.error.message });
+    if (response.success) setBackupMessage({ tone: "success", text: response.message });
+    else setBackupMessage({ tone: "error", text: response.error.message });
   };
 
   const dismissRestoreNotice = async () => {
@@ -4208,23 +4304,23 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     setDismissingRestore(false);
     if (response.success) {
       void infoList.refresh();
-      showResult({ tone: "success", text: "Restore notice dismissed. Your current data was left untouched." }, setMessage);
+      showResult({ tone: "success", text: "Restore notice dismissed. Your current data was left untouched." }, setBackupMessage);
     } else {
-      setMessage({ tone: "error", text: response.error.message });
+      setBackupMessage({ tone: "error", text: response.error.message });
     }
   };
 
   const openBackups = async () => {
     const outcome = await openDatabaseBackupsFolder();
-    if (!outcome.ok) setMessage({ tone: "error", text: outcome.message });
+    if (!outcome.ok) setBackupMessage({ tone: "error", text: outcome.message });
   };
 
   const downloadBackup = async (filePath: string, fileName: string) => {
-    setMessage(null);
+    setBackupMessage(null);
     const outcome = await saveBackupCopy(filePath, fileName);
     if (outcome === null) return;
     if (outcome.ok) showToast(outcome.message);
-    else setMessage({ tone: "error", text: outcome.message });
+    else setBackupMessage({ tone: "error", text: outcome.message });
   };
 
   const formatSize = (bytes: number) =>
@@ -4243,93 +4339,71 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     else backupMonths.push({ label, backups: [backup] });
   }
 
+  const sheets = sheetsStatus(syncState, syncHealth, dtrSyncEnabled);
+  const dtr = syncHealth?.dtr;
+  const progressPercent = dtrProgress && dtrProgress.total > 0 ? Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100)) : 0;
+
   return (
-    <section className="lan-panel" aria-label="Database and backup">
-      <div className="lan-panel-head">
-        <div>
-          <p className="section-kicker">Data and backup</p>
-          <h2>Move the attendance database to a new computer</h2>
-        </div>
-        <button className="admin-button db-guide-button" type="button" onClick={() => setGuideOpen(true)}>
-          <BookOpen size={15} aria-hidden="true" /> How to move to a new PC
-        </button>
-      </div>
-      <div className="lan-facts db-facts">
-        <span>
-          Database file{" "}
-          <strong className="db-path-value" title={info?.dbPath}><bdi>{info?.dbPath ?? "—"}</bdi></strong>
-        </span>
-        <span>
-          Storage mode{" "}
-          <strong>
-            {info?.isPortableMode
-              ? "Portable — next to the .exe"
-              : "Installed — app data folder"}
-          </strong>
-        </span>
-        <span>
-          Saved backups <strong>{info?.backups.length ?? 0}</strong>
-        </span>
-        <span>
-          Pending restore{" "}
-          <strong>
-            {info?.restorePending ? "Yes — restart to apply" : "None"}
-          </strong>
-        </span>
-      </div>
-      {info?.restoreFailed && (() => {
-        const failure = describeRestoreFailure(info.restoreFailed ?? "");
-        return (
-          <div className="warning-banner" role="alert">
-            <ShieldAlert size={20} />
-            <div>
-              <strong>Restore didn&apos;t go through — your current data is safe</strong>
-              <p>{failure.friendly}</p>
-              {failure.sourceFile && (
-                <p>Backup file: <code>{failure.sourceFile}</code></p>
-              )}
-              <p>Your current database was kept — nothing was replaced and no attendance data was lost.</p>
-              <p>What to do next: pick the correct <code>attendance-backup-*.apbackup</code> file and choose Restore again, or dismiss this notice if you no longer need the restore.</p>
-              <details>
-                <summary>Technical details (for support)</summary>
-                <code>{info.restoreFailed}</code>
-              </details>
-              <div className="lan-actions" style={{ marginTop: 8 }}>
-                <button
-                  className="admin-button file-action-primary"
-                  type="button"
-                  disabled={busy || dismissingRestore}
-                  onClick={() => void restore()}
-                >
-                  Try again…
-                </button>
-                <button
-                  className="admin-button"
-                  type="button"
-                  disabled={busy || dismissingRestore}
-                  onClick={() => void dismissRestoreNotice()}
-                >
-                  {dismissingRestore ? "Dismissing…" : "Dismiss"}
-                </button>
+    <section className="lan-panel db-panel" aria-label="Database and backup">
+      {/* Backups first: how fresh the newest one is, the three backup buttons, then the months and the guide. */}
+      <section className="db-section" aria-labelledby="db-backups-heading">
+        <h2 id="db-backups-heading">Backups</h2>
+        {info && <LastBackupLine backups={info.backups} now={new Date()} />}
+        {info?.restorePending && (
+          <p className="db-restore-waiting" role="status">A restore is waiting. Close and reopen the app to finish it.</p>
+        )}
+        {info?.restoreFailed && (() => {
+          const failure = describeRestoreFailure(info.restoreFailed ?? "");
+          return (
+            <div className="warning-banner" role="alert">
+              <ShieldAlert size={20} />
+              <div>
+                <strong>Restore didn&apos;t go through — your current data is safe</strong>
+                <p>{failure.friendly}</p>
+                {failure.sourceFile && (
+                  <p>Backup file: <code>{failure.sourceFile}</code></p>
+                )}
+                <p>Your current database was kept — nothing was replaced and no attendance data was lost.</p>
+                <p>What to do next: pick the correct <code>attendance-backup-*.apbackup</code> file and choose Restore again, or dismiss this notice if you no longer need the restore.</p>
+                <details>
+                  <summary>Technical details (for support)</summary>
+                  <code>{info.restoreFailed}</code>
+                </details>
+                <div className="lan-actions" style={{ marginTop: 8 }}>
+                  <button
+                    className="admin-button file-action-primary"
+                    type="button"
+                    disabled={backupBusy || dismissingRestore}
+                    onClick={() => void restore()}
+                  >
+                    Try again…
+                  </button>
+                  <button
+                    className="admin-button"
+                    type="button"
+                    disabled={backupBusy || dismissingRestore}
+                    onClick={() => void dismissRestoreNotice()}
+                  >
+                    {dismissingRestore ? "Dismissing…" : "Dismiss"}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        );
-      })()}
-      <div className="lan-actions db-actions">
+          );
+        })()}
         <div className="db-action-group">
           <button
             className="admin-button file-action-primary"
             type="button"
-            disabled={busy}
+            disabled={backupBusy}
             onClick={() => void createBackup()}
           >
-            {busy ? "Working…" : "Create backup now"}
+            {backupRunning ? "Saving backup…" : "Create backup now"}
           </button>
           <button
             className="admin-button"
             type="button"
-            disabled={busy}
+            disabled={backupBusy}
             onClick={() => void restore()}
           >
             Restore from backup file…
@@ -4342,221 +4416,219 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
             Open backups folder
           </button>
         </div>
-        <div className="db-action-group db-sync-group">
+        <NoticeLine notice={backupMessage} />
+        {infoList.status === "loading" && <p className="load-pending">Loading backups…</p>}
+        {/* In a browser the backup tools are not there at all, so that is a calm note with no Retry. */}
+        {infoList.status === "failed" &&
+          ("__TAURI_INTERNALS__" in window ? (
+            <LoadFailed what="the backup list" reason={infoList.error} onRetry={() => void infoList.reload()} />
+          ) : (
+            <NoticeLine notice={{ tone: "info", text: infoList.error ?? "Backups are available in the desktop application." }} />
+          ))}
+        {info && info.backups.length > 0 && (
+          <details className="db-backup-list" open>
+            <summary>
+              Existing backups <span className="db-backup-count">{info.backups.length}</span>
+            </summary>
+            <div className="db-backup-months">
+              {backupMonths.map((month) => (
+                <details key={month.label} className="db-backup-month">
+                  <summary>
+                    {month.label} <span className="db-backup-count">{month.backups.length}</span>
+                  </summary>
+                  <ul>
+                    {month.backups.map((backup) => (
+                      <li key={backup.filePath}>
+                        {/* The date leads; the file name is for finding it in the folder. */}
+                        <span className="db-backup-when">{formatWhen(backup.modifiedAt)}</span>
+                        <code>{backup.fileName}</code>
+                        <span>{formatSize(backup.sizeBytes)}</span>
+                        <div className="db-backup-actions">
+                          <button
+                            className="admin-button"
+                            type="button"
+                            disabled={backupBusy}
+                            onClick={() => setRestoreFile(backup.filePath)}
+                          >
+                            <History size={14} aria-hidden="true" /> Restore
+                          </button>
+                          <button
+                            className="admin-button"
+                            type="button"
+                            disabled={backupBusy}
+                            onClick={() => void downloadBackup(backup.filePath, backup.fileName)}
+                          >
+                            <Download size={14} aria-hidden="true" /> Download
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ))}
+            </div>
+          </details>
+        )}
+        <button className="text-button db-guide-link" type="button" onClick={() => setGuideOpen(true)}>
+          <BookOpen size={14} aria-hidden="true" /> How to move to a new PC
+        </button>
+      </section>
+
+      {/* Google Sheets (intern DTR upload): one status in plain words beside the heading, one Sync now and the
+          on/off for this PC; queue numbers and retry details only under "Details for support". */}
+      <section className="db-section" aria-labelledby="db-sheets-heading">
+        <div className="db-section-head">
+          <h2 id="db-sheets-heading">Google Sheets</h2>
+          <span className={`sheets-status is-${sheets.tone}`} role="status">
+            <i aria-hidden="true" />
+            {sheets.text}
+          </span>
+        </div>
+        <div className="db-action-group">
           <button
             className="admin-button"
             type="button"
             data-testid="dtr-sync-now"
-            disabled={busy || dtrSyncActive}
+            disabled={syncBusy || dtrSyncActive || dtrSyncEnabled === false}
             onClick={() => void syncInterns()}
           >
-            Sync Intern DTR now
+            <RefreshCcw size={14} aria-hidden="true" /> Sync now
           </button>
-          <label className="sync-toggle" title="Per-device kill switch: OFF on this PC never affects deployment. While OFF, punches queue locally and manual sync refuses.">
+          <label className="voice-toggle-label">
             <input
               type="checkbox"
               checked={dtrSyncEnabled ?? true}
-              disabled={dtrSyncEnabled === null || dtrToggleBusy || busy}
+              disabled={dtrSyncEnabled === null || dtrToggleBusy || syncBusy}
               onChange={() => void toggleDtrSync()}
-              aria-label="Sync intern attendance to the DTR sheet on this device"
             />
-            Sync interns to DTR sheet on this device{dtrSyncEnabled === false ? " (OFF — queuing only)" : ""}
+            <span>Upload attendance to Google Sheets from this PC</span>
           </label>
         </div>
-      </div>
-      {stoppedDtrSync && (
-        <p className="load-failed" role="status">
-          Stopped at {stoppedDtrSync.tab}{" "}
-          <button
-            className="text-button"
-            type="button"
-            disabled={busy || dtrSyncActive || stoppedDtrSync.userId === null}
-            onClick={() => {
-              if (stoppedDtrSync.userId !== null) void syncInterns(stoppedDtrSync.userId);
-            }}
-          >
-            Retry
-          </button>
-        </p>
-      )}
-      <NoticeLine notice={message} />
-      <div className="sync-health" aria-label="DTR sync status" role="status">
-        <div className="sync-health-head">
-          <strong>DTR sync status</strong>
-          <span className={syncBadge.className} aria-label="DTR-only sync status">{syncState.kind === "syncing" ? "Syncing…" : syncBadge.label}</span>
-          {dtrDead > 0 && (
-            <span className="sync-badge attention" aria-label="DTR sync failures">DTR sync failures: {dtrDead}</span>
-          )}
-        </div>
+        {/* Off: Sync now waits too, and this says why. */}
+        {dtrSyncEnabled === false && <p className="reset-hint">{UPLOAD_OFF_TEXT}</p>}
         {syncState.kind === "syncing" && (
           <div
             className="sync-progress-wrap"
             role="progressbar"
-            aria-valuenow={dtrProgress && dtrProgress.total > 0 ? Math.round((dtrProgress.current / dtrProgress.total) * 100) : 0}
+            aria-valuenow={progressPercent}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-label="Intern DTR sync progress"
           >
             <div className="sync-progress-status">
               <strong>
-                {dtrProgress
-                  ? dtrProgress.status === "starting"
-                    ? `Starting DTR sync (${dtrProgress.total} interns)…`
-                    : `Syncing intern ${dtrProgress.current} of ${dtrProgress.total}: ${dtrProgress.fullName}`
-                  : "Syncing intern DTR sheets…"}
-              </strong>
-              <span className="sync-badge idle">{dtrSyncSourceLabel(dtrProgress?.source)}</span>
-              <span>
                 {dtrProgress && dtrProgress.total > 0
-                  ? `${Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100))}%`
-                  : "…"}
-              </span>
+                  ? `Uploading ${dtrProgress.status === "starting" ? 0 : dtrProgress.current} of ${dtrProgress.total}…`
+                  : "Starting the upload…"}
+              </strong>
+              <span>{dtrProgress && dtrProgress.total > 0 ? `${progressPercent}%` : "…"}</span>
             </div>
             <div className="sync-progress-bar">
-              <div
-                className="sync-progress-fill"
-                style={{
-                  width: `${dtrProgress && dtrProgress.total > 0 ? Math.min(100, Math.round((dtrProgress.current / dtrProgress.total) * 100)) : 0}%`,
-                }}
-              />
+              <div className="sync-progress-fill" style={{ width: `${progressPercent}%` }} />
             </div>
           </div>
         )}
-        {syncState.kind === "error" ? (
-        <p className="sync-health-note">DTR status unavailable — {syncState.message}</p>
-        ) : (
-          <>
-            {dtrHealthCopy(syncHealth, syncState.kind === "stale") && (
-              <p className={syncHealth?.dtr?.dead || syncHealth?.dtr?.needsAttention ? "sync-health-error" : "sync-health-note"}>
-                {dtrHealthCopy(syncHealth, syncState.kind === "stale")}
-              </p>
-            )}
-            {syncState.kind === "stale" && (
-              <p className="sync-health-error">Sync status unavailable — showing last known data ({syncState.message})</p>
-            )}
-            <ul className="sync-health-rows">
-              {(syncHealth?.byTable ?? []).map((row) => (
-                <li key={row.tableName}>
-                  <code>{row.tableName}</code>
-                  <span className={row.pending > 0 ? "sync-badge pending" : "sync-badge ok"}>
-                    {row.pending > 0 ? `${row.pending} pending` : "OK"}
-                  </span>
-                </li>
-              ))}
-              <li>
-                <code>InternDtr tabs</code>
-                <span className={(syncHealth?.dtrPendingCount ?? 0) > 0 ? "sync-badge pending" : "sync-badge ok"}>
-                  {(syncHealth?.dtrPendingCount ?? 0) > 0
-                    ? `${syncHealth?.dtrPendingCount} pending`
-                    : "OK"}
-                </span>
-              </li>
-            </ul>
-            {(syncHealth?.dtrPendingItems ?? []).length > 0 && (
-              <p className="sync-health-note">
-                Waiting for a tab: {(syncHealth?.dtrPendingItems ?? []).slice(0, 5).map((person) => person.fullName).join(", ")}
-                {(syncHealth?.dtrPendingCount ?? 0) > 5 ? ` (+${(syncHealth?.dtrPendingCount ?? 0) - 5} more)` : ""}
-              </p>
-            )}
-            {syncHealth?.throttledUntil && (
-              <p className="sync-health-error">
-                Throttled until {formatWhen(syncHealth.throttledUntil)}
-                {syncHealth.lastThrottleReason ? ` — ${syncHealth.lastThrottleReason}` : ""}
-              </p>
-            )}
-            {syncHealth?.inProgress && (
-              <p className="sync-health-note">
-                Sync in progress — {syncHealth.inProgress.owner} since {formatWhen(syncHealth.inProgress.startedAt)}
-              </p>
-            )}
-            {(syncHealth?.leaseRecovered ?? 0) > 0 && (
-              <p className="sync-health-note">Lease recovered: {syncHealth?.leaseRecovered}</p>
-            )}
-            {(syncHealth?.oldestRetryableAgeSec ?? null) !== null && (
-              <p className={syncHealth?.pendingAgeAlert ? "sync-health-error" : "sync-health-note"}>
-                Oldest retryable: {formatDuration(syncHealth?.oldestRetryableAgeSec ?? 0)} old
-                {syncHealth?.pendingAgeAlert ? " — over 6h, queue needs attention" : ""}
-              </p>
-            )}
-            <p className="sync-health-note">
-              Last sync: {formatWhen(syncHealth?.lastSyncedAt ?? null)}
-              {dtrDead > 0 ? (
-                <>
-                  {` · ${dtrDead} failed DTR item(s) `}
-                  <button className="text-button" type="button" disabled={busy} onClick={() => void syncInterns()}>
-                    Retry sync now
-                  </button>
-                </>
-              ) : ""}
-            </p>
-          </>
+        {stoppedDtrSync && (
+          <p className="load-failed" role="status">
+            Stopped at {stoppedDtrSync.tab}{" "}
+            <button
+              className="text-button"
+              type="button"
+              disabled={syncBusy || dtrSyncActive || dtrSyncEnabled === false || stoppedDtrSync.userId === null}
+              onClick={() => {
+                if (stoppedDtrSync.userId !== null) void syncInterns(stoppedDtrSync.userId);
+              }}
+            >
+              Retry
+            </button>
+          </p>
         )}
-      </div>
-      <AdminUpdatesCard onManualCheck={props.onManualUpdateCheck ?? (() => {})} />
-      <GeneratedFileActions result={backupResult} label="Latest backup" />
-      {infoList.status === "loading" && <p className="load-pending">Loading backups…</p>}
-      {/* In a browser the backup tools are not there at all, so that is a calm note with no Retry. */}
-      {infoList.status === "failed" &&
-        ("__TAURI_INTERNALS__" in window ? (
-          <LoadFailed what="the backup list" reason={infoList.error} onRetry={() => void infoList.reload()} />
-        ) : (
-          <NoticeLine notice={{ tone: "info", text: infoList.error ?? "Backups are available in the desktop application." }} />
-        ))}
-      {info && info.backups.length > 0 && (
-        <details className="db-backup-list" open>
-          <summary>
-            Existing backups <span className="db-backup-count">{info.backups.length}</span>
-          </summary>
-          <div className="db-backup-months">
-            {backupMonths.map((month) => (
-              <details key={month.label} className="db-backup-month">
-                <summary>
-                  {month.label} <span className="db-backup-count">{month.backups.length}</span>
-                </summary>
-                <ul>
-                  {month.backups.map((backup) => (
-                    <li key={backup.filePath}>
-                      <code>{backup.fileName}</code>
-                      <span>{formatSize(backup.sizeBytes)}</span>
-                      <span>{formatWhen(backup.modifiedAt)}</span>
-                      <div className="db-backup-actions">
-                        <button
-                          className="admin-button"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => setRestoreFile(backup.filePath)}
-                        >
-                          <History size={14} aria-hidden="true" /> Restore
-                        </button>
-                        <button
-                          className="admin-button"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void downloadBackup(backup.filePath, backup.fileName)}
-                        >
-                          <Download size={14} aria-hidden="true" /> Download
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            ))}
-          </div>
-        </details>
-      )}
+        <NoticeLine notice={syncMessage} />
+        {syncState.kind === "error" && <p className="sync-health-note">{syncState.message}</p>}
+        {syncState.kind === "stale" && (
+          <p className="sync-health-note">Couldn&apos;t refresh the status, showing the last known one ({syncState.message}).</p>
+        )}
+        {syncHealth && (
+          <details className="tech-details">
+            <summary>Details for support</summary>
+            <dl>
+              {dtr && (
+                <div>
+                  <dt>Intern DTR records</dt>
+                  <dd>
+                    {`${dtr.queued} queued · ${dtr.retrying} retrying · ${dtr.processing} uploading · ${dtr.retryablePending} waiting for a tab · ${dtr.dead} failed · ${dtr.needsAttention} need an administrator`}
+                  </dd>
+                </div>
+              )}
+              {syncHealth.byTable.map((row) => (
+                <div key={row.tableName}>
+                  <dt><code>{row.tableName}</code></dt>
+                  <dd>{row.pending > 0 ? `${row.pending} pending` : "OK"}</dd>
+                </div>
+              ))}
+              <div>
+                <dt><code>InternDtr tabs</code></dt>
+                <dd>{syncHealth.dtrPendingCount > 0 ? `${syncHealth.dtrPendingCount} pending` : "OK"}</dd>
+              </div>
+              {syncHealth.dtrPendingItems.length > 0 && (
+                <div>
+                  <dt>Waiting for a tab</dt>
+                  <dd>
+                    {syncHealth.dtrPendingItems.slice(0, 5).map((person) => person.fullName).join(", ")}
+                    {syncHealth.dtrPendingCount > 5 ? ` (+${syncHealth.dtrPendingCount - 5} more)` : ""}
+                  </dd>
+                </div>
+              )}
+              {syncHealth.throttledUntil && (
+                <div>
+                  <dt>Throttled until</dt>
+                  <dd>
+                    {formatWhen(syncHealth.throttledUntil)}
+                    {syncHealth.lastThrottleReason ? ` — ${syncHealth.lastThrottleReason}` : ""}
+                  </dd>
+                </div>
+              )}
+              {syncHealth.inProgress && (
+                <div>
+                  <dt>Sync in progress</dt>
+                  <dd>{`${syncHealth.inProgress.owner} since ${formatWhen(syncHealth.inProgress.startedAt)}`}</dd>
+                </div>
+              )}
+              {syncHealth.leaseRecovered > 0 && (
+                <div>
+                  <dt>Lease recovered</dt>
+                  <dd>{syncHealth.leaseRecovered}</dd>
+                </div>
+              )}
+              {syncHealth.oldestRetryableAgeSec !== null && (
+                <div>
+                  <dt>Oldest retryable</dt>
+                  <dd>
+                    {`${formatDuration(syncHealth.oldestRetryableAgeSec)} old`}
+                    {syncHealth.pendingAgeAlert ? " — over 6h, queue needs attention" : ""}
+                  </dd>
+                </div>
+              )}
+              <div>
+                <dt>Last sync</dt>
+                <dd>{formatWhen(syncHealth.lastSyncedAt)}</dd>
+              </div>
+            </dl>
+          </details>
+        )}
+      </section>
       {guideOpen && (
         <div className="confirm-backdrop" role="presentation">
           <section ref={guideRef} className="confirm-dialog db-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="db-guide-heading">
             <BookOpen size={22} aria-hidden="true" />
             <h2 id="db-guide-heading">Moving to the new front-desk PC</h2>
-            <p>No data loss, no manual SQL:</p>
+            <p>Three steps, and nothing is lost:</p>
             <ol className="db-steps">
               <li>
                 On the <strong>old PC</strong>: open Admin → Data and backup and
-                press <strong>Create backup now</strong>. The app writes a
-                consistent copy of the entire database (SQLite online backup — safe
-                even while the app is running) and keeps the newest 10.
+                press <strong>Create backup now</strong>. The app saves a complete
+                copy of all attendance data (safe even while the app is running)
+                and keeps the newest 10.
               </li>
               <li>
                 Copy the <code>attendance-backup-*.apbackup</code> file to a USB drive (or
@@ -4573,13 +4645,10 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
               </li>
             </ol>
             <p>
-              A backup is also written automatically every time the app closes
-              cleanly. If the new PC already has data, restoring replaces it — the
-              previous database is saved first under{" "}
-              <code>backups/pre-restore-*.db</code> so the restore can always be
-              rolled back. The database file location is configurable in{" "}
-              <code>config.toml</code> (<code>[database] path</code>) — see
-              docs/database-migration.md.
+              A backup is also made automatically every time the app closes
+              normally. If the new PC already has data, restoring replaces it, but
+              that data is saved in the backups folder first, so a restore can
+              always be undone.
             </p>
             <div className="confirm-actions">
               <button className="submit-button" type="button" onClick={() => setGuideOpen(false)}>
@@ -4591,7 +4660,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       )}
       <ConfirmDialog
         open={Boolean(restoreFile)}
-        busy={busy}
+        busy={restoreBusy}
         tone="danger"
         title="Restore database from backup?"
         message="The app will close and restore the database from the selected file on the next launch. Any data on this device will be replaced."

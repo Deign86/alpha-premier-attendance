@@ -365,28 +365,12 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .lan-facts strong { color: var(--ink); font-size: .78rem; font-weight: 600; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .lan-facts { grid-template-columns: 1fr 1fr; } .lan-panel-head { flex-direction: column; } }
 .db-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-/* Long DB path: one line, trimmed at the front so the file name stays visible (full path on hover) */
-.lan-facts strong.db-path-value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; overflow-wrap: normal; }
-/* Backup buttons and DTR sync controls as two separate groups */
-.db-actions { flex-wrap: wrap; justify-content: space-between; row-gap: 12px; }
 .db-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.db-sync-group { gap: 14px; padding-left: 16px; border-left: 1px solid var(--line); }
-.sync-health { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); display: grid; gap: 8px; }
-.sync-health-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.sync-health-head strong { color: var(--ink); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 .sync-badge { display: inline-flex; align-items: center; padding: 3px 10px; border: 1px solid var(--line-bright); border-radius: 999px; font-size: .66rem; font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
-.sync-badge.ok { color: var(--success); border-color: #4e825d; }
 .sync-badge.pending { color: var(--gold-bright); border-color: var(--gold-soft); }
 .sync-badge.attention { color: var(--danger); border-color: #955e4f; }
 .sync-badge.idle { color: var(--quiet); border-color: var(--line-bright); }
-.sync-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: .72rem; font-weight: 700; color: var(--gold-bright); cursor: pointer; }
-.sync-toggle input { width: 16px; height: 16px; accent-color: var(--gold-bright); cursor: pointer; }
-.sync-toggle:has(input:disabled) { opacity: .55; cursor: wait; }
-.sync-health-rows { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.sync-health-rows li { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .76rem; }
-.sync-health-rows code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--gold-bright); overflow-wrap: anywhere; }
 .sync-health-note { margin: 0; color: var(--quiet); font-size: .74rem; }
-.sync-health-error { margin: 0; color: var(--danger); font-size: .74rem; overflow-wrap: anywhere; }
 .sync-progress-wrap { display: grid; gap: 6px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .sync-progress-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .76rem; }
 .sync-progress-status strong { color: var(--ink); font-weight: 600; }
@@ -419,10 +403,7 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
   .db-backup-list li code { grid-column: 1 / -1; }
   .db-backup-actions { justify-self: end; }
 }
-/* Below this width the two action groups wrap onto separate lines, where the divider would dangle */
-@media (max-width: 1100px) { .db-sync-group { padding-left: 0; border-left: 0; } }
 /* "How to move to a new PC" guide popup */
-.db-guide-button { flex: none; }
 .confirm-dialog.db-guide-dialog { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
 .db-guide-dialog .db-steps { margin: 12px 0; }
 .db-guide-dialog code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: .76rem; color: var(--gold-bright); overflow-wrap: anywhere; }
@@ -2273,55 +2254,6 @@ input[type="checkbox"].voice-switch:checked::before { width: 14px; height: 14px;
   font-weight: 600;
 }
 
-/* Admin Updates Panel Section */
-.admin-update-section {
-  display: grid;
-  gap: 16px;
-}
-
-.admin-update-card {
-  display: grid;
-  gap: 14px;
-  padding: 20px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-}
-
-.admin-update-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.admin-update-info {
-  display: grid;
-  gap: 4px;
-}
-
-.admin-update-info h3 {
-  margin: 0;
-  color: var(--ink);
-  font-size: .92rem;
-  font-weight: 600;
-}
-
-.admin-update-info p {
-  margin: 0;
-  color: var(--muted);
-  font-size: .76rem;
-}
-
-.admin-update-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
 .version-tag {
   display: grid;
   gap: 3px;
@@ -2439,55 +2371,6 @@ input[type="checkbox"].voice-switch:checked::before { width: 14px; height: 14px;
   color: var(--gold-bright);
   font-size: .78rem;
   font-weight: 600;
-}
-
-/* Admin Updates Panel Section */
-.admin-update-section {
-  display: grid;
-  gap: 16px;
-}
-
-.admin-update-card {
-  display: grid;
-  gap: 14px;
-  padding: 20px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-}
-
-.admin-update-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.admin-update-info {
-  display: grid;
-  gap: 4px;
-}
-
-.admin-update-info h3 {
-  margin: 0;
-  color: var(--ink);
-  font-size: .92rem;
-  font-weight: 600;
-}
-
-.admin-update-info p {
-  margin: 0;
-  color: var(--muted);
-  font-size: .76rem;
-}
-
-.admin-update-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
 }
 
 /* Card Type Toggle & Segmented Controls */
@@ -5165,4 +5048,103 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 
 @media (prefers-reduced-motion: reduce) {
   .admin-shell :is(.payroll-steps li, .payroll-steps li::after, .payroll-step-mark, .cutoff-fill-buttons::before, .cutoff-fill-buttons .admin-button) { transition: none; }
+}
+
+/* --- Data and backup, System, Friday backup reminder ------------------------------------------------------------ */
+/* Six section tabs and the mode switch still share one row at 1366px: slightly tighter tab and switch buttons
+   (narrower screens already give the tabs a row of their own). */
+@media (min-width: 901px) {
+  .admin-toolbar { column-gap: 12px; }
+  .admin-shell .admin-tabs button { gap: 6px; padding-inline: 10px; font-size: .8rem; }
+  .admin-shell .admin-mode-btn { padding-inline: 8px; font-size: .8rem; }
+}
+
+/* Friday reminder: one calm gold line under the header (every tab) with a gold Create backup now and a quiet Later.
+   Phones: the words on top, the two buttons on a row below. */
+.backup-reminder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 20px 0 0; padding: 7px 8px 7px 14px; color: var(--ink); background: linear-gradient(180deg, rgba(198, 162, 84, .12), rgba(198, 162, 84, .05)); border: 1px solid rgba(198, 162, 84, .4); border-radius: 8px; font-size: .82rem; line-height: 1.4; animation: admin-fade 200ms ease-out; }
+.backup-reminder > svg { flex: none; color: var(--gold-bright); }
+.backup-reminder > p { flex: 1 1 260px; min-width: 0; margin: 0; }
+.backup-reminder-actions { display: flex; flex: none; align-items: center; gap: 4px; }
+.backup-reminder .admin-button { min-height: 34px; padding: 6px 14px; border-radius: 6px; font-size: .78rem; white-space: nowrap; }
+.backup-reminder .text-button { min-height: 34px; padding: 6px 12px; color: var(--muted); border-radius: 6px; font-size: .78rem; font-weight: 600; }
+.backup-reminder .text-button:hover:not(:disabled) { color: var(--ink); background: rgba(198, 162, 84, .08); }
+.backup-reminder .notice { flex: 1 1 100%; margin: 0; }
+@media (max-width: 600px) {
+  .backup-reminder { padding: 10px 12px; }
+  .backup-reminder > p { flex-basis: calc(100% - 30px); }
+  .backup-reminder-actions { flex: 1 1 100%; }
+  .backup-reminder-actions .admin-button { flex: 1 1 auto; }
+}
+
+/* Data and backup: two sections one after the other, Backups then Google Sheets, split by a hairline. Headings in
+   Orbitron at one size (System's "This PC" too); buttons 34px with 6px corners. */
+.admin-shell :is(.db-section, .system-panel) h2 { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: 1rem; font-weight: 600; }
+.admin-shell .db-section + .db-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid rgba(198, 162, 84, .14); }
+.admin-shell .db-section .db-action-group { gap: 8px 10px; margin-top: 12px; }
+.admin-shell :is(.db-panel, .system-panel) .admin-button { min-height: 34px; padding: 6px 12px; border-radius: 6px; font-size: .78rem; }
+.admin-shell :is(.db-panel, .system-panel) .voice-toggle-label { gap: 8px; font-size: .8rem; }
+.admin-shell :is(.db-panel, .system-panel) .voice-toggle-label input { flex: none; width: 16px; height: 16px; accent-color: var(--gold-bright); }
+.admin-shell :is(.db-panel, .system-panel) .voice-toggle-label:has(input:disabled) { color: var(--quiet); cursor: not-allowed; }
+.admin-shell .db-panel .reset-hint { margin-top: 6px; }
+.admin-shell .db-panel .sync-progress-wrap { margin-top: 10px; }
+
+/* Backups leads with the newest backup's time (coral once it is over a week old or when there is none), then a gold
+   line while a restore waits for the app to reopen. */
+.admin-shell .db-last-backup { margin: 6px 0 0; color: var(--muted); font-size: .82rem; }
+.admin-shell .db-last-backup strong { color: var(--ink); font-weight: 600; }
+.admin-shell .db-last-backup.is-stale { color: var(--danger); font-weight: 600; }
+.admin-shell .db-restore-waiting { margin: 6px 0 0; color: var(--gold-bright); font-size: .8rem; font-weight: 600; }
+/* Each backup row leads with its date; the file name follows, quieter. Phones and tablets: date and size on the
+   first line, the file name under them, the buttons last. */
+.admin-shell .db-backup-list li { grid-auto-flow: row dense; }
+.admin-shell .db-backup-list li .db-backup-when { color: var(--ink); font-weight: 600; }
+.admin-shell .db-backup-list li code { color: var(--muted); font-size: .72rem; }
+@media (min-width: 901px) { .admin-shell .db-backup-list li { grid-template-columns: auto minmax(0, 1fr) auto auto; } }
+/* "How to move to a new PC": a quiet text link under the backups. */
+.admin-shell .db-guide-link { gap: 6px; min-height: 30px; margin-top: 10px; padding: 4px 6px; color: var(--gold-bright); border-radius: 6px; font-size: .78rem; font-weight: 600; }
+.admin-shell .db-guide-link:hover { color: var(--ink); background: rgba(198, 162, 84, .08); }
+
+/* Google Sheets: one status beside the heading in one colour (green up to date, gold waiting, coral failed, grey
+   checking or paused). */
+.admin-shell .db-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.admin-shell .sheets-status { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; color: var(--muted); border: 1px solid var(--line-bright); border-radius: 6px; font-size: .76rem; font-weight: 600; line-height: 1.35; }
+.admin-shell .sheets-status i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.admin-shell .sheets-status.is-ok { color: var(--success); border-color: rgba(152, 210, 168, .4); }
+.admin-shell .sheets-status.is-waiting { color: var(--gold-bright); border-color: rgba(198, 162, 84, .45); }
+.admin-shell .sheets-status.is-failed { color: var(--danger); border-color: rgba(239, 170, 146, .45); }
+.admin-shell .db-panel .sync-health-note { margin-top: 8px; }
+
+/* Folds for support (System's Technical details, Google Sheets' Details for support): one quiet line, closed. */
+.admin-shell .tech-details { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(198, 162, 84, .14); }
+.admin-shell .tech-details summary { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 2px 6px; color: var(--muted); border-radius: 6px; font-size: .78rem; font-weight: 600; cursor: pointer; list-style: none; }
+.admin-shell .tech-details summary::-webkit-details-marker { display: none; }
+.admin-shell .tech-details summary::before { content: "▸"; color: var(--gold); transition: transform 160ms ease; }
+.admin-shell .tech-details[open] > summary::before { transform: rotate(90deg); }
+.admin-shell .tech-details summary:hover { color: var(--ink); }
+.admin-shell .tech-details dl { display: grid; gap: 2px; margin: 6px 0 0; padding: 0 0 0 6px; }
+.admin-shell .tech-details dl > div { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 2px 12px; padding: 4px 0; font-size: .76rem; }
+.admin-shell .tech-details dt { color: var(--quiet); }
+.admin-shell .tech-details dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.admin-shell .tech-details code { color: var(--gold-bright); font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: .74rem; }
+@media (max-width: 600px) { .admin-shell .tech-details dl > div { grid-template-columns: minmax(0, 1fr); } }
+
+/* System: one flat "This PC" card. The version beside Check for updates now, two tick boxes (each note sits just
+   under its box), one card reader line, then the fold. */
+.admin-shell .system-panel { display: grid; justify-items: start; gap: 12px; }
+.admin-shell .system-panel > .tech-details { justify-self: stretch; margin-top: 2px; }
+.admin-shell .system-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.admin-shell .system-version { color: var(--ink); font-size: .82rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.admin-shell .system-panel :is(.reset-hint, .system-error) { margin: -8px 0 0 24px; font-size: .74rem; }
+.admin-shell .system-error { color: var(--danger); }
+.admin-shell .system-reader { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; margin: 0; color: var(--muted); font-size: .8rem; }
+.admin-shell .system-reader i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.admin-shell .system-reader strong { color: var(--ink); font-weight: 600; }
+.admin-shell .system-reader.is-ready i { background: var(--success); box-shadow: 0 0 0 3px rgba(152, 210, 168, .14); }
+.admin-shell .system-reader.is-checking i { background: #e9b04c; box-shadow: 0 0 0 3px rgba(233, 176, 76, .14); }
+.admin-shell .system-reader:is(.is-missing, .is-error) strong { color: var(--danger); }
+.admin-shell .system-reader:is(.is-missing, .is-error) i { background: #e46a58; box-shadow: 0 0 0 3px rgba(228, 106, 88, .16); }
+
+@media (prefers-reduced-motion: reduce) {
+  .backup-reminder { animation: none; }
+  .admin-shell .tech-details summary::before { transition: none; }
 }

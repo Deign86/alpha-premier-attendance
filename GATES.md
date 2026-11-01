@@ -1730,3 +1730,17 @@ unchanged.
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 25 files / 500 tests passed.
 - [x] Review (3 lenses, 15 verified findings, 7 distinct problems fixed): the cutoff label now follows the dates (a half-month preset's label, otherwise "<start> to <end>"), so hand-typed dates never save the pre-filled name; the step bar goes in order (Review current while drafts exist, Export done only when all finalized and a PDF exists); the regenerate banner shows only with drafts, otherwise a calm "All N records … finalized" line, and deleting finalized records needs DELETE typed; the table shows the chosen cutoff with a "Show all cutoffs" toggle and a Period column; Generate and exports say why while payroll loads or fails; preset and hand-typed paths tested; focus rings no longer clipped.
+
+## UI revamp batch 9: System tab, Data and backup in plain words, Friday backup reminder (client only; O1, O2, O3 + audit S1-S5, D1-D4)
+
+- [x] O1/S1-S5: a sixth "System" tab (last; same unsaved-changes guard) with one flat "This PC" card: version beside Check for updates now, "Check for updates automatically", "Open the attendance screen when Windows starts" (disabled in a browser with "Only in the desktop app"; failure says so), one card reader line, and a closed "Technical details (for support)" fold; no developer lines left.
+  EVIDENCE: live shot b9-live-system (1366) and b9-live-system-390.
+- [x] O2/D1-D4: Data and backup has two sections, "Backups" (last backup line, Create backup now, Restore from backup file, Open backups folder, Existing backups with every month closed, date first in each row, "How to move to a new PC" link, restore-waiting line) and "Google Sheets" (one plain-words badge, one Sync now, a plain "Upload attendance to Google Sheets from this PC" checkbox, a closed "Details for support" fold); 34px buttons; no paths or storage mode outside the folds.
+  EVIDENCE: live shot b9-live-data; page width 1356/1366, 390/390.
+- [x] O3: "Last backup: today, 8:02 AM" (coral when over 7 days or none); a Friday banner under the admin header on every tab when it is Friday in Manila, at least one intern timed in today, no intern is still timed in and no backup was made today; Create backup now runs the shared backup action; Later hides it for the day; checks every 5 minutes, no requests on other days.
+  EVIDENCE: backup-reminder.test.tsx (rules, polling, Later, shared action) passes.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 534 tests passed (run with 2 workers; the PC was low on memory).
+- [x] Review (3 lenses, 17 verified findings, 8 distinct problems fixed): the reminder asks nothing on other days, after Later or once a backup covers the day, reads backups before attendance, and the App tests pin a Thursday clock so they pass on Fridays; it is due when the newest backup is older than the last intern time-out; one backup at a time with a shared "Saving backup…" state; the card reader shows the real last scan from today's attendance; the startup setting is read back after a change; backup and upload actions have separate busy states; upload wording in plain words; Sync now is disabled while uploads are off.

@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Update } from '@tauri-apps/plugin-updater';
 import { UpdateBanner, updaterReleaseInstant } from './update-banner';
 import { AdminUpdatesCard } from './admin-updates-card';
 import * as updateService from './services/updateService';
+import * as api from './api';
 
 function createMockUpdate(
   version = '0.1.15',
@@ -163,52 +164,104 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
   });
 
   describe('AdminUpdatesCard', () => {
-    it('renders software updates card and triggers manual check', async () => {
+    afterEach(() => {
+      // SAFETY: Cleaning up the desktop-layer mock from window
+      delete (window as Window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+    });
+
+    it('shows plain rows with no developer words, and Check for updates now triggers a manual check', async () => {
       const manualCheckMock = vi.fn();
       render(<AdminUpdatesCard onManualCheck={manualCheckMock} />);
 
-      expect(screen.getByText(/Software updates/i)).toBeInTheDocument();
-      expect(screen.getByText(/Application version & release channel/i)).toBeInTheDocument();
+      // In a web browser there is no installed version to show.
+      expect(screen.getByText('Version: desktop app only')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Check for updates automatically' })).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' })).toBeInTheDocument();
+      expect(screen.queryByText(/github|Deign86|release channel|kiosk terminal|Software updates/i)).not.toBeInTheDocument();
 
-      const checkButton = screen.getByRole('button', { name: /Check for updates now/i });
       await act(async () => {
-        fireEvent.click(checkButton);
+        fireEvent.click(screen.getByRole('button', { name: /Check for updates now/i }));
       });
-
       expect(manualCheckMock).toHaveBeenCalled();
     });
 
-    it('toggles terminal auto-update setting and stores in localStorage', async () => {
+    it('shows the installed version beside Check for updates now in the desktop app', async () => {
+      const invoke = vi.fn(async (command: string) => (command === 'plugin:app|version' ? '0.2.25' : null));
+      // SAFETY: Minimal desktop-layer mock for the version request in jsdom
+      (window as Window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = { invoke };
+      vi.spyOn(api, 'getAutostartStatus').mockResolvedValue(false);
       render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
 
-      const checkbox = screen.getByRole('checkbox', {
-        name: /Automatically check for updates on this kiosk terminal/i,
-      });
-      expect(checkbox).toBeChecked();
+      const version = await screen.findByText('Version 0.2.25');
+      expect(version.nextElementSibling).toHaveTextContent('Check for updates now');
+    });
 
-      // Uncheck auto-update
+    it('toggles automatic update checks and stores the choice', async () => {
+      render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
+
+      const checkbox = screen.getByRole('checkbox', { name: 'Check for updates automatically' });
+      expect(checkbox).toBeChecked();
       await act(async () => {
         fireEvent.click(checkbox);
       });
 
       expect(checkbox).not.toBeChecked();
       expect(updateService.isAutoUpdateDisabledLocally()).toBe(true);
-      expect(
-        screen.getByText(/Automatic background checks are disabled for this kiosk terminal/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText('Off. Check for updates now still works.')).toBeInTheDocument();
     });
 
-    it('renders and toggles system autostart checkbox', async () => {
+    it('turns Windows startup off in a web browser instead of letting it untick itself', () => {
+      const setSpy = vi.spyOn(api, 'setAutostartStatus');
       render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
 
-      const autostartCheckbox = screen.getByRole('checkbox', {
-        name: /Start Alpha Premier Attendance automatically on Windows startup/i,
-      });
-      expect(autostartCheckbox).toBeInTheDocument();
+      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' });
+      expect(startup).toBeDisabled();
+      expect(screen.getByText('Only in the desktop app.')).toBeInTheDocument();
+      expect(setSpy).not.toHaveBeenCalled();
+    });
 
+    it('reads the startup setting back and says so when turning it on did not take', async () => {
+      // SAFETY: Minimal desktop-layer mock so the startup box is on
+      (window as Window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = { invoke: vi.fn(async () => null) };
+      // Opening: off. First try: still off afterwards. Second try: on.
+      const getSpy = vi.spyOn(api, 'getAutostartStatus').mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      const setSpy = vi.spyOn(api, 'setAutostartStatus').mockResolvedValue(true);
+      render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
+
+      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' });
+      expect(startup).toBeEnabled();
       await act(async () => {
-        fireEvent.click(autostartCheckbox);
+        fireEvent.click(startup);
       });
+      expect(setSpy).toHaveBeenCalledWith(true);
+      expect(getSpy).toHaveBeenCalledTimes(2);
+      expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't change the startup setting.");
+      expect(startup).not.toBeChecked();
+
+      // A later change that works clears the message.
+      await act(async () => {
+        fireEvent.click(startup);
+      });
+      expect(startup).toBeChecked();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('says so when turning startup off did not take, and keeps the box ticked', async () => {
+      // SAFETY: Minimal desktop-layer mock so the startup box is on
+      (window as Window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = { invoke: vi.fn(async () => null) };
+      // Opening: on. After the try: still on (setAutostartStatus reports the request, Windows kept it).
+      vi.spyOn(api, 'getAutostartStatus').mockResolvedValue(true);
+      const setSpy = vi.spyOn(api, 'setAutostartStatus').mockResolvedValue(false);
+      render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
+
+      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' });
+      await waitFor(() => expect(startup).toBeChecked());
+      await act(async () => {
+        fireEvent.click(startup);
+      });
+      expect(setSpy).toHaveBeenCalledWith(false);
+      expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't change the startup setting.");
+      expect(startup).toBeChecked();
     });
   });
 });

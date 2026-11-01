@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DatabasePanel, UserEditor } from './App';
+import { DatabasePanel, SystemPanel, UserEditor } from './App';
 import { Toasts } from './toasts';
 import * as api from './api';
 import * as tauriApi from './tauri-api';
@@ -100,14 +100,221 @@ describe('DatabasePanel', () => {
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
-  it('renders database path, storage mode, and existing backups', async () => {
+  it('renders the backups heading and existing backups, with the database facts left to the System tab', async () => {
     render(<DatabasePanel />);
 
-    expect(await screen.findByText('Move the attendance database to a new computer')).toBeInTheDocument();
-    expect(screen.getByText('Installed — app data folder')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Backups' })).toBeInTheDocument();
     expect(screen.getByText('attendance-backup-20260815-000000.apbackup')).toBeInTheDocument();
     expect(screen.getByText('1024 KB')).toBeInTheDocument();
     expect(loadDatabaseInfoSpy).toHaveBeenCalled();
+    // No developer details here: no database path, storage mode or update controls.
+    expect(screen.queryByText(mockDbInfo.dbPath)).not.toBeInTheDocument();
+    expect(screen.queryByText('Installed — app data folder')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Technical details/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /check for updates now/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /windows starts/i })).not.toBeInTheDocument();
+  });
+
+  it('shows two sections one after the other: Backups, then Google Sheets with its own Sync now and on/off', async () => {
+    render(<DatabasePanel />);
+
+    const backups = await screen.findByRole('region', { name: 'Backups' });
+    const sheets = screen.getByRole('region', { name: 'Google Sheets' });
+    expect(backups.compareDocumentPosition(sheets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const name of [/create backup now/i, /restore from backup file/i, /open backups folder/i, /how to move to a new pc/i]) {
+      expect(within(backups).getByRole('button', { name })).toBeInTheDocument();
+    }
+    expect(within(backups).queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
+    expect(within(sheets).getByRole('button', { name: /^sync now$/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /sync/i })).toHaveLength(1);
+    // A plain tick box, no developer tooltip.
+    const upload = within(sheets).getByRole('checkbox', { name: 'Upload attendance to Google Sheets from this PC' });
+    expect(upload).toBeChecked();
+    expect(upload.closest('label')).not.toHaveAttribute('title');
+  });
+
+  it('says plainly when uploading is off on this PC', async () => {
+    vi.spyOn(api, 'getInternDtrSync').mockResolvedValue({ success: true, enabled: false });
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText("Uploading is off for this PC. Attendance is kept here and uploads when it's turned back on.")).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Upload attendance to Google Sheets from this PC' })).not.toBeChecked();
+    expect(screen.getByText('Paused on this PC')).toBeInTheDocument();
+    // Nothing would upload, so Sync now waits too.
+    expect(screen.getByRole('button', { name: /^sync now$/i })).toBeDisabled();
+  });
+
+  it('leaves out "Use Sync now" from a failed upload while uploading is off', async () => {
+    vi.spyOn(api, 'getInternDtrSync').mockResolvedValue({ success: true, enabled: false });
+    loadDtrSyncHealthSpy.mockResolvedValue({
+      success: true,
+      health: {
+        pending: 0, deadLetter: 0, byTable: [], dtrPendingCount: 0, dtrPendingItems: [], lastSyncedAt: null, lastError: null,
+        throttledUntil: null, lastThrottleReason: null, inProgress: null, leaseRecovered: 0, oldestRetryableAgeSec: null, pendingAgeAlert: false,
+        dtr: {
+          enabled: true, queued: 0, retrying: 0, processing: 0, dead: 2, retryablePending: 0, needsAttention: 0, persistenceFailure: false,
+          nextRetryEligibleAt: null, oldestOutstandingAgeSec: null, currentIssue: 'none', currentIssueSince: null, lastSuccessfulWriteAt: null,
+          emittedAt: '2026-08-15T00:00:00Z', activity: 'idle',
+        },
+      },
+    });
+    render(<DatabasePanel />);
+
+    expect(await screen.findByText("2 records couldn't upload.")).toBeInTheDocument();
+    expect(screen.queryByText(/Use Sync now/)).not.toBeInTheDocument();
+  });
+
+  it('turns uploading on and off in plain words, and says so when the setting could not change', async () => {
+    const setSpy = vi.spyOn(api, 'setInternDtrSync')
+      .mockResolvedValueOnce({ success: true, enabled: false })
+      .mockResolvedValueOnce({ success: true, enabled: true })
+      .mockResolvedValueOnce({ success: false, enabled: true, error: { message: 'DTR_TOGGLE_FAILED' } });
+    vi.spyOn(api, 'getInternDtrSync').mockResolvedValue({ success: true, enabled: true });
+    const user = userEvent.setup();
+    render(<><DatabasePanel /><Toasts /></>);
+
+    const upload = await screen.findByRole('checkbox', { name: 'Upload attendance to Google Sheets from this PC' });
+    await waitFor(() => expect(upload).toBeEnabled());
+    await user.click(upload);
+    expect(await screen.findAllByText("Uploading is off for this PC. Attendance is kept here and uploads when it's turned back on.")).not.toHaveLength(0);
+    await user.click(upload);
+    expect(await screen.findByText('Uploading to Google Sheets is on for this PC.')).toBeInTheDocument();
+    await user.click(upload);
+    expect(await screen.findByText("Couldn't change the upload setting.")).toBeInTheDocument();
+    expect(screen.queryByText(/DTR_TOGGLE_FAILED/)).not.toBeInTheDocument();
+    expect(setSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps backup buttons free while an upload runs, and upload controls free while a backup runs', async () => {
+    let finishSync: (value: Awaited<ReturnType<typeof api.syncInternDtr>>) => void = () => {};
+    vi.spyOn(api, 'syncInternDtr').mockReturnValueOnce(new Promise((resolve) => { finishSync = resolve; }));
+    let finishBackup: (value: Awaited<ReturnType<typeof api.createDatabaseBackup>>) => void = () => {};
+    createDatabaseBackupSpy.mockReturnValueOnce(new Promise((resolve) => { finishBackup = resolve; }));
+    vi.spyOn(api, 'getInternDtrSync').mockResolvedValue({ success: true, enabled: true });
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    await user.click(await screen.findByRole('button', { name: /^sync now$/i }));
+    expect(screen.getByRole('button', { name: /^sync now$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create backup now' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /restore from backup file/i })).toBeEnabled();
+    await act(async () => finishSync(successfulDtrSync));
+
+    await user.click(screen.getByRole('button', { name: 'Create backup now' }));
+    expect(screen.getByRole('button', { name: 'Saving backup…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /restore from backup file/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^sync now$/i })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: 'Upload attendance to Google Sheets from this PC' })).toBeEnabled();
+    await act(async () => finishBackup({ success: false, error: { message: 'Unable to create a database backup.' } }));
+    expect(await screen.findByRole('button', { name: 'Create backup now' })).toBeEnabled();
+  });
+
+  it('shows a gold line while a restore waits for the app to reopen', async () => {
+    loadDatabaseInfoSpy.mockResolvedValue({ ...mockDbInfo, restorePending: true });
+    render(<DatabasePanel />);
+
+    const line = await screen.findByText('A restore is waiting. Close and reopen the app to finish it.');
+    expect(line).toHaveClass('db-restore-waiting');
+    expect(within(screen.getByRole('region', { name: 'Backups' })).getByText(/A restore is waiting/)).toBe(line);
+  });
+
+  it('leads each backup row with its date and keeps no extra Latest backup card after Create backup now', async () => {
+    createDatabaseBackupSpy.mockResolvedValueOnce({
+      success: true,
+      filePath: 'C:\\backups\\attendance-backup-20260815-020000.apbackup',
+      directoryPath: 'C:\\backups',
+      fileName: 'attendance-backup-20260815-020000.apbackup',
+      fileKind: 'backup',
+      isPortableMode: false,
+    });
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    const name = await screen.findByText('attendance-backup-20260815-000000.apbackup');
+    const row = name.closest('li');
+    expect(row?.firstElementChild).toHaveTextContent('Aug 15, 2026, 8:00 AM');
+    expect(row?.firstElementChild?.nextElementSibling).toBe(name);
+
+    await user.click(screen.getByRole('button', { name: /create backup now/i }));
+    expect(createDatabaseBackupSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Latest backup')).not.toBeInTheDocument();
+  });
+
+  describe('Last backup line', () => {
+    const backupAt = (modifiedAt: string) => ({ ...mockDbInfo.backups[0], filePath: `C:\\backups\\${modifiedAt}.apbackup`, modifiedAt });
+    afterEach(() => vi.useRealTimers());
+
+    it('leads with today and the time when the newest backup is from today', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-30T18:30:00+08:00'));
+      // Newest first is not assumed: the newest of the list counts.
+      loadDatabaseInfoSpy.mockResolvedValue({ ...mockDbInfo, backups: [backupAt('2026-10-21T08:05:00+08:00'), backupAt('2026-10-30T08:02:00+08:00')] });
+      render(<DatabasePanel />);
+
+      const line = await screen.findByText(/^Last backup:/);
+      expect(line).toHaveTextContent('Last backup: today, 8:02 AM');
+      expect(line).not.toHaveClass('is-stale');
+      // It sits right under the heading, before the backup buttons.
+      expect(screen.getByRole('heading', { name: 'Backups' }).nextElementSibling).toBe(line);
+    });
+
+    it('shows the date and time for an older backup within a week', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-30T18:30:00+08:00'));
+      loadDatabaseInfoSpy.mockResolvedValue({ ...mockDbInfo, backups: [backupAt('2026-10-29T08:05:00+08:00')] });
+      render(<DatabasePanel />);
+
+      expect(await screen.findByText(/^Last backup:/)).toHaveTextContent('Last backup: Oct 29, 2026, 8:05 AM');
+    });
+
+    it('turns coral when the newest backup is over a week old', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-30T18:30:00+08:00'));
+      loadDatabaseInfoSpy.mockResolvedValue({ ...mockDbInfo, backups: [backupAt('2026-10-21T08:05:00+08:00')] });
+      render(<DatabasePanel />);
+
+      const line = await screen.findByText('Last backup was 9 days ago. Create one now.');
+      expect(line).toHaveClass('is-stale');
+    });
+
+    it('keeps a backup exactly a week old calm', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-30T18:30:00+08:00'));
+      loadDatabaseInfoSpy.mockResolvedValue({ ...mockDbInfo, backups: [backupAt('2026-10-23T08:05:00+08:00')] });
+      render(<DatabasePanel />);
+
+      expect(await screen.findByText(/^Last backup:/)).toHaveTextContent('Last backup: Oct 23, 2026, 8:05 AM');
+      expect(screen.queryByText(/days ago/)).not.toBeInTheDocument();
+    });
+
+    it('asks for a first backup when there are none', async () => {
+      loadDatabaseInfoSpy.mockResolvedValue({ ...mockDbInfo, backups: [], lastBackupAt: null });
+      render(<DatabasePanel />);
+
+      expect(await screen.findByText('No backups yet. Create one now.')).toHaveClass('is-stale');
+    });
+
+    it('updates to today after Create backup now', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-30T18:30:00+08:00'));
+      loadDatabaseInfoSpy
+        .mockResolvedValueOnce({ ...mockDbInfo, backups: [backupAt('2026-10-21T08:05:00+08:00')] })
+        .mockResolvedValue({ ...mockDbInfo, backups: [backupAt('2026-10-30T18:30:00+08:00'), backupAt('2026-10-21T08:05:00+08:00')] });
+      createDatabaseBackupSpy.mockResolvedValueOnce({
+        success: true,
+        filePath: 'C:\\backups\\attendance-backup-20261030-103000.apbackup',
+        directoryPath: 'C:\\backups',
+        fileName: 'attendance-backup-20261030-103000.apbackup',
+        fileKind: 'backup',
+        isPortableMode: false,
+      });
+      const user = userEvent.setup();
+      render(<DatabasePanel />);
+
+      await screen.findByText('Last backup was 9 days ago. Create one now.');
+      await user.click(screen.getByRole('button', { name: /create backup now/i }));
+      expect(await screen.findByText(/^Last backup:/)).toHaveTextContent('Last backup: today, 6:30 PM');
+    });
   });
 
   it('handles Create backup now action successfully', async () => {
@@ -351,11 +558,11 @@ describe('DatabasePanel', () => {
     const user = userEvent.setup();
     render(<DatabasePanel />);
 
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
 
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/DTR sync complete: checked 1 intern\(s\), synced 4 row\(s\) \(1 new tab\(s\) created: Marissa C\. Dalisay\)\./i)).toBeInTheDocument();
+    expect(await screen.findByText('Upload finished: 4 records sent.')).toBeInTheDocument();
   });
 
   it('shows the stopped tab and retries from that intern, keeping resumed progress until completion', async () => {
@@ -388,7 +595,7 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    await user.click(await screen.findByRole('button', { name: /sync intern dtr now/i }));
+    await user.click(await screen.findByRole('button', { name: /^sync now$/i }));
     expect(await screen.findByText('Stopped at Failed Tab')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Retry' }));
@@ -400,11 +607,11 @@ describe('DatabasePanel', () => {
     act(() => {
       progressHandler?.({ current: 1, total: 2, userId: 'APG-FAIL', fullName: 'Failed Intern', status: 'syncing' });
     });
-    expect(screen.getByText(/Syncing intern 1 of 2: Failed Intern/)).toBeInTheDocument();
+    expect(screen.getByText('Uploading 1 of 2…')).toBeInTheDocument();
     await act(async () => {
       resolveResumed?.({ success: true, internsChecked: 2, tabsCreated: [], rowsSynced: 3, details: [], errors: [] });
     });
-    expect(await screen.findByText(/DTR sync complete: checked 2 intern\(s\), synced 3 row\(s\)\./)).toBeInTheDocument();
+    expect(await screen.findByText('Upload finished: 3 records sent.')).toBeInTheDocument();
     expect(screen.queryByText('Stopped at Failed Tab')).not.toBeInTheDocument();
   });
 
@@ -431,7 +638,7 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    await user.click(await screen.findByRole('button', { name: /sync intern dtr now/i }));
+    await user.click(await screen.findByRole('button', { name: /^sync now$/i }));
     expect(await screen.findByText('Stopped at Missing Tab Intern')).toBeInTheDocument();
     const retry = screen.getByRole('button', { name: 'Retry' });
     expect(retry).toBeEnabled();
@@ -544,7 +751,7 @@ describe('DatabasePanel', () => {
     const errorsAlert = await screen.findByRole('alert');
     expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Juan Dela Cruz \(APG-2026-103\): Google Sheets write failed/i);
     expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Marissa Dalisay \(APG-2026-116\): permission denied/i);
-    expect(screen.getByText(/Synced 2 row\(s\), but encountered errors:/i)).toBeInTheDocument();
+    expect(screen.getByText(/^2 records sent, but some didn't upload:/)).toBeInTheDocument();
   });
 
   it('displays real-time progress bar when dtr-sync-progress events occur during sync', async () => {
@@ -563,10 +770,10 @@ describe('DatabasePanel', () => {
     const user = userEvent.setup();
     render(<DatabasePanel />);
 
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
 
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.getByText('Uploading…')).toBeInTheDocument();
 
     act(() => {
       progressHandler?.({
@@ -578,7 +785,9 @@ describe('DatabasePanel', () => {
       });
     });
 
-    expect(await screen.findByText(/Syncing intern 3 of 10: Juan Dela Cruz/i)).toBeInTheDocument();
+    expect(await screen.findByText('Uploading 3 of 10…')).toBeInTheDocument();
+    // No Queue/Manual capsule in Data and backup.
+    expect(screen.queryByText(/^(Queue|Manual)$/)).not.toBeInTheDocument();
     expect(screen.getByText('30%')).toBeInTheDocument();
 
     await act(async () => {
@@ -592,7 +801,7 @@ describe('DatabasePanel', () => {
       });
     });
 
-    expect(await screen.findByText(/DTR sync complete: checked 10 intern\(s\), synced 25 row\(s\)\./i)).toBeInTheDocument();
+    expect(await screen.findByText('Upload finished: 25 records sent.')).toBeInTheDocument();
   });
 
   it('displays DTR sync error message when sync errors occur', async () => {
@@ -608,7 +817,7 @@ describe('DatabasePanel', () => {
     const user = userEvent.setup();
     render(<DatabasePanel />);
 
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
 
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
@@ -637,13 +846,19 @@ describe('DatabasePanel', () => {
 
     render(<DatabasePanel />);
 
-    expect(await screen.findByLabelText('DTR sync status')).toBeInTheDocument();
-    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Google Sheets' })).toBeInTheDocument();
+    expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
     expect(screen.getByText('attendance')).toBeInTheDocument();
     expect(screen.getByText('2 pending')).toBeInTheDocument();
     expect(screen.getByText('InternDtr tabs')).toBeInTheDocument();
     expect(screen.getByText('1 pending')).toBeInTheDocument();
-    expect(screen.getByText(/Waiting for a tab: Marissa C\. Dalisay/)).toBeInTheDocument();
+    expect(screen.getByText('Waiting for a tab')).toBeInTheDocument();
+    expect(screen.getByText('Marissa C. Dalisay')).toBeInTheDocument();
+    // Table names and counts are for support: inside the closed "Details for support" fold.
+    const fold = screen.getByText('Details for support').closest('details');
+    expect(fold).not.toHaveAttribute('open');
+    expect(fold).toContainElement(screen.getByText('attendance'));
+    expect(fold).toContainElement(screen.getByText('InternDtr tabs'));
     expect(loadDtrSyncHealthSpy).toHaveBeenCalled();
   });
 
@@ -686,10 +901,12 @@ describe('DatabasePanel', () => {
 
     render(<DatabasePanel />);
 
-    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
+    expect(await screen.findByText(/^Up to date · last upload/)).toBeInTheDocument();
     expect(screen.queryByText('All sync failures: 1')).not.toBeInTheDocument();
     expect(screen.queryByText(/failed DTR item\(s\)/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText('DTR-only sync status')).toHaveTextContent('DTR idle');
+    // One green line beside the heading; no second failures badge.
+    expect(screen.getByText(/^Up to date · last upload/).closest('.sheets-status')).toHaveClass('is-ok');
+    expect(screen.getAllByText(/^Up to date/)).toHaveLength(1);
     expect(screen.queryByText('Healthy')).not.toBeInTheDocument();
     expect(screen.queryByText('Attention')).not.toBeInTheDocument();
     expect(screen.queryByText(/Last error: Google Sheets auth failed: expired token/)).not.toBeInTheDocument();
@@ -734,8 +951,8 @@ describe('DatabasePanel', () => {
 
     render(<DatabasePanel />);
 
-    expect(await screen.findByText('DTR status unavailable. Attendance continues to save locally.')).toBeInTheDocument();
-    expect(screen.queryByText('Sheet syncing paused; attendance recording continues.')).not.toBeInTheDocument();
+    expect(await screen.findByText('Status unavailable. Attendance keeps saving on this PC.')).toBeInTheDocument();
+    expect(screen.queryByText('Paused on this PC')).not.toBeInTheDocument();
   });
 
   it('renders retryable work as waiting and action-required work as admin attention', async () => {
@@ -776,11 +993,10 @@ describe('DatabasePanel', () => {
     });
 
     const { unmount } = render(<DatabasePanel />);
-    expect(await screen.findByText(/2 punches are waiting for retry/)).toBeInTheDocument();
-    expect(screen.getByText(/Retry attempts are bounded/)).toBeInTheDocument();
-    expect(screen.getByText(/Next retry eligibility:/)).toBeInTheDocument();
-    expect(screen.queryByText(/next attempt|automatic delivery/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/need admin (?:help|attention)/i)).not.toBeInTheDocument();
+    // Waiting is gold, not a failure: the count and the next try, in plain words.
+    const waiting = await screen.findByText('2 records waiting · next try Aug 15, 2026, 9:00 AM');
+    expect(waiting.closest('.sheets-status')).toHaveClass('is-waiting');
+    expect(document.querySelector('.sheets-status.is-failed')).toBeNull();
     unmount();
 
     loadDtrSyncHealthSpy.mockResolvedValueOnce({
@@ -819,7 +1035,8 @@ describe('DatabasePanel', () => {
       },
     });
     render(<DatabasePanel />);
-    expect(await screen.findByText('Punches need admin attention before they can sync.')).toBeInTheDocument();
+    const attention = await screen.findByText('1 record needs an administrator before it can upload.');
+    expect(attention.closest('.sheets-status')).toHaveClass('is-failed');
   });
 
   it('shows DTR DEAD independently and does not mark it as an ops failure', async () => {
@@ -860,7 +1077,10 @@ describe('DatabasePanel', () => {
     });
 
     render(<DatabasePanel />);
-    expect(await screen.findByText('DTR attention')).toBeInTheDocument();
+    const failed = await screen.findByText("1 record couldn't upload. Use Sync now to try again.");
+    expect(failed.closest('.sheets-status')).toHaveClass('is-failed');
+    // One Sync now: no second retry button for failed records.
+    expect(screen.getAllByRole('button', { name: /sync now/i })).toHaveLength(1);
     expect(screen.queryByText('All sync failures: 1')).not.toBeInTheDocument();
     expect(getDtrSyncHealthSnapshot()).toMatchObject({
       emittedAt: '2026-08-15T00:00:00Z',
@@ -882,7 +1102,7 @@ describe('DatabasePanel', () => {
 
     render(<DatabasePanel />);
 
-    await screen.findByLabelText('DTR sync status');
+    await screen.findByRole('region', { name: 'Google Sheets' });
     expect(getDtrSyncHealthSnapshot()?.persistenceFailure).toBe(true);
   });
 
@@ -918,8 +1138,7 @@ describe('DatabasePanel', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
 
-    expect(await screen.findByText(/showing last known data \(network unreachable\)/i)).toBeInTheDocument();
-    expect(screen.getByText('DTR status update delayed')).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't refresh the status, showing the last known one (network unreachable).")).toBeInTheDocument();
     expect(screen.getByText('attendance')).toBeInTheDocument();
     expect(screen.getByText('2 pending')).toBeInTheDocument();
   });
@@ -933,9 +1152,9 @@ describe('DatabasePanel', () => {
     render(<DatabasePanel />);
 
     expect(
-      await screen.findByText(/DTR status unavailable — Sync status is available in the desktop application\./),
+      await screen.findByText('Sync status is available in the desktop application.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('DTR status unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Status unavailable')).toBeInTheDocument();
     expect(screen.queryByText('InternDtr tabs')).not.toBeInTheDocument();
   });
 
@@ -947,7 +1166,7 @@ describe('DatabasePanel', () => {
     loadDtrSyncHealthSpy.mockReturnValueOnce(first);
 
     render(<DatabasePanel />);
-    await screen.findByLabelText('DTR sync status');
+    await screen.findByRole('region', { name: 'Google Sheets' });
 
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));
@@ -974,7 +1193,7 @@ describe('DatabasePanel', () => {
         pendingAgeAlert: false,
       },
     });
-    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
   });
 
   it('refreshes sync health after Sync Intern DTR now', async () => {
@@ -989,10 +1208,10 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    await screen.findByLabelText('DTR sync status');
+    await screen.findByRole('region', { name: 'Google Sheets' });
     const callsBefore = loadDtrSyncHealthSpy.mock.calls.length;
 
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
 
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
@@ -1039,11 +1258,11 @@ describe('DatabasePanel', () => {
     const user = userEvent.setup();
     render(<DatabasePanel />);
     // Initial mount load is a successful payload without the typed DTR summary.
-    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
 
     // Start the manual sync. It sets the syncing state SYNCHRONOUSLY, then
     // calls refreshSyncHealth which consumes the pending `manual` promise.
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
     await waitFor(() => {
       expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
@@ -1051,7 +1270,7 @@ describe('DatabasePanel', () => {
 
     // The manual-sync refresh is still unresolved, so the badge must read
     // Syncing. This is the assertion that fails without the syncing guard.
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.getByText('Uploading…')).toBeInTheDocument();
     expect(screen.queryByText('Not synced')).not.toBeInTheDocument();
 
     await act(async () => {
@@ -1074,12 +1293,12 @@ describe('DatabasePanel', () => {
         },
       });
     });
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.getByText('Uploading…')).toBeInTheDocument();
 
     await act(async () => {
       resolveSync({ success: true, internsChecked: 1, tabsCreated: [], rowsSynced: 1, details: [], errors: [] });
     });
-    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
   });
 
   it('does not let a background poll clear the Syncing badge (N8a)', async () => {
@@ -1095,14 +1314,14 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
+    expect(await screen.findByText(/^Up to date · last upload/)).toBeInTheDocument();
     // The next loadDtrSyncHealth call after mount is the background poll.
     loadDtrSyncHealthSpy.mockReturnValueOnce(bgPromise);
 
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
     expect(syncInternDtrSpy).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.getByText('Uploading…')).toBeInTheDocument();
 
     // A background tick fires mid-sync and resolves healthy: badge must stay.
     await act(async () => {
@@ -1134,7 +1353,7 @@ describe('DatabasePanel', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.getByText('Uploading…')).toBeInTheDocument();
 
     // Finish the manual sync so the component settles: its own post-sync
     // refresh (releaseSyncing) leaves `syncing` for real.
@@ -1148,7 +1367,7 @@ describe('DatabasePanel', () => {
         errors: [],
       });
     });
-    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
+    expect(await screen.findByText(/^Up to date · last upload/)).toBeInTheDocument();
   });
 
   const threeInterns = () => {
@@ -1451,7 +1670,9 @@ describe('DatabasePanel', () => {
     for (const bar of bars) {
       expect(bar).toHaveAttribute('aria-valuenow', '0');
     }
-    expect(await screen.findAllByText('Manual')).not.toHaveLength(0);
+    // Plain progress words; the Queue/Manual capsule is gone from Data and backup.
+    expect(await screen.findByText('Uploading 0 of 10…')).toBeInTheDocument();
+    expect(screen.queryByText('Manual')).not.toBeInTheDocument();
 
     act(() => {
       for (const handler of handlers) {
@@ -1471,7 +1692,8 @@ describe('DatabasePanel', () => {
         expect(bar).toHaveAttribute('aria-valuenow', '30');
       }
     });
-    expect(await screen.findAllByText('Queue')).not.toHaveLength(0);
+    expect(await screen.findByText('Uploading 3 of 10…')).toBeInTheDocument();
+    expect(screen.queryByText('Queue')).not.toBeInTheDocument();
 
     await act(async () => {
       resolveSync({
@@ -1504,13 +1726,13 @@ describe('DatabasePanel', () => {
 
     const user = userEvent.setup();
     render(<DatabasePanel />);
-    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
+    expect(await screen.findByText(/^Up to date · last upload/)).toBeInTheDocument();
 
-    const syncBtn = await screen.findByRole('button', { name: /sync intern dtr now/i });
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
     await user.click(syncBtn);
-    expect(await screen.findByText(/DTR sync complete/i)).toBeInTheDocument();
-    expect(await screen.findByText('DTR idle')).toBeInTheDocument();
-    expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
+    expect(await screen.findByText(/^Upload finished/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Up to date · last upload/)).toBeInTheDocument();
+    expect(screen.queryByText('Uploading…')).not.toBeInTheDocument();
   });
 
   it('parses the task-10 health extension fields from the native payload', async () => {
@@ -1566,7 +1788,7 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/Throttled until/i)).toBeInTheDocument();
     expect(screen.getByText(/50-writes\/min budget spent/)).toBeInTheDocument();
     expect(screen.getByText(/admin_sync_now/)).toBeInTheDocument();
-    expect(screen.getByText(/lease recovered: 2/i)).toBeInTheDocument();
+    expect(screen.getByText('Lease recovered').nextElementSibling).toHaveTextContent('2');
     expect(screen.getByText(/oldest retryable/i)).toBeInTheDocument();
   });
 
@@ -1592,8 +1814,68 @@ describe('DatabasePanel', () => {
 
     render(<DatabasePanel />);
 
-    expect(await screen.findByText('DTR status unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/Throttled until/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('SystemPanel', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('is one flat "This PC" card: version and updates, startup, one card reader line, and a closed support fold', async () => {
+    vi.spyOn(api, 'loadDatabaseInfo').mockResolvedValue(mockDbInfo);
+    vi.spyOn(api, 'getAutostartStatus').mockResolvedValue(false);
+    const onManualUpdateCheck = vi.fn();
+    const user = userEvent.setup();
+    render(<SystemPanel onManualUpdateCheck={onManualUpdateCheck} />);
+
+    const card = screen.getByRole('region', { name: 'This PC' });
+    // No kicker, intro sentence or boxed sub-sections: the controls come straight after the title.
+    expect(within(card).queryByText(/^system$/i)).not.toBeInTheDocument();
+    expect(within(card).queryAllByRole('region')).toHaveLength(0);
+    expect(within(card).getByText('Version: desktop app only')).toBeInTheDocument();
+    expect(within(card).getByRole('checkbox', { name: 'Check for updates automatically' })).toBeInTheDocument();
+    expect(within(card).getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' })).toBeDisabled();
+    // One reader line, with no page-open time passed off as a scan.
+    const reader = within(card).getByText('Card reader:', { exact: false });
+    expect(reader).toHaveTextContent('Card reader: Only in the desktop app');
+    expect(within(card).queryByText(/last activity/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /check for updates now/i }));
+    expect(onManualUpdateCheck).toHaveBeenCalledTimes(1);
+
+    // Paths and storage mode sit inside the fold, which starts closed; no developer lines at all.
+    const fold = screen.getByText('Technical details (for support)').closest('details');
+    expect(fold).not.toBeNull();
+    expect(fold).not.toHaveAttribute('open');
+    expect(await within(fold!).findByText(mockDbInfo.dbPath)).toBeInTheDocument();
+    expect(within(fold!).getByText(mockDbInfo.backupDir)).toBeInTheDocument();
+    expect(within(fold!).getByText('Installed — app data folder')).toBeInTheDocument();
+    expect(screen.queryByText(/config\.toml|Deign86|github/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pending restore/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText('Technical details (for support)'));
+    expect(fold).toHaveAttribute('open');
+  });
+
+  it("shows the reader as ready, with the last scan from today's attendance when there is one", async () => {
+    vi.spyOn(api, 'loadDatabaseInfo').mockResolvedValue(mockDbInfo);
+    vi.spyOn(api, 'getAutostartStatus').mockResolvedValue(false);
+    vi.spyOn(tauriApi, 'getScannerStatus').mockResolvedValue({ state: 'connected', message: 'Waiting for card', detail: null, mode: 'keyboard', paused: false });
+    // SAFETY: Minimal desktop-layer mock so the panel reads the reader like the desktop app
+    (window as typeof window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = { invoke: vi.fn(async () => null) };
+    try {
+      const { rerender } = render(<SystemPanel onManualUpdateCheck={vi.fn()} />);
+      const reader = await screen.findByText('Ready');
+      // No time today yet: just the reader, no made-up scan time.
+      expect(reader.closest('p')).toHaveTextContent(/^Card reader: Ready$/);
+
+      rerender(<SystemPanel onManualUpdateCheck={vi.fn()} lastScanAt="2026-10-30T16:52:00+08:00" />);
+      expect(reader.closest('p')).toHaveTextContent('Card reader: Ready · Last scan 4:52 PM');
+    } finally {
+      // SAFETY: Cleaning up the desktop-layer mock from window
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
   });
 });
