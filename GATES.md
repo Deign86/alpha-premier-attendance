@@ -1649,3 +1649,19 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
   EXPECT: all pass; git diff --stat -- server src-tauri shared unchanged (3 files, +25 -7).
   EVIDENCE: oxlint exit 0, typecheck exit 0, client 20 files / 421 tests passed; 3 files changed, 25 insertions(+), 7 deletions(-).
+
+## UI revamp batch 4: admin header on the page, reader status dot, kiosk pill, Live search (client only; A1, A3, K3, L4)
+
+- [x] A1: brand block (kicker, visible "Manage attendance" h1, office address) and the action buttons sit on the page background; section tabs and the 1/2 switch are two separate bars on one row; switch wraps under the tabs on smaller screens; names, guards and sliding thumbs unchanged.
+  EVIDENCE: at 1366x768 the brand block is 119px, the bars 46px, and the content starts at y=253; tabs bar 852px and switch 350px share the row; one h1 "Manage attendance"; page width 1356/1366 and 390/390 (no sideways scroll); in Bathroom mode the tabs bar hides and the switch stays at the right.
+- [x] A3: reader status as a dot plus a word (Reader ready / Checking / Reader missing / Reader error / Browser mode) with a details popover (Escape, click outside, aria-expanded).
+  EVIDENCE: shot b4-after-reader-popover; ScannerDiagnostics tests updated and the new state tests pass.
+- [x] K3: kiosk header pill reads Reading…, Done or Error during a scan result, then the reader's own state.
+  EVIDENCE: captured pill text Ready -> Done after a demo scan, Error after an unknown card; test "header pill follows the scan" passes in the full suite (result window widened to 1.2 s so it is not flaky).
+- [x] L4: Live attendance search (name or ID) and department filter, on screen only, "No one matches" with Clear filters; the at-a-glance counts still cover the whole day.
+  EVIDENCE: shot b4-after-live-search ("Ma" -> 3 rows) and b4-after-live-empty; test passes with no extra requests.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass; server, src-tauri and shared untouched.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 20 files / 429 tests passed.
+- [x] Review (3 lenses, each finding verified): fixed a red "Error" pill on a repeat tap (now calm "Done" like the "Already scanned" card), reader details now close when focus leaves and Escape elsewhere no longer pulls focus to the header, Clear filters returns focus to the search box, the reader keeps its word on phones, and the actions align with the top of the brand block.

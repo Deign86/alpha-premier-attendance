@@ -544,18 +544,6 @@ td small { font-size: .7rem; }
 .admin-tabs button { min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .75rem; }
 .admin-tabs button:hover { color: var(--ink); background: var(--surface-raised); }
 .admin-tabs button.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); }
-/* Scanner diagnostics strip (admin panel): read-only status, mode, detail. */
-.scanner-diag { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin: 0 0 18px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
-.scanner-diag-state { display: inline-flex; align-items: center; gap: 8px; font-size: .74rem; font-weight: 700; }
-.scanner-diag-state i { width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
-.scanner-diag-state.is-connected { color: var(--success); } .scanner-diag-state.is-connected i { background: var(--success); box-shadow: 0 0 0 3px rgba(152, 210, 168, .14); }
-.scanner-diag-state.is-scanning { color: var(--gold-bright); } .scanner-diag-state.is-scanning i { background: var(--gold-bright); }
-.scanner-diag-state.is-offline, .scanner-diag-state.is-error { color: var(--danger); } .scanner-diag-state.is-offline i, .scanner-diag-state.is-error i { background: var(--danger); }
-.scanner-diag-mode, .scanner-diag-detail { color: var(--quiet); font-size: .7rem; }
-.scanner-diag-activity { color: var(--muted); font-size: .7rem; }
-/* Subtle vertical dividers between status, reader, activity and hint; dropped once the strip wraps on narrow screens. */
-.scanner-diag > span + span { padding-left: 18px; border-left: 1px solid var(--line); }
-@media (max-width: 900px) { .scanner-diag > span + span { padding-left: 0; border-left: 0; } }
 .admin-grid { grid-template-columns: minmax(280px, 350px) minmax(0, 1fr); gap: 24px; }
 .admin-form { padding: 20px; border-radius: var(--radius-md); box-shadow: 0 10px 32px rgba(0, 0, 0, .14); }
 .admin-form h2 { margin-bottom: 15px; font-size: 1rem; }
@@ -4060,7 +4048,7 @@ textarea.input {
 /* Every glass panel catches a thin gold gleam along its top edge. */
 .kiosk-topbar::before, .scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before,
 .live-shell .dashboard-header::before, .live-shell .lan-panel::before, .live-shell .table-wrap::before,
-.card-setup-dialog::before, .admin-login form::before, .admin-shell .dashboard-header::before, .admin-shell .admin-form::before, .admin-shell .users-table-section::before {
+.card-setup-dialog::before, .admin-login form::before, .admin-shell .admin-form::before, .admin-shell .users-table-section::before {
   content: ""; position: absolute; top: 0; left: 14%; right: 14%; height: 1px; background: linear-gradient(90deg, transparent, var(--edge-light, rgba(225, 196, 119, .8)), transparent); pointer-events: none;
 }
 
@@ -4473,17 +4461,10 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 /* More room around the page: wider side margins and space above the header, still wide enough for the tables. */
 .admin-shell:not(.admin-login) { width: min(1600px, calc(100% - 2 * clamp(20px, 4vw, 72px))); padding: clamp(24px, 3vw, 40px) 0 48px; }
 
-/* Header: a glass card with two calm columns. Brand, title, office and the mode switch on the left;
-   the page buttons, small and quiet, on the right. */
-.admin-shell .dashboard-header { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title nav" "switch nav"; align-items: start; gap: 16px 32px; padding: 24px 28px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-enter 600ms var(--ease-soft) backwards; }
-.admin-title { grid-area: title; min-width: 0; }
-.admin-title .dashboard-brand { margin: 0 0 12px; }
-.admin-title .section-kicker { margin: 0; letter-spacing: .14em; }
-.admin-title h1 { margin: 4px 0 4px; font-family: 'Orbitron', sans-serif; font-size: 1.5rem; font-weight: 600; line-height: 1.2; letter-spacing: .02em; }
-.admin-title .section-description { margin: 0; font-size: .85rem; }
-
-/* Attendance / Bathroom Key Log: the kiosk's sliding gold thumb, at the original small size, under the title. */
-.admin-shell .admin-mode-switcher { grid-area: switch; justify-self: start; margin: 0; padding: 3px; border-radius: 8px; }
+/* Header: on the page itself, no card (layout in "Admin: header on the page" at the end of the file). */
+.admin-shell .dashboard-header { position: relative; animation: kiosk-enter 600ms var(--ease-soft) backwards; }
+/* Attendance / Bathroom Key Log: the kiosk's sliding gold thumb, at the original small size. */
+.admin-shell .admin-mode-switcher { margin: 0; padding: 3px; border-radius: 8px; }
 .admin-shell .admin-mode-switcher::before { top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(0, 0, 0, .2); }
 .admin-shell .admin-mode-btn { justify-content: center; gap: 7px; min-height: 32px; padding: 5px 14px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; box-shadow: none; font-size: .8rem; transition: color 200ms ease-out; }
 .admin-shell .admin-mode-btn:hover { color: var(--ink); background: transparent; }
@@ -4493,7 +4474,7 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .admin-shell .admin-mode-btn.is-active .admin-mode-key-badge { color: #11100c; background: rgba(17, 16, 12, .14); border-color: rgba(17, 16, 12, .28); }
 
 /* Scanner, Live view and Lock: small outlined buttons with icons, no lift or glow; the dev-only Sheets reset in coral. */
-.admin-shell .dashboard-header nav { grid-area: nav; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 520px; }
+.admin-shell .dashboard-header nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .admin-shell .dashboard-header nav :is(a, button) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; color: var(--ink); background: transparent; background-image: none; border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; box-shadow: none; font-size: .78rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
 .admin-shell .dashboard-header nav :is(a, button) svg { width: 15px; height: 15px; }
 .admin-shell .dashboard-header nav :is(a, button):hover:not(:disabled) { color: var(--gold-bright); background-color: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); box-shadow: none; transform: none; }
@@ -4501,35 +4482,19 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .admin-shell .dashboard-header nav .is-danger svg { color: currentColor; }
 .admin-shell .dashboard-header nav .is-danger:hover:not(:disabled) { color: var(--danger); background-color: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .7); }
 
-/* Tablets and phones: one column (title, switch, buttons). */
-@media (max-width: 900px) {
-  .admin-shell .dashboard-header { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "switch" "nav"; }
-  .admin-shell .dashboard-header nav { justify-content: flex-start; max-width: none; }
-}
-@media (max-width: 600px) {
-  .admin-shell .dashboard-header { padding: 18px; border-radius: 8px; }
-  .admin-shell .admin-mode-switcher { justify-self: stretch; }
-  .admin-shell .admin-mode-key-badge { display: none; }
-  .admin-shell .admin-mode-btn { padding-inline: 8px; }
-  .admin-shell .dashboard-header nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
-}
+@media (max-width: 600px) { .admin-shell .admin-mode-key-badge { display: none; } }
 
-/* Tabs and sensor status share one row: a slim glass tab bar with icons, and the sensor as quiet text. */
-.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 22px 0 18px; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
-.admin-shell .admin-tabs { display: flex; flex: 0 1 auto; gap: 2px; min-width: 0; max-width: 100%; margin: 0; padding: 4px; overflow-x: auto; scrollbar-width: thin; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 6px; box-shadow: var(--glass-shadow); }
+/* Section tabs: icons and plain words in their own glass bar (end of file); the gold thumb slides to the chosen one. */
+.admin-shell .admin-tabs { display: flex; flex: 0 1 auto; flex-wrap: wrap; min-width: 0; max-width: 100%; margin: 0; }
 .admin-shell .admin-tabs button { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: .8rem; font-weight: 600; white-space: nowrap; transition: color 180ms ease-out, background-color 180ms ease-out; }
 .admin-shell .admin-tabs button svg { width: 15px; height: 15px; color: var(--gold); }
 .admin-shell .admin-tabs button:hover { color: var(--ink); background: rgba(198, 162, 84, .07); }
 .admin-shell .admin-tabs button.is-active { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); }
 .admin-shell .admin-tabs button.is-active svg { color: currentColor; }
-.admin-shell .scanner-diag { flex: 0 1 auto; margin: 0 0 0 auto; padding: 6px 12px; gap: 4px 12px; color: var(--muted); background: transparent; border: 1px solid rgba(198, 162, 84, .16); border-radius: 6px; font-size: .74rem; }
-.admin-shell .scanner-diag > span + span { padding-left: 12px; border-left-color: rgba(198, 162, 84, .18); }
 .admin-shell > .dashboard-alert { margin: 0 0 14px; padding: 10px 14px; border-radius: 6px; font-size: .8rem; }
 @media (max-width: 900px) {
   .admin-shell .admin-tabs { flex: 1 1 100%; flex-wrap: wrap; overflow: visible; }
   .admin-shell .admin-tabs button { flex: 1 1 auto; justify-content: center; }
-  .admin-shell .scanner-diag { flex-basis: 100%; margin-left: 0; }
-  .admin-shell .scanner-diag > span + span { padding-left: 0; border-left: 0; }
 }
 
 /* --- Admin: Users and RFID -------------------------------------------------- */
@@ -4837,9 +4802,92 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .payroll-pdf-section :is(th, td) { overflow-wrap: normal; }
 
 /* --- Bathroom Key Log (admin): header spacing and the Assign label -------------------------------------- */
-/* The page starts the same distance below the header as the admin tabs do, and the date sits on the title's line.
-   "Selected: …" sits apart from "Assign Key to Staff" instead of running into it. */
-.admin-shell .bathroom-key-log-workspace { margin-top: 28px; }
+/* The date sits on the title's line. "Selected: …" sits apart from "Assign Key to Staff" instead of running into it. */
 .admin-shell .bathroom-header-controls { align-items: flex-end; }
 .admin-shell .bathroom-header-controls h2 { margin: 0 0 6px; }
 .bathroom-checkout-box > .field-label { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+
+/* --- Admin: header on the page, tabs and mode switch as two bars -------------------------------------------- */
+/* No header card: the brand block (logo and name, the kicker, the "Manage attendance" title and the office address)
+   sits on the page at the top left, and the reader status and page buttons at the top right. Below them one row
+   holds two separate glass bars: the section tabs on the left and the Attendance / Bathroom Key Log switch on the
+   right. When the row runs out of width the switch wraps under the tabs (right-aligned; full width on phones).
+   Spacing: 12px between the reader and the buttons, 10px between buttons, 24px from the header to the bars and
+   from the bars to the page. */
+.admin-shell .dashboard-header { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px 32px; margin: 0; padding: 0; border: 0; }
+.admin-title { min-width: 0; }
+.admin-title .dashboard-brand { margin: 0 0 12px; }
+.admin-title .section-kicker { margin: 0; letter-spacing: .14em; }
+.admin-title h1 { margin: 4px 0; font-family: 'Orbitron', sans-serif; font-size: 1.5rem; font-weight: 600; line-height: 1.2; letter-spacing: .02em; }
+.admin-title .section-description { margin: 0; font-size: .85rem; }
+.admin-header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px 12px; }
+.admin-shell .dashboard-header nav { width: auto; gap: 10px; }
+
+/* The bars: equal heights (36px buttons in a 4px-padded bar), roomier buttons and 4px between tabs. Sized so both
+   bars share one row at 1366px wide. */
+.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; margin: 24px 0; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
+.admin-shell .admin-tabs { gap: 4px; padding: 4px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
+.admin-shell .admin-tabs button { gap: 7px; min-height: 36px; padding: 7px 14px; font-size: .82rem; }
+.admin-shell .admin-mode-switcher { margin-left: auto; padding: 4px; background: var(--glass); border-color: var(--glass-edge); box-shadow: var(--glass-shadow); }
+.admin-shell .admin-mode-switcher::before { top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 2); }
+.admin-shell .admin-mode-btn { min-height: 36px; padding: 8px 12px; font-size: .82rem; }
+/* The page below starts the same distance under the bars in both modes. */
+.admin-shell .bathroom-key-log-workspace { margin-top: 0; }
+
+/* Reader status: a coloured dot and a short word; clicking opens a small details card under it.
+   Green ready, amber checking, red missing or failing, grey in a web browser (no reader there). */
+.reader-status { position: relative; }
+.reader-status-button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 10px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: .78rem; font-weight: 600; white-space: nowrap; transition: color 160ms ease-out, background-color 160ms ease-out; }
+.reader-status-button:hover, .reader-status-button[aria-expanded="true"] { color: var(--ink); background: rgba(198, 162, 84, .07); }
+.reader-status-button:active:not(:disabled) { transform: none; }
+.reader-status-button i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.reader-status-button.is-ready i { background: var(--success); box-shadow: 0 0 0 3px rgba(152, 210, 168, .14); }
+.reader-status-button.is-checking i { background: #e9b04c; box-shadow: 0 0 0 3px rgba(233, 176, 76, .14); }
+.reader-status-button:is(.is-missing, .is-error) { color: var(--danger); }
+.reader-status-button:is(.is-missing, .is-error) i { background: #e46a58; box-shadow: 0 0 0 3px rgba(228, 106, 88, .16); }
+.reader-status-details { position: absolute; top: calc(100% + 6px); left: 0; z-index: 1; display: grid; gap: 4px; width: max-content; max-width: min(300px, calc(100vw - 48px)); padding: 12px 14px; color: var(--muted); background: linear-gradient(180deg, rgba(33, 30, 23, .98), rgba(13, 12, 10, .99)); border: 1px solid rgba(198, 162, 84, .3); border-radius: 8px; box-shadow: 0 16px 40px rgba(0, 0, 0, .5); font-size: .74rem; line-height: 1.45; text-align: left; animation: admin-fade 160ms ease-out; }
+.reader-status-details p { margin: 0; }
+.reader-status-details .reader-status-headline { color: var(--ink); font-weight: 600; }
+/* While the details are open the header sits above the bars and panels below it, so the card is not covered. */
+.admin-shell .dashboard-header:has(.reader-status-details) { z-index: 3; }
+
+/* Tablets: the buttons move under the brand block; the tabs share their bar's width and the switch keeps to the right. */
+@media (max-width: 900px) {
+  .admin-header-actions, .admin-shell .dashboard-header nav { justify-content: flex-start; }
+}
+/* Phones: the reader keeps its word on its own line above the buttons, the buttons fill their row and the switch
+   takes the full width. */
+@media (max-width: 600px) {
+  .admin-header-actions { flex: 1 1 100%; flex-wrap: wrap; align-items: flex-start; }
+  .admin-header-actions .reader-status { flex: 1 1 100%; }
+  .reader-status-button { padding-inline: 10px; }
+  .admin-shell .dashboard-header nav { flex: 1 1 0; min-width: 0; }
+  .admin-shell .dashboard-header nav > * { flex: 1 1 auto; }
+  .admin-shell .admin-tabs button { padding-inline: 10px; }
+  .admin-shell .admin-mode-switcher { flex: 1 1 100%; }
+  .admin-shell .admin-mode-btn { padding-inline: 8px; }
+}
+/* Very small phones (about 320px): tighter mode buttons so "Bathroom Key Log" stays on one line. */
+@media (max-width: 360px) { .admin-shell .admin-mode-btn { padding-inline: 4px; font-size: .76rem; } }
+
+/* --- Live attendance: search and department filter ------------------------------------------------------- */
+/* A compact search box and a department dropdown above the table, the same size as the LAN viewer toggle. They
+   narrow the rows on screen only; the "today at a glance" counts above still cover the whole day. */
+.live-shell .live-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.live-shell .live-filters .search-input-wrap { flex: 1 1 240px; width: auto; max-width: 360px; }
+.live-shell .live-filters .search-input-wrap svg { left: 11px; color: var(--gold); }
+.live-shell .live-filters :is(.input, .select) { height: 34px; color: var(--ink); background-color: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .3); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .78rem; }
+.live-shell .live-filters .input { padding: 0 10px 0 32px; }
+.live-shell .live-filters .input::placeholder { color: var(--quiet); }
+.live-shell .live-filters .select { flex: 0 1 220px; width: auto; min-width: 0; padding: 0 34px 0 10px; background-position: right 11px center; }
+.live-shell .live-filters :is(.input, .select):hover { border-color: rgba(198, 162, 84, .55); }
+.live-shell .live-filters :is(.input, .select):focus { background-color: rgba(0, 0, 0, .3); border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .16); outline: none; }
+/* Nothing matches: one quiet line and a gold text button that clears both filters. */
+.live-shell .live-no-match { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 32px 24px; text-align: center; }
+.live-shell .live-no-match p { margin: 0; color: var(--muted); }
+.live-shell .live-no-match .text-button { min-height: 32px; padding: 4px 10px; color: var(--gold-bright); border-radius: 6px; font-size: .78rem; font-weight: 600; }
+.live-shell .live-no-match .text-button:hover { color: var(--ink); background: rgba(198, 162, 84, .1); }
+@media (max-width: 600px) {
+  .live-shell .live-filters .search-input-wrap { max-width: none; }
+  .live-shell .live-filters .select { flex: 1 1 100%; }
+}

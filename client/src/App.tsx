@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -1195,6 +1195,16 @@ export default function App() {
   // Scanner readiness for the compact status pill. Falls back to a neutral
   // state when the native layer is unavailable (browser dev mode).
   const scannerPill = (() => {
+    // A scan on screen outranks the reader's own state, which comes back when the result clears.
+    if (state === "processing")
+      return { label: "Reading…", state: "scanning" as const, detail: "Reading the card" };
+    if (state === "success")
+      return { label: "Done", state: "connected" as const, detail: "Scan finished" };
+    // A repeat tap shows the calm "Already scanned" card, so the pill stays calm too.
+    if (state === "error" && error?.error.code === "DUPLICATE_SCAN")
+      return { label: "Done", state: "connected" as const, detail: "Card already scanned" };
+    if (state === "error")
+      return { label: "Error", state: "error" as const, detail: "The scan did not go through" };
     if (!scannerStatus)
       return { label: "Connecting…", state: "scanning" as const, detail: "" };
     switch (scannerStatus.state) {
@@ -2612,6 +2622,10 @@ function LiveAttendance() {
   const [lan, setLan] = useState<LanStatusResponse | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
   const [lanOpen, setLanOpen] = useState(false);
+  // On-screen filters only: the counts and the refresh cycle always cover the whole day.
+  const [search, setSearch] = useState("");
+  const [department, setDepartment] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [tableUsers, setTableUsers] = useState<AdminUser[]>([]);
   const [clampHistory, setClampHistory] = useState<AttendanceListItem[]>([]);
   const clampHistoryWeekRef = useRef("");
@@ -2758,6 +2772,20 @@ function LiveAttendance() {
   const timedIn = liveRows.filter((row) => Boolean(row.timeIn)).length;
   const timedOut = liveRows.filter((row) => Boolean(row.timeOut)).length;
   const needsCorrection = liveRows.filter((row) => row.status === "LATE_TIMEOUT").length;
+  // Departments in today's rows (plus the chosen one, so the dropdown never loses it after a refresh).
+  const departments = [...new Set([...liveRows.map((row) => row.department?.trim() ?? ""), department].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const query = search.trim().toLowerCase();
+  const shownRows = liveRows.filter(
+    (row) =>
+      (!department || row.department?.trim() === department) &&
+      (!query || row.fullName.toLowerCase().includes(query) || row.userId.toLowerCase().includes(query)),
+  );
+  // Focus goes back to the search box, since the Clear filters button disappears with the empty message.
+  const clearFilters = () => {
+    setSearch("");
+    setDepartment("");
+    searchRef.current?.focus();
+  };
   // Running but likely unreachable from other devices: flag it on the collapsed LAN toggle.
   const lanNeedsCheck = lan !== null && lan.state === "running" && (lan.networkProfile === "public" || lan.localHealthOk === false);
   return (
@@ -2819,9 +2847,41 @@ function LiveAttendance() {
           onRefresh={() => void refreshLan()}
         />
       </div>
-      {attendance.kind === "loading" ? null : (
+      {liveRows.length > 0 && (
+        <div className="live-filters">
+          <div className="search-input-wrap">
+            <Search size={15} aria-hidden="true" />
+            <input
+              ref={searchRef}
+              type="search"
+              className="input"
+              aria-label="Search name or ID"
+              placeholder="Search name or ID"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <select
+            className="select"
+            aria-label="Department"
+            value={department}
+            onChange={(event) => setDepartment(event.target.value)}
+          >
+            <option value="">All departments</option>
+            {departments.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {attendance.kind === "loading" ? null : liveRows.length > 0 && shownRows.length === 0 ? (
+        <div className="empty-state live-no-match">
+          <p>No one matches</p>
+          <button type="button" className="text-button" onClick={clearFilters}>Clear filters</button>
+        </div>
+      ) : (
         <AttendanceTable
-          rows={attendance.rows}
+          rows={shownRows}
           timezone="Asia/Manila"
           users={tableUsers}
           history={clampHistory}
@@ -3118,10 +3178,16 @@ function LanViewerPanel({
   );
 }
 
-/** Read-only scanner diagnostics for the admin panel: status and focus guidance. */
+/** Card reader status for the admin header: a coloured dot and a short word; the details open on click. */
 export function ScannerDiagnostics() {
   const [status, setStatus] = useState<ScannerStatus | null>(null);
   const [lastActivity, setLastActivity] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const detailsId = useId();
+  // The browser build has no desktop layer, so no reader status ever arrives there.
+  const browserMode = !("__TAURI_INTERNALS__" in window);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -3146,12 +3212,38 @@ export function ScannerDiagnostics() {
     return () => unlisten?.();
   }, []);
 
-  if (!status)
-    return (
-      <div className="scanner-diag" role="status" aria-live="polite">
-        <LoaderCircle className="spin" size={15} /> Checking sensor connection...
-      </div>
-    );
+  // Escape, or a click or keyboard focus anywhere else, closes the details. Escape only brings focus back to the
+  // button when focus was on it, so an Escape typed elsewhere on the page never pulls focus up to the header.
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: MouseEvent | FocusEvent) => {
+      if (event.target instanceof Node && !boxRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const focusInside = boxRef.current?.contains(document.activeElement) ?? false;
+      setOpen(false);
+      if (focusInside) buttonRef.current?.focus();
+    };
+    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("focusin", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOutside);
+      document.removeEventListener("focusin", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const reader = !status
+    ? browserMode
+      ? { tone: "browser", word: "Browser mode" }
+      : { tone: "checking", word: "Checking…" }
+    : status.state === "offline"
+      ? { tone: "missing", word: "Reader missing" }
+      : status.state === "error"
+        ? { tone: "error", word: "Reader error" }
+        : { tone: "ready", word: "Reader ready" };
 
   const stateLabel = {
     connected: "Waiting for card",
@@ -3161,20 +3253,43 @@ export function ScannerDiagnostics() {
   } satisfies Record<ScannerStatus["state"], string>;
 
   return (
-    <div className="scanner-diag" role="status">
-      <span className={`scanner-diag-state is-${status.state}`}>
+    <div className="reader-status" ref={boxRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`reader-status-button is-${reader.tone}`}
+        aria-expanded={open}
+        aria-controls={open ? detailsId : undefined}
+        onClick={() => setOpen((current) => !current)}
+      >
         <i aria-hidden="true" />
-        {status.paused
-          ? "Paused — this screen is typing"
-          : stateLabel[status.state]}
-      </span>
-      <span className="scanner-diag-mode">Reader: Keyboard-mode RFID reader</span>
-      <span className="scanner-diag-activity">
-        Last activity: {lastActivity ? formatTime(lastActivity, "Asia/Manila") : "Not yet recorded"}
-      </span>
-      <span className="scanner-diag-detail">Keep the attendance window focused before scanning.</span>
-      {status.detail && status.detail !== "Keep the attendance window focused before scanning" && (
-        <span className="scanner-diag-detail">{status.detail}</span>
+        <span className="reader-status-word">{reader.word}</span>
+      </button>
+      {open && (
+        <div id={detailsId} className="reader-status-details">
+          {status ? (
+            <>
+              <p className="reader-status-headline">
+                {status.paused ? "Paused — this screen is typing" : stateLabel[status.state]}
+              </p>
+              <p>Reader: Keyboard-mode RFID reader</p>
+              <p>
+                Last activity: {lastActivity ? formatTime(lastActivity, "Asia/Manila") : "Not yet recorded"}
+              </p>
+              <p>Keep the attendance window focused before scanning.</p>
+              {status.detail && status.detail !== "Keep the attendance window focused before scanning" && (
+                <p>{status.detail}</p>
+              )}
+            </>
+          ) : browserMode ? (
+            <>
+              <p className="reader-status-headline">Opened in a web browser</p>
+              <p>The card reader is checked only in the desktop app on the attendance PC.</p>
+            </>
+          ) : (
+            <p className="reader-status-headline">Checking the card reader connection…</p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -3556,6 +3671,7 @@ function AdminPanel() {
     );
   return (
     <main className="dashboard-shell admin-shell">
+      {/* On the page itself, no card: the brand block on the left, the reader status and page buttons on the right. */}
       <header className="dashboard-header">
         <div className="admin-title">
           <DashboardBrand />
@@ -3565,6 +3681,64 @@ function AdminPanel() {
             {resolveOfficeDisplay(office, "short")}
           </p>
         </div>
+        <div className="admin-header-actions">
+          <ScannerDiagnostics />
+          <nav>
+            <a href="/" onClick={leaveLink}><Nfc size={16} aria-hidden="true" /> Scanner</a>
+            <a href="/attendance" onClick={leaveLink}><Activity size={16} aria-hidden="true" /> Live view</a>
+            {import.meta.env.DEV && (
+              <button
+                className="text-button is-danger"
+                type="button"
+                disabled={nuking}
+                onClick={() => setNukeConfirmOpen(true)}
+              >
+                <RefreshCcw size={16} aria-hidden="true" />
+                {nuking ? "Nuking…" : "Nuke & resync Sheets"}
+              </button>
+            )}
+            <button
+              className="text-button"
+              type="button"
+              onClick={() =>
+                leaveUsers(() => {
+                  void lockAdmin();
+                  setUnlocked(false);
+                  setSessionExpiresAt("");
+                })
+              }
+            >
+              <LockKeyhole size={16} aria-hidden="true" />
+              Lock
+            </button>
+          </nav>
+        </div>
+      </header>
+      {/* Two separate glass bars on one row: the section tabs (Attendance mode only) and the mode switch. */}
+      <div className="admin-toolbar">
+        {adminMode === "attendance" && (
+          <div className="admin-tabs" ref={tabsRef}>
+            {tabThumb && (
+              <span
+                className="admin-tabs-thumb"
+                aria-hidden="true"
+                style={{ width: tabThumb.width, height: tabThumb.height, transform: `translate(${tabThumb.x}px, ${tabThumb.y}px)` }}
+              />
+            )}
+            {ADMIN_TABS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                className={tab === id ? "is-active" : ""}
+                aria-current={tab === id ? "page" : undefined}
+                onClick={() => (id === tab ? undefined : leaveUsers(() => setTab(id)))}
+              >
+                <Icon size={16} aria-hidden="true" />
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher" data-active={adminMode}>
           <button
             type="button"
@@ -3587,64 +3761,11 @@ function AdminPanel() {
             <span>Bathroom Key Log</span>
           </button>
         </div>
-        <nav>
-          <a href="/" onClick={leaveLink}><Nfc size={16} aria-hidden="true" /> Scanner</a>
-          <a href="/attendance" onClick={leaveLink}><Activity size={16} aria-hidden="true" /> Live view</a>
-          {import.meta.env.DEV && (
-            <button
-              className="text-button is-danger"
-              type="button"
-              disabled={nuking}
-              onClick={() => setNukeConfirmOpen(true)}
-            >
-              <RefreshCcw size={16} aria-hidden="true" />
-              {nuking ? "Nuking…" : "Nuke & resync Sheets"}
-            </button>
-          )}
-          <button
-            className="text-button"
-            type="button"
-            onClick={() =>
-              leaveUsers(() => {
-                void lockAdmin();
-                setUnlocked(false);
-                setSessionExpiresAt("");
-              })
-            }
-          >
-            <LockKeyhole size={16} aria-hidden="true" />
-            Lock
-          </button>
-        </nav>
-      </header>
+      </div>
       {adminMode === "bathroom" ? (
         <BathroomKeyLogPanel users={users} />
       ) : (
         <>
-          <div className="admin-toolbar">
-            <div className="admin-tabs" ref={tabsRef}>
-              {tabThumb && (
-                <span
-                  className="admin-tabs-thumb"
-                  aria-hidden="true"
-                  style={{ width: tabThumb.width, height: tabThumb.height, transform: `translate(${tabThumb.x}px, ${tabThumb.y}px)` }}
-                />
-              )}
-              {ADMIN_TABS.map(({ id, label, Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={tab === id ? "is-active" : ""}
-                  aria-current={tab === id ? "page" : undefined}
-                  onClick={() => (id === tab ? undefined : leaveUsers(() => setTab(id)))}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  {label}
-                </button>
-              ))}
-            </div>
-            <ScannerDiagnostics />
-          </div>
           {error && <p className="dashboard-alert">{error}</p>}
           {tab === "users" ? (
             <UserEditor

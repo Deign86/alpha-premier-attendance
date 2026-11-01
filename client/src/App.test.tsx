@@ -544,6 +544,69 @@ describe('RFID kiosk', () => {
     expect(screen.getByText(/^Error$/)).toBeInTheDocument();
   });
 
+  it('header pill follows the scan: Reading…, then Done or Error, then back to Ready', async () => {
+    let resolveScan: ((value: Response) => void) | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 1200 }) } as Response;
+      }
+      if (url !== '/api/attendance/scan') {
+        // SAFETY: Fetch returns an empty day for the headcount and the week's arrival history
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [], fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
+      }
+      return new Promise<Response>((resolve) => { resolveScan = resolve; });
+    });
+    // A 1.2 s result window, so Done and Error stay long enough to observe when the whole suite runs at once.
+    render(<App />);
+    const scannerPill = () => document.querySelector('.scanner-pill');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'));
+
+    act(() => emitRfidScan('0000000001'));
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Reading…'));
+    await act(async () => {
+      // SAFETY: Resolve scan promise with mock Response
+      resolveScan?.({ ok: true, json: async () => successResponse } as Response);
+    });
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Done'));
+    expect(scannerPill()).toHaveClass('is-connected');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'), { timeout: 4_000 });
+
+    act(() => emitRfidScan('0000000002'));
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Reading…'));
+    await act(async () => {
+      // SAFETY: Resolve scan promise with mock error Response
+      resolveScan?.({ ok: true, json: async () => ({ success: false, requestId: 'req-err', error: { code: 'UNKNOWN_RFID_CARD', message: 'This RFID card is not registered.' } }) } as Response);
+    });
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Error'));
+    expect(scannerPill()).toHaveClass('is-error');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'), { timeout: 4_000 });
+  }, 15_000);
+
+  it('keeps the header pill calm on a repeat tap (the kiosk shows Already scanned)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 1200 }) } as Response;
+      }
+      if (url !== '/api/attendance/scan') {
+        // SAFETY: Fetch returns an empty day for the headcount and the week's arrival history
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [], fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
+      }
+      // SAFETY: Fetch returns the backend's repeat-tap rejection
+      return { ok: true, json: async () => ({ success: false, requestId: 'req-dup', error: { code: 'DUPLICATE_SCAN', message: 'Card scanned too recently.' } }) } as Response;
+    });
+    render(<App />);
+    const scannerPill = () => document.querySelector('.scanner-pill');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'));
+    act(() => emitRfidScan('0000000003'));
+    expect(await screen.findByText(/already scanned/i)).toBeInTheDocument();
+    expect(scannerPill()).toHaveTextContent('Done');
+    expect(scannerPill()).not.toHaveClass('is-error');
+  });
+
   it('keeps processing guard active during an in-flight scan', async () => {
     let resolveScan: ((value: Response) => void) | undefined;
     const scanCalls = vi.fn();
@@ -1017,9 +1080,83 @@ describe('ScannerDiagnostics', () => {
       paused: false,
     });
     render(<ScannerDiagnostics />);
-    expect(await screen.findByText(/Reader: Keyboard-mode RFID reader/)).toBeInTheDocument();
+    const button = await screen.findByRole('button', { name: 'Reader ready' });
+    expect(button).toHaveClass('is-ready');
+    // The details stay folded away until the dot is clicked.
+    expect(screen.queryByText(/Reader: Keyboard-mode RFID reader/)).not.toBeInTheDocument();
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/Reader: Keyboard-mode RFID reader/)).toBeInTheDocument();
     expect(screen.getByText(/Keep the attendance window focused before scanning\./)).toBeInTheDocument();
     expect(screen.getByText(/Waiting for card/)).toBeInTheDocument();
+  });
+
+  it('shows a grey Browser mode state instead of checking forever in a web browser', async () => {
+    render(<ScannerDiagnostics />);
+    // getScannerStatus rejects in the browser build (see beforeEach), so no status ever arrives.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const button = screen.getByRole('button', { name: 'Browser mode' });
+    expect(button).toHaveClass('is-browser');
+    expect(screen.queryByText(/checking/i)).not.toBeInTheDocument();
+    fireEvent.click(button);
+    expect(screen.getByText('The card reader is checked only in the desktop app on the attendance PC.')).toBeInTheDocument();
+  });
+
+  it('follows the desktop reader: checking, missing, failing and ready', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
+    try {
+      render(<ScannerDiagnostics />);
+      expect(screen.getByRole('button', { name: 'Checking…' })).toHaveClass('is-checking');
+      await waitFor(() => expect(scannerStatusHandlers.length).toBeGreaterThan(0));
+      const status = (state: ScannerStatus['state']): ScannerStatus => ({ state, message: 'Reader update', detail: null, mode: 'keyboard', paused: false });
+      act(() => emitScannerStatus(status('offline')));
+      expect(screen.getByRole('button', { name: 'Reader missing' })).toHaveClass('is-missing');
+      act(() => emitScannerStatus(status('error')));
+      expect(screen.getByRole('button', { name: 'Reader error' })).toHaveClass('is-error');
+      act(() => emitScannerStatus(status('connected')));
+      expect(screen.getByRole('button', { name: 'Reader ready' })).toHaveClass('is-ready');
+    } finally {
+      Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+    }
+  });
+
+  it('toggles the details on click and closes them with Escape or a click outside', async () => {
+    const user = userEvent.setup();
+    render(<><ScannerDiagnostics /><p>Outside</p></>);
+    const button = await screen.findByRole('button', { name: 'Browser mode' });
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button).not.toHaveAttribute('aria-controls');
+
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    const details = screen.getByText('Opened in a web browser').parentElement;
+    expect(button).toHaveAttribute('aria-controls', details?.id);
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+
+    await user.click(button);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+    expect(button).toHaveFocus();
+
+    await user.click(button);
+    await user.click(screen.getByText('Outside'));
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes the details when keyboard focus moves away, and an Escape elsewhere leaves focus alone', async () => {
+    const user = userEvent.setup();
+    render(<><ScannerDiagnostics /><input aria-label="Elsewhere" /></>);
+    const button = await screen.findByRole('button', { name: 'Browser mode' });
+    await user.click(button);
+    expect(screen.getByText('Opened in a web browser')).toBeInTheDocument();
+    await user.tab();
+    expect(screen.getByRole('textbox', { name: 'Elsewhere' })).toHaveFocus();
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('textbox', { name: 'Elsewhere' })).toHaveFocus();
   });
 });
 
@@ -2846,6 +2983,62 @@ describe('Admin Attendance Corrections', () => {
     expect(screen.getByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
   });
 
+  it('shows the brand block and page buttons on the page, with the tabs and mode switch as two bars below', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/bathroom/status')) {
+        // SAFETY: Mock bathroom status
+        return { ok: true, json: async () => ({ success: true, date: '2026-08-27', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-27T10:00:00Z' }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, users, attendance, payroll)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', users: [], attendance: [], profiles: [], payroll: [] }) } as Response;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByRole('button', { name: /users and rfid/i });
+
+      // Header on the page: the brand block (with the visible title) on the left, reader status and page buttons on the right.
+      const heading = screen.getByRole('heading', { level: 1, name: 'Manage attendance' });
+      expect(heading).toBeVisible();
+      const header = heading.closest('header');
+      expect(header).not.toBeNull();
+      const inHeader = within(header!);
+      expect(inHeader.getByText('ALPHA PREMIER REALTY')).toBeInTheDocument();
+      expect(inHeader.getByText('Administrator access')).toBeInTheDocument();
+      expect(inHeader.getByRole('button', { name: 'Browser mode' })).toBeInTheDocument();
+      expect(inHeader.getByRole('link', { name: 'Scanner' })).toHaveAttribute('href', '/');
+      expect(inHeader.getByRole('link', { name: 'Live view' })).toHaveAttribute('href', '/attendance');
+      expect(inHeader.getByRole('button', { name: 'Lock' })).toBeInTheDocument();
+
+      // Below the header, one row with two separate bars: the five section tabs, then the mode switch.
+      const tabNames = ['Users and RFID', 'Attendance corrections', 'Payroll', 'Data and backup', 'Voice announcements'];
+      const tabs = screen.getByRole('button', { name: 'Payroll' }).parentElement;
+      tabNames.forEach((name) => expect(within(tabs!).getByRole('button', { name })).toBeInTheDocument());
+      expect(within(tabs!).getByRole('button', { name: 'Users and RFID' })).toHaveAttribute('aria-current', 'page');
+      const switcher = screen.getByRole('tablist', { name: 'Administrator mode switcher' });
+      expect(header).not.toContainElement(tabs);
+      expect(header).not.toContainElement(switcher);
+      expect(tabs).not.toContainElement(switcher);
+      expect(switcher.parentElement).toBe(tabs?.parentElement);
+      expect(switcher.previousElementSibling).toBe(tabs);
+
+      // Bathroom mode hides the tabs bar; the switch stays in its row.
+      await user.click(within(switcher).getByRole('tab', { name: /^bathroom key log$/i }));
+      expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Users and RFID' })).not.toBeInTheDocument();
+      expect(screen.getByRole('tablist', { name: 'Administrator mode switcher' })).toBe(switcher);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('switches between Attendance and Bathroom Key Log mode on the Kiosk', async () => {
     window.history.pushState({}, '', '/');
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -3188,6 +3381,78 @@ describe('Live attendance revamp', () => {
       expect(screen.queryByRole('list', { name: 'Today at a glance' })).not.toBeInTheDocument();
       const counts = await screen.findByRole('list', { name: 'Today at a glance' });
       expect(within(counts).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['0 in office', '2 timed out', '2 timed in', '1 need correction']);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('filters the rows on screen by name, ID and department while the counts keep the whole day', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === '/api/attendance') {
+          // SAFETY: Fetch returns attendance Response mock
+          return {
+            ok: true,
+            json: async () => ({
+              success: true,
+              date: '2026-07-28',
+              fetchedAt: '2026-07-28T10:00:00+08:00',
+              attendance: [
+                { attendanceId: 'f1', attendanceDate: '2026-07-28', userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales', timeIn: '2026-07-28T08:00:00+08:00', timeOut: null, status: 'WORKING' },
+                { attendanceId: 'f2', attendanceDate: '2026-07-28', userId: 'APG-2026-002', fullName: 'Maria Santos', department: 'Engineering', timeIn: '2026-07-28T08:10:00+08:00', timeOut: null, status: 'WORKING' },
+                { attendanceId: 'f3', attendanceDate: '2026-07-28', userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Engineering', timeIn: '2026-07-28T08:20:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              ],
+            }),
+          } as Response;
+        }
+        // SAFETY: Fetch returns fallback success Response mock (config, roster, LAN)
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila' }) } as Response;
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      const counts = screen.getByRole('list', { name: 'Today at a glance' });
+      const countText = () => within(counts).getAllByRole('listitem').map((item) => item.textContent);
+      expect(countText()).toEqual(['2 in office', '1 timed out', '3 timed in']);
+
+      const department = screen.getByRole('combobox', { name: 'Department' });
+      expect(within(department).getAllByRole('option').map((option) => option.textContent)).toEqual(['All departments', 'Engineering', 'Sales']);
+
+      const search = screen.getByRole('searchbox', { name: 'Search name or ID' });
+      await user.type(search, 'dela');
+      expect(screen.getByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByText('Maria Santos')).not.toBeInTheDocument();
+      expect(screen.queryByText('Jose Rizal')).not.toBeInTheDocument();
+      // The IDs stay beside the names and are searchable too.
+      await user.clear(search);
+      await user.type(search, '2026-002');
+      expect(screen.getByText('Maria Santos')).toBeInTheDocument();
+      expect(screen.getByText('APG-2026-002')).toBeInTheDocument();
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+
+      await user.clear(search);
+      await user.selectOptions(department, 'Engineering');
+      expect(screen.getByText('Maria Santos')).toBeInTheDocument();
+      expect(screen.getByText('Jose Rizal')).toBeInTheDocument();
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+
+      // Nothing matches: a plain message and a way back; the counts never change.
+      await user.type(search, 'Juan');
+      expect(screen.getByText('No one matches')).toBeInTheDocument();
+      expect(screen.queryByRole('table')).not.toBeInTheDocument();
+      expect(countText()).toEqual(['2 in office', '1 timed out', '3 timed in']);
+      const attendanceCalls = fetchSpy.mock.calls.filter(([input]) => String(input) === '/api/attendance').length;
+      await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+      expect(search).toHaveValue('');
+      expect(department).toHaveValue('');
+      // The Clear filters button goes away with the message, so focus returns to the search box.
+      expect(search).toHaveFocus();
+      ['Juan Dela Cruz', 'Maria Santos', 'Jose Rizal'].forEach((name) => expect(screen.getByText(name)).toBeInTheDocument());
+      // Filtering works on the loaded rows only.
+      expect(fetchSpy.mock.calls.filter(([input]) => String(input) === '/api/attendance').length).toBe(attendanceCalls);
     } finally {
       window.history.pushState({}, '', '/');
     }
