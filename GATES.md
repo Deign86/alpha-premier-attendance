@@ -1585,3 +1585,48 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass.
   EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 417 + 297.
+
+## UI revamp batch 3: card setup dialog and admin shell + Users and RFID (client only)
+
+- [x] Card setup dialog, save step: every field shows without scrolling at 1366x768 and 1920x960; on phones it may scroll but Save stays in view.
+  EVIDENCE: before 560px wide, scrollHeight 893 vs clientHeight 688 (1366x768) and 737 (1920x960). After 1000x657 with no scrolling element at both sizes; phone: form scrolls 1002/698 with the sticky Save bar.
+- [x] Dropdown arrows sit clear of the right edge in the dialog and the admin forms.
+  EVIDENCE: dialog selects appearance none, background-position calc(100% - 16px) 50%, padding-right 44px (before: native arrow about 4px from the edge); admin forms right 14px / 40px.
+- [x] Dialog (unknown-card setup and kiosk Admin setup, incl. Forgot PIN and scan step) uses the glass look and shows its 3 steps on every step; existing setup dialog tests pass unchanged.
+  EVIDENCE: 0 text nodes under 14px in the dialog at 1366, 1920 and 390; client suite passes with no edits to the setup dialog tests.
+- [x] Admin: no page-level sideways scroll and no table sideways scroll from 320 to 1920.
+  EVIDENCE: document scrollWidth equals the viewport and the users table width equals its wrapper at 320, 390, 768, 1024, 1280, 1366, 1920 (with and without the registration pop-up).
+- [x] Admin header and tabs: compact original sizes (34px buttons and tabs), icons, clear active tab; the 1/2 shortcuts, tab order and every action are unchanged.
+  EVIDENCE: header buttons 34px at every width; mode switch test and tab tests pass.
+- [x] Registration form opens on demand in a pop-up and protects unsaved typing.
+  CHECK (client/): npx vitest run src/App.test.tsx -t "registration form on demand"
+  EXPECT: 3 passed (closed by default; Add user opens and focuses User ID; tab switch, Edit and Cancel ask "Discard unsaved changes?"; Keep editing keeps the typing; the 2 key does nothing while open).
+  EVIDENCE: 3 passed. Pop-up 860x589 (Add) and 860x640 (Edit) at 1366x768 with no scrolling. Review findings fixed: blur clean-ups no longer count as changes; uploads in progress count as unsaved and never land on another record; no second browser prompt after Discard on a link; modified clicks keep their new tab; no stale prompt after a lock; updates ask first.
+- [x] Kiosk and Live attendance look unchanged.
+  EVIDENCE: kiosk topbar blur(18px) saturate(1.4) and 12px buttons; Live header radius 20px, 44px buttons, body rgb(8, 8, 7), no .admin-shell on /attendance.
+- [x] Client only: no new server, src-tauri or shared changes.
+  CHECK: git diff --stat -- server src-tauri shared
+  EXPECT: unchanged (3 files, +25 -7: the temporary demo-seed hooks only).
+  EVIDENCE: 3 files changed, 25 insertions(+), 7 deletions(-).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0; full npm test 39 + 420 + 297 and verify:mcp passed before the pop-up change; client suite re-run after it (see the final report).
+
+## UI revamp batch 3b: compact kiosk and Live, sliding selections, one pop-up design, kiosk sparkles (client only)
+
+- [x] Kiosk home and Live attendance at compact sizes with 8px panels and 6px controls; no sideways scroll.
+  EVIDENCE: kiosk header 64px (was 76), Live header 179px (was 203), Live buttons 34px (were 44). Width sweep 320, 360, 390, 414, 600, 768, 900, 1024, 1280, 1366, 1440, 1500, 1920, 2560: no page sideways scroll on kiosk (attendance and bathroom) or Live; kiosk switch centred (offset 0) at every width; no mode tab clipped. Bathroom 1024x768 fits (768px; was 774 after the size change, 783 at 1366x768 before).
+- [x] "Register card as" and the admin tabs slide; the registration pop-up and kiosk card setup keep their size when switching card type.
+  EVIDENCE: admin pop-up 860x583 both ways; kiosk save step 656.5px both ways; thumb width equals the option width (223.5px) and lands on it; tab thumb rect equals the active tab rect for Users, Payroll and Voice at 1366 and when wrapped at 800; focus stays on the radio after switching.
+- [x] Cancel and Save user the same size; paired pop-up buttons equal.
+  EVIDENCE: Cancel and Save user 132x40 each (Save was 48px tall); confirmations 201x40 each; Edit payroll and Add missed attendance 220x40 each.
+- [x] One pop-up design; destructive confirmations are coral; test names unchanged.
+  EVIDENCE: 11 ConfirmDialog usages pass tone="danger" (delete user/selected, delete attendance record/selected, delete payroll/selected/cutoff records, restore database, wipe Sheets, discard unsaved changes x2); Finalize and Generate stay gold; "Confirm"/"Cancel" labels kept (12 tests use /confirm/i).
+- [x] Kiosk sparkles are light and out of the way.
+  EVIDENCE: 18 elements, transform and opacity only; no scroll added (scrollWidth 1366 at 1366); clicks reach the controls (elementFromPoint at the footer returns .kiosk-actions); paused while the card setup dialog is open; hidden with prefers-reduced-motion; positioned in the side bands, clear of the frosted centre cards.
+- [x] Review: 9 confirmed findings fixed (thumb box-sizing, pop-up hover and busy states, kiosk focus on card-type switch, kiosk row heights, phone reader dot, gleam in scrolling pop-ups, stale tab thumb).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
+  EXPECT: all pass; server, src-tauri and shared unchanged (3 files, +25 -7 demo-seed hooks only).
+  EVIDENCE: oxlint 0, typecheck 0, client 20 files / 420 tests passed; git diff --stat -- server src-tauri shared: 3 files changed, 25 insertions(+), 7 deletions(-).

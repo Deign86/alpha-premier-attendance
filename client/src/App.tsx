@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -7,9 +7,11 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  ClipboardCheck,
   Clock,
   CloudOff,
   CreditCard,
+  Database,
   Download,
   History,
   ImagePlus,
@@ -23,6 +25,7 @@ import {
   Nfc,
   Plus,
   PlusCircle,
+  RefreshCcw,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -30,10 +33,13 @@ import {
   UserCheck,
   UserRound,
   Users,
+  Volume2,
+  Wallet,
   Wifi,
   WifiOff,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type {
   ScanErrorResponse,
   ScanSuccessResponse,
@@ -1244,6 +1250,8 @@ export default function App() {
 
   return (
     <main className={`kiosk-shell state-${state} mode-${kioskMode}`}>
+      {/* Gold sparkles rising behind the kiosk (styles.css "Kiosk sparkles"). */}
+      <div className="kiosk-ambient" aria-hidden="true">{KIOSK_SPARKLES}</div>
       <header className="kiosk-topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
@@ -1787,8 +1795,39 @@ type SetupDialogProps = {
   onClose: () => void;
 };
 
+/** The kiosk's rising gold sparkles; each one's position, size and timing come from styles.css. */
+const KIOSK_SPARKLES = Array.from({ length: 18 }, (_, index) => <i key={index} />);
+
+/** Card setup progress: the step on screen is highlighted and earlier steps show as done. */
+function SetupSteps({ current }: { current: 1 | 2 | 3 }) {
+  return (
+    <div className="setup-steps" aria-label="Card association steps">
+      {["01 Unlock", "02 Scan card", "03 Save user"].map((label, index) => (
+        <span
+          key={label}
+          className={index + 1 === current ? "is-active" : index + 1 < current ? "is-done" : undefined}
+          aria-current={index + 1 === current ? "step" : undefined}
+        >
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Setup shares one message line: "…" is work in progress, success wording is done, anything else is a problem. */
+function setupMessageClass(message: string): string {
+  if (message.endsWith("…")) return "setup-progress";
+  return message.includes("successfully") || message.includes("ready to save") ? "setup-success" : "setup-error";
+}
+
 function SetupDialog(props: SetupDialogProps) {
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  // The save step puts the cursor in its first field once, when it opens for a card (not on card-type switches).
+  const saveFormRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (props.token && props.step === "edit") saveFormRef.current?.querySelector<HTMLInputElement>(".setup-fields input")?.focus({ preventScroll: true });
+  }, [props.token, props.step, props.uid]);
   const [resettingPin, setResettingPin] = useState(false);
   const [pinNotice, setPinNotice] = useState("");
   // An admin card tap can unlock mid-reset; a later expiry must land on unlock, not reset.
@@ -1831,7 +1870,8 @@ function SetupDialog(props: SetupDialogProps) {
       }}
     >
       <section
-        className="setup-dialog"
+        className="setup-dialog card-setup-dialog"
+        data-step={!props.token ? (resettingPin ? "reset" : "unlock") : props.step === "scan" ? "scan" : "save"}
         role="dialog"
         aria-modal="true"
         aria-labelledby="setup-heading"
@@ -1864,14 +1904,9 @@ function SetupDialog(props: SetupDialogProps) {
           />
         ) : !props.token ? (
           <form className="setup-form" onSubmit={props.onUnlock}>
-            <div className="setup-steps" aria-label="Card association steps">
-              <span className="is-active">01 Unlock</span>
-              <span>02 Scan card</span>
-              <span>03 Save user</span>
-            </div>
+            <SetupSteps current={1} />
             <p className="setup-copy">
-              Scan registered admin RFID card or enter administrator PIN to associate a card with an employee.
-              Example: Deign Lazaro, IT / Admin.
+              Tap an admin RFID card on the reader, or type the administrator PIN, to link a card to an employee.
             </p>
             <label htmlFor="admin-pin">Administrator PIN or Admin RFID card</label>
             <input
@@ -1918,6 +1953,7 @@ function SetupDialog(props: SetupDialogProps) {
           </form>
         ) : props.step === "scan" ? (
           <div className="setup-form">
+            <SetupSteps current={2} />
             <p className="setup-copy">
               Scan the employee card now. Existing cards open with their current
               details; new cards start with a blank profile.
@@ -1942,21 +1978,15 @@ function SetupDialog(props: SetupDialogProps) {
               </p>
             )}
             {props.error && (
-              <p
-                className={
-                  props.error.includes("successfully")
-                    ? "setup-success"
-                    : "setup-error"
-                }
-                role="status"
-              >
+              <p className={setupMessageClass(props.error)} role="status">
                 {props.error}
               </p>
             )}
             <div className="setup-footer">
               <span>
                 <UserRound size={15} />{" "}
-                {props.user ? "Existing user" : "New card enrollment"}
+                {/* A save clears the card ID and keeps the saved user; an expired session keeps both. */}
+                {!props.user ? "New card enrollment" : props.uid ? "Existing user" : "Ready for the next card"}
               </span>
               <button
                 className="text-button"
@@ -1968,7 +1998,8 @@ function SetupDialog(props: SetupDialogProps) {
             </div>
           </div>
         ) : (
-          <form className="setup-form" onSubmit={props.onUpsert}>
+          <form className="setup-form setup-form-save" onSubmit={props.onUpsert} ref={saveFormRef}>
+            <SetupSteps current={3} />
             <div className="card-badge">
               <CreditCard size={15} /> {props.uid}
               <span>{props.user ? "Existing card" : "New card"}</span>
@@ -2005,7 +2036,7 @@ function SetupDialog(props: SetupDialogProps) {
               </div>
             </div>
             {props.form.cardType === "ADMIN_ASSIST" ? (
-              <div className="setup-fields">
+              <div className="setup-fields" key="admin-card">
                 <label>
                   <span className="field-label">
                     Card label <span className="optional">optional</span>
@@ -2017,7 +2048,6 @@ function SetupDialog(props: SetupDialogProps) {
                       props.onFormChange("label", event.target.value)
                     }
                     autoComplete="off"
-                    autoFocus
                   />
                 </label>
                 <p className="field-hint">
@@ -2025,7 +2055,7 @@ function SetupDialog(props: SetupDialogProps) {
                 </p>
               </div>
             ) : (
-              <div className="setup-fields">
+              <div className="setup-fields" key="intern-card">
                 <label>
                   <span className="field-label">User ID</span>
                   <input
@@ -2038,7 +2068,6 @@ function SetupDialog(props: SetupDialogProps) {
                     }
                     autoComplete="off"
                     required
-                    autoFocus
                   />
                 </label>
                 <label>
@@ -2200,14 +2229,7 @@ function SetupDialog(props: SetupDialogProps) {
               </div>
             )}
             {props.error && (
-              <p
-                className={
-                  props.error.includes("successfully")
-                    ? "setup-success"
-                    : "setup-error"
-                }
-                role="status"
-              >
+              <p className={setupMessageClass(props.error)} role="status">
                 {props.error}
               </p>
             )}
@@ -3256,6 +3278,16 @@ function AttendanceTable({
   );
 }
 
+type AdminTab = "users" | "attendance" | "payroll" | "data" | "voice";
+
+const ADMIN_TABS = [
+  { id: "users", label: "Users and RFID", Icon: Users },
+  { id: "attendance", label: "Attendance corrections", Icon: ClipboardCheck },
+  { id: "payroll", label: "Payroll", Icon: Wallet },
+  { id: "data", label: "Data and backup", Icon: Database },
+  { id: "voice", label: "Voice announcements", Icon: Volume2 },
+] satisfies { id: AdminTab; label: string; Icon: LucideIcon }[];
+
 function AdminPanel() {
   const [unlocked, setUnlocked] = useState(false);
   useScannerPause(unlocked);
@@ -3264,9 +3296,10 @@ function AdminPanel() {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [adminMode, setAdminMode] = useState<"attendance" | "bathroom">("attendance");
-  const [tab, setTab] = useState<"users" | "attendance" | "payroll" | "data" | "voice">(
-    "users",
-  );
+  const [tab, setTab] = useState<AdminTab>("users");
+  // The gold thumb behind the current tab; measured so it can slide between tabs of different widths.
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [tabThumb, setTabThumb] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [rows, setRows] = useState<AttendanceListItem[]>([]);
   const [cutoffs, setCutoffs] = useState<PayrollCutoffRecord[]>([]);
@@ -3282,6 +3315,56 @@ function AdminPanel() {
   useEffect(() => {
     if (unlocked) setResettingPin(false);
   }, [unlocked]);
+  // Unsaved typing in User registration: anything that would close the Users tab asks first.
+  const [usersDirty, setUsersDirty] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+  const guardUsersForm = usersDirty && adminMode === "attendance" && tab === "users";
+  const leaveUsers = (action: () => void) => {
+    if (guardUsersForm) setPendingLeave(() => action);
+    else action();
+  };
+  // Set once a discard is confirmed for a link, so the browser doesn't ask a second time on the way out.
+  const leavingRef = useRef(false);
+  const leaveLink = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    // Ctrl/Cmd/Shift/middle clicks open a new tab or window, which keeps this page and its typing.
+    if (!guardUsersForm || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const href = event.currentTarget.href;
+    setPendingLeave(() => () => {
+      leavingRef.current = true;
+      window.location.assign(href);
+    });
+  };
+  // Closing or reloading the window: the browser shows its own "Leave site?" prompt.
+  useEffect(() => {
+    if (!guardUsersForm) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!leavingRef.current) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [guardUsersForm]);
+  // A prompt left open when the session locks must not come back (and run its old action) after unlocking.
+  useEffect(() => {
+    if (!unlocked) setPendingLeave(null);
+  }, [unlocked]);
+
+  useLayoutEffect(() => {
+    const bar = tabsRef.current;
+    if (!bar) {
+      setTabThumb(null);
+      return;
+    }
+    const place = () => {
+      const active = bar.querySelector<HTMLElement>("button.is-active");
+      if (active) setTabThumb({ x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight });
+    };
+    place();
+    if (!("ResizeObserver" in window)) return;
+    const observer = new ResizeObserver(place);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [tab, adminMode, unlocked]);
 
   const unlockWithPinOrRfid = useCallback(
     async (candidate: string) => {
@@ -3317,16 +3400,18 @@ function AdminPanel() {
           (target.matches("input, textarea, select, [contenteditable='true']") ||
             target.isContentEditable),
       );
-      if (isTextEntry) return;
+      // No mode switching while a pop-up or prompt is open (it would replace or stack on the waiting choice).
+      if (isTextEntry || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (event.key === "1") {
         setAdminMode("attendance");
       } else if (event.key === "2") {
-        setAdminMode("bathroom");
+        if (guardUsersForm) setPendingLeave(() => () => setAdminMode("bathroom"));
+        else setAdminMode("bathroom");
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [unlocked]);
+  }, [unlocked, guardUsersForm]);
 
   useEffect(() => {
     if (unlocked) return;
@@ -3402,8 +3487,8 @@ function AdminPanel() {
   }, [unlocked, load]);
   if (!unlocked && resettingPin)
     return (
-      <main className="dashboard-shell admin-login">
-        <a href="/">← Scanner</a>
+      <main className="dashboard-shell admin-login admin-shell">
+        <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
         <PinResetPanel
           onDone={(notice) => {
             setResettingPin(false);
@@ -3414,9 +3499,10 @@ function AdminPanel() {
     );
   if (!unlocked)
     return (
-      <main className="dashboard-shell admin-login">
-        <a href="/">← Scanner</a>
+      <main className="dashboard-shell admin-login admin-shell">
+        <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
         <form onSubmit={unlock}>
+          <DashboardBrand />
           <p className="section-kicker">Administrator access</p>
           <h1>Manage attendance</h1>
           <p className="setup-copy" style={{ marginBottom: "1rem" }}>
@@ -3456,61 +3542,64 @@ function AdminPanel() {
       </main>
     );
   return (
-    <main className="dashboard-shell">
+    <main className="dashboard-shell admin-shell">
       <header className="dashboard-header">
-        <div>
+        <div className="admin-title">
           <DashboardBrand />
           <p className="section-kicker">Administrator access</p>
           <h1>Manage attendance</h1>
           <p className="section-description">
             {resolveOfficeDisplay(office, "short")}
           </p>
-          <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={adminMode === "attendance"}
-              className={`admin-mode-btn ${adminMode === "attendance" ? "is-active" : ""}`}
-              onClick={() => setAdminMode("attendance")}
-            >
-              <span className="admin-mode-key-badge" aria-hidden="true">1</span>
-              <span>Attendance</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={adminMode === "bathroom"}
-              className={`admin-mode-btn ${adminMode === "bathroom" ? "is-active" : ""}`}
-              onClick={() => setAdminMode("bathroom")}
-            >
-              <span className="admin-mode-key-badge" aria-hidden="true">2</span>
-              <span>Bathroom Key Log</span>
-            </button>
-          </div>
+        </div>
+        <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher" data-active={adminMode}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={adminMode === "attendance"}
+            className={`admin-mode-btn ${adminMode === "attendance" ? "is-active" : ""}`}
+            onClick={() => setAdminMode("attendance")}
+          >
+            <span className="admin-mode-key-badge" aria-hidden="true">1</span>
+            <span>Attendance</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={adminMode === "bathroom"}
+            className={`admin-mode-btn ${adminMode === "bathroom" ? "is-active" : ""}`}
+            onClick={() => leaveUsers(() => setAdminMode("bathroom"))}
+          >
+            <span className="admin-mode-key-badge" aria-hidden="true">2</span>
+            <span>Bathroom Key Log</span>
+          </button>
         </div>
         <nav>
-          <a href="/">Scanner</a>
-          <a href="/attendance">Live view</a>
+          <a href="/" onClick={leaveLink}><Nfc size={16} aria-hidden="true" /> Scanner</a>
+          <a href="/attendance" onClick={leaveLink}><Activity size={16} aria-hidden="true" /> Live view</a>
           {import.meta.env.DEV && (
             <button
-              className="text-button"
+              className="text-button is-danger"
               type="button"
               disabled={nuking}
               onClick={() => setNukeConfirmOpen(true)}
             >
+              <RefreshCcw size={16} aria-hidden="true" />
               {nuking ? "Nuking…" : "Nuke & resync Sheets"}
             </button>
           )}
           <button
             className="text-button"
             type="button"
-            onClick={() => {
-              void lockAdmin();
-              setUnlocked(false);
-              setSessionExpiresAt("");
-            }}
+            onClick={() =>
+              leaveUsers(() => {
+                void lockAdmin();
+                setUnlocked(false);
+                setSessionExpiresAt("");
+              })
+            }
           >
-            <LockKeyhole size={14} aria-hidden="true" />
+            <LockKeyhole size={16} aria-hidden="true" />
             Lock
           </button>
         </nav>
@@ -3519,39 +3608,30 @@ function AdminPanel() {
         <BathroomKeyLogPanel users={users} />
       ) : (
         <>
-          <div className="admin-tabs">
-            <button
-              className={tab === "users" ? "is-active" : ""}
-              onClick={() => setTab("users")}
-            >
-              Users and RFID
-            </button>
-            <button
-              className={tab === "attendance" ? "is-active" : ""}
-              onClick={() => setTab("attendance")}
-            >
-              Attendance corrections
-            </button>
-            <button
-              className={tab === "payroll" ? "is-active" : ""}
-              onClick={() => setTab("payroll")}
-            >
-              Payroll
-            </button>
-            <button
-              className={tab === "data" ? "is-active" : ""}
-              onClick={() => setTab("data")}
-            >
-              Data and backup
-            </button>
-            <button
-              className={tab === "voice" ? "is-active" : ""}
-              onClick={() => setTab("voice")}
-            >
-              Voice announcements
-            </button>
+          <div className="admin-toolbar">
+            <div className="admin-tabs" ref={tabsRef}>
+              {tabThumb && (
+                <span
+                  className="admin-tabs-thumb"
+                  aria-hidden="true"
+                  style={{ width: tabThumb.width, height: tabThumb.height, transform: `translate(${tabThumb.x}px, ${tabThumb.y}px)` }}
+                />
+              )}
+              {ADMIN_TABS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={tab === id ? "is-active" : ""}
+                  aria-current={tab === id ? "page" : undefined}
+                  onClick={() => (id === tab ? undefined : leaveUsers(() => setTab(id)))}
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  {label}
+                </button>
+              ))}
+            </div>
+            <ScannerDiagnostics />
           </div>
-          <ScannerDiagnostics />
           {error && <p className="dashboard-alert">{error}</p>}
           {tab === "users" ? (
             <UserEditor
@@ -3559,6 +3639,7 @@ function AdminPanel() {
               editing={editing}
               setEditing={setEditing}
               onSaved={load}
+              onDirtyChange={setUsersDirty}
             />
           ) : tab === "attendance" ? (
             <AdminAttendance
@@ -3581,14 +3662,31 @@ function AdminPanel() {
         </>
       )}
       <ConfirmDialog
+        open={pendingLeave !== null}
+        busy={false}
+        tone="danger"
+        title="Discard unsaved changes?"
+        message="You have unsaved changes in User registration. Leaving now discards them."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        onCancel={() => setPendingLeave(null)}
+        onConfirm={() => {
+          // Every waiting action closes the Users tab (its editor then reports "clean") or leaves the page.
+          const action = pendingLeave;
+          setPendingLeave(null);
+          action?.();
+        }}
+      />
+      <ConfirmDialog
         open={nukeConfirmOpen}
         busy={nuking}
+        tone="danger"
         title="Wipe Google Sheets?"
         message="This will wipe all Google Sheets data and re-export everything from SQLite. This cannot be undone."
         onCancel={() => setNukeConfirmOpen(false)}
         onConfirm={() => void nukeSheets()}
       />
-      <UpdateBanner manualCheckTrigger={manualUpdateCheck} />
+      <UpdateBanner manualCheckTrigger={manualUpdateCheck} beforeInstall={leaveUsers} />
     </main>
   );
 }
@@ -3607,6 +3705,24 @@ type AdminUser = {
   cardType?: CardType;
   label?: string | null;
 };
+
+/** True when the registration form differs from the record it was opened with (the blank user when adding).
+ *  Both sides are compared as save() would send them, so the clean-ups done on blur don't count as changes. */
+function userFormChanged(form: AdminUser, base: AdminUser): boolean {
+  const comparable = (user: AdminUser) => [
+    user.userId.trim().toUpperCase(),
+    user.rfidUid.trim().toUpperCase(),
+    normalizeName(user.fullName),
+    (user.department ?? "").trim().replace(/\s+/g, " "),
+    user.status,
+    user.gender ?? "",
+    user.photoUrl ?? "",
+    user.cardType ?? "EMPLOYEE",
+  ];
+  const a = comparable(form);
+  const b = comparable(base);
+  return a.some((value, index) => value !== b[index]);
+}
 
 /** Data & backup panel: configurable DB location, safe backups, and the PC-switch restore flow. */
 type RestoreFailureDetail = {
@@ -4359,6 +4475,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       <ConfirmDialog
         open={Boolean(restoreFile)}
         busy={busy}
+        tone="danger"
         title="Restore database from backup?"
         message="The app will close and restore the database from the selected file on the next launch. Any data on this device will be replaced."
         onCancel={() => setRestoreFile(null)}
@@ -4372,11 +4489,13 @@ export function UserEditor({
   editing,
   setEditing,
   onSaved,
+  onDirtyChange,
 }: {
   users?: AdminUser[];
   editing: AdminUser | null;
   setEditing: (user: AdminUser | null) => void;
   onSaved: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const safeUsers = users ?? [];
   const blankUser: AdminUser = {
@@ -4594,7 +4713,10 @@ export function UserEditor({
       const res = await deleteAdminUser(id);
       if (res.success) {
         count++;
-        if (editing?.userId === id) setEditing(null);
+        if (editingRef.current?.userId === id) {
+          setEditing(null);
+          setFormOpen(false);
+        }
       }
     }
     setBatchUpdatingUsers(false);
@@ -4610,7 +4732,13 @@ export function UserEditor({
     let count = 0;
     for (const u of targetUsers) {
       const res = await saveAdminUser({ ...u, status }, u.userId);
-      if (res.success) count++;
+      if (!res.success) continue;
+      count++;
+      const open = editingRef.current;
+      if (open?.userId === u.userId) {
+        setEditing({ ...open, status });
+        setForm((current) => ({ ...current, status }));
+      }
     }
     setBatchUpdatingUsers(false);
     setSelectedUserIds(new Set());
@@ -4618,28 +4746,85 @@ export function UserEditor({
     onSaved();
   };
 
+  // Messages are cleared by the actions that open or switch the form, so "Saved." and "Deleted …" stay visible.
   useEffect(() => {
+    formSession.current += 1;
     setForm(editing ?? blankUser);
-    setMessage("");
     setPhotoBuster(Date.now());
   }, [editing]);
 
-  // Cap the users list to the registration card's height; the rest scrolls inside the list.
+  // The registration form opens on demand ("+ Add user" or Edit) in a pop-up, and closes after Save.
   const userFormRef = useRef<HTMLElement>(null);
-  const [usersCap, setUsersCap] = useState<number | null>(null);
+  const [formOpen, setFormOpen] = useState(Boolean(editing));
+  const formDirty = formOpen && (photoUploading || userFormChanged(form, editing ?? blankUser));
+  // Bumped whenever the form is reset or switched, so a photo upload that finishes later can tell it is stale.
+  const formSession = useRef(0);
+  // The record being edited right now (delete and batch actions read it after their awaits).
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  // Where focus goes back to when the pop-up closes (the Add user or Edit button that opened it).
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const rememberFocus = () => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  };
+  // A discard waiting for confirmation (Edit another user, Add user, close) while the form has unsaved typing.
+  const [pendingDiscard, setPendingDiscard] = useState<(() => void) | null>(null);
+  const guardDiscard = (action: () => void) => {
+    if (formDirty) setPendingDiscard(() => action);
+    else action();
+  };
+  const openAddForm = () => {
+    rememberFocus();
+    guardDiscard(() => {
+      formSession.current += 1;
+      setEditing(null);
+      setForm(blankUser);
+      setMessage("");
+      setFormOpen(true);
+    });
+  };
+  const closeForm = () =>
+    guardDiscard(() => {
+      formSession.current += 1;
+      setEditing(null);
+      setForm(blankUser);
+      setMessage("");
+      setFormOpen(false);
+    });
+  const requestEdit = (user: AdminUser) => {
+    rememberFocus();
+    if (editing?.userId === user.userId) setFormOpen(true);
+    else
+      guardDiscard(() => {
+        formSession.current += 1;
+        setEditing(user);
+        setForm(user);
+        setMessage("");
+        setFormOpen(true);
+      });
+  };
+  // Admin asks before leaving this tab while the form has unsaved typing; it learns about that here.
   useEffect(() => {
-    const formEl = userFormRef.current;
-    if (!formEl || !("ResizeObserver" in window)) return;
-    const observer = new ResizeObserver(() => setUsersCap(formEl.offsetHeight));
-    observer.observe(formEl);
-    setUsersCap(formEl.offsetHeight);
-    return () => observer.disconnect();
-  }, []);
-  // "See all users" lifts the cap; the toggle only shows when some users are scrolled out of view.
+    onDirtyChange?.(formDirty);
+  }, [formDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  // When the pop-up opens (or switches to another user), put the cursor in the first field that can be
+  // changed; when it closes, give focus back to the button that opened it.
+  useEffect(() => {
+    if (!formOpen) {
+      returnFocusRef.current?.focus({ preventScroll: true });
+      returnFocusRef.current = null;
+      return;
+    }
+    userFormRef.current
+      ?.querySelector<HTMLElement>("input:not([disabled]):not([type='radio']):not([type='file']), select")
+      ?.focus({ preventScroll: true });
+  }, [formOpen, editing]);
+  // The list is capped (styles.css) and scrolls inside; "See all" lifts the cap and only shows when users are hidden.
   const usersWrapRef = useRef<HTMLDivElement>(null);
   const [showAllUsers, setShowAllUsers] = useState(false);
-  const usersOverflowing = useVerticalOverflow(usersWrapRef, usersCap !== null);
-  const usersCapped = usersCap !== null && !showAllUsers;
+  const usersCapped = !showAllUsers;
+  const usersOverflowing = useVerticalOverflow(usersWrapRef, usersCapped);
 
   const handlePhotoUpload = async (file: File) => {
     if (!form.userId.trim()) {
@@ -4659,6 +4844,7 @@ export function UserEditor({
       return;
     }
     setPhotoUploading(true);
+    const session = formSession.current;
     let dataUrl: string;
     try {
       dataUrl = await preparePhotoDataUrl(file);
@@ -4677,6 +4863,8 @@ export function UserEditor({
         dataUrl,
       );
       setPhotoUploading(false);
+      // The form was switched or closed while uploading: don't put this photo on another record.
+      if (session !== formSession.current) return;
       if (!response.success) {
         setMessage(response.error.message);
         return;
@@ -4713,6 +4901,8 @@ export function UserEditor({
       if (response.success) {
         setMessage("Saved.");
         setEditing(null);
+        setForm(blankUser);
+        setFormOpen(false);
         onSaved();
       } else {
         setMessage(response.error?.message ?? "Unable to save user.");
@@ -4735,7 +4925,10 @@ export function UserEditor({
       const response = await deleteAdminUser(user.userId);
       if (response.success) {
         setMessage(`Deleted ${user.fullName}.`);
-        if (editing?.userId === user.userId) setEditing(null);
+        if (editingRef.current?.userId === user.userId) {
+          setEditing(null);
+          setFormOpen(false);
+        }
         onSaved();
       } else {
         setMessage(response.error?.message ?? "Unable to delete user.");
@@ -4746,44 +4939,79 @@ export function UserEditor({
       setDeletingUserId("");
     }
   };
+  // Status sits next to Gender for interns and after the identifier for admin cards.
+  const statusField = (
+    <label>
+      Status
+      <select
+        value={form.status}
+        onChange={(e) =>
+          setForm({
+            ...form,
+            status: e.target.value === "INACTIVE" ? "INACTIVE" : "ACTIVE",
+          })
+        }
+      >
+        <option value="ACTIVE">Active</option>
+        <option value="INACTIVE">Inactive</option>
+      </select>
+    </label>
+  );
+
+  // Shown in the form while it is open, otherwise above the list (save, delete and table actions report here).
+  const messageLine = message && (
+    <p
+      className={`form-message ${
+        message.includes("already") ||
+        message.includes("Unable") ||
+        message.includes("conflict") ||
+        message.includes("Error") ||
+        message.includes("Enter") ||
+        message.includes("Choose") ||
+        message.includes("must be") ||
+        message.includes("failed")
+          ? "is-error"
+          : "is-success"
+      }`}
+      role="status"
+    >
+      {message}
+    </p>
+  );
+
   return (
     <div className="admin-grid">
-      <section className="admin-form" ref={userFormRef}>
+      {formOpen && (
+      // A click outside does not close the pop-up, so a stray click never throws typing away.
+      <div className="user-form-backdrop" role="presentation">
+      <section
+        className="admin-form user-form-dialog"
+        ref={userFormRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="user-form-heading"
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          closeForm();
+        }}
+      >
         <div className="editor-heading">
           <div>
             <p className="section-kicker">User registration</p>
-            <h2>{editing ? `Editing ${editing.fullName}` : "Add user"}</h2>
+            <h2 id="user-form-heading">{editing ? `Editing ${editing.fullName}` : "Add user"}</h2>
+            {formDirty && <span className="unsaved-tag">Unsaved changes</span>}
           </div>
-          {editing && (
-            <button className="text-button" type="button" onClick={() => setEditing(null)}>
-              Cancel edit
-            </button>
-          )}
+          <button className="icon-button" type="button" onClick={closeForm} aria-label="Close user form">
+            <X size={17} aria-hidden="true" />
+          </button>
         </div>
         {editing && (
           <p className="edit-context" role="status">
             Active record: <strong>{editing.userId}</strong> · RFID {editing.rfidUid}
           </p>
         )}
-        {message && (
-          <p
-            className={`form-message ${
-              message.includes("already") ||
-              message.includes("Unable") ||
-              message.includes("conflict") ||
-              message.includes("Error") ||
-              message.includes("Enter") ||
-              message.includes("Choose") ||
-              message.includes("must be") ||
-              message.includes("failed")
-                ? "is-error"
-                : "is-success"
-            }`}
-            role="status"
-          >
-            {message}
-          </p>
-        )}
+        {messageLine}
         <form onSubmit={save}>
           <div className="card-type-toggle" role="radiogroup" aria-label="Register user as:">
             <span className="field-label">Card assignment type:</span>
@@ -4820,7 +5048,7 @@ export function UserEditor({
           </div>
 
           {form.cardType === "ADMIN_ASSIST" ? (
-            <>
+            <Fragment key="admin-card">
               <div className="modal-audit-callout" style={{ marginBottom: 12 }}>
                 <ShieldAlert size={16} />
                 <span>Admin RFID cards allow supervisors to perform assisted clock-ins at the kiosk. They do not record attendance for themselves.</span>
@@ -4868,9 +5096,10 @@ export function UserEditor({
                   }
                 />
               </label>
-            </>
+              {statusField}
+            </Fragment>
           ) : (
-            <>
+            <Fragment key="intern-card">
               <label>
                 User ID
                 <input
@@ -4946,6 +5175,7 @@ export function UserEditor({
                   <option value="FEMALE">Female</option>
                 </select>
               </label>
+              {statusField}
               <div className="photo-field">
                 <span className="field-label">
                   ID photo <span className="optional">optional</span>
@@ -4985,7 +5215,7 @@ export function UserEditor({
                       />
                       {photoUploading ? (
                         <span className="photo-overlay">
-                          <LoaderCircle size={16} className="spinning" /> Uploading photo…
+                          <LoaderCircle size={16} className="spin" /> Uploading photo…
                         </span>
                       ) : (
                         <span className="photo-overlay">
@@ -5058,7 +5288,7 @@ export function UserEditor({
                     />
                     {photoUploading ? (
                       <>
-                        <LoaderCircle size={25} className="spinning" />
+                        <LoaderCircle size={25} className="spin" />
                         <strong>Uploading photo…</strong>
                       </>
                     ) : isDraggingPhoto ? (
@@ -5080,32 +5310,21 @@ export function UserEditor({
                   </label>
                 )}
               </div>
-            </>
+            </Fragment>
           )}
-          <label>
-            Status
-            <select
-              value={form.status}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  status: e.target.value === "INACTIVE" ? "INACTIVE" : "ACTIVE",
-                })
-              }
-            >
-              <option value="ACTIVE">Active</option>
-              <option value="INACTIVE">Inactive</option>
-            </select>
-          </label>
-          <button className="submit-button" type="submit">
-            Save user
-          </button>
+          <div className="user-form-actions">
+            <button className="text-button" type="button" onClick={closeForm}>
+              Cancel
+            </button>
+            <button className="submit-button" type="submit">
+              Save user
+            </button>
+          </div>
         </form>
       </section>
-      <section
-        className={`table-with-bar users-table-section ${usersCapped ? "is-capped" : ""}`}
-        style={usersCapped ? { maxHeight: usersCap } : undefined}
-      >
+      </div>
+      )}
+      <section className={`table-with-bar users-table-section ${usersCapped ? "is-capped" : ""}`}>
         <div className="table-header-bar">
           <div className="table-selection-count">
             {selectedUserIds.size > 0 ? (
@@ -5170,6 +5389,11 @@ export function UserEditor({
                 >
                   Delete selected ({selectedUserIds.size})
                 </button>
+                {!formOpen && (
+                  <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
+                    <Plus size={15} aria-hidden="true" /> Add user
+                  </button>
+                )}
               </>
             ) : (
               <>
@@ -5189,6 +5413,11 @@ export function UserEditor({
                 >
                   {syncingDtrUserId === "ALL" ? "Syncing DTR…" : "Sync Interns to DTR"}
                 </button>
+                {!formOpen && (
+                  <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
+                    <Plus size={15} aria-hidden="true" /> Add user
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -5227,6 +5456,7 @@ export function UserEditor({
             </div>
           </div>
         )}
+        {!formOpen && messageLine}
         <div className="user-search-row">
           <div className="search-input-wrap">
             <Search size={15} />
@@ -5257,17 +5487,23 @@ export function UserEditor({
                 <th>RFID</th>
                 <th>Status</th>
                 <th>Voice</th>
-                <th />
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan={6} style={{ textAlign: "center", padding: "20px 12px" }}>
-                    No users match &ldquo;{userSearch.trim()}&rdquo;.{" "}
-                    <button className="text-button" type="button" onClick={() => setUserSearch("")}>
-                      Clear
-                    </button>
+                    {userSearch.trim() ? (
+                      <>
+                        No users match &ldquo;{userSearch.trim()}&rdquo;.{" "}
+                        <button className="text-button" type="button" onClick={() => setUserSearch("")}>
+                          Clear
+                        </button>
+                      </>
+                    ) : (
+                      "No users yet. Use Add user to register the first one."
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -5305,7 +5541,9 @@ export function UserEditor({
                     )}
                   </td>
                   <td className="user-status-cell">{user.rfidUid}</td>
-                  <td className="user-status-cell">{user.status}</td>
+                  <td className="user-status-cell">
+                    <span className={`status-pill status-${user.status.toLowerCase()}`}>{user.status}</span>
+                  </td>
                   <td>
                     {user.cardType === "ADMIN_ASSIST" ? (
                       <span className="form-help">—</span>
@@ -5336,7 +5574,7 @@ export function UserEditor({
                     )}
                     <button
                       className="text-button"
-                      onClick={() => setEditing(user)}
+                      onClick={() => requestEdit(user)}
                     >
                       Edit
                     </button>
@@ -5360,6 +5598,7 @@ export function UserEditor({
       <ConfirmDialog
         open={Boolean(deleteUserTarget)}
         busy={Boolean(deletingUserId)}
+        tone="danger"
         title="Delete user?"
         message={deleteUserTarget ? `Are you sure you want to delete ${deleteUserTarget.fullName} (${deleteUserTarget.userId})? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.` : ""}
         onCancel={() => setDeleteUserTarget(null)}
@@ -5368,10 +5607,26 @@ export function UserEditor({
       <ConfirmDialog
         open={batchDeleteUsersOpen}
         busy={batchUpdatingUsers}
+        tone="danger"
         title="Delete selected users?"
         message={`Are you sure you want to delete ${selectedUserIds.size} selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.`}
         onCancel={() => setBatchDeleteUsersOpen(false)}
         onConfirm={() => void removeBatchUsers()}
+      />
+      <ConfirmDialog
+        open={pendingDiscard !== null}
+        busy={false}
+        tone="danger"
+        title="Discard unsaved changes?"
+        message="You have unsaved changes in User registration. Discarding them can't be undone."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        onCancel={() => setPendingDiscard(null)}
+        onConfirm={() => {
+          const action = pendingDiscard;
+          setPendingDiscard(null);
+          action?.();
+        }}
       />
     </div>
   );
@@ -6024,6 +6279,7 @@ export function PayrollWorkspace({
       <ConfirmDialog
         open={clearCutoffOpen}
         busy={clearingCutoff}
+        tone="danger"
         title="Delete cutoff records?"
         message={`This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for cutoff ${form.cutoffStart} through ${form.cutoffEnd}. Continue?`}
         onCancel={() => setClearCutoffOpen(false)}
@@ -6040,6 +6296,9 @@ function ConfirmDialog({
   message,
   onCancel,
   onConfirm,
+  cancelLabel = "Cancel",
+  confirmLabel = "Confirm",
+  tone = "default",
 }: {
   open: boolean;
   busy: boolean;
@@ -6047,18 +6306,23 @@ function ConfirmDialog({
   message: string;
   onCancel: () => void;
   onConfirm: () => void;
+  cancelLabel?: string;
+  confirmLabel?: string;
+  /** "danger" for actions that delete, wipe, replace or discard: coral icon, edge and confirm button. */
+  tone?: "default" | "danger";
 }) {
   if (!open) return null;
+  const danger = tone === "danger";
   return (
     <div className="confirm-backdrop" role="presentation">
-      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-heading">
-        <CircleAlert size={22} aria-hidden="true" />
+      <section className={danger ? "confirm-dialog is-danger" : "confirm-dialog"} role="dialog" aria-modal="true" aria-labelledby="confirm-heading">
+        <CircleAlert className="confirm-icon" size={20} aria-hidden="true" />
         <h2 id="confirm-heading">{title}</h2>
         <p>{message}</p>
         <div className="confirm-actions">
-          <button className="text-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
-          <button className="submit-button" type="button" disabled={busy} onClick={onConfirm}>
-            {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Confirm
+          <button className="text-button" type="button" disabled={busy} onClick={onCancel}>{cancelLabel}</button>
+          <button className={danger ? "submit-button is-danger" : "submit-button"} type="button" disabled={busy} onClick={onConfirm}>
+            {busy ? <LoaderCircle className="spin" size={16} /> : danger ? null : <Check size={16} />} {confirmLabel}
           </button>
         </div>
       </section>
@@ -6223,13 +6487,13 @@ function EditPayrollDialog({
           )}
           <div className="attendance-stat">
             <span className="attendance-label">Late Deduction</span>
-            <span className="attendance-value" style={{ color: record.lateDeduction > 0 ? "#dc2626" : undefined }}>
+            <span className="attendance-value" style={{ color: record.lateDeduction > 0 ? "var(--danger)" : undefined }}>
               {php(record.lateDeduction)} ({record.lateUnits} hrs)
             </span>
           </div>
           <div className="attendance-stat">
             <span className="attendance-label">Absent / Halfday</span>
-            <span className="attendance-value" style={{ color: (absenceDeduction + record.halfDayDeduction) > 0 ? "#dc2626" : undefined }}>
+            <span className="attendance-value" style={{ color: (absenceDeduction + record.halfDayDeduction) > 0 ? "var(--danger)" : undefined }}>
               {php(absenceDeduction + record.halfDayDeduction)} ({absentDays} absent)
             </span>
           </div>
@@ -6273,7 +6537,7 @@ function EditPayrollDialog({
               </div>
               <div className="summary-item">
                 <span className="summary-label">Total Deductions</span>
-                <span className="summary-value" style={{ color: "#dc2626" }}>
+                <span className="summary-value" style={{ color: "var(--danger)" }}>
                   {php(totalDeductions)}
                 </span>
               </div>
@@ -6427,7 +6691,7 @@ function EditPayrollDialog({
               </div>
               <div className="summary-item">
                 <span className="summary-label">Total Deductions</span>
-                <span className="summary-value" style={{ color: "#dc2626" }}>
+                <span className="summary-value" style={{ color: "var(--danger)" }}>
                   {php(totalDeductions)}
                 </span>
               </div>
@@ -7025,7 +7289,7 @@ function PayrollTable({
                   <td>{php(row.absenceDeduction)}</td>
                   <td>{php(row.lateDeduction + row.halfDayDeduction)}</td>
                   <td>
-                    <strong style={{ color: "#dc2626" }}>{php(totalDeductions)}</strong>
+                    <strong style={{ color: "var(--danger)" }}>{php(totalDeductions)}</strong>
                   </td>
                   <td style={{ backgroundColor: "#fef08a" }}>
                     <strong style={{ color: "#854d0e" }}>{php(netPay)}</strong>
@@ -7125,6 +7389,7 @@ function PayrollTable({
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         busy={false}
+        tone="danger"
         title={deleteTarget?.status === "FINALIZED" ? "Delete finalized payroll?" : "Delete saved payroll?"}
         message={
           deleteTarget
@@ -7139,6 +7404,7 @@ function PayrollTable({
       <ConfirmDialog
         open={batchDeleteOpen}
         busy={deletingBatch}
+        tone="danger"
         title="Delete selected payrolls?"
         message={`Are you sure you want to delete ${selectedIds.size} selected payroll record(s)? This will permanently remove them from the cutoff.`}
         onCancel={() => setBatchDeleteOpen(false)}
@@ -7999,6 +8265,7 @@ function AdminAttendance({
       <ConfirmDialog
         open={batchDeleteAttendanceOpen}
         busy={batchDeletingAttendance}
+        tone="danger"
         title="Delete selected attendance records?"
         message={`Are you sure you want to delete ${selectedAttendanceIds.size} selected attendance record(s)? This will remove them from the logs.`}
         onCancel={() => setBatchDeleteAttendanceOpen(false)}
@@ -8594,6 +8861,7 @@ function AttendanceEditRow({
             <ConfirmDialog
               open={true}
               busy={deleting}
+              tone="danger"
               title="Delete attendance record?"
               message={`This will permanently delete ${row.fullName}'s time-in/time-out record for ${row.attendanceDate}. This cannot be undone.`}
               onCancel={() => setDeleteAttendanceConfirm(false)}

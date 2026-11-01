@@ -20,6 +20,8 @@ import { listenForCheckForUpdates } from './tauri-api';
 interface UpdateBannerProps {
   /** Optional manual trigger signal from admin panel */
   manualCheckTrigger?: number;
+  /** Admin passes its unsaved-changes check; the install (which restarts the app) runs once it allows. */
+  beforeInstall?: (install: () => void) => void;
 }
 
 interface ToastState {
@@ -31,7 +33,7 @@ type UpdateAvailability =
   | { status: 'none' }
   | { status: 'available'; update: Update; info: UpdateInfo };
 
-export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
+export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBannerProps) {
   const [availability, setAvailability] = useState<UpdateAvailability>({ status: 'none' });
   const [bannerDismissed, setBannerDismissed] = useState(() =>
     sessionStorage.getItem('alpha_dismissed_update') === 'true',
@@ -311,7 +313,7 @@ export function UpdateBanner({ manualCheckTrigger }: UpdateBannerProps) {
                     <button
                       className="submit-button"
                       type="button"
-                      onClick={() => void handleStartInstall()}
+                      onClick={() => (beforeInstall ? beforeInstall(() => void handleStartInstall()) : void handleStartInstall())}
                     >
                       <Download size={16} />
                       Download &amp; restart

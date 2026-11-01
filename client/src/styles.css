@@ -122,21 +122,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .result-photo-full { height: auto; aspect-ratio: auto; object-fit: contain; }
 .result-name { margin: 0; color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: clamp(1.7rem, 4vw, 2.5rem); font-weight: 600; line-height: 1.15; text-wrap: balance; overflow-wrap: anywhere; }
 .result-message { margin: 2px 0 0; max-width: 42ch; color: var(--muted); font-size: .95rem; text-wrap: pretty; }
-.result-user-id { margin: 2px 0 0; color: var(--gold-bright); font-size: .95rem; }
+.result-user-id { margin: 2px 0 0; color: var(--gold-bright); font-size: .8rem; }
 
 /* Scan result as an ID card: portrait beside the details, gold kept to a hairline, the status and the time. */
-.result-card { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: clamp(20px, 3vw, 32px); width: min(720px, 100%); padding: clamp(20px, 3vw, 32px); text-align: left; background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
+.result-card { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: clamp(16px, 2.2vw, 24px); width: min(640px, 100%); padding: clamp(16px, 2.2vw, 24px); text-align: left; background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
 .result-card.is-out { border-top-color: var(--line-bright); }
-.result-card .result-photo, .result-avatar { width: clamp(120px, 15vw, 168px); aspect-ratio: 3 / 4; margin: 0; border: 2px solid var(--gold); border-radius: var(--radius-lg); background: var(--surface-raised); object-fit: cover; object-position: center top; }
+.result-card .result-photo, .result-avatar { width: clamp(120px, 15vw, 168px); aspect-ratio: 3 / 4; margin: 0; border: 2px solid var(--gold); border-radius: 6px; background: var(--surface-raised); object-fit: cover; object-position: center top; }
 /* No ID photo on file: initials in the same 3:4 frame, so the card keeps its shape. */
 .result-avatar { display: grid; place-items: center; color: var(--gold-bright); font-size: clamp(2rem, 4vw, 2.6rem); font-weight: 600; }
 .result-body { display: grid; justify-items: start; gap: 6px; min-width: 0; }
-.result-status { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 4px; padding: 5px 12px; color: var(--gold-bright); background: rgba(198, 162, 84, .12); border: 1px solid rgba(198, 162, 84, .32); border-radius: 999px; font-size: .82rem; font-weight: 600; }
+.result-status { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 2px; padding: 4px 10px; color: var(--gold-bright); background: rgba(198, 162, 84, .12); border: 1px solid rgba(198, 162, 84, .32); border-radius: 6px; font-size: .74rem; font-weight: 600; }
 .result-card.is-out .result-status { color: var(--ink); background: rgba(246, 242, 233, .06); border-color: rgba(246, 242, 233, .16); }
 .result-card .result-name { font-size: clamp(1.5rem, 3vw, 2.1rem); }
-.result-times { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 36px; width: 100%; margin: 12px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.result-times { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 28px; width: 100%; margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
 .result-time { display: grid; gap: 2px; }
-.result-time dt { color: var(--quiet); font-size: .8rem; font-weight: 600; }
+.result-time dt { color: var(--quiet); font-size: .72rem; font-weight: 600; }
 /* Times use the header clock's face. */
 .result-time dd { margin: 0; color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .result-card.is-out .result-time dd { color: var(--ink); }
@@ -145,12 +145,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .result-card .result-message { text-align: left; }
 
 /* Notices and errors share the card frame, centred, with the icon in a soft disc. */
-.kiosk-result.is-notice, .kiosk-result.is-error { gap: 10px; width: min(560px, 100%); padding: clamp(24px, 4vw, 36px); background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
+.kiosk-result.is-notice, .kiosk-result.is-error { gap: 8px; width: min(560px, 100%); padding: clamp(18px, 2.6vw, 26px); background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
 .kiosk-result.is-error { border-top-color: var(--danger); }
-.kiosk-result.is-success { width: min(720px, 100%); }
+.kiosk-result.is-success { width: min(640px, 100%); }
 .kiosk-result.is-notice ~ .reset-progress, .kiosk-result.is-error ~ .reset-progress { width: min(560px, 100%); }
 .kiosk-result.is-notice .result-name, .kiosk-result.is-error .result-name { font-size: clamp(1.4rem, 3vw, 1.9rem); font-weight: 600; }
-.result-notice-icon, .result-error-icon { box-sizing: content-box; width: 26px; height: 26px; margin-bottom: 4px; padding: 14px; border-radius: 50%; }
+.result-notice-icon, .result-error-icon { box-sizing: content-box; width: 22px; height: 22px; margin-bottom: 4px; padding: 11px; border-radius: 50%; }
 .result-notice-icon { color: var(--gold-bright); background: rgba(198, 162, 84, .12); }
 
 @media (max-width: 600px) {
@@ -160,8 +160,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .result-card .result-message { text-align: center; }
   .result-card .result-photo, .result-avatar { width: 128px; }
 }
-.result-meta { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; color: var(--ink); font-size: .82rem; }
-.result-meta span { padding: 7px 12px; border: 1px solid var(--line-bright); background: #211d13; border-radius: 999px; }
+.result-meta { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; color: var(--ink); font-size: .76rem; }
+.result-meta span { padding: 6px 10px; border: 1px solid var(--line-bright); background: #211d13; border-radius: 6px; }
 .employee-badge { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright) !important; font-weight: 700; }
 .intern-badge { color: var(--gold-bright); background: #211d13; border-color: var(--gold-soft) !important; }
 .result-error-icon { color: var(--danger); background: rgba(239, 170, 146, .12); }
@@ -170,7 +170,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-card-button:hover { background: var(--gold-bright); }
 .reset-hint { margin: 0; color: var(--quiet); font-size: .72rem; }
 /* Drains over resultResetDelayMs (set inline) so people can see when the kiosk is ready again. */
-.reset-progress { width: min(720px, 100%); height: 2px; overflow: hidden; background: var(--line); border-radius: 999px; }
+.reset-progress { width: min(640px, 100%); height: 2px; overflow: hidden; background: var(--line); border-radius: 999px; }
 .reset-progress span { display: block; height: 100%; background: var(--gold); transform-origin: left center; animation: reset-countdown linear forwards; }
 @keyframes reset-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
@@ -2700,7 +2700,7 @@ textarea {
 .input:focus {
   border-color: var(--gold-bright);
   box-shadow: 0 0 0 3px rgba(198, 162, 84, 0.16);
-  background: var(--surface-raised);
+  background-color: var(--surface-raised);
 }
 
 textarea.input {
@@ -3970,25 +3970,13 @@ textarea.input {
    ========================================================================== */
 
 /* "In office now" headcount for the front desk, styled like the reader pill. */
-.office-count { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; color: var(--gold-bright); border: 1px solid var(--gold-soft); border-radius: 999px; font-size: .875rem; font-weight: 600; white-space: nowrap; }
+.office-count { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; color: var(--gold-bright); border: 1px solid var(--gold-soft); border-radius: 6px; font-size: .66rem; font-weight: 600; white-space: nowrap; }
+.office-count svg { width: 14px; height: 14px; }
 .office-count strong { font-family: 'Orbitron', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Readable from a step back: kiosk text no smaller than 14px. */
-.kiosk-shell .scanner-pill { font-size: .875rem; }
-.scan-console-title, .input-hint { font-size: .875rem; }
 /* The hint wraps as one sentence instead of splitting into two flex columns. */
 .input-hint { display: block; text-align: center; text-wrap: pretty; }
 .input-hint svg { margin-right: 6px; vertical-align: -2px; }
-.kiosk-shell .kiosk-action { font-size: .875rem; }
-
-/* Laptops have room for a larger brand line, address and clock (below 1280px the header uses two rows). */
-@media (min-width: 901px) {
-  .kiosk-shell .brand-name { font-size: .9rem; }
-  .kiosk-shell .brand-subtitle { font-size: .875rem; }
-  .kiosk-shell .clock span { font-size: .875rem; }
-  .kiosk-shell .clock strong { font-size: 1.2rem; }
-  .kiosk-mode-tab { font-size: .875rem; }
-}
 
 /* Tall screens: centre the greeting, reader and options as one group instead of
    leaving the bottom third empty. The options still sit right under the reader. */
@@ -4001,16 +3989,15 @@ textarea.input {
   .kiosk-topbar .topbar-cluster { margin-left: auto; }
   .kiosk-mode-switcher { order: 3; width: 100%; }
   /* With a row of their own the tabs get their full size back (the zoom rule above shrinks them). */
-  .kiosk-mode-tab { flex: 1 1 0; justify-content: center; padding: 7px 14px; font-size: .875rem; }
+  .kiosk-mode-tab { flex: 1 1 0; justify-content: center; padding: 6px 14px; font-size: .82rem; }
   .mode-shortcut-badge { width: 20px; height: 20px; font-size: .72rem; }
 }
 
 /* Phones: logo only, and the reader pill shrinks to its dot (phones have no reader), so the count and clock fit. */
 @media (max-width: 600px) {
   .kiosk-topbar .brand-text { display: none; }
-  .kiosk-shell .scanner-pill { padding: 7px; }
+  .kiosk-topbar .topbar-cluster .scanner-pill { padding: 6px; border-radius: 50%; }
   .scanner-pill-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .kiosk-mode-tab { font-size: .875rem; }
   /* The reader icon, field and Record button stay on one line instead of stacking. */
   .input-row { flex-direction: row; }
   .input-row input { flex: 1 1 0; }
@@ -4018,7 +4005,7 @@ textarea.input {
 
 /* Very small phones (about 320px): tighter mode tabs so "Bathroom Key Log" stays on screen. */
 @media (max-width: 360px) {
-  .kiosk-mode-tab { gap: 5px; padding: 6px 8px; font-size: .8rem; }
+  .kiosk-mode-tab { gap: 5px; padding: 5px 8px; font-size: .75rem; }
   .kiosk-topbar .topbar-cluster { gap: 8px; }
 }
 
@@ -4034,9 +4021,6 @@ textarea.input {
 .mode-bathroom .kiosk-hero .hero-icon svg { width: 28px; height: 28px; }
 .mode-bathroom .kiosk-hero h1 { font-size: clamp(1.8rem, 3vw, 2.6rem); }
 
-/* The Manual entry switch in the reader card follows the 14px floor. */
-.scan-console-toggle { font-size: .875rem; }
-
 /* ==========================================================================
    UI revamp, design pass (kiosk): an executive-lobby look in black, gold and
    white. Panels are frosted glass over a still backdrop of gold light, ID-card
@@ -4045,7 +4029,7 @@ textarea.input {
    opacity only, and is switched off by the reduced-motion setting.
    ========================================================================== */
 
-.kiosk-shell, .live-shell {
+.kiosk-shell, .live-shell, .admin-shell {
   --glass: linear-gradient(180deg, rgba(36, 33, 25, .6), rgba(15, 14, 11, .55));
   --glass-blur: blur(18px) saturate(140%);
   --glass-edge: rgba(198, 162, 84, .2);
@@ -4054,8 +4038,8 @@ textarea.input {
   position: relative;
   isolation: isolate;
 }
-/* The Live attendance page is a centred column, so its gold light goes on the page body instead. */
-.kiosk-shell, body:has(.live-shell) {
+/* Live attendance and Admin are centred columns, so their gold light goes on the page body instead. */
+.kiosk-shell, body:has(.live-shell), body:has(.admin-shell) {
   background-color: #080807;
   background-image:
     radial-gradient(ellipse 60% 45% at 15% -10%, rgba(198, 162, 84, .16), transparent 70%),
@@ -4065,25 +4049,25 @@ textarea.input {
 }
 
 /* Backdrop texture: pinstripes in two corners, like the company ID card, and a fine film grain. */
-.kiosk-shell::before, .kiosk-shell::after, .live-shell::before, .live-shell::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
-.kiosk-shell::before, .live-shell::before {
+.kiosk-shell::before, .kiosk-shell::after, .live-shell::before, .live-shell::after, .admin-shell::before, .admin-shell::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+.kiosk-shell::before, .live-shell::before, .admin-shell::before {
   background: repeating-linear-gradient(135deg, rgba(198, 162, 84, .1) 0 1px, transparent 1px 16px);
   -webkit-mask-image: radial-gradient(ellipse 42% 55% at 100% 100%, #000, transparent 75%), radial-gradient(ellipse 32% 45% at 0 0, #000, transparent 75%);
   mask-image: radial-gradient(ellipse 42% 55% at 100% 100%, #000, transparent 75%), radial-gradient(ellipse 32% 45% at 0 0, #000, transparent 75%);
 }
-.kiosk-shell::after, .live-shell::after {
+.kiosk-shell::after, .live-shell::after, .admin-shell::after {
   opacity: .05;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
   background-size: 180px;
 }
 
 /* Header: a floating glass bar, nearly full width with steady side margins. */
-.kiosk-topbar { position: relative; width: min(1760px, calc(100% - 2 * clamp(16px, 2.5vw, 40px))); margin: 14px auto 0; padding: 0 clamp(18px, 2vw, 32px); min-height: 76px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); }
+.kiosk-topbar { position: relative; width: min(1760px, calc(100% - 2 * clamp(16px, 2.5vw, 40px))); margin: 14px auto 0; padding: 0 clamp(14px, 1.6vw, 24px); min-height: 64px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
 /* 1280px and up: one row. Brand and clock get equal side columns, so the mode switch sits in the exact
    centre of the screen; a side only grows past its half when its content needs the room. */
 .kiosk-topbar .clock-date-short { display: none; }
 @media (min-width: 1280px) {
-  .kiosk-topbar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); column-gap: clamp(14px, 1.6vw, 28px); }
+  .kiosk-topbar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); column-gap: clamp(12px, 1.4vw, 24px); }
   .kiosk-topbar .brand-lockup { justify-self: start; }
   .kiosk-topbar .topbar-cluster { justify-self: end; }
 }
@@ -4095,38 +4079,39 @@ textarea.input {
 }
 /* Below 1280px: two rows. Brand and status on top, the mode switch centred on its own row. */
 @media (max-width: 1279px) {
-  .kiosk-topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; padding-block: 12px; }
+  .kiosk-topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; padding-block: 10px; }
   .kiosk-topbar .topbar-cluster { justify-self: end; margin-left: 0; }
-  .kiosk-mode-switcher { grid-column: 1 / -1; grid-row: 2; justify-self: center; width: min(100%, 460px); }
+  .kiosk-mode-switcher { grid-column: 1 / -1; grid-row: 2; justify-self: center; width: min(100%, 420px); }
 }
 @media (min-width: 601px) and (max-width: 1279px) {
-  .kiosk-mode-tab { gap: 7px; padding: 7px 14px; font-size: .875rem; }
+  .kiosk-mode-tab { gap: 7px; padding: 6px 14px; font-size: .82rem; }
   .mode-shortcut-badge { width: 20px; height: 20px; font-size: .72rem; }
 }
 @media (min-width: 901px) and (max-width: 1279px) { .kiosk-topbar .brand-subtitle { display: block; } }
 /* Short screens with the two-row header (about 1024x768): less air above the key cards so both still fit. */
-@media (max-width: 1279px) and (max-height: 800px) { .kiosk-shell.mode-bathroom > .kiosk-stage { gap: 14px; padding-top: 12px; } }
-@media (max-width: 900px) { .kiosk-topbar { padding: 12px 16px; } }
-@media (max-width: 600px) { .kiosk-topbar { width: calc(100% - 24px); margin-top: 12px; padding: 10px 12px; border-radius: 16px; } }
-@media (max-width: 360px) { .kiosk-topbar { width: calc(100% - 16px); padding: 10px; } }
+@media (max-width: 1279px) and (max-height: 800px) { .kiosk-shell.mode-bathroom > .kiosk-stage { gap: 14px; padding-top: 12px; padding-bottom: 24px; } }
+@media (max-width: 900px) { .kiosk-topbar { padding: 10px 14px; } }
+@media (max-width: 600px) { .kiosk-topbar { width: calc(100% - 24px); margin-top: 12px; padding: 8px 10px; border-radius: 8px; } }
+@media (max-width: 360px) { .kiosk-topbar { width: calc(100% - 16px); padding: 8px; } }
 
 /* Every glass panel catches a thin gold gleam along its top edge. */
 .kiosk-topbar::before, .scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before,
-.live-shell .dashboard-header::before, .live-shell .lan-panel::before, .live-shell .table-wrap::before {
+.live-shell .dashboard-header::before, .live-shell .lan-panel::before, .live-shell .table-wrap::before,
+.card-setup-dialog::before, .admin-login form::before, .admin-shell .dashboard-header::before, .admin-shell .admin-form::before, .admin-shell .users-table-section::before {
   content: ""; position: absolute; top: 0; left: 14%; right: 14%; height: 1px; background: linear-gradient(90deg, transparent, var(--edge-light, rgba(225, 196, 119, .8)), transparent); pointer-events: none;
 }
 
 /* Logo in a lit gold ring; quiet chips; a hairline before the clock on wide screens. */
-.kiosk-topbar .brand-mark { box-sizing: border-box; padding: 5px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; box-shadow: 0 0 18px rgba(198, 162, 84, .14); }
-.office-count, .kiosk-shell .scanner-pill { background: rgba(0, 0, 0, .22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
+.kiosk-topbar .brand-mark { box-sizing: border-box; padding: 4px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; box-shadow: 0 0 18px rgba(198, 162, 84, .14); }
+.office-count, .kiosk-shell .scanner-pill { border-radius: 6px; background: rgba(0, 0, 0, .22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
 .office-count { border-color: rgba(198, 162, 84, .4); }
-@media (min-width: 901px) { .kiosk-topbar .clock { padding-left: 16px; border-left: 1px solid rgba(198, 162, 84, .2); } }
+@media (min-width: 901px) { .kiosk-topbar .clock { padding-left: 12px; border-left: 1px solid rgba(198, 162, 84, .2); } }
 
 /* Mode switch: two equal tabs and one polished gold thumb that slides between them. */
-.kiosk-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 4px; background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 162, 84, .26); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .04); isolation: isolate; }
-.kiosk-mode-switcher::before { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; z-index: -1; width: calc((100% - 8px) / 2); background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .2), 0 4px 16px rgba(198, 162, 84, .3); transition: transform 340ms var(--ease-soft); }
-.kiosk-mode-switcher[data-active="bathroom"]::before { transform: translateX(100%); }
-.kiosk-mode-tab, .kiosk-mode-tab.active { justify-content: center; background: transparent; border-color: transparent; box-shadow: none; transition: color 200ms ease-out; }
+.kiosk-mode-switcher, .admin-shell .admin-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 3px; background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 162, 84, .26); border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .04); isolation: isolate; }
+.kiosk-mode-switcher::before, .admin-shell .admin-mode-switcher::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; z-index: -1; width: calc((100% - 6px) / 2); background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .2), 0 4px 16px rgba(198, 162, 84, .3); transition: transform 340ms var(--ease-soft); }
+.kiosk-mode-switcher[data-active="bathroom"]::before, .admin-shell .admin-mode-switcher[data-active="bathroom"]::before { transform: translateX(100%); }
+.kiosk-mode-tab, .kiosk-mode-tab.active { justify-content: center; border-radius: 6px; background: transparent; border-color: transparent; box-shadow: none; transition: color 200ms ease-out; }
 .kiosk-mode-tab:hover { color: var(--ink); background: transparent; }
 .kiosk-mode-tab.active, .kiosk-mode-tab.active:hover { color: #11100c; }
 .mode-shortcut-badge { transition: color 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out; }
@@ -4140,33 +4125,33 @@ textarea.input {
 .kiosk-hero .hero-icon::before, .kiosk-hero .hero-icon::after { content: ""; position: absolute; inset: -1px; border: 1px solid rgba(225, 196, 119, .5); border-radius: 50%; opacity: 0; pointer-events: none; }
 .state-ready .kiosk-hero .hero-icon::before, .state-ready .kiosk-hero .hero-icon::after { animation: kiosk-ripple 3.2s var(--ease-soft) infinite; }
 .state-ready .kiosk-hero .hero-icon::after { animation-delay: 1.6s; }
-.kiosk-hero h1, .live-shell .dashboard-header h1 { background: linear-gradient(180deg, #fffdf6 25%, #ead9ad 80%, #d8bc78); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 4px 28px rgba(198, 162, 84, .16)); }
+.kiosk-hero h1, .live-shell .dashboard-header h1, .admin-shell h1, .card-setup-dialog h2 { background: linear-gradient(180deg, #fffdf6 25%, #ead9ad 80%, #d8bc78); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 4px 28px rgba(198, 162, 84, .16)); }
 .kiosk-shell .hero-sub { color: var(--gold); }
-.kiosk-shell .hero-sub::before { content: ""; display: block; width: 72px; height: 1px; margin: 2px auto 12px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
-.mode-bathroom .hero-sub::before { margin-bottom: 8px; }
+.kiosk-shell .hero-sub::before { content: ""; display: block; width: 56px; height: 1px; margin: 0 auto 8px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+.mode-bathroom .hero-sub::before { margin-bottom: 6px; }
 
 /* Reader: a glass card; a breathing dot shows it is listening and a faint light passes along the slot. */
-.scan-console { position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); }
-.scan-console-title { display: inline-flex; align-items: center; gap: 8px; letter-spacing: .12em; }
+.scan-console { position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
+.scan-console-title { display: inline-flex; align-items: center; gap: 6px; letter-spacing: .12em; }
 .scan-console:not(.is-manual) .scan-console-title::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-bright); box-shadow: 0 0 10px rgba(225, 196, 119, .7); }
 .state-ready .scan-console:not(.is-manual) .scan-console-title::before { animation: kiosk-breathe 2.4s ease-in-out infinite alternate; }
-.input-row { position: relative; background: rgba(5, 5, 4, .6); border-color: rgba(198, 162, 84, .24); border-radius: 12px; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .55); }
+.input-row { position: relative; background: rgba(5, 5, 4, .6); border-color: rgba(198, 162, 84, .24); border-radius: 6px; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .55); }
 .state-ready .scan-console:not(.is-manual) .input-row::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; background: linear-gradient(90deg, transparent, rgba(225, 196, 119, .1), transparent); transform: translateX(-100%); animation: kiosk-sweep 5s ease-in-out infinite; pointer-events: none; }
 .scan-input-icon { background: rgba(198, 162, 84, .07); border-right-color: rgba(198, 162, 84, .18); }
-.input-row .submit-button { border-radius: 8px; }
+.input-row .submit-button { border-radius: 4px; }
 
-/* Options: glass buttons, gold icons and white labels; they lift slightly on hover. */
+/* Options: glass buttons, gold icons and white labels; they turn gold on hover. */
 .kiosk-actions { border-top: 1px solid transparent; border-image: linear-gradient(90deg, transparent, rgba(198, 162, 84, .3) 20%, rgba(198, 162, 84, .3) 80%, transparent) 1; }
-.kiosk-shell .kiosk-action, .live-shell .dashboard-header nav a { color: var(--ink); background-color: transparent; background-image: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .015)); border-color: rgba(198, 162, 84, .4); border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
-.kiosk-shell .kiosk-action svg, .live-shell .dashboard-header nav a svg { color: var(--gold-bright); }
-.kiosk-shell .kiosk-action:hover:not(:disabled), .live-shell .dashboard-header nav a:hover { color: var(--gold-bright); background-color: rgba(198, 162, 84, .1); border-color: var(--gold); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 8px 24px rgba(198, 162, 84, .14); transform: translateY(-2px); }
-.kiosk-shell .kiosk-action:active:not(:disabled), .live-shell .dashboard-header nav a:active { transform: translateY(0); }
+.kiosk-shell .kiosk-action, .live-shell .dashboard-header nav a, .admin-shell .dashboard-header nav :is(a, button), .admin-login > a { color: var(--ink); background-color: transparent; background-image: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .015)); border-color: rgba(198, 162, 84, .4); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
+.kiosk-shell .kiosk-action svg, .live-shell .dashboard-header nav a svg, .admin-shell .dashboard-header nav :is(a, button) svg, .admin-login > a svg { color: var(--gold-bright); }
+.kiosk-shell .kiosk-action:hover:not(:disabled), .live-shell .dashboard-header nav a:hover, .admin-shell .dashboard-header nav :is(a, button):hover:not(:disabled), .admin-login > a:hover { color: var(--gold-bright); background-color: rgba(198, 162, 84, .1); border-color: var(--gold); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06); }
+.kiosk-shell .kiosk-action:active:not(:disabled), .live-shell .dashboard-header nav a:active, .admin-shell .dashboard-header nav :is(a, button):active:not(:disabled), .admin-login > a:active { transform: translateY(0); }
 .kiosk-shell .kiosk-action[aria-pressed="true"] { color: #11100c; background-image: linear-gradient(180deg, #ecd28c, var(--gold)); border-color: var(--gold-bright); }
 .kiosk-shell .kiosk-action[aria-pressed="true"] svg { color: currentColor; }
 
 /* Results and messages: the same glass, rising in; the details follow one after another and
    a soft light passes across the card once. */
-.result-card, .kiosk-result.is-notice, .kiosk-result.is-error { position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 20px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 460ms var(--ease-soft) backwards; }
+.result-card, .kiosk-result.is-notice, .kiosk-result.is-error { position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 460ms var(--ease-soft) backwards; }
 .result-card { overflow: hidden; }
 .result-card.is-out { border-color: var(--glass-edge); --edge-light: rgba(246, 242, 233, .7); }
 .kiosk-result.is-error { --edge-light: var(--danger); }
@@ -4196,17 +4181,17 @@ textarea.input {
 .kiosk-actions > :nth-child(4) { animation-delay: 400ms; }
 
 /* Bathroom key cards: glass; the key in use has a gold edge that slowly breathes. */
-.bathroom-kiosk-card, .bathroom-kiosk-card.is-available { --edge-light: rgba(225, 196, 119, .35); position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid rgba(198, 162, 84, .16); border-radius: 18px; box-shadow: var(--glass-shadow); transition: border-color 240ms ease-out; animation: kiosk-enter 560ms var(--ease-soft) 240ms backwards; }
+.bathroom-kiosk-card, .bathroom-kiosk-card.is-available { --edge-light: rgba(225, 196, 119, .35); position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid rgba(198, 162, 84, .16); border-radius: 8px; box-shadow: var(--glass-shadow); transition: border-color 240ms ease-out; animation: kiosk-enter 560ms var(--ease-soft) 240ms backwards; }
 .bathroom-kiosk-card + .bathroom-kiosk-card { animation-delay: 320ms; }
 .bathroom-kiosk-card.is-in-use { --edge-light: var(--gold-bright); background: linear-gradient(180deg, rgba(52, 44, 26, .62), rgba(20, 18, 13, .55)); border-color: rgba(198, 162, 84, .6); }
 .bathroom-kiosk-card.is-in-use::after { content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: inherit; box-shadow: 0 0 0 1px rgba(225, 196, 119, .3), 0 0 28px rgba(198, 162, 84, .22); opacity: 0; animation: kiosk-breathe 3.6s ease-in-out infinite alternate; pointer-events: none; }
-.gender-icon-bubble, .gender-icon-bubble.female { color: var(--gold-bright); background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .18), rgba(198, 162, 84, .04) 70%); border: 1px solid rgba(225, 196, 119, .45); border-radius: 12px; }
-.active-holder-box { background: rgba(0, 0, 0, .28); border: 1px solid rgba(198, 162, 84, .26); border-radius: 14px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
-.available-prompt-box { padding: 22px 20px; background: rgba(0, 0, 0, .2); border: 1px dashed rgba(152, 210, 168, .28); border-radius: 14px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
-.available-icon { box-sizing: content-box; padding: 10px; border-radius: 50%; background: rgba(152, 210, 168, .08); box-shadow: 0 0 0 1px rgba(152, 210, 168, .22); }
+.gender-icon-bubble, .gender-icon-bubble.female { color: var(--gold-bright); background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .18), rgba(198, 162, 84, .04) 70%); border: 1px solid rgba(225, 196, 119, .45); border-radius: 6px; }
+.active-holder-box { background: rgba(0, 0, 0, .28); border: 1px solid rgba(198, 162, 84, .26); border-radius: 6px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
+.available-prompt-box { padding: 22px 20px; background: rgba(0, 0, 0, .2); border: 1px dashed rgba(152, 210, 168, .28); border-radius: 6px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
+.available-icon { box-sizing: content-box; padding: 8px; border-radius: 50%; background: rgba(152, 210, 168, .08); box-shadow: 0 0 0 1px rgba(152, 210, 168, .22); }
 .holder-avatar { background: linear-gradient(180deg, #ecd28c, #b8944a); box-shadow: 0 0 0 3px rgba(198, 162, 84, .14); }
 .holder-avatar.female { color: var(--gold-bright); background: #211d13; border: 1px solid var(--gold-soft); }
-.elapsed-timer-container { flex-wrap: wrap; gap: 6px 16px; background: rgba(0, 0, 0, .35); border-color: rgba(198, 162, 84, .16); border-radius: 10px; }
+.elapsed-timer-container { flex-wrap: wrap; gap: 6px 16px; background: rgba(0, 0, 0, .35); border-color: rgba(198, 162, 84, .16); border-radius: 6px; }
 /* On narrow cards the two stats wrap as whole lines instead of breaking "Time Out:" apart. */
 .elapsed-stat { white-space: nowrap; }
 
@@ -4222,7 +4207,8 @@ textarea.input {
 /* Reduced motion: the global rule shortens animations; this also drops the start delays so nothing waits hidden. */
 @media (prefers-reduced-motion: reduce) {
   .kiosk-shell *, .kiosk-shell *::before, .kiosk-shell *::after,
-  .live-shell *, .live-shell *::before, .live-shell *::after { animation-delay: 0s !important; }
+  .live-shell *, .live-shell *::before, .live-shell *::after,
+  .admin-shell *, .admin-shell *::before, .admin-shell *::after { animation-delay: 0s !important; }
 }
 
 /* ==========================================================================
@@ -4237,27 +4223,31 @@ textarea.input {
 body:has(.live-shell) { background-color: #080807 !important; }
 
 /* Header: a glass card with the logo in a lit ring and an Orbitron, champagne-tinted title. */
-.live-shell .dashboard-header { position: relative; padding: 22px clamp(18px, 2.4vw, 32px); background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 20px; box-shadow: var(--glass-shadow); animation: kiosk-enter 600ms var(--ease-soft) backwards; }
-.live-shell .dashboard-brand-mark { box-sizing: border-box; width: 30px; height: 30px; padding: 4px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; }
-.live-shell .dashboard-brand-name { font-size: .875rem; }
-.live-shell .dashboard-header .section-kicker { font-size: .875rem; letter-spacing: .14em; }
-.live-shell .dashboard-header h1 { font-family: 'Orbitron', sans-serif; font-size: clamp(1.75rem, 1rem + 2.6vw, 2.75rem); font-weight: 600; line-height: 1.1; letter-spacing: .02em; text-wrap: balance; }
-.live-shell .dashboard-header .section-description { max-width: none; font-size: .9375rem; }
-/* Scanner and Admin: outlined glass buttons with icons (the kiosk option-button look, shared above). */
-.live-shell .dashboard-header nav a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 18px; font-size: .875rem; font-weight: 700; }
+.live-shell .dashboard-header { position: relative; padding: 24px 28px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-enter 600ms var(--ease-soft) backwards; }
+.live-shell .dashboard-brand-mark, .admin-shell .dashboard-brand-mark { box-sizing: border-box; width: 30px; height: 30px; padding: 4px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; }
+.live-shell .dashboard-brand-name, .admin-shell .dashboard-brand-name { font-size: .875rem; }
+.live-shell .dashboard-header .section-kicker { letter-spacing: .14em; }
+.live-shell .dashboard-header h1 { font-family: 'Orbitron', sans-serif; font-size: 1.5rem; font-weight: 600; line-height: 1.2; letter-spacing: .02em; text-wrap: balance; }
+.live-shell .dashboard-header .section-description { max-width: none; font-size: .85rem; }
+/* Scanner and Admin: small outlined glass buttons with icons, the same size as the admin header buttons. */
+.live-shell .dashboard-header nav a { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; font-size: .78rem; font-weight: 600; }
+.live-shell .dashboard-header nav a svg { width: 15px; height: 15px; }
 .live-shell .dashboard-header nav a:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; }
 
 /* Toolbar: today's counts, the live status and the LAN viewer toggle on one wrapping row. */
-.live-shell .dashboard-alert { margin: 18px 0 0; padding: 12px 16px; background: rgba(40, 20, 16, .55); border-radius: 12px; font-size: .875rem; }
-.live-shell .live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 18px 0 14px; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
-.live-shell .live-counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.live-shell .dashboard-alert { margin: 14px 0 0; padding: 10px 14px; background: rgba(40, 20, 16, .55); border-radius: 6px; font-size: .8rem; }
+.live-shell .live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 16px 0 12px; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
+.live-shell .live-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.live-shell .office-count { padding: 5px 10px; font-size: .76rem; }
 .live-shell .live-counts .is-alert { color: var(--danger); border-color: rgba(239, 170, 146, .5); }
-.live-shell .dashboard-status { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 0 auto; padding: 6px 12px; color: var(--muted); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .875rem; font-variant-numeric: tabular-nums; }
-.live-shell .dashboard-status::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.live-shell .dashboard-status { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 0 auto; padding: 5px 10px; color: var(--muted); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .2); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .76rem; font-variant-numeric: tabular-nums; }
+.live-shell .dashboard-status::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--quiet); }
 .live-shell .dashboard-status[data-state="ready"]::before { background: var(--gold-bright); box-shadow: 0 0 10px rgba(225, 196, 119, .7); animation: kiosk-breathe 2.4s ease-in-out infinite alternate; }
 .live-shell .dashboard-status[data-state="stale"]::before { background: var(--danger); }
-.live-shell .live-lan-toggle { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; min-height: 44px; padding: 6px 12px 6px 14px; color: var(--ink); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .3); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .875rem; font-weight: 600; cursor: pointer; transition: border-color 180ms ease-out, background-color 180ms ease-out; }
+.live-shell .live-lan-toggle { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 7px; max-width: 100%; min-height: 34px; padding: 6px 12px; color: var(--ink); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .3); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .78rem; font-weight: 600; cursor: pointer; transition: border-color 180ms ease-out, background-color 180ms ease-out; }
 .live-shell .live-lan-toggle > svg:first-child { color: var(--gold-bright); }
+.live-shell .live-lan-toggle svg { width: 15px; height: 15px; }
+.live-shell .live-lan-flag svg { width: 13px; height: 13px; }
 .live-shell .live-lan-toggle:hover, .live-shell .live-lan-toggle[aria-expanded="true"] { background-color: rgba(198, 162, 84, .08); border-color: var(--gold); }
 .live-shell .live-lan-toggle:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; }
 .live-shell .live-lan-toggle .lan-state { padding: 0; border: 0; font-size: inherit; }
@@ -4267,36 +4257,33 @@ body:has(.live-shell) { background-color: #080807 !important; }
 .live-shell .live-lan-toggle[aria-expanded="true"] .live-lan-chevron { transform: rotate(180deg); }
 
 /* LAN viewer drawer: the same panel as before, in glass, rising in when opened. No display rule, so [hidden] wins. */
-.live-shell .live-lan-drawer { margin: 0 0 14px; }
-.live-shell .live-lan-drawer .lan-panel { position: relative; margin: 0; padding: 20px 22px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); animation: kiosk-enter 320ms var(--ease-soft) backwards; }
+.live-shell .live-lan-drawer { margin: 0 0 12px; }
+.live-shell .live-lan-drawer .lan-panel { position: relative; margin: 0; padding: 18px 20px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-enter 320ms var(--ease-soft) backwards; }
 /* The toggle already shows the state, so the panel's own chip is hidden. */
 .live-shell .lan-panel-head > .lan-state { display: none; }
-.live-shell .lan-panel-head h2 { font-size: 1.125rem; }
-.live-shell .lan-panel :is(.section-kicker, .lan-note, .lan-error, .lan-guidance p, .lan-guidance code, .lan-code) { font-size: .875rem; }
-.live-shell .lan-url { border-radius: 10px; font-size: .9375rem; }
-.live-shell .lan-guidance { background: rgba(0, 0, 0, .22); border-radius: 10px; }
+.live-shell .lan-panel-head h2 { font-size: 1.05rem; }
+.live-shell .lan-url { border-radius: 6px; font-size: .85rem; }
+.live-shell .lan-guidance { background: rgba(0, 0, 0, .22); border-radius: 6px; }
 .live-shell .lan-actions { flex-wrap: wrap; }
-.live-shell .lan-panel :is(.admin-button, .text-button) { min-height: 44px; padding: 8px 14px; border-radius: 12px; font-size: .875rem; }
-.live-shell .lan-facts span { font-size: .875rem; font-weight: 600; text-transform: none; letter-spacing: 0; }
-.live-shell .lan-facts strong { font-size: .9375rem; }
+.live-shell .lan-panel :is(.admin-button, .text-button) { min-height: 34px; padding: 6px 12px; border-radius: 6px; font-size: .78rem; }
 
 /* Table: a near-opaque glass panel; names and times in Orbitron, time in gold. */
-.live-shell .table-wrap { position: relative; margin: 0; background: linear-gradient(180deg, rgba(30, 28, 22, .86), rgba(13, 12, 10, .9)); border: 1px solid var(--glass-edge); border-radius: 18px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
-.live-shell .table-wrap th { padding: 16px 20px; color: var(--gold); background: rgba(0, 0, 0, .18); border-bottom-color: rgba(198, 162, 84, .22); font-size: .875rem; font-weight: 600; letter-spacing: .1em; }
-.live-shell .table-wrap td { padding: 14px 20px; border-bottom-color: rgba(198, 162, 84, .1); font-size: .9375rem; }
+.live-shell .table-wrap { position: relative; margin: 0; background: linear-gradient(180deg, rgba(30, 28, 22, .86), rgba(13, 12, 10, .9)); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
+.live-shell .table-wrap th { padding: 10px 12px; color: var(--gold); background: rgba(0, 0, 0, .18); border-bottom-color: rgba(198, 162, 84, .22); font-size: .62rem; font-weight: 600; letter-spacing: .1em; }
+.live-shell .table-wrap td { padding: 9px 12px; border-bottom-color: rgba(198, 162, 84, .1); font-size: .79rem; }
 .live-shell tbody tr:last-child td { border-bottom: 0; }
 .live-shell tbody tr:hover td { background: rgba(198, 162, 84, .05); }
-.live-shell td strong { font-family: 'Orbitron', sans-serif; font-size: .9375rem; font-weight: 600; letter-spacing: .01em; }
-.live-shell td:first-child small { font-size: .875rem; }
+.live-shell td strong { font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; letter-spacing: .01em; }
+.live-shell td:first-child small { font-size: .7rem; }
 .live-shell .table-wrap td:is(:nth-child(3), :nth-child(4)) { font-family: 'Orbitron', sans-serif; font-weight: 500; white-space: nowrap; }
 .live-shell .table-wrap td:nth-child(3) { color: var(--gold-bright); }
-.live-shell .clamped-time-in-static { border-radius: 8px; font-size: .875rem; }
-.live-shell .status-pill { padding: 5px 12px; font-size: .875rem; letter-spacing: .06em; white-space: nowrap; }
+.live-shell .clamped-time-in-static { border-radius: 6px; font-size: .78rem; }
+.live-shell .status-pill { padding: 4px 10px; border-radius: 6px; font-size: .72rem; letter-spacing: .05em; white-space: nowrap; }
 .live-shell .status-working { background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .5); }
 .live-shell .status-completed { background: rgba(152, 210, 168, .07); border-color: rgba(152, 210, 168, .4); }
 .live-shell .status-missed { border-color: rgba(239, 170, 146, .4); }
-.live-shell .status-hint { margin-top: 6px; font-size: .875rem; }
-.live-shell .empty-state { margin: 0; padding: 48px 24px; background: linear-gradient(180deg, rgba(30, 28, 22, .7), rgba(13, 12, 10, .75)); border: 1px dashed rgba(198, 162, 84, .3); border-radius: 18px; font-size: .9375rem; animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
+.live-shell .status-hint { margin-top: 4px; font-size: .7rem; }
+.live-shell .empty-state { margin: 0; padding: 42px 24px; background: linear-gradient(180deg, rgba(30, 28, 22, .7), rgba(13, 12, 10, .75)); border: 1px dashed rgba(198, 162, 84, .3); border-radius: 8px; font-size: .85rem; animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
 
 /* Tablets and phones: each row becomes a small card so time in, time out and status always show.
    Cells are placed by position, matching AttendanceTable's columns:
@@ -4306,7 +4293,7 @@ body:has(.live-shell) { background-color: #080807 !important; }
   .live-shell table, .live-shell tbody { display: block; }
   .live-shell thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* Two equal halves keep Time out lined up from card to card; only a wider "LATE TIMEOUT" row may widen its own half. */
-  .live-shell tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(max-content, 1fr); grid-template-areas: "emp status" "dept dept" "in out"; gap: 8px 16px; padding: 16px 18px; border-bottom: 1px solid rgba(198, 162, 84, .1); }
+  .live-shell tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(max-content, 1fr); grid-template-areas: "emp status" "dept dept" "in out"; gap: 6px 12px; padding: 12px 14px; border-bottom: 1px solid rgba(198, 162, 84, .1); }
   .live-shell tbody tr:last-child { border-bottom: 0; }
   .live-shell .table-wrap td { padding: 0; border: 0; }
   .live-shell tbody tr:hover td { background: none; }
@@ -4317,27 +4304,536 @@ body:has(.live-shell) { background-color: #080807 !important; }
   .live-shell tbody td:nth-child(5) { grid-area: status; justify-self: end; text-align: right; }
   .live-shell tbody td:nth-child(3)::before { content: "Time in"; }
   .live-shell tbody td:nth-child(4)::before { content: "Time out"; }
-  .live-shell tbody td:is(:nth-child(3), :nth-child(4))::before { display: block; margin-bottom: 2px; color: var(--quiet); font-family: 'Poppins', 'Segoe UI', sans-serif; font-size: .875rem; font-weight: 600; }
+  .live-shell tbody td:is(:nth-child(3), :nth-child(4))::before { display: block; margin-bottom: 2px; color: var(--quiet); font-family: 'Poppins', 'Segoe UI', sans-serif; font-size: .7rem; font-weight: 600; }
 }
 /* Tablets: one two-line row per person, with the times and status lined up in columns like the table. */
 @media (min-width: 601px) and (max-width: 900px) {
   /* A fixed status column (fits "LATE TIMEOUT") keeps the time columns aligned from row to row. */
-  .live-shell tbody tr { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 11rem; grid-template-areas: "emp in out status" "dept in out status"; align-items: center; gap: 4px 16px; }
+  .live-shell tbody tr { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 9rem; grid-template-areas: "emp in out status" "dept in out status"; align-items: center; gap: 4px 12px; }
 }
 @media (max-width: 600px) {
-  .live-shell .dashboard-header { padding: 18px 16px; border-radius: 16px; }
-  .live-shell .dashboard-header nav a { padding: 10px 12px; }
+  .live-shell .dashboard-header { padding: 18px; }
   .live-shell .dashboard-status, .live-shell .live-lan-toggle { flex: 1 1 auto; justify-content: center; margin-left: 0; }
-  .live-shell .table-wrap { border-radius: 16px; }
   /* A little less padding so "COMPLETED" fits half a card at 390px and Time out stays lined up. */
-  .live-shell tbody tr { padding-inline: 14px; }
-  .live-shell .status-pill { padding: 4px 10px; letter-spacing: .04em; }
+  .live-shell tbody tr { padding-inline: 12px; }
+  .live-shell .status-pill { padding: 3px 8px; letter-spacing: .04em; }
 }
 /* Narrow phones (under 390px): name on its own line, status under it. */
 @media (max-width: 389px) {
-  .live-shell tbody tr { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "emp emp" "status status" "dept dept" "in out"; padding: 14px 16px; }
+  .live-shell tbody tr { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "emp emp" "status status" "dept dept" "in out"; padding: 10px 12px; }
   .live-shell tbody td:nth-child(5) { justify-self: start; text-align: left; }
   /* The decorative Wi-Fi icon goes so "LAN viewer · Needs attention" and its arrow stay on one line. */
-  .live-shell .live-lan-toggle { gap: 6px; }
+  .live-shell .live-lan-toggle { gap: 5px; }
   .live-shell .live-lan-toggle > svg:first-child { display: none; }
 }
+
+/* ==========================================================================
+   UI revamp, batch 3: dropdowns, the card setup dialog and Admin (shell and
+   Users and RFID). Same steps, fields and actions; the dialog widens on the
+   save step so every field shows at once, and Admin uses the kiosk's glass
+   look with a wider page. Admin modals render inline, so blur and transform
+   stay off every ancestor of a modal (main, .admin-grid, the panels).
+   ========================================================================== */
+
+/* Dropdowns: one gold chevron, set in from the right edge, on every form select. */
+.setup-form select, .admin-form select, .date-filter select, select.select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 44px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='m3.25 5.25 3.75 3.5 3.75-3.5' stroke='%23e1c477' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  cursor: pointer;
+}
+
+/* --- Card setup dialog (kiosk "Set up this card" and "Admin setup") ------- */
+/* The kiosk keeps still behind the dialog, so the backdrop blur stays cheap. */
+.kiosk-shell:has(.card-setup-dialog) :is(.kiosk-topbar, .kiosk-stage, .kiosk-actions) *,
+.kiosk-shell:has(.card-setup-dialog) :is(.kiosk-topbar, .kiosk-stage, .kiosk-actions) *::before,
+.kiosk-shell:has(.card-setup-dialog) :is(.kiosk-topbar, .kiosk-stage, .kiosk-actions) *::after { animation-play-state: paused; }
+.setup-backdrop:has(> .card-setup-dialog) { background: rgba(4, 4, 3, .74); }
+/* A near-opaque panel: the scrim behind it is already blurred, so a second blur would add cost and nothing visible. */
+.card-setup-dialog { position: relative; display: flex; flex-direction: column; width: min(600px, 100%); max-height: min(880px, calc(100dvh - 40px)); overflow: hidden; background: linear-gradient(180deg, rgba(33, 30, 23, .97), rgba(13, 12, 10, .98)); border: 1px solid rgba(198, 162, 84, .3); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 420ms var(--ease-soft) backwards; }
+.card-setup-dialog[data-step="save"] { width: min(1000px, 100%); }
+.card-setup-dialog .setup-dialog-header { flex: none; padding: 18px 22px 16px 24px; border-bottom: 1px solid rgba(198, 162, 84, .16); }
+.card-setup-dialog .setup-title-wrap { gap: 14px; }
+.card-setup-dialog .setup-icon { width: 46px; height: 46px; background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .2), rgba(198, 162, 84, .04) 70%); border-color: rgba(225, 196, 119, .45); box-shadow: 0 0 20px rgba(198, 162, 84, .14); }
+.card-setup-dialog .section-kicker { font-size: .875rem; letter-spacing: .14em; }
+.card-setup-dialog h2 { margin-top: 2px; font-size: 1.375rem; letter-spacing: .02em; }
+.card-setup-dialog .icon-button { width: 44px; height: 44px; border: 1px solid transparent; border-radius: 6px; }
+.card-setup-dialog .icon-button:hover { color: var(--gold-bright); background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .3); }
+/* The body scrolls only as a fallback (zoomed or very short screens); the save footer then stays in view. */
+.card-setup-dialog .setup-form { flex: 1 1 auto; min-height: 0; overflow-y: auto; gap: 14px; padding: 20px 24px 24px; }
+.card-setup-dialog .setup-copy { margin: 0; font-size: .9375rem; line-height: 1.55; }
+
+/* Steps: three pills; the current one is lit and finished ones carry a tick. */
+.card-setup-dialog .setup-steps { display: flex; gap: 8px; margin: 0; }
+.card-setup-dialog .setup-steps span { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 8px 10px; color: var(--quiet); background: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .16); border-radius: 6px; font-size: .875rem; font-weight: 600; line-height: 1.25; text-align: center; }
+.card-setup-dialog .setup-steps .is-active { color: var(--gold-bright); background: rgba(198, 162, 84, .1); border-color: rgba(225, 196, 119, .6); box-shadow: 0 0 16px rgba(198, 162, 84, .12); }
+.card-setup-dialog .setup-steps .is-done { color: var(--ink); border-color: rgba(198, 162, 84, .3); }
+.card-setup-dialog .setup-steps .is-done::before { content: "\2713" / ""; color: var(--gold-bright); font-weight: 700; }
+
+/* Labels, fields and dropdowns (here, on the admin login and in the admin forms): 14px labels,
+   16px entries, rounded dark wells with a gold focus ring. */
+.card-setup-dialog .setup-form label, .card-setup-dialog .field-label { font-size: .875rem; font-weight: 600; }
+.card-setup-dialog .optional { font-size: .875rem; font-weight: 400; }
+:is(.card-setup-dialog .setup-form, .admin-login, .admin-shell .admin-form) :is(input:not([type="radio"], [type="file"], [type="checkbox"]), select) { height: 48px; font-size: 1rem; font-weight: 500; color: var(--ink); background-color: rgba(5, 5, 4, .6); border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .45); }
+:is(.card-setup-dialog .setup-form, .admin-login, .admin-shell .admin-form) input:not([type="radio"], [type="file"], [type="checkbox"]) { padding: 0 14px; }
+:is(.card-setup-dialog .setup-form, .admin-login, .admin-shell .admin-form) select { min-width: 0; padding: 0 44px 0 14px; }
+:is(.card-setup-dialog .setup-form, .admin-login, .admin-shell .admin-form) :is(input, select):hover:not(:disabled) { border-color: rgba(198, 162, 84, .5); }
+:is(.card-setup-dialog .setup-form, .admin-login, .admin-shell .admin-form) :is(input, select):focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .16), inset 0 2px 6px rgba(0, 0, 0, .45); }
+:is(.card-setup-dialog .setup-form, .admin-login, .admin-shell .admin-form) :is(input, select):disabled { color: var(--quiet); opacity: .7; cursor: not-allowed; }
+.card-setup-dialog .setup-fields label:not(.photo-dropzone) { grid-template-rows: auto 48px; gap: 7px; }
+.card-setup-dialog .field-hint { margin: 0; font-size: .875rem; }
+
+/* Scan step: the card field reads like the kiosk reader, with a breathing "listening" dot. */
+.card-setup-dialog label[for="setup-card-uid"] { display: inline-flex; align-items: center; gap: 8px; }
+.card-setup-dialog label[for="setup-card-uid"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-bright); box-shadow: 0 0 10px rgba(225, 196, 119, .7); animation: kiosk-breathe 2.4s ease-in-out infinite alternate; }
+.card-setup-dialog #setup-card-uid { height: 56px; font-family: 'Orbitron', sans-serif; font-size: 1.125rem; letter-spacing: .06em; }
+
+/* Buttons: polished gold for the main action (also on the admin login and forms), quiet glass for the rest;
+   disabled stays readable. */
+:is(.card-setup-dialog, .admin-login, .admin-shell .admin-form) .submit-button { min-height: 48px; padding: 10px 22px; color: #11100c; background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border: 0; border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 6px 18px rgba(198, 162, 84, .22); font-size: .9375rem; font-weight: 700; }
+:is(.card-setup-dialog, .admin-login, .admin-shell .admin-form) .submit-button:hover:not(:disabled) { filter: brightness(1.06); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 8px 24px rgba(198, 162, 84, .3); }
+:is(.card-setup-dialog, .admin-login, .admin-shell .admin-form) .submit-button:disabled { color: rgba(246, 242, 233, .5); background: rgba(198, 162, 84, .1); box-shadow: inset 0 0 0 1px rgba(198, 162, 84, .25); opacity: 1; cursor: not-allowed; }
+.card-setup-dialog .text-button { min-height: 44px; padding: 8px 14px; color: var(--gold-bright); border-radius: 6px; font-size: .875rem; font-weight: 600; }
+.card-setup-dialog .text-button:hover:not(:disabled) { background: rgba(198, 162, 84, .08); }
+.card-setup-dialog .setup-form > .text-button { justify-self: center; }
+
+/* Messages: one tinted line each for progress, success and problems. */
+.card-setup-dialog :is(.setup-progress, .setup-success, .setup-error) { margin: 0; padding: 10px 14px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(198, 162, 84, .3); border-radius: 6px; font-size: .875rem; }
+.card-setup-dialog .setup-success { border-color: rgba(152, 210, 168, .4); }
+.card-setup-dialog .setup-error { border-color: rgba(239, 170, 146, .45); }
+.card-setup-dialog .setup-footer { gap: 12px; margin-top: 2px; font-size: .875rem; }
+
+/* Save step: card and "Register card as" side by side, fields in two columns with the photo beside them,
+   and a footer that stays at the bottom of the dialog. */
+.card-setup-dialog .setup-form-save { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "steps steps" "badge toggle" "copy toggle" "fields fields" "msg msg" "footer footer"; column-gap: 20px; padding-bottom: 0; scroll-padding-bottom: 96px; }
+.setup-form-save > .setup-steps { grid-area: steps; }
+.setup-form-save > .card-badge { grid-area: badge; }
+.setup-form-save > .setup-copy { grid-area: copy; }
+.setup-form-save > .card-type-toggle { grid-area: toggle; align-self: center; }
+.setup-form-save > .setup-fields { grid-area: fields; }
+.setup-form-save > p[role="status"] { grid-area: msg; }
+.setup-form-save > .setup-footer { grid-area: footer; }
+.card-setup-dialog .card-badge { align-self: end; padding: 12px 14px; font-family: 'Orbitron', sans-serif; font-size: 1rem; letter-spacing: .05em; background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .38); border-radius: 6px; }
+.card-setup-dialog .card-badge span { padding: 3px 10px; color: var(--gold-bright); background: rgba(0, 0, 0, .25); border: 1px solid rgba(198, 162, 84, .3); border-radius: 4px; font-family: 'Poppins', 'Segoe UI', sans-serif; font-size: .875rem; font-weight: 600; letter-spacing: 0; }
+.card-setup-dialog .card-type-toggle { display: grid; gap: 8px; }
+.card-setup-dialog .setup-form-save .setup-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 220px; gap: 14px 16px; }
+/* Interns: User ID | Full name, then Department across, then Status | Gender; the photo spans all three rows. */
+.card-setup-dialog .setup-form-save .setup-fields > label:nth-child(3) { grid-column: 1 / span 2; }
+.card-setup-dialog .setup-form-save .photo-field { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 7px; grid-column: 3; grid-row: 1 / span 3; }
+/* Admin cards: the label and its explanation each take the full width. */
+/* Admin cards: the note fills the photo column and the three field rows keep their height, so the dialog doesn't jump. */
+.card-setup-dialog .setup-form-save .setup-fields { grid-template-rows: repeat(3, minmax(75px, 1fr)); }
+.card-setup-dialog .setup-form-save .setup-fields > label:has(+ .field-hint) { grid-column: 1 / span 2; }
+.card-setup-dialog .setup-form-save .setup-fields > .field-hint { display: flex; align-items: center; grid-column: 3; grid-row: 1 / span 3; padding: 14px; background: rgba(198, 162, 84, .06); border: 1px dashed rgba(198, 162, 84, .4); border-radius: 6px; line-height: 1.5; }
+.card-setup-dialog .setup-form-save .setup-footer { position: sticky; bottom: 0; z-index: 1; margin: 2px -24px 0; padding: 14px 24px 20px; background: #0e0d0a; border-top: 1px solid rgba(198, 162, 84, .14); box-shadow: 0 -10px 20px rgba(0, 0, 0, .35); }
+
+/* Photo: a fixed frame beside the fields; a picture fits inside it instead of stretching the dialog. */
+.card-setup-dialog .photo-dropzone { grid-template-rows: none; align-content: center; gap: 6px; min-height: 0; height: 100%; padding: 14px; color: var(--muted); background: rgba(0, 0, 0, .24); border: 1px dashed rgba(198, 162, 84, .42); border-radius: 6px; overflow: hidden; }
+.card-setup-dialog .photo-dropzone:hover, .card-setup-dialog .photo-dropzone:focus-within, .card-setup-dialog .photo-dropzone.is-dragging { color: var(--gold-bright); background-color: rgba(198, 162, 84, .07); border-color: var(--gold-bright); }
+.card-setup-dialog .photo-dropzone strong { font-size: .9375rem; text-align: center; }
+.card-setup-dialog .photo-dropzone small { font-size: .875rem; text-align: center; }
+.card-setup-dialog .photo-upload-link, .card-setup-dialog .photo-overlay { font-size: .875rem; }
+.card-setup-dialog .photo-dropzone.has-photo { padding: 0; border-style: solid; background: #0b0a08; }
+.card-setup-dialog .photo-dropzone.has-photo img { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; object-fit: contain; }
+
+/* Segmented "Register card as": gold for both choices (the admin card no longer turns blue). */
+.card-setup-dialog .segmented-control, .admin-shell .segmented-control { gap: 6px; padding: 5px; background: rgba(0, 0, 0, .3); border-color: rgba(198, 162, 84, .26); border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .5); }
+.card-setup-dialog .segmented-control .segment-option, .admin-shell .segmented-control .segment-option { flex-direction: row; gap: 8px; min-height: 48px; padding: 10px 12px; border-radius: 6px; font-size: .9375rem; }
+.admin-shell .segmented-control .segment-option { padding-inline: 8px; font-size: .875rem; }
+.card-setup-dialog .segmented-control .segment-option:hover, .admin-shell .segmented-control .segment-option:hover { background: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .3); }
+.card-setup-dialog .segmented-control .segment-option.is-selected, .card-setup-dialog .segmented-control .segment-option.is-selected.is-admin-card,
+.admin-shell .segmented-control .segment-option.is-selected, .admin-shell .segmented-control .segment-option.is-selected.is-admin-card { color: var(--gold-bright); background: rgba(198, 162, 84, .12); border-color: rgba(225, 196, 119, .6); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 16px rgba(198, 162, 84, .12); }
+
+/* Tablets: a narrower photo column. Phones: one column, a bottom sheet, the photo under the fields. */
+@media (max-width: 900px) {
+  .card-setup-dialog .setup-form-save .setup-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 180px; }
+}
+@media (max-width: 600px) {
+  .card-setup-dialog, .card-setup-dialog[data-step="save"] { width: 100%; max-height: 92dvh; border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .card-setup-dialog .setup-dialog-header { padding: 16px 16px 14px 18px; }
+  .card-setup-dialog h2 { font-size: 1.125rem; }
+  .card-setup-dialog .setup-form { padding: 16px 18px 20px; }
+  .card-setup-dialog .setup-steps { gap: 6px; }
+  .card-setup-dialog .setup-steps span { padding: 7px 6px; }
+  .card-setup-dialog .setup-form-save { grid-template-columns: minmax(0, 1fr); grid-template-areas: "steps" "badge" "copy" "toggle" "fields" "msg" "footer"; padding-bottom: 0; }
+  .card-setup-dialog .setup-form-save .setup-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .card-setup-dialog .setup-form-save .setup-fields > label:nth-child(-n+3) { grid-column: 1 / -1; }
+  .card-setup-dialog .setup-form-save .photo-field { grid-column: 1 / -1; grid-row: auto; }
+  .card-setup-dialog .setup-form-save .setup-fields { grid-template-rows: none; }
+  .card-setup-dialog .setup-form-save .setup-fields > :is(label:has(+ .field-hint), .field-hint) { grid-column: 1 / -1; grid-row: auto; }
+  .card-setup-dialog .photo-dropzone { height: auto; min-height: 140px; }
+  .card-setup-dialog .photo-dropzone.has-photo { height: 220px; }
+  .card-setup-dialog .setup-form-save .setup-footer { margin-inline: -18px; padding: 12px 18px 16px; }
+}
+
+/* --- Admin ----------------------------------------------------------------- */
+/* Admin keeps its original, compact sizes; the revamp adds the glass look, calmer colours and more room
+   around the page instead of bigger controls. */
+
+/* Fields and the main button in the admin login and forms: the dialog's look at admin size. */
+:is(.admin-login, .admin-shell .admin-form) :is(input:not([type="radio"], [type="file"], [type="checkbox"]), select) { height: 40px; font-size: .85rem; font-weight: 400; border-radius: 6px; box-shadow: inset 0 1px 4px rgba(0, 0, 0, .4); }
+:is(.admin-login, .admin-shell .admin-form) input:not([type="radio"], [type="file"], [type="checkbox"]) { padding: 0 12px; }
+:is(.admin-login, .admin-shell .admin-form) select { padding: 0 40px 0 12px; background-position: right 14px center; }
+:is(.admin-login, .admin-shell .admin-form) .submit-button { min-height: 40px; padding: 8px 18px; border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45); font-size: .8rem; }
+:is(.admin-login, .admin-shell .admin-form) .submit-button:hover:not(:disabled) { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 4px 14px rgba(198, 162, 84, .2); }
+.admin-shell .segmented-control { padding: 4px; border-radius: 6px; }
+.admin-shell .segmented-control .segment-option { min-height: 38px; padding: 7px 8px; border-radius: 6px; font-size: .78rem; }
+.admin-shell .segmented-control .segment-option.is-selected, .admin-shell .segmented-control .segment-option.is-selected.is-admin-card { box-shadow: none; }
+
+/* --- Admin: login ----------------------------------------------------------- */
+/* index.html paints the body inline (see the Live block), so the darker base needs !important here too. */
+body:has(.admin-shell) { background-color: #080807 !important; }
+/* The way back to the scanner: a small outlined button at the top left. */
+.admin-login > a { top: 24px; left: 0; z-index: 1; display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 12px; border-width: 1px; border-style: solid; border-radius: 6px; font-size: .78rem; font-weight: 600; text-decoration: none; }
+.admin-login > a svg { width: 15px; height: 15px; }
+.admin-login > a:hover { transform: none; box-shadow: none; }
+/* Login and PIN reset: a glass card with the brand, an Orbitron title and one clear Unlock button. */
+.admin-login form { position: relative; width: min(440px, 100%); padding: 28px 30px 22px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 460ms var(--ease-soft) backwards; }
+.admin-login .dashboard-brand { margin-bottom: 16px; }
+.admin-login .section-kicker { letter-spacing: .14em; }
+.admin-login h1 { margin: 6px 0 10px; font-family: 'Orbitron', sans-serif; font-size: 1.5rem; font-weight: 600; letter-spacing: .02em; }
+.admin-login label { margin: 12px 0 14px; font-size: .78rem; font-weight: 600; }
+.admin-login .submit-button { width: 100%; }
+.admin-login form > .text-button { display: flex; margin: 6px auto 0; padding: 6px 12px; color: var(--gold-bright); border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-login form > .text-button:hover:not(:disabled) { background: rgba(198, 162, 84, .08); }
+.admin-login :is(.dashboard-alert, .setup-error, .setup-success) { margin: 0 0 12px; padding: 9px 12px; border-radius: 6px; font-size: .8rem; }
+@media (max-width: 600px), (max-height: 760px) { .admin-login { padding-top: 80px; } }
+@media (max-width: 600px) {
+  .admin-login form { padding: 22px 20px 18px; border-radius: 8px; }
+  .admin-login > a { top: 16px; }
+}
+
+/* --- Admin: page, header, mode switch, tabs ------------------------------- */
+/* More room around the page: wider side margins and space above the header, still wide enough for the tables. */
+.admin-shell:not(.admin-login) { width: min(1600px, calc(100% - 2 * clamp(20px, 4vw, 72px))); padding: clamp(24px, 3vw, 40px) 0 48px; }
+
+/* Header: a glass card with two calm columns. Brand, title, office and the mode switch on the left;
+   the page buttons, small and quiet, on the right. */
+.admin-shell .dashboard-header { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title nav" "switch nav"; align-items: start; gap: 16px 32px; padding: 24px 28px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-enter 600ms var(--ease-soft) backwards; }
+.admin-title { grid-area: title; min-width: 0; }
+.admin-title .dashboard-brand { margin: 0 0 12px; }
+.admin-title .section-kicker { margin: 0; letter-spacing: .14em; }
+.admin-title h1 { margin: 4px 0 4px; font-family: 'Orbitron', sans-serif; font-size: 1.5rem; font-weight: 600; line-height: 1.2; letter-spacing: .02em; }
+.admin-title .section-description { margin: 0; font-size: .85rem; }
+
+/* Attendance / Bathroom Key Log: the kiosk's sliding gold thumb, at the original small size, under the title. */
+.admin-shell .admin-mode-switcher { grid-area: switch; justify-self: start; margin: 0; padding: 3px; border-radius: 8px; }
+.admin-shell .admin-mode-switcher::before { top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(0, 0, 0, .2); }
+.admin-shell .admin-mode-btn { justify-content: center; gap: 7px; min-height: 32px; padding: 5px 14px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; box-shadow: none; font-size: .8rem; transition: color 200ms ease-out; }
+.admin-shell .admin-mode-btn:hover { color: var(--ink); background: transparent; }
+.admin-shell .admin-mode-btn.is-active, .admin-shell .admin-mode-btn.is-active:hover { color: #11100c; background: transparent; box-shadow: none; }
+.admin-shell .admin-mode-key-badge { width: 18px; height: 18px; border-radius: 4px; font-size: .68rem; }
+.admin-shell .admin-mode-btn:not(.is-active) .admin-mode-key-badge { color: var(--gold-bright); background: transparent; border-color: rgba(198, 162, 84, .45); }
+.admin-shell .admin-mode-btn.is-active .admin-mode-key-badge { color: #11100c; background: rgba(17, 16, 12, .14); border-color: rgba(17, 16, 12, .28); }
+
+/* Scanner, Live view and Lock: small outlined buttons with icons, no lift or glow; the dev-only Sheets reset in coral. */
+.admin-shell .dashboard-header nav { grid-area: nav; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 520px; }
+.admin-shell .dashboard-header nav :is(a, button) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; color: var(--ink); background: transparent; background-image: none; border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; box-shadow: none; font-size: .78rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.admin-shell .dashboard-header nav :is(a, button) svg { width: 15px; height: 15px; }
+.admin-shell .dashboard-header nav :is(a, button):hover:not(:disabled) { color: var(--gold-bright); background-color: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); box-shadow: none; transform: none; }
+.admin-shell .dashboard-header nav .is-danger { color: var(--danger); border-color: rgba(239, 170, 146, .35); }
+.admin-shell .dashboard-header nav .is-danger svg { color: currentColor; }
+.admin-shell .dashboard-header nav .is-danger:hover:not(:disabled) { color: var(--danger); background-color: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .7); }
+
+/* Tablets and phones: one column (title, switch, buttons). */
+@media (max-width: 900px) {
+  .admin-shell .dashboard-header { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "switch" "nav"; }
+  .admin-shell .dashboard-header nav { justify-content: flex-start; max-width: none; }
+}
+@media (max-width: 600px) {
+  .admin-shell .dashboard-header { padding: 18px; border-radius: 8px; }
+  .admin-shell .admin-mode-switcher { justify-self: stretch; }
+  .admin-shell .admin-mode-key-badge { display: none; }
+  .admin-shell .admin-mode-btn { padding-inline: 8px; }
+  .admin-shell .dashboard-header nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
+}
+
+/* Tabs and sensor status share one row: a slim glass tab bar with icons, and the sensor as quiet text. */
+.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 22px 0 18px; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
+.admin-shell .admin-tabs { display: flex; flex: 0 1 auto; gap: 2px; min-width: 0; max-width: 100%; margin: 0; padding: 4px; overflow-x: auto; scrollbar-width: thin; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 6px; box-shadow: var(--glass-shadow); }
+.admin-shell .admin-tabs button { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: .8rem; font-weight: 600; white-space: nowrap; transition: color 180ms ease-out, background-color 180ms ease-out; }
+.admin-shell .admin-tabs button svg { width: 15px; height: 15px; color: var(--gold); }
+.admin-shell .admin-tabs button:hover { color: var(--ink); background: rgba(198, 162, 84, .07); }
+.admin-shell .admin-tabs button.is-active { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); }
+.admin-shell .admin-tabs button.is-active svg { color: currentColor; }
+.admin-shell .scanner-diag { flex: 0 1 auto; margin: 0 0 0 auto; padding: 6px 12px; gap: 4px 12px; color: var(--muted); background: transparent; border: 1px solid rgba(198, 162, 84, .16); border-radius: 6px; font-size: .74rem; }
+.admin-shell .scanner-diag > span + span { padding-left: 12px; border-left-color: rgba(198, 162, 84, .18); }
+.admin-shell > .dashboard-alert { margin: 0 0 14px; padding: 10px 14px; border-radius: 6px; font-size: .8rem; }
+@media (max-width: 900px) {
+  .admin-shell .admin-tabs { flex: 1 1 100%; flex-wrap: wrap; overflow: visible; }
+  .admin-shell .admin-tabs button { flex: 1 1 auto; justify-content: center; }
+  .admin-shell .scanner-diag { flex-basis: 100%; margin-left: 0; }
+  .admin-shell .scanner-diag > span + span { padding-left: 0; border-left: 0; }
+}
+
+/* --- Admin: Users and RFID -------------------------------------------------- */
+/* The list always takes the full width at the same height; "+ Add user" or Edit opens the registration form
+   in a pop-up. Panels are near-opaque glass, so long lists scroll smoothly. */
+.admin-shell .admin-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+.admin-shell .users-table-section { position: relative; background: linear-gradient(180deg, rgba(30, 28, 22, .88), rgba(13, 12, 10, .92)); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); animation: admin-fade 520ms var(--ease-soft) 120ms backwards; }
+/* Opacity only: a transform here would capture the confirmations' fixed position while it runs. */
+@keyframes admin-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Registration pop-up: the card setup dialog's look at admin size. Under the confirmation prompts (z-index 30),
+   so "Discard unsaved changes?" opens on top of it. */
+.user-form-backdrop { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; padding: 20px; background: rgba(4, 4, 3, .72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); animation: admin-fade 200ms ease-out backwards; }
+.admin-shell .user-form-dialog { position: relative; display: flex; flex-direction: column; width: min(860px, 100%); max-height: calc(100dvh - 40px); padding: 0; overflow: hidden; background: linear-gradient(180deg, rgba(33, 30, 23, .98), rgba(13, 12, 10, .99)); border: 1px solid rgba(198, 162, 84, .3); border-radius: 8px; box-shadow: var(--glass-shadow); animation: kiosk-card-in 360ms var(--ease-soft) backwards; }
+.admin-shell .user-form-dialog::before { content: ""; position: absolute; top: 0; left: 14%; right: 14%; height: 1px; background: linear-gradient(90deg, transparent, rgba(225, 196, 119, .8), transparent); pointer-events: none; }
+.admin-shell .user-form-dialog .editor-heading { flex: none; align-items: flex-start; padding: 18px 20px 14px 22px; border-bottom: 1px solid rgba(198, 162, 84, .14); }
+.admin-shell .user-form-dialog .section-kicker { letter-spacing: .14em; }
+.admin-shell .user-form-dialog h2 { margin: 2px 0 0; font-size: 1.05rem; letter-spacing: .02em; }
+/* On the title's line, so the pop-up's height never changes when it appears. */
+.admin-shell .user-form-dialog h2 { display: inline; }
+.admin-shell .unsaved-tag { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; color: var(--gold-bright); font-size: .72rem; font-weight: 600; vertical-align: 2px; }
+.admin-shell .unsaved-tag::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--gold-bright); box-shadow: 0 0 8px rgba(225, 196, 119, .6); }
+.admin-shell .user-form-dialog .editor-heading .icon-button { width: 32px; height: 32px; border-radius: 6px; }
+.admin-shell .user-form-dialog .editor-heading .icon-button:hover { color: var(--gold-bright); background: rgba(198, 162, 84, .08); }
+.admin-shell .edit-context { margin: 14px 22px 0; border-radius: 6px; }
+.admin-shell .form-message { margin: 14px 22px 0; border-radius: 6px; font-size: .8rem; }
+.admin-shell .users-table-section > .form-message { margin: 10px 14px 0; }
+
+/* Fields: two columns with the photo beside them. Interns: card type | photo, then User ID | RFID UID,
+   Full name and Department across, Gender | Status. The body scrolls only on short screens; the buttons stay put. */
+.admin-shell .user-form-dialog form { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 220px; align-content: start; gap: 12px 14px; padding: 16px 22px 0; overflow-y: auto; }
+.admin-shell .user-form-dialog form > .card-type-toggle { grid-column: 1 / 3; }
+.admin-shell .user-form-dialog form > .photo-field { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 6px; grid-column: 3; grid-row: 1 / span 5; }
+.admin-shell .user-form-dialog form:has(> .photo-field) > label:is(:nth-child(4), :nth-child(5)) { grid-column: 1 / 3; }
+/* Admin cards have no photo: two columns, the note across. */
+.admin-shell .user-form-dialog form > .user-form-actions { grid-column: 1 / -1; }
+/* Admin cards have no photo: the explanation fills the photo column and the four fields stack on the left,
+   so switching card type keeps the pop-up the same size. */
+.admin-shell .user-form-dialog form > .modal-audit-callout { display: flex; flex-direction: column; justify-content: center; gap: 10px; grid-column: 3; grid-row: 1 / span 5; padding: 16px; color: var(--muted); background: rgba(198, 162, 84, .06); border: 1px dashed rgba(198, 162, 84, .4); border-radius: 6px; font-size: .78rem; line-height: 1.5; }
+.admin-shell .user-form-dialog form > .modal-audit-callout svg { color: var(--gold-bright); }
+.admin-shell .user-form-dialog form:has(> .modal-audit-callout) > label { grid-column: 1 / 3; }
+.admin-shell .user-form-dialog label { gap: 6px; min-width: 0; margin: 0; font-size: .76rem; font-weight: 600; }
+.admin-shell .user-form-dialog :is(input, select) { width: 100%; min-width: 0; }
+.admin-shell .user-form-dialog .card-type-toggle { display: grid; gap: 6px; }
+.admin-shell .user-form-dialog .modal-audit-callout { margin: 0 !important; }
+/* Photo: a frame the height of the fields beside it; a picture fits inside instead of stretching the pop-up. */
+.admin-shell .user-form-dialog .photo-dropzone { grid-template-rows: none; align-content: center; height: 100%; min-height: 140px; padding: 12px; gap: 4px; background-color: rgba(0, 0, 0, .22); border-color: rgba(198, 162, 84, .4); border-radius: 6px; overflow: hidden; }
+.admin-shell .user-form-dialog .photo-preview-wrap { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+.admin-shell .user-form-dialog .photo-dropzone.has-photo { min-height: 140px; padding: 0; background: #0b0a08; }
+.admin-shell .user-form-dialog .photo-dropzone.has-photo img { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; object-fit: contain; }
+/* Change photo and Remove photo share one line under the frame. */
+.admin-shell .user-form-dialog .photo-preview-actions { flex-wrap: nowrap; justify-content: space-between; }
+.admin-shell .user-form-dialog .photo-preview-actions .text-button { min-height: 30px; padding: 4px 2px; font-size: .74rem; white-space: nowrap; }
+/* Buttons: Cancel and Save at the bottom right, pinned while the body scrolls. */
+.admin-shell .user-form-dialog .user-form-actions { position: sticky; bottom: 0; z-index: 1; display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 4px -22px 0; padding: 14px 22px 18px; background: #0e0d0a; border-top: 1px solid rgba(198, 162, 84, .12); }
+/* Cancel and Save user: the same size (the base gold button is 48px tall, so the height is set here for both). */
+.admin-shell .user-form-dialog .user-form-actions > :is(.text-button, .submit-button) { box-sizing: border-box; justify-content: center; width: auto; min-width: 132px; height: 40px; min-height: 40px; margin: 0; padding: 0 18px; border-radius: 6px; font-size: .8rem; }
+.admin-shell .user-form-dialog .user-form-actions .text-button { color: var(--ink); border: 1px solid rgba(198, 162, 84, .28); font-weight: 600; }
+.admin-shell .user-form-dialog .user-form-actions .text-button:hover { color: var(--gold-bright); border-color: rgba(198, 162, 84, .6); }
+/* Phones: a bottom sheet, one column with pairs kept, the photo under the fields. */
+@media (max-width: 700px) {
+  .user-form-backdrop { align-items: end; padding: 0; }
+  .admin-shell .user-form-dialog { width: 100%; max-height: 92dvh; border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .admin-shell .user-form-dialog form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 14px 16px 0; }
+  .admin-shell .user-form-dialog form > :is(.card-type-toggle, .photo-field, .modal-audit-callout) { grid-column: 1 / -1; grid-row: auto; }
+  .admin-shell .user-form-dialog form:has(> .modal-audit-callout) > label { grid-column: 1 / -1; }
+  .admin-shell .user-form-dialog form:has(> .photo-field) > label:is(:nth-child(4), :nth-child(5)) { grid-column: 1 / -1; }
+  .admin-shell .user-form-dialog .user-form-actions { margin-inline: -16px; padding: 12px 16px 16px; }
+  .admin-shell .user-form-dialog .user-form-actions > * { flex: 1 1 0; }
+  .admin-shell .edit-context, .admin-shell .form-message { margin-inline: 16px; }
+}
+
+/* Users list: one framed panel; the list is capped and scrolls inside ("See all" lifts the cap). */
+.admin-shell .users-table-section { overflow: hidden; }
+.admin-shell .users-table-section.is-capped { max-height: max(420px, min(760px, calc(100dvh - 120px))); }
+.admin-shell .users-table-section :is(.table-header-bar, .user-search-row, .table-wrap) { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.admin-shell .users-table-section .table-header-bar { padding: 10px 14px; border-bottom: 1px solid rgba(198, 162, 84, .12); }
+.admin-shell .users-table-section .user-search-row { padding: 10px 14px; }
+.admin-shell .users-table-section .user-search-row .input { height: 38px; font-size: .82rem; background-color: rgba(5, 5, 4, .55); border-color: rgba(198, 162, 84, .24); border-radius: 6px; }
+.admin-shell .users-table-section .user-search-row .input:focus { border-color: var(--gold-bright); }
+.admin-shell .users-table-section .table-batch-actions .admin-button { min-height: 32px; padding: 5px 12px; border-radius: 6px; }
+.admin-shell .users-table-section .add-user-button { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); border-color: transparent; }
+.admin-shell .users-table-section .add-user-button:hover:not(:disabled) { color: #11100c; background: linear-gradient(180deg, #ecd28c, #cfac5e); }
+
+/* Table: plain text instead of pills and boxes; the photo beside the name; gentle row hover. */
+.admin-shell .users-table-section table { min-width: 0; }
+.admin-shell .users-table-section th { padding: 10px 12px; color: var(--gold); background: #17150f; border-bottom-color: rgba(198, 162, 84, .2); font-weight: 600; letter-spacing: .1em; }
+.admin-shell .users-table-section.is-capped thead th { background: #17150f; }
+.admin-shell .users-table-section td { padding: 9px 12px; border-bottom-color: rgba(198, 162, 84, .08); vertical-align: middle; }
+.admin-shell .users-table-section tbody tr:last-child td { border-bottom: 0; }
+.admin-shell .users-table-section tbody tr:hover td { background: rgba(198, 162, 84, .045); }
+.admin-shell .users-table-section :is(th, td) input[type="checkbox"] { width: 16px; height: 16px; min-width: 16px; min-height: 16px; padding: 0; }
+.admin-shell .users-table-section td strong { font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; letter-spacing: .01em; }
+.admin-shell .users-table-section td > :is(.user-photo, .user-photo-fallback) { float: left; width: 32px; height: 32px; margin: 1px 10px 0 0; }
+.admin-shell .users-table-section td:nth-child(3) { letter-spacing: .02em; white-space: nowrap; }
+.admin-shell .users-table-section .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 0; background: none; border: 0; font-family: 'Poppins', 'Segoe UI', sans-serif; font-size: .76rem; font-weight: 600; letter-spacing: .03em; white-space: nowrap; }
+.admin-shell .users-table-section .status-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.admin-shell .status-active { color: var(--success); }
+.admin-shell .status-inactive { color: var(--quiet); }
+/* Admin RFID cards: gold instead of the old blue. */
+.admin-shell .user-photo-admin-card { width: 32px; height: 32px; margin-right: 10px; color: var(--gold-bright); background: rgba(198, 162, 84, .1); border-color: rgba(198, 162, 84, .45); }
+.admin-shell .badge-admin-card { color: var(--gold-bright); background: rgba(198, 162, 84, .1); border-color: rgba(198, 162, 84, .4); }
+/* Voice: the clip state as plain text with its dot; Play, Regenerate and the row actions as quiet text buttons. */
+.admin-shell .users-table-section .voice-slot { gap: 4px 10px; }
+.admin-shell .users-table-section .voice-slot .lan-state { padding: 0; background: none; border: 0; }
+.admin-shell .users-table-section td:last-child:not([colspan]) { white-space: nowrap; }
+.admin-shell .users-table-section td .text-button { min-height: 28px; padding: 3px 7px; color: var(--gold-bright); background: none; border: 0; border-radius: 6px; font-size: .76rem; font-weight: 600; white-space: nowrap; overflow-wrap: normal; }
+.admin-shell .users-table-section td:last-child .text-button + .text-button { margin-left: 4px; }
+.admin-shell .users-table-section td .text-button:hover:not(:disabled) { color: var(--ink); background: rgba(198, 162, 84, .12); }
+.admin-shell .users-table-section td .text-button.danger-button { color: var(--danger); }
+.admin-shell .users-table-section td .text-button.danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
+
+/* Tablets and phones: each user becomes a small card (cells placed by position:
+   1 select, 2 user, 3 RFID, 4 status, 5 voice, 6 actions); the visible "Select all" covers the head checkbox. */
+@media (max-width: 900px) {
+  .admin-shell .users-table-section table, .admin-shell .users-table-section tbody { display: block; }
+  .admin-shell .users-table-section thead { display: none; }
+  .admin-shell .users-table-section tbody tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "sel user status" ". rfid rfid" ". voice voice" ". act act"; gap: 6px 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid rgba(198, 162, 84, .08); }
+  .admin-shell .users-table-section tbody tr:has(> td[colspan]) { display: block; }
+  .admin-shell .users-table-section td, .admin-shell .users-table-section td.table-select-cell { width: auto; min-width: 0; max-width: none; padding: 0; border: 0; }
+  .admin-shell .users-table-section tbody tr:hover td { background: none; }
+  .admin-shell .users-table-section td:nth-child(1) { grid-area: sel; }
+  .admin-shell .users-table-section td:nth-child(2) { grid-area: user; }
+  .admin-shell .users-table-section td:nth-child(3) { grid-area: rfid; color: var(--muted); }
+  .admin-shell .users-table-section td:nth-child(3)::before { content: "RFID "; color: var(--quiet); font-weight: 600; }
+  .admin-shell .users-table-section td:nth-child(4) { grid-area: status; justify-self: end; }
+  .admin-shell .users-table-section td:nth-child(5) { grid-area: voice; }
+  .admin-shell .users-table-section td:nth-child(6) { grid-area: act; margin-left: -7px; white-space: normal; }
+}
+
+/* --- Sliding selections ---------------------------------------------------- */
+/* "Register card as" (kiosk dialog and admin pop-up): one gold-edged thumb slides between the two choices. */
+:is(.card-setup-dialog, .admin-shell) .segmented-control { --seg-pad: 5px; position: relative; isolation: isolate; }
+.admin-shell .segmented-control { --seg-pad: 4px; }
+:is(.card-setup-dialog, .admin-shell) .segmented-control::before { content: ""; box-sizing: border-box; position: absolute; z-index: -1; top: var(--seg-pad); bottom: var(--seg-pad); left: var(--seg-pad); width: calc((100% - 2 * var(--seg-pad) - 6px) / 2); background: rgba(198, 162, 84, .12); border: 1px solid rgba(225, 196, 119, .6); border-radius: 6px; box-shadow: 0 0 16px rgba(198, 162, 84, .12); transition: transform 320ms var(--ease-soft); pointer-events: none; }
+:is(.card-setup-dialog, .admin-shell) .segmented-control:has(> .segment-option:last-child input:checked)::before { transform: translateX(calc(100% + 6px)); }
+:is(.card-setup-dialog, .admin-shell) .segmented-control .segment-option.is-selected,
+:is(.card-setup-dialog, .admin-shell) .segmented-control .segment-option.is-selected.is-admin-card,
+:is(.card-setup-dialog, .admin-shell) .segmented-control .segment-option.is-selected:hover { background: transparent; border-color: transparent; box-shadow: none; }
+:is(.card-setup-dialog, .admin-shell) .segmented-control .segment-option { transition: color 200ms ease-out, background-color 200ms ease-out; }
+/* The fields of the chosen card type fade in. */
+.card-setup-dialog .setup-form-save .setup-fields > *, .admin-shell .user-form-dialog form > :is(label, .photo-field, .modal-audit-callout) { animation: admin-fade 240ms ease-out backwards; }
+
+/* Admin tabs: the gold thumb slides to the chosen tab (positioned from App.tsx). */
+.admin-shell .admin-tabs { position: relative; isolation: isolate; }
+.admin-tabs-thumb { position: absolute; top: 0; left: 0; z-index: -1; background: linear-gradient(180deg, #e6ca82, #c6a254); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); transition: transform 320ms var(--ease-soft), width 320ms var(--ease-soft), height 320ms var(--ease-soft); pointer-events: none; }
+.admin-shell .admin-tabs:has(.admin-tabs-thumb) button.is-active { background: transparent; box-shadow: none; }
+.admin-shell .admin-tabs button { transition: color 200ms ease-out, background-color 180ms ease-out; }
+
+/* --- Kiosk sparkles -------------------------------------------------------- */
+/* Tiny gold sparkles rise from the bottom of the screen at both sides, drift a little and fade away as they climb.
+   They stay clear of the centre column, so they never pass behind the frosted reader and result cards.
+   18 small dots animated with transform and opacity only, so the kiosk PC stays smooth; they pause while
+   the card setup dialog is open and are hidden when the reduced-motion setting is on. A faint, still gold
+   haze along the bottom edge is where they seem to come from. */
+.kiosk-ambient { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.kiosk-ambient::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 32vh; background: radial-gradient(ellipse 55% 100% at 50% 100%, rgba(198, 162, 84, .09), transparent 72%); }
+.kiosk-ambient i { position: absolute; bottom: -8px; left: var(--x); width: var(--s); height: var(--s); border-radius: 50%; background: #f5e2a6; box-shadow: 0 0 6px 1px rgba(225, 196, 119, .75), 0 0 14px 3px rgba(198, 162, 84, .22); opacity: 0; animation: kiosk-rise var(--d) linear var(--delay) infinite; will-change: transform, opacity; }
+.kiosk-ambient i:nth-child(1) { --x: 2%; --s: 3px; --d: 16s; --delay: -5s; --sway: 7px; --rise: 59vh; }
+.kiosk-ambient i:nth-child(2) { --x: 6%; --s: 2px; --d: 14s; --delay: -10s; --sway: -16px; --rise: 70vh; }
+.kiosk-ambient i:nth-child(3) { --x: 10%; --s: 4px; --d: 12s; --delay: -3s; --sway: 21px; --rise: 51vh; }
+.kiosk-ambient i:nth-child(4) { --x: 14%; --s: 3px; --d: 10s; --delay: 0s; --sway: -2px; --rise: 62vh; }
+.kiosk-ambient i:nth-child(5) { --x: 18%; --s: 2px; --d: 17s; --delay: -8s; --sway: -25px; --rise: 73vh; }
+.kiosk-ambient i:nth-child(6) { --x: 22%; --s: 2px; --d: 15s; --delay: 0s; --sway: 12px; --rise: 54vh; }
+.kiosk-ambient i:nth-child(7) { --x: 26%; --s: 3px; --d: 13s; --delay: -9s; --sway: -11px; --rise: 65vh; }
+.kiosk-ambient i:nth-child(8) { --x: 4%; --s: 2px; --d: 11s; --delay: -7s; --sway: 26px; --rise: 76vh; }
+.kiosk-ambient i:nth-child(9) { --x: 24%; --s: 4px; --d: 9s; --delay: 0s; --sway: 3px; --rise: 57vh; }
+.kiosk-ambient i:nth-child(10) { --x: 74%; --s: 3px; --d: 16s; --delay: -2s; --sway: -20px; --rise: 68vh; }
+.kiosk-ambient i:nth-child(11) { --x: 78%; --s: 2px; --d: 14s; --delay: -13s; --sway: 17px; --rise: 49vh; }
+.kiosk-ambient i:nth-child(12) { --x: 82%; --s: 2px; --d: 12s; --delay: 0s; --sway: -6px; --rise: 60vh; }
+.kiosk-ambient i:nth-child(13) { --x: 86%; --s: 3px; --d: 10s; --delay: -5s; --sway: -29px; --rise: 71vh; }
+.kiosk-ambient i:nth-child(14) { --x: 90%; --s: 2px; --d: 17s; --delay: -2s; --sway: 8px; --rise: 52vh; }
+.kiosk-ambient i:nth-child(15) { --x: 94%; --s: 4px; --d: 15s; --delay: 0s; --sway: -15px; --rise: 63vh; }
+.kiosk-ambient i:nth-child(16) { --x: 98%; --s: 3px; --d: 13s; --delay: -2s; --sway: 22px; --rise: 74vh; }
+.kiosk-ambient i:nth-child(17) { --x: 76%; --s: 2px; --d: 11s; --delay: -8s; --sway: -1px; --rise: 55vh; }
+.kiosk-ambient i:nth-child(18) { --x: 96%; --s: 2px; --d: 9s; --delay: 0s; --sway: -24px; --rise: 66vh; }
+.kiosk-shell:has(.card-setup-dialog) .kiosk-ambient i { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .kiosk-ambient i { display: none; } }
+@keyframes kiosk-rise {
+  0% { opacity: 0; transform: translate3d(0, 0, 0) scale(1); }
+  12% { opacity: .9; }
+  55% { opacity: .55; }
+  100% { opacity: 0; transform: translate3d(var(--sway), calc(-1 * var(--rise)), 0) scale(.15); }
+}
+
+/* --- Pop-up windows: one design ------------------------------------------------ */
+/* Confirmations, Add missed attendance, Edit payroll, the payroll breakdown, the backup guide, Assisted attendance,
+   Edit bathroom key log and the software update all share the registration pop-up's look: dark glass card, gold
+   edge and gleam, 8px corners, an Orbitron title, small muted text and equal-size buttons. Destructive
+   confirmations turn coral, like the kiosk's "Card not registered" card. */
+
+/* Backdrops. Layering keeps forms under confirmations: card setup 10, user form 25, update 35, confirmations 40. */
+.confirm-backdrop, .assisted-modal-backdrop, .setup-backdrop:has(> .update-dialog) { background: rgba(4, 4, 3, .74); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.confirm-backdrop { z-index: 40; }
+.setup-backdrop:has(> .update-dialog) { z-index: 35; }
+
+/* The card. */
+.confirm-dialog, .edit-payroll-dialog, .assisted-modal, .setup-dialog.update-dialog { position: relative; color: var(--ink); background: linear-gradient(90deg, transparent 14%, var(--modal-edge, rgba(225, 196, 119, .8)) 50%, transparent 86%) top / 100% 1px no-repeat, linear-gradient(180deg, rgba(33, 30, 23, .98), rgba(13, 12, 10, .99)); border: 1px solid rgba(198, 162, 84, .3); border-radius: 8px; box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .05); animation: kiosk-card-in 300ms cubic-bezier(.2, .7, .2, 1) backwards; }
+.confirm-dialog:not(.db-guide-dialog, .payroll-breakdown-dialog) { width: min(460px, 100%); padding: 22px 24px 20px; }
+/* Titles and text. */
+.confirm-dialog h2, .edit-payroll-dialog h2, .assisted-modal-header h3, .setup-dialog.update-dialog h2 { color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: 1.05rem; font-weight: 600; letter-spacing: .02em; }
+.confirm-dialog > h2 { margin: 14px 0 6px; }
+.confirm-dialog p, .assisted-modal-subtitle, .edit-payroll-dialog p.modal-subtitle { color: var(--muted); font-size: .82rem; line-height: 1.55; }
+.assisted-modal .section-kicker, .setup-dialog.update-dialog .section-kicker { letter-spacing: .14em; }
+.modal-section-group .field-label, .edit-payroll-section label { font-size: .78rem; font-weight: 600; }
+/* The icon sits in a soft gold disc; coral on destructive confirmations. */
+.confirm-dialog > svg:first-child { box-sizing: content-box; width: 20px; height: 20px; padding: 10px; color: var(--gold-bright); background: rgba(198, 162, 84, .12); border-radius: 50%; box-shadow: 0 0 0 1px rgba(225, 196, 119, .35); }
+.assisted-modal-icon, .assisted-modal-icon.icon-purple, .setup-dialog.update-dialog .setup-icon { color: var(--gold-bright); background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .2), rgba(198, 162, 84, .04) 70%); border: 1px solid rgba(225, 196, 119, .45); border-radius: 50%; }
+.confirm-dialog.is-danger { --modal-edge: var(--danger); border-color: rgba(239, 170, 146, .38); }
+.confirm-dialog.is-danger > svg:first-child { color: var(--danger); background: rgba(239, 170, 146, .12); box-shadow: 0 0 0 1px rgba(239, 170, 146, .35); }
+
+/* Headers, bodies and footers of the larger pop-ups. */
+.assisted-modal-header, .setup-dialog.update-dialog .setup-dialog-header { padding: 18px 20px 14px 22px; background: transparent; border-bottom: 1px solid rgba(198, 162, 84, .14); }
+.assisted-modal-body { padding: 18px 22px; }
+.assisted-modal-footer { gap: 8px; padding: 14px 22px 18px; background: #0e0d0a; border-top: 1px solid rgba(198, 162, 84, .12); }
+.assisted-modal-header .icon-button, .setup-dialog.update-dialog .setup-dialog-header .icon-button { width: 32px; height: 32px; border: 1px solid transparent; border-radius: 6px; }
+.assisted-modal-header .icon-button:hover, .setup-dialog.update-dialog .setup-dialog-header .icon-button:hover { color: var(--gold-bright); background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .3); }
+.confirm-actions, .update-dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+
+/* Buttons: Cancel-type and main buttons are the same size everywhere. */
+.confirm-actions > :is(.text-button, .submit-button), .update-dialog-footer > :is(.text-button, .submit-button), .assisted-modal-footer > :is(.modal-btn-cancel, .modal-btn-primary) { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 120px; height: 40px; min-height: 40px; margin: 0; padding: 0 18px; border-radius: 6px; font-size: .8rem; font-weight: 700; }
+.confirm-actions > .text-button, .update-dialog-footer > .text-button, .assisted-modal-footer > .modal-btn-cancel { color: var(--ink); background: transparent; border: 1px solid rgba(198, 162, 84, .28); font-weight: 600; }
+.confirm-actions > .text-button:hover:not(:disabled), .update-dialog-footer > .text-button:hover:not(:disabled), .assisted-modal-footer > .modal-btn-cancel:hover:not(:disabled) { color: var(--gold-bright); background: rgba(198, 162, 84, .06); border-color: rgba(198, 162, 84, .6); }
+.confirm-actions > .submit-button, .update-dialog-footer > .submit-button, .assisted-modal-footer > .modal-btn-primary { color: #11100c; background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border: 1px solid transparent; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45); }
+.confirm-actions > .submit-button:hover:not(:disabled), .update-dialog-footer > .submit-button:hover:not(:disabled), .assisted-modal-footer > .modal-btn-primary:hover:not(:disabled) { color: #11100c; background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-color: transparent; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45); filter: brightness(1.06); transform: none; }
+.confirm-actions > .submit-button:disabled, .update-dialog-footer > .submit-button:disabled, .assisted-modal-footer > .modal-btn-primary:disabled { color: rgba(246, 242, 233, .5); background: rgba(198, 162, 84, .1); box-shadow: inset 0 0 0 1px rgba(198, 162, 84, .25); opacity: 1; }
+/* Paired buttons share the row equally (up to 220px each), so Cancel and the main action are always the same size. */
+.confirm-actions > :is(.text-button, .submit-button), .update-dialog-footer > :is(.text-button, .submit-button), .assisted-modal-footer > :is(.modal-btn-cancel, .modal-btn-primary), .admin-shell .user-form-dialog .user-form-actions > :is(.text-button, .submit-button) { flex: 1 1 0; max-width: 220px; }
+.confirm-actions > .submit-button.is-danger:not(:disabled), .confirm-actions > .submit-button.is-danger:hover:not(:disabled) { color: #1a0f0b; background: linear-gradient(180deg, #f3c1af, #e2927b); border-color: transparent; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35); }
+.confirm-actions > .submit-button.is-danger:disabled { color: rgba(246, 242, 233, .5); background: rgba(239, 170, 146, .1); box-shadow: inset 0 0 0 1px rgba(239, 170, 146, .25); }
+
+/* Fields inside pop-ups: the same dark wells as the registration pop-up. */
+.assisted-modal :is(input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea), .edit-payroll-dialog :is(input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea) { color: var(--ink); background-color: rgba(5, 5, 4, .6); border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; }
+.assisted-modal :is(input, select, textarea):focus, .edit-payroll-dialog :is(input, select, textarea):focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .16); }
+.reason-pill-btn { border-radius: 6px; }
+
+/* Gold instead of the old purple, blue and yellow accents; the countdown stays coral but no longer pulses. */
+.modal-audit-callout, .modal-audit-callout.purple-callout, .edit-payroll-notice { color: var(--muted); background: rgba(198, 162, 84, .06); border: 1px dashed rgba(198, 162, 84, .4); border-radius: 6px; }
+.modal-audit-callout svg, .modal-audit-callout.purple-callout svg { color: var(--gold-bright); }
+.assisted-admin-card-tag { color: var(--gold-bright); background: rgba(198, 162, 84, .1); border-color: rgba(198, 162, 84, .4); border-radius: 4px; }
+.assisted-timer-pill { border-radius: 6px; animation: none; }
+.edit-payroll-summary .net-pay-box { color: var(--gold-bright); background: rgba(198, 162, 84, .14); border: 1px solid rgba(225, 196, 119, .45); border-radius: 6px; }
+.edit-payroll-dialog { padding: 22px 24px; }
+.update-toast, .update-banner { border-radius: 6px; }
+.update-toast.error { color: var(--danger); border-color: rgba(239, 170, 146, .45); }
+
+/* --- Data and backup: Existing backups as a clear tree ------------------------------------------- */
+/* Months sit one step in under "Existing backups" and each backup one more step in under its month. A thin gold
+   guide line runs down each level with a short tick to every month and backup, so the hierarchy reads at a glance. */
+.admin-shell .db-backup-list { border-radius: 8px; }
+.admin-shell .db-backup-count { border-radius: 6px; }
+.admin-shell .db-backup-months { gap: 2px; margin: 0 14px 12px 21px; padding: 0 0 0 16px; border-left: 1px solid rgba(198, 162, 84, .24); }
+.admin-shell .db-backup-month { border-top: 0; }
+.admin-shell .db-backup-month > summary { position: relative; padding: 8px 4px; }
+.admin-shell .db-backup-month > summary::after { content: ""; position: absolute; top: 50%; left: -16px; width: 12px; height: 1px; background: rgba(198, 162, 84, .24); }
+.admin-shell .db-backup-month ul { margin: 2px 0 8px 9px; padding: 0 0 0 18px; border-left: 1px solid rgba(198, 162, 84, .16); }
+.admin-shell .db-backup-list li { position: relative; border-radius: 6px; }
+.admin-shell .db-backup-list li::before { content: ""; position: absolute; top: 50%; left: -19px; width: 14px; height: 1px; background: rgba(198, 162, 84, .16); }
+@media (max-width: 600px) {
+  .admin-shell .db-backup-months { margin: 0 10px 10px 14px; padding-left: 10px; }
+  .admin-shell .db-backup-month > summary::after { left: -10px; width: 7px; }
+  .admin-shell .db-backup-month ul { margin-left: 6px; padding-left: 10px; }
+  .admin-shell .db-backup-list li::before { left: -11px; width: 7px; }
+  /* Phone rows: file name, then size and date, then Restore and Download side by side (words never break). */
+  .admin-shell .db-backup-list li { grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; padding: 10px; }
+  .admin-shell .db-backup-list li code { grid-column: 1 / -1; }
+  .admin-shell .db-backup-actions { grid-column: 1 / -1; justify-self: stretch; }
+  .admin-shell .db-backup-actions .admin-button { flex: 1 1 0; white-space: nowrap; overflow-wrap: normal; }
+}
+

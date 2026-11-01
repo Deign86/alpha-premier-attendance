@@ -1849,6 +1849,8 @@ describe('Admin Attendance Corrections', () => {
       const user = userEvent.setup();
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+      // The registration form opens on demand.
+      await user.click(screen.getByRole('button', { name: /^add user$/i }));
 
       const dropzone = screen.getByText(/choose an id photo/i).closest('label');
       expect(dropzone).not.toBeNull();
@@ -3734,5 +3736,100 @@ describe('Payroll total-deductions fallback', () => {
     const row = screen.getByRole('row', { name: /Backend Row/ });
     expect(within(row).getByText('PHP 420.00')).toBeInTheDocument();
     expect(within(row).queryByText('PHP 90.00')).not.toBeInTheDocument();
+  });
+});
+
+describe('Users and RFID: registration form on demand', () => {
+  const people = [
+    { userId: 'APG-1', rfidUid: 'UID-1', fullName: 'Ada Lovelace', department: 'IT', status: 'ACTIVE', employeeType: 'INTERN', gender: null, dailyRate: null, photoUrl: null },
+    { userId: 'APG-2', rfidUid: 'UID-2', fullName: 'Grace Hopper', department: 'IT', status: 'ACTIVE', employeeType: 'INTERN', gender: null, dailyRate: null, photoUrl: null },
+  ];
+  function mockAdminFetch() {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/bathroom/status')) {
+        // SAFETY: Mock bathroom status
+        return { ok: true, json: async () => ({ success: true, date: '2026-08-27', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-27T10:00:00Z' }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, attendance, payroll)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', attendance: [], payroll: [], profiles: [] }) } as Response;
+    });
+  }
+  async function openUsersTab() {
+    mockAdminFetch();
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Ada Lovelace');
+    return user;
+  }
+
+  it('keeps the form closed until Add user, and closes it again', async () => {
+    const user = await openUsersTab();
+    expect(screen.queryByLabelText(/^user id/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^add user$/i }));
+    expect(screen.getByLabelText(/^user id/i)).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: /close user form/i }));
+    expect(screen.queryByLabelText(/^user id/i)).not.toBeInTheDocument();
+  });
+
+  it('asks before a tab switch throws away unsaved typing', async () => {
+    const user = await openUsersTab();
+    await user.click(screen.getByRole('button', { name: /^add user$/i }));
+    await user.type(screen.getByLabelText(/full name/i), 'Katherine Johnson');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+    expect(screen.getByRole('dialog', { name: /discard unsaved changes/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /keep editing/i }));
+    expect(screen.getByLabelText(/full name/i)).toHaveValue('Katherine Johnson');
+    expect(screen.getByRole('button', { name: /users and rfid/i })).toHaveClass('is-active');
+
+    await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+    await user.click(screen.getByRole('button', { name: /discard changes/i }));
+    expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveClass('is-active');
+    expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+  });
+
+  it('asks before Edit or Cancel throws away unsaved typing, not when nothing changed, and ignores the 2 key while open', async () => {
+    const user = await openUsersTab();
+    const adaRow = screen.getByText('Ada Lovelace').closest('tr');
+    const graceRow = screen.getByText('Grace Hopper').closest('tr');
+    await user.click(within(adaRow!).getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByRole('heading', { name: 'Editing Ada Lovelace' })).toBeInTheDocument();
+
+    // Nothing typed yet: Edit switches straight away.
+    await user.click(within(graceRow!).getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByRole('heading', { name: 'Editing Grace Hopper' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText(/department/i));
+    await user.type(screen.getByLabelText(/department/i), 'Finance');
+    await user.click(within(adaRow!).getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByRole('dialog', { name: /discard unsaved changes/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /keep editing/i }));
+    expect(screen.getByRole('heading', { name: 'Editing Grace Hopper' })).toBeInTheDocument();
+
+    // While the pop-up is open the 1/2 shortcut does nothing, so it can't throw the typing away.
+    fireEvent.keyDown(window, { key: '2' });
+    expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Editing Grace Hopper' })).toBeInTheDocument();
+
+    // Cancel with unsaved typing asks too; discarding closes the pop-up.
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await user.click(screen.getByRole('button', { name: /discard changes/i }));
+    expect(screen.queryByRole('dialog', { name: 'Editing Grace Hopper' })).not.toBeInTheDocument();
   });
 });

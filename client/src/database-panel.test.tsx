@@ -1118,15 +1118,14 @@ describe('DatabasePanel', () => {
     expect(screen.getByRole('checkbox', { name: 'Select all users' })).toBeChecked();
   });
 
-  it('caps the users list to the registration card height, with See all to lift the cap', async () => {
+  it('caps the users list, with See all to lift the cap', async () => {
     vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
     class FakeResizeObserver {
       observe(): void {}
       disconnect(): void {}
     }
     vi.stubGlobal('ResizeObserver', FakeResizeObserver);
-    // Registration card is 600px tall; the user rows need 900px but only 500px fit.
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600);
+    // The cap itself is a stylesheet max-height; the user rows need 900px but only 500px fit.
     vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(900);
     vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(500);
     const intern = (userId: string, fullName: string) => ({
@@ -1146,12 +1145,10 @@ describe('DatabasePanel', () => {
 
       const usersSection = screen.getByRole('searchbox', { name: 'Search users' }).closest('section');
       expect(usersSection).toHaveClass('is-capped');
-      expect(usersSection).toHaveStyle({ maxHeight: '600px' });
 
       const user = userEvent.setup();
       await user.click(screen.getByRole('button', { name: 'See all (3)' }));
       expect(usersSection).not.toHaveClass('is-capped');
-      expect(usersSection).not.toHaveStyle({ maxHeight: '600px' });
 
       await user.click(screen.getByRole('button', { name: 'Show less' }));
       expect(usersSection).toHaveClass('is-capped');
