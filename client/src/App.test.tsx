@@ -1680,7 +1680,7 @@ describe('Admin Attendance Corrections', () => {
 
       expect(screen.getByRole('dialog', { name: /delete selected users\?/i })).toBeInTheDocument();
       expect(screen.getByText('Are you sure you want to delete 2 selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await user.click(screen.getByRole('button', { name: 'Delete users' }));
 
       await waitFor(() => {
         expect(deletedUserIds).toContain('u1');
@@ -1922,10 +1922,24 @@ describe('Admin Attendance Corrections', () => {
       expect(screen.getByRole('dialog', { name: /delete user\?/i })).toBeInTheDocument();
       expect(screen.getByText('Are you sure you want to delete Ada Lovelace (u1)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      // A permanent delete stays off until the User ID is typed; the field has focus so typing starts at once.
+      const confirmDelete = screen.getByRole('button', { name: 'Delete user' });
+      const typeId = screen.getByLabelText(/type u1 to confirm/i);
+      expect(typeId).toHaveFocus();
+      expect(confirmDelete).toBeDisabled();
+      await user.type(typeId, 'u2');
+      expect(confirmDelete).toBeDisabled();
+      await user.clear(typeId);
+      await user.type(typeId, 'U1');
+      expect(confirmDelete).toBeEnabled();
+      expect(deletedId).toBe('');
+
+      await user.click(confirmDelete);
       await waitFor(() => {
         expect(deletedId).toBe('u1');
       });
+      // The routine result is a toast.
+      expect(await screen.findByText('Deleted Ada Lovelace.')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -2007,7 +2021,7 @@ describe('Admin Attendance Corrections', () => {
         dataTransfer: { files: [file] },
       });
 
-      expect(await screen.findByText('Photo uploaded successfully.')).toBeInTheDocument();
+      expect(await screen.findByText('Photo uploaded.')).toBeInTheDocument();
       expect(capturedPhotoBody).toEqual({
         userId: 'EMP-999',
         dataUrl: 'data:image/jpeg;base64,mockadmindata',
@@ -2096,7 +2110,7 @@ describe('Admin Attendance Corrections', () => {
       await user.click(batchDeleteBtn);
 
       expect(screen.getByRole('dialog', { name: /delete selected attendance records\?/i })).toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await user.click(screen.getByRole('button', { name: 'Delete records' }));
 
       await waitFor(() => {
         expect(deletedAttendanceIds).toContain('att1');
@@ -4111,5 +4125,235 @@ describe('Users and RFID: registration form on demand', () => {
     await user.click(screen.getByRole('button', { name: /^cancel$/i }));
     await user.click(screen.getByRole('button', { name: /discard changes/i }));
     expect(screen.queryByRole('dialog', { name: 'Editing Grace Hopper' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
+  const people = [
+    { userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE', cardType: 'EMPLOYEE' },
+  ];
+  const attendanceRow = {
+    attendanceId: 'att-1', attendanceDate: '2026-07-28', userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales',
+    timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED', source: 'RFID',
+  };
+  /** Admin with one user and one attendance row; `failUsersOnce` makes the first users load fail. */
+  function mockAdmin(failUsersOnce = false) {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const calls = { users: 0, attendance: 0 };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        calls.users += 1;
+        if (failUsersOnce && calls.users === 1) throw new Error('offline');
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        calls.attendance += 1;
+        // SAFETY: Mock attendance list
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [attendanceRow] }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, bathroom)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [] }) } as Response;
+    });
+    return calls;
+  }
+
+  it('closes Add missed attendance with Escape, keeps Tab inside it and gives focus back to its button', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      const opener = screen.getByRole('button', { name: /\+ add missed attendance/i });
+      await user.click(opener);
+
+      const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      // Far more Tabs (forwards and back) than the pop-up has controls: focus never leaves it.
+      for (let index = 0; index < 12; index += 1) {
+        await user.tab();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+      for (let index = 0; index < 12; index += 1) {
+        await user.tab({ shift: true });
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: /add missed attendance/i })).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('answers Escape in the top pop-up only: the discard question first, then the form', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      const addUser = screen.getByRole('button', { name: /^add user$/i });
+      await user.click(addUser);
+      await user.type(screen.getByLabelText(/full name/i), 'Maria Clara');
+
+      // Escape on the form asks first; the destructive question starts on its safe button.
+      await user.keyboard('{Escape}');
+      const ask = screen.getByRole('dialog', { name: /discard unsaved changes/i });
+      expect(within(ask).getByRole('button', { name: /keep editing/i })).toHaveFocus();
+
+      // Escape closes only the question; the form and its typing stay.
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/full name/i)).toHaveValue('Maria Clara');
+
+      await user.keyboard('{Escape}');
+      await user.click(screen.getByRole('button', { name: /discard changes/i }));
+      expect(screen.queryByRole('dialog', { name: /add user/i })).not.toBeInTheDocument();
+      expect(addUser).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows a failed users list with Retry that reloads only that list, while other tabs still load', async () => {
+    const calls = mockAdmin(true);
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      expect(await screen.findByText("Couldn't load users.")).toBeInTheDocument();
+      expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
+
+      // The failure does not block Attendance corrections.
+      await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+      expect(await screen.findByText('Total records: 1')).toBeInTheDocument();
+      const attendanceLoads = calls.attendance;
+
+      await user.click(screen.getByRole('button', { name: /users and rfid/i }));
+      await user.click(screen.getByRole('button', { name: /retry/i }));
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByText("Couldn't load users.")).not.toBeInTheDocument();
+      expect(calls.users).toBe(2);
+      expect(calls.attendance).toBe(attendanceLoads);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows placeholder rows while the users list loads', async () => {
+    mockAdmin();
+    let releaseUsers: () => void = () => {};
+    const usersGate = new Promise<void>((resolve) => {
+      releaseUsers = resolve;
+    });
+    vi.spyOn(api, 'loadAdminUsers').mockImplementation(async () => {
+      await usersGate;
+      // SAFETY: Mock users response in the shared contract's form
+      return { success: true, users: people } as Awaited<ReturnType<typeof api.loadAdminUsers>>;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      expect(await screen.findByText('Loading users…')).toBeInTheDocument();
+      expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
+      act(() => releaseUsers());
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByText('Loading users…')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Admin results and date changes', () => {
+  const people = [
+    { userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE', cardType: 'EMPLOYEE' },
+  ];
+  const attendanceRow = {
+    attendanceId: 'att-1', attendanceDate: '2026-07-28', userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales',
+    timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED', source: 'RFID',
+  };
+  /** Admin with one user; attendance for `failDate` fails, every other date has one row. */
+  function mockAdmin(failDate = '') {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        if (failDate && url.includes(`date=${failDate}`)) throw new Error('offline');
+        // SAFETY: Mock attendance list
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [attendanceRow] }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, bathroom)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [] }) } as Response;
+    });
+  }
+
+  it('clears an earlier save error once the save works', async () => {
+    mockAdmin();
+    vi.spyOn(api, 'saveAdminUser')
+      .mockResolvedValueOnce({ success: false, error: { message: 'This RFID card is already assigned.' } })
+      .mockResolvedValueOnce({ success: true });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      await user.click(screen.getByRole('button', { name: /^add user$/i }));
+      await user.type(screen.getByLabelText(/^user id/i), 'APG-2026-002');
+      await user.type(screen.getByLabelText(/rfid uid/i), 'RFID-2');
+      await user.type(screen.getByLabelText(/full name/i), 'Maria Clara');
+
+      await user.click(screen.getByRole('button', { name: 'Save user' }));
+      expect(await screen.findByText('This RFID card is already assigned.')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Save user' }));
+      expect(await screen.findByText('User saved.')).toBeInTheDocument();
+      expect(screen.queryByText('This RFID card is already assigned.')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('drops the old date’s rows, selection and actions while another date fails to load', async () => {
+    mockAdmin('2026-07-01');
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      expect(await screen.findByText('Total records: 1')).toBeInTheDocument();
+      await user.click(screen.getByRole('checkbox', { name: /select attendance for juan dela cruz/i }));
+      expect(screen.getByText('1 of 1 attendance record(s) selected')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Filter attendance date'), { target: { value: '2026-07-01' } });
+
+      expect(await screen.findByText("Couldn't load attendance for this date.")).toBeInTheDocument();
+      expect(screen.getByText('Total records: 0')).toBeInTheDocument();
+      expect(screen.queryByText('1 of 1 attendance record(s) selected')).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /select attendance for juan dela cruz/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /export csv/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^select all$/i })).toBeDisabled();
+      expect(screen.getByRole('checkbox', { name: /select all attendance records/i })).toBeDisabled();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
   });
 });

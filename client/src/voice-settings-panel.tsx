@@ -13,6 +13,7 @@ import {
   testVoice,
 } from './services/ttsService';
 import { tauriApi } from './tauri-api';
+import { NoticeLine } from './notice';
 
 export interface VoiceSettingsPanelProps {
   onSettingsChange?: (settings: TtsSettings) => void;
@@ -295,14 +296,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         </div>
       )}
 
-      {feedback && (
-        <p
-          className={`dashboard-alert ${feedbackType === 'error' ? '' : 'db-notice'}`}
-          role={feedbackType === 'error' ? 'alert' : 'status'}
-        >
-          {feedback}
-        </p>
-      )}
+      <NoticeLine notice={feedback ? { tone: feedbackType, text: feedback } : null} />
 
       <div className="voice-settings-grid">
         {/* Audio Settings Card: on/off switch, speech rate + volume */}

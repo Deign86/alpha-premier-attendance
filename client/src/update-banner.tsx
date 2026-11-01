@@ -16,6 +16,8 @@ import {
   type UpdateProgress,
 } from './services/updateService';
 import { listenForCheckForUpdates } from './tauri-api';
+import { formatShortDate } from './format';
+import { useDialogKeys } from './use-dialog-keys';
 
 interface UpdateBannerProps {
   /** Optional manual trigger signal from admin panel */
@@ -33,6 +35,24 @@ type UpdateAvailability =
   | { status: 'none' }
   | { status: 'available'; update: Update; info: UpdateInfo };
 
+const UPDATER_TIME = /^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?\s*(Z|[+-]\d{1,2}:\d{2}(?::\d{2})?)?$/;
+
+/**
+ * The release time the updater reports ("2026-10-30 23:30:00.0 +00:00:00", or an ISO time) as an ISO instant, so
+ * it can be shown on Manila time; a bare day is kept as that day. Null when it can't be read (the date is then left out).
+ */
+export function updaterReleaseInstant(raw: string | undefined): string | null {
+  const text = raw?.trim() ?? '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = UPDATER_TIME.exec(text);
+  if (!match) return null;
+  const [, day, hour, minute, second, offset] = match;
+  const [offsetHours = '0', offsetMinutes = '00'] = offset && offset !== 'Z' ? offset.slice(1).split(':') : [];
+  const zone = offset && offset !== 'Z' ? `${offset[0]}${offsetHours.padStart(2, '0')}:${offsetMinutes}` : 'Z';
+  const iso = `${day}T${hour.padStart(2, '0')}:${minute}:${second}${zone}`;
+  return Number.isNaN(new Date(iso).getTime()) ? null : iso;
+}
+
 export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBannerProps) {
   const [availability, setAvailability] = useState<UpdateAvailability>({ status: 'none' });
   const [bannerDismissed, setBannerDismissed] = useState(() =>
@@ -49,6 +69,13 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
   const titleId = useId();
+  const releasedAt = availability.status === 'available' ? updaterReleaseInstant(availability.info.date) : null;
+  // Escape closes the details ("Later") except while the update installs; Tab stays inside.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogKeys(dialogRef, () => setModalOpen(false), {
+    busy: isInstalling,
+    open: modalOpen && availability.status === 'available',
+  });
 
   const showToast = useCallback((state: ToastState | null, autoDismissMs?: number) => {
     if (toastTimerRef.current) {
@@ -224,7 +251,7 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
 
       {/* Modal Dialog for Update Details & Installation */}
       {modalOpen && availability.status === 'available' && (
-        <div className="setup-backdrop" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div ref={dialogRef} className="setup-backdrop" role="dialog" aria-modal="true" aria-labelledby={titleId}>
           <div className="setup-dialog update-dialog">
             <div className="setup-dialog-header">
               <div className="setup-title-wrap">
@@ -258,6 +285,7 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
                 <div className="version-tag new">
                   <small>New release</small>
                   <strong>v{availability.info.version}</strong>
+                  {releasedAt && <small>Released {formatShortDate(releasedAt)}</small>}
                 </div>
               </div>
 

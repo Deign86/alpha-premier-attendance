@@ -9,6 +9,7 @@ import type {
 
 import * as api from "./api";
 import { PayrollWorkspace } from "./App";
+import { Toasts } from "./toasts";
 
 function record(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {
   return {
@@ -62,12 +63,16 @@ function pdfRecord(overrides: Partial<PayrollPdfRecord> = {}): PayrollPdfRecord 
   };
 }
 
+/** The workspace with the toast corner Admin renders, so routine results ("Payroll PDF generated") can be read. */
 function renderWorkspace(records: PayrollCutoffRecord[]) {
   return render(
-    <PayrollWorkspace
-      records={records}
-      onSaved={vi.fn()}
-    />,
+    <>
+      <PayrollWorkspace
+        records={records}
+        onSaved={vi.fn()}
+      />
+      <Toasts />
+    </>,
   );
 }
 
@@ -101,7 +106,7 @@ describe("PayrollWorkspace", () => {
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Generate payroll" }));
     expect(await screen.findByText("Unable to generate payroll.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
     expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
@@ -143,8 +148,9 @@ describe("PayrollWorkspace", () => {
         workerType: "intern",
       }),
     );
+    // A routine result: a toast with the cutoff in the shared date style.
     expect(
-      await screen.findByText("Payroll PDF generated for August 1-15, 2026."),
+      await screen.findByText("Payroll PDF generated for Aug 1–15, 2026."),
     ).toBeInTheDocument();
     // The period appears both in the saved payroll table and the PDF history.
     expect(screen.getAllByText("August 1-15, 2026").length).toBeGreaterThan(0);
@@ -184,7 +190,7 @@ describe("PayrollWorkspace", () => {
       }),
     );
     expect(
-      await screen.findByText("Payroll PDF generated for August 1-15, 2026."),
+      await screen.findByText("Payroll PDF generated for Aug 1–15, 2026."),
     ).toBeInTheDocument();
   });
 
@@ -236,7 +242,7 @@ describe("PayrollWorkspace", () => {
       }),
     );
     expect(
-      await screen.findByText("Saved 2 payslip image(s) for August 1-15, 2026."),
+      await screen.findByText("Saved 2 payslip image(s) for Aug 1–15, 2026."),
     ).toBeInTheDocument();
     expect(generatePayrollPdfSpy).not.toHaveBeenCalled();
 
@@ -398,7 +404,7 @@ describe("PayrollWorkspace", () => {
     expect(screen.getByRole("dialog", { name: "Regenerate cutoff payroll?" })).toBeInTheDocument();
     expect(screen.getByText(/replace the draft records with fresh calculations from latest attendance; finalized records are kept/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Regenerate payroll" }));
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
       expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
@@ -453,7 +459,7 @@ describe("PayrollWorkspace", () => {
     await user.type(stdDaysInput, "12");
 
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
-    await user.click(screen.getByRole("button", { name: /confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Generate payroll" }));
 
     expect(generatePayrollCutoffSpy).toHaveBeenCalledWith(
       "2026-08-01",
@@ -508,7 +514,7 @@ describe("PayrollWorkspace", () => {
     expect(screen.getByRole("dialog", { name: "Delete finalized payroll?" })).toBeInTheDocument();
     expect(screen.getByText(/This will delete the finalized payroll for Ada Lovelace/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Delete payroll" }));
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
     });
@@ -538,7 +544,7 @@ describe("PayrollWorkspace", () => {
     expect(screen.getByRole("dialog", { name: "Delete selected payrolls?" })).toBeInTheDocument();
     expect(screen.getByText(/Are you sure you want to delete 2 selected payroll record\(s\)\?/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Delete payrolls" }));
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-INT-001");
@@ -562,10 +568,46 @@ describe("PayrollWorkspace", () => {
     await user.click(finalizeSelectedBtn);
 
     expect(screen.getByRole("dialog", { name: "Finalize selected payrolls?" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Finalize payrolls" }));
     await waitFor(() => {
       expect(finalizePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
     });
+  });
+
+  it("reports a partly failed batch finalize inline and keeps the failed record selected", async () => {
+    vi.spyOn(api, "finalizePayrollCutoff").mockImplementation(async (id: string) =>
+      id === "P-001" ? { success: true } : { success: false, error: { message: "Locked." } },
+    );
+    const user = userEvent.setup();
+    renderWorkspace([
+      record({ payrollId: "P-001", employeeName: "Ada Lovelace", status: "DRAFT" }),
+      internRecord({ payrollId: "P-INT-001", employeeName: "Maria Santos", status: "DRAFT" }),
+    ]);
+
+    await user.click(screen.getByRole("checkbox", { name: /Select all payroll records/i }));
+    await user.click(screen.getByRole("button", { name: /Finalize selected \(2\)/i }));
+    await user.click(screen.getByRole("button", { name: "Finalize payrolls" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Finalized 1 of 2 payroll record(s). 1 could not be finalized.");
+    expect(screen.queryByText(/^Finalized 2 payroll/)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Select payroll for Maria Santos/i })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Select payroll for Ada Lovelace/i })).not.toBeChecked();
+  });
+
+  it("clears an earlier error when a later action succeeds", async () => {
+    vi.spyOn(api, "finalizePayrollCutoff").mockResolvedValue({ success: false, error: { message: "Payroll is locked by another admin." } });
+    vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([record({ payrollId: "P-001", status: "DRAFT" })]);
+
+    await user.click(screen.getByRole("button", { name: "Finalize" }));
+    await user.click(screen.getByRole("button", { name: "Finalize payroll" }));
+    expect(await screen.findByText("Payroll is locked by another admin.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Delete payroll" }));
+    expect(await screen.findByText("Payroll deleted.")).toBeInTheDocument();
+    expect(screen.queryByText("Payroll is locked by another admin.")).not.toBeInTheDocument();
   });
 
   it("shows cutoff duplicate banner and allows clearing all records for that cutoff", async () => {
@@ -582,9 +624,9 @@ describe("PayrollWorkspace", () => {
 
     await user.click(clearCutoffBtn);
     expect(screen.getByRole("dialog", { name: "Delete cutoff records?" })).toBeInTheDocument();
-    expect(screen.getByText(/This will permanently delete all 1 payroll record\(s\) for cutoff 2026-08-01 through 2026-08-15/i)).toBeInTheDocument();
+    expect(screen.getByText(/This will permanently delete all 1 payroll record\(s\) for Aug 1–15, 2026/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Confirm/i }));
+    await user.click(screen.getByRole("button", { name: "Delete cutoff records" }));
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
     });

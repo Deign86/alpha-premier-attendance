@@ -1665,3 +1665,23 @@ unchanged.
   EXPECT: all pass; server, src-tauri and shared untouched.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 20 files / 429 tests passed.
 - [x] Review (3 lenses, each finding verified): fixed a red "Error" pill on a repeat tap (now calm "Done" like the "Already scanned" card), reader details now close when focus leaves and Escape elsewhere no longer pulls focus to the header, Clear filters returns focus to the search box, the reader keeps its word on phones, and the actions align with the top of the brand block.
+
+## UI revamp batch 5: pop-ups and messages (client only; X1, X2, X3, X4, X6, X7)
+
+- [x] X1: every confirmation names its action (ConfirmDialog now requires confirmLabel); deleting one user needs the user ID typed first.
+  EVIDENCE: shot b5-after-delete-user (button "Delete user" stays disabled with a partial ID); b5-after-restore-confirm ("Restore database", coral); requireText test passes.
+- [x] X7: one dialog keyboard hook for every pop-up: Escape closes (not while busy), Tab stays inside, focus moves in (Cancel first on destructive ones) and returns to the opener; only the top pop-up answers Escape; links get a gold focus outline.
+  EVIDENCE: use-dialog-keys tests; Escape tests for the restore confirmation, Add missed attendance and the backup guide; stacked Escape test (discard question first, then the form).
+- [x] X2: messages carry an explicit type (success gold with a tick, info grey, error coral); word-guessing removed from card setup and the user form.
+  EVIDENCE: notice.tsx used by card setup, UserEditor, Payroll, Data and backup, attendance messages, file actions, PIN reset, voice settings.
+- [x] X3: short notes (toasts) for routine results; problems stay inline.
+  EVIDENCE: shot b5-after-toast ("User saved." bottom right); toasts tests (shows, hides at 3.5 s, dismiss, max 3).
+- [x] X4: loading rows and "Couldn't load … Retry" per list; one failure does not block the other tabs.
+  EVIDENCE: list-load tests; Retry reloads only the failed users list; backup list Retry test.
+- [x] X6: shared Manila date helpers (Fri, Oct 30, 2026 / 1:26 PM / Oct 16–31, 2026 / 2m 30s) for dates shown in admin; values sent to the server, CSV and date inputs unchanged.
+  EVIDENCE: format.test.ts; shot b5-after-pdf-dates (Oct 16–31, 2026 ranges, "Nov 1, 2026, 11:15 AM").
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass; server, src-tauri, shared and client/src/api.ts untouched by this batch.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 24 files / 460 tests passed.
+- [x] Review (3 lenses, each finding verified, 10 distinct problems fixed): earlier coral errors now clear when a later action succeeds; Attendance corrections drops the old date's rows, count, selection and export while a new date loads or fails; batch actions report partial failures inline instead of a success note; the backup list shows the reason and no futile Retry in the browser; payroll See all survives Retry; the update's release date uses Manila time; notes sit above the update banner; the users load error has margins; the note region no longer re-reads every note; dead CSS removed.

@@ -173,6 +173,11 @@ import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
 import { BathroomKeyLogPanel, getAvatarInitials } from "./bathroom-key-log";
+import { formatCutoffRange, formatDate, formatDateTime, formatDuration, formatMonth, formatTime } from "./format";
+import { useDialogKeys } from "./use-dialog-keys";
+import { NoticeLine, type Notice } from "./notice";
+import { Toasts, showToast } from "./toasts";
+import { LoadFailed, LoadingRows, useListLoad, type LoadStatus } from "./list-load";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 
 function toErrorMessage(cause: unknown, fallback: string): string {
@@ -328,7 +333,7 @@ export default function App() {
   const [setupDialogOpen, setSetupDialogOpen] = useState(false);
   const [setupStep, setSetupStep] = useState<SetupStep>("scan");
   const [setupBusy, setSetupBusy] = useState(false);
-  const [setupError, setSetupError] = useState("");
+  const [setupNotice, setSetupNotice] = useState<Notice | null>(null);
   const [adminPin, setAdminPin] = useState("");
   const [setupUid, setSetupUid] = useState("");
   const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
@@ -433,7 +438,7 @@ export default function App() {
       setSetupToken("");
       setSetupExpiresAt("");
       setSetupStep("scan");
-      setSetupError("Setup session expired. Unlock again to continue.");
+      setSetupNotice({ tone: "error", text: "Setup session expired. Unlock again to continue." });
     };
     checkSession();
     setupSessionTimer.current = window.setInterval(checkSession, 1_000);
@@ -480,7 +485,7 @@ export default function App() {
   const openSetup = useCallback(
     (initialUid = "") => {
       setSetupDialogOpen(true);
-      setSetupError("");
+      setSetupNotice(null);
       if (initialUid) setSetupUid(initialUid);
       setAdminPin("");
       if (setupToken) {
@@ -496,11 +501,11 @@ export default function App() {
       const candidate = pinOrUid.trim();
       if (!candidate || setupBusy) return;
       setSetupBusy(true);
-      setSetupError("");
+      setSetupNotice(null);
       try {
         const response = await unlockSetup(candidate);
         if (!response.success) {
-          setSetupError(response.error.message);
+          setSetupNotice({ tone: "error", text: response.error.message });
           return;
         }
         setSetupToken(response.setupToken);
@@ -510,7 +515,7 @@ export default function App() {
         setSetupDialogOpen(true);
         window.setTimeout(focusSetupInput, 0);
       } catch (error) {
-        setSetupError(error instanceof Error ? error.message : "Unable to unlock setup. Please try again.");
+        setSetupNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to unlock setup. Please try again." });
       } finally {
         setSetupBusy(false);
       }
@@ -532,7 +537,7 @@ export default function App() {
     setSetupStep("scan");
     setSetupUid("");
     setSetupUser(null);
-    setSetupError("");
+    setSetupNotice(null);
     setAdminPin("");
     setSetupForm(emptySetupForm);
   };
@@ -547,7 +552,7 @@ export default function App() {
     setSetupToken("");
     setSetupExpiresAt("");
     setSetupStep("scan");
-    setSetupError("Setup session expired. Unlock again to continue.");
+    setSetupNotice({ tone: "error", text: "Setup session expired. Unlock again to continue." });
     return true;
   }, [setupToken, setupExpiresAt]);
 
@@ -558,11 +563,11 @@ export default function App() {
       if (setupSessionExpired()) return;
       if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
       setSetupBusy(true);
-      setSetupError("");
+      setSetupNotice(null);
       const response = await lookupSetupCard(normalizedUid, setupToken);
       setSetupBusy(false);
       if (!response.success) {
-        setSetupError(response.error.message);
+        setSetupNotice({ tone: "error", text: response.error.message });
         return;
       }
       setSetupUid(response.rfidUid);
@@ -615,7 +620,7 @@ export default function App() {
     )
       return;
     setSetupBusy(true);
-    setSetupError("");
+    setSetupNotice(null);
     const cleanUid = (setupUid ?? "").trim().toUpperCase();
     const response = await upsertSetupUser(
       {
@@ -639,16 +644,12 @@ export default function App() {
     );
     setSetupBusy(false);
     if (!response.success) {
-      setSetupError(response.error.message);
+      setSetupNotice({ tone: "error", text: response.error.message });
       return;
     }
     if (setupSessionExpired()) return;
     setSetupUser(response.user);
-    setSetupError(
-      response.created
-        ? "Card enrolled successfully."
-        : "Card configuration updated successfully.",
-    );
+    setSetupNotice({ tone: "success", text: response.created ? "Card enrolled successfully." : "Card configuration updated successfully." });
     setSetupStep("scan");
     setSetupUid("");
     setSetupForm(emptySetupForm);
@@ -657,7 +658,7 @@ export default function App() {
 
   const uploadSetupPhotoFile = async (file: File) => {
     if (!setupToken || !setupForm.userId.trim()) {
-      setSetupError("Enter the User ID before uploading a photo.");
+      setSetupNotice({ tone: "error", text: "Enter the User ID before uploading a photo." });
       return;
     }
     if (setupSessionExpired()) return;
@@ -666,28 +667,24 @@ export default function App() {
         file.type.toLowerCase(),
       ) || /\.(jpe?g|png|webp)$/i.test(file.name);
     if (!isImage) {
-      setSetupError("Choose a JPEG, PNG, or WebP photo.");
+      setSetupNotice({ tone: "error", text: "Choose a JPEG, PNG, or WebP photo." });
       return;
     }
     if (file.size > 25 * 1024 * 1024) {
-      setSetupError("Photo file must be under 25 MB.");
+      setSetupNotice({ tone: "error", text: "Photo file must be under 25 MB." });
       return;
     }
     setSetupBusy(true);
-    setSetupError("Preparing photo…");
+    setSetupNotice({ tone: "info", text: "Preparing photo…" });
     let dataUrl: string;
     try {
       dataUrl = await preparePhotoDataUrl(file);
     } catch (error) {
       setSetupBusy(false);
-      setSetupError(
-        error instanceof Error
-          ? error.message
-          : "Unable to prepare this photo.",
-      );
+      setSetupNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to prepare this photo." });
       return;
     }
-    setSetupError("Uploading photo…");
+    setSetupNotice({ tone: "info", text: "Uploading photo…" });
     const response = await uploadSetupPhoto(
       setupForm.userId.trim().toUpperCase(),
       dataUrl,
@@ -695,11 +692,11 @@ export default function App() {
     );
     setSetupBusy(false);
     if (!response.success) {
-      setSetupError(response.error.message);
+      setSetupNotice({ tone: "error", text: response.error.message });
       return;
     }
     setSetupForm((current) => ({ ...current, photoUrl: response.photoUrl }));
-    setSetupError("Photo uploaded and ready to save.");
+    setSetupNotice({ tone: "success", text: "Photo uploaded and ready to save." });
   };
 
   // Shared scan pipeline: normalize, dedupe, guard, and arm the request
@@ -1170,13 +1167,7 @@ export default function App() {
     year: "numeric",
   }).format(now);
   // "Sat, Oct 31, 2026": shown on mid-size screens so the clock side of the header stays within its half.
-  const displayDateShort = new Intl.DateTimeFormat("en-PH", {
-    timeZone: config.timezone,
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(now);
+  const displayDateShort = formatDate(now, config.timezone);
   const displayTime = new Intl.DateTimeFormat("en-PH", {
     timeZone: config.timezone,
     hour: "numeric",
@@ -1694,7 +1685,7 @@ export default function App() {
           token={setupToken}
           step={setupStep}
           busy={setupBusy}
-          error={setupError}
+          notice={setupNotice}
           pin={adminPin}
           uid={setupUid}
           user={setupUser}
@@ -1702,7 +1693,7 @@ export default function App() {
           inputRef={setupInputRef}
           onPinChange={setAdminPin}
           onPinResetStart={() => {
-            setSetupError("");
+            setSetupNotice(null);
             setAdminPin("");
           }}
           onUnlock={handleUnlock}
@@ -1711,7 +1702,7 @@ export default function App() {
             setSetupStep("scan");
             setSetupUid("");
             setSetupUser(null);
-            setSetupError("");
+            setSetupNotice(null);
             setSetupForm(emptySetupForm);
             window.setTimeout(focusSetupInput, 0);
           }}
@@ -1786,7 +1777,7 @@ type SetupDialogProps = {
   token: string;
   step: SetupStep;
   busy: boolean;
-  error: string;
+  notice: Notice | null;
   pin: string;
   uid: string;
   user: SetupUser | null;
@@ -1825,12 +1816,6 @@ function SetupSteps({ current }: { current: 1 | 2 | 3 }) {
   );
 }
 
-/** Setup shares one message line: "…" is work in progress, success wording is done, anything else is a problem. */
-function setupMessageClass(message: string): string {
-  if (message.endsWith("…")) return "setup-progress";
-  return message.includes("successfully") || message.includes("ready to save") ? "setup-success" : "setup-error";
-}
-
 function SetupDialog(props: SetupDialogProps) {
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   // The save step puts the cursor in its first field once, when it opens for a card (not on card-type switches).
@@ -1844,12 +1829,9 @@ function SetupDialog(props: SetupDialogProps) {
   useEffect(() => {
     if (props.token) setResettingPin(false);
   }, [props.token]);
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogKeys(dialogRef, props.onClose, { busy: props.busy });
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        props.onClose();
-      }
-    };
     const handleDragOver = (e: DragEvent) => {
       e.preventDefault();
       if (e.dataTransfer) {
@@ -1859,15 +1841,13 @@ function SetupDialog(props: SetupDialogProps) {
     const handleDrop = (e: DragEvent) => {
       e.preventDefault();
     };
-    window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("dragover", handleDragOver);
     window.addEventListener("drop", handleDrop);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("dragover", handleDragOver);
       window.removeEventListener("drop", handleDrop);
     };
-  }, [props.onClose]);
+  }, []);
 
   return (
     <div
@@ -1880,6 +1860,7 @@ function SetupDialog(props: SetupDialogProps) {
       }}
     >
       <section
+        ref={dialogRef}
         className="setup-dialog card-setup-dialog"
         data-step={!props.token ? (resettingPin ? "reset" : "unlock") : props.step === "scan" ? "scan" : "save"}
         role="dialog"
@@ -1930,12 +1911,9 @@ function SetupDialog(props: SetupDialogProps) {
                 props.onPinChange(event.target.value);
               }}
               autoFocus
+              data-autofocus
             />
-            {props.error && (
-              <p className="setup-error" role="alert">
-                {props.error}
-              </p>
-            )}
+            <NoticeLine notice={props.notice} />
             <button
               className="submit-button setup-submit"
               type="submit"
@@ -1948,7 +1926,7 @@ function SetupDialog(props: SetupDialogProps) {
               )}{" "}
               Unlock setup
             </button>
-            {pinNotice && <p className="setup-success">{pinNotice}</p>}
+            <NoticeLine notice={pinNotice ? { tone: "success", text: pinNotice } : null} />
             <button
               className="text-button"
               type="button"
@@ -1987,11 +1965,7 @@ function SetupDialog(props: SetupDialogProps) {
                 <LoaderCircle className="spin" size={15} /> Looking up card…
               </p>
             )}
-            {props.error && (
-              <p className={setupMessageClass(props.error)} role="status">
-                {props.error}
-              </p>
-            )}
+            <NoticeLine notice={props.notice} />
             <div className="setup-footer">
               <span>
                 <UserRound size={15} />{" "}
@@ -2238,11 +2212,7 @@ function SetupDialog(props: SetupDialogProps) {
                 </div>
               </div>
             )}
-            {props.error && (
-              <p className={setupMessageClass(props.error)} role="status">
-                {props.error}
-              </p>
-            )}
+            <NoticeLine notice={props.notice} />
             <div className="setup-footer">
               <button
                 className="text-button"
@@ -2312,15 +2282,8 @@ function AssistedAttendanceModal({
     return () => clearInterval(timer);
   }, [onClose, busy]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, busy]);
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogKeys(dialogRef, onClose, { busy });
 
   const filteredEmployees = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -2352,6 +2315,7 @@ function AssistedAttendanceModal({
       }}
     >
       <section
+        ref={dialogRef}
         className="assisted-modal"
         role="dialog"
         aria-modal="true"
@@ -2402,6 +2366,7 @@ function AssistedAttendanceModal({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 autoFocus
+                data-autofocus
               />
             </div>
             <div className="employee-picker-list" role="group" aria-label="Active employees">
@@ -2542,17 +2507,6 @@ async function preparePhotoDataUrl(file: File): Promise<string> {
 }
 
 const PHOTO_UPLOAD_MAX_BYTES = 500 * 1024;
-
-function formatTime(value: string, timezone: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-PH", {
-    timeZone: timezone,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(date);
-}
 
 function localDate(timezone = "Asia/Manila") {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(
@@ -3443,9 +3397,6 @@ function AdminPanel() {
   const [tab, setTab] = useState<AdminTab>("users");
   // The gold thumb behind the current tab; measured so it can slide between tabs of different widths.
   const tabsRef = useRef<HTMLDivElement>(null);
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [rows, setRows] = useState<AttendanceListItem[]>([]);
-  const [cutoffs, setCutoffs] = useState<PayrollCutoffRecord[]>([]);
   const [date, setDate] = useState(localDate());
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
@@ -3563,29 +3514,41 @@ function AdminPanel() {
     const response = await nukeSheetsResync(true);
     setNuking(false);
     if (response.success) {
-      setError("Google Sheets wiped; re-export queued from SQLite.");
+      showToast("Google Sheets wiped; re-export queued from SQLite.");
     } else {
       setError(response.error?.message ?? "Unable to reset Google Sheets.");
     }
   };
-  const load = useCallback(async () => {
-    try {
-      const [
-        userResponse,
-        attendanceResponse,
-        cutoffResponse,
-      ] = await Promise.all([
-        loadAdminUsers(),
-        loadAdminAttendance(date),
-        loadPayrollCutoffs(),
-      ]);
-      if (userResponse.success) setUsers(userResponse.users ?? []);
-      if (attendanceResponse.success) setRows(attendanceResponse.attendance ?? []);
-      if (cutoffResponse.success) setCutoffs(cutoffResponse.payroll ?? []);
-    } catch {
-      setError("Unable to load administrator data.");
-    }
+  // Users, attendance and payroll load on their own: each shows its own loading rows and Retry, and one failing
+  // never blocks the other tabs.
+  const fetchUsers = useCallback(async (): Promise<AdminUser[]> => {
+    const response = await loadAdminUsers();
+    if (!response.success) throw new Error("Users did not load.");
+    return response.users ?? [];
+  }, []);
+  const fetchRows = useCallback(async (): Promise<AttendanceListItem[]> => {
+    const response = await loadAdminAttendance(date);
+    if (!response.success) throw new Error("Attendance did not load.");
+    return response.attendance ?? [];
   }, [date]);
+  const fetchCutoffs = useCallback(async (): Promise<PayrollCutoffRecord[]> => {
+    const response = await loadPayrollCutoffs();
+    if (!response.success) throw new Error("Payroll did not load.");
+    return response.payroll ?? [];
+  }, []);
+  const usersList = useListLoad(fetchUsers, [], unlocked);
+  const rowsList = useListLoad(fetchRows, [], unlocked);
+  const cutoffsList = useListLoad(fetchCutoffs, [], unlocked);
+  const users = usersList.data;
+  // After a save or delete every list refreshes in place (names and pay can change with it).
+  const refreshUsers = usersList.refresh;
+  const refreshRows = rowsList.refresh;
+  const refreshCutoffs = cutoffsList.refresh;
+  const load = useCallback(() => {
+    void refreshUsers();
+    void refreshRows();
+    void refreshCutoffs();
+  }, [refreshUsers, refreshRows, refreshCutoffs]);
   useEffect(() => {
     void checkAdminSession().then((expiresAt) => {
       setSessionExpiresAt(expiresAt ?? "");
@@ -3610,9 +3573,6 @@ function AdminPanel() {
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [sessionExpiresAt, unlocked]);
-  useEffect(() => {
-    if (unlocked) void load();
-  }, [unlocked, load]);
   if (!unlocked && resettingPin)
     return (
       <main className="dashboard-shell admin-login admin-shell">
@@ -3653,7 +3613,7 @@ function AdminPanel() {
           <button className="submit-button" disabled={busy || !pin.trim()}>
             Unlock admin
           </button>
-          {pinNotice && <p className="setup-success">{pinNotice}</p>}
+          <NoticeLine notice={pinNotice ? { tone: "success", text: pinNotice } : null} />
           <button
             className="text-button"
             type="button"
@@ -3774,19 +3734,25 @@ function AdminPanel() {
               setEditing={setEditing}
               onSaved={load}
               onDirtyChange={setUsersDirty}
+              loadStatus={usersList.status}
+              onRetry={() => void usersList.reload()}
             />
           ) : tab === "attendance" ? (
             <AdminAttendance
-              rows={rows}
+              rows={rowsList.data}
               date={date}
               setDate={setDate}
               users={users}
               onSaved={load}
+              loadStatus={rowsList.status}
+              onRetry={() => void rowsList.reload()}
             />
           ) : tab === "payroll" ? (
             <PayrollWorkspace
-              records={cutoffs}
+              records={cutoffsList.data}
               onSaved={load}
+              loadStatus={cutoffsList.status}
+              onRetry={() => void cutoffsList.reload()}
             />
           ) : tab === "voice" ? (
             <VoiceSettingsPanel />
@@ -3817,10 +3783,12 @@ function AdminPanel() {
         tone="danger"
         title="Wipe Google Sheets?"
         message="This will wipe all Google Sheets data and re-export everything from SQLite. This cannot be undone."
+        confirmLabel="Wipe Sheets"
         onCancel={() => setNukeConfirmOpen(false)}
         onConfirm={() => void nukeSheets()}
       />
       <UpdateBanner manualCheckTrigger={manualUpdateCheck} beforeInstall={leaveUsers} />
+      <Toasts />
     </main>
   );
 }
@@ -3944,7 +3912,7 @@ function dtrHealthCopy(health: DtrSyncHealth | null, stale: boolean): string | n
   if (dtr.activity === "unavailable") return "DTR status unavailable. Attendance continues to save locally.";
   if (dtr.retryablePending > 0) {
     const eligibility = dtr.nextRetryEligibleAt
-      ? ` Next retry eligibility: ${new Date(dtr.nextRetryEligibleAt).toLocaleString()}.`
+      ? ` Next retry eligibility: ${formatDateTime(dtr.nextRetryEligibleAt)}.`
       : "";
     return `${dtr.retryablePending} punches are waiting for retry. Retry attempts are bounded.${eligibility}`;
   }
@@ -3961,9 +3929,8 @@ function dtrHealthCopy(health: DtrSyncHealth | null, stale: boolean): string | n
 }
 
 export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) {
-  const [info, setInfo] = useState<DatabaseInfoResponse | null>(null);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  // Results that need reading stay on the page; routine ones (backup created, saved a copy) show as toasts.
+  const [message, setMessage] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const [stoppedDtrSync, setStoppedDtrSync] = useState<StoppedDtrSync | null>(null);
   const [backupResult, setBackupResult] = useState<GeneratedFileResult | null>(
@@ -4069,44 +4036,42 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     };
   }, [refreshSyncHealth]);
 
-  const refresh = useCallback(async () => {
+  const fetchInfo = useCallback(async (): Promise<DatabaseInfoResponse | null> => {
     const response = await loadDatabaseInfo();
-    if (response.success) {
-      setInfo(response);
-      setError("");
-    } else setError(response.error.message);
+    if (!response.success) throw new Error(response.error.message);
+    return response;
   }, []);
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const infoList = useListLoad(fetchInfo, null);
+  const info = infoList.data;
+  const guideRef = useRef<HTMLElement>(null);
+  useDialogKeys(guideRef, () => setGuideOpen(false), { open: guideOpen });
 
   const toggleDtrSync = async () => {
     if (dtrSyncEnabled === null || dtrToggleBusy) return;
     const next = !dtrSyncEnabled;
     setDtrToggleBusy(true);
-    setError("");
+    setMessage(null);
     const response = await setInternDtrSync(next);
     if (response.success) {
       setDtrSyncEnabled(response.enabled);
       void refreshDtrSyncHealth(() => refreshSyncHealth());
-      setNotice(response.enabled ? "Intern DTR sync enabled on this device." : "Intern DTR sync disabled on this device. Queued punches are kept and resume on re-enable.");
+      showToast(response.enabled ? "Intern DTR sync turned on for this device." : "Intern DTR sync turned off for this device. Queued punches are kept.");
     } else {
-      setError(response.error?.message ?? "DTR sync toggle failed.");
+      setMessage({ tone: "error", text: response.error?.message ?? "DTR sync toggle failed." });
     }
     setDtrToggleBusy(false);
   };
 
   const syncInterns = async (startFromUserId?: string) => {
     if (dtrSyncActive) {
-      setNotice("Sync already running.");
+      setMessage({ tone: "info", text: "Sync already running." });
       return;
     }
     setBusy(true);
     setSyncState({ kind: "syncing" });
     setDtrSyncActive(true);
     setDtrProgress(null);
-    setError("");
-    setNotice("");
+    setMessage(null);
     try {
       const response = await syncInternDtr(undefined, startFromUserId);
       const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
@@ -4127,19 +4092,17 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       if (response.success && !hasErrors) {
         const createdCount = response.tabsCreated?.length ?? 0;
         const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
-        setNotice(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
+        setMessage({ tone: "success", text: `DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.` });
       } else {
         const errDetail = hasErrors
           ? response.errors.join("; ")
           : response.error?.message || "DTR sync failed.";
-        const alreadyRunning = isDtrSyncAlreadyRunning(errDetail);
-        if (alreadyRunning) {
-          setNotice("Sync already running.");
+        if (isDtrSyncAlreadyRunning(errDetail)) {
+          setMessage({ tone: "info", text: "Sync already running." });
+        } else if (response.rowsSynced > 0) {
+          setMessage({ tone: "error", text: `Synced ${response.rowsSynced} row(s), but encountered errors: ${errDetail}` });
         } else {
-          setError(errDetail);
-        }
-        if (response.rowsSynced > 0 && !alreadyRunning) {
-          setNotice(`Synced ${response.rowsSynced} row(s), but encountered errors: ${errDetail}`);
+          setMessage({ tone: "error", text: errDetail });
         }
       }
     } finally {
@@ -4155,14 +4118,11 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
 
   const createBackup = async () => {
     setBusy(true);
-    setError("");
-    setNotice("");
+    setMessage(null);
     const response = await createDatabaseBackup();
     setBusy(false);
     if (response.success) {
-      setNotice(
-        `Backup created: ${response.fileName}. Copy this file to the new computer.`,
-      );
+      showToast(`Backup created: ${response.fileName}`);
       setBackupResult({
         filePath: null,
         directoryPath: response.directoryPath,
@@ -4170,13 +4130,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         fileKind: response.fileKind,
         isPortableMode: response.isPortableMode,
       });
-      void refresh();
-    } else setError(response.error.message);
+      void infoList.refresh();
+    } else setMessage({ tone: "error", text: response.error.message });
   };
 
   const restore = async () => {
     if (!("__TAURI_INTERNALS__" in window)) {
-      setError("Restore is available in the desktop application.");
+      setMessage({ tone: "error", text: "Restore is available in the desktop application." });
       return;
     }
     try {
@@ -4184,7 +4144,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       if (!selected) return;
       setRestoreFile(selected);
     } catch {
-      setError("Unable to open the file picker.");
+      setMessage({ tone: "error", text: "Unable to open the file picker." });
     }
   };
 
@@ -4193,12 +4153,12 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     const file = restoreFile;
     setRestoreFile(null);
     setBusy(true);
-    setError("");
-    setNotice("");
+    setMessage(null);
     const response = await requestDatabaseRestore(file);
     setBusy(false);
-    if (response.success) setNotice(response.message);
-    else setError(response.error.message);
+    // A scheduled restore closes the app, so it stays on the page rather than in a toast.
+    if (response.success) setMessage({ tone: "success", text: response.message });
+    else setMessage({ tone: "error", text: response.error.message });
   };
 
   const dismissRestoreNotice = async () => {
@@ -4206,53 +4166,37 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
     const response = await dismissRestoreFailure();
     setDismissingRestore(false);
     if (response.success) {
-      setInfo((current) => (current ? { ...current, restoreFailed: null } : current));
-      setNotice("Restore notice dismissed. Your current data was left untouched.");
+      void infoList.refresh();
+      showResult({ tone: "success", text: "Restore notice dismissed. Your current data was left untouched." }, setMessage);
     } else {
-      setError(response.error.message);
+      setMessage({ tone: "error", text: response.error.message });
     }
   };
 
   const openBackups = async () => {
     const outcome = await openDatabaseBackupsFolder();
-    if (!outcome.ok) setError(outcome.message);
+    if (!outcome.ok) setMessage({ tone: "error", text: outcome.message });
   };
 
   const downloadBackup = async (filePath: string, fileName: string) => {
-    setError("");
-    setNotice("");
+    setMessage(null);
     const outcome = await saveBackupCopy(filePath, fileName);
     if (outcome === null) return;
-    if (outcome.ok) setNotice(outcome.message);
-    else setError(outcome.message);
+    if (outcome.ok) showToast(outcome.message);
+    else setMessage({ tone: "error", text: outcome.message });
   };
 
   const formatSize = (bytes: number) =>
     bytes > 1024 * 1024
       ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
       : `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  const formatWhen = (value: string | null) => {
-    if (!value) return "—";
-    const date = new Date(value);
-    return Number.isNaN(date.getTime())
-      ? value
-      : date.toLocaleString("en-PH", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        });
-  };
+  const formatWhen = (value: string | null) => (value ? formatDateTime(value) : "—");
 
   // One fold per calendar month; backups arrive newest-first, so the first month is the latest.
   const backupMonths: { label: string; backups: DatabaseInfoResponse["backups"] }[] = [];
   for (const backup of info?.backups ?? []) {
     const date = backup.modifiedAt ? new Date(backup.modifiedAt) : null;
-    const label = date && !Number.isNaN(date.getTime())
-      ? date.toLocaleString("en-PH", { month: "long", year: "numeric" })
-      : "Unknown date";
+    const label = date && !Number.isNaN(date.getTime()) ? formatMonth(date) : "Unknown date";
     const month = backupMonths.find((group) => group.label === label);
     if (month) month.backups.push(backup);
     else backupMonths.push({ label, backups: [backup] });
@@ -4380,7 +4324,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         </div>
       </div>
       {stoppedDtrSync && (
-        <p className="dashboard-alert db-notice" role="status">
+        <p className="load-failed" role="status">
           Stopped at {stoppedDtrSync.tab}{" "}
           <button
             className="text-button"
@@ -4394,16 +4338,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
           </button>
         </p>
       )}
-      {notice && (
-        <p className="dashboard-alert db-notice" role="status">
-          {notice}
-        </p>
-      )}
-      {error && (
-        <p className="dashboard-alert" role="alert">
-          {error}
-        </p>
-      )}
+      <NoticeLine notice={message} />
       <div className="sync-health" aria-label="DTR sync status" role="status">
         <div className="sync-health-head">
           <strong>DTR sync status</strong>
@@ -4498,8 +4433,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
             )}
             {(syncHealth?.oldestRetryableAgeSec ?? null) !== null && (
               <p className={syncHealth?.pendingAgeAlert ? "sync-health-error" : "sync-health-note"}>
-                Oldest retryable: {Math.floor((syncHealth?.oldestRetryableAgeSec ?? 0) / 3600)}h{" "}
-                {Math.floor(((syncHealth?.oldestRetryableAgeSec ?? 0) % 3600) / 60)}m old
+                Oldest retryable: {formatDuration(syncHealth?.oldestRetryableAgeSec ?? 0)} old
                 {syncHealth?.pendingAgeAlert ? " — over 6h, queue needs attention" : ""}
               </p>
             )}
@@ -4519,6 +4453,14 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       </div>
       <AdminUpdatesCard onManualCheck={props.onManualUpdateCheck ?? (() => {})} />
       <GeneratedFileActions result={backupResult} label="Latest backup" />
+      {infoList.status === "loading" && <p className="load-pending">Loading backups…</p>}
+      {/* In a browser the backup tools are not there at all, so that is a calm note with no Retry. */}
+      {infoList.status === "failed" &&
+        ("__TAURI_INTERNALS__" in window ? (
+          <LoadFailed what="the backup list" reason={infoList.error} onRetry={() => void infoList.reload()} />
+        ) : (
+          <NoticeLine notice={{ tone: "info", text: infoList.error ?? "Backups are available in the desktop application." }} />
+        ))}
       {info && info.backups.length > 0 && (
         <details className="db-backup-list" open>
           <summary>
@@ -4564,7 +4506,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       )}
       {guideOpen && (
         <div className="confirm-backdrop" role="presentation">
-          <section className="confirm-dialog db-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="db-guide-heading">
+          <section ref={guideRef} className="confirm-dialog db-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="db-guide-heading">
             <BookOpen size={22} aria-hidden="true" />
             <h2 id="db-guide-heading">Moving to the new front-desk PC</h2>
             <p>No data loss, no manual SQL:</p>
@@ -4612,6 +4554,7 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
         tone="danger"
         title="Restore database from backup?"
         message="The app will close and restore the database from the selected file on the next launch. Any data on this device will be replaced."
+        confirmLabel="Restore database"
         onCancel={() => setRestoreFile(null)}
         onConfirm={() => void confirmRestore()}
       />
@@ -4624,12 +4567,17 @@ export function UserEditor({
   setEditing,
   onSaved,
   onDirtyChange,
+  loadStatus = "ready",
+  onRetry,
 }: {
   users?: AdminUser[];
   editing: AdminUser | null;
   setEditing: (user: AdminUser | null) => void;
   onSaved: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** Where the users list load stands (Admin loads it); loading shows placeholder rows, failed shows Retry. */
+  loadStatus?: LoadStatus;
+  onRetry?: () => void;
 }) {
   const safeUsers = users ?? [];
   const blankUser: AdminUser = {
@@ -4645,7 +4593,8 @@ export function UserEditor({
     photoUrl: null,
   };
   const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
-  const [message, setMessage] = useState("");
+  // Progress and problems stay on the page; routine successes (saved, deleted) show as toasts.
+  const [message, setMessage] = useState<Notice | null>(null);
   const [deletingUserId, setDeletingUserId] = useState("");
   const [deleteUserTarget, setDeleteUserTarget] = useState<AdminUser | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
@@ -4687,7 +4636,7 @@ export function UserEditor({
       setDtrProgress(progress);
       applyDtrProgressToGuard(progress);
       if (progress.status === "syncing") {
-        setMessage(`Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…`);
+        setMessage({ tone: "info", text: `Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…` });
       }
     })
       .then((cleanup) => {
@@ -4703,25 +4652,25 @@ export function UserEditor({
 
   const handleSyncDtr = async (userId?: string) => {
     if (dtrSyncActive) {
-      setMessage("Sync already running.");
+      setMessage({ tone: "info", text: "Sync already running." });
       return;
     }
     setSyncingDtrUserId(userId ?? "ALL");
     setDtrSyncActive(true);
     setDtrProgress(null);
-    setMessage(userId ? "Syncing intern DTR sheet…" : "Starting intern DTR sync…");
+    setMessage({ tone: "info", text: userId ? "Syncing intern DTR sheet…" : "Starting intern DTR sync…" });
     try {
       const response = await syncInternDtr(userId);
       const hasErrors = Array.isArray(response.errors) && response.errors.length > 0;
       if (response.success && !hasErrors) {
         const createdCount = response.tabsCreated?.length ?? 0;
         const createdMsg = createdCount > 0 ? ` (${createdCount} new tab(s) created: ${response.tabsCreated.join(", ")})` : "";
-        setMessage(`DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.`);
+        setMessage({ tone: "success", text: `DTR sync complete: checked ${response.internsChecked ?? 0} intern(s), synced ${response.rowsSynced ?? 0} row(s)${createdMsg}.` });
       } else {
         const errDetail = hasErrors
           ? response.errors.join("; ")
           : response.error?.message || "DTR sync failed.";
-        setMessage(isDtrSyncAlreadyRunning(errDetail) ? "Sync already running." : `DTR sync error: ${errDetail}`);
+        setMessage(isDtrSyncAlreadyRunning(errDetail) ? { tone: "info", text: "Sync already running." } : { tone: "error", text: `DTR sync error: ${errDetail}` });
       }
     } finally {
       setSyncingDtrUserId(null);
@@ -4746,12 +4695,12 @@ export function UserEditor({
   const handleRegenerateVoiceClip = async (userId: string) => {
     regeneratingVoiceOwner.current = userId;
     setRegeneratingVoiceUserId(userId);
-    setMessage("");
+    setMessage(null);
     try {
       const result = await regenerateVoiceClip(userId);
       if (regeneratingVoiceOwner.current !== userId) return;
       if (!result.ok) {
-        setMessage(result.error ?? "Voice regeneration failed.");
+        setMessage({ tone: "error", text: result.error ?? "Voice regeneration failed." });
         return;
       }
       const applySnapshot = (states: VoiceClipState[]): void => {
@@ -4775,9 +4724,9 @@ export function UserEditor({
         // Keep the previous snapshot on refresh failure.
       }
       if (outcome === "ready") {
-        setMessage(`Voice clip ready (${result.spokenText ?? userId}). Plays automatically on the next scan.`);
+        showToast(`Voice clip ready (${result.spokenText ?? userId}). Plays automatically on the next scan.`);
       } else {
-        setMessage(`Voice clip queued for regeneration (${result.spokenText ?? userId}). Still working — it plays automatically once pulled.`);
+        setMessage({ tone: "info", text: `Voice clip queued for regeneration (${result.spokenText ?? userId}). Still working — it plays automatically once pulled.` });
       }
     } finally {
       if (regeneratingVoiceOwner.current === userId) regeneratingVoiceOwner.current = null;
@@ -4842,20 +4791,22 @@ export function UserEditor({
     setBatchDeleteUsersOpen(false);
     setBatchUpdatingUsers(true);
     const ids = Array.from(selectedUserIds);
-    let count = 0;
+    const failed: string[] = [];
     for (const id of ids) {
-      const res = await deleteAdminUser(id);
-      if (res.success) {
-        count++;
-        if (editingRef.current?.userId === id) {
-          setEditing(null);
-          setFormOpen(false);
-        }
+      const deleted = await deleteAdminUser(id).then((res) => res.success, () => false);
+      if (!deleted) {
+        failed.push(id);
+        continue;
+      }
+      if (editingRef.current?.userId === id) {
+        setEditing(null);
+        setFormOpen(false);
       }
     }
     setBatchUpdatingUsers(false);
-    setSelectedUserIds(new Set());
-    setMessage(`Deleted ${count} user(s).`);
+    // Users that could not be deleted stay selected, ready for another try.
+    setSelectedUserIds(new Set(failed));
+    showResult(batchOutcome(ids.length - failed.length, ids.length, "Deleted", "user(s)"), setMessage);
     onSaved();
   };
 
@@ -4863,11 +4814,13 @@ export function UserEditor({
     if (selectedUserIds.size === 0) return;
     setBatchUpdatingUsers(true);
     const targetUsers = safeUsers.filter((u) => selectedUserIds.has(u.userId));
-    let count = 0;
+    const failed: string[] = [];
     for (const u of targetUsers) {
-      const res = await saveAdminUser({ ...u, status }, u.userId);
-      if (!res.success) continue;
-      count++;
+      const saved = await saveAdminUser({ ...u, status }, u.userId).then((res) => res.success, () => false);
+      if (!saved) {
+        failed.push(u.userId);
+        continue;
+      }
       const open = editingRef.current;
       if (open?.userId === u.userId) {
         setEditing({ ...open, status });
@@ -4875,12 +4828,12 @@ export function UserEditor({
       }
     }
     setBatchUpdatingUsers(false);
-    setSelectedUserIds(new Set());
-    setMessage(`Updated ${count} user(s) to ${status.toLowerCase()}.`);
+    setSelectedUserIds(new Set(failed));
+    showResult(batchOutcome(targetUsers.length - failed.length, targetUsers.length, "Updated", `user(s) to ${status.toLowerCase()}`), setMessage);
     onSaved();
   };
 
-  // Messages are cleared by the actions that open or switch the form, so "Saved." and "Deleted …" stay visible.
+  // Messages are cleared by the actions that open or switch the form.
   useEffect(() => {
     formSession.current += 1;
     setForm(editing ?? blankUser);
@@ -4896,11 +4849,6 @@ export function UserEditor({
   // The record being edited right now (delete and batch actions read it after their awaits).
   const editingRef = useRef(editing);
   editingRef.current = editing;
-  // Where focus goes back to when the pop-up closes (the Add user or Edit button that opened it).
-  const returnFocusRef = useRef<HTMLElement | null>(null);
-  const rememberFocus = () => {
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  };
   // A discard waiting for confirmation (Edit another user, Add user, close) while the form has unsaved typing.
   const [pendingDiscard, setPendingDiscard] = useState<(() => void) | null>(null);
   const guardDiscard = (action: () => void) => {
@@ -4908,12 +4856,11 @@ export function UserEditor({
     else action();
   };
   const openAddForm = () => {
-    rememberFocus();
     guardDiscard(() => {
       formSession.current += 1;
       setEditing(null);
       setForm(blankUser);
-      setMessage("");
+      setMessage(null);
       setFormOpen(true);
     });
   };
@@ -4922,18 +4869,17 @@ export function UserEditor({
       formSession.current += 1;
       setEditing(null);
       setForm(blankUser);
-      setMessage("");
+      setMessage(null);
       setFormOpen(false);
     });
   const requestEdit = (user: AdminUser) => {
-    rememberFocus();
     if (editing?.userId === user.userId) setFormOpen(true);
     else
       guardDiscard(() => {
         formSession.current += 1;
         setEditing(user);
         setForm(user);
-        setMessage("");
+        setMessage(null);
         setFormOpen(true);
       });
   };
@@ -4942,14 +4888,12 @@ export function UserEditor({
     onDirtyChange?.(formDirty);
   }, [formDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
-  // When the pop-up opens (or switches to another user), put the cursor in the first field that can be
-  // changed; when it closes, give focus back to the button that opened it.
+  // Escape closes the pop-up (asking first when there is unsaved typing), Tab stays inside it, and focus goes back
+  // to the Add user or Edit button that opened it.
+  useDialogKeys(userFormRef, closeForm, { open: formOpen });
+  // When the pop-up opens (or switches to another user), put the cursor in the first field that can be changed.
   useEffect(() => {
-    if (!formOpen) {
-      returnFocusRef.current?.focus({ preventScroll: true });
-      returnFocusRef.current = null;
-      return;
-    }
+    if (!formOpen) return;
     userFormRef.current
       ?.querySelector<HTMLElement>("input:not([disabled]):not([type='radio']):not([type='file']), select")
       ?.focus({ preventScroll: true });
@@ -4962,7 +4906,7 @@ export function UserEditor({
 
   const handlePhotoUpload = async (file: File) => {
     if (!form.userId.trim()) {
-      setMessage("Enter the User ID before uploading a photo.");
+      setMessage({ tone: "error", text: "Enter the User ID before uploading a photo." });
       return;
     }
     const isImage =
@@ -4970,11 +4914,11 @@ export function UserEditor({
         file.type.toLowerCase(),
       ) || /\.(jpe?g|png|webp)$/i.test(file.name);
     if (!isImage) {
-      setMessage("Choose a JPEG, PNG, or WebP photo.");
+      setMessage({ tone: "error", text: "Choose a JPEG, PNG, or WebP photo." });
       return;
     }
     if (file.size > 25 * 1024 * 1024) {
-      setMessage("Photo file must be under 25 MB.");
+      setMessage({ tone: "error", text: "Photo file must be under 25 MB." });
       return;
     }
     setPhotoUploading(true);
@@ -4984,11 +4928,7 @@ export function UserEditor({
       dataUrl = await preparePhotoDataUrl(file);
     } catch (error) {
       setPhotoUploading(false);
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to prepare this photo.",
-      );
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Unable to prepare this photo." });
       return;
     }
     try {
@@ -5000,15 +4940,15 @@ export function UserEditor({
       // The form was switched or closed while uploading: don't put this photo on another record.
       if (session !== formSession.current) return;
       if (!response.success) {
-        setMessage(response.error.message);
+        setMessage({ tone: "error", text: response.error.message });
         return;
       }
       setForm((current) => ({ ...current, photoUrl: response.photoUrl }));
       setPhotoBuster(Date.now());
-      setMessage("Photo uploaded successfully.");
+      showResult({ tone: "success", text: "Photo uploaded." }, setMessage);
     } catch (err) {
       setPhotoUploading(false);
-      setMessage(toErrorMessage(err, "Unable to upload photo."));
+      setMessage({ tone: "error", text: toErrorMessage(err, "Unable to upload photo.") });
     }
   };
 
@@ -5033,20 +4973,20 @@ export function UserEditor({
       };
       const response = await saveAdminUser(payload, editing?.userId);
       if (response.success) {
-        setMessage("Saved.");
+        showResult({ tone: "success", text: "User saved." }, setMessage);
         setEditing(null);
         setForm(blankUser);
         setFormOpen(false);
         onSaved();
       } else {
-        setMessage(response.error?.message ?? "Unable to save user.");
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to save user." });
       }
     } catch (err) {
       const errMsg = toErrorMessage(err, "Unable to save user.");
       if (errMsg.includes("USER_CONFLICT")) {
-        setMessage("This RFID card or User ID is already assigned to another user.");
+        setMessage({ tone: "error", text: "This RFID card or User ID is already assigned to another user." });
       } else {
-        setMessage(errMsg);
+        setMessage({ tone: "error", text: errMsg });
       }
     }
   };
@@ -5058,17 +4998,17 @@ export function UserEditor({
     try {
       const response = await deleteAdminUser(user.userId);
       if (response.success) {
-        setMessage(`Deleted ${user.fullName}.`);
+        showResult({ tone: "success", text: `Deleted ${user.fullName}.` }, setMessage);
         if (editingRef.current?.userId === user.userId) {
           setEditing(null);
           setFormOpen(false);
         }
         onSaved();
       } else {
-        setMessage(response.error?.message ?? "Unable to delete user.");
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to delete user." });
       }
     } catch (err) {
-      setMessage(toErrorMessage(err, "Unable to delete user."));
+      setMessage({ tone: "error", text: toErrorMessage(err, "Unable to delete user.") });
     } finally {
       setDeletingUserId("");
     }
@@ -5093,25 +5033,7 @@ export function UserEditor({
   );
 
   // Shown in the form while it is open, otherwise above the list (save, delete and table actions report here).
-  const messageLine = message && (
-    <p
-      className={`form-message ${
-        message.includes("already") ||
-        message.includes("Unable") ||
-        message.includes("conflict") ||
-        message.includes("Error") ||
-        message.includes("Enter") ||
-        message.includes("Choose") ||
-        message.includes("must be") ||
-        message.includes("failed")
-          ? "is-error"
-          : "is-success"
-      }`}
-      role="status"
-    >
-      {message}
-    </p>
-  );
+  const messageLine = <NoticeLine notice={message} className="form-message" />;
 
   return (
     <div className="admin-grid">
@@ -5124,11 +5046,6 @@ export function UserEditor({
         role="dialog"
         aria-modal="true"
         aria-labelledby="user-form-heading"
-        onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
-          event.stopPropagation();
-          closeForm();
-        }}
       >
         <div className="editor-heading">
           <div>
@@ -5523,11 +5440,10 @@ export function UserEditor({
                 >
                   Delete selected ({selectedUserIds.size})
                 </button>
-                {!formOpen && (
-                  <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
-                    <Plus size={15} aria-hidden="true" /> Add user
-                  </button>
-                )}
+                {/* Stays on the page under the pop-up, so focus can come back to it when the form closes. */}
+                <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
+                  <Plus size={15} aria-hidden="true" /> Add user
+                </button>
               </>
             ) : (
               <>
@@ -5547,11 +5463,10 @@ export function UserEditor({
                 >
                   {syncingDtrUserId === "ALL" ? "Syncing DTR…" : "Sync Interns to DTR"}
                 </button>
-                {!formOpen && (
-                  <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
-                    <Plus size={15} aria-hidden="true" /> Add user
-                  </button>
-                )}
+                {/* Stays on the page under the pop-up, so focus can come back to it when the form closes. */}
+                <button className="admin-button add-user-button" type="button" onClick={openAddForm}>
+                  <Plus size={15} aria-hidden="true" /> Add user
+                </button>
               </>
             )}
           </div>
@@ -5591,6 +5506,7 @@ export function UserEditor({
           </div>
         )}
         {!formOpen && messageLine}
+        {loadStatus === "failed" && onRetry && <LoadFailed what="users" onRetry={onRetry} />}
         <div className="user-search-row">
           <div className="search-input-wrap">
             <Search size={15} />
@@ -5625,7 +5541,10 @@ export function UserEditor({
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.length === 0 ? (
+              {loadStatus === "loading" ? (
+                <LoadingRows columns={6} label="Loading users…" />
+              ) : filteredUsers.length === 0 ? (
+                loadStatus === "failed" ? null : (
                 <tr>
                   <td colSpan={6} style={{ textAlign: "center", padding: "20px 12px" }}>
                     {userSearch.trim() ? (
@@ -5640,6 +5559,7 @@ export function UserEditor({
                     )}
                   </td>
                 </tr>
+                )
               ) : (
                 filteredUsers.map((user) => (
                 <tr
@@ -5735,6 +5655,8 @@ export function UserEditor({
         tone="danger"
         title="Delete user?"
         message={deleteUserTarget ? `Are you sure you want to delete ${deleteUserTarget.fullName} (${deleteUserTarget.userId})? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.` : ""}
+        confirmLabel="Delete user"
+        requireText={deleteUserTarget?.userId}
         onCancel={() => setDeleteUserTarget(null)}
         onConfirm={() => void remove()}
       />
@@ -5744,6 +5666,7 @@ export function UserEditor({
         tone="danger"
         title="Delete selected users?"
         message={`Are you sure you want to delete ${selectedUserIds.size} selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.`}
+        confirmLabel="Delete users"
         onCancel={() => setBatchDeleteUsersOpen(false)}
         onConfirm={() => void removeBatchUsers()}
       />
@@ -5990,12 +5913,18 @@ function computeSemiMonthlyCutoff(
 export function PayrollWorkspace({
   records,
   onSaved,
+  loadStatus = "ready",
+  onRetry,
 }: {
   records: PayrollCutoffRecord[];
   onSaved: () => void;
+  /** Where the payroll records load stands (Admin loads them). */
+  loadStatus?: LoadStatus;
+  onRetry?: () => void;
 }) {
   const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
-  const [message, setMessage] = useState("");
+  // Problems stay on the page; generated, deleted and saved results show as toasts.
+  const [message, setMessage] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [cutoffMonth, setCutoffMonth] = useState(() => {
@@ -6042,6 +5971,8 @@ export function PayrollWorkspace({
 
   const [clearCutoffOpen, setClearCutoffOpen] = useState(false);
   const [clearingCutoff, setClearingCutoff] = useState(false);
+  // The picked cutoff as people read it ("Aug 1–15, 2026"); the label saved with the payroll is unchanged.
+  const cutoffRange = formatCutoffRange(form.cutoffStart, form.cutoffEnd);
 
   const existingCutoffRecords = useMemo(() => {
     if (!form.cutoffStart || !form.cutoffEnd) return [];
@@ -6055,14 +5986,14 @@ export function PayrollWorkspace({
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!form.cutoffStart || !form.cutoffEnd) {
-      setMessage("Select a cutoff period first.");
+      setMessage({ tone: "error", text: "Select a cutoff period first." });
       return;
     }
     if (form.cutoffStart > form.cutoffEnd) {
-      setMessage("Cutoff start must be on or before cutoff end.");
+      setMessage({ tone: "error", text: "Cutoff start must be on or before cutoff end." });
       return;
     }
-    setMessage("");
+    setMessage(null);
     setConfirmOpen(true);
   };
 
@@ -6084,22 +6015,24 @@ export function PayrollWorkspace({
       );
       if (response.success) {
         const skipped = response.warnings ?? [];
-        const skippedNote =
-          skipped.length > 0
-            ? ` ${skipped.length} attendance record(s) could not be priced and were left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? "…" : ""}. Fix them in Attendance, then regenerate.`
-            : "";
+        showToast(
+          existingCutoffRecords.length > 0
+            ? `Payroll regenerated for ${cutoffRange}; finalized records were kept.`
+            : `Payroll generated for ${cutoffRange}.`,
+        );
+        // Records left out need fixing, so that part stays on the page.
         setMessage(
-          (existingCutoffRecords.length > 0
-            ? "Draft records for this cutoff were regenerated from attendance; finalized records were kept."
-            : "Payroll drafts were generated from completed attendance.") + skippedNote,
+          skipped.length > 0
+            ? { tone: "error", text: `${skipped.length} attendance record(s) could not be priced and were left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? "…" : ""}. Fix them in Attendance, then regenerate.` }
+            : null,
         );
         onSaved();
         setConfirmOpen(false);
       } else {
-        setMessage(response.error?.message ?? "Unable to save payroll.");
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to save payroll." });
       }
     } catch (error) {
-      setMessage(toErrorMessage(error, "Unable to save payroll."));
+      setMessage({ tone: "error", text: toErrorMessage(error, "Unable to save payroll.") });
     } finally {
       setSaving(false);
     }
@@ -6120,13 +6053,13 @@ export function PayrollWorkspace({
         }
       }
       if (failCount > 0) {
-        setMessage(`Deleted ${count} payroll record(s) for cutoff ${form.cutoffStart} to ${form.cutoffEnd}. ${failCount} record(s) could not be deleted.`);
+        setMessage({ tone: "error", text: `Deleted ${count} payroll record(s) for ${cutoffRange}. ${failCount} record(s) could not be deleted.` });
       } else {
-        setMessage(`Deleted ${count} payroll record(s) for cutoff ${form.cutoffStart} to ${form.cutoffEnd}.`);
+        showResult({ tone: "success", text: `Deleted ${count} payroll record(s) for ${cutoffRange}.` }, setMessage);
       }
       onSaved();
     } catch (error) {
-      setMessage(toErrorMessage(error, "Unable to delete payroll records."));
+      setMessage({ tone: "error", text: toErrorMessage(error, "Unable to delete payroll records.") });
     } finally {
       setClearingCutoff(false);
       setClearCutoffOpen(false);
@@ -6163,12 +6096,12 @@ export function PayrollWorkspace({
       : null;
   }, [form.cutoffStart, form.cutoffEnd, form.payrollCutoffLabel, records]);
 
-  const [pdfMessage, setPdfMessage] = useState("");
+  const [pdfMessage, setPdfMessage] = useState<Notice | null>(null);
   const [generating, setGenerating] = useState(false);
   const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
-  const [payslipMessage, setPayslipMessage] = useState("");
+  const [payslipMessage, setPayslipMessage] = useState<Notice | null>(null);
   const [payslipDirectory, setPayslipDirectory] = useState<string | null>(null);
-  const [payslipOpenMessage, setPayslipOpenMessage] = useState("");
+  const [payslipOpenMessage, setPayslipOpenMessage] = useState<Notice | null>(null);
   const [generatingPayslips, setGeneratingPayslips] = useState(false);
 
   useEffect(() => {
@@ -6180,13 +6113,11 @@ export function PayrollWorkspace({
   const generatePdf = async () => {
     if (generating) return;
     if (!selectedCutoff) {
-      setPdfMessage(
-        "No payroll records to generate. Create and save a payroll first.",
-      );
+      setPdfMessage({ tone: "error", text: "No payroll records to generate. Create and save a payroll first." });
       return;
     }
     setGenerating(true);
-    setPdfMessage("");
+    setPdfMessage(null);
     try {
       const response = await generatePayrollPdf({
         cutoffStart: selectedCutoff.cutoffStart,
@@ -6201,14 +6132,10 @@ export function PayrollWorkspace({
             (item) => item.payrollPdfId !== response.pdf.payrollPdfId,
           ),
         ]);
-        setPdfMessage(`Payroll PDF generated for ${selectedCutoff.label}.`);
-      } else setPdfMessage(response.error.message);
+        showToast(`Payroll PDF generated for ${formatCutoffRange(selectedCutoff.cutoffStart, selectedCutoff.cutoffEnd)}.`);
+      } else setPdfMessage({ tone: "error", text: response.error.message });
     } catch (error) {
-      setPdfMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to generate the payroll PDF.",
-      );
+      setPdfMessage({ tone: "error", text: error instanceof Error ? error.message : "Unable to generate the payroll PDF." });
     } finally {
       setGenerating(false);
     }
@@ -6217,15 +6144,13 @@ export function PayrollWorkspace({
   const generatePayslips = async () => {
     if (generatingPayslips) return;
     setPayslipDirectory(null);
-    setPayslipOpenMessage("");
+    setPayslipOpenMessage(null);
     if (!selectedCutoff) {
-      setPayslipMessage(
-        "No payroll records to generate payslips for. Create and save a payroll first.",
-      );
+      setPayslipMessage({ tone: "error", text: "No payroll records to generate payslips for. Create and save a payroll first." });
       return;
     }
     setGeneratingPayslips(true);
-    setPayslipMessage("");
+    setPayslipMessage(null);
     try {
       const response = await generateInternPayslipImages({
         cutoffStart: selectedCutoff.cutoffStart,
@@ -6234,16 +6159,10 @@ export function PayrollWorkspace({
       });
       if (response.success) {
         setPayslipDirectory(response.directoryPath);
-        setPayslipMessage(
-          `Saved ${response.fileCount} payslip image(s) for ${selectedCutoff.label}.`,
-        );
-      } else setPayslipMessage(response.error.message);
+        showToast(`Saved ${response.fileCount} payslip image(s) for ${formatCutoffRange(selectedCutoff.cutoffStart, selectedCutoff.cutoffEnd)}.`);
+      } else setPayslipMessage({ tone: "error", text: response.error.message });
     } catch (error) {
-      setPayslipMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to generate the payslips.",
-      );
+      setPayslipMessage({ tone: "error", text: error instanceof Error ? error.message : "Unable to generate the payslips." });
     } finally {
       setGeneratingPayslips(false);
     }
@@ -6251,7 +6170,7 @@ export function PayrollWorkspace({
 
   const openPayslipFolder = async (directoryPath: string) => {
     const result = await openGeneratedDirectory(directoryPath);
-    setPayslipOpenMessage(result.ok ? "" : result.message);
+    setPayslipOpenMessage(result.ok ? null : { tone: "error", text: result.message });
   };
 
   return (
@@ -6382,15 +6301,13 @@ export function PayrollWorkspace({
         </div>
       )}
 
-      {message && <p className="dashboard-alert">{message}</p>}
-      {pdfMessage && <p className="dashboard-alert">{pdfMessage}</p>}
-      {payslipMessage && <p className="dashboard-alert">{payslipMessage}</p>}
-      {payslipOpenMessage && (
-        <p className="dashboard-alert">{payslipOpenMessage}</p>
-      )}
+      <NoticeLine notice={message} />
+      <NoticeLine notice={pdfMessage} />
+      <NoticeLine notice={payslipMessage} />
+      <NoticeLine notice={payslipOpenMessage} />
 
       <section className="payroll-table">
-        <PayrollTable records={records} onFinalized={onSaved} />
+        <PayrollTable records={records} onFinalized={onSaved} loadStatus={loadStatus} onRetry={onRetry} />
       </section>
 
       <section className="payroll-pdf-section">
@@ -6404,9 +6321,10 @@ export function PayrollWorkspace({
         title={existingCutoffRecords.length > 0 ? "Regenerate cutoff payroll?" : "Generate payroll drafts?"}
         message={
           existingCutoffRecords.length > 0
-            ? `Payroll already exists for ${form.cutoffStart} through ${form.cutoffEnd} (${existingCutoffRecords.length} record(s)). Generating new payroll will replace the draft records with fresh calculations from latest attendance; finalized records are kept. Continue?`
-            : `This will generate payroll records for ${form.cutoffStart} through ${form.cutoffEnd} from completed attendance. Days without a time-out are not paid; late time-outs are paid up to 17:00. Continue?`
+            ? `Payroll already exists for ${cutoffRange} (${existingCutoffRecords.length} record(s)). Generating new payroll will replace the draft records with fresh calculations from latest attendance; finalized records are kept. Continue?`
+            : `This will generate payroll records for ${cutoffRange} from completed attendance. Days without a time-out are not paid; late time-outs are paid up to 17:00. Continue?`
         }
+        confirmLabel={existingCutoffRecords.length > 0 ? "Regenerate payroll" : "Generate payroll"}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => void confirmGenerate()}
       />
@@ -6415,7 +6333,8 @@ export function PayrollWorkspace({
         busy={clearingCutoff}
         tone="danger"
         title="Delete cutoff records?"
-        message={`This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for cutoff ${form.cutoffStart} through ${form.cutoffEnd}. Continue?`}
+        message={`This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for ${cutoffRange}. Continue?`}
+        confirmLabel="Delete cutoff records"
         onCancel={() => setClearCutoffOpen(false)}
         onConfirm={() => void clearCutoffRecords()}
       />
@@ -6423,17 +6342,22 @@ export function PayrollWorkspace({
   );
 }
 
-function ConfirmDialog({
-  open,
-  busy,
-  title,
-  message,
-  onCancel,
-  onConfirm,
-  cancelLabel = "Cancel",
-  confirmLabel = "Confirm",
-  tone = "default",
-}: {
+/** Shows a result: a routine success as a toast (clearing any older problem left on the page), anything else inline. */
+function showResult(notice: Notice, setMessage: (notice: Notice | null) => void): void {
+  if (notice.tone === "success") {
+    setMessage(null);
+    showToast(notice.text);
+  } else setMessage(notice);
+}
+
+/** A batch action's result: success when every item worked, otherwise a problem saying how many did not. */
+function batchOutcome(done: number, total: number, verb: string, noun: string): Notice {
+  return done === total
+    ? { tone: "success", text: `${verb} ${done} ${noun}.` }
+    : { tone: "error", text: `${verb} ${done} of ${total} ${noun}. ${total - done} could not be ${verb.toLowerCase()}.` };
+}
+
+type ConfirmDialogProps = {
   open: boolean;
   busy: boolean;
   title: string;
@@ -6441,21 +6365,72 @@ function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
   cancelLabel?: string;
-  confirmLabel?: string;
+  /** Names the action ("Delete user", "Restore database"), never a bare "Confirm". */
+  confirmLabel: string;
   /** "danger" for actions that delete, wipe, replace or discard: coral icon, edge and confirm button. */
   tone?: "default" | "danger";
-}) {
-  if (!open) return null;
+  /** For permanent deletes: the confirm button stays off until this text (say, the User ID) is typed. */
+  requireText?: string;
+};
+
+function ConfirmDialog(props: ConfirmDialogProps) {
+  return props.open ? <ConfirmDialogCard {...props} /> : null;
+}
+
+function ConfirmDialogCard({
+  busy,
+  title,
+  message,
+  onCancel,
+  onConfirm,
+  cancelLabel = "Cancel",
+  confirmLabel,
+  tone = "default",
+  requireText,
+}: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogKeys(dialogRef, onCancel, { busy });
+  const [typed, setTyped] = useState("");
+  const typedId = useId();
   const danger = tone === "danger";
+  const unlocked = !requireText || typed.trim().toUpperCase() === requireText.trim().toUpperCase();
   return (
     <div className="confirm-backdrop" role="presentation">
-      <section className={danger ? "confirm-dialog is-danger" : "confirm-dialog"} role="dialog" aria-modal="true" aria-labelledby="confirm-heading">
+      <section ref={dialogRef} className={danger ? "confirm-dialog is-danger" : "confirm-dialog"} role="dialog" aria-modal="true" aria-labelledby="confirm-heading">
         <CircleAlert className="confirm-icon" size={20} aria-hidden="true" />
         <h2 id="confirm-heading">{title}</h2>
         <p>{message}</p>
+        {requireText && (
+          <label className="confirm-type-field" htmlFor={typedId}>
+            <span>
+              Type <strong>{requireText}</strong> to confirm
+            </span>
+            <input
+              id={typedId}
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && unlocked && !busy) onConfirm();
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={busy}
+              data-autofocus
+            />
+          </label>
+        )}
         <div className="confirm-actions">
-          <button className="text-button" type="button" disabled={busy} onClick={onCancel}>{cancelLabel}</button>
-          <button className={danger ? "submit-button is-danger" : "submit-button"} type="button" disabled={busy} onClick={onConfirm}>
+          {/* Destructive: focus starts on Cancel, so Enter never deletes by accident. */}
+          <button className="text-button" type="button" disabled={busy} onClick={onCancel} data-autofocus={danger ? true : undefined}>
+            {cancelLabel}
+          </button>
+          <button
+            className={danger ? "submit-button is-danger" : "submit-button"}
+            type="button"
+            disabled={busy || !unlocked}
+            onClick={onConfirm}
+            data-autofocus={danger ? undefined : true}
+          >
             {busy ? <LoaderCircle className="spin" size={16} /> : danger ? null : <Check size={16} />} {confirmLabel}
           </button>
         </div>
@@ -6490,6 +6465,8 @@ function EditPayrollDialog({
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogKeys(dialogRef, onClose, { busy: saving, open: open && Boolean(record) });
 
   useEffect(() => {
     if (record) {
@@ -6595,6 +6572,7 @@ function EditPayrollDialog({
   return (
     <div className="confirm-backdrop" role="presentation">
       <section
+        ref={dialogRef}
         className="edit-payroll-dialog"
         role="dialog"
         aria-modal="true"
@@ -6605,7 +6583,7 @@ function EditPayrollDialog({
           {isIntern ? " (Intern)" : ""}
         </h2>
         <p className="modal-subtitle">
-          {record.payrollCutoffLabel} ({record.cutoffStart} to {record.cutoffEnd}) • {record.employeeId}
+          {record.payrollCutoffLabel} ({formatCutoffRange(record.cutoffStart, record.cutoffEnd)}) • {record.employeeId}
         </p>
 
         <div className="edit-payroll-attendance-box">
@@ -7086,7 +7064,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
       )}
 
       <p className="payroll-cutoff-status">
-        Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({row.cutoffStart} to {row.cutoffEnd}).
+        Status: {row.status}. Cutoff: {row.payrollCutoffLabel} ({formatCutoffRange(row.cutoffStart, row.cutoffEnd)}).
       </p>
     </>
   );
@@ -7095,14 +7073,21 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
 function PayrollTable({
   records,
   onFinalized,
+  loadStatus = "ready",
+  onRetry,
 }: {
   records: PayrollCutoffRecord[];
   onFinalized: () => void;
+  loadStatus?: LoadStatus;
+  onRetry?: () => void;
 }) {
-  const [message, setMessage] = useState("");
+  // Problems stay under the table; finalized, deleted and updated results show as toasts.
+  const [message, setMessage] = useState<Notice | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editTarget, setEditTarget] = useState<PayrollCutoffRecord | null>(null);
   const [breakdownTarget, setBreakdownTarget] = useState<PayrollCutoffRecord | null>(null);
+  const breakdownRef = useRef<HTMLElement>(null);
+  useDialogKeys(breakdownRef, () => setBreakdownTarget(null), { open: Boolean(breakdownTarget) });
   const [deleteTarget, setDeleteTarget] = useState<PayrollCutoffRecord | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [finalizeTarget, setFinalizeTarget] = useState<PayrollCutoffRecord | null>(null);
@@ -7112,7 +7097,7 @@ function PayrollTable({
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
   const payrollWrapRef = useRef<HTMLDivElement>(null);
   const [showAllPayroll, setShowAllPayroll] = useState(false);
-  const payrollOverflowing = useVerticalOverflow(payrollWrapRef, records.length > 0);
+  const payrollOverflowing = useVerticalOverflow(payrollWrapRef, loadStatus !== "loading" && records.length > 0);
 
   const allSelected = records.length > 0 && selectedIds.size === records.length;
   const someSelected = selectedIds.size > 0 && selectedIds.size < records.length;
@@ -7168,13 +7153,13 @@ function PayrollTable({
     try {
       const response = await finalizePayrollCutoff(target.payrollId);
       if (response.success) {
-        setMessage("Payroll finalized.");
+        showResult({ tone: "success", text: "Payroll finalized." }, setMessage);
         onFinalized();
       } else {
-        setMessage(response.error?.message ?? "Unable to finalize payroll.");
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to finalize payroll." });
       }
     } catch (error) {
-      setMessage(toErrorMessage(error, "Unable to finalize payroll."));
+      setMessage({ tone: "error", text: toErrorMessage(error, "Unable to finalize payroll.") });
     } finally {
       setFinalizing(false);
     }
@@ -7187,7 +7172,7 @@ function PayrollTable({
     try {
       const response = await deletePayrollCutoff(target.payrollId);
       if (response.success) {
-        setMessage("Payroll deleted.");
+        showResult({ tone: "success", text: "Payroll deleted." }, setMessage);
         setSelectedIds((prev) => {
           const next = new Set(prev);
           next.delete(target.payrollId);
@@ -7195,10 +7180,10 @@ function PayrollTable({
         });
         onFinalized();
       } else {
-        setMessage(response.error?.message ?? "Unable to delete payroll.");
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to delete payroll." });
       }
     } catch (error) {
-      setMessage(toErrorMessage(error, "Unable to delete payroll."));
+      setMessage({ tone: "error", text: toErrorMessage(error, "Unable to delete payroll.") });
     }
   };
 
@@ -7212,29 +7197,17 @@ function PayrollTable({
     setDeletingBatch(true);
     try {
       const ids = Array.from(selectedIds);
-      let successCount = 0;
-      let failureCount = 0;
+      const failed: string[] = [];
       for (const id of ids) {
-        try {
-          const response = await deletePayrollCutoff(id);
-          if (response.success) {
-            successCount++;
-          } else {
-            failureCount++;
-          }
-        } catch {
-          failureCount++;
-        }
+        const deleted = await deletePayrollCutoff(id).then((response) => response.success, () => false);
+        if (!deleted) failed.push(id);
       }
-      setSelectedIds(new Set());
-      if (failureCount > 0) {
-        setMessage(`Deleted ${successCount} payroll record(s). ${failureCount} record(s) could not be deleted.`);
-      } else {
-        setMessage(`Deleted ${successCount} payroll record(s).`);
-      }
+      // Records that could not be deleted stay selected, ready for another try.
+      setSelectedIds(new Set(failed));
+      showResult(batchOutcome(ids.length - failed.length, ids.length, "Deleted", "payroll record(s)"), setMessage);
       onFinalized();
     } catch (error) {
-      setMessage(toErrorMessage(error, "Unable to complete batch deletion."));
+      setMessage({ tone: "error", text: toErrorMessage(error, "Unable to complete batch deletion.") });
     } finally {
       setDeletingBatch(false);
     }
@@ -7248,29 +7221,34 @@ function PayrollTable({
     setBatchFinalizeOpen(false);
     setFinalizing(true);
     try {
-      let successCount = 0;
+      const failed: string[] = [];
       for (const id of draftIds) {
-        try {
-          const response = await finalizePayrollCutoff(id);
-          if (response.success) successCount++;
-        } catch {
-          // Continue with remaining drafts
-        }
+        const finalized = await finalizePayrollCutoff(id).then((response) => response.success, () => false);
+        if (!finalized) failed.push(id);
       }
-      setSelectedIds(new Set());
-      setMessage(`Finalized ${successCount} payroll record(s).`);
+      setSelectedIds(new Set(failed));
+      showResult(batchOutcome(draftIds.length - failed.length, draftIds.length, "Finalized", "payroll record(s)"), setMessage);
       onFinalized();
     } catch (error) {
-      setMessage(toErrorMessage(error, "Unable to complete batch finalization."));
+      setMessage({ tone: "error", text: toErrorMessage(error, "Unable to complete batch finalization.") });
     } finally {
       setFinalizing(false);
     }
   };
 
-  if (!records.length)
+  if (loadStatus === "loading")
     return (
-      <div className="empty-state">No cutoff payroll has been created.</div>
+      <div className="table-wrap">
+        <table>
+          <tbody>
+            <LoadingRows columns={8} label="Loading payroll…" />
+          </tbody>
+        </table>
+      </div>
     );
+  const failedLine = loadStatus === "failed" && onRetry ? <LoadFailed what="payroll" onRetry={onRetry} /> : null;
+  if (!records.length)
+    return failedLine ?? <div className="empty-state">No cutoff payroll has been created.</div>;
 
   // Hide columns that are blank or ₱0 on every row; they reappear once any row has a value,
   // and the Breakdown popup always shows them.
@@ -7282,6 +7260,7 @@ function PayrollTable({
 
   return (
     <div className="payroll-table-with-bar">
+      {failedLine}
       <div className="payroll-table-header-bar">
         <div className="payroll-selection-count">
           {selectedIds.size > 0 ? (
@@ -7487,10 +7466,11 @@ function PayrollTable({
           </tbody>
         </table>
       </div>
-      {message && <p className="dashboard-alert">{message}</p>}
+      <NoticeLine notice={message} />
       {breakdownTarget && (
         <div className="confirm-backdrop" role="presentation">
           <section
+            ref={breakdownRef}
             className="confirm-dialog payroll-breakdown-dialog"
             role="dialog"
             aria-modal="true"
@@ -7516,7 +7496,7 @@ function PayrollTable({
         open={Boolean(editTarget)}
         onClose={() => setEditTarget(null)}
         onSaved={() => {
-          setMessage("Payroll updated.");
+          showResult({ tone: "success", text: "Payroll updated." }, setMessage);
           onFinalized();
         }}
       />
@@ -7532,6 +7512,7 @@ function PayrollTable({
               : `This will permanently delete the draft payroll for ${deleteTarget.employeeName} (${deleteTarget.payrollCutoffLabel}). Continue?`
             : ""
         }
+        confirmLabel="Delete payroll"
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => void remove()}
       />
@@ -7541,6 +7522,7 @@ function PayrollTable({
         tone="danger"
         title="Delete selected payrolls?"
         message={`Are you sure you want to delete ${selectedIds.size} selected payroll record(s)? This will permanently remove them from the cutoff.`}
+        confirmLabel="Delete payrolls"
         onCancel={() => setBatchDeleteOpen(false)}
         onConfirm={() => void removeBatch()}
       />
@@ -7553,6 +7535,7 @@ function PayrollTable({
             ? `This will finalize the payroll for ${finalizeTarget.employeeName} (${finalizeTarget.payrollCutoffLabel}). Values will be locked from further edits.`
             : ""
         }
+        confirmLabel="Finalize payroll"
         onCancel={() => setFinalizeTarget(null)}
         onConfirm={() => void finalize()}
       />
@@ -7561,6 +7544,7 @@ function PayrollTable({
         busy={finalizing}
         title="Finalize selected payrolls?"
         message={`This will finalize ${selectedDraftsCount} selected draft payroll record(s). Values will be locked from further edits.`}
+        confirmLabel="Finalize payrolls"
         onCancel={() => setBatchFinalizeOpen(false)}
         onConfirm={() => void finalizeBatch()}
       />
@@ -7580,17 +7564,7 @@ function php(value: number): string {
 }
 
 export function formatDeductionDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "—";
-  const parts = dateStr.split("-");
-  if (parts.length !== 3) return dateStr;
-  const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-  if (Number.isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString("en-PH", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return dateStr ? formatDate(dateStr) : "—";
 }
 
 /**
@@ -7625,30 +7599,12 @@ function parseCalculationBreakdown(
 }
 
 /**
- * Formats the Manila ISO timestamp of a generated payroll PDF for the history
- * list (e.g. "Aug 14, 2026, 10:30 AM"). Falls back to the raw value when the
- * timestamp cannot be parsed.
- */
-function formatGeneratedAt(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-/**
  * History of generated payroll PDFs produced by the Tauri backend. Each row
  * offers Open PDF (system default viewer) and Show in Folder actions backed by
  * the existing opener commands; nothing is ever printed from the browser.
  */
 function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
-  const [actionMessage, setActionMessage] = useState("");
+  const [actionMessage, setActionMessage] = useState<Notice | null>(null);
   // Months opened or closed by hand; the latest month starts open and older months start closed.
   const [toggledMonths, setToggledMonths] = useState<ReadonlySet<string>>(new Set());
   const runAction = async (
@@ -7656,7 +7612,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
     filePath: string,
   ) => {
     const result = await action(filePath);
-    setActionMessage(result.ok ? "" : result.message);
+    setActionMessage(result.ok ? null : { tone: "error", text: result.message });
   };
   const sorted = [...pdfs].sort((a, b) =>
     b.generatedAt.localeCompare(a.generatedAt),
@@ -7674,9 +7630,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
     else
       months.push({
         key,
-        label: key
-          ? new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1).toLocaleString("en-PH", { month: "long", year: "numeric" })
-          : "Other",
+        label: key ? formatMonth(`${key}-01`) : "Other",
         pdfs: [pdf],
       });
   }
@@ -7716,12 +7670,10 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
                   <tr key={pdf.payrollPdfId}>
                     <td>
                       <strong>{pdf.payrollCutoffLabel}</strong>
-                      <small>
-                        {pdf.cutoffStart} to {pdf.cutoffEnd}
-                      </small>
+                      <small>{formatCutoffRange(pdf.cutoffStart, pdf.cutoffEnd)}</small>
                     </td>
                     <td>Intern</td>
-                    <td>{formatGeneratedAt(pdf.generatedAt)}</td>
+                    <td>{formatDateTime(pdf.generatedAt)}</td>
                     <td>{pdf.employeeCount}</td>
                     <td>
                       <strong>{php(pdf.totalAmount)}</strong>
@@ -7751,7 +7703,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
           })}
         </table>
       </div>
-      {actionMessage && <p className="dashboard-alert">{actionMessage}</p>}
+      <NoticeLine notice={actionMessage} />
     </>
   );
 }
@@ -7917,20 +7869,29 @@ function clampedGraceTimeInIds(
   return clamped;
 }
 
+/** No rows: what the attendance page counts, selects and exports until a date's rows have loaded. */
+const NO_ATTENDANCE_ROWS: AttendanceListItem[] = [];
+
 function AdminAttendance({
   rows,
   date,
   setDate,
   users = [],
   onSaved,
+  loadStatus = "ready",
+  onRetry,
 }: {
   rows: AttendanceListItem[];
   date: string;
   setDate: (value: string) => void;
   users?: AdminUser[];
   onSaved: () => void;
+  /** Where this date's attendance load stands (Admin loads it). */
+  loadStatus?: LoadStatus;
+  onRetry?: () => void;
 }) {
-  const [message, setMessage] = useState("");
+  // Problems stay in the filter bar; exports and deletes show as toasts.
+  const [message, setMessage] = useState<Notice | null>(null);
   const [exporting, setExporting] = useState(false);
   const [fileResult, setFileResult] = useState<GeneratedFileResult | null>(
     null,
@@ -7943,7 +7904,9 @@ function AdminAttendance({
   const statusThumb = useActiveThumb(statusFilterRef, statusFilter);
   const [backdatedModalOpen, setBackdatedModalOpen] = useState(false);
 
-  const activeRows = rows;
+  // Until this date's rows have loaded (or after they failed to), nothing is counted, selected or exported.
+  const ready = loadStatus === "ready";
+  const activeRows = ready ? rows : NO_ATTENDANCE_ROWS;
   const [clampWeekHistory, setClampWeekHistory] = useState<AttendanceListItem[]>([]);
   const hasInternRoster = users.some((user) => user.employeeType === "INTERN");
 
@@ -8049,6 +8012,10 @@ function AdminAttendance({
   ];
 
   const [selectedAttendanceIds, setSelectedAttendanceIds] = useState<Set<string>>(new Set());
+  // A selection belongs to one date's rows.
+  useEffect(() => {
+    setSelectedAttendanceIds(new Set());
+  }, [date]);
   const [batchDeleteAttendanceOpen, setBatchDeleteAttendanceOpen] = useState(false);
   const [batchDeletingAttendance, setBatchDeletingAttendance] = useState(false);
   const masterAttendanceCheckboxRef = useRef<HTMLInputElement>(null);
@@ -8105,7 +8072,8 @@ function AdminAttendance({
       date,
     );
     if (result.success) {
-      setMessage(`Generated ${result.fileName} (${selectedRows.length} rows).`);
+      setMessage(null);
+      showToast(`Generated ${result.fileName} (${selectedRows.length} rows).`);
       setFileResult({
         filePath: result.filePath,
         directoryPath: result.directoryPath,
@@ -8113,7 +8081,7 @@ function AdminAttendance({
         fileKind: "csv",
         isPortableMode: false,
       });
-    } else setMessage(result.message);
+    } else setMessage({ tone: "error", text: result.message });
   };
 
   const removeBatchAttendance = async () => {
@@ -8121,14 +8089,15 @@ function AdminAttendance({
     setBatchDeleteAttendanceOpen(false);
     setBatchDeletingAttendance(true);
     const targetRows = filteredRows.filter((r) => selectedAttendanceIds.has(r.attendanceId));
-    let count = 0;
+    const failed: string[] = [];
     for (const r of targetRows) {
-      const res = await deleteAdminAttendance(r.attendanceId, r.attendanceDate);
-      if (res.success) count++;
+      const deleted = await deleteAdminAttendance(r.attendanceId, r.attendanceDate).then((res) => res.success, () => false);
+      if (!deleted) failed.push(r.attendanceId);
     }
     setBatchDeletingAttendance(false);
-    setSelectedAttendanceIds(new Set());
-    setMessage(`Deleted ${count} attendance record(s).`);
+    // Records that could not be deleted stay selected, ready for another try.
+    setSelectedAttendanceIds(new Set(failed));
+    showResult(batchOutcome(targetRows.length - failed.length, targetRows.length, "Deleted", "attendance record(s)"), setMessage);
     onSaved();
   };
 
@@ -8142,7 +8111,8 @@ function AdminAttendance({
     );
     setExporting(false);
     if (result.success) {
-      setMessage(`Generated ${result.fileName} (${filteredRows.length} rows).`);
+      setMessage(null);
+      showToast(`Generated ${result.fileName} (${filteredRows.length} rows).`);
       setFileResult({
         filePath: result.filePath,
         directoryPath: result.directoryPath,
@@ -8150,7 +8120,7 @@ function AdminAttendance({
         fileKind: "csv",
         isPortableMode: false,
       });
-    } else setMessage(result.message);
+    } else setMessage({ tone: "error", text: result.message });
   };
 
   const statusOptions = [
@@ -8273,7 +8243,7 @@ function AdminAttendance({
           <button
             className="admin-button"
             type="button"
-            disabled={exporting}
+            disabled={exporting || !ready}
             onClick={() => void exportWorkbook()}
           >
             {exporting ? (
@@ -8284,10 +8254,11 @@ function AdminAttendance({
               </>
             )}
           </button>
-          {message && <small role="status">{message}</small>}
+          <NoticeLine notice={message} className="attendance-filter-message" />
         </div>
       </div>
       <GeneratedFileActions result={fileResult} label="Attendance export" />
+      {loadStatus === "failed" && onRetry && <LoadFailed what="attendance for this date" onRetry={onRetry} />}
 
       <div className="table-header-bar">
         <div className="table-selection-count">
@@ -8314,6 +8285,7 @@ function AdminAttendance({
                 <button
                   className="text-button"
                   type="button"
+                  disabled={!ready}
                   onClick={() => setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)))}
                 >
                   Select all ({filteredRows.length})
@@ -8329,6 +8301,7 @@ function AdminAttendance({
               <button
                 className="admin-button"
                 type="button"
+                disabled={!ready}
                 onClick={exportSelectedAttendance}
               >
                 <Download size={14} /> Export selected CSV ({selectedAttendanceIds.size})
@@ -8336,7 +8309,7 @@ function AdminAttendance({
               <button
                 className="admin-button danger-button"
                 type="button"
-                disabled={batchDeletingAttendance}
+                disabled={batchDeletingAttendance || !ready}
                 onClick={() => setBatchDeleteAttendanceOpen(true)}
               >
                 Delete selected ({selectedAttendanceIds.size})
@@ -8346,6 +8319,7 @@ function AdminAttendance({
             <button
               className="text-button"
               type="button"
+              disabled={!ready || filteredRows.length === 0}
               onClick={() => setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)))}
             >
               Select all
@@ -8366,6 +8340,7 @@ function AdminAttendance({
                   type="checkbox"
                   ref={masterAttendanceCheckboxRef}
                   checked={allAttendanceSelected}
+                  disabled={!ready}
                   onChange={toggleSelectAllAttendance}
                   aria-label="Select all attendance records"
                 />
@@ -8380,7 +8355,10 @@ function AdminAttendance({
             </tr>
           </thead>
           <tbody>
-            {filteredRows.length === 0 ? (
+            {loadStatus === "loading" ? (
+              <LoadingRows columns={8} label="Loading attendance…" />
+            ) : filteredRows.length === 0 ? (
+              loadStatus === "failed" ? null : (
               <tr>
                 <td colSpan={8} className="table-empty-cell">
                   <div className="empty-state">
@@ -8392,6 +8370,7 @@ function AdminAttendance({
                   </div>
                 </td>
               </tr>
+              )
             ) : (
               filteredRows.map((row) => (
                 <AttendanceEditRow
@@ -8414,6 +8393,7 @@ function AdminAttendance({
         tone="danger"
         title="Delete selected attendance records?"
         message={`Are you sure you want to delete ${selectedAttendanceIds.size} selected attendance record(s)? This will remove them from the logs.`}
+        confirmLabel="Delete records"
         onCancel={() => setBatchDeleteAttendanceOpen(false)}
         onConfirm={() => void removeBatchAttendance()}
       />
@@ -8457,6 +8437,8 @@ function BackdatedAttendanceModal({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogKeys(dialogRef, onClose, { busy });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -8488,6 +8470,7 @@ function BackdatedAttendanceModal({
       });
       setBusy(false);
       if (response.success) {
+        showToast("Missed attendance added.");
         onSaved(attendanceDate);
         onClose();
       } else {
@@ -8504,10 +8487,11 @@ function BackdatedAttendanceModal({
       className="assisted-modal-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
       <section
+        ref={dialogRef}
         className="assisted-modal"
         role="dialog"
         aria-modal="true"
@@ -8782,7 +8766,8 @@ function AttendanceEditRow({
   const [timeOut, setTimeOut] = useState(
     row.timeOut ? row.timeOut.slice(11, 16) : "",
   );
-  const [message, setMessage] = useState("");
+  // A note that needs acting on stays on the row; a plain save or delete shows as a toast.
+  const [message, setMessage] = useState<Notice | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteAttendanceConfirm, setDeleteAttendanceConfirm] = useState(false);
   const [clampedRevealed, setClampedRevealed] = useState(false);
@@ -8808,14 +8793,15 @@ function AttendanceEditRow({
       expectedTimeOut: row.timeOut || null,
     });
     if (response.success) {
-      setMessage(
-        timeOutIso && isLateTimeout(timeOutIso)
-          ? "Saved — time-out is still after office hours, correction remains required."
-          : "Saved",
-      );
+      if (timeOutIso && isLateTimeout(timeOutIso)) {
+        setMessage({ tone: "info", text: "Saved — time-out is still after office hours, correction remains required." });
+      } else {
+        setMessage(null);
+        showToast(`Saved ${row.fullName}'s times.`);
+      }
       onSaved();
     } else {
-      setMessage(response.error?.message ?? "Unable to save attendance.");
+      setMessage({ tone: "error", text: response.error?.message ?? "Unable to save attendance." });
       // A stale row cannot be saved again as-is; reload it so the admin sees the current times.
       if (response.error?.code === "ATTENDANCE_CONFLICT" || response.error?.code === "ATTENDANCE_NOT_FOUND") onSaved();
     }
@@ -8829,10 +8815,10 @@ function AttendanceEditRow({
     );
     setDeleting(false);
     if (response.success) {
-      setMessage("Record deleted");
+      showResult({ tone: "success", text: `Deleted ${row.fullName}'s record.` }, setMessage);
       onSaved();
     } else {
-      setMessage(response.error?.message ?? "Unable to delete record.");
+      setMessage({ tone: "error", text: response.error?.message ?? "Unable to delete record." });
     }
   };
 
@@ -8998,7 +8984,7 @@ function AttendanceEditRow({
           >
             {deleting ? "Deleting..." : "Delete"}
           </button>
-          {message && <small>{message}</small>}
+          <NoticeLine notice={message} className="row-message" />
         </td>
       </tr>
       {deleteAttendanceConfirm && (
@@ -9010,6 +8996,7 @@ function AttendanceEditRow({
               tone="danger"
               title="Delete attendance record?"
               message={`This will permanently delete ${row.fullName}'s time-in/time-out record for ${row.attendanceDate}. This cannot be undone.`}
+              confirmLabel="Delete record"
               onCancel={() => setDeleteAttendanceConfirm(false)}
               onConfirm={() => void remove()}
             />

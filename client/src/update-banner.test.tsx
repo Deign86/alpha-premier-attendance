@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { Update } from '@tauri-apps/plugin-updater';
-import { UpdateBanner } from './update-banner';
+import { UpdateBanner, updaterReleaseInstant } from './update-banner';
 import { AdminUpdatesCard } from './admin-updates-card';
 import * as updateService from './services/updateService';
 
@@ -57,6 +57,37 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       expect(screen.getByText('v0.1.15')).toBeInTheDocument();
       expect(screen.getByText('v0.1.14')).toBeInTheDocument();
       expect(screen.getByText(/Added new payroll export format/i)).toBeInTheDocument();
+    });
+
+    it('shows the release day on Manila time, and nothing when the date cannot be read', async () => {
+      const mockUpdate = createMockUpdate('0.1.15', '0.1.14', 'Fixes.');
+      const check = vi.spyOn(updateService, 'checkForUpdates').mockResolvedValue({
+        state: 'available',
+        update: mockUpdate,
+        // 23:30 UTC on Oct 30 is already Oct 31 in Manila.
+        info: { version: '0.1.15', currentVersion: '0.1.14', date: '2026-10-30 23:30:00.0 +00:00:00' },
+      });
+      const { unmount } = render(<UpdateBanner manualCheckTrigger={1} />);
+      expect(await screen.findByText('Released Oct 31, 2026')).toBeInTheDocument();
+      unmount();
+
+      check.mockResolvedValue({
+        state: 'available',
+        update: mockUpdate,
+        info: { version: '0.1.15', currentVersion: '0.1.14', date: 'sometime soon' },
+      });
+      render(<UpdateBanner manualCheckTrigger={1} />);
+      expect(await screen.findByText(/Update Alpha Premier Attendance/i)).toBeInTheDocument();
+      expect(screen.queryByText(/^Released/)).not.toBeInTheDocument();
+    });
+
+    it('reads the updater release time as an instant', () => {
+      expect(updaterReleaseInstant('2026-10-30 23:30:00.0 +00:00:00')).toBe('2026-10-30T23:30:00+00:00');
+      expect(updaterReleaseInstant('2026-10-30 5:26:07.123 +08:00:00')).toBe('2026-10-30T05:26:07+08:00');
+      expect(updaterReleaseInstant('2026-10-30T05:26:00Z')).toBe('2026-10-30T05:26:00Z');
+      expect(updaterReleaseInstant('2026-08-26')).toBe('2026-08-26');
+      expect(updaterReleaseInstant('soon')).toBeNull();
+      expect(updaterReleaseInstant(undefined)).toBeNull();
     });
 
     it('triggers download and install on button click', async () => {

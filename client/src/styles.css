@@ -216,10 +216,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .setup-form input, .setup-form select { width: 100%; min-width: 0; height: 46px; padding: 0 12px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); border-radius: 3px; outline: 2px solid transparent; outline-offset: 2px; }
 .setup-form input::placeholder { color: var(--quiet); }
 .setup-form input:focus, .setup-form select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .13); }
-.setup-progress, .setup-success, .setup-error { display: flex; align-items: center; gap: 7px; margin: 1px 0 0; font-size: .76rem; line-height: 1.4; }
-.setup-progress { color: var(--gold-bright); }
-.setup-success { color: var(--success); }
-.setup-error { color: var(--danger); }
+.setup-progress { display: flex; align-items: center; gap: 7px; margin: 1px 0 0; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .setup-submit { width: 100%; margin-top: 5px; }
 .setup-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--quiet); font-size: .72rem; }
 .setup-footer > span { display: inline-flex; align-items: center; gap: 6px; }
@@ -378,7 +375,6 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .db-actions { flex-wrap: wrap; justify-content: space-between; row-gap: 12px; }
 .db-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .db-sync-group { gap: 14px; padding-left: 16px; border-left: 1px solid var(--line); }
-.db-notice { color: var(--success, #7fb069); }
 .sync-health { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); display: grid; gap: 8px; }
 .sync-health-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .sync-health-head strong { color: var(--ink); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
@@ -442,9 +438,6 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .file-action { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
 .file-action-primary { color: #11100c; background: var(--gold-bright); border-color: var(--gold-bright); font-weight: 700; }
 .file-result-mode { margin: 0; color: var(--quiet); font-size: .66rem; }
-.file-result-notice { display: flex; align-items: center; gap: 6px; margin: 0; font-size: .74rem; }
-.file-result-notice.is-success { color: var(--success, #6fbf73); }
-.file-result-notice.is-error { color: var(--danger, #e06c5c); }
 .checkbox-label { display: flex !important; align-items: center; gap: 10px; }
 .checkbox-label input { width: 20px; height: 20px; }
 .profile-toggle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
@@ -1341,7 +1334,6 @@ tr.selected-row td:first-child::before,
 .date-filter label { min-width: 140px; margin: 0; }
 .date-filter label:nth-of-type(3) { min-width: 176px; }
 .date-filter label:nth-of-type(4) { min-width: 164px; }
-.date-filter small { align-self: center; color: var(--muted); }
 /* Labels sit above their controls (like the other admin forms) so every control lines up on one baseline. */
 .date-filter label { display: grid; gap: 6px; color: var(--muted); font-size: .72rem; font-weight: 600; }
 /* One height and corner radius for every control in the bar: date, Today, search, department and the two actions. */
@@ -1609,27 +1601,6 @@ tr.selected-row td:first-child::before,
     padding: 8px 6px;
     font-size: .68rem;
   }
-}
-
-.form-message {
-  margin: 10px 0;
-  padding: 10px 14px;
-  border-radius: 4px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.form-message.is-success {
-  color: #98d2a8;
-  background: rgba(152, 210, 168, 0.12);
-  border: 1px solid rgba(152, 210, 168, 0.28);
-}
-
-.form-message.is-error {
-  color: #efaa92;
-  background: rgba(239, 170, 146, 0.12);
-  border: 1px solid rgba(239, 170, 146, 0.32);
 }
 
 .table-empty-cell {
@@ -4352,9 +4323,7 @@ body:has(.live-shell) { background-color: #080807 !important; }
 .card-setup-dialog .setup-form > .text-button { justify-self: center; }
 
 /* Messages: one tinted line each for progress, success and problems. */
-.card-setup-dialog :is(.setup-progress, .setup-success, .setup-error) { margin: 0; padding: 10px 14px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(198, 162, 84, .3); border-radius: 6px; font-size: .875rem; }
-.card-setup-dialog .setup-success { border-color: rgba(152, 210, 168, .4); }
-.card-setup-dialog .setup-error { border-color: rgba(239, 170, 146, .45); }
+.card-setup-dialog .setup-progress { margin: 0; padding: 10px 14px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(198, 162, 84, .3); border-radius: 6px; font-size: .875rem; }
 .card-setup-dialog .setup-footer { gap: 12px; margin-top: 2px; font-size: .875rem; }
 
 /* Save step: card and "Register card as" side by side, fields in two columns with the photo beside them,
@@ -4450,7 +4419,7 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .admin-login .submit-button { width: 100%; }
 .admin-login form > .text-button { display: flex; margin: 6px auto 0; padding: 6px 12px; color: var(--gold-bright); border-radius: 6px; font-size: .76rem; font-weight: 600; }
 .admin-login form > .text-button:hover:not(:disabled) { background: rgba(198, 162, 84, .08); }
-.admin-login :is(.dashboard-alert, .setup-error, .setup-success) { margin: 0 0 12px; padding: 9px 12px; border-radius: 6px; font-size: .8rem; }
+.admin-login .dashboard-alert { margin: 0 0 12px; padding: 9px 12px; border-radius: 6px; font-size: .8rem; }
 @media (max-width: 600px), (max-height: 760px) { .admin-login { padding-top: 80px; } }
 @media (max-width: 600px) {
   .admin-login form { padding: 22px 20px 18px; border-radius: 8px; }
@@ -4890,4 +4859,62 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 @media (max-width: 600px) {
   .live-shell .live-filters .search-input-wrap { max-width: none; }
   .live-shell .live-filters .select { flex: 1 1 100%; }
+}
+
+/* --- Messages, toasts, loading lists and keyboard focus ------------------------------------------------ */
+/* One message line coloured by what it means, set where the message is made (never guessed from its words):
+   gold with a check for success, muted grey for progress and notes, coral for problems that need action. */
+.notice { display: flex; align-items: flex-start; gap: 7px; margin: 12px 0; padding: 9px 12px; color: var(--muted); background: rgba(255, 255, 255, .03); border: 1px solid rgba(198, 162, 84, .18); border-radius: 6px; font-size: .8rem; line-height: 1.45; overflow-wrap: anywhere; }
+.notice > svg { flex: none; margin-top: 2px; }
+.notice.is-success { color: var(--gold-bright); background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .38); }
+.notice.is-error { color: var(--danger); background: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .4); }
+.card-setup-dialog .notice { margin: 0; padding: 10px 14px; font-size: .875rem; }
+.admin-login .notice { margin: 12px 0 0; }
+.file-result-card .notice { margin: 0; padding: 6px 10px; font-size: .74rem; }
+/* In the attendance filter bar the line takes a row of its own; on a table row it is a small plain note. */
+.date-filter .attendance-filter-message { flex: 1 1 100%; margin: 0; }
+td .row-message { margin: 4px 0 0; padding: 0; background: none; border: 0; font-size: .74rem; }
+
+/* Toasts: short notes for routine results, bottom-right on desktop and full width at the bottom on phones,
+   above every pop-up. They hide by themselves after a few seconds; at most three stack. */
+.toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 1100; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.toast { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 6px 8px 14px; color: var(--ink); background: linear-gradient(90deg, transparent 14%, rgba(225, 196, 119, .7) 50%, transparent 86%) top / 100% 1px no-repeat, linear-gradient(180deg, rgba(33, 30, 23, .98), rgba(13, 12, 10, .99)); border: 1px solid rgba(198, 162, 84, .38); border-radius: 8px; box-shadow: 0 14px 34px rgba(0, 0, 0, .5); font-size: .8rem; line-height: 1.4; pointer-events: auto; animation: toast-in 220ms cubic-bezier(.2, .7, .2, 1); }
+.toast > svg { flex: none; color: var(--gold-bright); }
+.toast > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-close { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 6px; }
+.toast-close:hover { color: var(--ink); background: rgba(198, 162, 84, .1); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (max-width: 600px) { .toast-region { left: 16px; right: 16px; bottom: 16px; width: auto; align-items: stretch; } }
+/* While the update banner sits in the same corner, toasts stack above it instead of covering its buttons. */
+body:has(.update-banner) .toast-region { bottom: 112px; }
+@media (max-width: 600px) { body:has(.update-banner) .toast-region { bottom: 150px; } }
+
+/* Lists while they load: soft placeholder rows instead of an empty table; a failed load gets one coral line
+   naming the list with a Retry for just that list. */
+.loading-row td { padding: 13px 14px; }
+.loading-bar { display: block; width: 100%; max-width: 620px; height: 10px; background: linear-gradient(90deg, rgba(198, 162, 84, .06) 25%, rgba(198, 162, 84, .16) 50%, rgba(198, 162, 84, .06) 75%) 0 0 / 200% 100%; border-radius: 4px; animation: loading-shimmer 1.4s ease-in-out infinite; }
+.loading-row:nth-child(2) .loading-bar { width: 84%; }
+.loading-row:nth-child(3) .loading-bar { width: 68%; }
+.loading-row:nth-child(4) .loading-bar { width: 76%; }
+@keyframes loading-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.load-pending { margin: 10px 0; color: var(--muted); font-size: .8rem; }
+.load-failed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 10px 0; padding: 7px 8px 7px 12px; color: var(--danger); background: rgba(239, 170, 146, .07); border: 1px solid rgba(239, 170, 146, .4); border-radius: 6px; font-size: .8rem; }
+.load-failed .text-button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 2px 8px; color: var(--gold-bright); border-radius: 6px; font-size: .78rem; font-weight: 600; }
+.load-failed .text-button:hover:not(:disabled) { background: rgba(198, 162, 84, .1); }
+/* Inside the Users panel the line keeps the same side margins as its other messages. */
+.admin-shell .users-table-section > .load-failed { margin: 10px 14px 0; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* A permanent delete asks for the User ID before its button turns on. */
+.confirm-type-field { display: grid; gap: 6px; margin: 2px 0 16px; color: var(--muted); font-size: .8rem; }
+.confirm-type-field strong { color: var(--ink); font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-weight: 600; overflow-wrap: anywhere; }
+.confirm-type-field input { height: 40px; padding: 0 12px; color: var(--ink); background: rgba(5, 5, 4, .6); border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; font-size: .85rem; }
+.confirm-type-field input:focus { border-color: var(--gold-bright); outline: none; box-shadow: 0 0 0 3px rgba(198, 162, 84, .16); }
+.confirm-dialog.is-danger .confirm-type-field input:focus { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(239, 170, 146, .16); }
+
+/* Keyboard focus on links (and other controls without their own ring) shows the same gold outline everywhere. */
+a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .toast, .loading-bar { animation: none; }
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DatabasePanel, UserEditor } from './App';
+import { Toasts } from './toasts';
 import * as api from './api';
 import * as tauriApi from './tauri-api';
 import { getDtrSyncHealthSnapshot, resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
@@ -121,12 +122,13 @@ describe('DatabasePanel', () => {
     });
 
     const user = userEvent.setup();
-    render(<DatabasePanel />);
+    render(<><DatabasePanel /><Toasts /></>);
 
     const backupBtn = await screen.findByRole('button', { name: /create backup now/i });
     await user.click(backupBtn);
 
     expect(createDatabaseBackupSpy).toHaveBeenCalledTimes(1);
+    // A routine result: shown as a toast.
     expect(await screen.findByText(/Backup created: attendance-backup-20260815-010000.apbackup/i)).toBeInTheDocument();
   });
 
@@ -176,7 +178,7 @@ describe('DatabasePanel', () => {
     // Confirm dialog should be visible
     expect(await screen.findByText('Restore database from backup?')).toBeInTheDocument();
 
-    const confirmBtn = screen.getByRole('button', { name: /confirm/i });
+    const confirmBtn = screen.getByRole('button', { name: 'Restore database' });
     await user.click(confirmBtn);
 
     expect(requestDatabaseRestoreSpy).toHaveBeenCalledWith('C:\\backups\\attendance-backup-20260815-000000.apbackup');
@@ -194,7 +196,7 @@ describe('DatabasePanel', () => {
 
     await user.click(await screen.findByRole('button', { name: /^restore$/i }));
     expect(await screen.findByText('Restore database from backup?')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /confirm/i }));
+    await user.click(screen.getByRole('button', { name: 'Restore database' }));
 
     expect(requestDatabaseRestoreSpy).toHaveBeenCalledWith(mockDbInfo.backups[0].filePath);
     expect(pickRestoreBackupFileSpy).not.toHaveBeenCalled();
@@ -207,7 +209,7 @@ describe('DatabasePanel', () => {
     });
 
     const user = userEvent.setup();
-    render(<DatabasePanel />);
+    render(<><DatabasePanel /><Toasts /></>);
 
     await user.click(await screen.findByRole('button', { name: /^download$/i }));
 
@@ -273,6 +275,58 @@ describe('DatabasePanel', () => {
       expect(screen.queryByText('Restore database from backup?')).not.toBeInTheDocument();
     });
     expect(requestDatabaseRestoreSpy).not.toHaveBeenCalled();
+  });
+
+  it('closes the restore confirmation with Escape, starting on Cancel and giving focus back to the row button', async () => {
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    const rowRestore = await screen.findByRole('button', { name: /^restore$/i });
+    await user.click(rowRestore);
+    const dialog = await screen.findByRole('dialog', { name: 'Restore database from backup?' });
+    // Destructive: focus starts on Cancel, so Enter never restores by accident.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(dialog).toContainElement(screen.getByRole('button', { name: 'Restore database' }));
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Restore database from backup?' })).not.toBeInTheDocument();
+    expect(rowRestore).toHaveFocus();
+    expect(requestDatabaseRestoreSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows a failed backup list with Retry that loads it again', async () => {
+    loadDatabaseInfoSpy
+      .mockResolvedValueOnce({ success: false, error: { message: 'Unable to read the database status.' } })
+      .mockResolvedValueOnce(mockDbInfo);
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+
+    // The failed line keeps the reason the service gave.
+    expect(await screen.findByText("Couldn't load the backup list. Unable to read the database status.")).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^retry$/i }));
+    expect(await screen.findByText('attendance-backup-20260815-000000.apbackup')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't load the backup list/)).not.toBeInTheDocument();
+  });
+
+  it('shows the desktop-only reply in a browser as a calm note without Retry', async () => {
+    // SAFETY: Removing the Tauri mock property, as in a plain browser
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    loadDatabaseInfoSpy.mockResolvedValue({ success: false, error: { message: 'Database tools are available in the desktop application.' } });
+    render(<DatabasePanel />);
+
+    const note = await screen.findByText('Database tools are available in the desktop application.');
+    expect(note.closest('.notice')).toHaveClass('is-info');
+    expect(screen.queryByText(/Couldn't load the backup list/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^retry$/i })).not.toBeInTheDocument();
+  });
+
+  it('closes the move-to-a-new-PC guide with Escape', async () => {
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    await user.click(await screen.findByRole('button', { name: /how to move to a new pc/i }));
+    expect(screen.getByRole('button', { name: /got it/i })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: /moving to the new front-desk pc/i })).not.toBeInTheDocument();
   });
 
   it('triggers Sync Intern DTR now and displays result', async () => {

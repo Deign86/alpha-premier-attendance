@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Clock,
@@ -19,6 +19,9 @@ import type {
 } from "@rfid-attendance/shared";
 import { bathroomTimeIn, bathroomTimeOut, loadBathroomStatus, updateBathroomLog } from "./api";
 import { announceBathroom } from "./services/ttsService";
+import { formatDayHeading, formatDuration, formatTime } from "./format";
+import { showToast } from "./toasts";
+import { useDialogKeys } from "./use-dialog-keys";
 
 export function getAvatarInitials(name: string): string {
   const tokens = name.trim().split(/\s+/).filter(Boolean);
@@ -26,42 +29,9 @@ export function getAvatarInitials(name: string): string {
   return tokens.slice(0, 2).map((token) => Array.from(token)[0] ?? "").join("").toUpperCase();
 }
 
-function formatTime(isoString: string): string {
-  try {
-    const d = new Date(isoString);
-    if (!Number.isFinite(d.getTime())) return isoString;
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Manila",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: true,
-    }).format(d);
-  } catch {
-    return isoString;
-  }
-}
-
-function formatDuration(seconds: number | null): string {
-  if (seconds === null || seconds === undefined || seconds < 0) return "—";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins === 0) return `${secs}s`;
-  return `${mins}m ${secs.toString().padStart(2, "0")}s`;
-}
-
 function formatLiveElapsed(timeOutIso: string, nowMs: number): string {
-  try {
-    const outMs = new Date(timeOutIso).getTime();
-    if (!Number.isFinite(outMs)) return "0s";
-    const diffSec = Math.max(0, Math.floor((nowMs - outMs) / 1000));
-    const mins = Math.floor(diffSec / 60);
-    const secs = diffSec % 60;
-    if (mins === 0) return `${secs}s`;
-    return `${mins}m ${secs.toString().padStart(2, "0")}s`;
-  } catch {
-    return "0s";
-  }
+  const outMs = new Date(timeOutIso).getTime();
+  return Number.isFinite(outMs) ? formatDuration((nowMs - outMs) / 1000) : "0s";
 }
 
 function todayManila(): string {
@@ -91,7 +61,6 @@ export function BathroomKeyLogPanel({
   const [loading, setLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState<BathroomGenderKey | null>(null);
   const [error, setError] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
   const [nowMs, setNowMs] = useState(Date.now);
 
   const [panelState, setPanelState] = useState<Record<BathroomGenderKey, GenderPanelState>>({
@@ -128,7 +97,7 @@ export function BathroomKeyLogPanel({
       return { ...prev, femaleActive: nextActive, femaleLogs: newLogs };
     });
     setError("");
-    setSuccessMsg("Saved — bathroom key times updated.");
+    showToast("Saved — bathroom key times updated.");
   };
 
   useEffect(() => {
@@ -178,7 +147,6 @@ export function BathroomKeyLogPanel({
   const handleCheckout = async (genderKey: BathroomGenderKey, userId: string | null) => {
     if (!userId || actionBusy) return;
     setError("");
-    setSuccessMsg("");
     setActionBusy(genderKey);
     try {
       const selectedEmployee = activeEmployees.find((employee) => employee.userId === userId);
@@ -190,7 +158,7 @@ export function BathroomKeyLogPanel({
           employeeName: selectedEmployee?.fullName,
           personId: selectedEmployee?.userId,
         });
-        setSuccessMsg(`Checked out ${genderKey.toLowerCase()} key.`);
+        showToast(`Checked out ${genderKey.toLowerCase()} key.`);
         setPanelState((prev) => ({ ...prev, [genderKey]: { search: "", selectedUserId: null } }));
         await refreshStatus(date);
       } else {
@@ -212,7 +180,6 @@ export function BathroomKeyLogPanel({
   const handleReturn = async (genderKey: BathroomGenderKey, logId: string) => {
     if (!logId || actionBusy) return;
     setError("");
-    setSuccessMsg("");
     setActionBusy(genderKey);
     try {
       const activeHolder = genderKey === "MALE" ? status?.maleActive : status?.femaleActive;
@@ -224,7 +191,7 @@ export function BathroomKeyLogPanel({
           employeeName: activeHolder?.fullName,
           personId: activeHolder?.userId,
         });
-        setSuccessMsg(`Returned ${genderKey.toLowerCase()} key.`);
+        showToast(`Returned ${genderKey.toLowerCase()} key.`);
         await refreshStatus(date);
       } else {
         setError(res.error?.message ?? "Failed to return key.");
@@ -382,7 +349,7 @@ export function BathroomKeyLogPanel({
         </div>
 
         <div className="bathroom-log-history-section">
-          <h4>{genderKey === "MALE" ? "Male" : "Female"} Key Log ({date})</h4>
+          <h4>{genderKey === "MALE" ? "Male" : "Female"} key log · {formatDayHeading(date)}</h4>
           <div className="table-wrap">
             <table>
               <thead>
@@ -399,7 +366,7 @@ export function BathroomKeyLogPanel({
                 {logs.length === 0 ? (
                   <tr>
                     <td colSpan={6} style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
-                      No {genderKey.toLowerCase()} key activity recorded for {date}.
+                      No {genderKey.toLowerCase()} key activity recorded for {formatDayHeading(date)}.
                     </td>
                   </tr>
                 ) : (
@@ -411,7 +378,7 @@ export function BathroomKeyLogPanel({
                       </td>
                       <td>{formatTime(log.timeOut)}</td>
                       <td>{log.timeIn ? formatTime(log.timeIn) : "—"}</td>
-                      <td>{log.durationSeconds !== null ? formatDuration(log.durationSeconds) : "In Use"}</td>
+                      <td>{log.durationSeconds === null ? "In Use" : formatDuration(log.durationSeconds)}</td>
                       <td>
                         <span className={`status-pill ${log.status === "OUT" ? "status-working" : "status-completed"}`}>
                           {log.status === "OUT" ? "OUT" : "RETURNED"}
@@ -473,7 +440,6 @@ export function BathroomKeyLogPanel({
       </div>
 
       {error && <p className="dashboard-alert" role="alert">{error}</p>}
-      {successMsg && <p className="dashboard-alert" style={{ borderColor: "var(--gold-soft)", color: "var(--gold-bright)" }} role="status">{successMsg}</p>}
 
       {loading && !status ? (
         <div style={{ textAlign: "center", padding: "40px", color: "var(--muted)" }}>
@@ -523,6 +489,8 @@ function EditBathroomLogModal({
   const [notes, setNotes] = useState(log.notes ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogKeys(dialogRef, onClose, { busy });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -565,10 +533,11 @@ function EditBathroomLogModal({
       className="assisted-modal-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
       <section
+        ref={dialogRef}
         className="assisted-modal"
         role="dialog"
         data-testid="bathroom-edit-dialog"

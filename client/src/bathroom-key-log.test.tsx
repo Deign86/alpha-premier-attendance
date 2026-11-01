@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminUser, BathroomStatusResponse } from "@rfid-attendance/shared";
 import { BathroomKeyLogPanel } from "./bathroom-key-log";
+import { Toasts } from "./toasts";
 import * as api from "./api";
 import * as ttsService from "./services/ttsService";
 
@@ -246,7 +247,7 @@ describe("BathroomKeyLogPanel", () => {
     });
 
     const user = userEvent.setup();
-    render(<BathroomKeyLogPanel users={mockUsers} />);
+    render(<><BathroomKeyLogPanel users={mockUsers} /><Toasts /></>);
 
     // Click Edit button
     const editBtn = await screen.findByRole("button", { name: /edit key log for john doe/i });
@@ -276,8 +277,9 @@ describe("BathroomKeyLogPanel", () => {
       notes: "Forgot to time in",
     });
 
-    // Success message is displayed
+    // The routine success shows as a toast and the pop-up closes.
     expect(await screen.findByText(/saved — bathroom key times updated/i)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /edit bathroom key log/i })).not.toBeInTheDocument();
   });
 
   it("prevents saving and shows validation error when timeIn precedes timeOut", async () => {
