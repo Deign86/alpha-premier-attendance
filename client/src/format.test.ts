@@ -5,6 +5,7 @@ import {
   formatDateTime,
   formatDayHeading,
   formatDuration,
+  formatLateMinutes,
   formatMonth,
   formatShortDate,
   formatTime,
@@ -55,6 +56,14 @@ describe('shared date and time style', () => {
     expect(formatDuration(19_320)).toBe('5h 22m');
     expect(formatDuration(0)).toBe('0s');
     expect(formatDuration(-5)).toBe('0s');
+  });
+
+  it('formats minutes late with hours and two-digit minutes', () => {
+    expect(formatLateMinutes(13)).toBe('13m');
+    expect(formatLateMinutes(65)).toBe('1h 05m');
+    expect(formatLateMinutes(322)).toBe('5h 22m');
+    expect(formatLateMinutes(60)).toBe('1h 00m');
+    expect(formatLateMinutes(-3)).toBe('0m');
   });
 
   it('formats cutoff ranges with an en dash', () => {

@@ -1341,7 +1341,10 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(await screen.findByDisplayValue('08:00')).toBeInTheDocument();
+      // The row reads as plain times until Edit opens its time fields.
+      expect(await screen.findByText('8:00 AM')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Edit times for Ada Lovelace' }));
+      expect(screen.getByDisplayValue('08:00')).toBeInTheDocument();
       expect(screen.getByDisplayValue('17:00')).toBeInTheDocument();
 
       const clearInBtn = screen.getByRole('button', { name: /clear time in for ada lovelace/i });
@@ -1435,14 +1438,11 @@ describe('Admin Attendance Corrections', () => {
       expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
       expect(screen.getAllByTestId('clamped-time-in')).toHaveLength(1);
 
-      // The actual scan stays underneath in the real input.
-      expect(screen.getByDisplayValue('08:30')).toBeInTheDocument();
-
       // Capture the clamped row before the chip unmounts on reveal.
       const row = chip.closest('tr');
       expect(row).not.toBeNull();
 
-      // Clicking the chip reveals the actual value for editing.
+      // Clicking the chip opens the row with the actual scan in its time field.
       await user.click(chip);
       expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
       expect(screen.getByDisplayValue('08:30')).toHaveFocus();
@@ -1519,7 +1519,8 @@ describe('Admin Attendance Corrections', () => {
       const chip = await screen.findByTestId('clamped-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
       expect(chip.getAttribute('title')).toBe('Actual scan: 8:21 AM (payable time clamped)');
-      expect(screen.getByDisplayValue('08:21')).toBeInTheDocument();
+      await user.click(chip);
+      expect(screen.getByDisplayValue('08:21')).toHaveFocus();
     } finally {
       vi.useRealTimers();
       window.history.pushState({}, '', '/');
@@ -2553,7 +2554,7 @@ describe('Admin Attendance Corrections', () => {
     });
   });
 
-  it('creates a correction for 2026-09-01 while today is 2026-09-02 and ensures the row still shows 2026-09-01', async () => {
+  it('creates a correction for 2026-09-01 while today is 2026-09-02 and shows its row under Tue, Sep 1, 2026', async () => {
     vi.restoreAllMocks();
     let capturedBody: {
       userId?: string;
@@ -2672,9 +2673,9 @@ describe('Admin Attendance Corrections', () => {
         });
       });
 
-      // The row for 2026-09-01 is displayed in the table with date 2026-09-01
-      expect(await screen.findByText('2026-09-01')).toBeInTheDocument();
-      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+      // The table moves to 2026-09-01 (shown once above it) and lists the new row
+      expect(await screen.findByText('Tue, Sep 1, 2026')).toBeInTheDocument();
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -2747,6 +2748,7 @@ describe('Admin Attendance Corrections', () => {
 
       // By default, initial date shows Ada Lovelace for 2026-09-02
       expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      expect(screen.getByText('Wed, Sep 2, 2026')).toBeInTheDocument();
 
       // Change specific date to 2026-09-01
       const dateInput = screen.getByLabelText(/filter attendance date/i);
@@ -2754,11 +2756,12 @@ describe('Admin Attendance Corrections', () => {
 
       // After changing date to 2026-09-01, Charles Babbage is shown
       expect(await screen.findByText('Charles Babbage')).toBeInTheDocument();
-      expect(screen.getByText('2026-09-01')).toBeInTheDocument();
+      expect(screen.getByText('Tue, Sep 1, 2026')).toBeInTheDocument();
 
       // Other dates are not shown
       expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
-      expect(screen.queryByText('2026-08-30')).not.toBeInTheDocument();
+      expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument();
+      expect(screen.queryByText('Sun, Aug 30, 2026')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
       window.history.pushState({}, '', '/');
@@ -2835,11 +2838,14 @@ describe('Admin Attendance Corrections', () => {
 
     try {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      fireEvent.change(screen.getByLabelText(/filter attendance date/i), { target: { value: '2026-09-01' } });
 
-      // Table row shows 2026-09-01
-      expect(await screen.findByText('2026-09-01')).toBeInTheDocument();
+      // The table shows 2026-09-01 once, above Ada's row
+      expect(await screen.findByText('Tue, Sep 1, 2026')).toBeInTheDocument();
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
 
       // Edit time-out
+      await user.click(screen.getByRole('button', { name: 'Edit times for Ada Lovelace' }));
       const timeOutInput = screen.getByLabelText(/^time out for ada lovelace$/i);
       fireEvent.change(timeOutInput, { target: { value: '18:00' } });
 
@@ -2854,8 +2860,9 @@ describe('Admin Attendance Corrections', () => {
         });
       });
 
-      // Row still displays 2026-09-01
-      expect(screen.getByText('2026-09-01')).toBeInTheDocument();
+      // The row closes again and the table still shows 2026-09-01
+      await waitFor(() => expect(screen.queryByLabelText(/^time out for ada lovelace$/i)).not.toBeInTheDocument());
+      expect(screen.getByText('Tue, Sep 1, 2026')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -2951,9 +2958,11 @@ describe('Admin Attendance Corrections', () => {
       for (const h of rfidHandlers) h('ADDE23');
     });
 
-    // Unlocks Admin panel directly
+    // Unlocks Admin panel directly, opening on Attendance corrections
     expect(capturedAdminUnlockBody).toEqual({ pin: 'ADDE23' });
     expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveAttribute('aria-current', 'page');
+    expect(await screen.findByText(/^Total records: /)).toBeInTheDocument();
   });
 
   it('switches between Attendance and Bathroom Key Log mode via header buttons and 1/2 keybindings', async () => {
@@ -3064,10 +3073,12 @@ describe('Admin Attendance Corrections', () => {
       expect(inHeader.getByRole('button', { name: 'Lock' })).toBeInTheDocument();
 
       // Below the header, one row with two separate bars: the five section tabs, then the mode switch.
-      const tabNames = ['Users and RFID', 'Attendance corrections', 'Payroll', 'Data and backup', 'Voice announcements'];
+      // Attendance corrections comes first and is where the admin page opens.
+      const tabNames = ['Attendance corrections', 'Users and RFID', 'Payroll', 'Data and backup', 'Voice announcements'];
       const tabs = screen.getByRole('button', { name: 'Payroll' }).parentElement;
-      tabNames.forEach((name) => expect(within(tabs!).getByRole('button', { name })).toBeInTheDocument());
-      expect(within(tabs!).getByRole('button', { name: 'Users and RFID' })).toHaveAttribute('aria-current', 'page');
+      expect(within(tabs!).getAllByRole('button').map((tab) => tab.textContent)).toEqual(tabNames);
+      expect(within(tabs!).getByRole('button', { name: 'Attendance corrections' })).toHaveAttribute('aria-current', 'page');
+      expect(within(tabs!).getByRole('button', { name: 'Users and RFID' })).not.toHaveAttribute('aria-current');
       const switcher = screen.getByRole('tablist', { name: 'Administrator mode switcher' });
       expect(header).not.toContainElement(tabs);
       expect(header).not.toContainElement(switcher);
@@ -3556,6 +3567,7 @@ describe('N7 concurrent voice regen ownership', () => {
       vi.spyOn(api, 'regenerateVoiceClip').mockImplementation((personId: string) => (personId === 'uA' ? regenA : regenB));
       vi.spyOn(api, 'pollVoiceClipReady').mockImplementation((personId: string) => (personId === 'uA' ? pollA : pollB));
       render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /users and rfid/i }));
       await screen.findByText('Ada Alpha');
       await screen.findByText('Zed Beta');
       const adaRow = (await screen.findByText('Ada Alpha')).closest('tr');
@@ -3820,24 +3832,21 @@ describe('hourly late clamp', () => {
       expect(chips).toHaveLength(6);
       expect(chips.filter((chip) => chip.textContent === '10:00 AM')).toHaveLength(4);
       expect(chips.filter((chip) => chip.textContent === '11:00 AM')).toHaveLength(1);
-      expect(screen.getByDisplayValue('09:03')).toBeInTheDocument();
-      expect(screen.getAllByDisplayValue('09:15')).toHaveLength(3);
-      expect(screen.getAllByDisplayValue('08:15')).toHaveLength(2);
-      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
-      expect(screen.getAllByDisplayValue('09:16')).toHaveLength(2);
-      expect(screen.getByDisplayValue('10:16')).toBeInTheDocument();
-      const boundaryGraceInput = screen.getAllByDisplayValue('08:15').find((input) =>
-        input.closest('tr')?.textContent?.includes('Grace Hopper'),
-      );
-      expect(boundaryGraceInput?.closest('tr')).toHaveTextContent('9:00 AM');
-      const exactGraceInput = screen.getAllByDisplayValue('08:15').find((input) =>
-        input.closest('tr')?.textContent?.includes('Charles Babbage'),
-      );
-      expect(exactGraceInput?.closest('tr')).not.toHaveTextContent('clamped');
-      const subMillisecondClampInput = screen.getAllByDisplayValue('09:15').find((input) =>
-        input.closest('tr')?.textContent?.includes('2026-08-03'),
-      );
-      expect(subMillisecondClampInput?.closest('tr')).toHaveTextContent('10:00 AM');
+      // Each chip keeps the actual scan in its tooltip; rows that are not clamped show the actual time.
+      const actualScan = (time: string) => `Actual scan: ${time} (payable time clamped)`;
+      const chipsFor = (time: string) => chips.filter((chip) => chip.getAttribute('title') === actualScan(time));
+      expect(chipsFor('9:16 AM')).toHaveLength(2);
+      expect(chipsFor('10:16 AM')).toHaveLength(1);
+      // 09:15:00.001 and the next week's 09:15 plus a nanosecond are both past :15.
+      expect(chipsFor('9:15 AM').map((chip) => chip.textContent)).toEqual(['10:00 AM', '10:00 AM']);
+      expect(screen.getByText('9:03 AM')).toBeInTheDocument();
+      expect(screen.getByText('9:15 AM')).toBeInTheDocument();
+      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
+      // A nanosecond past the 08:15 grace window clamps to 9:00; exactly 08:15 stays the actual grace arrival.
+      const [boundaryGraceChip] = chipsFor('8:15 AM');
+      expect(boundaryGraceChip).toHaveTextContent('9:00 AM');
+      expect(boundaryGraceChip.closest('tr')).toHaveTextContent('Grace Hopper');
+      expect(screen.getByText('8:15 AM').closest('tr')).toHaveTextContent('Charles Babbage');
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -3868,8 +3877,10 @@ describe('hourly late clamp', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(await screen.findByTestId('clamped-time-in')).toHaveTextContent('10:00 AM');
-      expect(screen.getByDisplayValue('09:30')).toBeInTheDocument();
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('10:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 9:30 AM (payable time clamped)');
+      expect(screen.getByText('8:06 AM')).toBeInTheDocument();
 
       await user.click(await screen.findByRole('button', { name: /export csv/i }));
       await waitFor(() => expect(exportedBlobs.length).toBeGreaterThan(0));
@@ -3921,7 +3932,7 @@ describe('hourly late clamp', () => {
       // SAFETY: the chip renders inside its attendance row
       expect((chips[0] as HTMLElement).closest('tr')).toHaveTextContent('Charles Babbage');
       // u3's first grace-window arrival stays actual.
-      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -3946,14 +3957,14 @@ describe('hourly late clamp', () => {
 
       const chips = await screen.findAllByTestId('clamped-time-in');
       expect(chips).toHaveLength(2);
-      const dates = chips.map((chip) => {
-        // SAFETY: the chip renders inside its attendance row
-        const rowElement = chip.closest('tr') as HTMLTableRowElement;
-        return within(rowElement).getAllByRole('cell')[1].textContent;
-      });
-      expect(dates).toEqual(expect.arrayContaining(['2026-07-28', '2026-08-04']));
-      // New week's graced first late keeps its actual time.
-      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+      // The chipped rows are Tuesday 2026-07-28 (08:30) and Tuesday 2026-08-04 (08:20).
+      expect(chips.map((chip) => chip.getAttribute('title'))).toEqual(expect.arrayContaining([
+        'Actual scan: 8:30 AM (payable time clamped)',
+        'Actual scan: 8:20 AM (payable time clamped)',
+      ]));
+      // Each week's graced first late keeps its actual time.
+      expect(screen.getByText('8:06 AM')).toBeInTheDocument();
+      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -4096,6 +4107,8 @@ describe('Users and RFID: registration form on demand', () => {
     window.history.pushState({}, '', '/admin');
     const user = userEvent.setup();
     render(<App />);
+    // Admin opens on Attendance corrections; this tab is second.
+    await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
     await screen.findByText('Ada Lovelace');
     return user;
   }
@@ -4232,6 +4245,7 @@ describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
     try {
       const user = userEvent.setup();
       render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
       await screen.findByText('Juan Dela Cruz');
       const addUser = screen.getByRole('button', { name: /^add user$/i });
       await user.click(addUser);
@@ -4262,15 +4276,13 @@ describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
     try {
       const user = userEvent.setup();
       render(<App />);
-      expect(await screen.findByText("Couldn't load users.")).toBeInTheDocument();
-      expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
-
-      // The failure does not block Attendance corrections.
-      await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+      // The failure does not block Attendance corrections, where the admin page opens.
       expect(await screen.findByText('Total records: 1')).toBeInTheDocument();
       const attendanceLoads = calls.attendance;
 
       await user.click(screen.getByRole('button', { name: /users and rfid/i }));
+      expect(await screen.findByText("Couldn't load users.")).toBeInTheDocument();
+      expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: /retry/i }));
       expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
       expect(screen.queryByText("Couldn't load users.")).not.toBeInTheDocument();
@@ -4295,6 +4307,7 @@ describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
     window.history.pushState({}, '', '/admin');
     try {
       render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /users and rfid/i }));
       expect(await screen.findByText('Loading users…')).toBeInTheDocument();
       expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
       act(() => releaseUsers());
@@ -4347,6 +4360,7 @@ describe('Admin results and date changes', () => {
     try {
       const user = userEvent.setup();
       render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
       await screen.findByText('Juan Dela Cruz');
       await user.click(screen.getByRole('button', { name: /^add user$/i }));
       await user.type(screen.getByLabelText(/^user id/i), 'APG-2026-002');
@@ -4385,6 +4399,676 @@ describe('Admin results and date changes', () => {
       expect(screen.getByRole('button', { name: /^select all$/i })).toBeDisabled();
       expect(screen.getByRole('checkbox', { name: /select all attendance records/i })).toBeDisabled();
     } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Attendance corrections: rows open on Edit', () => {
+  type MockRow = {
+    attendanceId: string; attendanceDate: string; userId: string; fullName: string; department: string;
+    timeIn: string; timeOut: string | null; status: string; source: string;
+  };
+  const people = [
+    { userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE', cardType: 'EMPLOYEE' },
+  ];
+  /** One day: Juan late 1h 05m, Maria late 5h 22m (still working), Jose late 20m. */
+  const day = (date: string, juanIn = '09:05:00'): MockRow[] => [
+    { attendanceId: `${date}-juan`, attendanceDate: date, userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales', timeIn: `${date}T${juanIn}+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+    { attendanceId: `${date}-maria`, attendanceDate: date, userId: 'APG-2026-002', fullName: 'Maria Clara', department: 'Sales', timeIn: `${date}T13:22:00+08:00`, timeOut: null, status: 'WORKING', source: 'RFID' },
+    { attendanceId: `${date}-jose`, attendanceDate: date, userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Sales', timeIn: `${date}T08:20:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+  ];
+  type SaveBody = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null };
+
+  /** The mocked server's rows by date (a test may change them to stand for a new scan). */
+  let stored = new Map<string, MockRow[]>();
+  type SaveError = { code: string; message: string };
+  /**
+   * Admin whose attendance for any date is `day(date)`; a save updates the stored row. `holdSave` delays the save's
+   * answer; `failSave` may answer a save with an error instead (the record then stays as stored).
+   */
+  function mockAdmin(holdSave?: Promise<void>, juanIn?: string, failSave?: () => SaveError | null) {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    stored = new Map<string, MockRow[]>();
+    const saves: SaveBody[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance/') && init?.method === 'PATCH') {
+        // SAFETY: Parse the mocked save body
+        const body = JSON.parse(String(init.body)) as SaveBody;
+        saves.push(body);
+        await holdSave;
+        const error = failSave?.() ?? null;
+        if (error) {
+          // SAFETY: Mock failed save response
+          return { ok: true, json: async () => ({ success: false, error }) } as Response;
+        }
+        for (const list of stored.values()) {
+          const row = list.find((item) => url.includes(`/api/admin/attendance/${item.attendanceId}`));
+          if (row) {
+            row.timeIn = body.timeIn ?? '';
+            row.timeOut = body.timeOut ?? null;
+          }
+        }
+        // SAFETY: Mock save response
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance/backdate')) {
+        // SAFETY: Mock missed-attendance add
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        const date = /date=([^&]+)/.exec(url)?.[1] ?? '2026-07-28';
+        if (!stored.has(date)) stored.set(date, day(date, juanIn));
+        const rows = (stored.get(date) ?? []).map((row) => ({ ...row }));
+        // SAFETY: Mock attendance list for the requested date
+        return { ok: true, json: async () => ({ success: true, date, attendance: rows }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, payroll PDFs, bathroom)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [], payrollPdfs: [] }) } as Response;
+    });
+    return saves;
+  }
+
+  /** Opens Attendance corrections on Tue, Jul 28, 2026 and returns Juan's row. */
+  async function openDay(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+    fireEvent.change(screen.getByLabelText('Filter attendance date'), { target: { value: '2026-07-28' } });
+    expect(await screen.findByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+    return rowOf(await screen.findByText('Juan Dela Cruz'));
+  }
+  function rowOf(element: HTMLElement): HTMLElement {
+    const row = element.closest('tr');
+    if (!row) throw new Error('not in a table row');
+    return row;
+  }
+
+  it('shows each row read-only with plain times until Edit, and Cancel closes it again', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+
+      // Read-only: plain times, "—" for a missing time-out, quiet Edit and Delete, no time fields anywhere.
+      expect(within(juan).getByText('9:05 AM')).toBeInTheDocument();
+      expect(within(juan).getByText('5:00 PM')).toBeInTheDocument();
+      expect(within(rowOf(screen.getByText('Maria Clara'))).getByText('—')).toBeInTheDocument();
+      expect(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' })).toBeInTheDocument();
+      expect(within(juan).getByRole('button', { name: "Delete Juan Dela Cruz's record" })).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^time (in|out) for/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument();
+
+      // Edit opens only that row: its time fields (focus on time in), Save and Cancel instead of Edit and Delete.
+      await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      expect(within(juan).getByLabelText('Time in for Juan Dela Cruz')).toHaveValue('09:05');
+      expect(within(juan).getByLabelText('Time in for Juan Dela Cruz')).toHaveFocus();
+      expect(within(juan).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:00');
+      expect(within(juan).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+      expect(within(juan).queryByRole('button', { name: "Delete Juan Dela Cruz's record" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Time in for Maria Clara')).not.toBeInTheDocument();
+      // Opening a row changes nothing yet.
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+
+      // A change shows "Unsaved" (and the gold edge); Cancel throws it away and goes back to plain times.
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+      expect(within(juan).getByText('Unsaved')).toBeInTheDocument();
+      expect(juan).toHaveClass('is-unsaved');
+      await user.click(within(juan).getByRole('button', { name: 'Cancel' }));
+      expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument();
+      expect(within(juan).getByText('5:00 PM')).toBeInTheDocument();
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+      expect(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' })).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps unsaved times through a search, and asks before another date discards them', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+
+      // Searching hides the row; clearing the search brings it back with the typing kept.
+      const search = screen.getByPlaceholderText('Name or ID');
+      await user.type(search, 'Maria');
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+      await user.clear(search);
+      const back = rowOf(await screen.findByText('Juan Dela Cruz'));
+      expect(within(back).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(within(back).getByText('Unsaved')).toBeInTheDocument();
+
+      // Another date asks first; Keep editing stays on this day with the typing.
+      const dateInput = screen.getByLabelText('Filter attendance date');
+      fireEvent.change(dateInput, { target: { value: '2026-07-29' } });
+      const ask = screen.getByRole('dialog', { name: 'Discard unsaved changes?' });
+      expect(ask).toHaveTextContent('Some times on Tue, Jul 28, 2026 are not saved yet. Showing Wed, Jul 29, 2026 discards them.');
+      await user.click(within(ask).getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+      expect(dateInput).toHaveValue('2026-07-28');
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // Discard changes shows the other date, every row read-only.
+      fireEvent.change(dateInput, { target: { value: '2026-07-29' } });
+      await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+      expect(await screen.findByText('Wed, Jul 29, 2026')).toBeInTheDocument();
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^time (in|out) for/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('Unsaved')).not.toBeInTheDocument();
+
+      // With nothing unsaved, a date change just happens.
+      fireEvent.change(dateInput, { target: { value: '2026-07-28' } });
+      expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+      expect(await screen.findByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('saves only the changed time, shows Saving… and then the row read-only with its new time', async () => {
+    let releaseSave: () => void = () => {};
+    // Time in with seconds: it must go back exactly as stored, while the edited time-out is rebuilt.
+    const saves = mockAdmin(new Promise<void>((resolve) => { releaseSave = resolve; }), '09:05:42');
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+
+      expect(await within(juan).findByRole('button', { name: 'Saving…' })).toBeDisabled();
+      act(() => releaseSave());
+
+      // The untouched time-in keeps its exact stamp (seconds and all); the edited time-out is rebuilt as HH:MM:00.
+      expect(saves).toEqual([{
+        attendanceDate: '2026-07-28',
+        timeIn: '2026-07-28T09:05:42+08:00',
+        timeOut: '2026-07-28T17:30:00+08:00',
+        expectedTimeIn: '2026-07-28T09:05:42+08:00',
+        expectedTimeOut: '2026-07-28T17:00:00+08:00',
+      }]);
+      await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
+      expect(within(juan).getByText('5:30 PM')).toBeInTheDocument();
+      expect(await screen.findByText("Saved Juan Dela Cruz's times.")).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows the chosen day once above the table and late arrivals in hours and minutes', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+
+      // The day sits once beside the count; no Date column and no 2026-07-28 anywhere in the table.
+      expect(screen.getAllByText('Tue, Jul 28, 2026')).toHaveLength(1);
+      expect(screen.getByText('Total records: 3')).toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: 'Date' })).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-07-28')).not.toBeInTheDocument();
+
+      // "Late 1h 05m", "Late 5h 22m", "Late 20m"; the tooltip keeps the minutes.
+      expect(within(juan).getByText('Late 1h 05m')).toHaveAttribute('title', 'Late arrival (65 minutes)');
+      expect(screen.getByText('Late 5h 22m')).toBeInTheDocument();
+      expect(screen.getByText('Late 20m')).toBeInTheDocument();
+
+      // A confirmation that names the day uses the same date style.
+      await user.click(within(juan).getByRole('button', { name: "Delete Juan Dela Cruz's record" }));
+      expect(screen.getByRole('dialog', { name: 'Delete attendance record?' })).toHaveTextContent(
+        "This will permanently delete Juan Dela Cruz's time-in/time-out record for Tue, Jul 28, 2026.",
+      );
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+  /** Opens Juan's row and types a new time-out into it. */
+  async function editJuan(user: ReturnType<typeof userEvent.setup>, juan: HTMLElement, timeOut = '17:30') {
+    await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+    fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: timeOut } });
+  }
+  const discardQuestion = () => screen.queryByRole('dialog', { name: 'Discard unsaved changes?' });
+
+  it('asks before a tab, Bathroom mode (button or the 2 key) or Lock throws away unsaved times', { timeout: 20000 }, async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+
+      // Another tab asks, naming this section; Keep editing keeps the typing.
+      await user.click(screen.getByRole('button', { name: 'Payroll' }));
+      expect(discardQuestion()).toHaveTextContent('You have unsaved changes in Attendance corrections. Leaving now discards them.');
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // The 2 key asks too, even with focus on the row's Save button.
+      const save = within(juan).getByRole('button', { name: 'Save' });
+      save.focus();
+      fireEvent.keyDown(save, { key: '2' });
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+
+      // So do the Bathroom Key Log button and Lock.
+      await user.click(screen.getByRole('tab', { name: /bathroom key log/i }));
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await user.click(screen.getByRole('button', { name: 'Lock' }));
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // Discard changes goes ahead; afterwards nothing is guarded.
+      await user.click(screen.getByRole('button', { name: 'Payroll' }));
+      await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+      expect(screen.getByRole('button', { name: 'Payroll' })).toHaveAttribute('aria-current', 'page');
+      await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Payroll' }));
+      expect(discardQuestion()).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('asks before Today or an added missed attendance moves to another date, and Keep editing stays', { timeout: 20000 }, async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+
+      await user.click(screen.getByRole('button', { name: 'Today' }));
+      expect(discardQuestion()).toHaveTextContent('Some times on Tue, Jul 28, 2026 are not saved yet.');
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+
+      // A missed attendance added for yesterday would show that day: it asks first.
+      await user.click(screen.getByRole('button', { name: /\+ add missed attendance/i }));
+      const add = await screen.findByRole('dialog', { name: /add missed attendance/i });
+      await user.type(within(add).getByLabelText(/reason \(mandatory audit trail\):/i), 'Forgot card');
+      await user.click(within(add).getByRole('button', { name: /add missed attendance/i }));
+      expect(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('holds a date typed by keyboard while rows are unsaved, asking only on Enter or leaving the field', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      const dateInput = screen.getByLabelText('Filter attendance date');
+
+      // A year typed digit by digit passes through 0002 and 2026: no question while typing.
+      fireEvent.keyDown(dateInput, { key: '2' });
+      fireEvent.change(dateInput, { target: { value: '0002-07-29' } });
+      expect(discardQuestion()).not.toBeInTheDocument();
+      expect(dateInput).toHaveValue('0002-07-29');
+      fireEvent.keyDown(dateInput, { key: '6' });
+      fireEvent.change(dateInput, { target: { value: '2026-07-29' } });
+      expect(discardQuestion()).not.toBeInTheDocument();
+
+      fireEvent.keyDown(dateInput, { key: 'Enter' });
+      expect(discardQuestion()).toHaveTextContent('Showing Wed, Jul 29, 2026 discards them.');
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(dateInput).toHaveValue('2026-07-28');
+
+      // Leaving the field asks too.
+      fireEvent.keyDown(dateInput, { key: '3' });
+      fireEvent.change(dateInput, { target: { value: '2026-07-30' } });
+      fireEvent.blur(dateInput);
+      expect(discardQuestion()).toHaveTextContent('Showing Thu, Jul 30, 2026 discards them.');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps a row open with the server times and the problem when the record changed before Save', async () => {
+    const conflict = 'This record was changed by another update. The list was reloaded — check the times and save again.';
+    mockAdmin(undefined, undefined, () => ({ code: 'ATTENDANCE_CONFLICT', message: conflict }));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      // Meanwhile the kiosk records a new time-out for Juan.
+      const stamped = stored.get('2026-07-28')?.find((row) => row.fullName === 'Juan Dela Cruz');
+      if (!stamped) throw new Error('no stored row for Juan');
+      stamped.timeOut = '2026-07-28T17:45:00+08:00';
+
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText(conflict)).toBeInTheDocument();
+      await waitFor(() => expect(within(juan).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:45'));
+      expect(within(juan).getByRole('button', { name: 'Save' })).toBeEnabled();
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+      // The server's message is enough: no second "record changed" note.
+      expect(screen.queryByText(/Your typed times were cleared/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('saves a time-out after 6:00 PM and keeps the late time-out note on its own line under the row', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan, '18:30');
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+
+      const note = await screen.findByText('Saved — time-out is still after office hours, correction remains required.');
+      await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
+      expect(within(juan).getByText('6:30 PM')).toBeInTheDocument();
+      expect(note.closest('tr')).toHaveClass('attendance-row-note');
+      expect(juan.nextElementSibling).toBe(note.closest('tr'));
+      expect(screen.queryByText("Saved Juan Dela Cruz's times.")).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('opens two rows at once, locks the date while one saves, and leaves focus where the admin is typing', async () => {
+    let releaseSave: () => void = () => {};
+    mockAdmin(new Promise<void>((resolve) => { releaseSave = resolve; }));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      const maria = rowOf(screen.getByText('Maria Clara'));
+      await editJuan(user, juan);
+      await user.click(within(maria).getByRole('button', { name: 'Edit times for Maria Clara' }));
+      fireEvent.change(within(maria).getByLabelText('Time out for Maria Clara'), { target: { value: '17:10' } });
+      expect(within(juan).getByText('Unsaved')).toBeInTheDocument();
+      expect(within(maria).getByText('Unsaved')).toBeInTheDocument();
+
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+      // While a row saves, the date stays put.
+      expect(screen.getByLabelText('Filter attendance date')).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Today' })).toBeDisabled();
+      // The admin carries on in Maria's row.
+      const mariaIn = within(maria).getByLabelText('Time in for Maria Clara');
+      mariaIn.focus();
+      act(() => releaseSave());
+
+      await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
+      expect(mariaIn).toHaveFocus();
+      expect(within(maria).getByLabelText('Time out for Maria Clara')).toHaveValue('17:10');
+      expect(screen.getByLabelText('Filter attendance date')).toBeEnabled();
+
+      // Cancel closes only Maria's row and gives focus to its Edit.
+      await user.click(within(maria).getByRole('button', { name: 'Cancel' }));
+      expect(within(maria).getByRole('button', { name: 'Edit times for Maria Clara' })).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('says so when a refresh replaced typed times because the record changed on the server', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      const maria = rowOf(screen.getByText('Maria Clara'));
+      await editJuan(user, juan);
+      // A new scan changes Juan's record; Maria's save refreshes the list.
+      const stamped = stored.get('2026-07-28')?.find((row) => row.fullName === 'Juan Dela Cruz');
+      if (!stamped) throw new Error('no stored row for Juan');
+      stamped.timeOut = '2026-07-28T17:45:00+08:00';
+      await user.click(within(maria).getByRole('button', { name: 'Edit times for Maria Clara' }));
+      fireEvent.change(within(maria).getByLabelText('Time out for Maria Clara'), { target: { value: '17:10' } });
+      await user.click(within(maria).getByRole('button', { name: 'Save' }));
+
+      expect(await screen.findByText('This record changed (for example a new scan). Your typed times were cleared; check and edit again.')).toBeInTheDocument();
+      expect(within(juan).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:45');
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+      // Typing again answers the note.
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:50' } });
+      expect(screen.queryByText(/Your typed times were cleared/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('points out unsaved rows hidden by the filters and shows them again', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      await user.type(screen.getByPlaceholderText('Name or ID'), 'Maria');
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+      expect(screen.getByText(/^1 unsaved row hidden by filters/)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Show' }));
+      expect(screen.getByPlaceholderText('Name or ID')).toHaveValue('');
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(screen.queryByText(/hidden by filters/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Sort by time in: Attendance corrections and Live attendance', () => {
+  /** Four people on one day: Maria last in (1:22 PM), Juan, Jose first in (8:20 AM), Andres with no time in. */
+  const rowsFor = (date: string) => [
+    { attendanceId: 'r-juan', attendanceDate: date, userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales', timeIn: `${date}T09:05:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+    { attendanceId: 'r-andres', attendanceDate: date, userId: 'APG-2026-004', fullName: 'Andres Bonifacio', department: 'Operations', timeIn: '', timeOut: null, status: 'MISSED', source: 'RFID' },
+    { attendanceId: 'r-maria', attendanceDate: date, userId: 'APG-2026-002', fullName: 'Maria Clara', department: 'Sales', timeIn: `${date}T13:22:00+08:00`, timeOut: null, status: 'WORKING', source: 'RFID' },
+    { attendanceId: 'r-jose', attendanceDate: date, userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Operations', timeIn: `${date}T08:20:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+  ];
+  function mockFetch() {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance') || url === '/api/attendance') {
+        const date = /date=([^&]+)/.exec(url)?.[1] ?? '2026-07-28';
+        // SAFETY: Mock attendance list (admin date list and the live snapshot)
+        return { ok: true, json: async () => ({ success: true, date, fetchedAt: `${date}T15:00:00+08:00`, attendance: rowsFor(date) }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, users, payroll, LAN)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', users: [], payroll: [], profiles: [], attendance: [] }) } as Response;
+    });
+  }
+  /** Names in the order the table shows them. */
+  const shownNames = () => [...document.querySelectorAll('tbody tr')].flatMap((row) => {
+    const name = row.querySelector('td strong')?.textContent;
+    return name ? [name] : [];
+  });
+
+  it('sorts corrections by time in, newest first, empty time in last, keeping filters, ticks and open rows', async () => {
+    localStorage.clear();
+    mockFetch();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+
+      // Newest first by default; the heading says so to screen readers and its button names the other order.
+      const heading = screen.getByRole('columnheader', { name: /time in/i });
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Jose Rizal', 'Andres Bonifacio']);
+
+      // An open row with a change and a ticked row survive the re-sort.
+      const juan = screen.getByText('Juan Dela Cruz').closest('tr');
+      expect(juan).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null above
+      await user.click(within(juan as HTMLElement).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      fireEvent.change(screen.getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' }));
+
+      // The heading keeps its name; the tooltip says what a click does.
+      const sortButton = within(heading).getByRole('button', { name: 'Time in' });
+      expect(sortButton).toHaveAttribute('title', 'Sort by time in, oldest first');
+      await user.click(sortButton);
+      expect(heading).toHaveAttribute('aria-sort', 'ascending');
+      expect(sortButton).toHaveAttribute('title', 'Sort by time in, newest first');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' })).toBeChecked();
+      expect(localStorage.getItem('alpha_premier_sort_attendance_corrections')).toBe('oldest');
+
+      // A status filter and a search keep the order.
+      await user.click(screen.getByRole('button', { name: /^completed \d+$/i }));
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz']);
+      await user.click(screen.getByRole('button', { name: /^all \d+$/i }));
+      await user.type(screen.getByPlaceholderText('Name or ID'), 'c');
+      expect(shownNames()).toEqual(['Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+
+      // Phones get the same choice as a small toggle beside the count (hidden on wide screens).
+      const toggle = screen.getByText('Oldest first');
+      expect(toggle).toHaveClass('time-order-toggle');
+      fireEvent.click(toggle);
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(toggle).toHaveTextContent('Newest first');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Andres Bonifacio']);
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('opens corrections in the order the viewer chose last time', async () => {
+    localStorage.clear();
+    localStorage.setItem('alpha_premier_sort_attendance_corrections', 'oldest');
+    mockFetch();
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      expect(screen.getByRole('columnheader', { name: /time in/i })).toHaveAttribute('aria-sort', 'ascending');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('sorts Live attendance by time in together with the search and department filter', async () => {
+    localStorage.clear();
+    mockFetch();
+    window.history.pushState({}, '', '/attendance');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      const heading = screen.getByRole('columnheader', { name: /time in/i });
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Jose Rizal', 'Andres Bonifacio']);
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Department' }), 'Operations');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Andres Bonifacio']);
+      await user.click(within(heading).getByRole('button', { name: 'Time in' }));
+      expect(heading).toHaveAttribute('aria-sort', 'ascending');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Andres Bonifacio']);
+      expect(localStorage.getItem('alpha_premier_sort_live_attendance')).toBe('oldest');
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Department' }), '');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+      await user.type(screen.getByRole('searchbox', { name: 'Search name or ID' }), 'c');
+      expect(shownNames()).toEqual(['Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+
+      // The phone toggle flips the same order.
+      fireEvent.click(screen.getByText('Oldest first'));
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Andres Bonifacio']);
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Sort by time in: clamped rows', () => {
+  it('sorts a clamped time-in by the payable time it shows, and the heading keeps its name', async () => {
+    localStorage.clear();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users: one intern (clamped after the week's grace) and one employee
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', rfidUid: 'RFID-4', employeeType: 'INTERN', status: 'ACTIVE' },
+              { userId: 'APG-2026-005', fullName: 'Gabriela Silang', rfidUid: 'RFID-5', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Monday's grace for the intern, then Tuesday 8:30 (shown as 9:00 AM) and the employee's 8:45
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'l-mon', attendanceDate: '2026-07-27', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'g-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-005', fullName: 'Gabriela Silang', department: 'Finance', timeIn: '2026-07-28T08:45:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'l-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, week history)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [], attendance: [] }) } as Response;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('9:00 AM');
+      // Newest first by what the table shows: 9:00 AM (an 8:30 scan) comes before 8:45 AM.
+      const firstRows = [...document.querySelectorAll('tbody tr.attendance-row')].slice(0, 2);
+      expect(firstRows[0]).toContainElement(chip);
+      expect(firstRows[1]).toHaveTextContent('Gabriela Silang');
+      expect(firstRows[1]).toHaveTextContent('8:45 AM');
+      // The heading's name stays "Time in"; the order is in aria-sort and the action in the tooltip.
+      const heading = screen.getByRole('columnheader', { name: 'Time in' });
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(within(heading).getByRole('button', { name: 'Time in' })).toHaveAttribute('title', 'Sort by time in, oldest first');
+    } finally {
+      localStorage.clear();
       window.history.pushState({}, '', '/');
     }
   });

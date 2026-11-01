@@ -1697,3 +1697,19 @@ unchanged.
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 24 files / 469 tests passed.
 - [x] Review (3 lenses, each finding verified, 7 distinct problems fixed): the kiosk hint shows only for new cards; both bar layers share one grid cell so the list never jumps (measured equal heights at 320, 390, 430, 480, 540, 768, 1366); a search unticks rows it hides and the count and actions use shown rows only; focus hand-off only when the bar started the action and never behind a pop-up; kiosk 24px row gap only above 600px; the hint is a description (aria-describedby), not part of the field name; focus returns to the bar after a partial failure.
+
+## UI revamp batch 7: Attendance corrections, attendance-first admin, time sorting (client only; C1, C2, C3, C4 + user requests)
+
+- [x] C1: rows are read-only (plain times, arrival, status, Edit and coral Delete); Edit opens only that row with the time inputs, Save and Cancel; per-record drafts survive search, filters and sorting; an "Unsaved" tag and gold edge while changed; changing the date with unsaved rows asks first; the save payload and original-stamp logic are unchanged.
+  EVIDENCE: live shots b7-after-readonly and b7-after-editing (Maria Ramos open with "Unsaved", others read-only); 10 attendance tests now click Edit first; new tests for read-only, Edit/Cancel, Unsaved, search keeping drafts and the date-change question.
+- [x] C2/C3/C4: the day shows once ("Fri, Oct 30, 2026 · Total records: 35") with no Date column (CSV unchanged); one time format ("8:12 AM", late time-out note "6:00 PM"); arrival badges "Late 13m" / "Late 1h 12m".
+  EVIDENCE: b7-after-readonly; format.test.ts covers formatLateMinutes.
+- [x] User request: tabs ordered Attendance corrections, Users and RFID, Payroll, Data and backup, Voice announcements; admin opens on Attendance corrections.
+  EVIDENCE: captured tab list after unlock: ["*Attendance corrections","Users and RFID","Payroll","Data and backup","Voice announcements"].
+- [x] User request: a quiet newest/oldest sort (heading arrow with aria-sort, tiny phone toggle, remembered per page) by time in on Attendance corrections and Live attendance, and by time out on the admin bathroom key logs; empty times last.
+  EVIDENCE: corrections rows flip from 9:11 AM first to 7:30 AM first (b7-after-oldest); time-sort.test.tsx and page tests pass.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 25 files / 490 tests passed.
+- [x] Review (3 lenses, 17 verified findings, 12 distinct problems fixed, plus the lead's bathroom word-break): unsaved corrections now trigger the leave question on tab switch, the 2 key, Bathroom, Lock, page links, reload and update install, naming the section; focus returns after a save only if it was still in that row; the exact-stamp test uses seconds; clamped rows sort by the time shown; sort headings keep their names and row actions name the person; the date is locked while a row saves and load uses the current date's loader; a record changed by a refresh shows a note; unsaved rows hidden by filters are announced with Show; keyboard-typed dates commit on Enter or blur; row messages sit on their own line; bathroom log headings and pills never break mid-word (bathroom cards no longer scroll sideways at 390).

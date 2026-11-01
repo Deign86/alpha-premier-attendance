@@ -22,6 +22,7 @@ import { announceBathroom } from "./services/ttsService";
 import { formatDayHeading, formatDuration, formatTime } from "./format";
 import { showToast } from "./toasts";
 import { useDialogKeys } from "./use-dialog-keys";
+import { sortByTime, TimeSortHeading, useTimeOrder } from "./time-sort";
 
 export function getAvatarInitials(name: string): string {
   const tokens = name.trim().split(/\s+/).filter(Boolean);
@@ -68,6 +69,8 @@ export function BathroomKeyLogPanel({
     FEMALE: { search: "", selectedUserId: null },
   });
   const [editingLog, setEditingLog] = useState<BathroomLogItem | null>(null);
+  // One order for both key logs, on screen only.
+  const [logOrder, toggleLogOrder] = useTimeOrder("alpha_premier_sort_bathroom_key_log");
 
   const handleLogUpdated = (updated: BathroomLogItem) => {
     setStatus((prev) => {
@@ -355,7 +358,7 @@ export function BathroomKeyLogPanel({
               <thead>
                 <tr>
                   <th>Employee</th>
-                  <th>Time Out</th>
+                  <TimeSortHeading label="Time Out" order={logOrder} onToggle={toggleLogOrder} />
                   <th>Time In</th>
                   <th>Duration</th>
                   <th>Status</th>
@@ -370,7 +373,7 @@ export function BathroomKeyLogPanel({
                     </td>
                   </tr>
                 ) : (
-                  logs.map((log) => (
+                  sortByTime(logs, (log) => log.timeOut, logOrder).map((log) => (
                     <tr key={log.logId}>
                       <td>
                         <strong>{log.fullName}</strong>

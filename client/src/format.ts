@@ -67,6 +67,13 @@ export function formatDuration(totalSeconds: number): string {
   return `${seconds}s`;
 }
 
+/** Minutes late: "13m", "1h 05m", "5h 22m". */
+export function formatLateMinutes(totalMinutes: number): string {
+  const minutes = Math.max(0, Math.floor(totalMinutes));
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours}h ${String(minutes % 60).padStart(2, "0")}m` : `${minutes}m`;
+}
+
 /**
  * A payroll cutoff between two calendar days: "Oct 16–31, 2026", "Oct 16 – Nov 15, 2026" across months and
  * "Dec 16, 2026 – Jan 15, 2027" across years. Falls back to "start – end" when either day can't be read.

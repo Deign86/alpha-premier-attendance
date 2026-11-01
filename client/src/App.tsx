@@ -173,11 +173,12 @@ import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
 import { BathroomKeyLogPanel, getAvatarInitials } from "./bathroom-key-log";
-import { formatCutoffRange, formatDate, formatDateTime, formatDuration, formatMonth, formatTime } from "./format";
+import { formatCutoffRange, formatDate, formatDateTime, formatDuration, formatLateMinutes, formatMonth, formatTime } from "./format";
 import { useDialogKeys } from "./use-dialog-keys";
 import { NoticeLine, type Notice } from "./notice";
 import { Toasts, showToast } from "./toasts";
 import { LoadFailed, LoadingRows, useListLoad, type LoadStatus } from "./list-load";
+import { sortByTime, TimeOrderToggle, TimeSortHeading, useTimeOrder, type TimeOrder } from "./time-sort";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 
 function toErrorMessage(cause: unknown, fallback: string): string {
@@ -2600,6 +2601,7 @@ function LiveAttendance() {
   // On-screen filters only: the counts and the refresh cycle always cover the whole day.
   const [search, setSearch] = useState("");
   const [department, setDepartment] = useState("");
+  const [timeOrder, toggleTimeOrder] = useTimeOrder("alpha_premier_sort_live_attendance");
   const searchRef = useRef<HTMLInputElement>(null);
   const [tableUsers, setTableUsers] = useState<AdminUser[]>([]);
   const [clampHistory, setClampHistory] = useState<AttendanceListItem[]>([]);
@@ -2847,6 +2849,8 @@ function LiveAttendance() {
               <option key={name} value={name}>{name}</option>
             ))}
           </select>
+          {/* Phones: the cards have no Time in heading, so the order gets a small toggle here. */}
+          <TimeOrderToggle column="Time in" order={timeOrder} onToggle={toggleTimeOrder} />
         </div>
       )}
       {attendance.kind === "loading" ? null : liveRows.length > 0 && shownRows.length === 0 ? (
@@ -2860,6 +2864,8 @@ function LiveAttendance() {
           timezone="Asia/Manila"
           users={tableUsers}
           history={clampHistory}
+          order={timeOrder}
+          onToggleOrder={toggleTimeOrder}
         />
       )}
     </main>
@@ -3290,11 +3296,16 @@ function AttendanceTable({
   timezone,
   users = [],
   history = [],
+  order,
+  onToggleOrder,
 }: {
   rows: AttendanceListItem[];
   timezone: string;
   users?: AdminUser[];
   history?: AttendanceListItem[];
+  /** Time in order on screen (LiveAttendance keeps the viewer's choice). */
+  order: TimeOrder;
+  onToggleOrder: () => void;
 }) {
   const clampedTimeInIds = useMemo(
     () => clampedGraceTimeInIds([...rows, ...history], users),
@@ -3311,13 +3322,14 @@ function AttendanceTable({
           <tr>
             <th>Employee</th>
             <th>Department</th>
-            <th>Time in</th>
+            <TimeSortHeading label="Time in" order={order} onToggle={onToggleOrder} />
             <th>Time out</th>
             <th>Status</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {/* Sorted by the time shown: a clamped time-in sorts as its payable hour. */}
+          {sortByTime(rows, (row) => (clampedTimeInIds.has(row.attendanceId) && row.timeIn ? clampedTimeInIso(row.timeIn) : row.timeIn), order).map((row) => {
             const late = row.status === "LATE_TIMEOUT";
             return (
               <tr key={row.attendanceId}>
@@ -3370,9 +3382,10 @@ function AttendanceTable({
 
 type AdminTab = "users" | "attendance" | "payroll" | "data" | "voice";
 
+// Attendance corrections first: it is the main reason an admin opens this page.
 const ADMIN_TABS = [
-  { id: "users", label: "Users and RFID", Icon: Users },
   { id: "attendance", label: "Attendance corrections", Icon: ClipboardCheck },
+  { id: "users", label: "Users and RFID", Icon: Users },
   { id: "payroll", label: "Payroll", Icon: Wallet },
   { id: "data", label: "Data and backup", Icon: Database },
   { id: "voice", label: "Voice announcements", Icon: Volume2 },
@@ -3415,7 +3428,7 @@ function AdminPanel() {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [adminMode, setAdminMode] = useState<"attendance" | "bathroom">("attendance");
-  const [tab, setTab] = useState<AdminTab>("users");
+  const [tab, setTab] = useState<AdminTab>("attendance");
   // The gold thumb behind the current tab; measured so it can slide between tabs of different widths.
   const tabsRef = useRef<HTMLDivElement>(null);
   const [date, setDate] = useState(localDate());
@@ -3430,19 +3443,21 @@ function AdminPanel() {
   useEffect(() => {
     if (unlocked) setResettingPin(false);
   }, [unlocked]);
-  // Unsaved typing in User registration: anything that would close the Users tab asks first.
+  // Unsaved typing in User registration or in Attendance corrections: anything that would close that tab asks first.
   const [usersDirty, setUsersDirty] = useState(false);
+  const [attendanceDirty, setAttendanceDirty] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
-  const guardUsersForm = usersDirty && adminMode === "attendance" && tab === "users";
-  const leaveUsers = (action: () => void) => {
-    if (guardUsersForm) setPendingLeave(() => action);
+  const guardUnsaved =
+    adminMode === "attendance" && ((usersDirty && tab === "users") || (attendanceDirty && tab === "attendance"));
+  const leaveSection = (action: () => void) => {
+    if (guardUnsaved) setPendingLeave(() => action);
     else action();
   };
   // Set once a discard is confirmed for a link, so the browser doesn't ask a second time on the way out.
   const leavingRef = useRef(false);
   const leaveLink = (event: React.MouseEvent<HTMLAnchorElement>) => {
     // Ctrl/Cmd/Shift/middle clicks open a new tab or window, which keeps this page and its typing.
-    if (!guardUsersForm || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    if (!guardUnsaved || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     const href = event.currentTarget.href;
     setPendingLeave(() => () => {
@@ -3452,13 +3467,13 @@ function AdminPanel() {
   };
   // Closing or reloading the window: the browser shows its own "Leave site?" prompt.
   useEffect(() => {
-    if (!guardUsersForm) return;
+    if (!guardUnsaved) return;
     const warn = (event: BeforeUnloadEvent) => {
       if (!leavingRef.current) event.preventDefault();
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [guardUsersForm]);
+  }, [guardUnsaved]);
   // A prompt left open when the session locks must not come back (and run its old action) after unlocking.
   useEffect(() => {
     if (!unlocked) setPendingLeave(null);
@@ -3505,13 +3520,13 @@ function AdminPanel() {
       if (event.key === "1") {
         setAdminMode("attendance");
       } else if (event.key === "2") {
-        if (guardUsersForm) setPendingLeave(() => () => setAdminMode("bathroom"));
+        if (guardUnsaved) setPendingLeave(() => () => setAdminMode("bathroom"));
         else setAdminMode("bathroom");
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [unlocked, guardUsersForm]);
+  }, [unlocked, guardUnsaved]);
 
   useEffect(() => {
     if (unlocked) return;
@@ -3563,13 +3578,17 @@ function AdminPanel() {
   const users = usersList.data;
   // After a save or delete every list refreshes in place (names and pay can change with it).
   const refreshUsers = usersList.refresh;
-  const refreshRows = rowsList.refresh;
   const refreshCutoffs = cutoffsList.refresh;
-  const load = useCallback(() => {
-    void refreshUsers();
-    void refreshRows();
-    void refreshCutoffs();
-  }, [refreshUsers, refreshRows, refreshCutoffs]);
+  // Attendance refreshes through a ref: a save that finishes after the date changed refreshes the new date's
+  // rows, never the old date's (an old refresh would leave the new date loading).
+  const refreshRowsRef = useRef(rowsList.refresh);
+  useLayoutEffect(() => {
+    refreshRowsRef.current = rowsList.refresh;
+  }, [rowsList.refresh]);
+  // Resolves once all three have answered, so a saved attendance row can wait for its new times.
+  const load = useCallback(async () => {
+    await Promise.all([refreshUsers(), refreshRowsRef.current(), refreshCutoffs()]);
+  }, [refreshUsers, refreshCutoffs]);
   useEffect(() => {
     void checkAdminSession().then((expiresAt) => {
       setSessionExpiresAt(expiresAt ?? "");
@@ -3682,7 +3701,7 @@ function AdminPanel() {
               className="text-button"
               type="button"
               onClick={() =>
-                leaveUsers(() => {
+                leaveSection(() => {
                   void lockAdmin();
                   setUnlocked(false);
                   setSessionExpiresAt("");
@@ -3712,7 +3731,7 @@ function AdminPanel() {
                 type="button"
                 className={tab === id ? "is-active" : ""}
                 aria-current={tab === id ? "page" : undefined}
-                onClick={() => (id === tab ? undefined : leaveUsers(() => setTab(id)))}
+                onClick={() => (id === tab ? undefined : leaveSection(() => setTab(id)))}
               >
                 <Icon size={16} aria-hidden="true" />
                 {label}
@@ -3736,7 +3755,7 @@ function AdminPanel() {
             role="tab"
             aria-selected={adminMode === "bathroom"}
             className={`admin-mode-btn ${adminMode === "bathroom" ? "is-active" : ""}`}
-            onClick={() => leaveUsers(() => setAdminMode("bathroom"))}
+            onClick={() => leaveSection(() => setAdminMode("bathroom"))}
           >
             <span className="admin-mode-key-badge" aria-hidden="true">2</span>
             <span>Bathroom Key Log</span>
@@ -3765,6 +3784,7 @@ function AdminPanel() {
               setDate={setDate}
               users={users}
               onSaved={load}
+              onDirtyChange={setAttendanceDirty}
               loadStatus={rowsList.status}
               onRetry={() => void rowsList.reload()}
             />
@@ -3787,12 +3807,12 @@ function AdminPanel() {
         busy={false}
         tone="danger"
         title="Discard unsaved changes?"
-        message="You have unsaved changes in User registration. Leaving now discards them."
+        message={`You have unsaved changes in ${tab === "attendance" ? "Attendance corrections" : "User registration"}. Leaving now discards them.`}
         cancelLabel="Keep editing"
         confirmLabel="Discard changes"
         onCancel={() => setPendingLeave(null)}
         onConfirm={() => {
-          // Every waiting action closes the Users tab (its editor then reports "clean") or leaves the page.
+          // Every waiting action closes the guarded tab (it then reports "clean") or leaves the page.
           const action = pendingLeave;
           setPendingLeave(null);
           action?.();
@@ -3808,7 +3828,7 @@ function AdminPanel() {
         onCancel={() => setNukeConfirmOpen(false)}
         onConfirm={() => void nukeSheets()}
       />
-      <UpdateBanner manualCheckTrigger={manualUpdateCheck} beforeInstall={leaveUsers} />
+      <UpdateBanner manualCheckTrigger={manualUpdateCheck} beforeInstall={leaveSection} />
       <Toasts />
     </main>
   );
@@ -7938,12 +7958,37 @@ function clampedGraceTimeInIds(
 /** No rows: what the attendance page counts, selects and exports until a date's rows have loaded. */
 const NO_ATTENDANCE_ROWS: AttendanceListItem[] = [];
 
+/**
+ * A row open for editing: the times typed (HH:MM, "" when cleared), the record's stamps when it opened, and
+ * whether typed changes were cleared because the record changed on the server meanwhile.
+ */
+type AttendanceDraft = { timeIn: string; timeOut: string; fromIn: string; fromOut: string | null; changedOnServer: boolean };
+
+/** "2026-10-30T08:12:00+08:00" → "08:12", the value a time input shows. */
+function clockOf(stamp: string | null): string {
+  return stamp ? stamp.slice(11, 16) : "";
+}
+
+function draftFor(row: AttendanceListItem): AttendanceDraft {
+  return { timeIn: clockOf(row.timeIn), timeOut: clockOf(row.timeOut), fromIn: row.timeIn, fromOut: row.timeOut, changedOnServer: false };
+}
+
+const RECORD_CHANGED_NOTICE: Notice = {
+  tone: "error",
+  text: "This record changed (for example a new scan). Your typed times were cleared; check and edit again.",
+};
+
+function draftChanged(draft: AttendanceDraft): boolean {
+  return draft.timeIn !== clockOf(draft.fromIn) || draft.timeOut !== clockOf(draft.fromOut);
+}
+
 function AdminAttendance({
   rows,
   date,
   setDate,
   users = [],
   onSaved,
+  onDirtyChange,
   loadStatus = "ready",
   onRetry,
 }: {
@@ -7951,7 +7996,10 @@ function AdminAttendance({
   date: string;
   setDate: (value: string) => void;
   users?: AdminUser[];
-  onSaved: () => void;
+  /** Refreshes the lists; a saved row stays on "Saving…" until it resolves. */
+  onSaved: () => void | Promise<void>;
+  /** Reports whether any open row has unsaved times, so Admin can ask before leaving the tab or page. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** Where this date's attendance load stands (Admin loads it). */
   loadStatus?: LoadStatus;
   onRetry?: () => void;
@@ -7973,6 +8021,67 @@ function AdminAttendance({
   // Until this date's rows have loaded (or after they failed to), nothing is counted, selected or exported.
   const ready = loadStatus === "ready";
   const activeRows = ready ? rows : NO_ATTENDANCE_ROWS;
+
+  // Rows open for editing, by record. Kept here, above the filters, so searching or filtering never loses typing.
+  const [drafts, setDrafts] = useState<Map<string, AttendanceDraft>>(() => new Map());
+  const setDraft = (id: string, draft: AttendanceDraft | null) =>
+    setDrafts((current) => {
+      const next = new Map(current);
+      if (draft) next.set(id, draft);
+      else next.delete(id);
+      return next;
+    });
+  // Rows saving or deleting: the date stays put until they finish, so their refresh lands on their own date.
+  const busyRowIds = useRef(new Set<string>());
+  const [rowsBusy, setRowsBusy] = useState(false);
+  const setRowBusy = (id: string, busy: boolean) => {
+    if (busy) busyRowIds.current.add(id);
+    else busyRowIds.current.delete(id);
+    setRowsBusy(busyRowIds.current.size > 0);
+  };
+  // A record that changed on the server (say, a new scan or a save conflict) shows its current times again, with a
+  // note on the row when typed changes were cleared; a record that is gone drops its draft.
+  useEffect(() => {
+    if (!ready) return;
+    setDrafts((current) => {
+      let changed = false;
+      const next = new Map<string, AttendanceDraft>();
+      for (const [id, draft] of current) {
+        const row = rows.find((candidate) => candidate.attendanceId === id);
+        if (!row) changed = true;
+        else if (row.timeIn !== draft.fromIn || row.timeOut !== draft.fromOut) {
+          // A row's own save changes its record too; that is not news to the admin.
+          next.set(id, { ...draftFor(row), changedOnServer: draftChanged(draft) && !busyRowIds.current.has(id) });
+          changed = true;
+        } else next.set(id, draft);
+      }
+      return changed ? next : current;
+    });
+  }, [rows, ready]);
+  const hasUnsaved = [...drafts.values()].some(draftChanged);
+  useEffect(() => {
+    onDirtyChange?.(hasUnsaved);
+  }, [hasUnsaved, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  // Another date shows other records: unsaved times are discarded first, after asking.
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
+  const changeDate = (next: string) => {
+    if (next === date || busyRowIds.current.size > 0 || batchDeletingAttendance) return;
+    if (hasUnsaved) {
+      setPendingDate(next);
+      return;
+    }
+    setDrafts(new Map());
+    setDate(next);
+  };
+  // A date typed into the field while rows are unsaved, held until Enter or leaving the field.
+  const [typedDate, setTypedDate] = useState<string | null>(null);
+  const typingDate = useRef(false);
+  const commitTypedDate = () => {
+    if (typedDate) changeDate(typedDate);
+    setTypedDate(null);
+  };
+
   const [clampWeekHistory, setClampWeekHistory] = useState<AttendanceListItem[]>([]);
   const hasInternRoster = users.some((user) => user.employeeType === "INTERN");
 
@@ -8069,6 +8178,27 @@ function AdminAttendance({
     return row.status === statusFilter;
   });
 
+  // On screen only: counts, selection and the CSV export keep using filteredRows in the server's order. Rows sort
+  // by the time they show, so a clamped time-in sorts as its payable 9:00 AM.
+  const [timeOrder, toggleTimeOrder] = useTimeOrder("alpha_premier_sort_attendance_corrections");
+  const shownRows = sortByTime(
+    filteredRows,
+    (row) => (clampedTimeInIds.has(row.attendanceId) && row.timeIn ? clampedTimeInIso(row.timeIn) : row.timeIn),
+    timeOrder,
+  );
+  // Unsaved rows that the filters hide get a note by the count, with a way to show them again.
+  const shownIds = new Set(filteredRows.map((row) => row.attendanceId));
+  const hiddenUnsaved = activeRows.filter((row) => {
+    const draft = drafts.get(row.attendanceId);
+    return draft !== undefined && draftChanged(draft) && !shownIds.has(row.attendanceId);
+  }).length;
+  const clearFilters = () => {
+    setStatusFilter("");
+    setSourceFilter("");
+    setEmployeeFilter("");
+    setDepartmentFilter("");
+  };
+
   const departments = [
     ...new Set(
       activeRows
@@ -8084,6 +8214,8 @@ function AdminAttendance({
   }, [date]);
   const [batchDeleteAttendanceOpen, setBatchDeleteAttendanceOpen] = useState(false);
   const [batchDeletingAttendance, setBatchDeletingAttendance] = useState(false);
+  // No other date while rows are saving or deleting: their refresh must land on this date.
+  const dateLocked = rowsBusy || batchDeletingAttendance;
   const masterAttendanceCheckboxRef = useRef<HTMLInputElement>(null);
   const attendanceWrapRef = useRef<HTMLDivElement>(null);
   const [showAllAttendance, setShowAllAttendance] = useState(false);
@@ -8261,18 +8393,34 @@ function AdminAttendance({
             <input
               type="date"
               aria-label="Filter attendance date"
-              value={date}
+              value={typedDate ?? date}
+              disabled={dateLocked}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitTypedDate();
+                else typingDate.current = true;
+              }}
+              onPointerDown={() => {
+                typingDate.current = false;
+              }}
+              onBlur={commitTypedDate}
               onChange={(event) => {
                 const val = event.target.value;
-                if (val) setDate(val);
+                if (!val) return;
+                // With unsaved rows, a date typed segment by segment waits for Enter or leaving the field, so the
+                // discard question never opens on a half-typed date. A date picked from the calendar applies at once.
+                if (hasUnsaved && typingDate.current) setTypedDate(val);
+                else {
+                  setTypedDate(null);
+                  changeDate(val);
+                }
               }}
             />
           </label>
           <button
             type="button"
             className="filter-preset-btn"
-            onClick={() => setDate(localDate())}
-            disabled={date === localDate()}
+            onClick={() => changeDate(localDate())}
+            disabled={date === localDate() || dateLocked}
           >
             Today
           </button>
@@ -8328,11 +8476,23 @@ function AdminAttendance({
 
       <div className="table-header-bar">
         <div className="table-selection-count">
+          {/* The chosen day, once for the whole table. */}
+          <span className="attendance-day">{formatDate(date)}</span>
           {selectedAttendanceIds.size > 0 ? (
             <span className="table-selection-badge">{selectedAttendanceIds.size} of {filteredRows.length} attendance record(s) selected</span>
           ) : (
             <span>Total records: {filteredRows.length}</span>
           )}
+          {hiddenUnsaved > 0 && (
+            <span className="attendance-hidden-unsaved">
+              {hiddenUnsaved === 1 ? "1 unsaved row" : `${hiddenUnsaved} unsaved rows`} hidden by filters ·{" "}
+              <button type="button" className="text-button" onClick={clearFilters}>
+                Show
+              </button>
+            </span>
+          )}
+          {/* Phones: the cards have no Time in heading, so the order gets a small toggle here. */}
+          <TimeOrderToggle column="Time in" order={timeOrder} onToggle={toggleTimeOrder} />
           {(showAllAttendance || attendanceOverflowing) && (
             <button
               className="text-button see-all-toggle"
@@ -8411,24 +8571,25 @@ function AdminAttendance({
                   aria-label="Select all attendance records"
                 />
               </th>
-              <th>Date</th>
               <th>Employee</th>
-              <th>Time in</th>
+              <TimeSortHeading label="Time in" order={timeOrder} onToggle={toggleTimeOrder} />
               <th>Arrival</th>
               <th>Time out</th>
               <th>Status</th>
-              <th />
+              <th>
+                <span className="visually-hidden">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
             {loadStatus === "loading" ? (
-              <LoadingRows columns={8} label="Loading attendance…" />
+              <LoadingRows columns={7} label="Loading attendance…" />
             ) : filteredRows.length === 0 ? (
               loadStatus === "failed" ? null : (
               <tr>
-                <td colSpan={8} className="table-empty-cell">
+                <td colSpan={7} className="table-empty-cell">
                   <div className="empty-state">
-                    No attendance records found for {date}
+                    No attendance records found for this day
                     {employeeFilter || departmentFilter || statusFilter || sourceFilter
                       ? " matching the selected filters"
                       : ""}
@@ -8438,10 +8599,13 @@ function AdminAttendance({
               </tr>
               )
             ) : (
-              filteredRows.map((row) => (
+              shownRows.map((row) => (
                 <AttendanceEditRow
                   key={row.attendanceId}
                   row={row}
+                  draft={drafts.get(row.attendanceId)}
+                  onDraftChange={(draft) => setDraft(row.attendanceId, draft)}
+                  onBusyChange={(busy) => setRowBusy(row.attendanceId, busy)}
                   selected={selectedAttendanceIds.has(row.attendanceId)}
                   onToggleSelect={() => toggleSelectAttendance(row.attendanceId)}
                   arrivalInfo={arrivalMap.get(row.attendanceId)}
@@ -8463,6 +8627,21 @@ function AdminAttendance({
         onCancel={() => setBatchDeleteAttendanceOpen(false)}
         onConfirm={() => void removeBatchAttendance()}
       />
+      <ConfirmDialog
+        open={pendingDate !== null}
+        busy={false}
+        tone="danger"
+        title="Discard unsaved changes?"
+        message={`Some times on ${formatDate(date)} are not saved yet. Showing ${pendingDate ? formatDate(pendingDate) : "another day"} discards them.`}
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        onCancel={() => setPendingDate(null)}
+        onConfirm={() => {
+          if (pendingDate) setDate(pendingDate);
+          setDrafts(new Map());
+          setPendingDate(null);
+        }}
+      />
       {backdatedModalOpen && (
         <BackdatedAttendanceModal
           activeEmployees={users.filter(
@@ -8471,9 +8650,9 @@ function AdminAttendance({
           onClose={() => setBackdatedModalOpen(false)}
           onSaved={(createdDate?: string) => {
             if (createdDate) {
-              setDate(createdDate);
+              changeDate(createdDate);
             }
-            onSaved();
+            void onSaved();
           }}
         />
       )}
@@ -8813,6 +8992,9 @@ export function keepOrBuildManilaIso(date: string, hhmm: string, original: strin
 
 function AttendanceEditRow({
   row,
+  draft,
+  onDraftChange,
+  onBusyChange,
   selected,
   onToggleSelect,
   arrivalInfo,
@@ -8820,71 +9002,107 @@ function AttendanceEditRow({
   onSaved,
 }: {
   row: AttendanceListItem;
+  /** Present while the row is open for editing. */
+  draft?: AttendanceDraft;
+  /** Opens or updates the row's editor (a draft) or closes it (null). */
+  onDraftChange: (draft: AttendanceDraft | null) => void;
+  /** Reports while the row is saving or deleting, so the date can't change under it. */
+  onBusyChange: (busy: boolean) => void;
   selected?: boolean;
   onToggleSelect?: () => void;
   arrivalInfo?: { arrivalStatus: ArrivalStatus; minutesLate: number };
   timeInClamped?: boolean;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
 }) {
-  const [timeIn, setTimeIn] = useState(
-    row.timeIn ? row.timeIn.slice(11, 16) : "",
-  );
-  const [timeOut, setTimeOut] = useState(
-    row.timeOut ? row.timeOut.slice(11, 16) : "",
-  );
   // A note that needs acting on stays on the row; a plain save or delete shows as a toast.
   const [message, setMessage] = useState<Notice | null>(null);
+  const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteAttendanceConfirm, setDeleteAttendanceConfirm] = useState(false);
-  const [clampedRevealed, setClampedRevealed] = useState(false);
+  const rowRef = useRef<HTMLTableRowElement>(null);
   const timeInInputRef = useRef<HTMLInputElement>(null);
-
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const editing = draft !== undefined;
+  const unsaved = draft ? draftChanged(draft) : false;
+  const notice = message ?? (draft?.changedOnServer ? RECORD_CHANGED_NOTICE : null);
+  // Opening the editor moves focus to its time-in field. Closing it moves focus back to Edit: always after Cancel,
+  // after a save only when focus is still in this row (or nowhere), never away from typing elsewhere.
+  const moveFocus = useRef<"always" | "if-here" | null>(null);
   useEffect(() => {
-    setTimeIn(row.timeIn ? row.timeIn.slice(11, 16) : "");
-    setTimeOut(row.timeOut ? row.timeOut.slice(11, 16) : "");
-    setClampedRevealed(false);
-  }, [row.timeIn, row.timeOut]);
+    const mode = moveFocus.current;
+    moveFocus.current = null;
+    if (!mode) return;
+    if (editing) {
+      timeInInputRef.current?.focus();
+      return;
+    }
+    const active = document.activeElement;
+    if (mode === "always" || !active || active === document.body || rowRef.current?.contains(active)) editButtonRef.current?.focus();
+  }, [editing]);
+  const openEditor = () => {
+    moveFocus.current = "always";
+    onDraftChange(draftFor(row));
+  };
+  const closeEditor = (focus: "always" | "if-here") => {
+    moveFocus.current = focus;
+    onDraftChange(null);
+  };
 
   const late = row.status === "LATE_TIMEOUT";
   const save = async () => {
-    // An untouched time keeps its exact stamp: rebuilding it as HH:MM:00 would drop
-    // the seconds and can change late hours and grace use.
-    const timeInIso = keepOrBuildManilaIso(row.attendanceDate, timeIn, row.timeIn);
-    const timeOutIso = keepOrBuildManilaIso(row.attendanceDate, timeOut, row.timeOut);
-    const response = await saveAdminAttendance(row.attendanceId, {
-      attendanceDate: row.attendanceDate,
-      timeIn: timeInIso,
-      timeOut: timeOutIso,
-      expectedTimeIn: row.timeIn || null,
-      expectedTimeOut: row.timeOut || null,
-    });
-    if (response.success) {
-      if (timeOutIso && isLateTimeout(timeOutIso)) {
-        setMessage({ tone: "info", text: "Saved — time-out is still after office hours, correction remains required." });
+    if (!draft) return;
+    setSaving(true);
+    onBusyChange(true);
+    try {
+      // An untouched time keeps its exact stamp: rebuilding it as HH:MM:00 would drop
+      // the seconds and can change late hours and grace use.
+      const timeInIso = keepOrBuildManilaIso(row.attendanceDate, draft.timeIn, row.timeIn);
+      const timeOutIso = keepOrBuildManilaIso(row.attendanceDate, draft.timeOut, row.timeOut);
+      const response = await saveAdminAttendance(row.attendanceId, {
+        attendanceDate: row.attendanceDate,
+        timeIn: timeInIso,
+        timeOut: timeOutIso,
+        expectedTimeIn: row.timeIn || null,
+        expectedTimeOut: row.timeOut || null,
+      });
+      if (response.success) {
+        if (timeOutIso && isLateTimeout(timeOutIso)) {
+          setMessage({ tone: "info", text: "Saved — time-out is still after office hours, correction remains required." });
+        } else {
+          setMessage(null);
+          showToast(`Saved ${row.fullName}'s times.`);
+        }
+        // Back to read-only once the list shows the new times.
+        await onSaved();
+        closeEditor("if-here");
       } else {
-        setMessage(null);
-        showToast(`Saved ${row.fullName}'s times.`);
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to save attendance." });
+        // A stale row cannot be saved again as-is; reload it so the admin sees the current times.
+        if (response.error?.code === "ATTENDANCE_CONFLICT" || response.error?.code === "ATTENDANCE_NOT_FOUND") await onSaved();
       }
-      onSaved();
-    } else {
-      setMessage({ tone: "error", text: response.error?.message ?? "Unable to save attendance." });
-      // A stale row cannot be saved again as-is; reload it so the admin sees the current times.
-      if (response.error?.code === "ATTENDANCE_CONFLICT" || response.error?.code === "ATTENDANCE_NOT_FOUND") onSaved();
+    } finally {
+      setSaving(false);
+      onBusyChange(false);
     }
   };
   const remove = async () => {
     setDeleteAttendanceConfirm(false);
     setDeleting(true);
-    const response = await deleteAdminAttendance(
-      row.attendanceId,
-      row.attendanceDate,
-    );
-    setDeleting(false);
-    if (response.success) {
-      showResult({ tone: "success", text: `Deleted ${row.fullName}'s record.` }, setMessage);
-      onSaved();
-    } else {
-      setMessage({ tone: "error", text: response.error?.message ?? "Unable to delete record." });
+    onBusyChange(true);
+    try {
+      const response = await deleteAdminAttendance(
+        row.attendanceId,
+        row.attendanceDate,
+      );
+      if (response.success) {
+        showResult({ tone: "success", text: `Deleted ${row.fullName}'s record.` }, setMessage);
+        await onSaved();
+      } else {
+        setMessage({ tone: "error", text: response.error?.message ?? "Unable to delete record." });
+      }
+    } finally {
+      setDeleting(false);
+      onBusyChange(false);
     }
   };
 
@@ -8905,8 +9123,48 @@ function AttendanceEditRow({
         className="arrival-badge badge-late"
         title={`Late arrival (${arrivalInfo.minutesLate} minutes)`}
       >
-        Late ({arrivalInfo.minutesLate}m)
+        Late {formatLateMinutes(arrivalInfo.minutesLate)}
       </span>
+    );
+  };
+
+  /** The editor's time field with its clear button. */
+  const timeField = (which: "in" | "out") => {
+    if (!draft) return null;
+    const value = which === "in" ? draft.timeIn : draft.timeOut;
+    // Typing again answers the "record changed" note.
+    const setValue = (next: string) =>
+      onDraftChange(which === "in" ? { ...draft, timeIn: next, changedOnServer: false } : { ...draft, timeOut: next, changedOnServer: false });
+    const label = `time ${which}`;
+    return (
+      <div className="time-input-group">
+        <input
+          ref={which === "in" ? timeInInputRef : undefined}
+          aria-label={`Time ${which} for ${row.fullName}`}
+          type="time"
+          value={value}
+          disabled={saving}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        {value && !saving ? (
+          <button
+            type="button"
+            className="time-clear-btn"
+            title={`Clear ${label}`}
+            aria-label={`Clear ${label} for ${row.fullName}`}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setValue("");
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              setValue("");
+            }}
+          >
+            <X size={13} />
+          </button>
+        ) : null}
+      </div>
     );
   };
 
@@ -8914,15 +9172,15 @@ function AttendanceEditRow({
     <>
       {late && (
         <tr className="admin-attention-row">
-          <td colSpan={8} className="admin-attention">
+          <td colSpan={7} className="admin-attention">
             <strong>Late time-out — manual correction required.</strong> This
-            time-out was recorded after office hours ({LATE_TIMEOUT_THRESHOLD}); the
-            office does not allow overtime. Re-enter the official time-out below
-            to complete the shift.
+            time-out was recorded after office hours (
+            {formatTime(`${row.attendanceDate}T${LATE_TIMEOUT_THRESHOLD}:00+08:00`)}); the
+            office does not allow overtime. Edit the time-out below to complete the shift.
           </td>
         </tr>
       )}
-      <tr className={selected ? "selected-row" : ""}>
+      <tr ref={rowRef} className={`attendance-row${selected ? " selected-row" : ""}${editing ? " is-open" : ""}${unsaved ? " is-unsaved" : ""}`}>
         <td className="table-select-cell">
           {onToggleSelect && (
             <input
@@ -8932,11 +9190,6 @@ function AttendanceEditRow({
               aria-label={`Select attendance for ${row.fullName}`}
             />
           )}
-        </td>
-        <td>
-          <span style={{ fontSize: ".82rem", color: "var(--muted)" }}>
-            {row.attendanceDate}
-          </span>
         </td>
         <td>
           <strong>{row.fullName}</strong>
@@ -8959,100 +9212,87 @@ function AttendanceEditRow({
               <History size={11} /> Backdated entry by {row.recordedBy || "Admin"}{row.recordedReason ? ` — ${row.recordedReason}` : ""}
             </span>
           )}
+          {unsaved && <span className="unsaved-tag">Unsaved</span>}
         </td>
         <td>
-          <div className="time-input-group">
-            <input
-              ref={timeInInputRef}
-              aria-label={`Time in for ${row.fullName}`}
-              type="time"
-              value={timeIn}
-              onFocus={() => setClampedRevealed(true)}
-              onChange={(e) => setTimeIn(e.target.value)}
-            />
-            {timeInClamped && !clampedRevealed && row.timeIn && timeIn === row.timeIn.slice(11, 16) ? (
-              <button
-                type="button"
-                className="clamped-time-in-chip"
-                data-testid="clamped-time-in"
-                title={`Actual scan: ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)} (payable time clamped)`}
-                aria-label={`Shown as ${clampedTimeLabel(row.timeIn)} for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
-                onClick={() => {
-                  setClampedRevealed(true);
-                  timeInInputRef.current?.focus();
-                }}
-              >
-                {clampedTimeLabel(row.timeIn)}
-              </button>
-            ) : null}
-            {timeIn ? (
-              <button
-                type="button"
-                className="time-clear-btn"
-                title="Clear time in"
-                aria-label={`Clear time in for ${row.fullName}`}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setTimeIn("");
-                }}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setTimeIn("");
-                }}
-              >
-                <X size={13} />
-              </button>
-            ) : null}
-          </div>
+          {editing ? (
+            timeField("in")
+          ) : timeInClamped && row.timeIn ? (
+            // The payable (clamped) time; the actual scan is in the tooltip, and a click opens it for editing.
+            <button
+              type="button"
+              className="clamped-time-in-chip clamped-time-in-static"
+              data-testid="clamped-time-in"
+              title={`Actual scan: ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)} (payable time clamped)`}
+              aria-label={`Shown as ${clampedTimeLabel(row.timeIn)} for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
+              onClick={openEditor}
+            >
+              {clampedTimeLabel(row.timeIn)}
+            </button>
+          ) : row.timeIn ? (
+            formatTime(row.timeIn)
+          ) : (
+            "—"
+          )}
         </td>
         <td>{renderArrival()}</td>
-        <td>
-          <div className="time-input-group">
-            <input
-              aria-label={`Time out for ${row.fullName}`}
-              type="time"
-              value={timeOut}
-              onChange={(e) => setTimeOut(e.target.value)}
-            />
-            {timeOut ? (
-              <button
-                type="button"
-                className="time-clear-btn"
-                title="Clear time out"
-                aria-label={`Clear time out for ${row.fullName}`}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setTimeOut("");
-                }}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setTimeOut("");
-                }}
-              >
-                <X size={13} />
-              </button>
-            ) : null}
-          </div>
-        </td>
+        <td>{editing ? timeField("out") : row.timeOut ? formatTime(row.timeOut) : "—"}</td>
         <td>
           <span className={`status-pill status-${row.status.toLowerCase()}`}>
             {late ? "LATE TIMEOUT" : row.status}
           </span>
         </td>
-        <td>
-          <button className="text-button" onClick={() => void save()}>
-            Save
-          </button>
-          <button
-            className="text-button danger-button"
-            disabled={deleting}
-            onClick={() => setDeleteAttendanceConfirm(true)}
-          >
-            {deleting ? "Deleting..." : "Delete"}
-          </button>
-          <NoticeLine notice={message} className="row-message" />
+        <td className="attendance-row-actions">
+          {editing ? (
+            <>
+              <button className="attendance-save-button" type="button" disabled={saving} onClick={() => void save()}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button
+                className="text-button"
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setMessage(null);
+                  closeEditor("always");
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                ref={editButtonRef}
+                className="text-button"
+                type="button"
+                aria-label={`Edit times for ${row.fullName}`}
+                disabled={deleting}
+                onClick={openEditor}
+              >
+                Edit
+              </button>
+              <button
+                className="text-button danger-button"
+                type="button"
+                aria-label={`Delete ${row.fullName}'s record`}
+                disabled={deleting}
+                onClick={() => setDeleteAttendanceConfirm(true)}
+              >
+                {deleting ? "Deleting..." : "Delete"}
+              </button>
+            </>
+          )}
         </td>
       </tr>
+      {/* A note for this record (a save problem, the late time-out reminder) on its own full-width line under it. */}
+      {notice && (
+        <tr className="attendance-row-note">
+          <td colSpan={7}>
+            <NoticeLine notice={notice} className="row-message" />
+          </td>
+        </tr>
+      )}
       {deleteAttendanceConfirm && (
         <tr>
           <td colSpan={7} style={{ padding: 0 }}>
@@ -9061,7 +9301,7 @@ function AttendanceEditRow({
               busy={deleting}
               tone="danger"
               title="Delete attendance record?"
-              message={`This will permanently delete ${row.fullName}'s time-in/time-out record for ${row.attendanceDate}. This cannot be undone.`}
+              message={`This will permanently delete ${row.fullName}'s time-in/time-out record for ${formatDate(row.attendanceDate)}. This cannot be undone.`}
               confirmLabel="Delete record"
               onCancel={() => setDeleteAttendanceConfirm(false)}
               onConfirm={() => void remove()}
