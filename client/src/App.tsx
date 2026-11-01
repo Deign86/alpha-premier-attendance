@@ -3288,6 +3288,35 @@ const ADMIN_TABS = [
   { id: "voice", label: "Voice announcements", Icon: Volume2 },
 ] satisfies { id: AdminTab; label: string; Icon: LucideIcon }[];
 
+type ActiveThumb = { x: number; y: number; width: number; height: number };
+
+/**
+ * Where the active button (`button.is-active`) sits inside `ref`, so a thumb or underline can slide to it.
+ * Re-measured when `activeKey` changes and whenever the bar or one of its buttons changes size.
+ */
+function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey: string): ActiveThumb | null {
+  const [thumb, setThumb] = useState<ActiveThumb | null>(null);
+  useLayoutEffect(() => {
+    const bar = ref.current;
+    if (!bar) {
+      setThumb(null);
+      return;
+    }
+    const place = () => {
+      const active = bar.querySelector<HTMLElement>("button.is-active");
+      if (active) setThumb({ x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight });
+    };
+    place();
+    if (!("ResizeObserver" in window)) return;
+    const observer = new ResizeObserver(place);
+    // Border boxes, so padding changes at narrow widths move the thumb too.
+    observer.observe(bar, { box: "border-box" });
+    bar.querySelectorAll("button").forEach((button) => observer.observe(button, { box: "border-box" }));
+    return () => observer.disconnect();
+  }, [ref, activeKey]);
+  return thumb;
+}
+
 function AdminPanel() {
   const [unlocked, setUnlocked] = useState(false);
   useScannerPause(unlocked);
@@ -3299,7 +3328,6 @@ function AdminPanel() {
   const [tab, setTab] = useState<AdminTab>("users");
   // The gold thumb behind the current tab; measured so it can slide between tabs of different widths.
   const tabsRef = useRef<HTMLDivElement>(null);
-  const [tabThumb, setTabThumb] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [rows, setRows] = useState<AttendanceListItem[]>([]);
   const [cutoffs, setCutoffs] = useState<PayrollCutoffRecord[]>([]);
@@ -3349,22 +3377,7 @@ function AdminPanel() {
     if (!unlocked) setPendingLeave(null);
   }, [unlocked]);
 
-  useLayoutEffect(() => {
-    const bar = tabsRef.current;
-    if (!bar) {
-      setTabThumb(null);
-      return;
-    }
-    const place = () => {
-      const active = bar.querySelector<HTMLElement>("button.is-active");
-      if (active) setTabThumb({ x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight });
-    };
-    place();
-    if (!("ResizeObserver" in window)) return;
-    const observer = new ResizeObserver(place);
-    observer.observe(bar);
-    return () => observer.disconnect();
-  }, [tab, adminMode, unlocked]);
+  const tabThumb = useActiveThumb(tabsRef, `${unlocked}:${adminMode}:${tab}`);
 
   const unlockWithPinOrRfid = useCallback(
     async (candidate: string) => {
@@ -4386,13 +4399,13 @@ export function DatabasePanel(props: { onManualUpdateCheck?: () => void } = {}) 
       <AdminUpdatesCard onManualCheck={props.onManualUpdateCheck ?? (() => {})} />
       <GeneratedFileActions result={backupResult} label="Latest backup" />
       {info && info.backups.length > 0 && (
-        <details className="db-backup-list">
+        <details className="db-backup-list" open>
           <summary>
             Existing backups <span className="db-backup-count">{info.backups.length}</span>
           </summary>
           <div className="db-backup-months">
-            {backupMonths.map((month, index) => (
-              <details key={month.label} className="db-backup-month" open={index === 0}>
+            {backupMonths.map((month) => (
+              <details key={month.label} className="db-backup-month">
                 <summary>
                   {month.label} <span className="db-backup-count">{month.backups.length}</span>
                 </summary>
@@ -7515,6 +7528,8 @@ function formatGeneratedAt(value: string): string {
  */
 function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   const [actionMessage, setActionMessage] = useState("");
+  // Months opened or closed by hand; the latest month starts open and older months start closed.
+  const [toggledMonths, setToggledMonths] = useState<ReadonlySet<string>>(new Set());
   const runAction = async (
     action: (filePath: string) => Promise<FileActionResult>,
     filePath: string,
@@ -7529,6 +7544,28 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
     return (
       <div className="empty-state">No payroll PDFs have been generated yet.</div>
     );
+  // One fold per cutoff month, newest month first; PDFs inside stay newest-generated first.
+  const months: { key: string; label: string; pdfs: PayrollPdfRecord[] }[] = [];
+  for (const pdf of sorted) {
+    const key = /^\d{4}-\d{2}/.test(pdf.cutoffStart) ? pdf.cutoffStart.slice(0, 7) : "";
+    const month = months.find((group) => group.key === key);
+    if (month) month.pdfs.push(pdf);
+    else
+      months.push({
+        key,
+        label: key
+          ? new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1).toLocaleString("en-PH", { month: "long", year: "numeric" })
+          : "Other",
+        pdfs: [pdf],
+      });
+  }
+  months.sort((a, b) => b.key.localeCompare(a.key));
+  const toggleMonth = (key: string) =>
+    setToggledMonths((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   return (
     <>
       <div className="table-wrap">
@@ -7543,42 +7580,54 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody>
-            {sorted.map((pdf) => (
-              <tr key={pdf.payrollPdfId}>
-                <td>
-                  <strong>{pdf.payrollCutoffLabel}</strong>
-                  <small>
-                    {pdf.cutoffStart} to {pdf.cutoffEnd}
-                  </small>
-                </td>
-                <td>Intern</td>
-                <td>{formatGeneratedAt(pdf.generatedAt)}</td>
-                <td>{pdf.employeeCount}</td>
-                <td>
-                  <strong>{php(pdf.totalAmount)}</strong>
-                </td>
-                <td className="payroll-pdf-actions">
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => void runAction(openGeneratedFile, pdf.filePath)}
-                  >
-                    Open PDF
-                  </button>
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() =>
-                      void runAction(revealGeneratedFile, pdf.filePath)
-                    }
-                  >
-                    Show in Folder
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
+          {months.map((month, index) => {
+            const open = (index === 0) !== toggledMonths.has(month.key);
+            return (
+              <tbody key={month.key} className="payroll-pdf-month">
+                <tr>
+                  <th colSpan={6} scope="rowgroup">
+                    <button type="button" aria-expanded={open} onClick={() => toggleMonth(month.key)}>
+                      {month.label} <span className="db-backup-count">{month.pdfs.length}</span>
+                    </button>
+                  </th>
+                </tr>
+                {open && month.pdfs.map((pdf) => (
+                  <tr key={pdf.payrollPdfId}>
+                    <td>
+                      <strong>{pdf.payrollCutoffLabel}</strong>
+                      <small>
+                        {pdf.cutoffStart} to {pdf.cutoffEnd}
+                      </small>
+                    </td>
+                    <td>Intern</td>
+                    <td>{formatGeneratedAt(pdf.generatedAt)}</td>
+                    <td>{pdf.employeeCount}</td>
+                    <td>
+                      <strong>{php(pdf.totalAmount)}</strong>
+                    </td>
+                    <td className="payroll-pdf-actions">
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => void runAction(openGeneratedFile, pdf.filePath)}
+                      >
+                        Open PDF
+                      </button>
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() =>
+                          void runAction(revealGeneratedFile, pdf.filePath)
+                        }
+                      >
+                        Show in Folder
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            );
+          })}
         </table>
       </div>
       {actionMessage && <p className="dashboard-alert">{actionMessage}</p>}
@@ -7769,6 +7818,8 @@ function AdminAttendance({
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  const statusFilterRef = useRef<HTMLDivElement>(null);
+  const statusThumb = useActiveThumb(statusFilterRef, statusFilter);
   const [backdatedModalOpen, setBackdatedModalOpen] = useState(false);
 
   const activeRows = rows;
@@ -7981,73 +8032,46 @@ function AdminAttendance({
     } else setMessage(result.message);
   };
 
+  const statusOptions = [
+    ["", "All", counts.all],
+    ["LATE", "Late", counts.late],
+    ["LATE_TIMEOUT", "Late time-out", counts.lateTimeout],
+    ["WORKING", "Working", counts.working],
+    ["COMPLETED", "Completed", counts.completed],
+    ["MISSED", "Missed", counts.missed],
+  ] as const;
+
   return (
     <section className="table-with-bar">
       <div className="attendance-filter-bar">
         <div className="attendance-filter-top">
-          <div className="attendance-pills">
+          {/* Status: one choice at a time, marked by a gold underline that slides to it. */}
+          <div className="attendance-status-filter" role="group" aria-label="Filter by status" ref={statusFilterRef}>
+            {statusThumb && (
+              <span
+                className="attendance-status-thumb"
+                aria-hidden="true"
+                style={{ width: statusThumb.width, transform: `translate(${statusThumb.x}px, ${statusThumb.y + statusThumb.height - 2}px)` }}
+              />
+            )}
+            {statusOptions.map(([id, label, count]) => (
+              <button
+                key={label}
+                type="button"
+                className={`${statusFilter === id ? "is-active" : ""}${count ? "" : " is-empty"}`}
+                aria-pressed={statusFilter === id}
+                onClick={() => setStatusFilter(id && statusFilter === id ? "" : id)}
+              >
+                {label} <span className="filter-count">{count}</span>
+              </button>
+            ))}
+          </div>
+          {/* Source: Assisted and Backdated switch on and off on their own and combine with the status. */}
+          <div className="attendance-source-filter" role="group" aria-label="Show only">
             <button
-              className={`filter-pill ${!statusFilter ? "is-active" : ""}`}
+              className={`source-toggle ${sourceFilter === "ADMIN_ASSISTED_SCAN" ? "is-active" : ""}`}
               type="button"
-              onClick={() => setStatusFilter("")}
-            >
-              All <span className="filter-pill-count">{counts.all}</span>
-            </button>
-            <button
-              className={`filter-pill ${statusFilter === "LATE" ? "is-active" : ""}`}
-              type="button"
-              onClick={() =>
-                setStatusFilter(statusFilter === "LATE" ? "" : "LATE")
-              }
-            >
-              Late <span className="filter-pill-count">{counts.late}</span>
-            </button>
-            <button
-              className={`filter-pill ${statusFilter === "LATE_TIMEOUT" ? "is-active" : ""}`}
-              type="button"
-              onClick={() =>
-                setStatusFilter(
-                  statusFilter === "LATE_TIMEOUT" ? "" : "LATE_TIMEOUT",
-                )
-              }
-            >
-              Late Time-out{" "}
-              <span className="filter-pill-count">{counts.lateTimeout}</span>
-            </button>
-            <button
-              className={`filter-pill ${statusFilter === "WORKING" ? "is-active" : ""}`}
-              type="button"
-              onClick={() =>
-                setStatusFilter(statusFilter === "WORKING" ? "" : "WORKING")
-              }
-            >
-              Working <span className="filter-pill-count">{counts.working}</span>
-            </button>
-            <button
-              className={`filter-pill ${statusFilter === "COMPLETED" ? "is-active" : ""}`}
-              type="button"
-              onClick={() =>
-                setStatusFilter(
-                  statusFilter === "COMPLETED" ? "" : "COMPLETED",
-                )
-              }
-            >
-              Completed{" "}
-              <span className="filter-pill-count">{counts.completed}</span>
-            </button>
-            <button
-              className={`filter-pill ${statusFilter === "MISSED" ? "is-active" : ""}`}
-              type="button"
-              onClick={() =>
-                setStatusFilter(statusFilter === "MISSED" ? "" : "MISSED")
-              }
-            >
-              Missed <span className="filter-pill-count">{counts.missed}</span>
-            </button>
-            <div className="filter-pills-divider" role="separator" />
-            <button
-              className={`filter-pill is-assisted ${sourceFilter === "ADMIN_ASSISTED_SCAN" ? "is-active" : ""}`}
-              type="button"
+              aria-pressed={sourceFilter === "ADMIN_ASSISTED_SCAN"}
               title="Show only kiosk scans assisted by an administrator"
               onClick={() =>
                 setSourceFilter(
@@ -8055,12 +8079,13 @@ function AdminAttendance({
                 )
               }
             >
-              <UserCheck size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-              Assisted <span className="filter-pill-count">{counts.assisted}</span>
+              <UserCheck size={14} aria-hidden="true" />
+              Assisted <span className="filter-count">{counts.assisted}</span>
             </button>
             <button
-              className={`filter-pill is-backdated ${sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "is-active" : ""}`}
+              className={`source-toggle ${sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "is-active" : ""}`}
               type="button"
+              aria-pressed={sourceFilter === "ADMIN_BACKDATED_ENTRY"}
               title="Show only backdated attendance manually entered by an administrator"
               onClick={() =>
                 setSourceFilter(
@@ -8068,8 +8093,8 @@ function AdminAttendance({
                 )
               }
             >
-              <History size={12} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-              Backdated <span className="filter-pill-count">{counts.backdated}</span>
+              <History size={14} aria-hidden="true" />
+              Backdated <span className="filter-count">{counts.backdated}</span>
             </button>
           </div>
         </div>

@@ -1349,12 +1349,6 @@ tr.selected-row td:first-child::before,
 .filter-preset-btn { padding: 6px 12px; font-size: .74rem; font-weight: 600; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s ease; }
 .filter-preset-btn:hover { color: var(--gold-bright); border-color: var(--gold-soft); }
 .filter-preset-btn.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); font-weight: 700; }
-.attendance-pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: .74rem; font-weight: 600; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line); border-radius: 999px; cursor: pointer; transition: all .15s ease; }
-.filter-pill:hover { color: var(--gold-bright); border-color: var(--gold-soft); }
-.filter-pill.is-active { color: var(--gold-bright); border-color: var(--gold); background: rgba(198, 162, 84, .14); }
-.filter-pill-count { padding: 1px 6px; border-radius: 999px; font-size: .66rem; background: var(--surface); color: var(--ink); }
-.filter-pill.is-active .filter-pill-count { background: var(--gold); color: #11100c; font-weight: 700; }
 .date-filter { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
 .date-filter label { min-width: 140px; margin: 0; }
 .date-filter label:nth-of-type(3) { min-width: 176px; }
@@ -3173,33 +3167,6 @@ textarea.input {
   box-shadow: 0 4px 14px rgba(198, 162, 84, 0.35);
 }
 
-/* Filter pills grouping & divider */
-.filter-pills-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.filter-pills-divider {
-  width: 1px;
-  height: 22px;
-  background: var(--line-bright);
-  margin: 0 4px;
-}
-
-.filter-pill.is-assisted.is-active {
-  background: #443419;
-  border-color: #d4a359;
-  color: #fed992;
-}
-
-.filter-pill.is-backdated.is-active {
-  background: #34234c;
-  border-color: #b388ff;
-  color: #dfcbff;
-}
-
 /* ==========================================================================
    Admin Mode Switcher (1: Attendance, 2: Bathroom Key Log)
    ========================================================================== */
@@ -3922,8 +3889,6 @@ textarea.input {
 /* #9 Admin Users: stop the rightmost column pushing past the table container
    (horizontal scroll itself is already declared on .table-wrap above) */
 .table-wrap th, .table-wrap td { min-width: 0; overflow-wrap: anywhere; }
-/* #10 Attendance pills: never wrap mid-pill */
-.filter-pill { white-space: nowrap; }
 /* #13 Data & Backup: long DB paths may break anywhere (belt-and-braces
    alongside .file-result-path) */
 .db-backup-list li { overflow-wrap: anywhere; }
@@ -3933,8 +3898,6 @@ textarea.input {
 /* #11 Attendance controls + #12 Payroll panels: explicit single-column stack.
    1100px (not 920px) so it fires at 125% zoom (~1024 CSS px) as well as 150%. */
 @media (max-width: 1100px) {
-  .attendance-filter-top { display: grid; grid-template-columns: minmax(0, 1fr); }
-  .filter-pill { padding: 4px 10px; font-size: .68rem; }
   .payroll-toolbar { flex-direction: column; }
   .payroll-generate-panel, .payroll-pdf-actions-panel { flex: 1 1 auto; min-width: 0; }
   /* Narrow kiosk topbar (high zoom): compact switcher + clock so brand, tabs,
@@ -4837,3 +4800,46 @@ body:has(.admin-shell) { background-color: #080807 !important; }
   .admin-shell .db-backup-actions .admin-button { flex: 1 1 0; white-space: nowrap; overflow-wrap: normal; }
 }
 
+/* --- Attendance corrections: calm filters ---------------------------------------------------------- */
+/* The status filters read as a quiet underline bar, one level below the gold tabs: plain words with small counts and
+   a gold line that slides to the chosen status. Statuses with nothing to show are dimmed. Assisted and Backdated are
+   separate on/off toggles at the end of the row, so they combine with any status. */
+.attendance-filter-bar { gap: 16px; }
+.attendance-filter-top { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; }
+.attendance-status-filter { position: relative; z-index: 0; display: flex; flex-wrap: wrap; min-width: 0; }
+.attendance-status-filter > button { display: inline-flex; align-items: baseline; gap: 7px; padding: 8px 14px 10px; color: var(--muted); background: none; border: 0; border-radius: 0; box-shadow: inset 0 -1px 0 rgba(198, 162, 84, .18); font-size: .8rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color 160ms ease, opacity 160ms ease; }
+.attendance-status-filter > button:hover { color: var(--ink); }
+.attendance-status-filter > button.is-active { color: var(--gold-bright); }
+.attendance-status-filter > button.is-empty:not(.is-active) { opacity: .5; }
+.attendance-status-filter > button:focus-visible, .source-toggle:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+.attendance-filter-top .filter-count { color: var(--quiet); font-size: .74rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.attendance-status-filter > button.is-active .filter-count, .source-toggle.is-active .filter-count { color: var(--gold-bright); }
+.attendance-status-thumb { position: absolute; top: 0; left: 0; z-index: 1; height: 2px; background: linear-gradient(90deg, #e6ca82, #c6a254); border-radius: 2px; box-shadow: 0 0 8px rgba(225, 196, 119, .45); pointer-events: none; transition: transform 320ms var(--ease-soft, ease), width 320ms var(--ease-soft, ease); }
+.attendance-source-filter { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
+.source-toggle { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; color: var(--muted); background: transparent; border: 1px solid rgba(198, 162, 84, .22); border-radius: 6px; font-size: .78rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease; }
+.source-toggle svg { flex: none; color: var(--gold); }
+.source-toggle:hover { color: var(--ink); border-color: rgba(198, 162, 84, .5); }
+.source-toggle.is-active { color: var(--gold-bright); background: rgba(198, 162, 84, .12); border-color: var(--gold); }
+@media (prefers-reduced-motion: reduce) { .attendance-status-thumb { transition: none; } }
+@media (max-width: 600px) { .attendance-status-filter > button { padding: 8px 10px 10px; } }
+
+/* --- Payroll: generated PDFs by month ---------------------------------------------------------------- */
+/* Each cutoff month is a fold row inside the one table, so the column headings stay on top. The latest month starts
+   open. The arrow and count match the Existing backups folds, and each PDF's period sits one step in. */
+.payroll-pdf-month th { padding: 0; text-align: left; text-transform: none; letter-spacing: 0; background: rgba(198, 162, 84, .05); border-top: 1px solid rgba(198, 162, 84, .16); }
+.payroll-pdf-month th button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 18px; color: var(--ink); background: none; border: 0; font: inherit; font-size: .82rem; font-weight: 600; text-align: left; cursor: pointer; }
+.payroll-pdf-month th button::before { content: "▸"; color: var(--gold-bright); transition: transform 160ms ease; }
+.payroll-pdf-month th button[aria-expanded="true"]::before { transform: rotate(90deg); }
+.payroll-pdf-month th button:hover { color: var(--gold-bright); }
+.payroll-pdf-month th button:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: -2px; }
+.payroll-pdf-month td:first-child { padding-left: 38px; }
+/* Words stay whole on narrow screens (the table scrolls sideways inside its card instead of breaking "Intern"). */
+.payroll-pdf-section :is(th, td) { overflow-wrap: normal; }
+
+/* --- Bathroom Key Log (admin): header spacing and the Assign label -------------------------------------- */
+/* The page starts the same distance below the header as the admin tabs do, and the date sits on the title's line.
+   "Selected: …" sits apart from "Assign Key to Staff" instead of running into it. */
+.admin-shell .bathroom-key-log-workspace { margin-top: 28px; }
+.admin-shell .bathroom-header-controls { align-items: flex-end; }
+.admin-shell .bathroom-header-controls h2 { margin: 0 0 6px; }
+.bathroom-checkout-box > .field-label { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }

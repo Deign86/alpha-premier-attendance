@@ -1630,3 +1630,22 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
   EXPECT: all pass; server, src-tauri and shared unchanged (3 files, +25 -7 demo-seed hooks only).
   EVIDENCE: oxlint 0, typecheck 0, client 20 files / 420 tests passed; git diff --stat -- server src-tauri shared: 3 files changed, 25 insertions(+), 7 deletions(-).
+
+## UI revamp batch 3c: backup tree, payroll PDFs by month, calm attendance filters, bathroom alignment (client only)
+
+- [x] Existing backups opens by default with every month closed; the tree indents stay.
+  EVIDENCE: database-panel test updated (list open, October and September closed) and passing; shot e-after-backups shows the list open with 3 closed months.
+- [x] Generated payroll PDFs are grouped by cutoff month (newest month first), latest month open, older months closed; one header row; Open PDF and Show in Folder unchanged.
+  CHECK: npm test -w client -- payroll.test.tsx
+  EXPECT: all pass (list, open and reveal tests unchanged).
+  EVIDENCE: payroll.test.tsx passes, plus a new test: October 2026 (2) open, September 2026 (1) closed even when regenerated last, toggling both ways.
+- [x] Attendance filters are calmer and still one click: status filters as an underline bar with a sliding gold line and small counts (zero counts dimmed); Assisted and Backdated as separate on/off toggles; names stay "Assisted 1" / "Backdated 1".
+  CHECK: npm test -w client -- App.test.tsx -t "filter pills"
+  EXPECT: pass.
+  EVIDENCE: test passes with new aria-pressed checks; underline 59px = All button 59px, 70px = Late 70px, 51px = 51px at 390 (border-box observed), offset 0; page width 390 at 390.
+- [x] Bathroom Key Log: the date picker lines up with the page title and sits clear of the header; "Assign Key to Staff" and "Selected: …" are spaced apart.
+  EVIDENCE: page starts 28px below the header card (was 8px); date bottom-aligned with the title block; "Selected: …" pushed to the right end of the label row (shot e-after-bath-assign).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
+  EXPECT: all pass; git diff --stat -- server src-tauri shared unchanged (3 files, +25 -7).
+  EVIDENCE: oxlint exit 0, typecheck exit 0, client 20 files / 421 tests passed; 3 files changed, 25 insertions(+), 7 deletions(-).

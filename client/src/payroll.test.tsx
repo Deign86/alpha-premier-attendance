@@ -339,6 +339,34 @@ describe("PayrollWorkspace", () => {
     ).toBeInTheDocument();
   });
 
+  it("groups generated payroll PDFs by cutoff month, latest month open", async () => {
+    const pdf = (id: string, cutoffStart: string, cutoffEnd: string, label: string, generatedAt: string) =>
+      pdfRecord({ payrollPdfId: id, fileName: `${id}.pdf`, filePath: `C:\\data\\exports\\${id}.pdf`, cutoffStart, cutoffEnd, payrollCutoffLabel: label, generatedAt });
+    loadPayrollPdfsSpy.mockResolvedValue({
+      success: true,
+      payrollPdfs: [
+        // A September PDF regenerated after the October ones still files under September.
+        pdf("sep-late", "2026-09-16", "2026-09-30", "September 16-30, 2026", "2026-11-02T09:00:00+08:00"),
+        pdf("oct-2", "2026-10-16", "2026-10-31", "October 16-31, 2026", "2026-11-01T09:00:00+08:00"),
+        pdf("oct-1", "2026-10-01", "2026-10-15", "October 1-15, 2026", "2026-10-16T09:00:00+08:00"),
+      ],
+    });
+    const user = userEvent.setup();
+    renderWorkspace([]);
+
+    const october = await screen.findByRole("button", { name: /October 2026\s*2/ });
+    const september = screen.getByRole("button", { name: /September 2026\s*1/ });
+    expect(october).toHaveAttribute("aria-expanded", "true");
+    expect(september).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(2);
+    expect(screen.queryByText("September 16-30, 2026")).not.toBeInTheDocument();
+
+    await user.click(september);
+    expect(screen.getByText("September 16-30, 2026")).toBeInTheDocument();
+    await user.click(october);
+    expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(1);
+  });
+
   it("does not expose manual payroll entry fields", () => {
     renderWorkspace([]);
     expect(screen.queryByRole("combobox", { name: "Personnel" })).not.toBeInTheDocument();

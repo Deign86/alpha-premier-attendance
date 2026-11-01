@@ -215,7 +215,7 @@ describe('DatabasePanel', () => {
     expect(await screen.findByText(/Backup saved to E:/i)).toBeInTheDocument();
   });
 
-  it('groups existing backups into one fold per month, newest month open', async () => {
+  it('groups existing backups into one fold per month, the list open and every month closed', async () => {
     const backup = (stamp: string, modifiedAt: string) => ({
       fileName: `attendance-backup-${stamp}.apbackup`,
       filePath: `C:\\backups\\attendance-backup-${stamp}.apbackup`,
@@ -235,7 +235,8 @@ describe('DatabasePanel', () => {
 
     const october = (await screen.findByText(/October 2026/)).closest('details');
     const september = screen.getByText(/September 2026/).closest('details');
-    expect(october).toHaveAttribute('open');
+    expect(october?.parentElement?.closest('details')).toHaveAttribute('open');
+    expect(october).not.toHaveAttribute('open');
     expect(september).not.toHaveAttribute('open');
     expect(october).toHaveTextContent('attendance-backup-20261020-120000.apbackup');
     expect(october).toHaveTextContent('attendance-backup-20261012-120000.apbackup');

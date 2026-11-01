@@ -2326,6 +2326,21 @@ describe('Admin Attendance Corrections', () => {
     expect(assistedPill).toBeInTheDocument();
     expect(backdatedPill).toBeInTheDocument();
 
+    // Status filters are one choice at a time; choosing the current one again goes back to All.
+    const allStatuses = screen.getByRole('button', { name: /^all \d+$/i });
+    const late = screen.getByRole('button', { name: /^late \d+$/i });
+    expect(allStatuses).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(late);
+    expect(late).toHaveAttribute('aria-pressed', 'true');
+    expect(allStatuses).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(late);
+    expect(allStatuses).toHaveAttribute('aria-pressed', 'true');
+    // Assisted and Backdated switch on and off on their own.
+    fireEvent.click(assistedPill);
+    expect(assistedPill).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(assistedPill);
+    expect(assistedPill).toHaveAttribute('aria-pressed', 'false');
+
     // Click "+ Add missed attendance"
     const addMissedButton = screen.getByRole('button', { name: /\+ add missed attendance/i });
     await user.click(addMissedButton);
