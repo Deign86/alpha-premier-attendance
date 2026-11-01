@@ -5909,7 +5909,6 @@ type PayrollForm = {
   payrollProfileId: string;
   cutoffStart: string;
   cutoffEnd: string;
-  payrollCutoffLabel: string;
   standardWorkingDays: string;
   actualWorkingDays: string;
   specialHolidayDays: string;
@@ -5932,7 +5931,6 @@ const emptyPayrollForm: PayrollForm = {
   payrollProfileId: "BEA_STANDARD",
   cutoffStart: "",
   cutoffEnd: "",
-  payrollCutoffLabel: "",
   standardWorkingDays: "11",
   actualWorkingDays: "11",
   specialHolidayDays: "0",
@@ -5996,6 +5994,49 @@ function computeSemiMonthlyCutoff(
   };
 }
 
+/** The form fields one half-month preset fills: its dates and its working days. */
+function cutoffFields(month: string, half: "first" | "second"): Pick<PayrollForm, "cutoffStart" | "cutoffEnd" | "standardWorkingDays"> {
+  const { cutoffStart, cutoffEnd } = computeSemiMonthlyCutoff(month, half);
+  return { cutoffStart, cutoffEnd, standardWorkingDays: String(countWorkdays(cutoffStart, cutoffEnd) || 11) };
+}
+
+/** A half-month cutoff by its month ("2026-08") and half. */
+interface HalfMonthCutoff {
+  month: string;
+  half: "first" | "second";
+}
+
+/**
+ * The most recently ended half-month cutoff on office (Manila) time, which is the one payroll is usually run for:
+ * on the 1st–15th the 16th–last day of last month, from the 16th the 1st–15th of this month.
+ */
+function lastEndedCutoff(): HalfMonthCutoff {
+  const today = localDate();
+  const [year, month, day] = today.split("-").map(Number);
+  if (day >= 16) return { month: today.slice(0, 7), half: "first" };
+  return { month: month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`, half: "second" };
+}
+
+const PAYROLL_STEPS = ["Cutoff", "Review", "Finalize", "Export"] as const;
+type PayrollStepState = "done" | "current" | "upcoming";
+
+/** Where the chosen cutoff stands, worked out on this PC from its dates, records and PDFs. Display only. */
+function PayrollSteps({ states }: { states: readonly PayrollStepState[] }) {
+  return (
+    <ol className="payroll-steps" aria-label="Payroll steps">
+      {PAYROLL_STEPS.map((label, index) => (
+        <li key={label} className={`is-${states[index]}`} aria-current={states[index] === "current" ? "step" : undefined}>
+          <span className="payroll-step-mark" aria-hidden="true">
+            {states[index] === "done" ? <Check size={12} strokeWidth={3} /> : index + 1}
+          </span>
+          <span className="payroll-step-label">{label}</span>
+          {states[index] === "done" && <span className="visually-hidden"> (done)</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function PayrollWorkspace({
   records,
   onSaved,
@@ -6008,15 +6049,16 @@ export function PayrollWorkspace({
   loadStatus?: LoadStatus;
   onRetry?: () => void;
 }) {
-  const [form, setForm] = useState<PayrollForm>(emptyPayrollForm);
+  // Opens on the cutoff that ended last, so Generate is ready without picking dates.
+  const [form, setForm] = useState<PayrollForm>(() => {
+    const { month, half } = lastEndedCutoff();
+    return { ...emptyPayrollForm, ...cutoffFields(month, half) };
+  });
   // Problems stay on the page; generated, deleted and saved results show as toasts.
   const [message, setMessage] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [cutoffMonth, setCutoffMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  });
+  const [cutoffMonth, setCutoffMonth] = useState(() => form.cutoffStart.slice(0, 7));
 
   // Keep the browser print header (if any) on-brand instead of the generic kiosk title.
   useEffect(() => {
@@ -6030,16 +6072,17 @@ export function PayrollWorkspace({
   const update = (field: keyof PayrollForm, value: string | boolean) =>
     setForm((current) => ({ ...current, [field]: value }));
 
-  const applyCutoffHalf = (half: "first" | "second") => {
-    const range = computeSemiMonthlyCutoff(cutoffMonth, half);
-    const workdays = countWorkdays(range.cutoffStart, range.cutoffEnd);
-    setForm((current) => ({
-      ...current,
-      cutoffStart: range.cutoffStart,
-      cutoffEnd: range.cutoffEnd,
-      payrollCutoffLabel: range.payrollCutoffLabel,
-      standardWorkingDays: String(workdays || 11),
-    }));
+  const applyCutoffHalf = (half: "first" | "second", month = cutoffMonth) =>
+    setForm((current) => ({ ...current, ...cutoffFields(month, half) }));
+  // The half-month of the cutoff month the dates match, shown pressed; none once the dates are typed by hand.
+  const preset = (["first", "second"] as const)
+    .map((half) => ({ half, ...computeSemiMonthlyCutoff(cutoffMonth, half) }))
+    .find((range) => range.cutoffStart === form.cutoffStart && range.cutoffEnd === form.cutoffEnd);
+  const activeHalf = preset?.half;
+  const changeCutoffMonth = (month: string) => {
+    setCutoffMonth(month);
+    // A chosen half moves with the month, so the dates and the pressed preset keep matching.
+    if (month && activeHalf) applyCutoffHalf(activeHalf, month);
   };
 
   const handleCutoffDateChange = (field: "cutoffStart" | "cutoffEnd", value: string) => {
@@ -6057,6 +6100,8 @@ export function PayrollWorkspace({
 
   const [clearCutoffOpen, setClearCutoffOpen] = useState(false);
   const [clearingCutoff, setClearingCutoff] = useState(false);
+  // The table shows the chosen cutoff's records unless every cutoff is asked for.
+  const [showAllCutoffs, setShowAllCutoffs] = useState(false);
   // The picked cutoff as people read it ("Aug 1–15, 2026"); the label saved with the payroll is unchanged.
   const cutoffRange = formatCutoffRange(form.cutoffStart, form.cutoffEnd);
 
@@ -6069,16 +6114,28 @@ export function PayrollWorkspace({
     );
   }, [records, form.cutoffStart, form.cutoffEnd]);
 
+  // Why Generate is off, shown under it: the dates, or the payroll list not loaded (its confirmation must know whether
+  // payroll exists). The export buttons add that the cutoff needs payroll first.
+  const datesReason =
+    !form.cutoffStart || !form.cutoffEnd
+      ? "Pick a cutoff start and end date."
+      : form.cutoffStart > form.cutoffEnd
+        ? "End date must be on or after the start date."
+        : null;
+  const generateReason =
+    datesReason ??
+    (loadStatus === "loading" ? "Loading payroll…" : loadStatus === "failed" ? "Payroll didn't load. Select Retry below." : null);
+  const exportReason = generateReason ?? (existingCutoffRecords.length > 0 ? null : "Generate payroll for this cutoff first.");
+  // The label saved with the payroll: the preset's ("August 1-15, 2026") when the dates are a half-month of the
+  // cutoff month, otherwise "<start> to <end>". PDFs and payslips keep the label their payroll was saved with.
+  const cutoffLabel = preset?.payrollCutoffLabel ?? `${form.cutoffStart} to ${form.cutoffEnd}`;
+  const exportLabel = existingCutoffRecords[0]?.payrollCutoffLabel || cutoffLabel;
+  const draftCount = existingCutoffRecords.filter((record) => record.status !== "FINALIZED").length;
+  const finalizedCount = existingCutoffRecords.length - draftCount;
+
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!form.cutoffStart || !form.cutoffEnd) {
-      setMessage({ tone: "error", text: "Select a cutoff period first." });
-      return;
-    }
-    if (form.cutoffStart > form.cutoffEnd) {
-      setMessage({ tone: "error", text: "Cutoff start must be on or before cutoff end." });
-      return;
-    }
+    if (generateReason) return;
     setMessage(null);
     setConfirmOpen(true);
   };
@@ -6093,12 +6150,7 @@ export function PayrollWorkspace({
       }
       const stdDays = Number(form.standardWorkingDays);
       const customization = !Number.isNaN(stdDays) && stdDays > 0 ? { standardWorkingDays: stdDays } : undefined;
-      const response = await generatePayrollCutoff(
-        form.cutoffStart,
-        form.cutoffEnd,
-        form.payrollCutoffLabel || `${form.cutoffStart} to ${form.cutoffEnd}`,
-        customization,
-      );
+      const response = await generatePayrollCutoff(form.cutoffStart, form.cutoffEnd, cutoffLabel, customization);
       if (response.success) {
         const skipped = response.warnings ?? [];
         showToast(
@@ -6152,36 +6204,6 @@ export function PayrollWorkspace({
     }
   };
 
-  // The selected payroll cutoff drives both generated payroll PDFs: the
-  // cutoff picked in the create form when set, otherwise the most recent
-  // cutoff found in the saved records.
-  const selectedCutoff = useMemo<{
-    cutoffStart: string;
-    cutoffEnd: string;
-    label: string;
-  } | null>(() => {
-    if (form.cutoffStart && form.cutoffEnd) {
-      return {
-        cutoffStart: form.cutoffStart,
-        cutoffEnd: form.cutoffEnd,
-        label:
-          form.payrollCutoffLabel ||
-          `${form.cutoffStart} to ${form.cutoffEnd}`,
-      };
-    }
-    const latest = records.reduce<PayrollCutoffRecord | null>(
-      (best, row) => (!best || row.cutoffStart > best.cutoffStart ? row : best),
-      null,
-    );
-    return latest
-      ? {
-          cutoffStart: latest.cutoffStart,
-          cutoffEnd: latest.cutoffEnd,
-          label: latest.payrollCutoffLabel,
-        }
-      : null;
-  }, [form.cutoffStart, form.cutoffEnd, form.payrollCutoffLabel, records]);
-
   const [pdfMessage, setPdfMessage] = useState<Notice | null>(null);
   const [generating, setGenerating] = useState(false);
   const [payrollPdfs, setPayrollPdfs] = useState<PayrollPdfRecord[]>([]);
@@ -6196,19 +6218,33 @@ export function PayrollWorkspace({
     });
   }, []);
 
+  // The chosen cutoff's PDFs, newest first, listed beside the export buttons.
+  const cutoffPdfs = useMemo(
+    () =>
+      payrollPdfs
+        .filter((pdf) => pdf.cutoffStart === form.cutoffStart && pdf.cutoffEnd === form.cutoffEnd)
+        .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt)),
+    [payrollPdfs, form.cutoffStart, form.cutoffEnd],
+  );
+
+  // Cutoff is done once its dates are set; Review and Finalize once every record is finalized (Review stays current
+  // while any draft exists or nothing is generated); Export once a PDF exists for the finalized cutoff. The current
+  // step is the first one not done, and the steps after it are upcoming whatever their own check says.
+  const allFinalized = existingCutoffRecords.length > 0 && draftCount === 0;
+  const currentStep = [!datesReason, allFinalized, allFinalized, allFinalized && cutoffPdfs.length > 0].indexOf(false);
+  const stepStates = PAYROLL_STEPS.map((_, index): PayrollStepState =>
+    currentStep === -1 || index < currentStep ? "done" : index === currentStep ? "current" : "upcoming",
+  );
+
   const generatePdf = async () => {
-    if (generating) return;
-    if (!selectedCutoff) {
-      setPdfMessage({ tone: "error", text: "No payroll records to generate. Create and save a payroll first." });
-      return;
-    }
+    if (generating || exportReason) return;
     setGenerating(true);
     setPdfMessage(null);
     try {
       const response = await generatePayrollPdf({
-        cutoffStart: selectedCutoff.cutoffStart,
-        cutoffEnd: selectedCutoff.cutoffEnd,
-        payrollCutoffLabel: selectedCutoff.label,
+        cutoffStart: form.cutoffStart,
+        cutoffEnd: form.cutoffEnd,
+        payrollCutoffLabel: exportLabel,
         workerType: "intern",
       });
       if (response.success) {
@@ -6218,7 +6254,7 @@ export function PayrollWorkspace({
             (item) => item.payrollPdfId !== response.pdf.payrollPdfId,
           ),
         ]);
-        showToast(`Payroll PDF generated for ${formatCutoffRange(selectedCutoff.cutoffStart, selectedCutoff.cutoffEnd)}.`);
+        showToast(`Payroll PDF generated for ${cutoffRange}.`);
       } else setPdfMessage({ tone: "error", text: response.error.message });
     } catch (error) {
       setPdfMessage({ tone: "error", text: error instanceof Error ? error.message : "Unable to generate the payroll PDF." });
@@ -6228,24 +6264,20 @@ export function PayrollWorkspace({
   };
 
   const generatePayslips = async () => {
-    if (generatingPayslips) return;
+    if (generatingPayslips || exportReason) return;
     setPayslipDirectory(null);
     setPayslipOpenMessage(null);
-    if (!selectedCutoff) {
-      setPayslipMessage({ tone: "error", text: "No payroll records to generate payslips for. Create and save a payroll first." });
-      return;
-    }
     setGeneratingPayslips(true);
     setPayslipMessage(null);
     try {
       const response = await generateInternPayslipImages({
-        cutoffStart: selectedCutoff.cutoffStart,
-        cutoffEnd: selectedCutoff.cutoffEnd,
-        payrollCutoffLabel: selectedCutoff.label,
+        cutoffStart: form.cutoffStart,
+        cutoffEnd: form.cutoffEnd,
+        payrollCutoffLabel: exportLabel,
       });
       if (response.success) {
         setPayslipDirectory(response.directoryPath);
-        showToast(`Saved ${response.fileCount} payslip image(s) for ${formatCutoffRange(selectedCutoff.cutoffStart, selectedCutoff.cutoffEnd)}.`);
+        showToast(`Saved ${response.fileCount} payslip image(s) for ${cutoffRange}.`);
       } else setPayslipMessage({ tone: "error", text: response.error.message });
     } catch (error) {
       setPayslipMessage({ tone: "error", text: error instanceof Error ? error.message : "Unable to generate the payslips." });
@@ -6261,17 +6293,26 @@ export function PayrollWorkspace({
 
   return (
     <section className="payroll-workspace">
+      <PayrollSteps states={stepStates} />
       <div className="payroll-toolbar">
         <form className="payroll-generate-panel" onSubmit={save}>
           <div className="payroll-panel-heading">
             <h2>Generate cutoff payroll</h2>
-            <button
-              className="submit-button payroll-generate-submit"
-              type="submit"
-              disabled={saving || !form.cutoffStart || !form.cutoffEnd}
-            >
-              {saving ? "Generating..." : "Generate from attendance"}
-            </button>
+            <div className="payroll-generate-action">
+              <button
+                className="submit-button payroll-generate-submit"
+                type="submit"
+                disabled={saving || Boolean(generateReason)}
+                aria-describedby={generateReason ? "payroll-generate-reason" : undefined}
+              >
+                {saving ? "Generating..." : "Generate from attendance"}
+              </button>
+              {generateReason && (
+                <p className="payroll-reason" id="payroll-generate-reason">
+                  {generateReason}
+                </p>
+              )}
+            </div>
           </div>
           <div className="payroll-generate-controls">
             <div className="cutoff-period">
@@ -6280,13 +6321,15 @@ export function PayrollWorkspace({
                 <input
                   type="month"
                   value={cutoffMonth}
-                  onChange={(event) => setCutoffMonth(event.target.value)}
+                  onChange={(event) => changeCutoffMonth(event.target.value)}
                 />
               </label>
               <div className="cutoff-fill-buttons">
                 <button
                   className="admin-button"
                   type="button"
+                  aria-pressed={activeHalf === "first"}
+                  disabled={!cutoffMonth}
                   onClick={() => applyCutoffHalf("first")}
                 >
                   1st&ndash;15th
@@ -6294,6 +6337,8 @@ export function PayrollWorkspace({
                 <button
                   className="admin-button"
                   type="button"
+                  aria-pressed={activeHalf === "second"}
+                  disabled={!cutoffMonth}
                   onClick={() => applyCutoffHalf("second")}
                 >
                   16th&ndash;last day
@@ -6342,19 +6387,21 @@ export function PayrollWorkspace({
               className="admin-button"
               type="button"
               onClick={() => void generatePdf()}
-              disabled={generating}
+              disabled={generating || Boolean(exportReason)}
+              aria-describedby={exportReason ? "payroll-export-reason" : undefined}
             >
-              {generating ? "Generating..." : "Generate Intern Payroll PDF"}
+              {generating ? "Generating..." : "Download payroll PDF"}
             </button>
             <button
               className="admin-button"
               type="button"
               onClick={() => void generatePayslips()}
-              disabled={generatingPayslips}
+              disabled={generatingPayslips || Boolean(exportReason)}
+              aria-describedby={exportReason ? "payroll-export-reason" : undefined}
             >
               {generatingPayslips
                 ? "Generating payslips..."
-                : "Generate Intern Payslips"}
+                : "Download payslips"}
             </button>
             {payslipDirectory && (
               <button
@@ -6366,10 +6413,17 @@ export function PayrollWorkspace({
               </button>
             )}
           </div>
+          {exportReason && (
+            <p className="payroll-reason" id="payroll-export-reason">
+              {exportReason}
+            </p>
+          )}
+          <CutoffPdfList pdfs={cutoffPdfs} heading={datesReason ? "PDFs for this cutoff" : `PDFs for ${cutoffRange}`} />
         </div>
       </div>
 
-      {existingCutoffRecords.length > 0 && (
+      {/* Drafts: what regenerating does, and Delete all. All finalized: one calm line; the delete asks for DELETE. */}
+      {draftCount > 0 ? (
         <div className="cutoff-existing-banner" role="status">
           <span>
             Payroll already exists for this cutoff ({existingCutoffRecords.length} record(s)). Generating from attendance will replace draft records; finalized records are kept.
@@ -6385,6 +6439,24 @@ export function PayrollWorkspace({
             </button>
           </div>
         </div>
+      ) : (
+        allFinalized && (
+          <p className="cutoff-finalized-line" role="status">
+            <span>
+              {existingCutoffRecords.length === 1
+                ? "The one record for this cutoff is finalized."
+                : `All ${existingCutoffRecords.length} records for this cutoff are finalized.`}
+            </span>
+            <button
+              className="text-button danger-button"
+              type="button"
+              disabled={clearingCutoff || saving}
+              onClick={() => setClearCutoffOpen(true)}
+            >
+              Delete all records
+            </button>
+          </p>
+        )
       )}
 
       <NoticeLine notice={message} />
@@ -6393,11 +6465,19 @@ export function PayrollWorkspace({
       <NoticeLine notice={payslipOpenMessage} />
 
       <section className="payroll-table">
-        <PayrollTable records={records} onFinalized={onSaved} loadStatus={loadStatus} onRetry={onRetry} />
+        <PayrollTable
+          records={showAllCutoffs ? records : existingCutoffRecords}
+          allCount={records.length}
+          showingAll={showAllCutoffs}
+          onShowAllChange={setShowAllCutoffs}
+          onFinalized={onSaved}
+          loadStatus={loadStatus}
+          onRetry={onRetry}
+        />
       </section>
 
-      <section className="payroll-pdf-section">
-        <h2>Generated payroll PDFs</h2>
+      <section className="payroll-pdf-section" aria-labelledby="payroll-pdf-history-heading">
+        <h2 id="payroll-pdf-history-heading">Generated payroll PDFs</h2>
         <PayrollPdfList pdfs={payrollPdfs} />
       </section>
 
@@ -6419,8 +6499,13 @@ export function PayrollWorkspace({
         busy={clearingCutoff}
         tone="danger"
         title="Delete cutoff records?"
-        message={`This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for ${cutoffRange}. Continue?`}
+        message={
+          finalizedCount > 0
+            ? `This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for ${cutoffRange}, including ${finalizedCount} finalized (approved) record(s). This cannot be undone.`
+            : `This will permanently delete all ${existingCutoffRecords.length} payroll record(s) for ${cutoffRange}. Continue?`
+        }
         confirmLabel="Delete cutoff records"
+        requireText={finalizedCount > 0 ? "DELETE" : undefined}
         onCancel={() => setClearCutoffOpen(false)}
         onConfirm={() => void clearCutoffRecords()}
       />
@@ -7158,11 +7243,19 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
 
 function PayrollTable({
   records,
+  allCount,
+  showingAll,
+  onShowAllChange,
   onFinalized,
   loadStatus = "ready",
   onRetry,
 }: {
+  /** The rows shown: the chosen cutoff's, or every cutoff's. Selection and batch actions apply to these. */
   records: PayrollCutoffRecord[];
+  /** How many records every cutoff has together, for "Show all cutoffs (74)". */
+  allCount: number;
+  showingAll: boolean;
+  onShowAllChange: (showAll: boolean) => void;
   onFinalized: () => void;
   loadStatus?: LoadStatus;
   onRetry?: () => void;
@@ -7333,8 +7426,21 @@ function PayrollTable({
       </div>
     );
   const failedLine = loadStatus === "failed" && onRetry ? <LoadFailed what="payroll" onRetry={onRetry} /> : null;
+  // Switches between the chosen cutoff's rows and every cutoff's (shown only when it would change the rows).
+  const scopeToggle = (showingAll || allCount > records.length) && (
+    <button className="text-button see-all-toggle" type="button" onClick={() => onShowAllChange(!showingAll)}>
+      {showingAll ? "Show this cutoff only" : `Show all cutoffs (${allCount})`}
+    </button>
+  );
   if (!records.length)
-    return failedLine ?? <div className="empty-state">No cutoff payroll has been created.</div>;
+    return (
+      failedLine ?? (
+        <div className="empty-state payroll-empty">
+          <span>No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance.</span>
+          {scopeToggle}
+        </div>
+      )
+    );
 
   // Hide columns that are blank or ₱0 on every row; they reappear once any row has a value,
   // and the Breakdown popup always shows them.
@@ -7364,6 +7470,7 @@ function PayrollTable({
               {showAllPayroll ? "Show less" : `See all (${records.length})`}
             </button>
           )}
+          {scopeToggle}
         </div>
         <div className="payroll-batch-actions">
           {selectedIds.size > 0 ? (
@@ -7430,6 +7537,7 @@ function PayrollTable({
               </th>
               <th>Employee #</th>
               <th>Employee Name</th>
+              {showingAll && <th>Period</th>}
               {showDept && <th>Dept / Role</th>}
               {showBank && <th>Bank / A/C</th>}
               {showTin && <th>TIN #</th>}
@@ -7472,6 +7580,7 @@ function PayrollTable({
                         : row.employeeName}
                     </strong>
                   </td>
+                  {showingAll && <td className="payroll-period-cell">{formatCutoffRange(row.cutoffStart, row.cutoffEnd)}</td>}
                   {showDept && <td>{payrollDeptRole(row)}</td>}
                   {showBank && <td>{payrollBankAccount(row)}</td>}
                   {showTin && <td>{row.tin || "—"}</td>}
@@ -7693,19 +7802,12 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
   const [actionMessage, setActionMessage] = useState<Notice | null>(null);
   // Months opened or closed by hand; the latest month starts open and older months start closed.
   const [toggledMonths, setToggledMonths] = useState<ReadonlySet<string>>(new Set());
-  const runAction = async (
-    action: (filePath: string) => Promise<FileActionResult>,
-    filePath: string,
-  ) => {
-    const result = await action(filePath);
-    setActionMessage(result.ok ? null : { tone: "error", text: result.message });
-  };
   const sorted = [...pdfs].sort((a, b) =>
     b.generatedAt.localeCompare(a.generatedAt),
   );
   if (!sorted.length)
     return (
-      <div className="empty-state">No payroll PDFs have been generated yet.</div>
+      <div className="empty-state">No PDFs yet. Finalize the cutoff, then Download payroll PDF.</div>
     );
   // One fold per cutoff month, newest month first; PDFs inside stay newest-generated first.
   const months: { key: string; label: string; pdfs: PayrollPdfRecord[] }[] = [];
@@ -7765,22 +7867,7 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
                       <strong>{php(pdf.totalAmount)}</strong>
                     </td>
                     <td className="payroll-pdf-actions">
-                      <button
-                        className="text-button"
-                        type="button"
-                        onClick={() => void runAction(openGeneratedFile, pdf.filePath)}
-                      >
-                        Open PDF
-                      </button>
-                      <button
-                        className="text-button"
-                        type="button"
-                        onClick={() =>
-                          void runAction(revealGeneratedFile, pdf.filePath)
-                        }
-                      >
-                        Show in Folder
-                      </button>
+                      <PayrollPdfButtons filePath={pdf.filePath} onResult={setActionMessage} />
                     </td>
                   </tr>
                 ))}
@@ -7791,6 +7878,49 @@ function PayrollPdfList({ pdfs }: { pdfs: PayrollPdfRecord[] }) {
       </div>
       <NoticeLine notice={actionMessage} />
     </>
+  );
+}
+
+/** Open PDF and Show in Folder for one generated payroll PDF; a file that can't be opened reports why. */
+function PayrollPdfButtons({ filePath, onResult }: { filePath: string; onResult: (notice: Notice | null) => void }) {
+  const run = async (action: (filePath: string) => Promise<FileActionResult>) => {
+    const result = await action(filePath);
+    onResult(result.ok ? null : { tone: "error", text: result.message });
+  };
+  return (
+    <>
+      <button className="text-button" type="button" onClick={() => void run(openGeneratedFile)}>
+        Open PDF
+      </button>
+      <button className="text-button" type="button" onClick={() => void run(revealGeneratedFile)}>
+        Show in Folder
+      </button>
+    </>
+  );
+}
+
+/** The chosen cutoff's PDFs beside the export buttons, newest first; the full history stays at the bottom. */
+function CutoffPdfList({ pdfs, heading }: { pdfs: PayrollPdfRecord[]; heading: string }) {
+  const [actionMessage, setActionMessage] = useState<Notice | null>(null);
+  return (
+    <div className="payroll-cutoff-pdfs">
+      <h3 id="payroll-cutoff-pdfs-heading">{heading}</h3>
+      {pdfs.length ? (
+        <ul aria-labelledby="payroll-cutoff-pdfs-heading">
+          {pdfs.map((pdf) => (
+            <li key={pdf.payrollPdfId}>
+              <span>{formatDateTime(pdf.generatedAt)}</span>
+              <span className="payroll-pdf-actions">
+                <PayrollPdfButtons filePath={pdf.filePath} onResult={setActionMessage} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="payroll-cutoff-pdfs-empty">No PDF for this cutoff yet.</p>
+      )}
+      <NoticeLine notice={actionMessage} />
+    </div>
   );
 }
 

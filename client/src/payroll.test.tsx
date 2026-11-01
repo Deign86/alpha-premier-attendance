@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   InternPayslipSaveResponse,
@@ -85,7 +85,8 @@ describe("PayrollWorkspace", () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-08-15T12:00:00Z"));
+    // Mon, Aug 17, 2026 in Manila: the cutoff that ended last (and opens pre-filled) is Aug 1–15, the fixtures' cutoff.
+    vi.setSystemTime(new Date("2026-08-17T10:00:00+08:00"));
     window.print = vi.fn();
     generatePayrollCutoffSpy = vi.spyOn(api, "generatePayrollCutoff");
     generatePayrollPdfSpy = vi.spyOn(api, "generatePayrollPdf");
@@ -112,12 +113,111 @@ describe("PayrollWorkspace", () => {
     expect(generatePayrollCutoffSpy).toHaveBeenCalledWith("2026-08-01", "2026-08-15", "August 1-15, 2026", { standardWorkingDays: 10 });
   });
 
+  it("opens on the cutoff that ended last in Manila, with its month and half-month preset", () => {
+    const opensOn = (now: string, start: string, end: string, month: string, preset: RegExp) => {
+      vi.setSystemTime(new Date(now));
+      const { unmount } = renderWorkspace([]);
+      expect(screen.getByLabelText("Cutoff start")).toHaveValue(start);
+      expect(screen.getByLabelText("Cutoff end")).toHaveValue(end);
+      expect(screen.getByLabelText("Cutoff month")).toHaveValue(month);
+      for (const button of [screen.getByRole("button", { name: /1st.*15th/i }), screen.getByRole("button", { name: /16th.*last day/i })]) {
+        expect(button).toHaveAttribute("aria-pressed", String(preset.test(button.textContent ?? "")));
+      }
+      // Ready to generate: no reason line under the button.
+      expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Generate from attendance" })).not.toHaveAccessibleDescription();
+      unmount();
+    };
+    // From the 16th: this month's 1st–15th.
+    opensOn("2026-08-17T10:00:00+08:00", "2026-08-01", "2026-08-15", "2026-08", /1st/);
+    // On the 1st–15th: last month's 16th–last day (the 15th itself hasn't ended), across the new year too.
+    opensOn("2026-08-15T18:00:00+08:00", "2026-07-16", "2026-07-31", "2026-07", /16th/);
+    opensOn("2027-01-10T10:00:00+08:00", "2026-12-16", "2026-12-31", "2026-12", /16th/);
+    opensOn("2026-03-01T09:00:00+08:00", "2026-02-16", "2026-02-28", "2026-02", /16th/);
+    // Manila time decides: 1:30 AM on Aug 16 in Manila is still Aug 15 in UTC.
+    opensOn("2026-08-15T17:30:00Z", "2026-08-01", "2026-08-15", "2026-08", /1st/);
+  });
+
+  it("says under a disabled Generate button what is missing", () => {
+    renderWorkspace([]);
+    const generate = screen.getByRole("button", { name: "Generate from attendance" });
+
+    fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "" } });
+    expect(generate).toBeDisabled();
+    expect(generate).toHaveAccessibleDescription("Pick a cutoff start and end date.");
+    // Typed dates match no preset, so neither shows pressed.
+    expect(screen.getByRole("button", { name: /1st.*15th/i })).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "2026-07-31" } });
+    expect(generate).toBeDisabled();
+    expect(generate).toHaveAccessibleDescription("End date must be on or after the start date.");
+
+    // A one-day cutoff is allowed.
+    fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "2026-08-01" } });
+    expect(generate).toBeEnabled();
+    expect(generate).not.toHaveAccessibleDescription();
+    expect(screen.queryByText("End date must be on or after the start date.")).not.toBeInTheDocument();
+  });
+
+  it("moves the chosen half-month with the cutoff month", () => {
+    renderWorkspace([]);
+    fireEvent.change(screen.getByLabelText("Cutoff month"), { target: { value: "2026-09" } });
+    expect(screen.getByLabelText("Cutoff start")).toHaveValue("2026-09-01");
+    expect(screen.getByLabelText("Cutoff end")).toHaveValue("2026-09-15");
+    expect(screen.getByRole("button", { name: /1st.*15th/i })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows the payroll steps for the chosen cutoff, the current one marked", async () => {
+    // "Cutoff:done", "Review:current", …: done steps read "(done)", the current one has aria-current="step".
+    const steps = () =>
+      within(screen.getByRole("list", { name: "Payroll steps" }))
+        .getAllByRole("listitem")
+        .map((step) => {
+          const text = step.textContent ?? "";
+          const state = step.getAttribute("aria-current") === "step" ? "current" : text.includes("(done)") ? "done" : "upcoming";
+          return `${text.replace(/\d| \(done\)/g, "")}:${state}`;
+        });
+    const draft = (id: string) => internRecord({ payrollId: id, status: "DRAFT" });
+    const final = (id: string) => internRecord({ payrollId: id, status: "FINALIZED" });
+    const julyDraft = internRecord({ payrollId: "JUL", status: "DRAFT", cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31" });
+    const cases: [PayrollCutoffRecord[], PayrollPdfRecord[], string[]][] = [
+      // Not generated yet, or any draft left (even with some finalized): Review.
+      [[], [], ["Cutoff:done", "Review:current", "Finalize:upcoming", "Export:upcoming"]],
+      [[draft("A"), draft("B")], [], ["Cutoff:done", "Review:current", "Finalize:upcoming", "Export:upcoming"]],
+      [[final("A"), draft("B")], [], ["Cutoff:done", "Review:current", "Finalize:upcoming", "Export:upcoming"]],
+      // A PDF made while drafts remain doesn't tick Export: steps after the current one stay upcoming.
+      [[final("A"), draft("B")], [pdfRecord()], ["Cutoff:done", "Review:current", "Finalize:upcoming", "Export:upcoming"]],
+      // All finalized: Export. A draft of another cutoff doesn't count.
+      [[final("A"), final("B"), julyDraft], [], ["Cutoff:done", "Review:done", "Finalize:done", "Export:current"]],
+    ];
+    for (const [records, pdfs, expected] of cases) {
+      loadPayrollPdfsSpy.mockResolvedValue({ success: true, payrollPdfs: pdfs });
+      const { unmount } = renderWorkspace(records);
+      // The PDF list has loaded once the cutoff's PDFs (if any) are listed beside the export buttons.
+      await (pdfs.length ? screen.findByRole("list", { name: "PDFs for Aug 1–15, 2026" }) : screen.findByText("No PDF for this cutoff yet."));
+      expect(steps()).toEqual(expected);
+      unmount();
+    }
+    // Empty dates: Cutoff is the current step.
+    renderWorkspace([final("A")]);
+    fireEvent.change(screen.getByLabelText("Cutoff start"), { target: { value: "" } });
+    expect(steps()).toEqual(["Cutoff:current", "Review:upcoming", "Finalize:upcoming", "Export:upcoming"]);
+  });
+
+  it("ticks Export once a PDF exists for the chosen cutoff, leaving no step current when all are done", async () => {
+    loadPayrollPdfsSpy.mockResolvedValue({ success: true, payrollPdfs: [pdfRecord()] });
+    renderWorkspace([internRecord({ status: "FINALIZED" })]);
+    const list = screen.getByRole("list", { name: "Payroll steps" });
+    await waitFor(() => expect(within(list).getAllByText("(done)", { exact: false })).toHaveLength(4));
+    expect(within(list).queryByRole("listitem", { current: "step" })).not.toBeInTheDocument();
+  });
+
   it("shows the intern payroll PDF and payslip actions and no print/export actions", () => {
     renderWorkspace([record()]);
-    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download payroll PDF" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Generate Employee Payroll PDF" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate Intern Payslips" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download payslips" })).toBeInTheDocument();
     // No register, CSV/XLSX, or browser print actions.
     expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /register/i })).not.toBeInTheDocument();
@@ -138,7 +238,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord({ netPay: 770 })]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Download payroll PDF" }));
 
     await waitFor(() =>
       expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
@@ -152,10 +252,14 @@ describe("PayrollWorkspace", () => {
     expect(
       await screen.findByText("Payroll PDF generated for Aug 1–15, 2026."),
     ).toBeInTheDocument();
-    // The period appears both in the saved payroll table and the PDF history.
-    expect(screen.getAllByText("August 1-15, 2026").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Open PDF" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
+    // The new PDF shows beside the export buttons and in the history.
+    const cutoffList = screen.getByRole("list", { name: "PDFs for Aug 1–15, 2026" });
+    expect(within(cutoffList).getByRole("button", { name: "Open PDF" })).toBeInTheDocument();
+    expect(within(cutoffList).getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
+    const history = screen.getByRole("region", { name: "Generated payroll PDFs" });
+    expect(within(history).getByText("August 1-15, 2026")).toBeInTheDocument();
+    expect(within(history).getByRole("button", { name: "Open PDF" })).toBeInTheDocument();
+    expect(within(history).getByRole("button", { name: "Show in Folder" })).toBeInTheDocument();
     expect(screen.getAllByText("PHP 770.00").length).toBeGreaterThan(0);
     expect(window.print).not.toHaveBeenCalled();
   });
@@ -179,7 +283,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Download payroll PDF" }));
 
     await waitFor(() =>
       expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
@@ -201,22 +305,39 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Download payroll PDF" }));
     expect(
       await screen.findByText("Unable to generate the payroll PDF."),
     ).toBeInTheDocument();
     expect(window.print).not.toHaveBeenCalled();
   });
 
-  it("shows a message instead of generating when there are no records", async () => {
+  it("keeps Download payroll PDF and Download payslips off, with the reason, until the chosen cutoff has payroll", async () => {
     const user = userEvent.setup();
-    renderWorkspace([]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
-    expect(
-      screen.getByText("No payroll records to generate. Create and save a payroll first."),
-    ).toBeInTheDocument();
+    // Only another cutoff (Jul 16–31) has payroll: the pre-filled Aug 1–15 has none.
+    const { unmount } = renderWorkspace([internRecord({ cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31", payrollCutoffLabel: "July 16-31, 2026" })]);
+    for (const name of ["Download payroll PDF", "Download payslips"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription("Generate payroll for this cutoff first.");
+      await user.click(button);
+    }
     expect(generatePayrollPdfSpy).not.toHaveBeenCalled();
+    expect(generateInternPayslipImagesSpy).not.toHaveBeenCalled();
     expect(window.print).not.toHaveBeenCalled();
+
+    // Picking that cutoff turns them on, with no reason line.
+    await user.click(screen.getByRole("button", { name: /16th.*last day/i }));
+    fireEvent.change(screen.getByLabelText("Cutoff month"), { target: { value: "2026-07" } });
+    expect(screen.getByRole("button", { name: "Download payroll PDF" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download payslips" })).toBeEnabled();
+    expect(screen.queryByText("Generate payroll for this cutoff first.")).not.toBeInTheDocument();
+    unmount();
+
+    // With no cutoff dates the reason says so.
+    renderWorkspace([internRecord()]);
+    fireEvent.change(screen.getByLabelText("Cutoff start"), { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "Download payroll PDF" })).toHaveAccessibleDescription("Pick a cutoff start and end date.");
   });
 
   it("generates intern payslip images for the selected cutoff and opens the saved folder", async () => {
@@ -232,7 +353,7 @@ describe("PayrollWorkspace", () => {
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
     expect(screen.queryByRole("button", { name: "Open payslip folder" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    await user.click(screen.getByRole("button", { name: "Download payslips" }));
 
     await waitFor(() =>
       expect(generateInternPayslipImagesSpy).toHaveBeenCalledWith({
@@ -264,7 +385,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    await user.click(screen.getByRole("button", { name: "Download payslips" }));
     await user.click(await screen.findByRole("button", { name: "Open payslip folder" }));
     expect(
       await screen.findByText("The folder could not be found. It may have been moved or deleted."),
@@ -278,10 +399,10 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    await user.click(screen.getByRole("button", { name: "Download payslips" }));
     expect(await screen.findByText("Unable to generate the payslips.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open payslip folder" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate Intern Payslips" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download payslips" })).toBeEnabled();
   });
 
   it("disables the payslip button and shows progress while generating", async () => {
@@ -293,7 +414,7 @@ describe("PayrollWorkspace", () => {
     );
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    await user.click(screen.getByRole("button", { name: "Download payslips" }));
 
     const busyButton = screen.getByRole("button", { name: "Generating payslips..." });
     expect(busyButton).toBeDisabled();
@@ -301,17 +422,7 @@ describe("PayrollWorkspace", () => {
     expect(generateInternPayslipImagesSpy).toHaveBeenCalledTimes(1);
 
     finish({ success: false, error: { message: "Unable to generate the payslips." } });
-    expect(await screen.findByRole("button", { name: "Generate Intern Payslips" })).toBeEnabled();
-  });
-
-  it("shows a message instead of generating payslips when there are no records", async () => {
-    const user = userEvent.setup();
-    renderWorkspace([]);
-    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
-    expect(
-      screen.getByText("No payroll records to generate payslips for. Create and save a payroll first."),
-    ).toBeInTheDocument();
-    expect(generateInternPayslipImagesSpy).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "Download payslips" })).toBeEnabled();
   });
 
   it("lists previously generated payroll PDFs with open and reveal actions", async () => {
@@ -328,21 +439,62 @@ describe("PayrollWorkspace", () => {
     });
     renderWorkspace([internRecord()]);
 
-    // The period label appears in the PDF history rows (the saved payroll
-    // table renders it too, so exact-match queries would be ambiguous).
-    expect(await screen.findAllByText("August 1-15, 2026")).not.toHaveLength(0);
-    expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Show in Folder" })).toHaveLength(1);
+    const history = screen.getByRole("region", { name: "Generated payroll PDFs" });
+    expect(await within(history).findByText("August 1-15, 2026")).toBeInTheDocument();
+    expect(within(history).getAllByRole("button", { name: "Open PDF" })).toHaveLength(1);
+    expect(within(history).getAllByRole("button", { name: "Show in Folder" })).toHaveLength(1);
     expect(screen.queryByText("Employee")).not.toBeInTheDocument();
     expect(screen.getAllByText("Intern")).toHaveLength(1);
     expect(window.print).not.toHaveBeenCalled();
   });
 
-  it("shows an empty state when no payroll PDFs exist", async () => {
+  it("says the next step when there is no payroll and no PDF yet", async () => {
     renderWorkspace([]);
     expect(
-      await screen.findByText("No payroll PDFs have been generated yet."),
+      await screen.findByText("No PDFs yet. Finalize the cutoff, then Download payroll PDF."),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText("No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No PDF for this cutoff yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/No cutoff payroll has been created/)).not.toBeInTheDocument();
+  });
+
+  it("lists the chosen cutoff's PDFs beside the export buttons, newest first, and keeps the full history", async () => {
+    const openSpy = vi.spyOn(api, "openGeneratedFile").mockResolvedValue({ ok: false, message: "The file could not be found." });
+    const pdf = (id: string, cutoffStart: string, cutoffEnd: string, label: string, generatedAt: string) =>
+      pdfRecord({ payrollPdfId: id, fileName: `${id}.pdf`, filePath: `C:\\data\\exports\\${id}.pdf`, cutoffStart, cutoffEnd, payrollCutoffLabel: label, generatedAt });
+    loadPayrollPdfsSpy.mockResolvedValue({
+      success: true,
+      payrollPdfs: [
+        pdf("aug-early", "2026-08-01", "2026-08-15", "August 1-15, 2026", "2026-08-16T09:05:00+08:00"),
+        pdf("jul-late", "2026-07-16", "2026-07-31", "July 16-31, 2026", "2026-08-01T10:00:00+08:00"),
+        pdf("aug-late", "2026-08-01", "2026-08-15", "August 1-15, 2026", "2026-08-17T08:40:00+08:00"),
+      ],
+    });
+    const user = userEvent.setup();
+    renderWorkspace([internRecord()]);
+
+    const cutoffList = await screen.findByRole("list", { name: "PDFs for Aug 1–15, 2026" });
+    const rows = within(cutoffList).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Aug 17, 2026, 8:40 AMOpen PDFShow in Folder",
+      "Aug 16, 2026, 9:05 AMOpen PDFShow in Folder",
+    ]);
+    await user.click(within(rows[0]).getByRole("button", { name: "Open PDF" }));
+    expect(openSpy).toHaveBeenCalledWith("C:\\data\\exports\\aug-late.pdf");
+    expect(await screen.findByText("The file could not be found.")).toBeInTheDocument();
+
+    // The history at the bottom still has every PDF, grouped by month.
+    const history = screen.getByRole("region", { name: "Generated payroll PDFs" });
+    expect(within(history).getByRole("button", { name: /August 2026\s*2/ })).toHaveAttribute("aria-expanded", "true");
+    expect(within(history).getByRole("button", { name: /July 2026\s*1/ })).toBeInTheDocument();
+
+    // Another cutoff with no PDF says so.
+    await user.click(screen.getByRole("button", { name: /16th.*last day/i }));
+    expect(screen.queryByRole("list", { name: /PDFs for/ })).not.toBeInTheDocument();
+    expect(screen.getByText("PDFs for Aug 16–31, 2026")).toBeInTheDocument();
+    expect(screen.getByText("No PDF for this cutoff yet.")).toBeInTheDocument();
   });
 
   it("groups generated payroll PDFs by cutoff month, latest month open", async () => {
@@ -614,7 +766,7 @@ describe("PayrollWorkspace", () => {
     const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();
     renderWorkspace([
-      record({ payrollId: "P-001", cutoffStart: "2026-08-01", cutoffEnd: "2026-08-15" }),
+      record({ payrollId: "P-001", cutoffStart: "2026-08-01", cutoffEnd: "2026-08-15", status: "DRAFT" }),
     ]);
 
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
@@ -630,6 +782,132 @@ describe("PayrollWorkspace", () => {
     await waitFor(() => {
       expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("P-001");
     });
+  });
+
+  it("shows the regenerate banner only while drafts exist, and a calm line once every record is finalized", async () => {
+    const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+
+    // No payroll for the cutoff: neither.
+    let view = renderWorkspace([]);
+    expect(screen.queryByText(/Payroll already exists for this cutoff/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/for this cutoff (is|are) finalized/)).not.toBeInTheDocument();
+    view.unmount();
+
+    // Drafts (one finalized too): the banner with Delete all.
+    view = renderWorkspace([internRecord({ payrollId: "A", status: "DRAFT" }), internRecord({ payrollId: "B", status: "FINALIZED" })]);
+    expect(screen.getByText(/Payroll already exists for this cutoff \(2 record\(s\)\)/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete all records for this cutoff (2)" })).toBeInTheDocument();
+    expect(screen.queryByText(/for this cutoff (is|are) finalized/)).not.toBeInTheDocument();
+    view.unmount();
+
+    // All finalized: one calm line; deleting says approved pay goes too and asks for DELETE.
+    renderWorkspace([internRecord({ payrollId: "A" }), internRecord({ payrollId: "B" })]);
+    expect(screen.queryByText(/Payroll already exists for this cutoff/)).not.toBeInTheDocument();
+    expect(screen.getByText("All 2 records for this cutoff are finalized.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete all records" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete cutoff records?" });
+    expect(dialog).toHaveTextContent(
+      "This will permanently delete all 2 payroll record(s) for Aug 1–15, 2026, including 2 finalized (approved) record(s). This cannot be undone.",
+    );
+    const confirm = within(dialog).getByRole("button", { name: "Delete cutoff records" });
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText(/Type DELETE to confirm/), "DELETE");
+    await user.click(confirm);
+    await waitFor(() => expect(deletePayrollCutoffSpy).toHaveBeenCalledTimes(2));
+    expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("A");
+    expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("B");
+  });
+
+  it("saves the label that matches the dates: typed dates send '<start> to <end>', a preset sends its own label", async () => {
+    generatePayrollCutoffSpy.mockResolvedValue({ success: true });
+    generatePayrollPdfSpy.mockResolvedValue({ success: false, error: { message: "Not now." } });
+    generateInternPayslipImagesSpy.mockResolvedValue({ success: false, error: { message: "Not now." } });
+    const user = userEvent.setup();
+    /** Generate (as a regenerate, so nothing is deleted), then both exports, for the dates on screen. */
+    const runAll = async () => {
+      await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
+      await user.click(screen.getByRole("button", { name: "Regenerate payroll" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: "Download payroll PDF" }));
+      await user.click(screen.getByRole("button", { name: "Download payslips" }));
+    };
+    const custom = internRecord({ payrollId: "C", cutoffStart: "2026-08-03", cutoffEnd: "2026-08-14", payrollCutoffLabel: "2026-08-03 to 2026-08-14" });
+    const lateAug = internRecord({ payrollId: "L", cutoffStart: "2026-08-16", cutoffEnd: "2026-08-31", payrollCutoffLabel: "August 16-31, 2026" });
+    renderWorkspace([custom, lateAug]);
+
+    // Dates typed after the pre-fill: the pre-filled "August 1-15, 2026" must not stick.
+    fireEvent.change(screen.getByLabelText("Cutoff start"), { target: { value: "2026-08-03" } });
+    fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "2026-08-14" } });
+    await runAll();
+    expect(generatePayrollCutoffSpy).toHaveBeenLastCalledWith("2026-08-03", "2026-08-14", "2026-08-03 to 2026-08-14", { standardWorkingDays: 10 });
+    expect(generatePayrollPdfSpy).toHaveBeenLastCalledWith({ cutoffStart: "2026-08-03", cutoffEnd: "2026-08-14", payrollCutoffLabel: "2026-08-03 to 2026-08-14", workerType: "intern" });
+    expect(generateInternPayslipImagesSpy).toHaveBeenLastCalledWith({ cutoffStart: "2026-08-03", cutoffEnd: "2026-08-14", payrollCutoffLabel: "2026-08-03 to 2026-08-14" });
+
+    // The other preset: its own label and working days (Aug 16–31, 2026 has 11 weekdays).
+    await user.click(screen.getByRole("button", { name: /16th.*last day/i }));
+    expect(screen.getByLabelText("Standard days")).toHaveValue(11);
+    await runAll();
+    expect(generatePayrollCutoffSpy).toHaveBeenLastCalledWith("2026-08-16", "2026-08-31", "August 16-31, 2026", { standardWorkingDays: 11 });
+    expect(generatePayrollPdfSpy).toHaveBeenLastCalledWith({ cutoffStart: "2026-08-16", cutoffEnd: "2026-08-31", payrollCutoffLabel: "August 16-31, 2026", workerType: "intern" });
+    expect(generateInternPayslipImagesSpy).toHaveBeenLastCalledWith({ cutoffStart: "2026-08-16", cutoffEnd: "2026-08-31", payrollCutoffLabel: "August 16-31, 2026" });
+  });
+
+  it("keeps Generate and the exports off with a reason while the payroll list loads or after it failed", () => {
+    const { rerender } = render(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="loading" onRetry={vi.fn()} />);
+    for (const name of ["Generate from attendance", "Download payroll PDF", "Download payslips"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+      expect(screen.getByRole("button", { name })).toHaveAccessibleDescription("Loading payroll…");
+    }
+    rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="failed" onRetry={vi.fn()} />);
+    for (const name of ["Generate from attendance", "Download payroll PDF", "Download payslips"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+      expect(screen.getByRole("button", { name })).toHaveAccessibleDescription("Payroll didn't load. Select Retry below.");
+    }
+    expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
+    // The dates themselves are fine: Cutoff stays done.
+    expect(within(screen.getByRole("list", { name: "Payroll steps" })).getAllByRole("listitem")[0]).toHaveTextContent("(done)");
+  });
+
+  it("shows the chosen cutoff's records, or every cutoff's with a Period column, and acts on the rows shown", async () => {
+    const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderWorkspace([
+      internRecord({ payrollId: "AUG", employeeName: "Maria Santos", status: "DRAFT" }),
+      internRecord({ payrollId: "JUL", employeeName: "Jose Reyes", status: "DRAFT", cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31", payrollCutoffLabel: "July 16-31, 2026" }),
+    ]);
+
+    // Aug 1–15 only: Jose's July row is hidden and there is no Period column.
+    expect(screen.getByText("Total records: 1")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Maria Santos/ })).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Jose Reyes/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Period" })).not.toBeInTheDocument();
+
+    // Every cutoff: both rows, each with its period.
+    await user.click(screen.getByRole("button", { name: "Show all cutoffs (2)" }));
+    expect(screen.getByText("Total records: 2")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Period" })).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /Jose Reyes/ })).getByText("Jul 16–31, 2026")).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /Maria Santos/ })).getByText("Aug 1–15, 2026")).toBeInTheDocument();
+
+    // Select all picks the rows shown; going back to this cutoff drops the hidden July row from the selection.
+    await user.click(screen.getByRole("checkbox", { name: /Select all payroll records/i }));
+    expect(screen.getByText(/2 of 2 payroll record\(s\) selected/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show this cutoff only" }));
+    expect(screen.queryByRole("row", { name: /Jose Reyes/ })).not.toBeInTheDocument();
+    expect(await screen.findByText(/1 of 1 payroll record\(s\) selected/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Delete selected \(1\)/ }));
+    await user.click(screen.getByRole("button", { name: "Delete payrolls" }));
+    await waitFor(() => expect(deletePayrollCutoffSpy).toHaveBeenCalledWith("AUG"));
+    expect(deletePayrollCutoffSpy).not.toHaveBeenCalledWith("JUL");
+  });
+
+  it("offers every cutoff from the empty table when the chosen cutoff has no payroll", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([internRecord({ cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31", payrollCutoffLabel: "July 16-31, 2026" })]);
+    expect(screen.getByText("No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show all cutoffs (1)" }));
+    expect(screen.getByRole("row", { name: /Maria Santos/ })).toBeInTheDocument();
   });
 
   it("displays transparent deductions breakdown table with dates, causes, and amounts when available", async () => {

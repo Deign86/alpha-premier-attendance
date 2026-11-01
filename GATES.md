@@ -1713,3 +1713,20 @@ unchanged.
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 25 files / 490 tests passed.
 - [x] Review (3 lenses, 17 verified findings, 12 distinct problems fixed, plus the lead's bathroom word-break): unsaved corrections now trigger the leave question on tab switch, the 2 key, Bathroom, Lock, page links, reload and update install, naming the section; focus returns after a save only if it was still in that row; the exact-stamp test uses seconds; clamped rows sort by the time shown; sort headings keep their names and row actions name the person; the date is locked while a row saves and load uses the current date's loader; a record changed by a refresh shows a note; unsaved rows hidden by filters are announced with Show; keyboard-typed dates commit on Enter or blur; row messages sit on their own line; bathroom log headings and pills never break mid-word (bathroom cards no longer scroll sideways at 390).
+
+## UI revamp batch 8: Payroll (client only; P1, P2, P3, P4, P5)
+
+- [x] P1: the Generate panel opens on the most recently ended half-month cutoff (Asia/Manila), with month, preset and standard days to match; a disabled Generate says why.
+  EVIDENCE: live on Nov 1, 2026 the dates read 2026-10-16 to 2026-10-31 with "16th–last day" pressed (b8-after-top); boundary tests include the 15th and 16th.
+- [x] P2: "Download payroll PDF" and "Download payslips", disabled with a reason until the chosen cutoff has payroll; values sent to the server unchanged.
+  EVIDENCE: b8-after-top; payroll tests updated to the new names.
+- [x] P3: display-only step bar Cutoff · Review · Finalize · Export (current step gold with aria-current, done steps ticked).
+  EVIDENCE: step-bar tests for drafts, partly finalized, all finalized and PDF present.
+- [x] P4: empty states give the next step ("No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance."; "No PDFs yet. Finalize the cutoff, then Download payroll PDF.").
+- [x] P5: "PDFs for Oct 16–31, 2026" beside the export buttons (newest first, Open PDF / Show in Folder), month-grouped history kept at the bottom.
+  EVIDENCE: b8-after-top shows the two Oct 16–31 PDFs; no sideways scroll at 1366 (1356/1366) or 390 (390/390).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 25 files / 500 tests passed.
+- [x] Review (3 lenses, 15 verified findings, 7 distinct problems fixed): the cutoff label now follows the dates (a half-month preset's label, otherwise "<start> to <end>"), so hand-typed dates never save the pre-filled name; the step bar goes in order (Review current while drafts exist, Export done only when all finalized and a PDF exists); the regenerate banner shows only with drafts, otherwise a calm "All N records … finalized" line, and deleting finalized records needs DELETE typed; the table shows the chosen cutoff with a "Show all cutoffs" toggle and a Period column; Generate and exports say why while payroll loads or fails; preset and hand-typed paths tested; focus rings no longer clipped.

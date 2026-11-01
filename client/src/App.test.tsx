@@ -3734,6 +3734,8 @@ describe('Weekly-grace clamp display extension', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
+      // The record's Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
+      fireEvent.click(screen.getByRole('button', { name: 'Show all cutoffs (1)' }));
       fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       const chip = await screen.findByTestId('clamped-payroll-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
@@ -4024,6 +4026,8 @@ describe('hourly late clamp', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
+      // The record's Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
+      fireEvent.click(screen.getByRole('button', { name: 'Show all cutoffs (1)' }));
       fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       // The payroll details use the same hourly display clamp.
       expect(await screen.findByTestId('clamped-payroll-time-in')).toHaveTextContent('10:00 AM');
@@ -4052,7 +4056,10 @@ describe('Payroll total-deductions fallback', () => {
   function renderRecords(records: PayrollCutoffRecord[]) {
     vi.restoreAllMocks();
     vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
-    return render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
+    const view = render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
+    // The rows' Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
+    fireEvent.click(screen.getByRole('button', { name: `Show all cutoffs (${records.length})` }));
+    return view;
   }
 
   it('derives total deductions from components when a legacy cutoff row omits the field', () => {
