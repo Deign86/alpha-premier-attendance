@@ -243,7 +243,7 @@ export function BathroomKeyLogPanel({
           {isOut && activeHolder ? (
             <div className="bathroom-active-holder-box">
               <div className="bathroom-holder-meta">
-                <div className="employee-picker-avatar" style={{ width: 44, height: 44, fontSize: "1rem" }}>
+                <div className="employee-picker-avatar" style={{ width: 44, height: 44, fontSize: "var(--fs-16)" }}>
                   {getAvatarInitials(activeHolder.fullName)}
                 </div>
                 <div className="bathroom-holder-info">
@@ -281,7 +281,7 @@ export function BathroomKeyLogPanel({
               <label className="field-label" htmlFor={`search-${genderKey.toLowerCase()}`}>
                 <span>Assign Key to Staff</span>
                 {selectedEmployee && (
-                  <span style={{ color: "var(--gold-bright)", fontWeight: 400, fontSize: "0.75rem" }}>
+                  <span style={{ color: "var(--gold-bright)", fontWeight: 400, fontSize: "var(--fs-12)" }}>
                     Selected: {selectedEmployee.fullName}
                   </span>
                 )}
@@ -306,7 +306,7 @@ export function BathroomKeyLogPanel({
                 aria-label={`Select ${genderKey.toLowerCase()} employee`}
               >
                 {filteredList.length === 0 ? (
-                  <div style={{ padding: "16px 12px", textAlign: "center", color: "var(--muted)", fontSize: "0.82rem" }}>
+                  <div style={{ padding: "16px 12px", textAlign: "center", color: "var(--muted)", fontSize: "var(--fs-12)" }}>
                     No staff found matching &ldquo;{searchTerm}&rdquo;.
                   </div>
                 ) : (
@@ -432,7 +432,7 @@ export function BathroomKeyLogPanel({
           />
           <button
             type="button"
-            className="text-button"
+            className="admin-button"
             onClick={() => setDate(todayManila())}
             data-testid="bathroom-log-today"
             disabled={date === todayManila()}

@@ -2523,9 +2523,15 @@ describe('Admin Attendance Corrections', () => {
     // Switch to Attendance tab
     await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-    // Badges should be visible in the table
-    expect(await screen.findByText(/assisted by duty manager/i)).toBeInTheDocument();
-    expect(screen.getByText(/backdated entry by admin — physical attendance verified/i)).toBeInTheDocument();
+    // The notes' wording, their full text in the tooltip, and no inline style.
+    const assistedNote = await screen.findByText(/assisted by duty manager/i);
+    expect(assistedNote).toHaveTextContent('Assisted by Duty Manager');
+    expect(assistedNote).toHaveAttribute('title', 'Kiosk scan assisted by: Duty Manager (Forgot RFID card)');
+    expect(assistedNote).not.toHaveAttribute('style');
+    const backdatedNote = screen.getByText(/backdated by admin — physical attendance verified/i);
+    expect(backdatedNote).toHaveTextContent('Backdated by Admin — Physical attendance verified');
+    expect(backdatedNote).toHaveAttribute('title', 'Backdated manual entry by: Admin — Reason: Physical attendance verified');
+    expect(backdatedNote).not.toHaveAttribute('style');
 
     // Filter pills should show counts
     const assistedPill = screen.getByRole('button', { name: /assisted 1/i });

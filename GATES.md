@@ -1809,3 +1809,42 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass, including new tests for the note while ticked, Late + Assisted narrowing the selection (one CSV row, one delete), the partial delete focus, counts with Late on and a search, and the plural chip.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 553 tests passed. Live check at 1366: Late on → "All 13" with 2 + 4 + 7 + 0 = 13 and "13 of 35 records"; a ticked late time-out row's note cell has the row's rgba(198, 162, 84, .08) tint and 3px gold edge.
+
+## UI revamp batch 10: One text-size scale, three button types, calm status and notes (client only; D2, D4 + audit consistency)
+
+- [x] D2: `:root` defines --fs-12, --fs-14, --fs-16, --fs-20, --fs-28, --fs-40 and --fs-60, and every rem font size in styles.css plus the inline fontSize values in App.tsx and bathroom-key-log.tsx use them. Nothing is below 12px. The kiosk greeting stays fluid between 40 and 60. One deliberate exception: the short-screen greeting cap (max-height 760px) keeps 3.2rem.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); for (const t of ['--fs-12','--fs-14','--fs-16','--fs-20','--fs-28','--fs-40','--fs-60']) if(!s.includes(t+':')) process.exit(1); const free=(s.match(/font-size:\s*[\d.]+rem/g)||[]).length; if(free>1) {console.log(free); process.exit(1);}"
+  EXPECT: exit 0; no plain `font-size: Nrem` left (the short-screen cap sits inside a clamp), and no px font size outside the tokens.
+  EVIDENCE: live at 1366: Live attendance text uses 12/14/16/20px only; the kiosk uses 12/14/16 and a 60px greeting (54.7px at 390). No sideways scroll on either.
+- [x] Sizes that moved by more than 2px were listed and accepted as calmer:
+  - page titles: 24 → 20;
+  - small labels: 9.92 → 12;
+  - the time-in card name and time: 33.6 → 28 at 1366;
+  - notice titles: 30.4 → 28;
+  - the admin login title: 24 → 20;
+  - the bathroom key titles: 18.4 → 16.
+  EVIDENCE: before/after pairs at 1366 and 390 in the scratchpad folder shots-b10 (kiosk idle, success, already scanned, login, Live, corrections, users, payroll, data, system, voice, bathroom log).
+- [x] Badges, counts and small times use Poppins: Live times and counts, backup counts, slider badges, the 1/2 key badges, bathroom pills, the elapsed timer, update dialog numbers, the assisted countdown and the corrections date. The clock, greeting, brand and headings stay Orbitron.
+- [x] D4: Data and backup, System, Voice announcements and the admin Bathroom Key Log use the three button types:
+  - gold filled for the main action and outline for the rest;
+  - 34px in toolbars, 40px on the bathroom card actions, 6px corners;
+  - disabled buttons dim and don't change on hover.
+  On the bathroom page, Time In (Return Key) is outline (label and test ids kept), Time Out is filled, and Today is a 34px outline button. The page title is 20px, above the 16px key titles. The old green and gold bathroom button rules and the old Users selection-bar rules are deleted.
+- [x] Users status reads "● Active" (green) and "● Inactive" (grey) in sentence case.
+  CHECK: cd client && npx vitest run src/database-panel.test.tsx
+  EXPECT: the new test finds "Active"/"Inactive" with the dot class, and "ACTIVE" is gone.
+- [x] Assisted/Backdated notes are small muted text with the icon ("Assisted by …", "Backdated by Admin — reason"). On the desktop table (901px and up) they are cut to one line with the full text in the title. On tablet and phone cards they wrap in full.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Assisted"
+  EXPECT: the wording, the full text in the title, and no inline style.
+- [x] Review fixes:
+  - the open Voice help bubbles stay inside the screen and their card;
+  - the notes wrap on cards;
+  - the bathroom title is 20px;
+  - the corrections date is Poppins with tabular-nums;
+  - dead CSS is removed;
+  - a test comment is trimmed.
+  EVIDENCE: each of the 5 info bubbles focused at 320 and 390: scrollWidth equals the viewport and every bubble is inside its card; also checked at 768 and 1366.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 554 tests passed.

@@ -2374,7 +2374,7 @@ function AssistedAttendanceModal({
             <label className="field-label" htmlFor="assisted-search">
               <span>Select Employee</span>
               {selectedEmployee && (
-                <span style={{ color: "var(--gold-bright)", fontWeight: 400, fontSize: "0.72rem" }}>
+                <span style={{ color: "var(--gold-bright)", fontWeight: 400, fontSize: "var(--fs-12)" }}>
                   Selected: {selectedEmployee.fullName}
                 </span>
               )}
@@ -2394,7 +2394,7 @@ function AssistedAttendanceModal({
             </div>
             <div className="employee-picker-list" role="group" aria-label="Active employees">
               {filteredEmployees.length === 0 ? (
-                <div style={{ padding: "20px 12px", textAlign: "center", color: "var(--muted)", fontSize: "0.82rem" }}>
+                <div style={{ padding: "20px 12px", textAlign: "center", color: "var(--muted)", fontSize: "var(--fs-12)" }}>
                   No active employees found matching &ldquo;{search}&rdquo;.
                 </div>
               ) : (
@@ -5748,7 +5748,7 @@ export function UserEditor({
                   </td>
                   <td className="user-status-cell">{user.rfidUid}</td>
                   <td className="user-status-cell">
-                    <span className={`status-pill status-${user.status.toLowerCase()}`}>{user.status}</span>
+                    <span className={`status-pill status-${user.status.toLowerCase()}`}>{user.status === "ACTIVE" ? "Active" : "Inactive"}</span>
                   </td>
                   <td>
                     {user.cardType === "ADMIN_ASSIST" ? (
@@ -9572,7 +9572,6 @@ function AttendanceEditRow({
             <span
               className="badge badge-assisted"
               title={`Kiosk scan assisted by: ${row.recordedBy || "Admin"}${row.recordedReason ? ` (${row.recordedReason})` : ""}`}
-              style={{ display: "inline-flex", marginTop: 4 }}
             >
               <UserCheck size={11} /> Assisted by {row.recordedBy || "Admin"}
             </span>
@@ -9581,9 +9580,8 @@ function AttendanceEditRow({
             <span
               className="badge badge-backdated"
               title={`Backdated manual entry by: ${row.recordedBy || "Admin"}${row.recordedReason ? ` — Reason: ${row.recordedReason}` : ""}`}
-              style={{ display: "inline-flex", marginTop: 4 }}
             >
-              <History size={11} /> Backdated entry by {row.recordedBy || "Admin"}{row.recordedReason ? ` — ${row.recordedReason}` : ""}
+              <History size={11} /> Backdated by {row.recordedBy || "Admin"}{row.recordedReason ? ` — ${row.recordedReason}` : ""}
             </span>
           )}
           {unsaved && <span className="unsaved-tag">Unsaved</span>}

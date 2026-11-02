@@ -1378,6 +1378,19 @@ describe('DatabasePanel', () => {
     return [intern('A-1', 'Alex Rivera'), intern('S-2', 'Sam Santos'), intern('A-3', 'Alex Cruz')];
   };
 
+  it('Users status reads as a sentence-case word (Active, Inactive), like Attendance corrections', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const [alex, sam, cruz] = threeInterns();
+    render(<UserEditor users={[alex, { ...sam, status: 'INACTIVE' as const }, cruz]} editing={null} setEditing={() => {}} onSaved={() => {}} />);
+    const statusOf = (name: string) => within(screen.getByRole('row', { name: new RegExp(name) })).getByText(/^(Active|Inactive)$/);
+    expect(statusOf('Alex Rivera')).toHaveTextContent(/^Active$/);
+    expect(statusOf('Alex Rivera')).toHaveClass('status-pill', 'status-active');
+    expect(statusOf('Sam Santos')).toHaveTextContent(/^Inactive$/);
+    expect(statusOf('Sam Santos')).toHaveClass('status-pill', 'status-inactive');
+    expect(screen.queryByText('ACTIVE')).not.toBeInTheDocument();
+    expect(screen.queryByText('INACTIVE')).not.toBeInTheDocument();
+  });
+
   it('Users header tick box selects only the users the search shows, with one count', async () => {
     vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
     const user = userEvent.setup();
