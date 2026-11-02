@@ -1198,8 +1198,6 @@ tr.selected-row td:first-child::before,
   margin-bottom: 10px;
 }
 
-.scan-console-toggle { min-height: 0; padding: 2px 6px; font-size: var(--fs-12); font-weight: 700; }
-
 .scan-console-title {
   color: var(--ink);
   font-size: var(--fs-12);
@@ -3090,13 +3088,6 @@ textarea.input {
   gap: 20px;
 }
 
-@media (max-width: 900px) {
-  .bathroom-kiosk-keys-grid {
-    grid-template-columns: 1fr !important;
-    gap: 12px !important;
-  }
-}
-
 .bathroom-kiosk-card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -3106,17 +3097,6 @@ textarea.input {
   flex-direction: column;
   gap: 18px;
   transition: all 0.2s ease-in-out;
-}
-
-.bathroom-kiosk-card.is-in-use {
-  border-color: var(--gold);
-  background: #1c1912;
-  box-shadow: 0 0 20px rgba(198, 162, 84, 0.12);
-}
-
-.bathroom-kiosk-card.is-available {
-  border-color: #3b503e;
-  background: #121612;
 }
 
 .bathroom-card-header {
@@ -3145,27 +3125,6 @@ textarea.input {
   color: var(--quiet);
 }
 
-.gender-icon-bubble {
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.gender-icon-bubble.male {
-  background: #211d13;
-  color: var(--gold-bright);
-  border: 1px solid var(--gold-soft);
-}
-
-.gender-icon-bubble.female {
-  background: #26171e;
-  color: #f2a8c6;
-  border: 1px solid #734559;
-}
-
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -3174,139 +3133,6 @@ textarea.input {
   font-size: var(--fs-12);
   font-weight: 700;
   letter-spacing: 0.05em;
-}
-
-.status-pill.status-available {
-  color: var(--success);
-  background: #162419;
-  border: 1px solid #34583c;
-}
-
-.status-pill.status-in-use {
-  color: var(--gold-bright);
-  background: #262013;
-  border: 1px solid var(--gold);
-}
-
-.available-prompt-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 20px;
-  background: var(--surface-input);
-  border-radius: 6px;
-  border: 1px dashed var(--line-bright);
-  text-align: center;
-}
-
-.available-icon {
-  color: var(--success);
-  margin-bottom: 10px;
-  opacity: 0.9;
-}
-
-.available-main {
-  margin: 0;
-  font-family: 'Orbitron', sans-serif;
-  font-size: var(--fs-16);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.available-sub {
-  margin: 4px 0 0;
-  font-size: var(--fs-12);
-  color: var(--muted);
-}
-
-.active-holder-box {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  background: #14110a;
-  border-radius: 6px;
-  padding: 16px;
-  border: 1px solid var(--line-bright);
-}
-
-.active-holder-header {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.holder-avatar {
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: var(--gold);
-  color: #090a09;
-  font-family: 'Orbitron', sans-serif;
-  font-weight: 800;
-  font-size: var(--fs-16);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.holder-avatar.female {
-  background: #381f2a;
-  color: #f2a8c6;
-  border: 1px solid #734559;
-}
-
-.holder-label {
-  margin: 0;
-  font-size: var(--fs-12);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--quiet);
-}
-
-.holder-name {
-  margin: 2px 0 0;
-  font-family: 'Orbitron', sans-serif;
-  font-size: var(--fs-16);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.holder-dept {
-  margin: 2px 0 0;
-  font-size: var(--fs-12);
-  color: var(--gold-bright);
-}
-
-.elapsed-timer-container {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: #090a09;
-  border-radius: 4px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-}
-
-.elapsed-stat {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--fs-12);
-  color: var(--muted);
-}
-
-.elapsed-counter {
-  color: var(--gold-bright) !important;
-  font-family: 'Orbitron', sans-serif !important;
-  font-size: var(--fs-16) !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-}
-
-.spin-slow {
-  animation: spin 3s linear infinite;
 }
 
 .bathroom-kiosk-history-section {
@@ -3527,13 +3353,9 @@ textarea.input {
    UI revamp, Stage 3: kiosk finish.
    ========================================================================== */
 
-/* Bathroom Key Log: a compact title and small key icon, so both key cards (who has the key,
-   since when) are on screen without scrolling on a laptop. */
+/* Bathroom Key Log: less air above the title, so both key cards are on screen without scrolling on a laptop
+   (title sizes: "Kiosk Bathroom Key Log" at the end of the file). */
 .kiosk-shell.mode-bathroom > .kiosk-stage { gap: clamp(16px, 2.5vh, 28px); padding-top: clamp(20px, 3vh, 40px); }
-.mode-bathroom .kiosk-hero { gap: 6px; }
-.mode-bathroom .kiosk-hero .hero-icon { width: 56px; height: 56px; margin-bottom: 2px; }
-.mode-bathroom .kiosk-hero .hero-icon svg { width: 28px; height: 28px; }
-.mode-bathroom .kiosk-hero h1 { font-size: clamp(var(--fs-28), 3vw, var(--fs-40)); }
 
 /* ==========================================================================
    UI revamp, design pass (kiosk): an executive-lobby look in black, gold and
@@ -3688,26 +3510,16 @@ textarea.input {
 .kiosk-hero > :nth-child(2) { animation-delay: 70ms; }
 .kiosk-hero > :nth-child(3) { animation-delay: 140ms; }
 .scan-console { animation-delay: 210ms; }
-.mode-bathroom .kiosk-hero > *, .mode-bathroom .scan-console { animation-name: kiosk-enter-alt; }
+.mode-bathroom .kiosk-hero > * { animation-name: kiosk-enter-alt; }
 .kiosk-actions > * { animation: kiosk-enter 600ms var(--ease-soft) 280ms backwards; }
 .kiosk-actions > :nth-child(2) { animation-delay: 320ms; }
 .kiosk-actions > :nth-child(3) { animation-delay: 360ms; }
 .kiosk-actions > :nth-child(4) { animation-delay: 400ms; }
 
-/* Bathroom key cards: glass; the key in use has a gold edge that slowly breathes. */
+/* Bathroom key cards: glass; the key in use has a gold edge. */
 .bathroom-kiosk-card, .bathroom-kiosk-card.is-available { --edge-light: rgba(225, 196, 119, .35); position: relative; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid rgba(198, 162, 84, .16); border-radius: 8px; box-shadow: var(--glass-shadow); transition: border-color 240ms ease-out; animation: kiosk-enter 560ms var(--ease-soft) 240ms backwards; }
 .bathroom-kiosk-card + .bathroom-kiosk-card { animation-delay: 320ms; }
 .bathroom-kiosk-card.is-in-use { --edge-light: var(--gold-bright); background: linear-gradient(180deg, rgba(52, 44, 26, .62), rgba(20, 18, 13, .55)); border-color: rgba(198, 162, 84, .6); }
-.bathroom-kiosk-card.is-in-use::after { content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: inherit; box-shadow: 0 0 0 1px rgba(225, 196, 119, .3), 0 0 28px rgba(198, 162, 84, .22); opacity: 0; animation: kiosk-breathe 3.6s ease-in-out infinite alternate; pointer-events: none; }
-.gender-icon-bubble, .gender-icon-bubble.female { color: var(--gold-bright); background: radial-gradient(circle at 50% 30%, rgba(225, 196, 119, .18), rgba(198, 162, 84, .04) 70%); border: 1px solid rgba(225, 196, 119, .45); border-radius: 6px; }
-.active-holder-box { background: rgba(0, 0, 0, .28); border: 1px solid rgba(198, 162, 84, .26); border-radius: 6px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
-.available-prompt-box { padding: 22px 20px; background: rgba(0, 0, 0, .2); border: 1px dashed rgba(152, 210, 168, .28); border-radius: 6px; animation: kiosk-enter 420ms var(--ease-soft) backwards; }
-.available-icon { box-sizing: content-box; padding: 8px; border-radius: 50%; background: rgba(152, 210, 168, .08); box-shadow: 0 0 0 1px rgba(152, 210, 168, .22); }
-.holder-avatar { background: linear-gradient(180deg, #ecd28c, #b8944a); box-shadow: 0 0 0 3px rgba(198, 162, 84, .14); }
-.holder-avatar.female { color: var(--gold-bright); background: #211d13; border: 1px solid var(--gold-soft); }
-.elapsed-timer-container { flex-wrap: wrap; gap: 6px 16px; background: rgba(0, 0, 0, .35); border-color: rgba(198, 162, 84, .16); border-radius: 6px; }
-/* On narrow cards the two stats wrap as whole lines instead of breaking "Time Out:" apart. */
-.elapsed-stat { white-space: nowrap; }
 
 @keyframes kiosk-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 /* The same motion under a second name: switching names replays it when the kiosk changes mode. */
@@ -5018,8 +4830,8 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 /* --- Attendance corrections: calm rows, one name for the late time-out, compact filters, a selection bar ----------- */
 /* Status as a small dot and a word, here and on Live attendance (no capsule pills): Working gold, Completed green,
    Missed grey, and Late time-out coral, the one status that needs fixing. */
-:is(.admin-shell, .live-shell) .status-word { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
-:is(.admin-shell, .live-shell) .status-word::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+:is(.admin-shell, .live-shell, .kiosk-shell) .status-word { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
+:is(.admin-shell, .live-shell, .kiosk-shell) .status-word::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 :is(.admin-shell, .live-shell) .status-word.is-working { color: var(--gold-bright); }
 :is(.admin-shell, .live-shell) .status-word.is-completed { color: var(--success); }
 :is(.admin-shell, .live-shell) .status-word.is-missed { color: var(--quiet); }
@@ -5159,4 +4971,99 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 @media (prefers-reduced-motion: reduce) {
   .admin-shell :is(.db-panel, .system-panel, .voice-panel, .bathroom-key-log-workspace) .admin-button,
   .admin-shell .bathroom-key-log-workspace .bathroom-action-button { transition: none; }
+}
+
+/* --- Kiosk Bathroom Key Log: ID-card key cards and Type card ID -------------------------------------------------- */
+/* A compact title (56px key, 40 title, 14 sub line) with the two key cards right under it, and less air under the
+   Type card ID button, so at 1366x768 everything fits, and so does an error card that replaces the title for a
+   moment. A scan that goes through keeps the title; its key card flashes instead (below). */
+.kiosk-shell.mode-bathroom > .kiosk-stage { padding-bottom: 24px; }
+.kiosk-shell.mode-bathroom .kiosk-hero { gap: 4px; }
+.kiosk-shell.mode-bathroom .kiosk-hero .hero-icon { width: 56px; height: 56px; margin-bottom: 2px; }
+.kiosk-shell.mode-bathroom .kiosk-hero .hero-icon svg { width: 28px; height: 28px; }
+.kiosk-shell.mode-bathroom .kiosk-hero h1 { max-width: none; font-size: var(--fs-40); }
+@media (max-width: 600px) { .kiosk-shell.mode-bathroom .kiosk-hero h1 { font-size: var(--fs-28); } }
+
+/* Two cards side by side on laptops and tablets (equal heights, so nothing moves when a key changes hands); stacked
+   on phones, below. */
+.kiosk-shell .bathroom-kiosk-wrapper { max-width: 1000px; }
+.kiosk-shell .bathroom-kiosk-keys-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
+/* Each key card reads like the time-in ID card: a header (key, name of the key, status as a dot and a word) over a
+   thin gold rule, then the gold-framed photo with the holder's details. Gold edge while in use, a neutral edge while
+   free; no glow and no lift. */
+.kiosk-shell .bathroom-kiosk-card { gap: 14px; padding: 16px 20px 20px; }
+.kiosk-shell .bathroom-kiosk-card.is-available { border-color: rgba(246, 242, 233, .12); }
+.kiosk-shell .bathroom-kiosk-card .bathroom-card-header { gap: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(198, 162, 84, .3); }
+.kiosk-shell .bathroom-kiosk-card .bathroom-card-title-group { gap: 10px; min-width: 0; }
+.kiosk-shell .bathroom-kiosk-card .bathroom-card-title-group > svg { flex: none; color: var(--gold-bright); }
+.kiosk-shell .bathroom-kiosk-card .bathroom-card-title { line-height: 1.25; }
+.kiosk-shell .bathroom-kiosk-card .bathroom-card-subtitle { margin: 2px 0 0; color: var(--muted); }
+.kiosk-shell .bathroom-kiosk-card .status-word { font-size: var(--fs-14); }
+.kiosk-shell .status-word.is-in-use { color: var(--gold-bright); }
+.kiosk-shell .status-word.is-available { color: var(--success); }
+
+/* The photo slot keeps one size in both states (the text fits beside it, a two-line name too). Free: an empty frame
+   with a key. */
+.kiosk-shell .bathroom-kiosk-body { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 18px; }
+.kiosk-shell .bathroom-kiosk-body :is(.result-photo, .result-avatar) { width: 136px; height: auto; aspect-ratio: 3 / 4; margin: 0; border: 2px solid var(--gold); border-radius: 6px; background: var(--surface-raised); object-fit: cover; object-position: center top; }
+.kiosk-shell .bathroom-kiosk-body .result-avatar { font-size: var(--fs-28); }
+.kiosk-shell .bathroom-kiosk-body .result-avatar.is-empty { color: var(--gold-soft); background: rgba(0, 0, 0, .22); border-color: rgba(246, 242, 233, .14); box-shadow: none; }
+.kiosk-shell .bathroom-kiosk-body .result-body { justify-items: start; gap: 4px; }
+.kiosk-shell .bathroom-kiosk-body .result-name { margin: 0; font-size: var(--fs-20); line-height: 1.15; }
+.kiosk-shell .bathroom-kiosk-card.is-available .result-user-id { color: var(--muted); font-size: var(--fs-14); text-wrap: balance; }
+.kiosk-shell .bathroom-kiosk-body .result-times { justify-content: flex-start; gap: 4px 20px; margin-top: 6px; padding-top: 8px; }
+.kiosk-shell .bathroom-kiosk-body .result-time { margin: 0; }
+.kiosk-shell .bathroom-kiosk-body .result-time dd { font-size: var(--fs-20); }
+.kiosk-shell .bathroom-kiosk-elapsed { margin: 0; color: var(--muted); font-size: var(--fs-14); line-height: 1.4; }
+.kiosk-shell .bathroom-kiosk-elapsed strong { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Right after a scan the key's card flashes for 1.8s (KEY_FLASH_MS in App.tsx): a brighter gold edge and a soft gold
+   wash that fade out, behind the card's content; no movement. Reduced motion: the same highlight, still, for the
+   same time. A return says who brought the key back, in gold, until the flash ends. */
+.kiosk-shell .bathroom-kiosk-flash { position: absolute; inset: -1px; z-index: -1; border-radius: inherit; background: rgba(225, 196, 119, .12); box-shadow: 0 0 0 1px var(--gold-bright), inset 0 0 0 1px var(--gold-bright); pointer-events: none; animation: bathroom-key-flash 1800ms ease-out forwards; }
+.kiosk-shell .bathroom-kiosk-card.is-available .result-user-id.is-returned { color: var(--gold-bright); }
+@keyframes bathroom-key-flash { from, 35% { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .kiosk-shell .bathroom-kiosk-flash { animation: none; } }
+
+/* Type card ID: a small gold-outline button under the cards; it opens a compact box in its place (the card ID field
+   with a gold Record inside, and a quiet ×). The button keeps the box's 40px row, so opening it moves nothing. */
+.kiosk-shell .bathroom-manual-toggle { display: inline-flex; align-items: center; gap: 7px; height: 34px; margin-block: 3px; padding: 0 14px; color: var(--ink); background: transparent; border: 1px solid rgba(198, 162, 84, .45); border-radius: 6px; font-size: var(--fs-12); font-weight: 600; white-space: nowrap; transition: color 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out; animation: kiosk-enter 600ms var(--ease-soft) 360ms backwards; }
+.kiosk-shell .bathroom-manual-toggle svg { color: var(--gold-bright); }
+.kiosk-shell .bathroom-manual-toggle:hover:not(:disabled) { color: var(--gold-bright); background: rgba(198, 162, 84, .07); border-color: var(--gold); }
+.kiosk-shell .bathroom-manual-toggle:disabled { opacity: .5; }
+.kiosk-shell .bathroom-manual-box { display: flex; align-items: center; gap: 8px; width: min(420px, 100%); animation: kiosk-enter 320ms var(--ease-soft) backwards; }
+.kiosk-shell .bathroom-manual-box .input-row { flex: 1 1 auto; min-width: 0; min-height: 40px; }
+.kiosk-shell .bathroom-manual-box .input-row input { flex: 1 1 0; height: 38px; padding: 0 12px; }
+.kiosk-shell .bathroom-manual-box .input-row .submit-button { width: auto; min-height: 0; margin: 3px; padding: 0 14px; }
+.kiosk-shell .bathroom-manual-cancel { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; color: var(--muted); background: transparent; border: 1px solid rgba(246, 242, 233, .16); border-radius: 6px; }
+.kiosk-shell .bathroom-manual-cancel:hover { color: var(--ink); border-color: rgba(246, 242, 233, .32); }
+
+/* Tablets: still side by side, with a smaller photo and name. Here "Out for" wraps under the time and a name may take
+   two lines, so the body keeps that in-use height (chip, name, ID, rule, Taken time, Out for) in both states and a
+   card never grows when its key is taken. */
+@media (max-width: 900px) {
+  .kiosk-shell .bathroom-kiosk-card { padding: 14px 16px 16px; }
+  .kiosk-shell .bathroom-kiosk-body { gap: 14px; min-height: 182px; }
+  .kiosk-shell .bathroom-kiosk-body :is(.result-photo, .result-avatar) { width: 112px; }
+  .kiosk-shell .bathroom-kiosk-body .result-name { font-size: var(--fs-16); }
+}
+/* Phones (under 720px): the cards stack, each with room for a bigger photo again (tall enough that a card keeps its
+   height when its key changes hands). */
+@media (max-width: 719px) {
+  .kiosk-shell .bathroom-kiosk-keys-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .kiosk-shell .bathroom-kiosk-body { min-height: 0; }
+  .kiosk-shell .bathroom-kiosk-body :is(.result-photo, .result-avatar) { width: 128px; }
+  .kiosk-shell .bathroom-kiosk-body .result-name { font-size: var(--fs-20); }
+}
+/* Very small phones: the in-use text is taller than the photo, so the body keeps that height in both states, and a
+   smaller status word keeps "Available" on the header's one line. */
+@media (max-width: 360px) {
+  .kiosk-shell .bathroom-kiosk-card .status-word { font-size: var(--fs-12); }
+  .kiosk-shell .bathroom-kiosk-body { gap: 12px; min-height: 180px; }
+  .kiosk-shell .bathroom-kiosk-body :is(.result-photo, .result-avatar) { width: 92px; }
+  .kiosk-shell .bathroom-kiosk-body .result-name { font-size: var(--fs-16); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kiosk-shell .bathroom-manual-toggle { transition: none; }
 }

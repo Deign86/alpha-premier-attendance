@@ -131,8 +131,8 @@ import { sseUrl, onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnl
 import type { FileActionResult } from "./api";
 import type { DtrSyncHealth } from "./api";
 import "./styles.css";
-import { BathroomKioskView } from "./bathroom-kiosk-view";
-import type { BathroomScanResponse, BathroomStatusResponse, VoiceClipState, VoiceWorkerStatus } from "@rfid-attendance/shared";
+import { BathroomKioskView, ResultPortrait } from "./bathroom-kiosk-view";
+import type { BathroomScanResponse, BathroomScanSuccessResponse, BathroomStatusResponse, VoiceClipState, VoiceWorkerStatus } from "@rfid-attendance/shared";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
@@ -173,7 +173,7 @@ import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
 import { createBackupNow, FridayBackupReminder, LastBackupLine, manilaDay, useBackupCreated, useBackupRunning } from "./backup-reminder";
-import { BathroomKeyLogPanel, getAvatarInitials } from "./bathroom-key-log";
+import { BathroomKeyLogPanel } from "./bathroom-key-log";
 import { formatCutoffRange, formatDate, formatDateTime, formatDuration, formatLateMinutes, formatMonth, formatTime } from "./format";
 import { useDialogKeys } from "./use-dialog-keys";
 import { NoticeLine, type Notice } from "./notice";
@@ -257,6 +257,8 @@ const emptySetupForm: SetupForm = {
 
 /** The native pipeline deduplicates device events before they reach the UI. */
 const SCAN_DEDUP_WINDOW_MS = 2000;
+/** How long a bathroom key card flashes after a scan (the bathroom-key-flash animation in styles.css). */
+const KEY_FLASH_MS = 1_800;
 
 export function greetingForDate(date: Date, timeZone: string): string {
   const hourPart = new Intl.DateTimeFormat("en-US", {
@@ -352,6 +354,20 @@ export default function App() {
   const [bathroomStatus, setBathroomStatus] = useState<BathroomStatusResponse | null>(null);
   const [bathroomScanResult, setBathroomScanResult] = useState<BathroomScanResponse | null>(null);
   const bathroomResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The key cards show the holder's ID photo, which the status feed doesn't carry: each successful scan's photo is
+  // remembered here. Memory only (a photo can be a large data URI), so after a restart initials show until the
+  // person scans again.
+  // A successful bathroom scan shows on its key card, which flashes for a moment, instead of on a result card.
+  const [keyFlash, setKeyFlash] = useState<BathroomScanSuccessResponse | null>(null);
+  const keyFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [holderPhotos, setHolderPhotos] = useState<ReadonlyMap<string, string>>(() => new Map<string, string>());
+  useEffect(() => {
+    const scanned = result?.success ? result.user : keyFlash?.user ?? null;
+    const photoUrl = scanned?.photoUrl;
+    if (!scanned || !photoUrl) return;
+    const { userId } = scanned;
+    setHolderPhotos((current) => (current.get(userId) === photoUrl ? current : new Map(current).set(userId, photoUrl)));
+  }, [result, keyFlash]);
 
   const fetchBathroomStatus = useCallback(async () => {
     try {
@@ -418,6 +434,7 @@ export default function App() {
   useEffect(
     () => () => {
       if (resetTimer.current) clearTimeout(resetTimer.current);
+      if (keyFlashTimer.current) clearTimeout(keyFlashTimer.current);
       requestController.current?.abort();
       if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
       if (setupSessionTimer.current) {
@@ -483,6 +500,23 @@ export default function App() {
     setUid("");
     setManualUid("");
   }, []);
+
+  // Bathroom mode's Type card ID box: it closes and clears after a recorded scan, on Cancel or Escape, on a mode
+  // switch, and after a minute without typing, so the kiosk goes back to reading cards.
+  const manualToggleRef = useRef<HTMLButtonElement>(null);
+  const closeManualEntry = useCallback(() => {
+    setManualMode(false);
+    setManualUid("");
+  }, []);
+  const cancelManualEntry = useCallback(() => {
+    closeManualEntry();
+    window.requestAnimationFrame(() => manualToggleRef.current?.focus());
+  }, [closeManualEntry]);
+  useEffect(() => {
+    if (kioskMode !== "bathroom" || !manualMode) return;
+    const timer = window.setTimeout(closeManualEntry, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [kioskMode, manualMode, manualUid, closeManualEntry]);
 
   const openSetup = useCallback(
     (initialUid = "") => {
@@ -726,6 +760,9 @@ export default function App() {
       }
     }
     scanInFlightRef.current = true;
+    // A new scan takes over: the last result's reset must not fire mid-request and abort it.
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
     setUid(normalizedUid);
     setState("processing");
     requestController.current?.abort();
@@ -895,11 +932,18 @@ export default function App() {
         );
         if (controller.signal.aborted) return;
 
-        setBathroomScanResult(response);
-        setState(response.success ? "success" : "error");
+        closeManualEntry();
+        void fetchBathroomStatus();
 
         // Voice announcement
         if (response.success) {
+          // A success shows only on its key card (which flashes on its own timer) and to screen readers, so the
+          // kiosk is ready for the next card straight away.
+          setState("ready");
+          setUid("");
+          setKeyFlash(response);
+          if (keyFlashTimer.current) clearTimeout(keyFlashTimer.current);
+          keyFlashTimer.current = setTimeout(() => setKeyFlash(null), KEY_FLASH_MS);
           if (document.visibilityState === "hidden" || !document.hasFocus()) {
             void notifyScanSuccess(response.user.fullName).catch(() => undefined);
           }
@@ -909,29 +953,28 @@ export default function App() {
             employeeName: response.user.fullName,
             personId: response.user.userId,
           });
-        } else {
-          void announceScanError({
-            errorCode: response.error.code,
-            message: response.error.message,
-            activeHolderName: response.activeHolder?.fullName,
-            activeHolderId: response.activeHolder?.userId,
-            genderKey: response.genderKey,
-          });
+          return;
         }
 
-        void fetchBathroomStatus();
-
-        if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
-        bathroomResetTimer.current = setTimeout(() => {
-          // Same reset as attendance, so the reader box is cleared too.
-          resetToReady();
-        }, config.resultResetDelayMs);
+        setBathroomScanResult(response);
+        setState("error");
+        void announceScanError({
+          errorCode: response.error.code,
+          message: response.error.message,
+          activeHolderName: response.activeHolder?.fullName,
+          activeHolderId: response.activeHolder?.userId,
+          genderKey: response.genderKey,
+        });
+        // The error card stays for the reset delay; same reset as attendance, so the card ID box is cleared too.
+        bathroomResetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
       } catch {
+        if (controller.signal.aborted) return;
         setState("error");
         setBathroomScanResult({
           success: false,
           error: { code: "INTERNAL_ERROR", message: "Bathroom service is temporarily unavailable." },
         });
+        closeManualEntry();
         void announceScanError({
           errorCode: "SERVICE_ERROR",
           message: "Bathroom service is temporarily unavailable.",
@@ -945,7 +988,7 @@ export default function App() {
         releaseScanPipeline(controller);
       }
     },
-    [config.resultResetDelayMs, fetchBathroomStatus, resetToReady],
+    [closeManualEntry, config.resultResetDelayMs, fetchBathroomStatus, resetToReady],
   );
 
   const handleManualKeyDown = (
@@ -978,6 +1021,10 @@ export default function App() {
       }
     }
   };
+
+  // Latest mode switch (assigned below, every render), so the wedge listener's 1/2 keys switch the same way as
+  // the tabs without re-registering the listener.
+  const switchKioskModeRef = useRef<(mode: "attendance" | "bathroom") => void>(() => {});
 
   // Keyboard-mode RFID reader scan handling.
   // The reader acts as a keyboard wedge emitting a rapid sequence of keypresses
@@ -1023,6 +1070,9 @@ export default function App() {
         void unlockSetupWithPinOrCard(normalized);
       } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
         handleSetupInput(normalized);
+      } else if (manualMode && kioskMode === "bathroom") {
+        // A card tapped while Type card ID is open (focus outside its field) isn't read: say how to scan it.
+        flashScanNotice("Close Type card ID to scan your card");
       } else if (!manualMode && !setupDialogOpen && !adminAssistData) {
         if (kioskMode === "bathroom") {
           void submitBathroom(normalized, "RFID");
@@ -1033,6 +1083,8 @@ export default function App() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // Bathroom mode's Type card ID box closes on Escape wherever the focus is.
+      if (event.key === "Escape" && kioskMode === "bathroom" && manualMode) cancelManualEntry();
       if (!document.hasFocus()) {
         resetBuffer();
         return;
@@ -1054,7 +1106,10 @@ export default function App() {
       // land in the focused input's React state and native scanner events
       // bypass this keyboard-wedge path entirely.
       const isInDialog = Boolean(target?.closest('[role="dialog"]') || setupDialogOpen);
-      if (isInDialog || isTextEntry || manualMode || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
+      // Manual entry gets its keys. Bathroom mode's Type card ID box only while the focus is inside it: elsewhere a
+      // card tap still fills the buffer, so flush() can say why it wasn't read.
+      const typingCardId = manualMode && (kioskMode !== "bathroom" || Boolean(target?.closest(".bathroom-manual-box")));
+      if (isInDialog || isTextEntry || typingCardId || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
         resetBuffer();
         return;
       }
@@ -1072,7 +1127,9 @@ export default function App() {
       lastKeyAt = now;
 
       if (event.key === "Enter") {
-        event.preventDefault();
+        // The Enter that ends a card tap is the reader's, not the focused button's (with Type card ID open, a lone
+        // Enter still presses the button it is on).
+        if (buffer || !manualMode) event.preventDefault();
         flush();
         return;
       }
@@ -1081,11 +1138,11 @@ export default function App() {
       const allowedCharRegex = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
       if (allowedCharRegex.test(event.key)) {
         buffer += event.key;
-        if (buffer === "1" || buffer === "2") {
+        if (!manualMode && (buffer === "1" || buffer === "2")) {
           const modeKey = buffer;
           modeSwitchTimer = setTimeout(() => {
             if (buffer === modeKey) {
-              setKioskMode(modeKey === "1" ? "attendance" : "bathroom");
+              switchKioskModeRef.current(modeKey === "1" ? "attendance" : "bathroom");
               resetBuffer();
             }
           }, 200);
@@ -1108,7 +1165,7 @@ export default function App() {
       if (noticeTimer.current) clearTimeout(noticeTimer.current);
       resetBuffer();
     };
-  }, [adminAssistData, config, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard]);
+  }, [adminAssistData, cancelManualEntry, config, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard]);
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -1160,6 +1217,20 @@ export default function App() {
     setUid("");
     setManualUid("");
   };
+
+  // Each mode starts ready, in reader mode: an open card ID box or a result card never carries over to the other
+  // mode (attendance would read a bathroom result as "Saved offline" or "Can't reach the system").
+  const switchKioskMode = (mode: "attendance" | "bathroom") => {
+    if (mode === kioskMode) return;
+    setKioskMode(mode);
+    closeManualEntry();
+    if (state === "success" || state === "error") {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+      if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
+      resetToReady();
+    }
+  };
+  switchKioskModeRef.current = switchKioskMode;
 
   const displayDate = new Intl.DateTimeFormat("en-PH", {
     timeZone: config.timezone,
@@ -1275,7 +1346,7 @@ export default function App() {
             data-testid="kiosk-mode-attendance"
             aria-selected={kioskMode === "attendance"}
             className={`kiosk-mode-tab ${kioskMode === "attendance" ? "active" : ""}`}
-            onClick={() => setKioskMode("attendance")}
+            onClick={() => switchKioskMode("attendance")}
           >
             <span className="mode-shortcut-badge">1</span> Attendance
           </button>
@@ -1285,7 +1356,7 @@ export default function App() {
             data-testid="kiosk-mode-bathroom"
             aria-selected={kioskMode === "bathroom"}
             className={`kiosk-mode-tab ${kioskMode === "bathroom" ? "active" : ""}`}
-            onClick={() => setKioskMode("bathroom")}
+            onClick={() => switchKioskMode("bathroom")}
           >
             <span className="mode-shortcut-badge">2</span> Bathroom Key Log
           </button>
@@ -1396,54 +1467,7 @@ export default function App() {
           </div>
         )}
 
-        {/* BATHROOM SCAN SUCCESS */}
-        {kioskMode === "bathroom" && state === "success" && bathroomScanResult?.success && (
-          <div
-            className="kiosk-result is-success"
-            data-testid="kiosk-result-success"
-            role="status"
-            aria-live="polite"
-          >
-            <div className={`result-card ${bathroomScanResult.action === "CHECKOUT" ? "is-in" : "is-out"}`}>
-              <ResultPortrait photoUrl={bathroomScanResult.user.photoUrl} fullName={bathroomScanResult.user.fullName} />
-              <div className="result-body">
-                <span className="result-status">
-                  <KeyRound size={15} aria-hidden="true" />
-                  {bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} key {bathroomScanResult.action === "CHECKOUT" ? "checked out" : "returned"}
-                </span>
-                <h2 className="result-name">{bathroomScanResult.user.fullName}</h2>
-                <p className="result-user-id">
-                  {bathroomScanResult.user.userId}
-                  {bathroomScanResult.user.department ? ` · ${bathroomScanResult.user.department}` : ""}
-                </p>
-                <dl className="result-times">
-                  {bathroomScanResult.action === "RETURN" && (
-                    <div className="result-time is-secondary">
-                      <dt>Taken</dt>
-                      <dd>{formatTime(bathroomScanResult.timeOut, config.timezone)}</dd>
-                    </div>
-                  )}
-                  <div className="result-time">
-                    <dt>{bathroomScanResult.action === "CHECKOUT" ? "Taken" : "Returned"}</dt>
-                    <dd>
-                      {formatTime(
-                        (bathroomScanResult.action === "CHECKOUT" ? bathroomScanResult.timeOut : bathroomScanResult.timeIn) ?? bathroomScanResult.timestamp,
-                        config.timezone,
-                      )}
-                    </dd>
-                  </div>
-                </dl>
-                {bathroomScanResult.durationSeconds !== null && bathroomScanResult.durationSeconds !== undefined && (
-                  <div className="result-meta">
-                    <span className="badge badge-duration">
-                      Out for {Math.max(1, Math.round(bathroomScanResult.durationSeconds / 60))} min
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        {/* A bathroom scan that went through has no result card: its key card flashes (BathroomKioskView). */}
 
         {/* ATTENDANCE SCAN ERROR */}
         {kioskMode === "attendance" && state === "error" && error && error.error.code === "DUPLICATE_SCAN" && (
@@ -1526,7 +1550,7 @@ export default function App() {
           </div>
         )}
 
-        {/* READY / PROCESSING HERO */}
+        {/* READY / PROCESSING HERO (in bathroom mode only the error card replaces it) */}
         {((kioskMode === "attendance" && (state === "ready" || state === "processing")) ||
           (kioskMode === "bathroom" && !bathroomScanResult)) && (
           <div className="kiosk-hero">
@@ -1544,8 +1568,8 @@ export default function App() {
           </div>
         )}
 
-        {((kioskMode === "attendance" && (state === "ready" || state === "processing")) ||
-          (kioskMode === "bathroom" && (manualMode || !bathroomScanResult))) && (
+        {/* The reader box is attendance-only; bathroom mode reads cards without it (Type card ID below). */}
+        {kioskMode === "attendance" && (state === "ready" || state === "processing") && (
           <div
             className={`scan-console${manualMode ? " is-manual" : ""}`}
             aria-label={manualMode ? "Manual card entry" : "RFID scanner"}
@@ -1554,19 +1578,6 @@ export default function App() {
               <span className="scan-console-title">
                 {manualMode ? "Manual card ID" : "RFID reader"}
               </span>
-              {kioskMode === "bathroom" && (
-                <button
-                  className="text-button scan-console-toggle"
-                  data-testid="kiosk-manual-toggle"
-                  type="button"
-                  onClick={toggleManualMode}
-                  disabled={state !== "ready"}
-                  aria-pressed={manualMode}
-                >
-                  {manualMode ? <CreditCard size={14} /> : <Keyboard size={14} />}
-                  {manualMode ? "Use card reader" : "Manual entry"}
-                </button>
-              )}
             </div>
             <div className="input-row">
               {!manualMode && (
@@ -1599,13 +1610,7 @@ export default function App() {
                   className="submit-button"
                   data-testid="kiosk-record-submit"
                   type="button"
-                  onClick={() => {
-                    if (kioskMode === "bathroom") {
-                      void submitBathroom(manualUid, "MANUAL_TEST");
-                    } else {
-                      void submit(manualUid, "MANUAL_TEST");
-                    }
-                  }}
+                  onClick={() => void submit(manualUid, "MANUAL_TEST")}
                   disabled={!manualUid.trim() || state !== "ready"}
                 >
                   <ArrowRight size={18} /> Record
@@ -1630,24 +1635,84 @@ export default function App() {
           </div>
         )}
 
-        {/* DYNAMIC BATHROOM STATUS & HISTORY (ALWAYS VISIBLE IN MODE 2), below the reader */}
+        {/* KEY CARDS (always shown in mode 2), right under the title */}
         {kioskMode === "bathroom" && (
           <BathroomKioskView
             status={bathroomStatus}
+            photos={holderPhotos}
+            flash={keyFlash}
             timezone={config.timezone}
             nowMs={now.getTime()}
           />
         )}
 
+        {/* Cards arrive through the wedge listener and native scanner events, so bathroom mode shows no reader box:
+            Type card ID opens a small box for someone without their ID. It steps aside while an error card shows,
+            so the error, the cards and the countdown still fit a laptop screen. */}
+        {kioskMode === "bathroom" && !bathroomScanResult && (manualMode ? (
+          <div className="bathroom-manual-box" role="group" aria-label="Type card ID">
+            <div className="input-row">
+              <input
+                ref={scannerInputRef}
+                id="scanner-uid"
+                data-testid="scanner-uid"
+                aria-label="Manual card ID"
+                type="password"
+                value={manualUid}
+                onChange={(event) => setManualUid(event.target.value)}
+                onKeyDown={handleManualKeyDown}
+                placeholder="Enter a card ID"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={state !== "ready"}
+              />
+              <button
+                className="submit-button"
+                data-testid="kiosk-record-submit"
+                type="button"
+                onClick={() => void submitBathroom(manualUid, "MANUAL_TEST")}
+                disabled={!manualUid.trim() || state !== "ready"}
+              >
+                <ArrowRight size={16} /> Record
+              </button>
+            </div>
+            <button className="bathroom-manual-cancel" type="button" aria-label="Cancel" title="Cancel" onClick={cancelManualEntry}>
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+        ) : (
+          <button
+            ref={manualToggleRef}
+            className="bathroom-manual-toggle"
+            data-testid="kiosk-manual-toggle"
+            type="button"
+            onClick={toggleManualMode}
+            disabled={state !== "ready"}
+          >
+            <Keyboard size={14} aria-hidden="true" /> Type card ID
+          </button>
+        ))}
+        {kioskMode === "bathroom" && scanNotice && (
+          <p className="input-hint" role="status" data-testid="kiosk-scan-notice">
+            {scanNotice}
+          </p>
+        )}
+        {/* Screen readers hear each bathroom success, which shows only on its key card. */}
+        {kioskMode === "bathroom" && (
+          <p className="visually-hidden" role="status" aria-live="polite">
+            {keyFlash ? bathroomAnnouncement(keyFlash, config.timezone) : ""}
+          </p>
+        )}
+
         {(state === "success" || state === "error") && (
           <div className="reset-progress" role="progressbar" aria-label="Returning to ready mode">
             {/* Keyed per scan so the bar restarts when a new result replaces the last one. */}
-            <span key={result?.requestId ?? (bathroomScanResult?.success ? bathroomScanResult.timestamp : state)} style={{ animationDuration: `${config.resultResetDelayMs}ms` }} />
+            <span key={result?.requestId ?? state} style={{ animationDuration: `${config.resultResetDelayMs}ms` }} />
           </div>
         )}
       </section>
 
-      {/* The options row is attendance-only; bathroom mode keeps Manual entry inside the reader card. */}
+      {/* The options row is attendance-only; bathroom mode has Type card ID under the key cards. */}
       {kioskMode === "attendance" && (
         <footer className="kiosk-actions">
           <button
@@ -1747,6 +1812,12 @@ function isStockScanMessage(message: string): boolean {
   return /^time (in|out) recorded( successfully)?\.?$/i.test(message.trim());
 }
 
+/** What screen readers hear after a bathroom scan: "Male key checked out by Juan Dela Cruz at 8:14 PM". */
+function bathroomAnnouncement(scan: BathroomScanSuccessResponse, timeZone: string): string {
+  const at = formatTime((scan.action === "CHECKOUT" ? scan.timeOut : scan.timeIn) ?? scan.timestamp, timeZone);
+  return `${scan.genderKey === "MALE" ? "Male" : "Female"} key ${scan.action === "CHECKOUT" ? "checked out" : "returned"} by ${scan.user.fullName} at ${at}`;
+}
+
 /** What the kiosk says for a failed scan: a title and, when people can act on it, a next step. */
 type ScanErrorCopy = { title: string; hint: string | null };
 
@@ -1762,17 +1833,6 @@ function friendlyScanError(code: string, message: string): ScanErrorCopy {
     default:
       return { title: message, hint: null };
   }
-}
-
-/** The ID photo when there is one; otherwise the same initials circle the bathroom key cards use. */
-function ResultPortrait({ photoUrl, fullName }: { photoUrl?: string | null; fullName: string }) {
-  return photoUrl ? (
-    <img className="result-photo result-photo-full" src={photoSource(photoUrl)} alt={`${fullName} ID`} />
-  ) : (
-    <div className="result-avatar" aria-label="ID photo unavailable">
-      {getAvatarInitials(fullName)}
-    </div>
-  );
 }
 
 type SetupDialogProps = {

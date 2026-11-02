@@ -7,7 +7,7 @@ import * as api from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
 import { resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
-import type { BathroomScanResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
+import type { BathroomActiveHolder, BathroomScanResponse, BathroomScanSuccessResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
 
 let rfidHandlers: Array<(uid: string) => void> = [];
 let scannerStatusHandlers: Array<(status: ScannerStatus) => void> = [];
@@ -651,7 +651,7 @@ describe('RFID kiosk', () => {
     ));
   });
 
-  it('routes the manual Record button to the bathroom pipeline in bathroom mode (B1)', async () => {
+  it('routes the Type card ID Record button to the bathroom pipeline in bathroom mode (B1)', async () => {
     window.history.pushState({}, '', '/');
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
@@ -673,7 +673,9 @@ describe('RFID kiosk', () => {
     render(<App />);
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
     expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /manual entry/i }));
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    // The box opens with the cursor in the field.
+    await waitFor(() => expect(screen.getByLabelText(/manual card id/i)).toHaveFocus());
     await user.type(screen.getByLabelText(/manual card id/i), 'BATH-001');
     await user.click(screen.getByRole('button', { name: /record/i }));
 
@@ -682,6 +684,10 @@ describe('RFID kiosk', () => {
       expect.objectContaining({ body: JSON.stringify({ rfidUid: 'BATH-001', source: 'MANUAL_TEST' }) }),
     ));
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+    // A recorded scan closes the box, and the kiosk is ready again at once (the key card shows the result).
+    expect(await screen.findByText('Male key checked out by Ada Lovelace at 9:00 AM')).toBeInTheDocument();
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled();
   });
 
   it('renders an API error and returns to ready after the reset delay', async () => {
@@ -3149,7 +3155,7 @@ describe('Admin Attendance Corrections', () => {
     expect(screen.queryByTestId('bathroom-kiosk-view')).not.toBeInTheDocument();
   });
 
-  it('clears the reader box when a bathroom result goes back to ready', async () => {
+  it('clears the Type card ID box when a bathroom result goes back to ready', async () => {
     window.history.pushState({}, '', '/');
     const user = userEvent.setup();
     const checkout: BathroomScanResponse = {
@@ -3177,9 +3183,17 @@ describe('Admin Attendance Corrections', () => {
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
-    act(() => emitRfidScan('FEMALE-CARD-01'));
-    expect(await screen.findByText('Jane Smith')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText(/scanner card id/i)).toHaveValue(''), { timeout: 1_500 });
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    // Enter records, like the Record button.
+    await user.type(screen.getByLabelText(/manual card id/i), 'FEMALE-CARD-01{Enter}');
+    expect(await screen.findByText('Female key checked out by Jane Smith at 10:00 AM')).toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/bathroom/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: 'FEMALE-CARD-01', source: 'MANUAL_TEST' }) }),
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    expect(screen.getByLabelText(/manual card id/i)).toHaveValue('');
   });
 
   it('announces bathroom key checkout, return, and in-use errors in bathroom kiosk mode', async () => {
@@ -3236,7 +3250,7 @@ describe('Admin Attendance Corrections', () => {
 
     // 1. Scan for checkout
     act(() => emitRfidScan('MALE-CARD-01'));
-    expect(await screen.findByText('John Doe')).toBeInTheDocument();
+    expect(await screen.findByText('Male key checked out by John Doe at 10:00 AM')).toBeInTheDocument();
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'CHECKOUT',
       genderKey: 'MALE',
@@ -3263,7 +3277,7 @@ describe('Admin Attendance Corrections', () => {
       timestamp: '2026-08-28T10:00:00+08:00',
     };
     act(() => emitRfidScan('FEMALE-CARD-01'));
-    expect(await screen.findByText('Jane Smith')).toBeInTheDocument();
+    expect(await screen.findByText('Female key returned by Jane Smith at 10:00 AM')).toBeInTheDocument();
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'RETURN',
       genderKey: 'FEMALE',
@@ -3334,6 +3348,341 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByRole('button', { name: /close card setup/i }));
     fireEvent.keyDown(window, { key: '2' });
     expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+  });
+});
+
+describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
+  // Made-up people only.
+  const holder = (userId: string, fullName: string, genderKey: 'MALE' | 'FEMALE'): BathroomActiveHolder => ({
+    logId: `log-${userId}`,
+    userId,
+    fullName,
+    department: 'Operations',
+    genderKey,
+    timeOut: new Date(Date.now() - 395_000).toISOString(),
+  });
+  type BathroomDay = { maleActive: BathroomActiveHolder | null; femaleActive: BathroomActiveHolder | null };
+
+  /** Bathroom status answers with `day` as it is at each request; scans answer in turn from `scans`. */
+  /**
+   * Bathroom status answers with `day` as it is at each request; scans answer in turn from `scans`, after `scanDelayMs`
+   * when set (rejecting like fetch if the request is aborted first). `resetDelayMs` is the kiosk's result reset delay.
+   */
+  function mockBathroomKiosk(day: BathroomDay, scans: BathroomScanResponse[] = [], resetDelayMs = 300, scanDelayMs = 0) {
+    const queue = [...scans];
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config with the given reset delay
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: resetDelayMs }) } as Response;
+      }
+      if (url.includes('/bathroom/scan')) {
+        const next = queue.shift();
+        if (!next) throw new Error('unexpected bathroom scan');
+        // SAFETY: Mock bathroom scan response
+        const answer = { ok: true, json: async () => next } as Response;
+        if (!scanDelayMs) return answer;
+        return new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(answer), scanDelayMs);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+        });
+      }
+      // SAFETY: Bathroom status and other requests get the day as it is now
+      return { ok: true, json: async () => ({ success: true, date: '2026-08-28', ...day, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-28T10:00:00Z' }) } as Response;
+    });
+  }
+
+  const checkout = (person: BathroomActiveHolder, photoUrl: string | null): BathroomScanSuccessResponse => ({
+    success: true,
+    action: 'CHECKOUT',
+    genderKey: person.genderKey,
+    user: { userId: person.userId, fullName: person.fullName, department: person.department, photoUrl, gender: person.genderKey },
+    timeOut: person.timeOut,
+    message: 'Floor key checked out',
+    timestamp: person.timeOut,
+  });
+
+  it('shows no reader box in bathroom mode, and a wedge scan still checks a key out and back in', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+    const giveBack: BathroomScanSuccessResponse = { ...checkout(paolo, null), action: 'RETURN', timeIn: new Date().toISOString(), durationSeconds: 395 };
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(paolo, null), giveBack]);
+    const user = userEvent.setup();
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFID reader')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /type card id/i })).toBeInTheDocument();
+
+    const wedge = (card: string) => {
+      for (const key of [...card, 'Enter']) fireEvent.keyDown(window, { key });
+    };
+    const bathroomScans = () => vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url) === '/api/bathroom/scan');
+    wedge('0000004242');
+    expect(await screen.findByText(/^Male key checked out by Paolo Aquino at/)).toBeInTheDocument();
+    expect(bathroomScans()[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ rfidUid: '0000004242', source: 'RFID' }) }));
+
+    // Back to ready; the same card, a little later than the repeat-tap guard (2s), returns the key.
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 5_000);
+    wedge('0000004242');
+    expect(await screen.findByText(/^Male key returned by Paolo Aquino at/)).toBeInTheDocument();
+    expect(bathroomScans()).toHaveLength(2);
+    expect(bathroomScans()[1][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ rfidUid: '0000004242', source: 'RFID' }) }));
+  });
+
+  it('closes the Type card ID box on Cancel, on Escape and on a mode switch, clearing what was typed', async () => {
+    mockBathroomKiosk({ maleActive: null, femaleActive: null });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    await user.type(screen.getByLabelText(/manual card id/i), 'APG-1');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toHaveFocus());
+
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    expect(screen.getByLabelText(/manual card id/i)).toHaveValue('');
+    await user.type(screen.getByLabelText(/manual card id/i), 'APG-2');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+
+    // A mode switch closes it too: Attendance comes back in reader mode, and so does Bathroom.
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    await user.click(screen.getByTestId('kiosk-mode-attendance'));
+    expect(screen.getByLabelText(/scanner card id/i)).toHaveAttribute('readonly');
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/bathroom/scan', expect.anything());
+  });
+
+  it('closes the Type card ID box after a minute without typing', () => {
+    vi.useFakeTimers();
+    try {
+      mockBathroomKiosk({ maleActive: null, femaleActive: null });
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      fireEvent.click(screen.getByTestId('kiosk-manual-toggle'));
+      fireEvent.change(screen.getByTestId('scanner-uid'), { target: { value: '12' } });
+      act(() => { vi.advanceTimersByTime(59_000); });
+      // Typing starts the minute again.
+      fireEvent.change(screen.getByTestId('scanner-uid'), { target: { value: '123' } });
+      act(() => { vi.advanceTimersByTime(59_000); });
+      expect(screen.getByTestId('scanner-uid')).toHaveValue('123');
+      act(() => { vi.advanceTimersByTime(1_000); });
+      expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('kiosk-manual-toggle'));
+      expect(screen.getByTestId('scanner-uid')).toHaveValue('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the holder photo on the key card after a bathroom checkout scan', async () => {
+    const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+    const photo = 'data:image/png;base64,iVBORw0KGgo=';
+    const day: BathroomDay = { maleActive: null, femaleActive: null };
+    mockBathroomKiosk(day, [checkout(paolo, photo)]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(within(await screen.findByTestId('bathroom-kiosk-card-male')).getByText('Ready to take')).toBeInTheDocument();
+
+    day.maleActive = paolo;
+    act(() => emitRfidScan('MALE-CARD-07'));
+    await waitFor(() => expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino'));
+    expect(within(screen.getByTestId('bathroom-kiosk-card-male')).getByRole('img', { name: 'Paolo Aquino ID' })).toHaveAttribute('src', photo);
+  });
+
+  it('shows initials while the holder photo is unknown, and the in-use and available card copy', async () => {
+    mockBathroomKiosk({ maleActive: holder('APG-2026-007', 'Paolo Aquino', 'MALE'), femaleActive: null });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+
+    const male = within(await screen.findByTestId('bathroom-kiosk-card-male'));
+    expect(await male.findByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+    expect(male.getByLabelText('ID photo unavailable')).toHaveTextContent('PA');
+    expect(male.queryByRole('img')).not.toBeInTheDocument();
+    expect(male.getByTestId('bathroom-kiosk-status-male')).toHaveTextContent(/^In use$/);
+    expect(male.getByText('Key taken')).toBeInTheDocument();
+    expect(male.getByText('APG-2026-007 · Operations')).toBeInTheDocument();
+    expect(male.getByText('Taken')).toBeInTheDocument();
+    expect(male.getByText(/^Out for/)).toHaveTextContent(/^Out for \d+m \d{2}s$/);
+
+    const female = within(screen.getByTestId('bathroom-kiosk-card-female'));
+    expect(female.getByTestId('bathroom-kiosk-status-female')).toHaveTextContent(/^Available$/);
+    expect(female.getByText('Ready to take')).toBeInTheDocument();
+    expect(female.getByText('Tap your ID to take this key')).toBeInTheDocument();
+  });
+
+  /** Lets the mocked requests answer and React settle while fake timers run. */
+  const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(50); });
+
+  it('shows no result card after a checkout: the key card flashes for a moment and screen readers hear it', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const day: BathroomDay = { maleActive: null, femaleActive: null };
+      mockBathroomKiosk(day, [checkout(paolo, null)]);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+
+      day.maleActive = paolo;
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await settle();
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      expect(male).toHaveClass('is-flashing', 'is-in-use');
+      expect(within(male).getByText('Key taken')).toBeInTheDocument();
+      expect(screen.getByTestId('bathroom-kiosk-card-female')).not.toHaveClass('is-flashing');
+      const spoken = screen.getByText(/^Male key checked out by Paolo Aquino at \d{1,2}:\d{2} (AM|PM)$/);
+      expect(spoken).toHaveAttribute('aria-live', 'polite');
+      expect(spoken).toHaveClass('visually-hidden');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_800); });
+      expect(male).not.toHaveClass('is-flashing');
+      expect(male).toHaveClass('is-in-use');
+      // The flash is over, so the announcement is cleared for the next scan.
+      expect(spoken).toBeEmptyDOMElement();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flashes the key card on a return, saying who brought it back until the flash ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const day: BathroomDay = { maleActive: paolo, femaleActive: null };
+      const giveBack: BathroomScanSuccessResponse = { ...checkout(paolo, null), action: 'RETURN', timeIn: new Date().toISOString(), durationSeconds: 395 };
+      mockBathroomKiosk(day, [giveBack]);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+
+      day.maleActive = null;
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await settle();
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      expect(male).toHaveClass('is-flashing', 'is-available');
+      expect(within(male).getByText(/^Returned by Paolo Aquino · \d{1,2}:\d{2} (AM|PM)$/)).toBeInTheDocument();
+      expect(within(male).queryByText('Tap your ID to take this key')).not.toBeInTheDocument();
+      expect(screen.getByText(/^Male key returned by Paolo Aquino at \d{1,2}:\d{2} (AM|PM)$/)).toBeInTheDocument();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_800); });
+      expect(male).not.toHaveClass('is-flashing');
+      expect(within(male).getByText('Tap your ID to take this key')).toBeInTheDocument();
+      expect(within(male).queryByText(/^Returned by/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is ready again right after a success: ready key icon and Type card ID enabled', async () => {
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000);
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    act(() => emitRfidScan('MALE-CARD-07'));
+    expect(await screen.findByText(/^Male key checked out by Paolo Aquino/)).toBeInTheDocument();
+    expect(container.querySelector('.kiosk-hero .hero-icon')).toHaveClass('icon-ready');
+    expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('switching to Attendance right after a bathroom success shows the reader box, not a result', async () => {
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000);
+    const user = userEvent.setup();
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    act(() => emitRfidScan('MALE-CARD-07'));
+    expect(await screen.findByText(/^Male key checked out by Paolo Aquino/)).toBeInTheDocument();
+    await user.click(screen.getByTestId('kiosk-mode-attendance'));
+    expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/scanner card id/i)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('switching to Attendance right after a bathroom error drops the error too', async () => {
+    const unknown: BathroomScanResponse = { success: false, error: { code: 'USER_NOT_FOUND', message: 'Card is not registered.' } };
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [unknown], 4_000);
+    const user = userEvent.setup();
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    act(() => emitRfidScan('UNKNOWN-CARD-01'));
+    expect(await screen.findByText('Card not registered')).toBeInTheDocument();
+    // The 1 key switches the same way as the tab.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    fireEvent.keyDown(window, { key: '1' });
+    await waitFor(() => expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active'));
+    expect(screen.queryByTestId('kiosk-result-unreachable')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kiosk-result-error')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/scanner card id/i)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('records a second card tapped 3.9s after a success (the old reset no longer aborts it)', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const bea = holder('APG-2026-006', 'Bea Castillo', 'FEMALE');
+      mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(paolo, null), checkout(bea, null)], 4_000, 200);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(screen.getByText(/^Male key checked out by Paolo Aquino/)).toBeInTheDocument();
+
+      // Paolo's answer came at 200ms; Bea taps 3.9s after it.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_850); });
+      act(() => emitRfidScan('FEMALE-CARD-06'));
+      // Bea's request is still out when Paolo's result would have been reset (4s).
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(screen.getByText(/^Female key checked out by Bea Castillo/)).toBeInTheDocument();
+      expect(screen.getByTestId('bathroom-kiosk-card-female')).toHaveClass('is-flashing');
+      expect(screen.queryByText('Bathroom service is temporarily unavailable.')).not.toBeInTheDocument();
+      expect(vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url) === '/api/bathroom/scan')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the Type card ID box on Escape when the focus is outside it, and refuses a card tap while it is open', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    mockBathroomKiosk({ maleActive: null, femaleActive: null });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    act(() => screen.getByLabelText(/manual card id/i).blur());
+
+    // A card tapped now isn't read (the box is open): the kiosk says how to scan it.
+    for (const key of [...'0000004242', 'Enter']) fireEvent.keyDown(document.body, { key });
+    expect(await screen.findByTestId('kiosk-scan-notice')).toHaveTextContent('Close Type card ID to scan your card');
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/bathroom/scan', expect.anything());
+    expect(screen.getByTestId('scanner-uid')).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toHaveFocus());
   });
 });
 

@@ -1848,3 +1848,46 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 554 tests passed.
+
+## UI revamp batch 11: Kiosk Bathroom Key Log, ID-card key cards, Type card ID, flash instead of pop-up (client only; owner requests 2026-11-02)
+
+- [x] The key cards look like the time-in ID card.
+  - In use: gold-framed photo (or initials), a "Key taken" chip, the name, "ID · department", and "Taken" in gold with a ticking "Out for".
+  - Available: an empty frame with a key, "Ready to take" and "Tap your ID to take this key".
+  - Status is "● In use" / "● Available".
+  - The cards are equal height in both states at every width.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "ID-card key cards"
+  EXPECT: all pass, including the holder photo after a checkout, initials when the photo is unknown, and the card wording.
+  EVIDENCE: card heights match whether a key is in use or free: 281/281 at 721, 768 and 900; 270/270 at 390; 279/279 at 360 and 320; 286/286 at 1366.
+- [x] The cards come first. The hero is smaller, and its title is 40px with a 56px icon (owner asked for a little bigger; 28px at 600px and narrower). At 1366x768 the hero, both cards and Type card ID fit without page scroll. No sideways scroll from 320 to 1366.
+  EVIDENCE:
+  - 1366x768: hero 172–309, cards 328–614, button 636–670, scrollHeight 768. Before: reader box 267–422, cards 441–716.
+  - Live check on the dev server: scrollHeight 768.
+- [x] The reader box is hidden in bathroom mode. A "Type card ID" button opens an inline box (focused input, Record, ×). The box closes and clears:
+  - after a recorded scan;
+  - on × or Escape (from anywhere);
+  - on a mode switch;
+  - after 60 s without typing.
+  A card tap while the box is open shows "Close Type card ID to scan your card". Wedge scans still check keys out and in with the box hidden.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Type card ID"
+  EXPECT: all pass (60 s close with fake timers).
+- [x] A successful bathroom scan shows no pop-up (owner request). Instead:
+  - the scanned key's card flashes gold for 1.8 s (a static highlight with reduced motion);
+  - a return briefly shows "Returned by <full name> · time";
+  - a visually hidden live region announces the result.
+  The kiosk goes straight back to ready. Errors keep their card and the reset delay. A mode switch clears any result and its timers.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Kiosk Bathroom Key Log"
+  EXPECT: all pass, including:
+  - no success card or countdown bar;
+  - switching to Attendance right after a success or an error shows no offline/unreachable card;
+  - a second card tapped 3.9 s after a success records normally.
+  EVIDENCE: live on the dev server with a made-up demo card (APG-DEMO-002), at 1366:
+  - **Checkout:** the female card was "is-in-use is-flashing" with the photo; the hero icon kept the ready class; Type card ID was enabled; there was no success card; the live text read "Female key checked out by Maria Ramos at 9:12 PM".
+  - **Switch to Attendance:** no offline card, reader box present.
+  - **Return:** "Returned by Maria Ramos · 9:13 PM", and the flash cleared after 1.8 s.
+- [x] The photo is remembered in memory (userId → photoUrl) from every successful attendance and bathroom scan. Nothing is persisted, and the backend is unchanged. ResultPortrait is shared from bathroom-kiosk-view.tsx.
+- [x] Dead kiosk CSS removed (old holder box, available box, gender bubbles, kiosk status capsules, breathing glow, scan-console toggle, `.mode-bathroom .scan-console`).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 566 tests passed.
