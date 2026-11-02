@@ -49,6 +49,7 @@ import type {
   SetupUser,
   UserGender,
   AttendanceListItem,
+  AttendanceStatus,
   PayrollCutoffRecord,
   CutoffCalculationBreakdownData,
   AttendanceDeductionItem,
@@ -63,7 +64,6 @@ import {
   resolveOfficeDisplay,
   INTERN_DAILY_RATE_PHP,
   INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
-  LATE_TIMEOUT_THRESHOLD,
   ATTENDANCE_TIMEZONE,
   isNoGraceDate,
   isLateTimeout,
@@ -2749,7 +2749,7 @@ function LiveAttendance() {
   // Same truthiness checks as AttendanceTable's cells (a MISSED row can lack a valid time in).
   const timedIn = liveRows.filter((row) => Boolean(row.timeIn)).length;
   const timedOut = liveRows.filter((row) => Boolean(row.timeOut)).length;
-  const needsCorrection = liveRows.filter((row) => row.status === "LATE_TIMEOUT").length;
+  const lateTimeouts = liveRows.filter((row) => row.status === "LATE_TIMEOUT").length;
   // Departments in today's rows (plus the chosen one, so the dropdown never loses it after a refresh).
   const departments = [...new Set([...liveRows.map((row) => row.department?.trim() ?? ""), department].filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const query = search.trim().toLowerCase();
@@ -2789,8 +2789,8 @@ function LiveAttendance() {
             <li className="office-count"><Users size={16} aria-hidden="true" /><strong>{inOffice}</strong> in office</li>
             <li className="office-count"><LogOut size={16} aria-hidden="true" /><strong>{timedOut}</strong> timed out</li>
             <li className="office-count"><LogIn size={16} aria-hidden="true" /><strong>{timedIn}</strong> timed in</li>
-            {needsCorrection > 0 && (
-              <li className="office-count is-alert"><CircleAlert size={16} aria-hidden="true" /><strong>{needsCorrection}</strong> need correction</li>
+            {lateTimeouts > 0 && (
+              <li className="office-count is-alert"><CircleAlert size={16} aria-hidden="true" /><strong>{lateTimeouts}</strong> late time-out{lateTimeouts === 1 ? "" : "s"}</li>
             )}
           </ul>
         )}
@@ -3311,6 +3311,26 @@ function DashboardBrand() {
   );
 }
 
+/** Attendance statuses in plain words. A late time-out keeps its familiar name, the same everywhere it shows. */
+const STATUS_WORD = {
+  WORKING: "Working",
+  COMPLETED: "Completed",
+  MISSED: "Missed",
+  LATE_TIMEOUT: "Late time-out",
+} satisfies Record<AttendanceStatus, string>;
+
+/** A record's status as a small coloured dot and a word (Live attendance and Attendance corrections). */
+function StatusWord({ status }: { status: AttendanceStatus }) {
+  return (
+    <span
+      className={`status-word is-${status.toLowerCase()}`}
+      title={status === "LATE_TIMEOUT" ? "Timed out after office hours; the time-out needs correcting" : undefined}
+    >
+      {STATUS_WORD[status]}
+    </span>
+  );
+}
+
 function AttendanceTable({
   rows,
   timezone,
@@ -3349,51 +3369,32 @@ function AttendanceTable({
         </thead>
         <tbody>
           {/* Sorted by the time shown: a clamped time-in sorts as its payable hour. */}
-          {sortByTime(rows, (row) => (clampedTimeInIds.has(row.attendanceId) && row.timeIn ? clampedTimeInIso(row.timeIn) : row.timeIn), order).map((row) => {
-            const late = row.status === "LATE_TIMEOUT";
-            return (
-              <tr key={row.attendanceId}>
-                <td>
-                  <strong>{row.fullName}</strong>
-                  <small>{row.userId}</small>
-                </td>
-                <td>{row.department || "—"}</td>
-                <td>
-                  {clampedTimeInIds.has(row.attendanceId) && row.timeIn ? (
-                    <span
-                      className="clamped-time-in-chip clamped-time-in-static"
-                      data-testid="clamped-time-in"
-                      title={`Actual scan: ${formatTime(row.timeIn, timezone)} (payable time clamped)`}
-                    >
-                      {clampedTimeLabel(row.timeIn)}
-                    </span>
-                  ) : (
-                    row.timeIn ? formatTime(row.timeIn, timezone) : "—"
-                  )}
-                </td>
-                <td>{row.timeOut ? formatTime(row.timeOut, timezone) : "—"}</td>
-                <td>
-                  {late ? (
-                    <>
-                      <span
-                        className="status-pill status-late_timeout"
-                        title="Time-out recorded after office hours; manual correction required"
-                      >
-                        LATE TIMEOUT
-                      </span>
-                      <small className="status-hint">Correction needed</small>
-                    </>
-                  ) : (
-                    <span
-                      className={`status-pill status-${row.status.toLowerCase()}`}
-                    >
-                      {row.status}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
+          {sortByTime(rows, (row) => (clampedTimeInIds.has(row.attendanceId) && row.timeIn ? clampedTimeInIso(row.timeIn) : row.timeIn), order).map((row) => (
+            <tr key={row.attendanceId}>
+              <td>
+                <strong>{row.fullName}</strong>
+                <small>{row.userId}</small>
+              </td>
+              <td>{row.department || "—"}</td>
+              <td>
+                {clampedTimeInIds.has(row.attendanceId) && row.timeIn ? (
+                  <span
+                    className="clamped-time-in-chip clamped-time-in-static"
+                    data-testid="clamped-time-in"
+                    title={`Actual scan: ${formatTime(row.timeIn, timezone)} (payable time clamped)`}
+                  >
+                    {clampedTimeLabel(row.timeIn)}
+                  </span>
+                ) : (
+                  row.timeIn ? formatTime(row.timeIn, timezone) : "—"
+                )}
+              </td>
+              <td>{row.timeOut ? formatTime(row.timeOut, timezone) : "—"}</td>
+              <td>
+                <StatusWord status={row.status} />
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -8404,6 +8405,8 @@ function AdminAttendance({
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  // Late is an arrival flag, not a status: it narrows the rows together with the status and the source.
+  const [lateOnly, setLateOnly] = useState(false);
   const statusFilterRef = useRef<HTMLDivElement>(null);
   const statusThumb = useActiveThumb(statusFilterRef, statusFilter);
   const [backdatedModalOpen, setBackdatedModalOpen] = useState(false);
@@ -8529,44 +8532,31 @@ function AdminAttendance({
     [activeRows, clampWeekHistory, users],
   );
 
-  const counts = useMemo(() => {
-    let lateCount = 0;
-    for (const info of arrivalMap.values()) {
-      if (info.arrivalStatus === "LATE") lateCount++;
-    }
-    return {
-      all: activeRows.length,
-      late: lateCount,
-      lateTimeout: activeRows.filter((r) => r.status === "LATE_TIMEOUT").length,
-      working: activeRows.filter((r) => r.status === "WORKING").length,
-      completed: activeRows.filter((r) => r.status === "COMPLETED").length,
-      missed: activeRows.filter((r) => r.status === "MISSED").length,
-      assisted: activeRows.filter((r) => r.source === "ADMIN_ASSISTED_SCAN").length,
-      backdated: activeRows.filter((r) => r.source === "ADMIN_BACKDATED_ENTRY").length,
-    };
-  }, [activeRows, arrivalMap]);
-
-  const filteredRows = activeRows.filter((row) => {
-    if (
-      employeeFilter &&
-      !`${row.fullName} ${row.userId}`
-        .toLowerCase()
-        .includes(employeeFilter.toLowerCase())
-    ) {
-      return false;
-    }
-    if (departmentFilter && row.department !== departmentFilter) {
-      return false;
-    }
-    if (sourceFilter && row.source !== sourceFilter) {
-      return false;
-    }
-    if (!statusFilter) return true;
-    if (statusFilter === "LATE") {
-      return arrivalMap.get(row.attendanceId)?.arrivalStatus === "LATE";
-    }
-    return row.status === statusFilter;
-  });
+  const isLate = (row: AttendanceListItem) => arrivalMap.get(row.attendanceId)?.arrivalStatus === "LATE";
+  const employeeQuery = employeeFilter.toLowerCase();
+  /** Whether a row passes every filter but `skip`: a button's count leaves out its own filter, so it is what a click shows. */
+  const passesFilters = (row: AttendanceListItem, skip: "status" | "late" | "source" | null) =>
+    (!employeeQuery || `${row.fullName} ${row.userId}`.toLowerCase().includes(employeeQuery)) &&
+    (!departmentFilter || row.department === departmentFilter) &&
+    (skip === "source" || !sourceFilter || row.source === sourceFilter) &&
+    (skip === "late" || !lateOnly || isLate(row)) &&
+    (skip === "status" || !statusFilter || row.status === statusFilter);
+  const filteredRows = activeRows.filter((row) => passesFilters(row, null));
+  const filtering = Boolean(employeeFilter || departmentFilter || statusFilter || sourceFilter || lateOnly);
+  // The statuses count the rows every other filter lets through, so with no status chosen All matches the rows shown;
+  // each record has one status, so they add up to All.
+  const statusRows = activeRows.filter((row) => passesFilters(row, "status"));
+  const sourceRows = activeRows.filter((row) => passesFilters(row, "source"));
+  const counts = {
+    all: statusRows.length,
+    lateTimeout: statusRows.filter((r) => r.status === "LATE_TIMEOUT").length,
+    working: statusRows.filter((r) => r.status === "WORKING").length,
+    completed: statusRows.filter((r) => r.status === "COMPLETED").length,
+    missed: statusRows.filter((r) => r.status === "MISSED").length,
+    late: activeRows.filter((row) => passesFilters(row, "late") && isLate(row)).length,
+    assisted: sourceRows.filter((r) => r.source === "ADMIN_ASSISTED_SCAN").length,
+    backdated: sourceRows.filter((r) => r.source === "ADMIN_BACKDATED_ENTRY").length,
+  };
 
   // On screen only: counts, selection and the CSV export keep using filteredRows in the server's order. Rows sort
   // by the time they show, so a clamped time-in sorts as its payable 9:00 AM.
@@ -8585,6 +8575,7 @@ function AdminAttendance({
   const clearFilters = () => {
     setStatusFilter("");
     setSourceFilter("");
+    setLateOnly(false);
     setEmployeeFilter("");
     setDepartmentFilter("");
   };
@@ -8613,12 +8604,41 @@ function AdminAttendance({
 
   const allAttendanceSelected = filteredRows.length > 0 && selectedAttendanceIds.size === filteredRows.length;
   const someAttendanceSelected = selectedAttendanceIds.size > 0 && selectedAttendanceIds.size < filteredRows.length;
+  const attendanceSelecting = selectedAttendanceIds.size > 0;
+  const listBarRef = useRef<HTMLDivElement>(null);
+  const selectionBarRef = useRef<HTMLDivElement>(null);
+  // The selection-bar button that started the last action, so the focus can come back after the bar hides.
+  const barActionFrom = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (masterAttendanceCheckboxRef.current) {
       masterAttendanceCheckboxRef.current.indeterminate = someAttendanceSelected;
     }
   }, [someAttendanceSelected]);
+
+  // The bar that isn't showing can't be clicked or tabbed into (React 18 has no inert prop).
+  useLayoutEffect(() => {
+    listBarRef.current?.toggleAttribute("inert", attendanceSelecting);
+    selectionBarRef.current?.toggleAttribute("inert", !attendanceSelecting);
+  }, [attendanceSelecting]);
+
+  // When an action started from the selection bar ends, put the focus somewhere sensible if the bar dropped it: the
+  // header tick box once the bar hides, else back on the button (it was disabled while the action ran). Only when the
+  // focus fell to the page or is still in the hidden bar, and never while a pop-up is open.
+  useLayoutEffect(() => {
+    const from = barActionFrom.current;
+    if (!from || batchDeletingAttendance || document.querySelector("[aria-modal='true']")) return;
+    barActionFrom.current = null;
+    const focus = document.activeElement;
+    if (!attendanceSelecting) {
+      if (focus === document.body || selectionBarRef.current?.contains(focus)) masterAttendanceCheckboxRef.current?.focus({ preventScroll: true });
+    } else if (focus === document.body) {
+      const target = from.disabled || !from.isConnected
+        ? selectionBarRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+        : from;
+      target?.focus({ preventScroll: true });
+    }
+  }, [attendanceSelecting, batchDeletingAttendance]);
 
   useEffect(() => {
     setSelectedAttendanceIds((prev) => {
@@ -8711,14 +8731,47 @@ function AdminAttendance({
     } else setMessage({ tone: "error", text: result.message });
   };
 
+  // Each record has exactly one status, so the counts add up to All. The late time-out problem comes right after All.
   const statusOptions = [
     ["", "All", counts.all],
-    ["LATE", "Late", counts.late],
-    ["LATE_TIMEOUT", "Late time-out", counts.lateTimeout],
-    ["WORKING", "Working", counts.working],
-    ["COMPLETED", "Completed", counts.completed],
-    ["MISSED", "Missed", counts.missed],
+    ["LATE_TIMEOUT", STATUS_WORD.LATE_TIMEOUT, counts.lateTimeout],
+    ["WORKING", STATUS_WORD.WORKING, counts.working],
+    ["COMPLETED", STATUS_WORD.COMPLETED, counts.completed],
+    ["MISSED", STATUS_WORD.MISSED, counts.missed],
   ] as const;
+  // Show only: Late (an arrival flag) combines with everything; Assisted and Backdated are one source at a time.
+  const toggleSource = (source: string) => setSourceFilter((current) => (current === source ? "" : source));
+  const showOnly = [
+    { label: "Late", Icon: Clock, count: counts.late, on: lateOnly, title: "Show only late arrivals", toggle: () => setLateOnly((on) => !on) },
+    { label: "Assisted", Icon: UserCheck, count: counts.assisted, on: sourceFilter === "ADMIN_ASSISTED_SCAN", title: "Show only kiosk scans assisted by an administrator", toggle: () => toggleSource("ADMIN_ASSISTED_SCAN") },
+    { label: "Backdated", Icon: History, count: counts.backdated, on: sourceFilter === "ADMIN_BACKDATED_ENTRY", title: "Show only backdated attendance manually entered by an administrator", toggle: () => toggleSource("ADMIN_BACKDATED_ENTRY") },
+  ] satisfies { label: string; Icon: LucideIcon; count: number; on: boolean; title: string; toggle: () => void }[];
+  // In both bar layers, so they stay reachable while rows are ticked: unsaved rows the filters hide, the phone sort
+  // toggle and See all.
+  const barNotes = (
+    <>
+      {hiddenUnsaved > 0 && (
+        <span className="attendance-hidden-unsaved">
+          {hiddenUnsaved === 1 ? "1 unsaved row" : `${hiddenUnsaved} unsaved rows`} hidden by filters ·{" "}
+          <button type="button" className="text-button" onClick={clearFilters}>
+            Show
+          </button>
+        </span>
+      )}
+      {/* Phones: the cards have no Time in heading, so the order gets a small toggle here. */}
+      <TimeOrderToggle column="Time in" order={timeOrder} onToggle={toggleTimeOrder} />
+      {(showAllAttendance || attendanceOverflowing) && (
+        <button
+          className="text-button see-all-toggle"
+          type="button"
+          aria-expanded={showAllAttendance}
+          onClick={() => setShowAllAttendance((current) => !current)}
+        >
+          {showAllAttendance ? "Show less" : "See all"}
+        </button>
+      )}
+    </>
+  );
 
   return (
     <section className="table-with-bar">
@@ -8741,71 +8794,55 @@ function AdminAttendance({
                 aria-pressed={statusFilter === id}
                 onClick={() => setStatusFilter(id && statusFilter === id ? "" : id)}
               >
+                {label} <span className={`filter-count${id === "LATE_TIMEOUT" && count > 0 ? " is-alert" : ""}`}>{count}</span>
+              </button>
+            ))}
+          </div>
+          {/* Toggles that switch on and off on their own and combine with the status; dimmed with nothing to show. */}
+          <div className="attendance-source-filter" role="group" aria-label="Show only">
+            {showOnly.map(({ label, Icon, count, on, title, toggle }) => (
+              <button
+                key={label}
+                className={`source-toggle${on ? " is-active" : ""}${count ? "" : " is-empty"}`}
+                type="button"
+                aria-pressed={on}
+                title={title}
+                onClick={toggle}
+              >
+                <Icon size={14} aria-hidden="true" />
                 {label} <span className="filter-count">{count}</span>
               </button>
             ))}
           </div>
-          {/* Source: Assisted and Backdated switch on and off on their own and combine with the status. */}
-          <div className="attendance-source-filter" role="group" aria-label="Show only">
-            <button
-              className={`source-toggle ${sourceFilter === "ADMIN_ASSISTED_SCAN" ? "is-active" : ""}`}
-              type="button"
-              aria-pressed={sourceFilter === "ADMIN_ASSISTED_SCAN"}
-              title="Show only kiosk scans assisted by an administrator"
-              onClick={() =>
-                setSourceFilter(
-                  sourceFilter === "ADMIN_ASSISTED_SCAN" ? "" : "ADMIN_ASSISTED_SCAN",
-                )
-              }
-            >
-              <UserCheck size={14} aria-hidden="true" />
-              Assisted <span className="filter-count">{counts.assisted}</span>
-            </button>
-            <button
-              className={`source-toggle ${sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "is-active" : ""}`}
-              type="button"
-              aria-pressed={sourceFilter === "ADMIN_BACKDATED_ENTRY"}
-              title="Show only backdated attendance manually entered by an administrator"
-              onClick={() =>
-                setSourceFilter(
-                  sourceFilter === "ADMIN_BACKDATED_ENTRY" ? "" : "ADMIN_BACKDATED_ENTRY",
-                )
-              }
-            >
-              <History size={14} aria-hidden="true" />
-              Backdated <span className="filter-count">{counts.backdated}</span>
-            </button>
-          </div>
         </div>
-        <div className="date-filter">
-          <label>
-            Date
-            <input
-              type="date"
-              aria-label="Filter attendance date"
-              value={typedDate ?? date}
-              disabled={dateLocked}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") commitTypedDate();
-                else typingDate.current = true;
-              }}
-              onPointerDown={() => {
-                typingDate.current = false;
-              }}
-              onBlur={commitTypedDate}
-              onChange={(event) => {
-                const val = event.target.value;
-                if (!val) return;
-                // With unsaved rows, a date typed segment by segment waits for Enter or leaving the field, so the
-                // discard question never opens on a half-typed date. A date picked from the calendar applies at once.
-                if (hasUnsaved && typingDate.current) setTypedDate(val);
-                else {
-                  setTypedDate(null);
-                  changeDate(val);
-                }
-              }}
-            />
-          </label>
+        {/* One compact row like Live attendance's filters: the day, Today, a name search and the department. */}
+        <div className="attendance-filters">
+          <input
+            type="date"
+            className="input"
+            aria-label="Filter attendance date"
+            value={typedDate ?? date}
+            disabled={dateLocked}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commitTypedDate();
+              else typingDate.current = true;
+            }}
+            onPointerDown={() => {
+              typingDate.current = false;
+            }}
+            onBlur={commitTypedDate}
+            onChange={(event) => {
+              const val = event.target.value;
+              if (!val) return;
+              // With unsaved rows, a date typed segment by segment waits for Enter or leaving the field, so the
+              // discard question never opens on a half-typed date. A date picked from the calendar applies at once.
+              if (hasUnsaved && typingDate.current) setTypedDate(val);
+              else {
+                setTypedDate(null);
+                changeDate(val);
+              }
+            }}
+          />
           <button
             type="button"
             className="filter-preset-btn"
@@ -8814,133 +8851,92 @@ function AdminAttendance({
           >
             Today
           </button>
-          <label>
-            Employee
+          <div className="search-input-wrap">
+            <Search size={15} aria-hidden="true" />
             <input
+              type="search"
+              className="input"
+              aria-label="Employee"
               placeholder="Name or ID"
               value={employeeFilter}
               onChange={(event) => setEmployeeFilter(event.target.value)}
             />
-          </label>
-          <label>
-            Department
-            <select
-              value={departmentFilter}
-              onChange={(event) => setDepartmentFilter(event.target.value)}
-            >
-              <option value="">All departments</option>
-              {departments.map((department) => (
-                <option key={department} value={department}>
-                  {department}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="admin-button-primary"
-            type="button"
-            aria-label="+ Add missed attendance"
-            onClick={() => setBackdatedModalOpen(true)}
+          </div>
+          <select
+            className="select"
+            aria-label="Department"
+            value={departmentFilter}
+            onChange={(event) => setDepartmentFilter(event.target.value)}
           >
-            <Plus size={15} /> Add missed attendance
-          </button>
-          <button
-            className="admin-button"
-            type="button"
-            disabled={exporting || !ready}
-            onClick={() => void exportWorkbook()}
-          >
-            {exporting ? (
-              "Preparing..."
-            ) : (
-              <>
-                <Download size={15} /> Export CSV
-              </>
-            )}
-          </button>
+            <option value="">All departments</option>
+            {departments.map((department) => (
+              <option key={department} value={department}>
+                {department}
+              </option>
+            ))}
+          </select>
           <NoticeLine notice={message} className="attendance-filter-message" />
         </div>
       </div>
       <GeneratedFileActions result={fileResult} label="Attendance export" />
       {loadStatus === "failed" && onRetry && <LoadFailed what="attendance for this date" onRetry={onRetry} />}
 
-      <div className="table-header-bar">
-        <div className="table-selection-count">
-          {/* The chosen day, once for the whole table. */}
-          <span className="attendance-day">{formatDate(date)}</span>
-          {selectedAttendanceIds.size > 0 ? (
-            <span className="table-selection-badge">{selectedAttendanceIds.size} of {filteredRows.length} attendance record(s) selected</span>
-          ) : (
-            <span>Total records: {filteredRows.length}</span>
-          )}
-          {hiddenUnsaved > 0 && (
-            <span className="attendance-hidden-unsaved">
-              {hiddenUnsaved === 1 ? "1 unsaved row" : `${hiddenUnsaved} unsaved rows`} hidden by filters ·{" "}
-              <button type="button" className="text-button" onClick={clearFilters}>
-                Show
-              </button>
-            </span>
-          )}
-          {/* Phones: the cards have no Time in heading, so the order gets a small toggle here. */}
-          <TimeOrderToggle column="Time in" order={timeOrder} onToggle={toggleTimeOrder} />
-          {(showAllAttendance || attendanceOverflowing) && (
-            <button
-              className="text-button see-all-toggle"
-              type="button"
-              aria-expanded={showAllAttendance}
-              onClick={() => setShowAllAttendance((current) => !current)}
-            >
-              {showAllAttendance ? "Show less" : `See all (${filteredRows.length})`}
+      {/* While rows are ticked the selection bar takes the list bar's place. Both stay in one grid cell (the bar keeps
+          the taller one's height, so the rows never move); the one not showing is hidden and inert, and they cross-fade. */}
+      <div className="table-header-bar attendance-list-bar">
+        <div className="attendance-bar-layer" ref={listBarRef} aria-hidden={attendanceSelecting}>
+          <div className="table-selection-count">
+            {/* The chosen day, once for the whole table, and one count. */}
+            <span className="attendance-day">{formatDate(date)}</span>
+            <span>{filtering ? `${filteredRows.length} of ${recordCount(activeRows.length)}` : recordCount(filteredRows.length)}</span>
+            {barNotes}
+          </div>
+          <div className="table-batch-actions">
+            <button className="admin-button" type="button" onClick={() => setBackdatedModalOpen(true)}>
+              <Plus size={15} aria-hidden="true" /> Add missed attendance
             </button>
-          )}
+            <button className="admin-button" type="button" disabled={exporting || !ready} onClick={() => void exportWorkbook()}>
+              <Download size={15} aria-hidden="true" /> {exporting ? "Preparing..." : "Export CSV"}
+            </button>
+          </div>
         </div>
-        <div className="table-batch-actions">
-          {selectedAttendanceIds.size > 0 ? (
-            <>
-              {selectedAttendanceIds.size < filteredRows.length && (
-                <button
-                  className="text-button"
-                  type="button"
-                  disabled={!ready}
-                  onClick={() => setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)))}
-                >
-                  Select all ({filteredRows.length})
-                </button>
-              )}
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => setSelectedAttendanceIds(new Set())}
-              >
-                Clear selection
-              </button>
-              <button
-                className="admin-button"
-                type="button"
-                disabled={!ready}
-                onClick={exportSelectedAttendance}
-              >
-                <Download size={14} /> Export selected CSV ({selectedAttendanceIds.size})
-              </button>
-              <button
-                className="admin-button danger-button"
-                type="button"
-                disabled={batchDeletingAttendance || !ready}
-                onClick={() => setBatchDeleteAttendanceOpen(true)}
-              >
-                Delete selected ({selectedAttendanceIds.size})
-              </button>
-            </>
-          ) : (
+        <div
+          className="attendance-bar-layer attendance-selection-bar"
+          role="group"
+          aria-label="Selected attendance records"
+          ref={selectionBarRef}
+          aria-hidden={!attendanceSelecting}
+        >
+          <div className="table-selection-count">
+            <span className="table-selection-badge">{selectedAttendanceIds.size} selected</span>
             <button
               className="text-button"
               type="button"
-              disabled={!ready || filteredRows.length === 0}
-              onClick={() => setSelectedAttendanceIds(new Set(filteredRows.map((r) => r.attendanceId)))}
+              onClick={(event) => {
+                barActionFrom.current = event.currentTarget;
+                setSelectedAttendanceIds(new Set());
+              }}
             >
-              Select all
+              Clear
             </button>
-          )}
+            {barNotes}
+          </div>
+          <div className="table-batch-actions">
+            <button className="admin-button" type="button" disabled={!ready} onClick={exportSelectedAttendance}>
+              Export selected
+            </button>
+            <button
+              className="admin-button danger-button"
+              type="button"
+              disabled={batchDeletingAttendance || !ready}
+              onClick={(event) => {
+                barActionFrom.current = event.currentTarget;
+                setBatchDeleteAttendanceOpen(true);
+              }}
+            >
+              Delete selected
+            </button>
+          </div>
         </div>
       </div>
 
@@ -8980,9 +8976,7 @@ function AdminAttendance({
                 <td colSpan={7} className="table-empty-cell">
                   <div className="empty-state">
                     No attendance records found for this day
-                    {employeeFilter || departmentFilter || statusFilter || sourceFilter
-                      ? " matching the selected filters"
-                      : ""}
+                    {filtering ? " matching the selected filters" : ""}
                     .
                   </div>
                 </td>
@@ -9457,7 +9451,7 @@ function AttendanceEditRow({
       });
       if (response.success) {
         if (timeOutIso && isLateTimeout(timeOutIso)) {
-          setMessage({ tone: "info", text: "Saved — time-out is still after office hours, correction remains required." });
+          setMessage({ tone: "info", text: "Saved. Still a late time-out: enter the real time-out." });
         } else {
           setMessage(null);
           showToast(`Saved ${row.fullName}'s times.`);
@@ -9560,16 +9554,6 @@ function AttendanceEditRow({
 
   return (
     <>
-      {late && (
-        <tr className="admin-attention-row">
-          <td colSpan={7} className="admin-attention">
-            <strong>Late time-out — manual correction required.</strong> This
-            time-out was recorded after office hours (
-            {formatTime(`${row.attendanceDate}T${LATE_TIMEOUT_THRESHOLD}:00+08:00`)}); the
-            office does not allow overtime. Edit the time-out below to complete the shift.
-          </td>
-        </tr>
-      )}
       <tr ref={rowRef} className={`attendance-row${selected ? " selected-row" : ""}${editing ? " is-open" : ""}${unsaved ? " is-unsaved" : ""}`}>
         <td className="table-select-cell">
           {onToggleSelect && (
@@ -9628,9 +9612,7 @@ function AttendanceEditRow({
         <td>{renderArrival()}</td>
         <td>{editing ? timeField("out") : row.timeOut ? formatTime(row.timeOut) : "—"}</td>
         <td>
-          <span className={`status-pill status-${row.status.toLowerCase()}`}>
-            {late ? "LATE TIMEOUT" : row.status}
-          </span>
+          <StatusWord status={row.status} />
         </td>
         <td className="attendance-row-actions">
           {editing ? (
@@ -9675,11 +9657,18 @@ function AttendanceEditRow({
           )}
         </td>
       </tr>
-      {/* A note for this record (a save problem, the late time-out reminder) on its own full-width line under it. */}
-      {notice && (
+      {/* A note for this record on its own full-width line under it: a save problem, or else for a late time-out one
+          short line saying what to do. */}
+      {(notice || late) && (
         <tr className="attendance-row-note">
           <td colSpan={7}>
-            <NoticeLine notice={notice} className="row-message" />
+            {notice ? (
+              <NoticeLine notice={notice} className="row-message" />
+            ) : (
+              <p className="row-message attendance-late-note">
+                Timed out after office hours. {editing ? "Enter the real time-out and click Save." : "Click Edit and enter the real time-out."}
+              </p>
+            )}
           </td>
         </tr>
       )}

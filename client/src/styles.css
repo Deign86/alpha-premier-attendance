@@ -282,19 +282,11 @@ th, td { padding: 16px 18px; border-bottom: 1px solid var(--line); text-align: l
 th { color: var(--gold); text-transform: uppercase; font-size: .62rem; letter-spacing: .04em; }
 td strong, td small { display: block; } td small { color: var(--quiet); margin-top: 4px; font-size: .68rem; }
 .status-pill { display: inline-block; padding: 5px 8px; border: 1px solid var(--line-bright); font-size: .63rem; }
-.status-completed { color: var(--success); } .status-working { color: var(--gold-bright); } .status-missed { color: var(--danger); } .status-late_timeout { color: var(--danger); border-color: var(--danger); background: rgba(239, 170, 146, .08); }
-.status-hint { color: var(--danger); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
-.arrival-badge { display: inline-flex; align-items: center; padding: 3px 8px; font-size: .66rem; font-weight: 700; border-radius: var(--radius-sm); letter-spacing: .02em; white-space: nowrap; }
-.badge-ontime { color: var(--success); background: rgba(82, 196, 126, .1); border: 1px solid rgba(82, 196, 126, .25); }
-.badge-late { color: var(--danger); background: rgba(239, 170, 146, .1); border: 1px solid rgba(239, 170, 146, .3); }
-.badge-none { color: var(--quiet); }
-.admin-attention-row td { padding: 0; }
-.admin-attention { margin: 8px 0; padding: 10px 13px; border: 1px solid var(--danger); border-left: 3px solid var(--danger); background: rgba(239, 170, 146, .08); color: var(--danger); font-size: .75rem; }
-.admin-attention strong { display: inline; color: inherit; }
+.status-completed { color: var(--success); } .status-working { color: var(--gold-bright); }
 .empty-state { margin-top: 22px; padding: 34px; border: 1px dashed var(--line-bright); color: var(--muted); text-align: center; }
 .admin-login { display: grid; place-items: center; } .admin-login form { width: min(460px, 100%); padding: 32px; border: 1px solid var(--line); background: var(--surface); }
-.admin-login label, .admin-form label, .date-filter { display: grid; gap: 7px; margin: 16px 0; color: var(--ink); font-size: .76rem; }
-.admin-login input, .admin-form input, .admin-form select, .date-filter input, td input { height: 42px; padding: 0 10px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); }
+.admin-login label, .admin-form label { display: grid; gap: 7px; margin: 16px 0; color: var(--ink); font-size: .76rem; }
+.admin-login input, .admin-form input, .admin-form select, td input { height: 42px; padding: 0 10px; color: var(--ink); background: var(--surface-input); border: 1px solid var(--line-bright); }
 .time-input-group { position: relative; display: inline-flex; align-items: center; }
 .time-input-group input { padding-right: 32px; }
 .time-clear-btn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: var(--quiet); width: 26px; height: 26px; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); z-index: 5; pointer-events: auto; }
@@ -491,9 +483,9 @@ td small { font-size: .7rem; }
 .admin-login > a:hover { color: var(--ink); }
 .admin-login form { width: min(460px, 100%); padding: 30px; border: 1px solid var(--line); border-top: 3px solid var(--gold); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-panel); }
 .admin-login h1 { margin: 7px 0 20px; font-size: 2rem; line-height: 1.1; }
-.admin-login label, .admin-form label, .date-filter { gap: 7px; margin: 14px 0; font-size: .78rem; }
-.admin-login input, .admin-form input, .admin-form select, .date-filter input, td input { height: 44px; border-radius: var(--radius-sm); }
-.admin-form select, .date-filter select, .voice-select, .lan-panel select {
+.admin-login label, .admin-form label { gap: 7px; margin: 14px 0; font-size: .78rem; }
+.admin-login input, .admin-form input, .admin-form select, td input { height: 44px; border-radius: var(--radius-sm); }
+.admin-form select, .voice-select, .lan-panel select {
   appearance: none;
   min-width: 156px;
   padding: 0 34px 0 12px;
@@ -506,10 +498,10 @@ td small { font-size: .7rem; }
   font-size: .76rem;
   cursor: pointer;
 }
-.admin-form select:hover:not(:disabled), .date-filter select:hover:not(:disabled), .voice-select:hover:not(:disabled), .lan-panel select:hover:not(:disabled) { border-color: var(--gold); background-color: var(--surface-raised); }
-.admin-form select:focus, .date-filter select:focus, .voice-select:focus, .lan-panel select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .12); outline: 2px solid var(--gold-bright); outline-offset: 2px; }
-.admin-form select:disabled, .date-filter select:disabled, .voice-select:disabled, .lan-panel select:disabled { opacity: .45; cursor: not-allowed; }
-.admin-form select option, .date-filter select option, .voice-select option, .lan-panel select option { color: var(--ink); background: var(--surface); }
+.admin-form select:hover:not(:disabled), .voice-select:hover:not(:disabled), .lan-panel select:hover:not(:disabled) { border-color: var(--gold); background-color: var(--surface-raised); }
+.admin-form select:focus, .voice-select:focus, .lan-panel select:focus { border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .12); outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+.admin-form select:disabled, .voice-select:disabled, .lan-panel select:disabled { opacity: .45; cursor: not-allowed; }
+.admin-form select option, .voice-select option, .lan-panel select option { color: var(--ink); background: var(--surface); }
 .admin-tabs { gap: 4px; margin: 22px 0 20px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
 .admin-tabs button { min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: .75rem; }
 .admin-tabs button:hover { color: var(--ink); background: var(--surface-raised); }
@@ -1090,26 +1082,8 @@ tr.selected-row td:first-child::before,
 .edit-payroll-notice { padding: 10px 14px; margin-bottom: 14px; background: rgba(59, 130, 246, .1); border: 1px solid rgba(59, 130, 246, .3); border-radius: var(--radius-sm); font-size: .82rem; color: var(--ink); line-height: 1.5; }
 .attendance-filter-bar { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
 .attendance-filter-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.filter-presets { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .filter-preset-btn { padding: 6px 12px; font-size: .74rem; font-weight: 600; color: var(--muted); background: var(--surface-input); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s ease; }
 .filter-preset-btn:hover { color: var(--gold-bright); border-color: var(--gold-soft); }
-.filter-preset-btn.is-active { color: #11100c; background: var(--gold); border-color: var(--gold-bright); font-weight: 700; }
-.date-filter { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
-.date-filter label { min-width: 140px; margin: 0; }
-.date-filter label:nth-of-type(3) { min-width: 176px; }
-.date-filter label:nth-of-type(4) { min-width: 164px; }
-/* Labels sit above their controls (like the other admin forms) so every control lines up on one baseline. */
-.date-filter label { display: grid; gap: 6px; color: var(--muted); font-size: .72rem; font-weight: 600; }
-/* One height and corner radius for every control in the bar: date, Today, search, department and the two actions. */
-.date-filter input,
-.date-filter select,
-.date-filter .filter-preset-btn,
-.date-filter .admin-button,
-.date-filter .admin-button-primary { box-sizing: border-box; height: 44px; min-height: 44px; border-radius: var(--radius-sm); }
-.date-filter input { width: 100%; padding: 0 12px; font-size: .8rem; }
-.date-filter select { width: 100%; padding: 0 36px 0 12px; font-size: .8rem; background-position: right 12px center; }
-.date-filter .filter-preset-btn { padding: 0 16px; }
-.date-filter .admin-button, .date-filter .admin-button-primary { padding: 0 16px; }
 
 @media (max-width: 920px) {
   .dashboard-header { align-items: flex-start; flex-direction: column; gap: 16px; }
@@ -2763,33 +2737,6 @@ textarea.input {
   box-shadow: none;
 }
 
-/* Admin Primary Action Button (+ Add missed attendance) */
-.admin-button-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 42px;
-  padding: 8px 16px;
-  background: var(--gold);
-  color: #11100c;
-  border: 1px solid var(--gold-bright);
-  border-radius: 3px;
-  font-size: 0.74rem;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 180ms ease, border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
-  box-shadow: 0 2px 8px rgba(198, 162, 84, 0.2);
-}
-
-.admin-button-primary:hover:not(:disabled) {
-  background: var(--gold-bright);
-  border-color: var(--gold-bright);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(198, 162, 84, 0.35);
-}
-
 /* ==========================================================================
    Admin Mode Switcher (1: Attendance, 2: Bathroom Key Log)
    ========================================================================== */
@@ -3862,11 +3809,6 @@ body:has(.live-shell) { background-color: #080807 !important; }
 .live-shell .table-wrap td:is(:nth-child(3), :nth-child(4)) { font-family: 'Orbitron', sans-serif; font-weight: 500; white-space: nowrap; }
 .live-shell .table-wrap td:nth-child(3) { color: var(--gold-bright); }
 .live-shell .clamped-time-in-static { border-radius: 6px; font-size: .78rem; }
-.live-shell .status-pill { padding: 4px 10px; border-radius: 6px; font-size: .72rem; letter-spacing: .05em; white-space: nowrap; }
-.live-shell .status-working { background: rgba(198, 162, 84, .08); border-color: rgba(198, 162, 84, .5); }
-.live-shell .status-completed { background: rgba(152, 210, 168, .07); border-color: rgba(152, 210, 168, .4); }
-.live-shell .status-missed { border-color: rgba(239, 170, 146, .4); }
-.live-shell .status-hint { margin-top: 4px; font-size: .7rem; }
 .live-shell .empty-state { margin: 0; padding: 42px 24px; background: linear-gradient(180deg, rgba(30, 28, 22, .7), rgba(13, 12, 10, .75)); border: 1px dashed rgba(198, 162, 84, .3); border-radius: 8px; font-size: .85rem; animation: kiosk-card-in 520ms var(--ease-soft) 160ms backwards; }
 
 /* Tablets and phones: each row becomes a small card so time in, time out and status always show.
@@ -3876,7 +3818,7 @@ body:has(.live-shell) { background-color: #080807 !important; }
   .live-shell table { min-width: 0; }
   .live-shell table, .live-shell tbody { display: block; }
   .live-shell thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  /* Two equal halves keep Time out lined up from card to card; only a wider "LATE TIMEOUT" row may widen its own half. */
+  /* Two equal halves keep Time out lined up from card to card; only a wider "Late time-out" row may widen its own half. */
   .live-shell tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(max-content, 1fr); grid-template-areas: "emp status" "dept dept" "in out"; gap: 6px 12px; padding: 12px 14px; border-bottom: 1px solid rgba(198, 162, 84, .1); }
   .live-shell tbody tr:last-child { border-bottom: 0; }
   .live-shell .table-wrap td { padding: 0; border: 0; }
@@ -3892,15 +3834,14 @@ body:has(.live-shell) { background-color: #080807 !important; }
 }
 /* Tablets: one two-line row per person, with the times and status lined up in columns like the table. */
 @media (min-width: 601px) and (max-width: 900px) {
-  /* A fixed status column (fits "LATE TIMEOUT") keeps the time columns aligned from row to row. */
+  /* A fixed status column (fits "Late time-out") keeps the time columns aligned from row to row. */
   .live-shell tbody tr { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 9rem; grid-template-areas: "emp in out status" "dept in out status"; align-items: center; gap: 4px 12px; }
 }
 @media (max-width: 600px) {
   .live-shell .dashboard-header { padding: 18px; }
   .live-shell .dashboard-status, .live-shell .live-lan-toggle { flex: 1 1 auto; justify-content: center; margin-left: 0; }
-  /* A little less padding so "COMPLETED" fits half a card at 390px and Time out stays lined up. */
+  /* A little less padding so the status fits half a card at 390px and Time out stays lined up. */
   .live-shell tbody tr { padding-inline: 12px; }
-  .live-shell .status-pill { padding: 3px 8px; letter-spacing: .04em; }
 }
 /* Narrow phones (under 390px): name on its own line, status under it. */
 @media (max-width: 389px) {
@@ -3920,7 +3861,7 @@ body:has(.live-shell) { background-color: #080807 !important; }
    ========================================================================== */
 
 /* Dropdowns: one gold chevron, set in from the right edge, on every form select. */
-.setup-form select, .admin-form select, .date-filter select, select.select {
+.setup-form select, .admin-form select, select.select {
   -webkit-appearance: none;
   appearance: none;
   padding-right: 44px;
@@ -4094,15 +4035,12 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 
 /* Header: on the page itself, no card (layout in "Admin: header on the page" at the end of the file). */
 .admin-shell .dashboard-header { position: relative; animation: kiosk-enter 600ms var(--ease-soft) backwards; }
-/* Attendance / Bathroom Key Log: the kiosk's sliding gold thumb, at the original small size. */
+/* Attendance / Bathroom Key Log: the kiosk's sliding thumb, at the original small size (a quiet outline, end of file). */
 .admin-shell .admin-mode-switcher { margin: 0; padding: 3px; border-radius: 8px; }
-.admin-shell .admin-mode-switcher::before { top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(0, 0, 0, .2); }
+.admin-shell .admin-mode-switcher::before { top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); border-radius: 6px; }
 .admin-shell .admin-mode-btn { justify-content: center; gap: 7px; min-height: 32px; padding: 5px 14px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; box-shadow: none; font-size: .8rem; transition: color 200ms ease-out; }
 .admin-shell .admin-mode-btn:hover { color: var(--ink); background: transparent; }
-.admin-shell .admin-mode-btn.is-active, .admin-shell .admin-mode-btn.is-active:hover { color: #11100c; background: transparent; box-shadow: none; }
 .admin-shell .admin-mode-key-badge { width: 18px; height: 18px; border-radius: 4px; font-size: .68rem; }
-.admin-shell .admin-mode-btn:not(.is-active) .admin-mode-key-badge { color: var(--gold-bright); background: transparent; border-color: rgba(198, 162, 84, .45); }
-.admin-shell .admin-mode-btn.is-active .admin-mode-key-badge { color: #11100c; background: rgba(17, 16, 12, .14); border-color: rgba(17, 16, 12, .28); }
 
 /* Scanner, Live view and Lock: small outlined buttons with icons, no lift or glow; the dev-only Sheets reset in coral. */
 .admin-shell .dashboard-header nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
@@ -4396,8 +4334,8 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 
 /* --- Attendance corrections: calm filters ---------------------------------------------------------- */
 /* The status filters read as a quiet underline bar, one level below the gold tabs: plain words with small counts and
-   a gold line that slides to the chosen status. Statuses with nothing to show are dimmed. Assisted and Backdated are
-   separate on/off toggles at the end of the row, so they combine with any status. */
+   a gold line that slides to the chosen status. Statuses with nothing to show are dimmed. Late, Assisted and Backdated
+   are separate on/off toggles at the end of the row, so they combine with any status. */
 .attendance-filter-bar { gap: 16px; }
 .attendance-filter-top { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; }
 .attendance-status-filter { position: relative; z-index: 0; display: flex; flex-wrap: wrap; min-width: 0; }
@@ -4532,7 +4470,7 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .admin-login .notice { margin: 12px 0 0; }
 .file-result-card .notice { margin: 0; padding: 6px 10px; font-size: .74rem; }
 /* In the attendance filter bar the line takes a row of its own; on a table row it is a small plain note. */
-.date-filter .attendance-filter-message { flex: 1 1 100%; margin: 0; }
+.attendance-filters .attendance-filter-message { flex: 1 1 100%; margin: 0; }
 td .row-message { margin: 4px 0 0; padding: 0; background: none; border: 0; font-size: .74rem; }
 
 /* Toasts: short notes for routine results, bottom-right on desktop and full width at the bottom on phones,
@@ -4631,7 +4569,7 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 
 /* --- Attendance corrections: read-only rows, Edit opens one row ---------------------------------------------- */
 /* The chosen day shows once, above the table, beside the count. Rows read as plain text ("8:12 AM", "—") with quiet
-   Edit and Delete (coral) text buttons. Edit turns just that row into its two time fields with Save (gold) and
+   Edit and Delete (grey until pointed at) text buttons. Edit turns just that row into its two time fields with Save (gold) and
    Cancel; a row with changes shows "Unsaved" under the name and a gold edge on its left. */
 .admin-shell .table-with-bar .table-selection-count { color: var(--muted); font-size: .78rem; }
 .admin-shell .attendance-day { color: var(--ink); font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; letter-spacing: .02em; }
@@ -4641,7 +4579,6 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 .admin-shell .attendance-table-wrap td strong { font-family: 'Orbitron', sans-serif; font-size: .8rem; font-weight: 600; letter-spacing: .01em; }
 .admin-shell .attendance-row > td:is(:nth-child(3), :nth-child(5)) { white-space: nowrap; overflow-wrap: normal; }
 .admin-shell .attendance-row .clamped-time-in-chip { border-radius: 6px; cursor: pointer; }
-.admin-shell .attendance-row .status-pill { white-space: nowrap; overflow-wrap: normal; }
 .admin-shell .attendance-table-wrap .unsaved-tag { display: flex; width: max-content; margin: 4px 0 0; }
 .admin-shell .attendance-row.is-open > td { background: rgba(198, 162, 84, .04); }
 .admin-shell .attendance-row.is-unsaved > td:first-child { box-shadow: inset 3px 0 0 var(--gold); }
@@ -4659,8 +4596,6 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 .admin-shell .attendance-row-actions > button + button { margin-left: 4px; }
 .admin-shell .attendance-row-actions .text-button { min-height: 30px; padding: 3px 8px; color: var(--gold-bright); background: none; border: 0; border-radius: 6px; font-size: .76rem; font-weight: 600; white-space: nowrap; overflow-wrap: normal; }
 .admin-shell .attendance-row-actions .text-button:hover:not(:disabled) { color: var(--ink); background: rgba(198, 162, 84, .12); }
-.admin-shell .attendance-row-actions .text-button.danger-button { color: var(--danger); }
-.admin-shell .attendance-row-actions .text-button.danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
 .admin-shell .attendance-save-button { box-sizing: border-box; min-width: 72px; height: 30px; padding: 0 14px; color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); border: 0; border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); font-size: .76rem; font-weight: 700; white-space: nowrap; }
 .admin-shell .attendance-save-button:hover:not(:disabled) { background: linear-gradient(180deg, #ecd28c, #cfac5e); }
 .admin-shell .attendance-save-button:disabled { opacity: .7; cursor: progress; }
@@ -4668,7 +4603,7 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
    line right under the record, so it never widens a column; it shares an open row's tint and gold edge. */
 .admin-shell .attendance-row:has(+ .attendance-row-note) > td { border-bottom-color: transparent; }
 .admin-shell .attendance-row-note > td { padding: 0 12px 10px 50px; }
-.admin-shell .attendance-row-note .row-message { margin: 0; padding: 6px 10px; }
+.admin-shell .attendance-row-note .row-message { margin: 0; padding: 6px 0; }
 .admin-shell .attendance-row.is-open + .attendance-row-note > td { background: rgba(198, 162, 84, .04); }
 .admin-shell .attendance-row.is-unsaved + .attendance-row-note > td { box-shadow: inset 3px 0 0 var(--gold); }
 /* "1 unsaved row hidden by filters · Show" beside the count. */
@@ -4722,7 +4657,7 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
   .admin-shell .attendance-row.is-open .attendance-row-actions > button { flex: 1 1 0; height: 40px; min-height: 40px; margin: 0; }
   .admin-shell .attendance-row.is-open .attendance-row-actions > .text-button { border: 1px solid rgba(198, 162, 84, .28); }
 }
-/* Narrow phones (under 390px): the name gets its own line and the status sits under it, so "COMPLETED" fits. */
+/* Narrow phones (under 390px): the name gets its own line and the status sits under it, so a long status fits. */
 @media (max-width: 389px) {
   .admin-shell .attendance-row { grid-template-areas: "sel emp emp" ". status status" ". in out" ". arr act"; }
   .admin-shell .attendance-row.is-open { grid-template-areas: "sel emp emp" ". status status" ". in in" ". out out" ". arr arr" ". act act"; }
@@ -5098,4 +5033,94 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 @media (prefers-reduced-motion: reduce) {
   .admin-shell :is(.payroll-steps li::after, .payroll-step-mark, .cutoff-fill-buttons::before, .cutoff-fill-buttons .admin-button, .payroll-list-bar, .payroll-bar-layer, .payroll-bar-layer[aria-hidden="true"], .payroll-scope-switch button), .payroll-scope-thumb { transition: none; }
   .admin-shell .payroll-cutoff-dates { animation: none; }
+}
+
+/* --- Attendance corrections: calm rows, one name for the late time-out, compact filters, a selection bar ----------- */
+/* Status as a small dot and a word, here and on Live attendance (no capsule pills): Working gold, Completed green,
+   Missed grey, and Late time-out coral, the one status that needs fixing. */
+:is(.admin-shell, .live-shell) .status-word { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .76rem; font-weight: 600; white-space: nowrap; }
+:is(.admin-shell, .live-shell) .status-word::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+:is(.admin-shell, .live-shell) .status-word.is-working { color: var(--gold-bright); }
+:is(.admin-shell, .live-shell) .status-word.is-completed { color: var(--success); }
+:is(.admin-shell, .live-shell) .status-word.is-missed { color: var(--quiet); }
+:is(.admin-shell, .live-shell) .status-word.is-late_timeout { color: var(--danger); }
+/* Arrival as plain text: "Late 38m" gold, "On time" muted, "—" quiet. */
+.admin-shell .attendance-row .arrival-badge { padding: 0; background: none; border: 0; border-radius: 0; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .attendance-row .badge-late { color: var(--gold-bright); }
+.admin-shell .attendance-row .badge-ontime { color: var(--muted); }
+.admin-shell .attendance-row .badge-none { color: var(--quiet); }
+/* Delete stays grey until pointed at or focused, then turns coral (it still asks first). */
+.admin-shell .attendance-row-actions .text-button.danger-button { color: var(--muted); }
+.admin-shell .attendance-row-actions .text-button.danger-button:is(:hover, :focus-visible):not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
+/* A late time-out's note: one short coral line under the row, no box. A ticked row's note line shares its tint and gold
+   edge (desktop: on the cell; tablets and phones: on the card line). */
+.admin-shell .attendance-row-note .attendance-late-note { color: var(--danger); font-weight: 500; }
+@media (min-width: 901px) {
+  .admin-shell .attendance-row.selected-row + .attendance-row-note > td { background: rgba(198, 162, 84, .08); box-shadow: inset 3px 0 0 var(--gold); }
+}
+@media (max-width: 900px) {
+  .admin-shell .attendance-row.selected-row + .attendance-row-note { background: rgba(198, 162, 84, .05); }
+}
+
+/* Filters: the Late time-out count turns coral while there are any; Late, Assisted and Backdated dim at 0 like the
+   statuses. */
+.attendance-status-filter > button .filter-count.is-alert { color: var(--danger); }
+.source-toggle.is-empty:not(.is-active) { opacity: .5; }
+/* One compact row like Live attendance's filters: 34px controls with 6px corners. Today has white words while it can
+   be used and dims once today is shown. */
+.admin-shell .attendance-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.admin-shell .attendance-filters :is(.input, .select, .filter-preset-btn) { box-sizing: border-box; height: 34px; color: var(--ink); background-color: rgba(0, 0, 0, .22); border: 1px solid rgba(198, 162, 84, .3); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); font-size: .78rem; }
+.admin-shell .attendance-filters input[type="date"] { flex: none; width: 150px; padding: 0 10px; }
+.admin-shell .attendance-filters .search-input-wrap { flex: 1 1 220px; width: auto; max-width: 320px; }
+.admin-shell .attendance-filters .search-input-wrap svg { left: 11px; color: var(--gold); }
+.admin-shell .attendance-filters .search-input-wrap .input { padding: 0 10px 0 32px; }
+.admin-shell .attendance-filters .input::placeholder { color: var(--quiet); }
+.admin-shell .attendance-filters .select { flex: 0 1 220px; width: auto; min-width: 0; padding: 0 34px 0 10px; background-position: right 11px center; }
+.admin-shell .attendance-filters :is(.input, .select, .filter-preset-btn):hover:not(:disabled) { border-color: rgba(198, 162, 84, .55); }
+.admin-shell .attendance-filters :is(.input, .select):focus { background-color: rgba(0, 0, 0, .3); border-color: var(--gold-bright); box-shadow: 0 0 0 3px rgba(198, 162, 84, .16); outline: none; }
+.admin-shell .attendance-filters .filter-preset-btn { padding: 0 14px; }
+.admin-shell .attendance-filters .filter-preset-btn:hover:not(:disabled) { color: var(--gold-bright); }
+.admin-shell .attendance-filters :is(.input, .filter-preset-btn):disabled { color: var(--quiet); opacity: .6; cursor: default; }
+@media (max-width: 600px) {
+  .admin-shell .attendance-filters .search-input-wrap { max-width: none; }
+  .admin-shell .attendance-filters .select { flex: 1 1 100%; }
+  /* Phones: Late, Assisted and Backdated keep one line. */
+  .source-toggle { padding: 0 10px; }
+}
+
+/* The table bar holds two layers in one grid cell, like Users and Payroll: the day, one count and See all with Add
+   missed attendance and Export CSV (outline, not gold) at the right, and while rows are ticked the selection bar (how
+   many, Clear | Export selected, Delete selected). The cell keeps the taller layer's height, so the rows never move;
+   the one not showing is hidden (and inert, set in AdminAttendance). Buttons 34px with 6px corners. */
+.admin-shell .attendance-list-bar { display: grid; grid-template-columns: minmax(0, 1fr); transition: background-color 200ms ease-out; }
+.admin-shell .attendance-list-bar:has(> .attendance-selection-bar:not([aria-hidden="true"])) { background: linear-gradient(rgba(198, 162, 84, .07), rgba(198, 162, 84, .07)), var(--surface-raised); }
+.admin-shell .attendance-bar-layer { display: flex; grid-area: 1 / 1; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; transition: opacity 200ms var(--ease-soft), transform 200ms var(--ease-soft), visibility 0s; }
+.admin-shell .attendance-bar-layer[aria-hidden="true"] { visibility: hidden; opacity: 0; transform: translateY(4px); transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0s linear 120ms; }
+.admin-shell .attendance-list-bar .table-selection-count { min-height: 34px; gap: 4px 10px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.admin-shell .attendance-list-bar .table-selection-badge { color: var(--gold-bright); font-size: .78rem; font-weight: 600; }
+.admin-shell .attendance-list-bar .see-all-toggle { min-height: 26px; padding: 2px 8px; color: var(--gold-bright); border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-shell .attendance-list-bar .table-batch-actions { gap: 6px; }
+.admin-shell .attendance-list-bar .table-batch-actions > button { box-sizing: border-box; min-height: 34px; padding: 6px 12px; color: var(--ink); background: transparent; border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.admin-shell .attendance-list-bar .table-batch-actions > button svg { flex: none; color: var(--gold); }
+.admin-shell .attendance-list-bar .table-batch-actions > button:hover:not(:disabled) { color: var(--gold-bright); background: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); box-shadow: none; }
+.admin-shell .attendance-list-bar .table-batch-actions > .danger-button { color: var(--danger); border-color: rgba(239, 170, 146, .35); }
+.admin-shell .attendance-list-bar .table-batch-actions > .danger-button:hover:not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .7); }
+.admin-shell .attendance-selection-bar .text-button { min-height: 0; padding: 2px 8px; color: var(--muted); border-radius: 6px; font-size: .76rem; font-weight: 600; }
+.admin-shell .attendance-selection-bar .text-button:hover { color: var(--ink); background: rgba(198, 162, 84, .07); }
+.admin-shell .attendance-list-bar button:disabled { opacity: .5; cursor: not-allowed; }
+/* Phones: each layer's two buttons share one full-width row. */
+@media (max-width: 600px) {
+  .admin-shell .attendance-list-bar .table-batch-actions { flex: 1 1 100%; }
+  .admin-shell .attendance-list-bar .table-batch-actions > button { flex: 1 1 auto; padding-inline: 8px; }
+}
+
+/* Attendance / Bathroom Key Log: a quiet switch, so the section tab stays the page's one filled-gold "you are here".
+   The chosen side has gold words and a thin gold outline that still slides; the 1 and 2 keys follow it. */
+.admin-shell .admin-mode-switcher::before { box-sizing: border-box; background: transparent; border: 1px solid rgba(225, 196, 119, .6); box-shadow: none; }
+.admin-shell .admin-mode-btn.is-active, .admin-shell .admin-mode-btn.is-active:hover { color: var(--gold-bright); }
+.admin-shell .admin-mode-btn .admin-mode-key-badge { color: var(--quiet); background: transparent; border-color: rgba(198, 162, 84, .3); }
+.admin-shell .admin-mode-btn.is-active .admin-mode-key-badge { color: var(--gold-bright); border-color: rgba(225, 196, 119, .6); }
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-shell :is(.attendance-list-bar, .attendance-bar-layer, .attendance-bar-layer[aria-hidden="true"]) { transition: none; }
 }

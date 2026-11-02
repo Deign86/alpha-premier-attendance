@@ -897,7 +897,7 @@ describe('RFID kiosk', () => {
     await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(false));
   });
 
-  it('shows a distinct LATE TIMEOUT pill in the live attendance view', async () => {
+  it('shows a late time-out as its own status word in the live attendance view', async () => {
     window.history.pushState({}, '', '/attendance');
     try {
       vi.restoreAllMocks();
@@ -918,6 +918,7 @@ describe('RFID kiosk', () => {
               attendance: [
                 { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T18:55:00+08:00', status: 'LATE_TIMEOUT' },
                 { attendanceId: 'a2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+                { attendanceId: 'a3', attendanceDate: '2026-07-28', userId: 'u3', fullName: 'Alan Turing', department: 'Engineering', timeIn: '2026-07-28T08:10:00+08:00', timeOut: '2026-07-28T18:20:00+08:00', status: 'LATE_TIMEOUT' },
               ],
             }),
           } as Response;
@@ -926,10 +927,17 @@ describe('RFID kiosk', () => {
         return { ok: true, json: async () => ({ success: true }) } as Response;
       });
       render(<App />);
-      expect(await screen.findByText('LATE TIMEOUT')).toBeInTheDocument();
-      expect(screen.getByText('Correction needed')).toBeInTheDocument();
-      // Normal shifts keep rendering their existing status unchanged.
-      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+      // A dot and a word, the same name everywhere ("Late time-out"), with the reason in its tooltip.
+      const lates = await screen.findAllByText('Late time-out');
+      expect(lates).toHaveLength(2);
+      const [late] = lates;
+      expect(late).toHaveClass('status-word', 'is-late_timeout');
+      expect(late).toHaveAttribute('title', 'Timed out after office hours; the time-out needs correcting');
+      // The chip above counts them in the plural.
+      expect(screen.getByRole('list', { name: 'Today at a glance' })).toHaveTextContent('2 late time-outs');
+      expect(screen.queryByText('Correction needed')).not.toBeInTheDocument();
+      // Normal shifts show their own word with the same dot.
+      expect(screen.getByText('Completed')).toHaveClass('status-word', 'is-completed');
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -1285,7 +1293,7 @@ describe('Admin Attendance Corrections', () => {
       expect(tableBox).toHaveClass('attendance-table-wrap');
       expect(tableBox).not.toHaveClass('is-expanded');
 
-      await user.click(await screen.findByRole('button', { name: /^See all \(\d+\)$/ }));
+      await user.click(await screen.findByRole('button', { name: 'See all' }));
       expect(tableBox).toHaveClass('is-expanded');
 
       await user.click(screen.getByRole('button', { name: 'Show less' }));
@@ -2146,15 +2154,15 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(await screen.findByText('Total records: 2')).toBeInTheDocument();
+      expect(await screen.findByText('2 records')).toBeInTheDocument();
       const masterCheckbox = screen.getByRole('checkbox', { name: /select all attendance records/i });
       expect(masterCheckbox).not.toBeChecked();
 
       await user.click(masterCheckbox);
       expect(masterCheckbox).toBeChecked();
-      expect(await screen.findByText('2 of 2 attendance record(s) selected')).toBeInTheDocument();
+      expect(await screen.findByText('2 selected')).toBeInTheDocument();
 
-      const batchDeleteBtn = screen.getByRole('button', { name: /delete selected \(2\)/i });
+      const batchDeleteBtn = screen.getByRole('button', { name: 'Delete selected' });
       await user.click(batchDeleteBtn);
 
       expect(screen.getByRole('dialog', { name: /delete selected attendance records\?/i })).toBeInTheDocument();
@@ -2527,12 +2535,12 @@ describe('Admin Attendance Corrections', () => {
 
     // Status filters are one choice at a time; choosing the current one again goes back to All.
     const allStatuses = screen.getByRole('button', { name: /^all \d+$/i });
-    const late = screen.getByRole('button', { name: /^late \d+$/i });
+    const working = screen.getByRole('button', { name: /^working \d+$/i });
     expect(allStatuses).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(late);
-    expect(late).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(working);
+    expect(working).toHaveAttribute('aria-pressed', 'true');
     expect(allStatuses).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(late);
+    fireEvent.click(working);
     expect(allStatuses).toHaveAttribute('aria-pressed', 'true');
     // Assisted and Backdated switch on and off on their own.
     fireEvent.click(assistedPill);
@@ -2540,8 +2548,8 @@ describe('Admin Attendance Corrections', () => {
     fireEvent.click(assistedPill);
     expect(assistedPill).toHaveAttribute('aria-pressed', 'false');
 
-    // Click "+ Add missed attendance"
-    const addMissedButton = screen.getByRole('button', { name: /\+ add missed attendance/i });
+    // Add missed attendance (an outline button in the table bar)
+    const addMissedButton = screen.getByRole('button', { name: /^add missed attendance$/i });
     await user.click(addMissedButton);
 
     // Modal opens
@@ -2662,7 +2670,7 @@ describe('Admin Attendance Corrections', () => {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
       // Click Add missed attendance
-      await user.click(screen.getByRole('button', { name: /\+ add missed attendance/i }));
+      await user.click(screen.getByRole('button', { name: /^add missed attendance$/i }));
 
       const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
       expect(dialog).toBeInTheDocument();
@@ -2977,7 +2985,7 @@ describe('Admin Attendance Corrections', () => {
     expect(capturedAdminUnlockBody).toEqual({ pin: 'ADDE23' });
     expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveAttribute('aria-current', 'page');
-    expect(await screen.findByText(/^Total records: /)).toBeInTheDocument();
+    expect(await screen.findByText(/^\d+ records?$/)).toBeInTheDocument();
   });
 
   it('switches between Attendance and Bathroom Key Log mode via header buttons and 1/2 keybindings', async () => {
@@ -3452,7 +3460,7 @@ describe('Live attendance revamp', () => {
       render(<App />);
       expect(screen.queryByRole('list', { name: 'Today at a glance' })).not.toBeInTheDocument();
       const counts = await screen.findByRole('list', { name: 'Today at a glance' });
-      expect(within(counts).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['0 in office', '2 timed out', '2 timed in', '1 need correction']);
+      expect(within(counts).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['0 in office', '2 timed out', '2 timed in', '1 late time-out']);
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -4238,7 +4246,7 @@ describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
       const user = userEvent.setup();
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
-      const opener = screen.getByRole('button', { name: /\+ add missed attendance/i });
+      const opener = screen.getByRole('button', { name: /^add missed attendance$/i });
       await user.click(opener);
 
       const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
@@ -4299,7 +4307,7 @@ describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
       const user = userEvent.setup();
       render(<App />);
       // The failure does not block Attendance corrections, where the admin page opens.
-      expect(await screen.findByText('Total records: 1')).toBeInTheDocument();
+      expect(await screen.findByText('1 record')).toBeInTheDocument();
       const attendanceLoads = calls.attendance;
 
       await user.click(screen.getByRole('button', { name: /users and rfid/i }));
@@ -4407,18 +4415,18 @@ describe('Admin results and date changes', () => {
       const user = userEvent.setup();
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
-      expect(await screen.findByText('Total records: 1')).toBeInTheDocument();
+      expect(await screen.findByText('1 record')).toBeInTheDocument();
       await user.click(screen.getByRole('checkbox', { name: /select attendance for juan dela cruz/i }));
-      expect(screen.getByText('1 of 1 attendance record(s) selected')).toBeInTheDocument();
+      expect(screen.getByText('1 selected')).toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText('Filter attendance date'), { target: { value: '2026-07-01' } });
 
       expect(await screen.findByText("Couldn't load attendance for this date.")).toBeInTheDocument();
-      expect(screen.getByText('Total records: 0')).toBeInTheDocument();
-      expect(screen.queryByText('1 of 1 attendance record(s) selected')).not.toBeInTheDocument();
+      expect(screen.getByText('0 records')).toBeInTheDocument();
+      expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Selected attendance records' })).not.toBeInTheDocument();
       expect(screen.queryByRole('checkbox', { name: /select attendance for juan dela cruz/i })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /export csv/i })).toBeDisabled();
-      expect(screen.getByRole('button', { name: /^select all$/i })).toBeDisabled();
       expect(screen.getByRole('checkbox', { name: /select all attendance records/i })).toBeDisabled();
     } finally {
       window.history.pushState({}, '', '/');
@@ -4512,6 +4520,26 @@ describe('Attendance corrections: rows open on Edit', () => {
     const row = element.closest('tr');
     if (!row) throw new Error('not in a table row');
     return row;
+  }
+  /** The day with Jose's time-out after office hours, so his record is a late time-out. */
+  const withLateJose = (date: string, juanIn?: string): MockRow[] =>
+    day(date, juanIn).map((row) => (row.fullName === 'Jose Rizal' ? { ...row, timeOut: `${date}T18:40:00+08:00`, status: 'LATE_TIMEOUT' } : row));
+  /** Records every attendance delete the page sends (by record); `fail` answers the chosen ones with an error. */
+  function trackDeletes(fail: (attendanceId: string) => boolean = () => false): string[] {
+    const deleted: string[] = [];
+    const base = vi.mocked(globalThis.fetch).getMockImplementation();
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      if (init?.method === 'DELETE') {
+        const attendanceId = decodeURIComponent(/\/api\/admin\/attendance\/([^?]+)/.exec(String(input))?.[1] ?? '');
+        deleted.push(attendanceId);
+        const body = fail(attendanceId) ? { success: false, error: { message: 'Could not delete.' } } : { success: true };
+        // SAFETY: Mock delete response
+        return { ok: true, json: async () => body } as Response;
+      }
+      if (!base) throw new Error('fetch is not mocked');
+      return base(input, init);
+    });
+    return deleted;
   }
 
   it('shows each row read-only with plain times until Edit, and Cancel closes it again', async () => {
@@ -4640,7 +4668,7 @@ describe('Attendance corrections: rows open on Edit', () => {
 
       // The day sits once beside the count; no Date column and no 2026-07-28 anywhere in the table.
       expect(screen.getAllByText('Tue, Jul 28, 2026')).toHaveLength(1);
-      expect(screen.getByText('Total records: 3')).toBeInTheDocument();
+      expect(screen.getByText('3 records')).toBeInTheDocument();
       expect(screen.queryByRole('columnheader', { name: 'Date' })).not.toBeInTheDocument();
       expect(screen.queryByText('2026-07-28')).not.toBeInTheDocument();
 
@@ -4658,12 +4686,239 @@ describe('Attendance corrections: rows open on Edit', () => {
       window.history.pushState({}, '', '/');
     }
   });
+  it('orders the status filters with Late time-out after All, counts each record once and keeps Late as a separate toggle (filters)', async () => {
+    // Juan on time; Maria (working) and Jose (late time-out) arrived late.
+    mockAdmin(undefined, '07:55:00');
+    stored.set('2026-07-28', withLateJose('2026-07-28', '07:55:00'));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+
+      const statuses = screen.getByRole('group', { name: 'Filter by status' });
+      const buttons = within(statuses).getAllByRole('button');
+      expect(buttons.map((button) => button.textContent)).toEqual(['All 3', 'Late time-out 1', 'Working 1', 'Completed 1', 'Missed 0']);
+      // A record is counted once: the statuses add up to All.
+      const counted = buttons.slice(1).map((button) => Number(button.querySelector('.filter-count')?.textContent));
+      expect(counted.reduce((sum, count) => sum + count, 0)).toBe(3);
+      // The late time-out count is coral while there are any; an empty status is dimmed.
+      expect(buttons[1].querySelector('.filter-count')).toHaveClass('is-alert');
+      expect(buttons[3].querySelector('.filter-count')).not.toHaveClass('is-alert');
+      expect(buttons[4]).toHaveClass('is-empty');
+
+      // Late is an arrival toggle beside Assisted and Backdated; the ones with nothing to show are dimmed.
+      const showOnly = screen.getByRole('group', { name: 'Show only' });
+      expect(within(showOnly).getAllByRole('button').map((button) => button.textContent)).toEqual(['Late 2', 'Assisted 0', 'Backdated 0']);
+      const late = within(showOnly).getByRole('button', { name: 'Late 2' });
+      expect(late).not.toHaveClass('is-empty');
+      expect(within(showOnly).getByRole('button', { name: 'Assisted 0' })).toHaveClass('is-empty');
+      expect(within(showOnly).getByRole('button', { name: 'Backdated 0' })).toHaveClass('is-empty');
+
+      // Late combines with a status. The statuses count what the other filters let through, so All matches the rows
+      // shown and a status Late leaves empty is dimmed.
+      await user.click(late);
+      expect(late).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('2 of 3 records')).toBeInTheDocument();
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+      expect(within(statuses).getAllByRole('button').map((button) => button.textContent)).toEqual(['All 2', 'Late time-out 1', 'Working 1', 'Completed 0', 'Missed 0']);
+      expect(within(statuses).getByRole('button', { name: 'Completed 0' })).toHaveClass('is-empty');
+      await user.click(within(statuses).getByRole('button', { name: 'Working 1' }));
+      expect(late).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('1 of 3 records')).toBeInTheDocument();
+      expect(screen.getByText('Maria Clara')).toBeInTheDocument();
+      expect(screen.queryByText('Jose Rizal')).not.toBeInTheDocument();
+      // The toggles count with the chosen status: one working record arrived late.
+      expect(within(showOnly).getAllByRole('button').map((button) => button.textContent)).toEqual(['Late 1', 'Assisted 0', 'Backdated 0']);
+      // Turning Late off keeps the status, and the statuses count the whole day again.
+      await user.click(late);
+      expect(late).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByText('1 of 3 records')).toBeInTheDocument();
+      expect(within(statuses).getAllByRole('button').map((button) => button.textContent)).toEqual(['All 3', 'Late time-out 1', 'Working 1', 'Completed 1', 'Missed 0']);
+      // A search narrows the counts too.
+      await user.type(screen.getByPlaceholderText('Name or ID'), 'Juan');
+      expect(within(statuses).getAllByRole('button').map((button) => button.textContent)).toEqual(['All 1', 'Late time-out 0', 'Working 0', 'Completed 1', 'Missed 0']);
+      expect(within(showOnly).getByRole('button', { name: 'Late 0' })).toHaveClass('is-empty');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('puts one short late time-out line under a late time-out row, in its own note line', async () => {
+    mockAdmin();
+    stored.set('2026-07-28', withLateJose('2026-07-28'));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+
+      const jose = rowOf(screen.getByText('Jose Rizal'));
+      expect(within(jose).getByText('Late time-out')).toHaveClass('status-word', 'is-late_timeout');
+      // Plain words for the other statuses, as a dot and a word.
+      expect(within(rowOf(screen.getByText('Maria Clara'))).getByText('Working')).toHaveClass('status-word', 'is-working');
+      const note = jose.nextElementSibling;
+      expect(note).toHaveClass('attendance-row-note');
+      expect(note).toHaveTextContent('Timed out after office hours. Click Edit and enter the real time-out.');
+      // No long paragraph above the row any more, and no note under the other rows.
+      expect(screen.queryByText(/manual correction required/i)).not.toBeInTheDocument();
+      expect(jose.previousElementSibling).not.toHaveTextContent(/office hours/);
+      expect(rowOf(screen.getByText('Maria Clara')).nextElementSibling).not.toHaveClass('attendance-row-note');
+
+      // While the row is open the line says what to do there.
+      await user.click(within(jose).getByRole('button', { name: 'Edit times for Jose Rizal' }));
+      expect(jose.nextElementSibling).toHaveTextContent('Timed out after office hours. Enter the real time-out and click Save.');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('swaps the table bar for a selection bar while rows are ticked (selection bar)', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+      const header = screen.getByRole('checkbox', { name: 'Select all attendance records' });
+
+      // One count, the header tick box only (no Select all button), no selection bar yet.
+      expect(screen.getByText('3 records')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^select all/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Selected attendance records' })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Maria Clara' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' }));
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+      expect(header).toBePartiallyChecked();
+      // The list bar is hidden meanwhile (both stay in the same place), so its buttons can't be reached.
+      expect(screen.queryByRole('button', { name: /^add missed attendance$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /export csv/i })).not.toBeInTheDocument();
+      expect(within(bar).getByRole('button', { name: 'Export selected' })).toBeEnabled();
+
+      // Delete selected asks first; cancelling keeps the selection.
+      await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
+      expect(screen.getByRole('dialog', { name: 'Delete selected attendance records?' })).toHaveTextContent('2 selected attendance record(s)');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+
+      // Clear empties it: the list bar comes back and the focus lands on the header tick box.
+      await user.click(within(bar).getByRole('button', { name: 'Clear' }));
+      expect(screen.queryByRole('group', { name: 'Selected attendance records' })).not.toBeInTheDocument();
+      expect(header).not.toBeChecked();
+      expect(header).toHaveFocus();
+      expect(screen.getByRole('button', { name: /^add missed attendance$/i })).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('acts only on ticked rows still shown after Late and Assisted narrow the list (selection bar)', async () => {
+    // Juan on time; Maria late and assisted; Jose late.
+    mockAdmin(undefined, '07:55:00');
+    stored.set('2026-07-28', withLateJose('2026-07-28', '07:55:00').map((row) => (row.fullName === 'Maria Clara' ? { ...row, source: 'ADMIN_ASSISTED_SCAN' } : row)));
+    const deleted = trackDeletes();
+    const exported: Blob[] = [];
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: (blob: Blob) => {
+        exported.push(blob);
+        return 'blob:attendance-export';
+      },
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+      for (const name of ['Juan Dela Cruz', 'Maria Clara', 'Jose Rizal']) {
+        await user.click(screen.getByRole('checkbox', { name: `Select attendance for ${name}` }));
+      }
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      expect(within(bar).getByText('3 selected')).toBeInTheDocument();
+
+      // Late hides on-time Juan, then Assisted hides Jose: only Maria stays ticked.
+      const showOnly = screen.getByRole('group', { name: 'Show only' });
+      await user.click(within(showOnly).getByRole('button', { name: 'Late 2' }));
+      expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+      await user.click(within(showOnly).getByRole('button', { name: 'Assisted 1' }));
+      expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+
+      // Export selected writes exactly that one record.
+      await user.click(within(bar).getByRole('button', { name: 'Export selected' }));
+      await waitFor(() => expect(exported).toHaveLength(1));
+      const csv = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(exported[0]);
+      });
+      const dataLines = csv.split('\r\n').filter(Boolean).slice(1);
+      expect(dataLines).toHaveLength(1);
+      expect(dataLines[0]).toContain('Maria Clara');
+
+      // Delete selected deletes exactly that one record.
+      await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
+      expect(screen.getByRole('dialog', { name: 'Delete selected attendance records?' })).toHaveTextContent('1 selected attendance record(s)');
+      await user.click(screen.getByRole('button', { name: 'Delete records' }));
+      await waitFor(() => expect(deleted).toEqual(['2026-07-28-maria']));
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps the focus on the selection bar when some selected records could not be deleted (selection bar)', async () => {
+    mockAdmin();
+    const deleted = trackDeletes((attendanceId) => attendanceId === '2026-07-28-jose');
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Maria Clara' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' }));
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
+      await user.click(screen.getByRole('button', { name: 'Delete records' }));
+
+      // Jose's record failed: it stays ticked, the bar stays, and the focus is back on Delete selected, not the page.
+      await waitFor(() => expect(within(bar).getByText('1 selected')).toBeInTheDocument());
+      expect(deleted).toEqual(expect.arrayContaining(['2026-07-28-maria', '2026-07-28-jose']));
+      expect(deleted).toHaveLength(2);
+      expect(within(bar).getByRole('button', { name: 'Delete selected' })).toHaveFocus();
+      expect(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' })).toBeChecked();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   /** Opens Juan's row and types a new time-out into it. */
   async function editJuan(user: ReturnType<typeof userEvent.setup>, juan: HTMLElement, timeOut = '17:30') {
     await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
     fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: timeOut } });
   }
   const discardQuestion = () => screen.queryByRole('dialog', { name: 'Discard unsaved changes?' });
+
+  it('keeps the note about unsaved rows hidden by filters, and its Show, while rows are ticked (selection bar)', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      // Working hides Juan's unsaved row; then a row is ticked and the selection bar takes over.
+      await user.click(screen.getByRole('button', { name: 'Working 1' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Maria Clara' }));
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+      expect(within(bar).getByText(/1 unsaved row hidden by filters/)).toBeInTheDocument();
+
+      await user.click(within(bar).getByRole('button', { name: 'Show' }));
+      expect(screen.getByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(screen.queryByText(/unsaved row hidden by filters/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
 
   it('asks before a tab, Bathroom mode (button or the 2 key) or Lock throws away unsaved times', { timeout: 20000 }, async () => {
     mockAdmin();
@@ -4730,7 +4985,7 @@ describe('Attendance corrections: rows open on Edit', () => {
       expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
 
       // A missed attendance added for yesterday would show that day: it asks first.
-      await user.click(screen.getByRole('button', { name: /\+ add missed attendance/i }));
+      await user.click(screen.getByRole('button', { name: /^add missed attendance$/i }));
       const add = await screen.findByRole('dialog', { name: /add missed attendance/i });
       await user.type(within(add).getByLabelText(/reason \(mandatory audit trail\):/i), 'Forgot card');
       await user.click(within(add).getByRole('button', { name: /add missed attendance/i }));
@@ -4810,7 +5065,7 @@ describe('Attendance corrections: rows open on Edit', () => {
       await editJuan(user, juan, '18:30');
       await user.click(within(juan).getByRole('button', { name: 'Save' }));
 
-      const note = await screen.findByText('Saved — time-out is still after office hours, correction remains required.');
+      const note = await screen.findByText('Saved. Still a late time-out: enter the real time-out.');
       await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
       expect(within(juan).getByText('6:30 PM')).toBeInTheDocument();
       expect(note.closest('tr')).toHaveClass('attendance-row-note');
@@ -4893,7 +5148,8 @@ describe('Attendance corrections: rows open on Edit', () => {
       await editJuan(user, juan);
       await user.type(screen.getByPlaceholderText('Name or ID'), 'Maria');
       expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
-      expect(screen.getByText(/^1 unsaved row hidden by filters/)).toBeInTheDocument();
+      // The note sits in both bar layers (so ticking rows never hides it); the shown one has the reachable Show.
+      expect(screen.getByRole('button', { name: 'Show' }).parentElement).toHaveTextContent(/^1 unsaved row hidden by filters/);
 
       await user.click(screen.getByRole('button', { name: 'Show' }));
       expect(screen.getByPlaceholderText('Name or ID')).toHaveValue('');
@@ -4976,8 +5232,10 @@ describe('Sort by time in: Attendance corrections and Live attendance', () => {
       await user.type(screen.getByPlaceholderText('Name or ID'), 'c');
       expect(shownNames()).toEqual(['Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
 
-      // Phones get the same choice as a small toggle beside the count (hidden on wide screens).
-      const toggle = screen.getByText('Oldest first');
+      // Phones get the same choice as a small toggle beside the count (hidden on wide screens). It sits in both bar
+      // layers; this is the one in the bar that is showing.
+      const toggle = screen.getAllByText('Oldest first').find((element) => !element.closest('[aria-hidden="true"]'));
+      if (!toggle) throw new Error('no sort toggle in the shown bar');
       expect(toggle).toHaveClass('time-order-toggle');
       fireEvent.click(toggle);
       expect(heading).toHaveAttribute('aria-sort', 'descending');

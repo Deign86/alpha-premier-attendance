@@ -1772,3 +1772,40 @@ unchanged.
   EXPECT: all pass, including out-of-date PDF (older than finalizedAt, headcount mismatch), loading/failed Next line, 45 days refused, payslip folder reset, focus after Finalize all.
   EVIDENCE: 56/56 passed. Headless layout checks: Net Pay fully visible beside the actions at window widths 901, 1024, 1093, 1300, 1349, 1366, 1440, 1600 (drafts, drafts with All cutoffs, done with All cutoffs); steps text never under a hairline from 601 to 900px.
 - [x] Test stability: client/vite.config.ts sets testTimeout 15000, because full admin flows passed 5 s on the busy front-desk PC (one test took 6.6 s on its own); full suite 26 files / 547 tests passed with 2 workers.
+
+## UI revamp fix round: Attendance corrections and admin polish (client only; audit C1-C5, E1 + Live status words)
+
+- [x] C1: rows are calm: status as a dot and a word ("Working", "Completed", "Missed", "Late time-out"; no capsule pills), "Late 38m" plain gold text, "On time" muted, Delete grey that turns coral only on hover/focus (still confirms); the clamp chip keeps its title and test id.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Attendance corrections"
+  EXPECT: row tests pass with the new words; no "LATE TIMEOUT" or uppercase status text in the attendance tables.
+  EVIDENCE: passes; `grep "LATE TIMEOUT" client/src/App.tsx` finds nothing; shots corrections-normal-*.
+- [x] C2: one name, "Late time-out", for the status word, the filter and the row note; Live's chip reads "N late time-out". Status filters in order All, Late time-out (coral count above 0), Working, Completed, Missed, adding up to All; "Late" is a toggle beside Assisted and Backdated; all three dim at 0.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "filters"
+  EXPECT: a test reads the status buttons in that order with counts that add up to All, and the Late toggle combines with a status.
+  EVIDENCE: new test reads ["All 3", "Late time-out 1", "Working 1", "Completed 1", "Missed 0"] (1+1+1+0 = 3) and ["Late 2", "Assisted 0", "Backdated 0"]; Late + Working shows "1 of 3 records". Live test reads "1 late time-out".
+- [x] C3: the filter row is 34px (date, Today, Name or ID, Department); "Add missed attendance" (outline) and "Export CSV" sit at the right of the table bar; Today has white text when enabled.
+  EVIDENCE: measured at 1366: the four filter controls 34/34/34/34px, the bar buttons 34px; Today enabled rgb(246, 242, 233) (--ink), disabled dimmed. Shots corrections-normal-*.
+- [x] C4: table bar "Fri, Oct 30, 2026 · 35 records", "See all" without a number, header checkbox only, and while rows are ticked "3 selected · Clear | Export selected · Delete selected" in the same grid cell (nothing moves).
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "selection bar"
+  EXPECT: the bar swaps in and out, Clear empties it and returns focus to the header checkbox, Delete selected confirms.
+  EVIDENCE: passes; both layers 34px at 1366 (phone 390: 90px and 76px in one cell, so the rows stay put). Shots corrections-ticked-*.
+- [x] C5: a late time-out row has one short coral line in its own note line under it: "Timed out after office hours. Click Edit and enter the real time-out." (no box, no paragraph above the row).
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "late time-out line"
+  EXPECT: the line sits in the note line right after the row; the old "manual correction required" paragraph is gone.
+  EVIDENCE: passes; shots corrections-late-* (Late time-out filter on).
+- [x] E1: the Attendance / Bathroom Key Log switch is quiet: the active option has gold text and a thin gold outline thumb that still slides; the 1/2 badges stay; only the section tab is filled gold.
+  EVIDENCE: computed thumb: no background image, transparent background, 1px rgba(225, 196, 119, .6) border, no shadow; active text rgb(225, 196, 119). Shots admin-header-1366x300 and admin-header-390x540.
+- [x] Batch 7 behaviour unchanged: Edit/Save/Cancel, per-record drafts, leave and date guards, time sort, save payload and record-changed note.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "rows open on Edit"
+  EXPECT: all pass.
+  EVIDENCE: 15 passed (12 before + 3 new).
+- [x] No sideways page scroll; screenshots (made-up data, temporary harness deleted) in the scratchpad folder shots-fixcorr.
+  EVIDENCE: page scroll width never above the window at 320, 768, 1024, 1366 and 1920 in all four states (normal, one row open, late time-out, rows ticked); 16 screenshots saved.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 550 tests passed.
+- [x] Review fixes (A–G): the unsaved-rows-hidden note, the phone sort toggle and See all sit in both bar layers, so ticking rows never hides them; status counts leave out the status filter and each toggle leaves out its own filter, so All matches "N of M" and dimming follows the other filters; Export/Delete selected act only on ticked rows still shown; a partly failed Delete selected puts the focus back on the bar; the late time-out line says "Enter the real time-out and click Save." while the row is open and a still-late save says "Saved. Still a late time-out: enter the real time-out."; a ticked row's note line shares its tint and gold edge; Live's chip pluralises ("2 late time-outs").
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass, including new tests for the note while ticked, Late + Assisted narrowing the selection (one CSV row, one delete), the partial delete focus, counts with Late on and a search, and the plural chip.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 553 tests passed. Live check at 1366: Late on → "All 13" with 2 + 4 + 7 + 0 = 13 and "13 of 35 records"; a ticked late time-out row's note cell has the row's rgba(198, 162, 84, .08) tint and 3px gold edge.
