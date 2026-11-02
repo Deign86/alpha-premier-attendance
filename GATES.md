@@ -1891,3 +1891,39 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 566 tests passed.
+
+## UI revamp batch 12: Payroll back to the two original panels, coral Total Deductions (client only; owner request 2026-11-02)
+
+- [x] The top of Payroll is the original two panels again (same words as commit 84b6e31), in today's style:
+  - **"Generate cutoff payroll":** cutoff month, the 1st–15th / 16th–last day pair, Cutoff start, Cutoff end and Standard days are always visible, with the gold "Generate from attendance" button on the heading row.
+  - **"Export payroll":** "Generate Intern Payroll PDF" and "Generate Intern Payslips".
+  - **Removed:** the 3 steps, the Next line, Change dates and their CSS. The pre-fill and every validation are kept.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: all pass, including both panels with the old labels, no steps/Next line/Change dates, and one gold button in every state.
+  EVIDENCE:
+  - 1366: Generate 919×185 and Export 312×185, top offset 0, height difference 0; controls on one row.
+  - 1024: 636×261 and 280×261, aligned.
+  - ≤900: stacked.
+  - scrollWidth never above the viewport from 320 to 1366.
+- [x] Every old action is still reachable:
+  - Generate again is the gold button (with its confirm);
+  - Finalize all is on the table bar ("Finalize all (N)"; "Finalize all for <cutoff> (N)" under All cutoffs);
+  - Delete all records is a coral text button on the record-count line, with its confirm;
+  - Open PDF / Show in folder / Open payslip folder are quiet links under the export status.
+- [x] Exports stay blocked until every draft is finalized, with "Finalize all drafts first." or "Generate payroll first.". The status line reads "PDF made <date time>", or "Payroll changed since the last PDF. Generate it again.".
+  CHECK: cd client && npx vitest run src/payroll.test.tsx -t "export"
+  EXPECT: the reason and status cases pass.
+- [x] Total Deductions above zero are coral (`money-deduction`, var(--danger)), and zero is muted (`money-zero`). This applies to the table cells, both Edit payroll summaries, the Breakdown row and both formula totals. No inline styles; net pay stays gold.
+  EVIDENCE: computed colour rgb(239, 170, 146) for amounts above zero and rgb(170, 167, 158) for zero. Shot after-table-deductions-crop.
+- [x] Review fixes:
+  - focus goes to "Generate from attendance" when Delete all records or a row Delete leaves the cutoff empty;
+  - the pressed half of the cutoff pair has a dark focus ring;
+  - the date fields get aria-invalid and aria-describedby, and both reason lines are role=status;
+  - Finalize all is labelled with its cutoff under All cutoffs;
+  - a vacuous test check was replaced.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: 61 tests pass.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 571 tests passed (payroll.test.tsx 61).

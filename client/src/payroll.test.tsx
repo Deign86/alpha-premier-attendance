@@ -76,26 +76,24 @@ function renderWorkspace(records: PayrollCutoffRecord[]) {
   );
 }
 
-/** Opens start, end and standard days, which stay folded under "Change dates" until asked for. */
-function openDates() {
-  fireEvent.click(screen.getByRole("button", { name: "Change dates" }));
+/** The left panel: the cutoff fields and the page's gold Generate button. */
+function generatePanel(): HTMLElement {
+  return screen.getByRole("form", { name: "Generate cutoff payroll" });
 }
 
-/** The steps as "label · status words:state": done steps read "(done)", the current one has aria-current="step". */
-function stepStates(): string[] {
-  return within(screen.getByRole("list", { name: "Payroll steps" }))
-    .getAllByRole("listitem")
-    .map((step) => {
-      const label = step.querySelector(".payroll-step-label")?.textContent;
-      const detail = step.querySelector(".payroll-step-detail")?.textContent;
-      const state = step.getAttribute("aria-current") === "step" ? "current" : step.textContent?.includes("(done)") ? "done" : "upcoming";
-      return `${label} · ${detail}:${state}`;
-    });
+/** The right panel: the two exports and the line under them. */
+function exportPanel(): HTMLElement {
+  return screen.getByRole("region", { name: "Export payroll" });
 }
 
-/** The Next line's sentence. */
-function nextLine(): string {
-  return document.querySelector(".payroll-next-text")?.textContent ?? "";
+/** The line under the export buttons: why they are off, or where the cutoff's PDF stands ("" when there is none). */
+function exportLine(): string {
+  return exportPanel().querySelector("p")?.textContent ?? "";
+}
+
+/** The two export buttons: the payroll PDF, then the payslips. */
+function exportButtons(): HTMLElement[] {
+  return within(exportPanel()).getAllByRole("button").slice(0, 2);
 }
 
 /** Opens the folded "Past payroll PDFs" history and returns its region. */
@@ -148,7 +146,6 @@ describe("PayrollWorkspace", () => {
     const opensOn = (now: string, start: string, end: string, month: string, preset: RegExp) => {
       vi.setSystemTime(new Date(now));
       const { unmount } = renderWorkspace([]);
-      openDates();
       expect(screen.getByLabelText("Cutoff start")).toHaveValue(start);
       expect(screen.getByLabelText("Cutoff end")).toHaveValue(end);
       expect(screen.getByLabelText("Cutoff month")).toHaveValue(month);
@@ -174,7 +171,6 @@ describe("PayrollWorkspace", () => {
     renderWorkspace([]);
     const generate = screen.getByRole("button", { name: "Generate from attendance" });
 
-    openDates();
     fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "" } });
     expect(generate).toBeDisabled();
     expect(generate).toHaveAccessibleDescription("Pick a cutoff start and end date.");
@@ -184,107 +180,179 @@ describe("PayrollWorkspace", () => {
     fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "2026-07-31" } });
     expect(generate).toBeDisabled();
     expect(generate).toHaveAccessibleDescription("End date must be on or after the start date.");
+    // The three fields are marked and say what is wrong, in the coral line that is read out.
+    for (const field of ["Cutoff start", "Cutoff end", "Standard days"]) {
+      expect(screen.getByLabelText(field)).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByLabelText(field)).toHaveAccessibleDescription("End date must be on or after the start date.");
+    }
+    const reason = screen.getAllByRole("status").find((line) => line.id === "payroll-generate-reason");
+    expect(reason).toHaveTextContent("End date must be on or after the start date.");
+    expect(reason).toHaveClass("is-problem");
 
     // A one-day cutoff is allowed.
     fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "2026-08-01" } });
     expect(generate).toBeEnabled();
     expect(generate).not.toHaveAccessibleDescription();
     expect(screen.queryByText("End date must be on or after the start date.")).not.toBeInTheDocument();
+    for (const field of ["Cutoff start", "Cutoff end", "Standard days"]) {
+      expect(screen.getByLabelText(field)).toHaveAttribute("aria-invalid", "false");
+      expect(screen.getByLabelText(field)).not.toHaveAccessibleDescription();
+    }
   });
 
   it("moves the chosen half-month with the cutoff month", () => {
     renderWorkspace([]);
-    openDates();
     fireEvent.change(screen.getByLabelText("Cutoff month"), { target: { value: "2026-09" } });
     expect(screen.getByLabelText("Cutoff start")).toHaveValue("2026-09-01");
     expect(screen.getByLabelText("Cutoff end")).toHaveValue("2026-09-15");
     expect(screen.getByRole("button", { name: /1st.*15th/i })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("shows three steps that say their status in words, the current one marked", async () => {
+  it("shows the two panels with their old labels, every cutoff field in view", () => {
+    renderWorkspace([]);
+    const generate = generatePanel();
+    expect(within(generate).getByRole("heading", { name: "Generate cutoff payroll" })).toBeInTheDocument();
+    expect(within(generate).getByRole("button", { name: "Generate from attendance" })).toHaveClass("submit-button");
+    for (const field of ["Cutoff month", "Cutoff start", "Cutoff end", "Standard days"]) {
+      expect(within(generate).getByLabelText(field)).toBeVisible();
+    }
+    expect(within(generate).getByRole("button", { name: /1st.*15th/i })).toBeInTheDocument();
+    expect(within(generate).getByRole("button", { name: /16th.*last day/i })).toBeInTheDocument();
+    const exports = exportPanel();
+    expect(within(exports).getByRole("heading", { name: "Export payroll" })).toBeInTheDocument();
+    expect(within(exports).getAllByRole("button").map((button) => button.textContent)).toEqual(["Generate Intern Payroll PDF", "Generate Intern Payslips"]);
+    // No steps, no Next line and no dates fold any more.
+    expect(screen.queryByRole("list", { name: "Payroll steps" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Next:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change dates" })).not.toBeInTheDocument();
+  });
+
+  it("says under the exports why they are off, or where the cutoff's PDF stands", async () => {
     const draft = (id: string) => internRecord({ payrollId: id, status: "DRAFT" });
     const final = (id: string) => internRecord({ payrollId: id, status: "FINALIZED" });
     const julyDraft = internRecord({ payrollId: "JUL", status: "DRAFT", cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31" });
-    const cases: [PayrollCutoffRecord[], PayrollPdfRecord[], string[]][] = [
-      // Nothing made yet: Make payroll is the current step.
-      [[], [], ["Make payroll · Not made yet:current", "Check and finalize · Waiting:upcoming", "Export · Waiting:upcoming"]],
-      // Drafts left (even with some finalized): Check and finalize, counting the finalized ones.
-      [[draft("A"), draft("B")], [], ["Make payroll · Made · 2 interns:done", "Check and finalize · 0 of 2 finalized:current", "Export · Waiting:upcoming"]],
-      [[final("A"), draft("B")], [], ["Make payroll · Made · 2 interns:done", "Check and finalize · 1 of 2 finalized:current", "Export · Waiting:upcoming"]],
-      // A PDF made while drafts remain doesn't tick Export: the steps after the current one wait.
-      [[final("A"), draft("B")], [pdfRecord()], ["Make payroll · Made · 2 interns:done", "Check and finalize · 1 of 2 finalized:current", "Export · Waiting:upcoming"]],
-      // All finalized: Export is ready. A draft of another cutoff doesn't count.
-      [[final("A"), final("B"), julyDraft], [], ["Make payroll · Made · 2 interns:done", "Check and finalize · All 2 finalized:done", "Export · Ready:current"]],
-      [[final("A")], [], ["Make payroll · Made · 1 intern:done", "Check and finalize · 1 of 1 finalized:done", "Export · Ready:current"]],
-      // A PDF of this finalized pay: every step done, none current.
-      [[final("A"), final("B")], [pdfRecord({ employeeCount: 2 })], ["Make payroll · Made · 2 interns:done", "Check and finalize · All 2 finalized:done", "Export · PDF made Aug 14, 2026, 10:30 AM:done"]],
+    const made = "PDF made Aug 14, 2026, 10:30 AM";
+    const changed = "Payroll changed since the last PDF. Generate it again.";
+    // [records, PDFs, the line under the exports, whether the exports are on]
+    const cases: [PayrollCutoffRecord[], PayrollPdfRecord[], string, boolean][] = [
+      // No payroll yet.
+      [[], [], "Generate payroll first.", false],
+      // Drafts left, even with some finalized and a PDF made from them.
+      [[draft("A"), draft("B")], [], "Finalize all drafts first.", false],
+      [[final("A"), draft("B")], [pdfRecord()], "Finalize all drafts first.", false],
+      // All finalized, no PDF yet: both on, no line. A draft of another cutoff doesn't count.
+      [[final("A"), final("B"), julyDraft], [], "", true],
+      // A PDF of this finalized pay.
+      [[final("A"), final("B")], [pdfRecord({ employeeCount: 2 })], made, true],
       // A PDF made before the last finalize (finalizedAt is UTC, generatedAt Manila: 10:30 Manila is 02:30 UTC), or for
-      // another headcount, is out of date: Export is ready again.
-      [
-        [final("A"), internRecord({ payrollId: "B", finalizedAt: "2026-08-14T03:00:00Z" })],
-        [pdfRecord({ employeeCount: 2 })],
-        ["Make payroll · Made · 2 interns:done", "Check and finalize · All 2 finalized:done", "Export · Ready · PDF out of date:current"],
-      ],
-      [[final("A"), final("B")], [pdfRecord({ employeeCount: 1 })], ["Make payroll · Made · 2 interns:done", "Check and finalize · All 2 finalized:done", "Export · Ready · PDF out of date:current"]],
+      // another headcount, is out of date.
+      [[final("A"), internRecord({ payrollId: "B", finalizedAt: "2026-08-14T03:00:00Z" })], [pdfRecord({ employeeCount: 2 })], changed, true],
+      [[final("A"), final("B")], [pdfRecord({ employeeCount: 1 })], changed, true],
       // Finalized before the PDF was made (02:00 UTC is 10:00 Manila): still current.
-      [[internRecord({ payrollId: "A", finalizedAt: "2026-08-14T02:00:00Z" })], [pdfRecord()], ["Make payroll · Made · 1 intern:done", "Check and finalize · 1 of 1 finalized:done", "Export · PDF made Aug 14, 2026, 10:30 AM:done"]],
+      [[internRecord({ payrollId: "A", finalizedAt: "2026-08-14T02:00:00Z" })], [pdfRecord()], made, true],
     ];
-    for (const [records, pdfs, expected] of cases) {
+    for (const [records, pdfs, line, on] of cases) {
       loadPayrollPdfsSpy.mockResolvedValue({ success: true, payrollPdfs: pdfs });
       const { unmount } = renderWorkspace(records);
       // The PDF list has loaded once the history heading counts it.
       await screen.findByRole("button", { name: `Past payroll PDFs ${pdfs.length}` });
-      await waitFor(() => expect(stepStates()).toEqual(expected));
+      await waitFor(() => expect(exportLine()).toBe(line));
+      for (const button of exportButtons()) {
+        if (on) {
+          expect(button).toBeEnabled();
+          expect(button).not.toHaveAccessibleDescription();
+        } else {
+          expect(button).toBeDisabled();
+          expect(button).toHaveAccessibleDescription(line);
+        }
+      }
       unmount();
     }
   });
 
-  it("says what the steps wait for while payroll loads or after it failed", () => {
+  it("says why Generate and the exports wait while payroll loads or after it failed", () => {
     const { rerender } = render(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="loading" onRetry={vi.fn()} />);
-    expect(stepStates()[0]).toBe("Make payroll · Loading…:current");
+    const buttons = () => [screen.getByRole("button", { name: "Generate from attendance" }), ...exportButtons()];
+    for (const button of buttons()) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription("Loading payroll…");
+    }
+    // Muted, not coral: nothing is wrong with the dates, so the fields aren't marked either. Both lines are read out.
+    expect(document.getElementById("payroll-generate-reason")).not.toHaveClass("is-problem");
+    expect(document.getElementById("payroll-generate-reason")).toHaveAttribute("role", "status");
+    expect(document.getElementById("payroll-export-reason")).toHaveAttribute("role", "status");
+    expect(screen.getByLabelText("Cutoff start")).toHaveAttribute("aria-invalid", "false");
     rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="failed" onRetry={vi.fn()} />);
-    expect(stepStates()[0]).toBe("Make payroll · Didn't load:current");
+    for (const button of buttons()) expect(button).toHaveAccessibleDescription("Payroll didn't load. Select Retry below.");
+    expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
+    // Loaded (empty): Generate is ready and the exports wait for payroll.
+    rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="ready" onRetry={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).not.toHaveAccessibleDescription();
+    expect(exportLine()).toBe("Generate payroll first.");
   });
 
-  it("shows one Next line per state with the page's one gold button", async () => {
-    const gold = () => Array.from(document.querySelectorAll(".payroll-next .submit-button")).map((button) => button.textContent);
-    const quiet = () => Array.from(document.querySelectorAll(".payroll-next .text-button")).map((button) => button.textContent);
+  it("leaves the focus alone when drafts or records go while it is on a field or a pop-up is open", async () => {
+    const user = userEvent.setup();
+    const drafts = [internRecord({ payrollId: "A", status: "DRAFT" }), internRecord({ payrollId: "B", status: "DRAFT" })];
+    const { rerender } = render(<PayrollWorkspace records={drafts} onSaved={vi.fn()} />);
+    // On a field: a reload that brings the drafts back finalized, then an empty cutoff, never takes the focus away.
+    const days = screen.getByLabelText("Standard days");
+    days.focus();
+    rerender(<PayrollWorkspace records={drafts} onSaved={vi.fn()} loadStatus="loading" />);
+    rerender(<PayrollWorkspace records={drafts.map((record) => ({ ...record, status: "FINALIZED" }))} onSaved={vi.fn()} />);
+    expect(days).toHaveFocus();
+    rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
+    expect(days).toHaveFocus();
 
-    // No payroll yet: make it from attendance.
+    // A pop-up open with the focus fallen to the page: the records go, and nothing behind the pop-up takes the focus.
+    rerender(<PayrollWorkspace records={drafts} onSaved={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Delete all records" }));
+    expect(screen.getByRole("dialog", { name: "Delete cutoff records?" })).toBeInTheDocument();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
+    expect(document.body).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).not.toHaveFocus();
+  });
+
+  it("keeps one gold button, Generate from attendance, in every state; the rest are outline or quiet text", async () => {
+    const gold = () => Array.from(document.querySelectorAll(".payroll-workspace .submit-button")).map((button) => button.textContent);
+    const quiet = () => Array.from(document.querySelectorAll(".payroll-toolbar .text-button")).map((button) => button.textContent);
+
+    // No payroll yet.
     let view = renderWorkspace([]);
-    expect(nextLine()).toBe("Next: make payroll for Aug 1–15, 2026 from attendance.");
     expect(gold()).toEqual(["Generate from attendance"]);
     expect(quiet()).toEqual([]);
     view.unmount();
 
-    // Drafts: finalize them; Generate again and Delete all stay quiet.
+    // Drafts: the same button generates again (no "Generate again"); Delete all records stays quiet text.
     view = renderWorkspace([internRecord({ payrollId: "A", status: "DRAFT" }), internRecord({ payrollId: "B", status: "DRAFT" }), internRecord({ payrollId: "C" })]);
-    expect(nextLine()).toBe("Next: check the drafts below, then finalize. Finalized pay is locked.");
-    expect(gold()).toEqual(["Finalize all (2)"]);
-    expect(quiet()).toEqual(["Generate again", "Delete all records"]);
-    expect(screen.queryByRole("button", { name: "Make payroll PDF" })).not.toBeInTheDocument();
+    expect(gold()).toEqual(["Generate from attendance"]);
+    expect(quiet()).toEqual(["Delete all records"]);
+    expect(screen.queryByRole("button", { name: "Generate again" })).not.toBeInTheDocument();
     view.unmount();
 
-    // All finalized, no PDF: make the PDF (gold) and the payslips (outline).
+    // All finalized, no PDF: both exports on, as outline buttons.
     view = renderWorkspace([internRecord({ payrollId: "A" }), internRecord({ payrollId: "B" })]);
-    expect(nextLine()).toBe("Next: make the payroll PDF and payslips.");
-    expect(gold()).toEqual(["Make payroll PDF"]);
-    expect(screen.getByRole("button", { name: "Make payslips" })).toBeEnabled();
-    expect(quiet()).toEqual(["Generate again", "Delete all records"]);
+    expect(gold()).toEqual(["Generate from attendance"]);
+    for (const button of exportButtons()) {
+      expect(button).toBeEnabled();
+      expect(button).toHaveClass("admin-button");
+    }
+    expect(quiet()).toEqual(["Delete all records"]);
     view.unmount();
 
-    // Done: the latest PDF with quiet links only, no gold button.
+    // A current PDF: Open PDF and Show in folder as quiet text under its line.
     loadPayrollPdfsSpy.mockResolvedValue({ success: true, payrollPdfs: [pdfRecord()] });
     renderWorkspace([internRecord({ payrollId: "A" })]);
-    await waitFor(() => expect(nextLine()).toBe("Done. PDF made Aug 14, 2026, 10:30 AM."));
-    expect(gold()).toEqual([]);
-    expect(quiet()).toEqual(["Open PDF", "Show in folder", "Make payslips", "Make PDF again", "Generate again", "Delete all records"]);
+    await waitFor(() => expect(exportLine()).toBe("PDF made Aug 14, 2026, 10:30 AM"));
+    expect(gold()).toEqual(["Generate from attendance"]);
+    expect(quiet()).toEqual(["Delete all records", "Open PDF", "Show in folder"]);
     await userEvent.setup().click(screen.getByRole("button", { name: "Open PDF" }));
     expect(openGeneratedFileSpy).toHaveBeenCalledWith(pdfRecord().filePath);
   });
 
   it("asks for a new PDF when the latest one is older than the finalized pay or for another headcount", async () => {
-    const gold = () => Array.from(document.querySelectorAll(".payroll-next .submit-button")).map((button) => button.textContent);
     const staleCases: [PayrollCutoffRecord[], PayrollPdfRecord][] = [
       // Finalized at 11:00 Manila (03:00 UTC), after the 10:30 PDF.
       [[internRecord({ payrollId: "A", finalizedAt: "2026-08-14T03:00:00Z" })], pdfRecord()],
@@ -295,8 +363,8 @@ describe("PayrollWorkspace", () => {
       loadPayrollPdfsSpy.mockResolvedValue({ success: true, payrollPdfs: [pdf] });
       const { unmount } = renderWorkspace(records);
       await screen.findByRole("button", { name: "Past payroll PDFs 1" });
-      await waitFor(() => expect(nextLine()).toBe("Next: the payroll changed since the last PDF. Make a new payroll PDF."));
-      expect(gold()).toEqual(["Make payroll PDF"]);
+      await waitFor(() => expect(exportLine()).toBe("Payroll changed since the last PDF. Generate it again."));
+      expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Open PDF" })).not.toBeInTheDocument();
       // The stale copy keeps its place in the history, without "Latest".
       const history = openHistory();
@@ -324,7 +392,11 @@ describe("PayrollWorkspace", () => {
         <Toasts />
       </>,
     );
-    await user.click(screen.getByRole("button", { name: "Finalize all (2)" }));
+    // On the table bar, an outline button beside the This cutoff | All cutoffs switch.
+    const finalizeAll = screen.getByRole("button", { name: "Finalize all (2)" });
+    expect(finalizeAll.closest(".payroll-list-bar")).not.toBeNull();
+    expect(finalizeAll).toHaveClass("admin-button");
+    await user.click(finalizeAll);
     const dialog = screen.getByRole("dialog", { name: "Finalize all drafts?" });
     expect(dialog).toHaveTextContent("This will finalize all 2 draft payroll record(s) for Aug 1–15, 2026. Values will be locked from further edits.");
     await user.click(within(dialog).getByRole("button", { name: "Finalize payrolls" }));
@@ -333,6 +405,28 @@ describe("PayrollWorkspace", () => {
     expect(finalizeSpy.mock.calls.map(([id]) => id)).toEqual(["A", "B"]);
     expect(onSaved).toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows Finalize all on the table bar while the chosen cutoff has drafts, naming that cutoff under All cutoffs", async () => {
+    const finalizeSpy = vi.spyOn(api, "finalizePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    const july = internRecord({ payrollId: "JUL", status: "DRAFT", cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31", payrollCutoffLabel: "July 16-31, 2026" });
+    const { rerender } = render(<PayrollWorkspace records={[internRecord({ payrollId: "A", status: "DRAFT" }), july]} onSaved={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Finalize all (1)" }).closest(".payroll-list-bar")).not.toBeNull();
+    // Every cutoff's rows: it stays, and says which cutoff it finalizes (July's draft is left alone).
+    await user.click(screen.getByRole("button", { name: "All cutoffs" }));
+    expect(screen.queryByRole("button", { name: "Finalize all (1)" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Finalize all for Aug 1–15, 2026 (1)" }));
+    const dialog = screen.getByRole("dialog", { name: "Finalize all drafts?" });
+    expect(dialog).toHaveTextContent("This will finalize all 1 draft payroll record(s) for Aug 1–15, 2026.");
+    await user.click(within(dialog).getByRole("button", { name: "Finalize payrolls" }));
+    await waitFor(() => expect(finalizeSpy).toHaveBeenCalledTimes(1));
+    expect(finalizeSpy).toHaveBeenCalledWith("A");
+    await user.click(screen.getByRole("button", { name: "This cutoff" }));
+    expect(screen.getByRole("button", { name: "Finalize all (1)" })).toBeInTheDocument();
+    // No drafts left in this cutoff (July's draft doesn't count): gone.
+    rerender(<PayrollWorkspace records={[internRecord({ payrollId: "A" }), july]} onSaved={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /^Finalize all/ })).not.toBeInTheDocument();
   });
 
   it("reports a partly failed Finalize all on the page", async () => {
@@ -346,10 +440,10 @@ describe("PayrollWorkspace", () => {
 
   it("shows the intern payroll PDF and payslip actions and no print/export actions", () => {
     renderWorkspace([record()]);
-    expect(screen.getByRole("button", { name: "Make payroll PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Generate Employee Payroll PDF" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate again" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Make payslips" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payslips" })).toBeInTheDocument();
     // No register, CSV/XLSX, or browser print actions.
     expect(screen.queryByRole("button", { name: /export/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /register/i })).not.toBeInTheDocument();
@@ -357,7 +451,7 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByRole("button", { name: /csv|xlsx|excel/i })).not.toBeInTheDocument();
   });
 
-  it("makes an intern payroll PDF for the selected cutoff, opens it and moves to Done", async () => {
+  it("makes an intern payroll PDF for the selected cutoff, opens it and offers it under the exports", async () => {
     const pdf = pdfRecord({ totalAmount: 770 });
     generatePayrollPdfSpy.mockResolvedValue({
       success: true,
@@ -370,7 +464,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord({ netPay: 770 })]);
-    await user.click(screen.getByRole("button", { name: "Make payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
 
     await waitFor(() =>
       expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
@@ -385,10 +479,10 @@ describe("PayrollWorkspace", () => {
       await screen.findByText("Payroll PDF made for Aug 1–15, 2026."),
     ).toBeInTheDocument();
     expect(openGeneratedFileSpy).toHaveBeenCalledWith(pdf.filePath);
-    // The Done line offers it again; the history (folded) lists it too.
-    expect(nextLine()).toBe("Done. PDF made Aug 14, 2026, 10:30 AM.");
-    expect(screen.getByRole("button", { name: "Show in folder" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Make PDF again" })).toBeInTheDocument();
+    // The line under the exports offers it again; the history (folded) lists it too.
+    expect(exportLine()).toBe("PDF made Aug 14, 2026, 10:30 AM");
+    expect(within(exportPanel()).getByRole("button", { name: "Show in folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeEnabled();
     const history = openHistory();
     expect(within(history).getByText("August 1-15, 2026")).toBeInTheDocument();
     expect(within(history).getByRole("button", { name: "Open PDF" })).toBeInTheDocument();
@@ -403,9 +497,9 @@ describe("PayrollWorkspace", () => {
     openGeneratedFileSpy.mockResolvedValue({ ok: false, message: "No app is set to open PDF files." });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
     expect(await screen.findByText("No app is set to open PDF files.")).toBeInTheDocument();
-    expect(nextLine()).toBe("Done. PDF made Aug 14, 2026, 10:30 AM.");
+    expect(exportLine()).toBe("PDF made Aug 14, 2026, 10:30 AM");
   });
 
   it("generates an intern payroll PDF with the intern worker type", async () => {
@@ -427,7 +521,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([record(), internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
 
     await waitFor(() =>
       expect(generatePayrollPdfSpy).toHaveBeenCalledWith({
@@ -449,7 +543,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
     expect(
       await screen.findByText("Unable to generate the payroll PDF."),
     ).toBeInTheDocument();
@@ -459,17 +553,22 @@ describe("PayrollWorkspace", () => {
 
   it("blocks the payroll PDF and payslips until the cutoff has payroll and every draft of it is finalized", async () => {
     const user = userEvent.setup();
-    const exportButtons = () => screen.queryAllByRole("button", { name: /^Make (payroll PDF|payslips)$/ });
     // Only another cutoff (Jul 16–31) has payroll: the pre-filled Aug 1–15 has none, so nothing to export yet.
     let view = renderWorkspace([internRecord({ cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31", payrollCutoffLabel: "July 16-31, 2026" })]);
-    expect(exportButtons()).toHaveLength(0);
+    for (const button of exportButtons()) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription("Generate payroll first.");
+    }
     view.unmount();
 
-    // Drafts left: still no exports, only Finalize all; Export waits.
+    // Drafts left: both off with one short reason; Finalize all waits on the table bar.
     view = renderWorkspace([internRecord({ payrollId: "A", status: "DRAFT" }), internRecord({ payrollId: "B" })]);
-    expect(exportButtons()).toHaveLength(0);
+    for (const button of exportButtons()) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription("Finalize all drafts first.");
+    }
+    expect(exportLine()).toBe("Finalize all drafts first.");
     expect(screen.getByRole("button", { name: "Finalize all (1)" })).toBeInTheDocument();
-    expect(stepStates()[2]).toBe("Export · Waiting:upcoming");
     view.unmount();
 
     // Every record finalized: both exports on, with no reason line.
@@ -478,7 +577,8 @@ describe("PayrollWorkspace", () => {
       expect(button).toBeEnabled();
       expect(button).not.toHaveAccessibleDescription();
     }
-    await user.click(screen.getByRole("button", { name: "Make payslips" }));
+    expect(exportLine()).toBe("");
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
     expect(generateInternPayslipImagesSpy).toHaveBeenCalledTimes(1);
     expect(generatePayrollPdfSpy).not.toHaveBeenCalled();
     expect(window.print).not.toHaveBeenCalled();
@@ -486,7 +586,7 @@ describe("PayrollWorkspace", () => {
 
   it("keeps the exports off with the reason while payroll reloads", () => {
     render(<PayrollWorkspace records={[internRecord()]} onSaved={vi.fn()} loadStatus="loading" onRetry={vi.fn()} />);
-    for (const name of ["Make payroll PDF", "Make payslips", "Generate again"]) {
+    for (const name of ["Generate Intern Payroll PDF", "Generate Intern Payslips", "Generate from attendance"]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
       expect(screen.getByRole("button", { name })).toHaveAccessibleDescription("Loading payroll…");
     }
@@ -505,7 +605,7 @@ describe("PayrollWorkspace", () => {
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
     expect(screen.queryByRole("button", { name: "Open payslip folder" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Make payslips" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
 
     await waitFor(() =>
       expect(generateInternPayslipImagesSpy).toHaveBeenCalledWith({
@@ -537,7 +637,7 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payslips" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
     await user.click(await screen.findByRole("button", { name: "Open payslip folder" }));
     expect(
       await screen.findByText("The folder could not be found. It may have been moved or deleted."),
@@ -551,10 +651,10 @@ describe("PayrollWorkspace", () => {
     });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payslips" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
     expect(await screen.findByText("Unable to generate the payslips.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open payslip folder" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Make payslips" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Generate Intern Payslips" })).toBeEnabled();
   });
 
   it("disables the payslip button and shows progress while generating", async () => {
@@ -566,15 +666,15 @@ describe("PayrollWorkspace", () => {
     );
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payslips" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
 
-    const busyButton = screen.getByRole("button", { name: "Making payslips…" });
+    const busyButton = screen.getByRole("button", { name: "Generating…" });
     expect(busyButton).toBeDisabled();
     await user.click(busyButton);
     expect(generateInternPayslipImagesSpy).toHaveBeenCalledTimes(1);
 
     finish({ success: false, error: { message: "Unable to generate the payslips." } });
-    expect(await screen.findByRole("button", { name: "Make payslips" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Generate Intern Payslips" })).toBeEnabled();
   });
 
   it("lists previously generated payroll PDFs with open and reveal actions", async () => {
@@ -603,20 +703,20 @@ describe("PayrollWorkspace", () => {
     expect(window.print).not.toHaveBeenCalled();
   });
 
-  it("says the next step when there is no payroll and no PDF yet", async () => {
+  it("says what comes first when there is no payroll and no PDF yet", async () => {
     renderWorkspace([]);
-    expect(nextLine()).toBe("Next: make payroll for Aug 1–15, 2026 from attendance.");
+    expect(exportLine()).toBe("Generate payroll first.");
     expect(
       screen.getByText("No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance."),
     ).toBeInTheDocument();
     openHistory();
     expect(
-      await screen.findByText("No PDFs yet. Finalize the cutoff, then select Make payroll PDF."),
+      await screen.findByText("No PDFs yet. Finalize the cutoff, then select Generate Intern Payroll PDF."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/No cutoff payroll has been created/)).not.toBeInTheDocument();
   });
 
-  it("offers only the cutoff's latest PDF in the Done line and folds every copy into Past payroll PDFs, newest tagged Latest", async () => {
+  it("offers only the cutoff's latest PDF under the exports and folds every copy into Past payroll PDFs, newest tagged Latest", async () => {
     openGeneratedFileSpy.mockResolvedValue({ ok: false, message: "The file could not be found." });
     const pdf = (id: string, cutoffStart: string, cutoffEnd: string, label: string, generatedAt: string) =>
       pdfRecord({ payrollPdfId: id, fileName: `${id}.pdf`, filePath: `C:\\data\\exports\\${id}.pdf`, cutoffStart, cutoffEnd, payrollCutoffLabel: label, generatedAt });
@@ -634,8 +734,8 @@ describe("PayrollWorkspace", () => {
       internRecord({ payrollId: "JUL", cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31", payrollCutoffLabel: "July 16-31, 2026" }),
     ]);
 
-    // The Done line names and opens the newest copy only.
-    await waitFor(() => expect(nextLine()).toBe("Done. PDF made Aug 17, 2026, 8:40 AM."));
+    // The line under the exports names and opens the newest copy only.
+    await waitFor(() => expect(exportLine()).toBe("PDF made Aug 17, 2026, 8:40 AM"));
     expect(screen.getAllByRole("button", { name: "Open PDF" })).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "Open PDF" }));
     expect(openGeneratedFileSpy).toHaveBeenCalledWith("C:\\data\\exports\\aug-late.pdf");
@@ -654,9 +754,9 @@ describe("PayrollWorkspace", () => {
     await user.click(within(history).getByRole("button", { name: /July 2026\s*1/ }));
     expect(within(within(history).getAllByRole("row").find((row) => row.textContent?.includes("July 16-31, 2026")) ?? history).getByText("Latest")).toBeInTheDocument();
 
-    // Another cutoff with no PDF goes back to making payroll.
+    // Another cutoff with no payroll and no PDF: nothing to export yet.
     await user.click(screen.getByRole("button", { name: /16th.*last day/i }));
-    expect(nextLine()).toBe("Next: make payroll for Aug 16–31, 2026 from attendance.");
+    expect(exportLine()).toBe("Generate payroll first.");
   });
 
   it("groups generated payroll PDFs by cutoff month, latest month open", async () => {
@@ -716,7 +816,7 @@ describe("PayrollWorkspace", () => {
       record({ payrollId: "P-002", employeeId: "EMP-002", status: "FINALIZED" }),
     ]);
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
-    await user.click(screen.getByRole("button", { name: "Generate again" }));
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     expect(screen.getByRole("dialog", { name: "Regenerate cutoff payroll?" })).toBeInTheDocument();
     expect(screen.getByText(/replace the draft records with fresh calculations from latest attendance; finalized records are kept/i)).toBeInTheDocument();
 
@@ -734,7 +834,7 @@ describe("PayrollWorkspace", () => {
     generatePayrollCutoffSpy.mockResolvedValueOnce({ success: true });
     const user = userEvent.setup();
     renderWorkspace([internRecord({ payrollId: "A" }), internRecord({ payrollId: "B" })]);
-    await user.click(screen.getByRole("button", { name: "Generate again" }));
+    await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     const dialog = screen.getByRole("dialog", { name: "Generate again?" });
     expect(dialog).toHaveTextContent(
       "All 2 record(s) for Aug 1–15, 2026 are finalized and stay as they are. Generating again only adds payroll, from completed attendance, for people not in this cutoff yet. Continue?",
@@ -786,17 +886,11 @@ describe("PayrollWorkspace", () => {
     render(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
-    // Read back in words until "Change dates" opens the fields.
-    expect(screen.getByText("Aug 1–15, 2026 · 10 working days")).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Standard days/i)).not.toBeInTheDocument();
-    const change = screen.getByRole("button", { name: "Change dates" });
-    expect(change).toHaveAttribute("aria-expanded", "false");
-    await user.click(change);
-    expect(screen.getByRole("button", { name: "Hide dates" })).toHaveAttribute("aria-expanded", "true");
-    const stdDaysInput = screen.getByLabelText(/Standard days/i);
+    // Always in view beside the dates, filled from the preset (Aug 1–15, 2026 has 10 weekdays).
+    const stdDaysInput = within(generatePanel()).getByLabelText(/Standard days/i);
+    expect(stdDaysInput).toHaveValue(10);
     await user.clear(stdDaysInput);
     await user.type(stdDaysInput, "12");
-    expect(screen.getByText("Aug 1–15, 2026 · 12 working days")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
     await user.click(screen.getByRole("button", { name: "Generate payroll" }));
@@ -987,6 +1081,7 @@ describe("PayrollWorkspace", () => {
 
     await user.click(screen.getByRole("button", { name: /1st.*15th/i }));
 
+    expect(within(generatePanel()).getByText(/^This cutoff has 1 record\./)).toBeInTheDocument();
     const clearCutoffBtn = await screen.findByRole("button", { name: "Delete all records" });
     expect(clearCutoffBtn).toHaveClass("danger-button");
 
@@ -1000,19 +1095,21 @@ describe("PayrollWorkspace", () => {
     });
   });
 
-  it("has no banner or finalized line: Delete all stays a quiet link, and with finalized pay it asks for DELETE", async () => {
+  it("says how many records the cutoff has, with Delete all records as quiet coral text that asks for DELETE once pay is finalized", async () => {
     const deletePayrollCutoffSpy = vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();
 
-    // No payroll for the cutoff: nothing to delete.
+    // No payroll for the cutoff: no line, nothing to delete.
     let view = renderWorkspace([]);
+    expect(screen.queryByText(/^This cutoff has/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete all records" })).not.toBeInTheDocument();
     view.unmount();
 
-    // Drafts (one finalized too): no "already exists" banner, just the quiet link.
+    // Drafts (one finalized too): one quiet line under the fields instead of the old "already exists" banner.
     view = renderWorkspace([internRecord({ payrollId: "A", status: "DRAFT" }), internRecord({ payrollId: "B", status: "FINALIZED" })]);
     expect(screen.queryByText(/Payroll already exists for this cutoff/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete all records" })).toHaveClass("text-button");
+    expect(within(generatePanel()).getByText("This cutoff has 2 records. Generating again replaces drafts; finalized pay is kept.")).toBeInTheDocument();
+    expect(within(generatePanel()).getByRole("button", { name: "Delete all records" })).toHaveClass("text-button", "danger-button");
     view.unmount();
 
     // All finalized: no finalized line; deleting says approved pay goes too and asks for DELETE.
@@ -1039,18 +1136,17 @@ describe("PayrollWorkspace", () => {
     const user = userEvent.setup();
     /** Generate again (every record is finalized, so nothing is deleted), then both exports, for the dates on screen. */
     const runAll = async () => {
-      await user.click(screen.getByRole("button", { name: "Generate again" }));
+      await user.click(screen.getByRole("button", { name: "Generate from attendance" }));
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Generate again" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      await user.click(screen.getByRole("button", { name: "Make payroll PDF" }));
-      await user.click(screen.getByRole("button", { name: "Make payslips" }));
+      await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
+      await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
     };
     const custom = internRecord({ payrollId: "C", cutoffStart: "2026-08-03", cutoffEnd: "2026-08-14", payrollCutoffLabel: "2026-08-03 to 2026-08-14" });
     const lateAug = internRecord({ payrollId: "L", cutoffStart: "2026-08-16", cutoffEnd: "2026-08-31", payrollCutoffLabel: "August 16-31, 2026" });
     renderWorkspace([custom, lateAug]);
 
     // Dates typed after the pre-fill: the pre-filled "August 1-15, 2026" must not stick.
-    openDates();
     fireEvent.change(screen.getByLabelText("Cutoff start"), { target: { value: "2026-08-03" } });
     fireEvent.change(screen.getByLabelText("Cutoff end"), { target: { value: "2026-08-14" } });
     await runAll();
@@ -1067,35 +1163,17 @@ describe("PayrollWorkspace", () => {
     expect(generateInternPayslipImagesSpy).toHaveBeenLastCalledWith({ cutoffStart: "2026-08-16", cutoffEnd: "2026-08-31", payrollCutoffLabel: "August 16-31, 2026" });
   });
 
-  it("says the payroll is loading or didn't load instead of asking to make it, with no gold button", () => {
-    const gold = () => document.querySelectorAll(".payroll-next .submit-button").length;
-    const { rerender } = render(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="loading" onRetry={vi.fn()} />);
-    expect(nextLine()).toBe("Loading payroll…");
-    expect(gold()).toBe(0);
-    rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="failed" onRetry={vi.fn()} />);
-    expect(nextLine()).toBe("Payroll didn't load. Select Retry below.");
-    expect(gold()).toBe(0);
-    expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
-    // Nothing to make or export until the list is there; once it loads empty, the make-payroll line returns.
-    expect(screen.queryByRole("button", { name: /^(Generate from attendance|Make payroll PDF|Make payslips)$/ })).not.toBeInTheDocument();
-    rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} loadStatus="ready" onRetry={vi.fn()} />);
-    expect(nextLine()).toBe("Next: make payroll for Aug 1–15, 2026 from attendance.");
-    expect(screen.getByRole("button", { name: "Generate from attendance" })).toBeEnabled();
-    // Coming back from loading doesn't take the focus.
-    expect(document.body).toHaveFocus();
-  });
-
-  it("refuses standard days outside 0 to 31 before generating, with the reason beside the dates", async () => {
+  it("refuses standard days outside 0 to 31 before generating, with the reason under the fields", async () => {
     const user = userEvent.setup();
     renderWorkspace([]);
-    openDates();
     const days = screen.getByLabelText("Standard days");
     await user.clear(days);
     await user.type(days, "45");
     const generate = screen.getByRole("button", { name: "Generate from attendance" });
     expect(generate).toBeDisabled();
     expect(generate).toHaveAccessibleDescription("Standard days must be 0 to 31 (whole or half days).");
-    expect(nextLine()).toBe("Next: fix the cutoff above, then make payroll from attendance.");
+    // A date problem is the one coral line, under the fields.
+    expect(document.getElementById("payroll-generate-reason")).toHaveClass("payroll-reason", "is-problem");
     // Enter in the field doesn't get past it either.
     fireEvent.submit(days.closest("form") ?? days);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -1111,8 +1189,8 @@ describe("PayrollWorkspace", () => {
     generatePayrollPdfSpy.mockResolvedValue({ success: false, error: { message: "Unable to generate the payroll PDF." } });
     const user = userEvent.setup();
     renderWorkspace([internRecord()]);
-    await user.click(screen.getByRole("button", { name: "Make payslips" }));
-    await user.click(screen.getByRole("button", { name: "Make payroll PDF" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
+    await user.click(screen.getByRole("button", { name: "Generate Intern Payroll PDF" }));
     expect(await screen.findByRole("button", { name: "Open payslip folder" })).toBeInTheDocument();
     expect(await screen.findByText("Unable to generate the payroll PDF.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /16th.*last day/i }));
@@ -1120,18 +1198,56 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByText("Unable to generate the payroll PDF.")).not.toBeInTheDocument();
   });
 
-  it("moves the focus to the new gold button after an action changes the Next line, and reads the line out", async () => {
+  it("hands the focus to the payroll PDF once Finalize all has finalized the last draft", async () => {
     vi.spyOn(api, "finalizePayrollCutoff").mockResolvedValue({ success: true });
     const user = userEvent.setup();
     const drafts = [internRecord({ payrollId: "A", status: "DRAFT" }), internRecord({ payrollId: "B", status: "DRAFT" })];
     const { rerender } = render(<PayrollWorkspace records={drafts} onSaved={vi.fn()} />);
-    expect(document.querySelector(".payroll-next-text")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Finalize all (2)" }));
     await user.click(screen.getByRole("button", { name: "Finalize payrolls" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    // The refreshed list arrives finalized: Finalize all goes away and its focus with it.
+    // The refreshed list arrives finalized: Finalize all leaves the bar, the exports turn on and the focus goes on to
+    // the payroll PDF.
     rerender(<PayrollWorkspace records={drafts.map((record) => ({ ...record, status: "FINALIZED" }))} onSaved={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Make payroll PDF" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: /^Finalize all/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toHaveFocus();
+  });
+
+  it("hands the focus to Generate from attendance once Delete all records has emptied the cutoff", async () => {
+    vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    for (const status of ["DRAFT", "FINALIZED"] as const) {
+      const records = [internRecord({ payrollId: "A", status }), internRecord({ payrollId: "B", status })];
+      const { rerender, unmount } = render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: "Delete all records" }));
+      const dialog = screen.getByRole("dialog", { name: "Delete cutoff records?" });
+      // Finalized pay asks for DELETE first.
+      if (status === "FINALIZED") await user.type(within(dialog).getByLabelText(/Type DELETE to confirm/), "DELETE");
+      await user.click(within(dialog).getByRole("button", { name: "Delete cutoff records" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      // The refreshed list arrives empty: Delete all records leaves, the exports are off, so Generate takes the focus.
+      rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Delete all records" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Generate from attendance" })).toHaveFocus();
+      unmount();
+    }
+  });
+
+  it("hands the focus to Generate from attendance once a row's Delete has removed the cutoff's only record", async () => {
+    vi.spyOn(api, "deletePayrollCutoff").mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    for (const status of ["DRAFT", "FINALIZED"] as const) {
+      const { rerender, unmount } = render(<PayrollWorkspace records={[internRecord({ payrollId: "A", status })]} onSaved={vi.fn()} />);
+      await user.click(within(screen.getByRole("row", { name: /Maria Santos/ })).getByRole("button", { name: "Delete" }));
+      await user.click(screen.getByRole("button", { name: "Delete payroll" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      rerender(<PayrollWorkspace records={[]} onSaved={vi.fn()} />);
+      expect(screen.queryByRole("row", { name: /Maria Santos/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Generate from attendance" })).toHaveFocus();
+      unmount();
+    }
   });
 
   it("shows the chosen cutoff's records, or every cutoff's with a Period column, and acts on the rows shown", async () => {
@@ -1216,11 +1332,44 @@ describe("PayrollWorkspace", () => {
     expect(net).not.toHaveAttribute("style");
     expect(deductions).toHaveTextContent("PHP 100.00");
     expect(deductions.querySelector("[style]")).toBeNull();
+    // Its amount in coral, by class; Net Pay stays gold.
+    expect(deductions.querySelector("strong")).toHaveClass("money-deduction");
+    expect(net.querySelector(".money-deduction")).toBeNull();
     // Drafts: Breakdown, Edit, Finalize, then Delete last; finalized rows: Breakdown and Delete.
     expect(within(draftRow).getAllByRole("button").map((button) => button.textContent)).toEqual(["Breakdown", "Edit", "Finalize", "Delete"]);
     const finalRow = screen.getByRole("row", { name: /Maria Santos/ });
     expect(within(finalRow).getAllByRole("cell")[2]).toHaveTextContent(/^Finalized$/);
+    // Nothing deducted: muted, not coral.
+    const zero = within(finalRow).getAllByRole("cell")[headings.indexOf("Total Deductions")];
+    expect(zero).toHaveTextContent("PHP 0.00");
+    expect(zero.querySelector("strong")).toHaveClass("money-zero");
+    expect(zero.querySelector(".money-deduction")).toBeNull();
     expect(within(finalRow).getAllByRole("button").map((button) => button.textContent)).toEqual(["Breakdown", "Delete"]);
+  });
+
+  it("shows Total Deductions in coral in Edit payroll and Breakdown, muted when nothing was deducted", async () => {
+    const user = userEvent.setup();
+    renderWorkspace([
+      internRecord({ payrollId: "A", employeeId: "APG-2026-001", employeeName: "Juan Dela Cruz", status: "DRAFT", lateUnits: 2, lateDeduction: 20, totalDeductions: 20, netPay: 780 }),
+      internRecord({ payrollId: "B", employeeId: "APG-2026-002", employeeName: "Jose Reyes" }),
+    ]);
+    const juan = screen.getByRole("row", { name: /Juan Dela Cruz/ });
+    await user.click(within(juan).getByRole("button", { name: "Edit" }));
+    const edit = screen.getByRole("dialog", { name: /Edit Payroll — Juan Dela Cruz/ });
+    expect(within(edit).getByText("Total Deductions").nextElementSibling).toHaveClass("summary-value", "money-deduction");
+    await user.click(within(edit).getByRole("button", { name: "Cancel" }));
+
+    await user.click(within(juan).getByRole("button", { name: "Breakdown" }));
+    let breakdown = screen.getByRole("dialog", { name: /Calculation breakdown — Juan Dela Cruz/ });
+    expect(within(breakdown).getByText("Total deductions", { selector: "dt" }).nextElementSibling).toHaveClass("money-deduction");
+    expect(breakdown.querySelector(".payroll-deductions-total")).toHaveClass("money-deduction");
+    await user.click(within(breakdown).getByRole("button", { name: /Close/ }));
+
+    await user.click(within(screen.getByRole("row", { name: /Jose Reyes/ })).getByRole("button", { name: "Breakdown" }));
+    breakdown = screen.getByRole("dialog", { name: /Calculation breakdown — Jose Reyes/ });
+    expect(within(breakdown).getByText("Total deductions", { selector: "dt" }).nextElementSibling).toHaveClass("money-zero");
+    expect(breakdown.querySelector(".payroll-deductions-total")).toHaveClass("money-zero");
+    expect(breakdown.querySelector(".money-deduction")).toBeNull();
   });
 
   it("displays transparent deductions breakdown table with dates, causes, and amounts when available", async () => {
