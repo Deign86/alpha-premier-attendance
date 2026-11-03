@@ -23,7 +23,7 @@ function format(value: DateInput, options: Intl.DateTimeFormatOptions, timeZone:
   const date = toDate(value);
   if (!date) return value instanceof Date ? "" : value;
   // Some browsers put a narrow no-break space before AM/PM; a plain space keeps one look everywhere.
-  return new Intl.DateTimeFormat("en-PH", { timeZone, ...options }).format(date).replace(/ /g, " ");
+  return new Intl.DateTimeFormat("en-PH", { timeZone, ...options }).format(date).replace(/\u202F/g, " ");
 }
 
 /** "Fri, Oct 30, 2026" */
