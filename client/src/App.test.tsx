@@ -85,7 +85,14 @@ beforeEach(() => {
 });
 
 describe('RFID kiosk', () => {
-  it('marks the kiosk DTR badge as attention when DEAD items exist', async () => {
+  it('names the kiosk ALPHA PREMIER in its one-line header', async () => {
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByText('ALPHA PREMIER').closest('header')).toHaveClass('kiosk-topbar');
+    expect(screen.queryByText(/realty/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the DTR sync pop-up in coral, outside the header, when DEAD items exist', async () => {
     const emittedAt = new Date().toISOString();
     act(() => {
       setDtrSyncHealthSnapshot({
@@ -99,7 +106,13 @@ describe('RFID kiosk', () => {
       });
     });
     render(<App />);
-    expect(await screen.findByLabelText('Intern DTR sync health')).toHaveClass('attention');
+    const notice = await screen.findByTestId('kiosk-dtr-notice');
+    expect(notice).toHaveClass('is-urgent');
+    expect(notice.parentElement).toHaveAttribute('role', 'status');
+    expect(notice.parentElement).toHaveAttribute('aria-live', 'polite');
+    expect(notice).toHaveTextContent('DTR sync');
+    expect(notice).toHaveTextContent('Attendance needs admin attention for DTR sync.');
+    expect(document.querySelector('.kiosk-topbar')).not.toContainElement(notice);
     act(() => {
       setDtrSyncHealthSnapshot({
         activity: 'idle',
@@ -138,7 +151,110 @@ describe('RFID kiosk', () => {
     });
 
     expect(await screen.findByText('2 punches are waiting for retry; attempts are bounded.')).toBeInTheDocument();
+    expect(screen.getByTestId('kiosk-dtr-notice')).not.toHaveClass('is-urgent');
     expect(screen.queryByText('No DTR items queued')).not.toBeInTheDocument();
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('shows no DTR sync pop-up while sync is idle, syncing or simply queued', async () => {
+    const fine = { queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() };
+    act(() => setDtrSyncHealthSnapshot({ ...fine, activity: 'idle' }));
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => setDtrSyncHealthSnapshot({ ...fine, activity: 'syncing', queued: 2 }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => setDtrSyncHealthSnapshot({ ...fine, activity: 'queued', queued: 3 }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    for (const copy of ['No DTR items queued', 'Syncing', '3 queued']) expect(screen.queryByText(copy)).not.toBeInTheDocument();
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('keeps the DTR sync live region mounted while it is empty, so the card is announced when it appears', async () => {
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const region = document.querySelector('.kiosk-dtr-notice-region');
+    expect(region).toHaveAttribute('role', 'status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toBeEmptyDOMElement();
+    act(() => setDtrSyncHealthSnapshot({ activity: 'offline', queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() }));
+    expect(document.querySelector('.kiosk-dtr-notice-region')).toBe(region);
+    expect(region).toContainElement(screen.getByTestId('kiosk-dtr-notice'));
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('shows no DTR sync pop-up for a late heartbeat alone, and keeps the real problem\'s sentence when one is late', async () => {
+    const lateAt = new Date(Date.now() - 2 * 60_000).toISOString();
+    const base = { activity: 'idle' as const, queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false };
+    act(() => setDtrSyncHealthSnapshot({ ...base, emittedAt: lateAt }));
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => setDtrSyncHealthSnapshot({ ...base, dead: 1, emittedAt: lateAt }));
+    const notice = screen.getByTestId('kiosk-dtr-notice');
+    expect(notice).toHaveTextContent('Attendance needs admin attention for DTR sync.');
+    expect(notice).not.toHaveTextContent('DTR status update delayed');
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('hides each kind of DTR sync problem with × until sync is fine again', async () => {
+    const base = { activity: 'idle' as const, queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false };
+    const attention = (count: number) => setDtrSyncHealthSnapshot({ ...base, needsAttention: count, emittedAt: new Date().toISOString() });
+    const retry = (count: number) => setDtrSyncHealthSnapshot({ ...base, activity: 'retrying', retryablePending: count, emittedAt: new Date().toISOString() });
+    act(() => attention(1));
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide DTR sync message' }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    // The same kind stays hidden, even with new counts; another kind shows.
+    act(() => attention(2));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => retry(2));
+    expect(screen.getByTestId('kiosk-dtr-notice')).toHaveTextContent('2 punches are waiting for retry; attempts are bounded.');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide DTR sync message' }));
+    act(() => retry(3));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    // Hiding the second kind doesn't bring the first one back.
+    act(() => attention(1));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    // Fine again: the card goes by itself and every × is forgotten, so a problem coming back later shows again.
+    act(() => setDtrSyncHealthSnapshot({ ...base, emittedAt: new Date().toISOString() }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => attention(1));
+    expect(screen.getByTestId('kiosk-dtr-notice')).toHaveTextContent('Attendance needs admin attention for DTR sync.');
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('keeps the focus in Manual entry when the DTR sync pop-up is closed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-manual-toggle'));
+    const field = screen.getByLabelText('Manual card ID');
+    await waitFor(() => expect(field).toHaveFocus());
+    act(() => setDtrSyncHealthSnapshot({ activity: 'offline', queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() }));
+    await user.click(screen.getByRole('button', { name: 'Hide DTR sync message' }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    expect(field).toHaveFocus();
+    await user.keyboard('42');
+    expect(field).toHaveValue('42');
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('never moves focus to the DTR sync pop-up, so a card tap still reaches the reader', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => setDtrSyncHealthSnapshot({ activity: 'offline', queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() }));
+    const notice = screen.getByTestId('kiosk-dtr-notice');
+    expect(notice).toHaveTextContent('Sync unavailable');
+    expect(notice).not.toHaveClass('is-urgent');
+    expect(document.activeElement).toBe(document.body);
+    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'Enter']) fireEvent.keyDown(window, { key });
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }) }),
+    ));
+    expect(document.activeElement).toBe(document.body);
+    act(() => resetDtrSyncGuardForTests());
   });
 
   it('uses Manila local time for the welcoming greeting', () => {

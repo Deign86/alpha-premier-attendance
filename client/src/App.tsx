@@ -145,7 +145,8 @@ import {
   setScannerPaused,
   notifyScanSuccess,
 } from "./tauri-api";
-import { dtrSyncHealthCopy, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
+import { dtrSyncHealthCopy, dtrSyncNoticeKind, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
+import type { DtrSyncHealthSnapshot, DtrSyncNoticeKind } from "./dtr-sync-guard";
 
 type ScannerStatus = {
   state: "connected" | "scanning" | "offline" | "error";
@@ -1314,7 +1315,7 @@ export default function App() {
             <img src={logoPhoenix} alt="" />
           </div>
           <div className="brand-text">
-            <p className="brand-name">ALPHA PREMIER REALTY</p>
+            <p className="brand-name">ALPHA PREMIER</p>
             <p className="brand-subtitle">
               {resolveOfficeDisplay(config.office, "short")}
             </p>
@@ -1359,11 +1360,6 @@ export default function App() {
             <i aria-hidden="true" />
             <span className="scanner-pill-label">{scannerPill.label}</span>
           </span>
-          {syncSnapshot && (
-            <span className={`sync-badge ${syncSnapshot.needsAttention > 0 || syncSnapshot.dead > 0 ? "attention" : syncSnapshot.queued > 0 ? "pending" : "idle"}`} role="status" aria-label="Intern DTR sync health">
-              {dtrSyncHealthCopy(syncSnapshot)}
-            </span>
-          )}
           <div
             className="clock"
             aria-label={`Current time in ${config.timezone}`}
@@ -1763,6 +1759,8 @@ export default function App() {
         </footer>
       )}
 
+      <KioskDtrNotice snapshot={syncSnapshot} />
+
       {setupDialogOpen && (
         <SetupDialog
           token={setupToken}
@@ -1870,6 +1868,38 @@ type SetupDialogProps = {
 
 /** The kiosk's rising gold sparkles; each one's position, size and timing come from styles.css. */
 const KIOSK_SPARKLES = Array.from({ length: 18 }, (_, index) => <i key={index} />);
+
+/** Desktop app only: a small card when Intern DTR sync needs a look; nothing while it is idle, syncing or simply queued.
+    It never takes focus. × hides that kind of problem (a changing count doesn't bring it back) until sync is fine again.
+    The live region is always there, so a screen reader announces the card when it appears. */
+function KioskDtrNotice({ snapshot }: { snapshot: DtrSyncHealthSnapshot | null }) {
+  const kind = snapshot ? dtrSyncNoticeKind(snapshot) : null;
+  const [dismissed, setDismissed] = useState<ReadonlySet<DtrSyncNoticeKind>>(() => new Set());
+  // Fine again forgets every ×, so a problem coming back later shows again.
+  if (!kind && dismissed.size > 0) setDismissed(new Set());
+  return (
+    <div className="kiosk-dtr-notice-region" role="status" aria-live="polite">
+      {snapshot && kind && !dismissed.has(kind) && (
+        <div className={`kiosk-dtr-notice${kind === "persistence" || kind === "attention" ? " is-urgent" : ""}`} data-testid="kiosk-dtr-notice">
+          <p className="kiosk-dtr-notice-title">DTR sync</p>
+          {/* The problem's own sentence even when the heartbeat is late (the kiosk's card never says "delayed"). */}
+          <p className="kiosk-dtr-notice-text">{dtrSyncHealthCopy({ ...snapshot, stale: false })}</p>
+          {/* No mousedown default, so a click never takes the focus from Manual entry or Type card ID. */}
+          <button
+            className="kiosk-dtr-notice-close"
+            type="button"
+            aria-label="Hide DTR sync message"
+            title="Hide"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setDismissed(new Set(dismissed).add(kind))}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Card setup progress: the step on screen is highlighted and earlier steps show as done. */
 function SetupSteps({ current }: { current: 1 | 2 | 3 }) {

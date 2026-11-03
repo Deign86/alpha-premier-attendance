@@ -107,9 +107,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .topbar-cluster { display: flex; align-items: center; gap: 16px; }
 .scanner-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; color: var(--muted); border: 1px solid var(--line-bright); border-radius: 999px; font-size: var(--fs-12); font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
 .scanner-pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.scanner-pill.is-connected { color: var(--success); border-color: #4e825d; }
-.scanner-pill.is-scanning { color: var(--gold-bright); border-color: var(--gold-soft); }
-.scanner-pill.is-offline, .scanner-pill.is-error { color: var(--danger); border-color: #955e4f; }
+.scanner-pill.is-connected { color: var(--success); }
+.scanner-pill.is-scanning { color: var(--gold-bright); }
+.scanner-pill.is-offline, .scanner-pill.is-error { color: var(--danger); }
 .clock { display: grid; gap: 2px; text-align: right; }
 .clock span { color: var(--quiet); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
 .clock strong { color: var(--gold-bright); font-family: 'Orbitron', sans-serif; font-size: var(--fs-16); font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
@@ -368,8 +368,6 @@ td strong, td small { display: block; } td small { color: var(--quiet); margin-t
 .db-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .db-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .sync-badge { display: inline-flex; align-items: center; padding: 3px 10px; border: 1px solid var(--line-bright); border-radius: 999px; font-size: var(--fs-12); font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
-.sync-badge.pending { color: var(--gold-bright); border-color: var(--gold-soft); }
-.sync-badge.attention { color: var(--danger); border-color: #955e4f; }
 .sync-badge.idle { color: var(--quiet); border-color: var(--line-bright); }
 .sync-health-note { margin: 0; color: var(--quiet); font-size: var(--fs-12); }
 .sync-progress-wrap { display: grid; gap: 6px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
@@ -1167,7 +1165,6 @@ tr.selected-row td:first-child::before,
 .kiosk-hero h1 {
   /* "Good afternoon" stays on one line on the kiosk screen */
   max-width: 24ch;
-  font-size: clamp(var(--fs-40), 4.4vw, var(--fs-60));
   line-height: 1.02;
   letter-spacing: .025em;
 }
@@ -1322,7 +1319,6 @@ tr.selected-row td:first-child::before,
 
   .kiosk-hero h1 {
     max-width: 12ch;
-    font-size: clamp(var(--fs-40), 14vw, var(--fs-60));
   }
 
   .scan-console {
@@ -3280,7 +3276,6 @@ textarea.input {
   .kiosk-shell { height: 100dvh; overflow-y: auto; }
   .kiosk-stage { gap: 18px; padding: 24px var(--kiosk-gutter, 24px) 32px; }
   .kiosk-hero { gap: 10px; }
-  .kiosk-hero h1 { font-size: clamp(var(--fs-28), 8vh, 3.2rem); }
   .hero-icon { width: 72px; height: 72px; margin-bottom: 0; }
   .hero-sub { font-size: var(--fs-14); }
   .scan-console { padding: 14px 16px 12px; }
@@ -3324,7 +3319,6 @@ textarea.input {
 /* Phones: logo only, and the reader pill shrinks to its dot (phones have no reader), so the count and clock fit. */
 @media (max-width: 600px) {
   .kiosk-topbar .brand-text { display: none; }
-  .kiosk-topbar .topbar-cluster .scanner-pill { padding: 6px; border-radius: 50%; }
   .scanner-pill-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* The reader icon, field and Record button stay on one line instead of stacking. */
   .input-row { flex-direction: row; }
@@ -3385,8 +3379,8 @@ textarea.input {
   background-size: 180px;
 }
 
-/* Header: a floating glass bar, nearly full width with steady side margins. */
-.kiosk-topbar { position: relative; width: min(1760px, calc(100% - 2 * clamp(16px, 2.5vw, 40px))); margin: 14px auto 0; padding: 0 clamp(14px, 1.6vw, 24px); min-height: 64px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
+/* Header: its width and look are in "Kiosk, overhaul 2" at the end of the file. */
+.kiosk-topbar { position: relative; }
 /* 1280px and up: one row. Brand and clock get equal side columns, so the mode switch sits in the exact
    centre of the screen; a side only grows past its half when its content needs the room. */
 .kiosk-topbar .clock-date-short { display: none; }
@@ -3403,7 +3397,7 @@ textarea.input {
 }
 /* Below 1280px: two rows. Brand and status on top, the mode switch centred on its own row. */
 @media (max-width: 1279px) {
-  .kiosk-topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; padding-block: 10px; }
+  .kiosk-topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; }
   .kiosk-topbar .topbar-cluster { justify-self: end; margin-left: 0; }
   .kiosk-mode-switcher { grid-column: 1 / -1; grid-row: 2; justify-self: center; width: min(100%, 420px); }
 }
@@ -3414,33 +3408,32 @@ textarea.input {
 @media (min-width: 901px) and (max-width: 1279px) { .kiosk-topbar .brand-subtitle { display: block; } }
 /* Short screens with the two-row header (about 1024x768): less air above the key cards so both still fit. */
 @media (max-width: 1279px) and (max-height: 800px) { .kiosk-shell.mode-bathroom > .kiosk-stage { gap: 14px; padding-top: 12px; padding-bottom: 24px; } }
-@media (max-width: 900px) { .kiosk-topbar { padding: 10px 14px; } }
-@media (max-width: 600px) { .kiosk-topbar { width: calc(100% - 24px); margin-top: 12px; padding: 8px 10px; border-radius: 8px; } }
-@media (max-width: 360px) { .kiosk-topbar { width: calc(100% - 16px); padding: 8px; } }
 
 /* Every glass panel catches a thin gold gleam along its top edge. */
-.kiosk-topbar::before, .scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before,
+.scan-console::before, .result-card::before, .kiosk-result.is-notice::before, .kiosk-result.is-error::before, .bathroom-kiosk-card::before,
 .live-shell .dashboard-header::before, .live-shell .lan-panel::before, .live-shell .table-wrap::before,
 .card-setup-dialog::before, .admin-login form::before, .admin-shell .admin-form::before, .admin-shell .users-table-section::before {
   content: ""; position: absolute; top: 0; left: 14%; right: 14%; height: 1px; background: linear-gradient(90deg, transparent, var(--edge-light, rgba(225, 196, 119, .8)), transparent); pointer-events: none;
 }
 
-/* Logo in a lit gold ring; quiet chips; a hairline before the clock on wide screens. */
+/* Logo in a lit gold ring; quiet chips (the kiosk's count and reader: round pills, overhaul 2); a hairline before the
+   clock on wide screens. */
 .kiosk-topbar .brand-mark { box-sizing: border-box; padding: 4px; background: radial-gradient(circle at 50% 35%, rgba(225, 196, 119, .16), rgba(198, 162, 84, .03) 70%); border: 1px solid rgba(225, 196, 119, .4); border-radius: 50%; box-shadow: 0 0 18px rgba(198, 162, 84, .14); }
-.office-count, .kiosk-shell .scanner-pill { border-radius: 6px; background: rgba(0, 0, 0, .22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
+.office-count { border-radius: 6px; background: rgba(0, 0, 0, .22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
 .office-count { border-color: rgba(198, 162, 84, .4); }
 @media (min-width: 901px) { .kiosk-topbar .clock { padding-left: 12px; border-left: 1px solid rgba(198, 162, 84, .2); } }
 
-/* Mode switch: two equal tabs and one polished gold thumb that slides between them. */
-.kiosk-mode-switcher, .admin-shell .admin-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 3px; background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 162, 84, .26); border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .04); isolation: isolate; }
-.kiosk-mode-switcher::before, .admin-shell .admin-mode-switcher::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; z-index: -1; width: calc((100% - 6px) / 2); background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .2), 0 4px 16px rgba(198, 162, 84, .3); transition: transform 340ms var(--ease-soft); }
+/* Mode switch: two equal tabs and one gold thumb that slides between them (polished on the admin; the kiosk's round
+   glass look: "Kiosk, overhaul 2" at the end of the file). */
+.kiosk-mode-switcher, .admin-shell .admin-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 3px; isolation: isolate; }
+.admin-shell .admin-mode-switcher { background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 162, 84, .26); border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .04); }
+.kiosk-mode-switcher::before, .admin-shell .admin-mode-switcher::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; z-index: -1; width: calc((100% - 6px) / 2); transition: transform 340ms var(--ease-soft); }
+.admin-shell .admin-mode-switcher::before { background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .2), 0 4px 16px rgba(198, 162, 84, .3); }
 .kiosk-mode-switcher[data-active="bathroom"]::before, .admin-shell .admin-mode-switcher[data-active="bathroom"]::before { transform: translateX(100%); }
-.kiosk-mode-tab, .kiosk-mode-tab.active { justify-content: center; border-radius: 6px; background: transparent; border-color: transparent; box-shadow: none; transition: color 200ms ease-out; }
+.kiosk-mode-tab, .kiosk-mode-tab.active { justify-content: center; background: transparent; border-color: transparent; box-shadow: none; transition: color 200ms ease-out; }
 .kiosk-mode-tab:hover { color: var(--ink); background: transparent; }
 .kiosk-mode-tab.active, .kiosk-mode-tab.active:hover { color: #11100c; }
 .mode-shortcut-badge { transition: color 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out; }
-.kiosk-mode-tab:not(.active) .mode-shortcut-badge { color: var(--gold-bright); background: transparent; border-color: rgba(198, 162, 84, .45); }
-.kiosk-mode-tab.active .mode-shortcut-badge { color: #11100c; background: rgba(17, 16, 12, .14); border-color: rgba(17, 16, 12, .28); }
 /* Phones have no number keys for the 1/2 shortcuts; dropping the badges keeps "Bathroom Key Log" inside its half. */
 @media (max-width: 600px) { .mode-shortcut-badge { display: none; } }
 
@@ -5006,7 +4999,7 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
    updated; Type card ID stays, greyed out. A smaller photo and padding than the attendance card keep it all on a
    1366x768 screen with room to spare. */
 .kiosk-shell.mode-bathroom .result-card { padding: 16px 20px; }
-.kiosk-shell.mode-bathroom .result-card :is(.result-photo, .result-avatar) { width: 132px; }
+.kiosk-shell.mode-bathroom .result-card :is(.result-photo, .result-avatar) { width: 120px; }
 
 /* Key cards: the original layout (a key tile, the key's name and a status capsule; then who has it, or a dashed "Key
    is Available" box) with depth: a top-lit surface and a light line along the top edge, a warm gold edge with a soft
@@ -5035,7 +5028,7 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
    key changes hands; the old and the new body share its one grid cell while they cross-fade. On laptops a long name
    (24 letters) and department still fit one line each; narrower cards make room for two lines of each (below). The
    text always shows in full: a touch screen can't show a cut-off name's tooltip. */
-.kiosk-shell .bathroom-card-body { display: grid; flex: 1 1 auto; min-height: 154px; }
+.kiosk-shell .bathroom-card-body { display: grid; flex: 1 1 auto; min-height: 150px; }
 .kiosk-shell .bathroom-card-body > * { grid-area: 1 / 1; }
 
 /* Free: a dashed box whose dashes slowly march round (one dash a second and a half, in small steps, so it repaints
@@ -5098,3 +5091,61 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
   .kiosk-shell :is(.available-prompt-box, .active-holder-box).is-leaving, .kiosk-shell .bathroom-kiosk-glow { display: none; }
   .kiosk-shell .bathroom-kiosk-card { transition: none; }
 }
+
+/* --- Kiosk, overhaul 2: one-line header, round mode switch, DTR corner card, smaller text ------------------------- */
+/* Text about 10% smaller for the front desk's small laptop: in the header, the stage and the options the size scale
+   steps down by a tenth, with 12px as the floor (12px labels stay 12), so every kiosk style keeps its proportions. The
+   card setup and other pop-ups keep the shared sizes. */
+.kiosk-shell > :is(.kiosk-topbar, .kiosk-stage, .kiosk-actions) { --fs-14: .7875rem; --fs-16: .9rem; --fs-20: 1.125rem; --fs-28: 1.575rem; --fs-40: 2.25rem; --fs-60: 3.375rem; }
+/* The greeting also follows the screen's width (and its height on short screens): those steps shrink by a tenth too. */
+.kiosk-shell .kiosk-hero h1 { font-size: clamp(var(--fs-40), 3.96vw, var(--fs-60)); }
+@media (max-width: 600px) { .kiosk-shell .kiosk-hero h1 { font-size: clamp(var(--fs-40), 12.6vw, var(--fs-60)); } }
+@media (max-height: 760px) { .kiosk-shell .kiosk-hero h1 { font-size: clamp(var(--fs-28), 7.2vh, 2.88rem); } }
+/* The bathroom error's "Currently with ..." line had no size of its own (the page's 16px); it steps down too. */
+.kiosk-shell .result-holder-detail { font-size: var(--fs-16); }
+/* Short laptop windows (1280x640 is a maximized window on a 1920x1080 screen at 150%): bathroom mode's spacing tightens
+   so the ID card, both key cards and Type card ID still fit without scrolling. */
+@media (min-width: 901px) and (max-height: 700px) { .kiosk-shell.mode-bathroom > .kiosk-stage { gap: 12px; padding-top: 12px; padding-bottom: 16px; } }
+
+/* Header: one line on the page, no box (brand, then the mode switch in the middle, then the count, the reader and the
+   clock), set in from the window's top and sides by the page's gutters, over a thin gold line that fades out at both
+   ends. */
+.kiosk-shell .kiosk-topbar { width: min(1760px, calc(100% - 2 * var(--kiosk-gutter))); min-height: 58px; margin: 14px auto 0; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; border-image: linear-gradient(90deg, transparent, rgba(198, 162, 84, .55) 50%, transparent) 1; }
+@media (max-width: 600px) { .kiosk-shell .kiosk-topbar { width: calc(100% - 32px); margin-top: 10px; } }
+/* The count and the reader: two small round pills of the switch's dark glass and hairline edge, the same height; the
+   reader keeps its coloured dot and word. Phones show the reader's dot alone, in a round pill. */
+.kiosk-shell .kiosk-topbar :is(.office-count, .scanner-pill) { box-sizing: border-box; height: 28px; padding: 0 12px; background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .3)); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); font-weight: 500; letter-spacing: .02em; }
+@media (max-width: 600px) { .kiosk-shell .kiosk-topbar .scanner-pill { justify-content: center; width: 28px; padding: 0; } }
+.kiosk-shell .kiosk-topbar .office-count { color: var(--muted); }
+.kiosk-shell .kiosk-topbar .office-count svg { color: var(--gold); }
+.kiosk-shell .kiosk-topbar .office-count strong { color: var(--ink); }
+
+/* Mode switch: a round pill of dark glass with a hairline edge. The chosen mode sits on one gold glass thumb that slides:
+   a soft gold fall with a lighter top half, a thin light line along its top and a faint warm lift (no hard bevel or
+   strong shadow). Its 1/2 key is a small dark bronze coin with a gold number; the other mode reads as quiet text with
+   an outlined key. */
+.kiosk-shell .kiosk-mode-switcher { background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .3)); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
+.kiosk-shell .kiosk-mode-switcher::before { background: linear-gradient(180deg, rgba(255, 248, 225, .2), rgba(255, 248, 225, 0) 55%), linear-gradient(180deg, #d8b866, #c6a254 55%, #b08d46); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .38), 0 2px 10px rgba(198, 162, 84, .2); }
+.kiosk-shell .mode-shortcut-badge { border-radius: 999px; }
+.kiosk-shell .kiosk-mode-tab:not(.active) .mode-shortcut-badge { color: var(--quiet); background: transparent; border-color: rgba(246, 242, 233, .2); }
+.kiosk-shell .kiosk-mode-tab.active .mode-shortcut-badge { color: var(--gold-bright); background: #33291a; border-color: rgba(17, 16, 12, .35); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 244, 214, .3); }
+@media (prefers-reduced-motion: reduce) { .kiosk-shell .kiosk-mode-switcher::before { transition: none; } }
+
+/* DTR sync (desktop app): a small card, only while sync needs a look; muted gold, coral when attendance needs an
+   administrator. Never a modal: nothing behind it is blocked. Laptops and tablets: fixed at the top right, just under the
+   header's gold line (14px margin + the 59px one-row header from 1280px, the 107px two-row header below), in the
+   corner the centred greeting, result cards and key cards leave free; narrower windows narrow it so it stays clear of a
+   640px result card. Phones: under the options. The update banner keeps the bottom corner. */
+.kiosk-dtr-notice { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; width: min(560px, calc(100% - 32px)); margin: 0 auto 16px; padding: 10px 6px 10px 12px; color: var(--muted); background: rgba(17, 16, 12, .94); border: 1px solid rgba(198, 162, 84, .3); border-radius: 8px; font-size: var(--fs-12); line-height: 1.4; animation: toast-in 220ms var(--ease-soft); }
+@media (min-width: 901px) {
+  .kiosk-dtr-notice-region { position: fixed; top: 131px; right: var(--kiosk-gutter); z-index: 5; width: clamp(176px, calc((100vw - 640px) / 2 - var(--kiosk-gutter) - 12px), 224px); }
+  .kiosk-dtr-notice { width: auto; margin: 0; box-shadow: 0 12px 30px rgba(0, 0, 0, .45); }
+}
+@media (min-width: 1280px) { .kiosk-dtr-notice-region { top: 83px; } }
+.kiosk-dtr-notice-title { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--gold); font-weight: 600; letter-spacing: .04em; }
+.kiosk-dtr-notice-title::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.kiosk-dtr-notice-text { grid-column: 1; margin: 2px 0 0; overflow-wrap: anywhere; }
+.kiosk-dtr-notice-close { grid-column: 2; grid-row: 1 / span 2; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 6px; }
+.kiosk-dtr-notice-close:hover { color: var(--ink); background: rgba(198, 162, 84, .1); }
+.kiosk-dtr-notice.is-urgent { border-color: rgba(239, 170, 146, .45); }
+.kiosk-dtr-notice.is-urgent .kiosk-dtr-notice-title { color: var(--danger); }

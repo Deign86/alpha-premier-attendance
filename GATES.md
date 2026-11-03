@@ -1974,3 +1974,25 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 578 tests passed.
+
+## UI overhaul 2, stage 1: Kiosk, a gold-line header, round glassy switch, DTR notice, text 10% smaller, 150% scaling (client only; owner requests 2026-11-03)
+
+- [x] The header is one row on the page (no box) with a 1px fading gold line under it, inside the page gutters, with more top and side room. The brand reads "ALPHA PREMIER". The in-office count and the reader status are minimal round pills.
+- [x] The mode switch is a fully round dark glass pill. The active thumb is round gold with a soft gradient, a 1px top light line and a faint warm glow, and still slides with transform only. The active number badge is a dark bronze coin (#33291a) with a gold number. Admin keeps its own switch rule for now.
+- [x] The DTR status left the header. A minimalist "DTR sync" card shows only when there is a real problem (dtrSyncNoticeKind: persistence | attention | paused | retry | throttled | retrying | offline | unavailable). It:
+  - ignores a late heartbeat;
+  - is dismissed by kind until sync is fine again;
+  - never takes focus (× keeps focus in Manual entry);
+  - sits in an always-present live region;
+  - is fixed top-right under the header line from 901px up, and in the flow on phones.
+  CHECK: cd client && npx vitest run src/dtr-sync-guard.test.ts && npx vitest run src/App.test.tsx -t "DTR"
+  EXPECT: all pass.
+- [x] Kiosk text is about 10% smaller (kiosk-scoped --fs-* overrides, 12px floor). Greeting 60 → 54 at 1366x768; result name and time 28 → 25.2; bathroom title 40 → 36.
+- [x] The kiosk fits a 1920x1080 laptop at 150% scaling.
+  EVIDENCE:
+  - At 1280x640 (maximized) and 1280x720, page scrollHeight = viewport in all 8 states (attendance idle, time-in, error, Manual entry, bathroom in use, bathroom ID card, bathroom key error, Type card ID), with and without the DTR card.
+  - Also at 1366x768 and 1366x657. No sideways scroll at 320–1920.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 600 tests passed (builder run). A coordinator re-run had one known-slow admin test hit its 20 s limit under load. It passes alone (18/18 in its group, 16.4 s).
