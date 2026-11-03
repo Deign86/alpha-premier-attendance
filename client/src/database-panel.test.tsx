@@ -112,7 +112,7 @@ describe('DatabasePanel', () => {
     expect(screen.queryByText('Installed — app data folder')).not.toBeInTheDocument();
     expect(screen.queryByText(/Technical details/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /check for updates now/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /windows starts/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /when you log in/i })).not.toBeInTheDocument();
   });
 
   it('shows two sections one after the other: Backups, then Google Sheets with its own Sync now and on/off', async () => {
@@ -1849,7 +1849,7 @@ describe('SystemPanel', () => {
     expect(within(card).queryAllByRole('region')).toHaveLength(0);
     expect(within(card).getByText('Version: desktop app only')).toBeInTheDocument();
     expect(within(card).getByRole('checkbox', { name: 'Check for updates automatically' })).toBeInTheDocument();
-    expect(within(card).getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' })).toBeDisabled();
+    expect(within(card).getByRole('checkbox', { name: 'Open the attendance screen when you log in' })).toBeDisabled();
     // One reader line, with no page-open time passed off as a scan.
     const reader = within(card).getByText('Card reader:', { exact: false });
     expect(reader).toHaveTextContent('Card reader: Only in the desktop app');

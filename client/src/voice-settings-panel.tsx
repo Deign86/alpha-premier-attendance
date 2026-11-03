@@ -160,7 +160,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           : result.engineUsed === 'piper'
             ? 'Piper (local neural voice)'
             : result.engineUsed === 'system'
-              ? 'Windows SAPI (system voice)'
+              ? 'System voice (Windows SAPI / macOS)'
               : 'No voice played';
       setFeedback(`Voice played successfully via ${engineLabel}.`);
       setFeedbackType('success');
@@ -221,7 +221,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
                   : status.piperAvailable
                     ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
                     : status.systemSapiAvailable
-                      ? 'Windows SAPI system voice active'
+                      ? 'System voice active (Windows SAPI / macOS)'
                       : 'No offline TTS engine detected'
             }
           >
@@ -233,7 +233,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
                 : status.piperAvailable
                   ? 'Piper TTS Ready'
                   : status.systemSapiAvailable
-                    ? 'SAPI Ready'
+                    ? 'System Voice Ready'
                     : 'Offline TTS Unavailable'}
           </span>
         )}
@@ -465,7 +465,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           <strong>Zero-cloud, offline speech synthesis:</strong>
         </p>
         <p>
-          Runs 100% locally with Ma&apos;am Bea cloned voice (multi-tone pre-rendered clips) and high-quality Piper neural voices (ONNX) with Windows SAPI fallback.
+          Runs 100% locally with Ma&apos;am Bea cloned voice (multi-tone pre-rendered clips) and high-quality Piper neural voices (ONNX) with a system voice fallback (Windows SAPI or macOS speech).
           Spoken greetings are triggered immediately on successful RFID card scans with zero internet latency.
         </p>
       </div>

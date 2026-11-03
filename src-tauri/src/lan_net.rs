@@ -125,6 +125,9 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// exists, `Some(false)` when none does, and `None` when the check could not
 /// run (non-Windows, missing PowerShell, or the query timed out).
 pub async fn detect_firewall_allow_rule(port: u16) -> Option<bool> {
+    if !cfg!(windows) {
+        return None;
+    }
     let script = r#"
 try {
   $f = Get-NetFirewallPortFilter -Protocol TCP | Where-Object { $_.LocalPort -contains '__PORT__' };
@@ -229,6 +232,9 @@ fn parse_network_category(text: &str) -> NetworkProfile {
 /// 2=DomainAuthenticated) via `Get-NetConnectionProfile`. Non-Windows or
 /// missing PowerShell degrades to `Unknown` without error.
 pub async fn detect_network_profile() -> NetworkProfile {
+    if !cfg!(windows) {
+        return NetworkProfile::Unknown;
+    }
     let mut cmd = tokio::process::Command::new("powershell");
     cmd.args([
         "-NoProfile",

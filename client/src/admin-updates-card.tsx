@@ -13,7 +13,7 @@ interface AdminUpdatesCardProps {
 
 /** System's update and startup rows: the installed version beside Check for updates now, then two plain tick boxes. */
 export function AdminUpdatesCard({ onManualCheck }: AdminUpdatesCardProps) {
-  // The installed version and Windows startup exist only in the desktop app.
+  // The installed version and start-at-login exist only in the desktop app.
   const desktop = '__TAURI_INTERNALS__' in window;
   const [version, setVersion] = useState<string | null>(null);
   const [autoUpdateDisabled, setAutoUpdateDisabled] = useState(() =>
@@ -87,7 +87,7 @@ export function AdminUpdatesCard({ onManualCheck }: AdminUpdatesCardProps) {
           disabled={!desktop || autostartBusy}
           onChange={(e) => void toggleAutostart(e.target.checked)}
         />
-        <span>Open the attendance screen when Windows starts</span>
+        <span>Open the attendance screen when you log in</span>
       </label>
       {!desktop ? (
         <p className="reset-hint">Only in the desktop app.</p>

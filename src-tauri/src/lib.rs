@@ -5171,7 +5171,15 @@ async fn open_generated_artifact(
             .spawn()
             .map_err(|_| "ARTIFACT_OPEN_FAILED".to_string())?;
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&canonical)
+            .spawn()
+            .map_err(|_| "ARTIFACT_OPEN_FAILED".to_string())?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = canonical;
     }

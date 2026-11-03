@@ -24,6 +24,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version_step.outputs.tag }}
+      version: ${{ steps.version_step.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -96,3 +99,74 @@ jobs:
           releaseName: 'Alpha Premier Attendance v__VERSION__'
           releaseDraft: false
           prerelease: false
+
+  # Native macOS .app/.dmg (one per arch) attached to the same release. Runs
+  # after Windows so it builds the bumped tag, and tauri-action merges the
+  # darwin entries into the release's latest.json. Per-arch rather than
+  # universal-apple-darwin: the universal bundler only lipo-merges the main
+  # binary and then fails to copy the extra `migrate_from_sheets` bin.
+  # max-parallel 1 keeps the two latest.json merges from racing.
+  build-macos:
+    needs: build-windows
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-windows.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies and target artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+          key: ${{ matrix.target }}
+
+      - name: Install dependencies and build frontend
+        run: |
+          npm ci
+          npm run build:fast
+
+      # The release tag points at the pre-bump commit, so stamp the bumped
+      # version; otherwise the Mac bundle and the merged latest.json carry
+      # the previous version and break auto-update for every platform.
+      - name: Stamp release version
+        env:
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          node -e 'const fs=require("fs"),f="src-tauri/tauri.conf.json",c=JSON.parse(fs.readFileSync(f,"utf8"));c.version=process.env.VERSION;fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+          grep '"version"' src-tauri/tauri.conf.json
+
+      - name: Build Tauri app and attach to release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
+          ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+          ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
+        with:
+          tagName: ${{ needs.build-windows.outputs.tag }}
+          releaseName: 'Alpha Premier Attendance ${{ needs.build-windows.outputs.tag }}'
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}

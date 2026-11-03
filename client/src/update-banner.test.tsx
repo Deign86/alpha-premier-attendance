@@ -176,7 +176,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       // In a web browser there is no installed version to show.
       expect(screen.getByText('Version: desktop app only')).toBeInTheDocument();
       expect(screen.getByRole('checkbox', { name: 'Check for updates automatically' })).toBeInTheDocument();
-      expect(screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' })).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Open the attendance screen when you log in' })).toBeInTheDocument();
       expect(screen.queryByText(/github|Deign86|release channel|kiosk terminal|Software updates/i)).not.toBeInTheDocument();
 
       await act(async () => {
@@ -214,7 +214,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       const setSpy = vi.spyOn(api, 'setAutostartStatus');
       render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
 
-      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' });
+      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when you log in' });
       expect(startup).toBeDisabled();
       expect(screen.getByText('Only in the desktop app.')).toBeInTheDocument();
       expect(setSpy).not.toHaveBeenCalled();
@@ -228,7 +228,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       const setSpy = vi.spyOn(api, 'setAutostartStatus').mockResolvedValue(true);
       render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
 
-      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' });
+      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when you log in' });
       expect(startup).toBeEnabled();
       await act(async () => {
         fireEvent.click(startup);
@@ -254,7 +254,7 @@ describe('UpdateBanner & AdminUpdatesCard', () => {
       const setSpy = vi.spyOn(api, 'setAutostartStatus').mockResolvedValue(false);
       render(<AdminUpdatesCard onManualCheck={vi.fn()} />);
 
-      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when Windows starts' });
+      const startup = screen.getByRole('checkbox', { name: 'Open the attendance screen when you log in' });
       await waitFor(() => expect(startup).toBeChecked());
       await act(async () => {
         fireEvent.click(startup);

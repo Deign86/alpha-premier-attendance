@@ -1,6 +1,7 @@
 fn main() {
-    if std::env::var("PROFILE").as_deref() == Ok("release") {
-        let target = std::env::var("TARGET").unwrap_or_default();
+    let target = std::env::var("TARGET").unwrap_or_default();
+    // GUI-subsystem flag is Windows-only; macOS/Linux linkers reject it.
+    if std::env::var("PROFILE").as_deref() == Ok("release") && target.contains("windows") {
         if target.contains("msvc") {
             println!("cargo:rustc-link-arg-bin=alpha-premier-attendance=/SUBSYSTEM:WINDOWS");
         } else {

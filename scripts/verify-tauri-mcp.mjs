@@ -234,7 +234,6 @@ async function runVerification() {
   // STEP 2: Feature Map & Skill Spec Validation
   console.log('\n[2/6] Verifying project verification skill & feature map...');
   const skillMdAgents = resolve(rootDir, '.agents/skills/verify-alpha-premier-attendance/SKILL.md');
-  const skillMdAgent = resolve(rootDir, '.agent/skills/verify-alpha-premier-attendance/SKILL.md');
   const featureDirAgents = resolve(rootDir, '.agents/skills/verify-alpha-premier-attendance/features');
 
   const requiredFeatures = [
@@ -246,7 +245,7 @@ async function runVerification() {
     'README.md',
   ];
 
-  let skillValid = existsSync(skillMdAgents) && existsSync(skillMdAgent);
+  let skillValid = existsSync(skillMdAgents);
   const featureChecks = [];
   for (const f of requiredFeatures) {
     const p = resolve(featureDirAgents, f);
