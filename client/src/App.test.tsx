@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Profiler } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics, PayrollWorkspace } from './App';
@@ -7,7 +8,8 @@ import * as api from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
 import { resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
-import type { BathroomScanResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
+import { formatTime } from './format';
+import type { BathroomActiveHolder, BathroomScanResponse, BathroomScanSuccessResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
 
 let rfidHandlers: Array<(uid: string) => void> = [];
 let scannerStatusHandlers: Array<(status: ScannerStatus) => void> = [];
@@ -516,7 +518,7 @@ describe('RFID kiosk', () => {
     });
     render(<App />);
     act(() => emitRfidScan('UNREGISTERED'));
-    expect(await screen.findByText('This RFID card is not registered.')).toBeInTheDocument();
+    expect(await screen.findByText('Card not registered')).toBeInTheDocument();
     expect(ttsService.announceScanError).toHaveBeenCalledWith({
       errorCode: 'UNKNOWN_RFID_CARD',
       message: 'This RFID card is not registered.',
@@ -544,6 +546,69 @@ describe('RFID kiosk', () => {
     expect(screen.getByText(/^Error$/)).toBeInTheDocument();
   });
 
+  it('header pill follows the scan: Reading…, then Done or Error, then back to Ready', async () => {
+    let resolveScan: ((value: Response) => void) | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 1200 }) } as Response;
+      }
+      if (url !== '/api/attendance/scan') {
+        // SAFETY: Fetch returns an empty day for the headcount and the week's arrival history
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [], fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
+      }
+      return new Promise<Response>((resolve) => { resolveScan = resolve; });
+    });
+    // A 1.2 s result window, so Done and Error stay long enough to observe when the whole suite runs at once.
+    render(<App />);
+    const scannerPill = () => document.querySelector('.scanner-pill');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'));
+
+    act(() => emitRfidScan('0000000001'));
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Reading…'));
+    await act(async () => {
+      // SAFETY: Resolve scan promise with mock Response
+      resolveScan?.({ ok: true, json: async () => successResponse } as Response);
+    });
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Done'));
+    expect(scannerPill()).toHaveClass('is-connected');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'), { timeout: 4_000 });
+
+    act(() => emitRfidScan('0000000002'));
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Reading…'));
+    await act(async () => {
+      // SAFETY: Resolve scan promise with mock error Response
+      resolveScan?.({ ok: true, json: async () => ({ success: false, requestId: 'req-err', error: { code: 'UNKNOWN_RFID_CARD', message: 'This RFID card is not registered.' } }) } as Response);
+    });
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Error'));
+    expect(scannerPill()).toHaveClass('is-error');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'), { timeout: 4_000 });
+  }, 15_000);
+
+  it('keeps the header pill calm on a repeat tap (the kiosk shows Already scanned)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 1200 }) } as Response;
+      }
+      if (url !== '/api/attendance/scan') {
+        // SAFETY: Fetch returns an empty day for the headcount and the week's arrival history
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [], fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
+      }
+      // SAFETY: Fetch returns the backend's repeat-tap rejection
+      return { ok: true, json: async () => ({ success: false, requestId: 'req-dup', error: { code: 'DUPLICATE_SCAN', message: 'Card scanned too recently.' } }) } as Response;
+    });
+    render(<App />);
+    const scannerPill = () => document.querySelector('.scanner-pill');
+    await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'));
+    act(() => emitRfidScan('0000000003'));
+    expect(await screen.findByText(/already scanned/i)).toBeInTheDocument();
+    expect(scannerPill()).toHaveTextContent('Done');
+    expect(scannerPill()).not.toHaveClass('is-error');
+  });
+
   it('keeps processing guard active during an in-flight scan', async () => {
     let resolveScan: ((value: Response) => void) | undefined;
     const scanCalls = vi.fn();
@@ -551,6 +616,10 @@ describe('RFID kiosk', () => {
       if (String(input) === '/api/config') {
         // SAFETY: Fetch returns config Response mock
         return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (String(input) === '/api/attendance') {
+        // SAFETY: Fetch returns an empty day for the in-office headcount
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [], fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
       }
       scanCalls(String(input));
       return new Promise<Response>((resolve) => { resolveScan = resolve; });
@@ -584,7 +653,7 @@ describe('RFID kiosk', () => {
     ));
   });
 
-  it('routes the manual Record button to the bathroom pipeline in bathroom mode (B1)', async () => {
+  it('routes the Type card ID Record button to the bathroom pipeline in bathroom mode (B1)', async () => {
     window.history.pushState({}, '', '/');
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
@@ -606,7 +675,9 @@ describe('RFID kiosk', () => {
     render(<App />);
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
     expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /manual entry/i }));
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    // The box opens with the cursor in the field.
+    await waitFor(() => expect(screen.getByLabelText(/manual card id/i)).toHaveFocus());
     await user.type(screen.getByLabelText(/manual card id/i), 'BATH-001');
     await user.click(screen.getByRole('button', { name: /record/i }));
 
@@ -615,6 +686,11 @@ describe('RFID kiosk', () => {
       expect.objectContaining({ body: JSON.stringify({ rfidUid: 'BATH-001', source: 'MANUAL_TEST' }) }),
     ));
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
+    // A recorded scan closes the box and shows the ID card; Type card ID is back, greyed out until the card goes.
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent('Ada Lovelace');
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /type card id/i })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
   });
 
   it('renders an API error and returns to ready after the reset delay', async () => {
@@ -627,9 +703,120 @@ describe('RFID kiosk', () => {
     // Let the config load so the (mocked) short reset delay is in effect.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     act(() => emitRfidScan('DEADBEEF'));
-    expect(await screen.findByText('Card is not registered.')).toBeInTheDocument();
+    expect(await screen.findByText('Card not registered')).toBeInTheDocument();
+    expect(screen.getByText('Please ask an admin to set up this card.')).toBeInTheDocument();
+    expect(screen.queryByText('UNKNOWN RFID CARD')).not.toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument(), { timeout: 1_000 });
+  });
+
+  it('explains an inactive card in plain words with a next step', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-inactive',
+      error: { code: 'INACTIVE_USER', message: 'This user is inactive.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Card inactive')).toBeInTheDocument();
+    expect(screen.getByText('Please see an admin to turn this card back on.')).toBeInTheDocument();
+    expect(screen.queryByText('INACTIVE USER')).not.toBeInTheDocument();
+  });
+
+  it('keeps showing the system message for errors without a plain-word version', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-rate',
+      error: { code: 'RATE_LIMITED', message: 'Too many scans. Please wait a moment.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Too many scans. Please wait a moment.')).toBeInTheDocument();
+    expect(screen.queryByText('RATE LIMITED')).not.toBeInTheDocument();
+  });
+
+  it('shows how many people are in the office (timed in, not yet out) in the header', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === '/api/attendance') {
+        // SAFETY: Fetch returns today's attendance for the headcount
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            fetchedAt: '2026-07-28T09:00:00+08:00',
+            attendance: [{ status: 'WORKING' }, { status: 'WORKING' }, { status: 'COMPLETED' }, { status: 'LATE_TIMEOUT' }],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch returns mock Response for config and other requests
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+    });
+    render(<App />);
+    expect(await screen.findByTestId('kiosk-in-office')).toHaveTextContent('2 in office');
+  });
+
+  it('puts the cursor in the field when Manual entry opens', async () => {
+    const user = userEvent.setup();
+    mockFetch();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-manual-toggle'));
+    await waitFor(() => expect(screen.getByLabelText('Manual card ID')).toHaveFocus());
+  });
+
+  it('shows what was recorded in an action band instead of the stock confirmation', async () => {
+    mockFetch({ ...successResponse, message: 'Time In recorded successfully.' });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    const result = await screen.findByTestId('kiosk-result-success');
+    expect(within(result).getByText('Time in')).toBeInTheDocument();
+    expect(within(result).getByText(/9:00/)).toBeInTheDocument();
+    expect(within(result).queryByText('Time In recorded successfully.')).not.toBeInTheDocument();
+  });
+
+  it('keeps a server message that says more than the stock confirmation', async () => {
+    mockFetch({ ...successResponse, message: 'Lunch break started. Tap again when you are back.' });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Lunch break started. Tap again when you are back.')).toBeInTheDocument();
+  });
+
+  it('shows initials when the intern has no ID photo', async () => {
+    mockFetch({ ...successResponse, user: { ...successResponse.user, photoUrl: null } });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByLabelText('ID photo unavailable')).toHaveTextContent('AL');
+  });
+
+  it('explains a repeat tap in plain words instead of an error code', async () => {
+    mockFetch({
+      success: false,
+      requestId: 'req-dup',
+      error: { code: 'DUPLICATE_SCAN', message: 'This card was scanned too recently.' },
+    });
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(await screen.findByText('Already scanned')).toBeInTheDocument();
+    expect(screen.queryByText('DUPLICATE SCAN')).not.toBeInTheDocument();
+  });
+
+  it('shows a saved-offline card for a queued scan', async () => {
+    mockFetch({
+      success: true,
+      offlineQueued: true,
+      message: 'Attendance saved offline. Will automatically sync when reconnected.',
+    });
+    render(<App />);
+    act(() => emitRfidScan('OFFLINE01'));
+    expect(within(await screen.findByTestId('kiosk-result-offline')).getByText('Saved offline')).toBeInTheDocument();
+  });
+
+  it('shows a cannot-reach card when the scan gets no answer', async () => {
+    mockFetch();
+    vi.spyOn(api, 'submitScan').mockRejectedValue(new Error('network down'));
+    render(<App />);
+    act(() => emitRfidScan('04A1B2C3'));
+    expect(within(await screen.findByTestId('kiosk-result-unreachable')).getByText("Can't reach the system")).toBeInTheDocument();
   });
 
   it('handles offline queued scans and returns to ready after reset delay', async () => {
@@ -719,7 +906,7 @@ describe('RFID kiosk', () => {
     await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(false));
   });
 
-  it('shows a distinct LATE TIMEOUT pill in the live attendance view', async () => {
+  it('shows a late time-out as its own status word in the live attendance view', async () => {
     window.history.pushState({}, '', '/attendance');
     try {
       vi.restoreAllMocks();
@@ -740,6 +927,7 @@ describe('RFID kiosk', () => {
               attendance: [
                 { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T18:55:00+08:00', status: 'LATE_TIMEOUT' },
                 { attendanceId: 'a2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+                { attendanceId: 'a3', attendanceDate: '2026-07-28', userId: 'u3', fullName: 'Alan Turing', department: 'Engineering', timeIn: '2026-07-28T08:10:00+08:00', timeOut: '2026-07-28T18:20:00+08:00', status: 'LATE_TIMEOUT' },
               ],
             }),
           } as Response;
@@ -748,10 +936,17 @@ describe('RFID kiosk', () => {
         return { ok: true, json: async () => ({ success: true }) } as Response;
       });
       render(<App />);
-      expect(await screen.findByText('LATE TIMEOUT')).toBeInTheDocument();
-      expect(screen.getByText('Correction needed')).toBeInTheDocument();
-      // Normal shifts keep rendering their existing status unchanged.
-      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+      // A dot and a word, the same name everywhere ("Late time-out"), with the reason in its tooltip.
+      const lates = await screen.findAllByText('Late time-out');
+      expect(lates).toHaveLength(2);
+      const [late] = lates;
+      expect(late).toHaveClass('status-word', 'is-late_timeout');
+      expect(late).toHaveAttribute('title', 'Timed out after office hours; the time-out needs correcting');
+      // The chip above counts them in the plural.
+      expect(screen.getByRole('list', { name: 'Today at a glance' })).toHaveTextContent('2 late time-outs');
+      expect(screen.queryByText('Correction needed')).not.toBeInTheDocument();
+      // Normal shifts show their own word with the same dot.
+      expect(screen.getByText('Completed')).toHaveClass('status-word', 'is-completed');
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -790,7 +985,10 @@ describe('RFID kiosk', () => {
     await user.keyboard('{Enter}');
     await screen.findByText('ABCD1234');
     expect(screen.getByLabelText(/^user id/i)).toHaveFocus();
+    expect(screen.getByLabelText(/^user id/i)).toHaveAttribute('placeholder', 'e.g. APG-2026-001');
     await user.type(screen.getByLabelText(/^user id/i), 'EMP-002');
+    // Not the usual intern format: a quiet hint under the field, and Save still works below.
+    expect(screen.getByText('Usual format: APG-YYYY-NNN')).toBeInTheDocument();
     await user.type(screen.getByLabelText(/full name/i), '  grace   hopper  ');
     fireEvent.blur(screen.getByLabelText(/full name/i));
     expect(screen.getByLabelText(/full name/i)).toHaveValue('Grace Hopper');
@@ -803,6 +1001,35 @@ describe('RFID kiosk', () => {
         body: expect.stringContaining('"fullName":"Grace Hopper"'),
       }),
     );
+  });
+
+  it('shows no User ID format hint for an existing card saved with another ID style', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config Response mock (long auto-submit delay: the card is submitted with Enter)
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 5_000, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      }
+      if (url.includes('/api/setup/unlock')) {
+        // SAFETY: Fetch returns unlock Response mock
+        return { ok: true, json: async () => ({ success: true, setupToken: 'setup-token', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/setup/card')) {
+        // SAFETY: Fetch returns an existing demo card
+        return { ok: true, json: async () => ({ success: true, rfidUid: 'DEMO0002', user: { userId: 'APG-DEMO-002', fullName: 'Juan Dela Cruz', department: 'IT', status: 'ACTIVE', rfidUid: 'DEMO0002', cardType: 'EMPLOYEE', gender: null, dailyRate: null, photoUrl: null } }) } as Response;
+      }
+      // SAFETY: Fetch returns fallback Response mock
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.click(screen.getByRole('button', { name: /unlock setup/i }));
+    await user.type(await screen.findByLabelText(/setup card id/i), 'DEMO0002{enter}');
+    expect(await screen.findByLabelText(/^user id/i)).toHaveValue('APG-DEMO-002');
+    expect(screen.queryByText('Usual format: APG-YYYY-NNN')).not.toBeInTheDocument();
   });
 
   it('supports drag and drop photo upload in setup dialog', async () => {
@@ -902,9 +1129,98 @@ describe('ScannerDiagnostics', () => {
       paused: false,
     });
     render(<ScannerDiagnostics />);
-    expect(await screen.findByText(/Reader: Keyboard-mode RFID reader/)).toBeInTheDocument();
+    const button = await screen.findByRole('button', { name: 'Reader ready' });
+    expect(button).toHaveClass('is-ready');
+    // The details stay folded away until the dot is clicked.
+    expect(screen.queryByText(/Reader: Keyboard-mode RFID reader/)).not.toBeInTheDocument();
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/Reader: Keyboard-mode RFID reader/)).toBeInTheDocument();
     expect(screen.getByText(/Keep the attendance window focused before scanning\./)).toBeInTheDocument();
     expect(screen.getByText(/Waiting for card/)).toBeInTheDocument();
+    // No time is made up from when the page opened: without a scan today there is no time line.
+    expect(screen.queryByText(/Last (activity|scan)/)).not.toBeInTheDocument();
+  });
+
+  it("shows the last scan from today's attendance in the details", async () => {
+    vi.spyOn(tauriApi, 'getScannerStatus').mockResolvedValue({
+      state: 'connected',
+      message: 'Keyboard-mode RFID reader ready',
+      detail: null,
+      mode: 'keyboard',
+      paused: false,
+    });
+    render(<ScannerDiagnostics lastScanAt="2026-10-30T16:52:00+08:00" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reader ready' }));
+    expect(screen.getByText('Last scan: 4:52 PM')).toBeInTheDocument();
+  });
+
+  it('shows a grey Browser mode state instead of checking forever in a web browser', async () => {
+    render(<ScannerDiagnostics />);
+    // getScannerStatus rejects in the browser build (see beforeEach), so no status ever arrives.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const button = screen.getByRole('button', { name: 'Browser mode' });
+    expect(button).toHaveClass('is-browser');
+    expect(screen.queryByText(/checking/i)).not.toBeInTheDocument();
+    fireEvent.click(button);
+    expect(screen.getByText('The card reader is checked only in the desktop app on the attendance PC.')).toBeInTheDocument();
+  });
+
+  it('follows the desktop reader: checking, missing, failing and ready', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
+    try {
+      render(<ScannerDiagnostics />);
+      expect(screen.getByRole('button', { name: 'Checking…' })).toHaveClass('is-checking');
+      await waitFor(() => expect(scannerStatusHandlers.length).toBeGreaterThan(0));
+      const status = (state: ScannerStatus['state']): ScannerStatus => ({ state, message: 'Reader update', detail: null, mode: 'keyboard', paused: false });
+      act(() => emitScannerStatus(status('offline')));
+      expect(screen.getByRole('button', { name: 'Reader missing' })).toHaveClass('is-missing');
+      act(() => emitScannerStatus(status('error')));
+      expect(screen.getByRole('button', { name: 'Reader error' })).toHaveClass('is-error');
+      act(() => emitScannerStatus(status('connected')));
+      expect(screen.getByRole('button', { name: 'Reader ready' })).toHaveClass('is-ready');
+    } finally {
+      Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+    }
+  });
+
+  it('toggles the details on click and closes them with Escape or a click outside', async () => {
+    const user = userEvent.setup();
+    render(<><ScannerDiagnostics /><p>Outside</p></>);
+    const button = await screen.findByRole('button', { name: 'Browser mode' });
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button).not.toHaveAttribute('aria-controls');
+
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    const details = screen.getByText('Opened in a web browser').parentElement;
+    expect(button).toHaveAttribute('aria-controls', details?.id);
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+
+    await user.click(button);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+    expect(button).toHaveFocus();
+
+    await user.click(button);
+    await user.click(screen.getByText('Outside'));
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes the details when keyboard focus moves away, and an Escape elsewhere leaves focus alone', async () => {
+    const user = userEvent.setup();
+    render(<><ScannerDiagnostics /><input aria-label="Elsewhere" /></>);
+    const button = await screen.findByRole('button', { name: 'Browser mode' });
+    await user.click(button);
+    expect(screen.getByText('Opened in a web browser')).toBeInTheDocument();
+    await user.tab();
+    expect(screen.getByRole('textbox', { name: 'Elsewhere' })).toHaveFocus();
+    expect(screen.queryByText('Opened in a web browser')).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('textbox', { name: 'Elsewhere' })).toHaveFocus();
   });
 });
 
@@ -986,7 +1302,7 @@ describe('Admin Attendance Corrections', () => {
       expect(tableBox).toHaveClass('attendance-table-wrap');
       expect(tableBox).not.toHaveClass('is-expanded');
 
-      await user.click(await screen.findByRole('button', { name: /^See all \(\d+\)$/ }));
+      await user.click(await screen.findByRole('button', { name: 'See all' }));
       expect(tableBox).toHaveClass('is-expanded');
 
       await user.click(screen.getByRole('button', { name: 'Show less' }));
@@ -1057,7 +1373,10 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(await screen.findByDisplayValue('08:00')).toBeInTheDocument();
+      // The row reads as plain times until Edit opens its time fields.
+      expect(await screen.findByText('8:00 AM')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Edit times for Ada Lovelace' }));
+      expect(screen.getByDisplayValue('08:00')).toBeInTheDocument();
       expect(screen.getByDisplayValue('17:00')).toBeInTheDocument();
 
       const clearInBtn = screen.getByRole('button', { name: /clear time in for ada lovelace/i });
@@ -1151,14 +1470,11 @@ describe('Admin Attendance Corrections', () => {
       expect(chip.getAttribute('title')).toBe('Actual scan: 8:30 AM (payable time clamped)');
       expect(screen.getAllByTestId('clamped-time-in')).toHaveLength(1);
 
-      // The actual scan stays underneath in the real input.
-      expect(screen.getByDisplayValue('08:30')).toBeInTheDocument();
-
       // Capture the clamped row before the chip unmounts on reveal.
       const row = chip.closest('tr');
       expect(row).not.toBeNull();
 
-      // Clicking the chip reveals the actual value for editing.
+      // Clicking the chip opens the row with the actual scan in its time field.
       await user.click(chip);
       expect(screen.queryByTestId('clamped-time-in')).not.toBeInTheDocument();
       expect(screen.getByDisplayValue('08:30')).toHaveFocus();
@@ -1235,7 +1551,8 @@ describe('Admin Attendance Corrections', () => {
       const chip = await screen.findByTestId('clamped-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
       expect(chip.getAttribute('title')).toBe('Actual scan: 8:21 AM (payable time clamped)');
-      expect(screen.getByDisplayValue('08:21')).toBeInTheDocument();
+      await user.click(chip);
+      expect(screen.getByDisplayValue('08:21')).toHaveFocus();
     } finally {
       vi.useRealTimers();
       window.history.pushState({}, '', '/');
@@ -1415,20 +1732,20 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
 
-      expect(await screen.findByText('Total users: 2')).toBeInTheDocument();
+      expect(await screen.findByText('2 users')).toBeInTheDocument();
       const masterCheckbox = screen.getByRole('checkbox', { name: /select all users/i });
       expect(masterCheckbox).not.toBeChecked();
 
       await user.click(masterCheckbox);
       expect(masterCheckbox).toBeChecked();
-      expect(await screen.findByText('2 of 2 user(s) selected')).toBeInTheDocument();
+      const selectionBar = await screen.findByRole('group', { name: 'Selected users' });
+      expect(within(selectionBar).getByText('2 selected')).toBeInTheDocument();
 
-      const batchDeleteBtn = screen.getByRole('button', { name: /delete selected \(2\)/i });
-      await user.click(batchDeleteBtn);
+      await user.click(within(selectionBar).getByRole('button', { name: 'Delete' }));
 
       expect(screen.getByRole('dialog', { name: /delete selected users\?/i })).toBeInTheDocument();
       expect(screen.getByText('Are you sure you want to delete 2 selected user(s)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await user.click(screen.getByRole('button', { name: 'Delete users' }));
 
       await waitFor(() => {
         expect(deletedUserIds).toContain('u1');
@@ -1482,7 +1799,7 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
 
-      expect(await screen.findByText('Total users: 2')).toBeInTheDocument();
+      expect(await screen.findByText('2 users')).toBeInTheDocument();
       expect(screen.getByRole('columnheader', { name: 'Voice' })).toBeInTheDocument();
       // Ada has a bundled manifest clip: Bea badge + Play + Regenerate.
       const adaRow = (await screen.findByText('Ada Lovelace')).closest('tr');
@@ -1670,10 +1987,24 @@ describe('Admin Attendance Corrections', () => {
       expect(screen.getByRole('dialog', { name: /delete user\?/i })).toBeInTheDocument();
       expect(screen.getByText('Are you sure you want to delete Ada Lovelace (u1)? All associated records (attendance, bathroom logs, and payroll) will be permanently deleted. This cannot be undone.')).toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      // A permanent delete stays off until the User ID is typed; the field has focus so typing starts at once.
+      const confirmDelete = screen.getByRole('button', { name: 'Delete user' });
+      const typeId = screen.getByLabelText(/type u1 to confirm/i);
+      expect(typeId).toHaveFocus();
+      expect(confirmDelete).toBeDisabled();
+      await user.type(typeId, 'u2');
+      expect(confirmDelete).toBeDisabled();
+      await user.clear(typeId);
+      await user.type(typeId, 'U1');
+      expect(confirmDelete).toBeEnabled();
+      expect(deletedId).toBe('');
+
+      await user.click(confirmDelete);
       await waitFor(() => {
         expect(deletedId).toBe('u1');
       });
+      // The routine result is a toast.
+      expect(await screen.findByText('Deleted Ada Lovelace.')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -1734,6 +2065,8 @@ describe('Admin Attendance Corrections', () => {
       const user = userEvent.setup();
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+      // The registration form opens on demand.
+      await user.click(screen.getByRole('button', { name: /^add user$/i }));
 
       const dropzone = screen.getByText(/choose an id photo/i).closest('label');
       expect(dropzone).not.toBeNull();
@@ -1753,7 +2086,7 @@ describe('Admin Attendance Corrections', () => {
         dataTransfer: { files: [file] },
       });
 
-      expect(await screen.findByText('Photo uploaded successfully.')).toBeInTheDocument();
+      expect(await screen.findByText('Photo uploaded.')).toBeInTheDocument();
       expect(capturedPhotoBody).toEqual({
         userId: 'EMP-999',
         dataUrl: 'data:image/jpeg;base64,mockadmindata',
@@ -1830,19 +2163,19 @@ describe('Admin Attendance Corrections', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(await screen.findByText('Total records: 2')).toBeInTheDocument();
+      expect(await screen.findByText('2 records')).toBeInTheDocument();
       const masterCheckbox = screen.getByRole('checkbox', { name: /select all attendance records/i });
       expect(masterCheckbox).not.toBeChecked();
 
       await user.click(masterCheckbox);
       expect(masterCheckbox).toBeChecked();
-      expect(await screen.findByText('2 of 2 attendance record(s) selected')).toBeInTheDocument();
+      expect(await screen.findByText('2 selected')).toBeInTheDocument();
 
-      const batchDeleteBtn = screen.getByRole('button', { name: /delete selected \(2\)/i });
+      const batchDeleteBtn = screen.getByRole('button', { name: 'Delete selected' });
       await user.click(batchDeleteBtn);
 
       expect(screen.getByRole('dialog', { name: /delete selected attendance records\?/i })).toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await user.click(screen.getByRole('button', { name: 'Delete records' }));
 
       await waitFor(() => {
         expect(deletedAttendanceIds).toContain('att1');
@@ -2199,9 +2532,15 @@ describe('Admin Attendance Corrections', () => {
     // Switch to Attendance tab
     await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-    // Badges should be visible in the table
-    expect(await screen.findByText(/assisted by duty manager/i)).toBeInTheDocument();
-    expect(screen.getByText(/backdated entry by admin — physical attendance verified/i)).toBeInTheDocument();
+    // The notes' wording, their full text in the tooltip, and no inline style.
+    const assistedNote = await screen.findByText(/assisted by duty manager/i);
+    expect(assistedNote).toHaveTextContent('Assisted by Duty Manager');
+    expect(assistedNote).toHaveAttribute('title', 'Kiosk scan assisted by: Duty Manager (Forgot RFID card)');
+    expect(assistedNote).not.toHaveAttribute('style');
+    const backdatedNote = screen.getByText(/backdated by admin — physical attendance verified/i);
+    expect(backdatedNote).toHaveTextContent('Backdated by Admin — Physical attendance verified');
+    expect(backdatedNote).toHaveAttribute('title', 'Backdated manual entry by: Admin — Reason: Physical attendance verified');
+    expect(backdatedNote).not.toHaveAttribute('style');
 
     // Filter pills should show counts
     const assistedPill = screen.getByRole('button', { name: /assisted 1/i });
@@ -2209,8 +2548,23 @@ describe('Admin Attendance Corrections', () => {
     expect(assistedPill).toBeInTheDocument();
     expect(backdatedPill).toBeInTheDocument();
 
-    // Click "+ Add missed attendance"
-    const addMissedButton = screen.getByRole('button', { name: /\+ add missed attendance/i });
+    // Status filters are one choice at a time; choosing the current one again goes back to All.
+    const allStatuses = screen.getByRole('button', { name: /^all \d+$/i });
+    const working = screen.getByRole('button', { name: /^working \d+$/i });
+    expect(allStatuses).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(working);
+    expect(working).toHaveAttribute('aria-pressed', 'true');
+    expect(allStatuses).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(working);
+    expect(allStatuses).toHaveAttribute('aria-pressed', 'true');
+    // Assisted and Backdated switch on and off on their own.
+    fireEvent.click(assistedPill);
+    expect(assistedPill).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(assistedPill);
+    expect(assistedPill).toHaveAttribute('aria-pressed', 'false');
+
+    // Add missed attendance (an outline button in the table bar)
+    const addMissedButton = screen.getByRole('button', { name: /^add missed attendance$/i });
     await user.click(addMissedButton);
 
     // Modal opens
@@ -2238,7 +2592,7 @@ describe('Admin Attendance Corrections', () => {
     });
   });
 
-  it('creates a correction for 2026-09-01 while today is 2026-09-02 and ensures the row still shows 2026-09-01', async () => {
+  it('creates a correction for 2026-09-01 while today is 2026-09-02 and shows its row under Tue, Sep 1, 2026', async () => {
     vi.restoreAllMocks();
     let capturedBody: {
       userId?: string;
@@ -2331,7 +2685,7 @@ describe('Admin Attendance Corrections', () => {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
       // Click Add missed attendance
-      await user.click(screen.getByRole('button', { name: /\+ add missed attendance/i }));
+      await user.click(screen.getByRole('button', { name: /^add missed attendance$/i }));
 
       const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
       expect(dialog).toBeInTheDocument();
@@ -2357,9 +2711,9 @@ describe('Admin Attendance Corrections', () => {
         });
       });
 
-      // The row for 2026-09-01 is displayed in the table with date 2026-09-01
-      expect(await screen.findByText('2026-09-01')).toBeInTheDocument();
-      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+      // The table moves to 2026-09-01 (shown once above it) and lists the new row
+      expect(await screen.findByText('Tue, Sep 1, 2026')).toBeInTheDocument();
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -2432,6 +2786,7 @@ describe('Admin Attendance Corrections', () => {
 
       // By default, initial date shows Ada Lovelace for 2026-09-02
       expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      expect(screen.getByText('Wed, Sep 2, 2026')).toBeInTheDocument();
 
       // Change specific date to 2026-09-01
       const dateInput = screen.getByLabelText(/filter attendance date/i);
@@ -2439,11 +2794,12 @@ describe('Admin Attendance Corrections', () => {
 
       // After changing date to 2026-09-01, Charles Babbage is shown
       expect(await screen.findByText('Charles Babbage')).toBeInTheDocument();
-      expect(screen.getByText('2026-09-01')).toBeInTheDocument();
+      expect(screen.getByText('Tue, Sep 1, 2026')).toBeInTheDocument();
 
       // Other dates are not shown
       expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
-      expect(screen.queryByText('2026-08-30')).not.toBeInTheDocument();
+      expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument();
+      expect(screen.queryByText('Sun, Aug 30, 2026')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
       window.history.pushState({}, '', '/');
@@ -2520,11 +2876,14 @@ describe('Admin Attendance Corrections', () => {
 
     try {
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      fireEvent.change(screen.getByLabelText(/filter attendance date/i), { target: { value: '2026-09-01' } });
 
-      // Table row shows 2026-09-01
-      expect(await screen.findByText('2026-09-01')).toBeInTheDocument();
+      // The table shows 2026-09-01 once, above Ada's row
+      expect(await screen.findByText('Tue, Sep 1, 2026')).toBeInTheDocument();
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
 
       // Edit time-out
+      await user.click(screen.getByRole('button', { name: 'Edit times for Ada Lovelace' }));
       const timeOutInput = screen.getByLabelText(/^time out for ada lovelace$/i);
       fireEvent.change(timeOutInput, { target: { value: '18:00' } });
 
@@ -2539,8 +2898,9 @@ describe('Admin Attendance Corrections', () => {
         });
       });
 
-      // Row still displays 2026-09-01
-      expect(screen.getByText('2026-09-01')).toBeInTheDocument();
+      // The row closes again and the table still shows 2026-09-01
+      await waitFor(() => expect(screen.queryByLabelText(/^time out for ada lovelace$/i)).not.toBeInTheDocument());
+      expect(screen.getByText('Tue, Sep 1, 2026')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -2636,9 +2996,11 @@ describe('Admin Attendance Corrections', () => {
       for (const h of rfidHandlers) h('ADDE23');
     });
 
-    // Unlocks Admin panel directly
+    // Unlocks Admin panel directly, opening on Attendance corrections
     expect(capturedAdminUnlockBody).toEqual({ pin: 'ADDE23' });
     expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveAttribute('aria-current', 'page');
+    expect(await screen.findByText(/^\d+ records?$/)).toBeInTheDocument();
   });
 
   it('switches between Attendance and Bathroom Key Log mode via header buttons and 1/2 keybindings', async () => {
@@ -2714,6 +3076,64 @@ describe('Admin Attendance Corrections', () => {
     expect(screen.getByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
   });
 
+  it('shows the brand block and page buttons on the page, with the tabs and mode switch as two bars below', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/bathroom/status')) {
+        // SAFETY: Mock bathroom status
+        return { ok: true, json: async () => ({ success: true, date: '2026-08-27', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-27T10:00:00Z' }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, users, attendance, payroll)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', users: [], attendance: [], profiles: [], payroll: [] }) } as Response;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByRole('button', { name: /users and rfid/i });
+
+      // Header on the page: the brand block (with the visible title) on the left, reader status and page buttons on the right.
+      const heading = screen.getByRole('heading', { level: 1, name: 'Manage attendance' });
+      expect(heading).toBeVisible();
+      const header = heading.closest('header');
+      expect(header).not.toBeNull();
+      const inHeader = within(header!);
+      expect(inHeader.getByText('ALPHA PREMIER REALTY')).toBeInTheDocument();
+      expect(inHeader.getByText('Administrator access')).toBeInTheDocument();
+      expect(inHeader.getByRole('button', { name: 'Browser mode' })).toBeInTheDocument();
+      expect(inHeader.getByRole('link', { name: 'Scanner' })).toHaveAttribute('href', '/');
+      expect(inHeader.getByRole('link', { name: 'Live view' })).toHaveAttribute('href', '/attendance');
+      expect(inHeader.getByRole('button', { name: 'Lock' })).toBeInTheDocument();
+
+      // Below the header, one row with two separate bars: the six section tabs, then the mode switch.
+      // Attendance corrections comes first and is where the admin page opens; Payroll second; System comes last.
+      const tabNames = ['Attendance corrections', 'Payroll', 'Users and RFID', 'Data and backup', 'Voice announcements', 'System'];
+      const tabs = screen.getByRole('button', { name: 'Payroll' }).parentElement;
+      expect(within(tabs!).getAllByRole('button').map((tab) => tab.textContent)).toEqual(tabNames);
+      expect(within(tabs!).getByRole('button', { name: 'Attendance corrections' })).toHaveAttribute('aria-current', 'page');
+      expect(within(tabs!).getByRole('button', { name: 'Users and RFID' })).not.toHaveAttribute('aria-current');
+      const switcher = screen.getByRole('tablist', { name: 'Administrator mode switcher' });
+      expect(header).not.toContainElement(tabs);
+      expect(header).not.toContainElement(switcher);
+      expect(tabs).not.toContainElement(switcher);
+      expect(switcher.parentElement).toBe(tabs?.parentElement);
+      expect(switcher.previousElementSibling).toBe(tabs);
+
+      // Bathroom mode hides the tabs bar; the switch stays in its row.
+      await user.click(within(switcher).getByRole('tab', { name: /^bathroom key log$/i }));
+      expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Users and RFID' })).not.toBeInTheDocument();
+      expect(screen.getByRole('tablist', { name: 'Administrator mode switcher' })).toBe(switcher);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('switches between Attendance and Bathroom Key Log mode on the Kiosk', async () => {
     window.history.pushState({}, '', '/');
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -2736,6 +3156,47 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByTestId('kiosk-mode-attendance'));
     expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active');
     expect(screen.queryByTestId('bathroom-kiosk-view')).not.toBeInTheDocument();
+  });
+
+  it('clears the Type card ID box when a bathroom result goes back to ready', async () => {
+    window.history.pushState({}, '', '/');
+    const user = userEvent.setup();
+    const checkout: BathroomScanResponse = {
+      success: true,
+      action: 'CHECKOUT',
+      genderKey: 'FEMALE',
+      user: { userId: 'EMP-02', fullName: 'Jane Smith', department: 'Finance', photoUrl: null, gender: 'FEMALE' },
+      timeOut: '2026-08-28T10:00:00+08:00',
+      message: 'Female floor key checked out',
+      timestamp: '2026-08-28T10:00:00+08:00',
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config with a short reset delay
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 300 }) } as Response;
+      }
+      if (url.includes('/bathroom/scan')) {
+        // SAFETY: Mock bathroom scan response
+        return { ok: true, json: async () => checkout } as Response;
+      }
+      // SAFETY: Bathroom status and other requests get an empty day
+      return { ok: true, json: async () => ({ success: true, date: '2026-08-28', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-28T10:00:00Z' }) } as Response;
+    });
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    // Enter records, like the Record button.
+    await user.type(screen.getByLabelText(/manual card id/i), 'FEMALE-CARD-01{Enter}');
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Female key taken\s*Jane Smith.*Taken\s*10:00 AM/);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/bathroom/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: 'FEMALE-CARD-01', source: 'MANUAL_TEST' }) }),
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    expect(screen.getByLabelText(/manual card id/i)).toHaveValue('');
   });
 
   it('announces bathroom key checkout, return, and in-use errors in bathroom kiosk mode', async () => {
@@ -2792,7 +3253,7 @@ describe('Admin Attendance Corrections', () => {
 
     // 1. Scan for checkout
     act(() => emitRfidScan('MALE-CARD-01'));
-    expect(await screen.findByText('John Doe')).toBeInTheDocument();
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key taken\s*John Doe.*Taken\s*10:00 AM/);
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'CHECKOUT',
       genderKey: 'MALE',
@@ -2818,8 +3279,9 @@ describe('Admin Attendance Corrections', () => {
       message: 'Female floor key returned',
       timestamp: '2026-08-28T10:00:00+08:00',
     };
+    // Tapped while John's ID card still shows: it is recorded and replaces the card.
     act(() => emitRfidScan('FEMALE-CARD-01'));
-    expect(await screen.findByText('Jane Smith')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Female key returned\s*Jane Smith.*Taken\s*9:50 AM\s*Returned\s*10:00 AM/));
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'RETURN',
       genderKey: 'FEMALE',
@@ -2893,6 +3355,471 @@ describe('Admin Attendance Corrections', () => {
   });
 });
 
+describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type card ID', () => {
+  // Made-up people only.
+  const holder = (userId: string, fullName: string, genderKey: 'MALE' | 'FEMALE'): BathroomActiveHolder => ({
+    logId: `log-${userId}`,
+    userId,
+    fullName,
+    department: 'Operations',
+    genderKey,
+    timeOut: new Date(Date.now() - 395_000).toISOString(),
+  });
+  type BathroomDay = { maleActive: BathroomActiveHolder | null; femaleActive: BathroomActiveHolder | null };
+
+  /**
+   * Bathroom status answers with `day` as it is at each request; scans answer in turn from `scans`, after `scanDelayMs`
+   * when set (rejecting like fetch if the request is aborted first, unless `cancellable` is false, as with the desktop
+   * app's IPC calls). `resetDelayMs` is the kiosk's result reset delay.
+   */
+  function mockBathroomKiosk(day: BathroomDay, scans: BathroomScanResponse[] = [], resetDelayMs = 300, scanDelayMs = 0, cancellable = true) {
+    const queue = [...scans];
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config with the given reset delay
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: resetDelayMs }) } as Response;
+      }
+      if (url.includes('/bathroom/scan')) {
+        const next = queue.shift();
+        if (!next) throw new Error('unexpected bathroom scan');
+        // SAFETY: Mock bathroom scan response
+        const answer = { ok: true, json: async () => next } as Response;
+        if (!scanDelayMs) return answer;
+        return new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(answer), scanDelayMs);
+          if (cancellable) init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+        });
+      }
+      // SAFETY: Bathroom status and other requests get the day as it is now
+      return { ok: true, json: async () => ({ success: true, date: '2026-08-28', ...day, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-28T10:00:00Z' }) } as Response;
+    });
+  }
+
+  const checkout = (person: BathroomActiveHolder, photoUrl: string | null): BathroomScanSuccessResponse => ({
+    success: true,
+    action: 'CHECKOUT',
+    genderKey: person.genderKey,
+    user: { userId: person.userId, fullName: person.fullName, department: person.department, photoUrl, gender: person.genderKey },
+    timeOut: person.timeOut,
+    message: 'Floor key checked out',
+    timestamp: person.timeOut,
+  });
+  const giveBack = (person: BathroomActiveHolder, photoUrl: string | null): BathroomScanSuccessResponse => ({
+    ...checkout(person, photoUrl),
+    action: 'RETURN',
+    timeIn: new Date().toISOString(),
+    durationSeconds: 395,
+    timestamp: new Date().toISOString(),
+  });
+  /** The time the kiosk shows for an ISO time (Asia/Manila, as configured). */
+  const shown = (iso: string) => formatTime(iso, 'Asia/Manila');
+  const photo = 'data:image/png;base64,iVBORw0KGgo=';
+
+  it('shows no reader box in bathroom mode, and a wedge scan still checks a key out and back in', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(paolo, null), giveBack(paolo, null)]);
+    const user = userEvent.setup();
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFID reader')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /type card id/i })).toBeInTheDocument();
+
+    const wedge = (card: string) => {
+      for (const key of [...card, 'Enter']) fireEvent.keyDown(window, { key });
+    };
+    const bathroomScans = () => vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url) === '/api/bathroom/scan');
+    wedge('0000004242');
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key takenPaolo Aquino/);
+    expect(bathroomScans()[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ rfidUid: '0000004242', source: 'RFID' }) }));
+
+    // Back to ready; the same card, a little later than the repeat-tap guard (2s), returns the key.
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 5_000);
+    wedge('0000004242');
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key returnedPaolo Aquino/);
+    expect(bathroomScans()).toHaveLength(2);
+    expect(bathroomScans()[1][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ rfidUid: '0000004242', source: 'RFID' }) }));
+  });
+
+  it('closes the Type card ID box on Cancel, on Escape and on a mode switch, clearing what was typed', async () => {
+    mockBathroomKiosk({ maleActive: null, femaleActive: null });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    await user.type(screen.getByLabelText(/manual card id/i), 'APG-1');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toHaveFocus());
+
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    expect(screen.getByLabelText(/manual card id/i)).toHaveValue('');
+    await user.type(screen.getByLabelText(/manual card id/i), 'APG-2');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+
+    // A mode switch closes it too: Attendance comes back in reader mode, and so does Bathroom.
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    await user.click(screen.getByTestId('kiosk-mode-attendance'));
+    expect(screen.getByLabelText(/scanner card id/i)).toHaveAttribute('readonly');
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/bathroom/scan', expect.anything());
+  });
+
+  it('closes the Type card ID box after a minute without typing', () => {
+    vi.useFakeTimers();
+    try {
+      mockBathroomKiosk({ maleActive: null, femaleActive: null });
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      fireEvent.click(screen.getByTestId('kiosk-manual-toggle'));
+      fireEvent.change(screen.getByTestId('scanner-uid'), { target: { value: '12' } });
+      act(() => { vi.advanceTimersByTime(59_000); });
+      // Typing starts the minute again.
+      fireEvent.change(screen.getByTestId('scanner-uid'), { target: { value: '123' } });
+      act(() => { vi.advanceTimersByTime(59_000); });
+      expect(screen.getByTestId('scanner-uid')).toHaveValue('123');
+      act(() => { vi.advanceTimersByTime(1_000); });
+      expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('kiosk-manual-toggle'));
+      expect(screen.getByTestId('scanner-uid')).toHaveValue('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the in-use and free key card copy in capsules, with initials and no photo on the key cards', async () => {
+    mockBathroomKiosk({ maleActive: holder('APG-2026-007', 'Paolo Aquino', 'MALE'), femaleActive: null });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+
+    const maleCard = await screen.findByTestId('bathroom-kiosk-card-male');
+    const male = within(maleCard);
+    expect(await male.findByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+    expect(maleCard).toHaveClass('is-in-use', 'gender-male');
+    expect(male.getByTestId('bathroom-kiosk-status-male')).toHaveTextContent(/^IN USE$/);
+    expect(male.getByText('Currently with')).toBeInTheDocument();
+    expect(male.getByText('APG-2026-007').closest('.holder-dept')).toHaveTextContent(/^Operations · APG-2026-007$/);
+    expect(male.getByText('PA')).toHaveClass('holder-avatar');
+    expect(male.getByText('Time Out')).toBeInTheDocument();
+    expect(male.getByText('Elapsed').nextElementSibling).toHaveTextContent(/^\d+m \d{2}s$/);
+    expect(male.queryByRole('img')).not.toBeInTheDocument();
+
+    const femaleCard = screen.getByTestId('bathroom-kiosk-card-female');
+    const female = within(femaleCard);
+    expect(femaleCard).toHaveClass('is-available', 'gender-female');
+    expect(female.getByTestId('bathroom-kiosk-status-female')).toHaveTextContent(/^AVAILABLE$/);
+    expect(female.getByText('Key is Available')).toBeInTheDocument();
+    expect(female.getByText('Tap female employee RFID card to check out')).toBeInTheDocument();
+    expect(female.queryByRole('img')).not.toBeInTheDocument();
+  });
+
+  /** Lets the mocked requests answer and React settle while fake timers run. */
+  const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(50); });
+
+  it('shows the ID card with the photo, chip and Taken time after a checkout, above the updated key cards, for the reset delay', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const day: BathroomDay = { maleActive: null, femaleActive: null };
+      mockBathroomKiosk(day, [checkout(paolo, photo)], 4_000);
+      const { container } = render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      expect(within(screen.getByTestId('bathroom-kiosk-card-male')).getByText('Key is Available')).toBeInTheDocument();
+
+      day.maleActive = paolo;
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await settle();
+      const card = screen.getByTestId('kiosk-result-success');
+      expect(card).toHaveAttribute('role', 'status');
+      expect(card).toHaveAttribute('aria-live', 'polite');
+      expect(within(card).getByRole('img', { name: 'Paolo Aquino ID' })).toHaveAttribute('src', photo);
+      expect(within(card).getByText(/Male key taken/)).toHaveClass('result-status');
+      expect(within(card).getByRole('heading', { name: 'Paolo Aquino' })).toBeInTheDocument();
+      expect(within(card).getByText('APG-2026-007 · Operations')).toBeInTheDocument();
+      expect(within(card).getByText('Taken').nextElementSibling).toHaveTextContent(shown(paolo.timeOut));
+      expect(within(card).queryByText('Returned')).not.toBeInTheDocument();
+      // In the title's place, with the countdown under it and the key cards, already updated, still below.
+      expect(screen.queryByRole('heading', { name: 'Bathroom Key Log' })).not.toBeInTheDocument();
+      expect(card.nextElementSibling).toHaveAttribute('role', 'progressbar');
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+      expect(screen.getByTestId('bathroom-kiosk-view').querySelector('img')).toBeNull();
+      // Type card ID stays, greyed out; a card tap still works (next tests).
+      expect(screen.getByRole('button', { name: /type card id/i })).toBeDisabled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_900); });
+      expect(screen.getByTestId('kiosk-result-success')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
+      expect(container.querySelector('.kiosk-hero .hero-icon')).toHaveClass('icon-ready');
+      expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled();
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows Taken and Returned on the ID card after a return, with initials when there is no photo, and frees the key card', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const day: BathroomDay = { maleActive: paolo, femaleActive: null };
+      const returned = giveBack(paolo, null);
+      mockBathroomKiosk(day, [returned], 4_000);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+
+      day.maleActive = null;
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await settle();
+      const card = screen.getByTestId('kiosk-result-success');
+      expect(within(card).getByText(/Male key returned/)).toBeInTheDocument();
+      expect(within(card).getByLabelText('ID photo unavailable')).toHaveTextContent('PA');
+      expect(within(card).getByText('Taken').nextElementSibling).toHaveTextContent(shown(paolo.timeOut));
+      expect(within(card).getByText('Returned').nextElementSibling).toHaveTextContent(shown(returned.timeIn ?? ''));
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      expect(male).toHaveClass('is-available');
+      expect(within(male).getByTestId('bathroom-kiosk-status-male')).toHaveTextContent('AVAILABLE');
+      expect(within(male).getByText('Key is Available')).toBeInTheDocument();
+      expect(within(male).queryByText('Currently with')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cross-fades a key card when it changes hands and glows its edge once, but not on the first load', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const day: BathroomDay = { maleActive: null, femaleActive: holder('APG-2026-006', 'Bea Castillo', 'FEMALE') };
+      mockBathroomKiosk(day, [checkout(paolo, null)], 4_000);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      const female = screen.getByTestId('bathroom-kiosk-card-female');
+      // Bea held the key before the kiosk opened: no change to show.
+      expect(female.querySelector('.bathroom-kiosk-glow, .is-leaving')).toBeNull();
+
+      day.maleActive = paolo;
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await settle();
+      // The free box fades out (hidden from screen readers) under the new in-use box; the edge glows.
+      const leaving = male.querySelector('.available-prompt-box.is-leaving');
+      expect(leaving).toHaveAttribute('aria-hidden', 'true');
+      expect(male.querySelector('.active-holder-box:not(.is-leaving)')).not.toBeNull();
+      expect(male.querySelectorAll('.bathroom-kiosk-glow')).toHaveLength(1);
+      expect(screen.getAllByTestId('bathroom-kiosk-holder-male')).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(male.querySelector('.is-leaving')).toBeNull();
+      expect(within(male).queryByText('Key is Available')).not.toBeInTheDocument();
+      expect(female.querySelector('.bathroom-kiosk-glow')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('switching to Attendance while the ID card shows leaves no result card there', async () => {
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000);
+    const user = userEvent.setup();
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    act(() => emitRfidScan('MALE-CARD-07'));
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent('Paolo Aquino');
+    await user.click(screen.getByTestId('kiosk-mode-attendance'));
+    expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/scanner card id/i)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    // And back in Bathroom mode the title is there, not the old ID card.
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
+  });
+
+  it('switching to Attendance right after a bathroom error drops the error too', async () => {
+    const unknown: BathroomScanResponse = { success: false, error: { code: 'USER_NOT_FOUND', message: 'Card is not registered.' } };
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [unknown], 4_000);
+    const user = userEvent.setup();
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    act(() => emitRfidScan('UNKNOWN-CARD-01'));
+    expect(await screen.findByText('Card not registered')).toBeInTheDocument();
+    // The 1 key switches the same way as the tab.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    fireEvent.keyDown(window, { key: '1' });
+    await waitFor(() => expect(screen.getByTestId('kiosk-mode-attendance')).toHaveClass('active'));
+    expect(screen.queryByTestId('kiosk-result-unreachable')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kiosk-result-error')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/scanner card id/i)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('records a second card tapped while the ID card shows, 3.9s in (the old reset no longer aborts it), and shows its card', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const bea = holder('APG-2026-006', 'Bea Castillo', 'FEMALE');
+      mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(paolo, null), checkout(bea, null)], 4_000, 200);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Male key takenPaolo Aquino/);
+
+      // Paolo's answer came at 200ms; Bea taps 3.9s after it, while his ID card still shows.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_850); });
+      act(() => emitRfidScan('FEMALE-CARD-06'));
+      // Bea's request is still out when Paolo's card would have been reset (4s).
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Female key takenBea Castillo/);
+      expect(screen.queryByText('Bathroom service is temporarily unavailable.')).not.toBeInTheDocument();
+      expect(vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url) === '/api/bathroom/scan')).toHaveLength(2);
+      // Bea's card gets the full reset delay of its own.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_800); });
+      expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent('Bea Castillo');
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the Type card ID box on Escape when the focus is outside it, and refuses a card tap while it is open', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    mockBathroomKiosk({ maleActive: null, femaleActive: null });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    await user.click(screen.getByRole('button', { name: /type card id/i }));
+    act(() => screen.getByLabelText(/manual card id/i).blur());
+
+    // A card tapped now isn't read (the box is open): the kiosk says how to scan it.
+    for (const key of [...'0000004242', 'Enter']) fireEvent.keyDown(document.body, { key });
+    expect(await screen.findByTestId('kiosk-scan-notice')).toHaveTextContent('Close Type card ID to scan your card');
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/bathroom/scan', expect.anything());
+    expect(screen.getByTestId('scanner-uid')).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toHaveFocus());
+  });
+
+  it('drops a bathroom answer that lands after a switch to Attendance, even when the request can not be cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      // As in the desktop app, where the IPC call can't be aborted: the answer comes 500ms later whatever happens.
+      mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000, 500, false);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.getByRole('heading', { name: 'Reading card…' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('kiosk-mode-attendance'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/scanner card id/i)).toBeEnabled();
+      expect(ttsService.announceBathroom).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops an attendance answer that lands after the 2 key switches to Bathroom, even when the request can not be cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/api/config')) {
+          // SAFETY: Fetch returns config with a 4s reset delay
+          return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 4_000 }) } as Response;
+        }
+        if (url.includes('/api/attendance/scan')) {
+          // SAFETY: A time-in that answers after 500ms, ignoring the abort (as the desktop app's IPC call does)
+          return new Promise<Response>((resolve) => setTimeout(() => resolve({ ok: true, json: async () => successResponse } as Response), 500));
+        }
+        // SAFETY: Bathroom status and other requests get an empty day
+        return { ok: true, json: async () => ({ success: true, date: '2026-08-28', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-28T10:00:00Z' }) } as Response;
+      });
+      render(<App />);
+      await settle();
+      act(() => emitRfidScan('DEADBEEF'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.getByRole('heading', { name: 'Reading card…' })).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: '2' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(screen.getByTestId('kiosk-mode-bathroom')).toHaveClass('active');
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
+      expect(ttsService.announceAttendance).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not show a change made while the kiosk was in Attendance as the key changing hands, but does for the next one', async () => {
+    vi.useFakeTimers();
+    try {
+      const day: BathroomDay = { maleActive: holder('APG-2026-007', 'Paolo Aquino', 'MALE'), femaleActive: null };
+      mockBathroomKiosk(day);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+
+      // While the kiosk shows Attendance, Paolo returns the key and Mark takes it (on another device).
+      fireEvent.click(screen.getByTestId('kiosk-mode-attendance'));
+      await settle();
+      day.maleActive = holder('APG-2026-009', 'Mark Villanueva', 'MALE');
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      expect(within(male).getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Mark Villanueva');
+      expect(male.querySelector('.bathroom-kiosk-glow')).toBeNull();
+      expect(male.querySelector('.is-leaving')).toBeNull();
+
+      // Mark returns it while the kiosk is here: the next status refresh shows that change.
+      day.maleActive = null;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(male.querySelector('.bathroom-kiosk-glow')).not.toBeNull();
+      expect(male.querySelector('.active-holder-box.is-leaving')).not.toBeNull();
+      expect(within(male).getByText('Key is Available')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('N6 LiveAttendance ordering', () => {
   it('keeps the newest snapshot when overlapping loads resolve out of order', async () => {
     window.history.pushState({}, '', '/attendance');
@@ -2942,6 +3869,159 @@ describe('N6 LiveAttendance ordering', () => {
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
       expect(screen.getByText('New Person')).toBeInTheDocument();
       expect(screen.queryByText('Old Person')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Live attendance revamp', () => {
+  function mockLiveFetch() {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url === '/api/attendance') {
+        // SAFETY: Fetch returns attendance Response mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            fetchedAt: '2026-07-28T10:00:00+08:00',
+            attendance: [
+              { attendanceId: 'a1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T18:55:00+08:00', status: 'LATE_TIMEOUT' },
+              { attendanceId: 'a2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              // An admin correction that clears the time in leaves a MISSED row with an empty timeIn.
+              { attendanceId: 'a3', attendanceDate: '2026-07-28', userId: 'u3', fullName: 'Alan Turing', department: 'Engineering', timeIn: '', timeOut: null, status: 'MISSED' },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch returns fallback success Response mock
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+  }
+
+  it('header links read as buttons with icons', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      render(<App />);
+      const scanner = await screen.findByRole('link', { name: 'Scanner' });
+      const admin = screen.getByRole('link', { name: 'Admin' });
+      expect(scanner).toHaveAttribute('href', '/');
+      expect(admin).toHaveAttribute('href', '/admin');
+      expect(scanner.querySelector('svg')).not.toBeNull();
+      expect(admin.querySelector('svg')).not.toBeNull();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('LAN viewer is collapsed by default but still auto-starts', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      const startLan = vi.spyOn(api, 'startLanViewer');
+      render(<App />);
+      const toggle = await screen.findByRole('button', { name: /lan viewer/i });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByRole('region', { name: 'LAN viewer' })).not.toBeInTheDocument();
+      expect(startLan).toHaveBeenCalled();
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('region', { name: 'LAN viewer' })).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows at-a-glance counts from the loaded rows', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      mockLiveFetch();
+      render(<App />);
+      expect(screen.queryByRole('list', { name: 'Today at a glance' })).not.toBeInTheDocument();
+      const counts = await screen.findByRole('list', { name: 'Today at a glance' });
+      expect(within(counts).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['0 in office', '2 timed out', '2 timed in', '1 late time-out']);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('filters the rows on screen by name, ID and department while the counts keep the whole day', async () => {
+    window.history.pushState({}, '', '/attendance');
+    try {
+      vi.restoreAllMocks();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === '/api/attendance') {
+          // SAFETY: Fetch returns attendance Response mock
+          return {
+            ok: true,
+            json: async () => ({
+              success: true,
+              date: '2026-07-28',
+              fetchedAt: '2026-07-28T10:00:00+08:00',
+              attendance: [
+                { attendanceId: 'f1', attendanceDate: '2026-07-28', userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales', timeIn: '2026-07-28T08:00:00+08:00', timeOut: null, status: 'WORKING' },
+                { attendanceId: 'f2', attendanceDate: '2026-07-28', userId: 'APG-2026-002', fullName: 'Maria Santos', department: 'Engineering', timeIn: '2026-07-28T08:10:00+08:00', timeOut: null, status: 'WORKING' },
+                { attendanceId: 'f3', attendanceDate: '2026-07-28', userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Engineering', timeIn: '2026-07-28T08:20:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              ],
+            }),
+          } as Response;
+        }
+        // SAFETY: Fetch returns fallback success Response mock (config, roster, LAN)
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila' }) } as Response;
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      const counts = screen.getByRole('list', { name: 'Today at a glance' });
+      const countText = () => within(counts).getAllByRole('listitem').map((item) => item.textContent);
+      expect(countText()).toEqual(['2 in office', '1 timed out', '3 timed in']);
+
+      const department = screen.getByRole('combobox', { name: 'Department' });
+      expect(within(department).getAllByRole('option').map((option) => option.textContent)).toEqual(['All departments', 'Engineering', 'Sales']);
+
+      const search = screen.getByRole('searchbox', { name: 'Search name or ID' });
+      await user.type(search, 'dela');
+      expect(screen.getByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByText('Maria Santos')).not.toBeInTheDocument();
+      expect(screen.queryByText('Jose Rizal')).not.toBeInTheDocument();
+      // The IDs stay beside the names and are searchable too.
+      await user.clear(search);
+      await user.type(search, '2026-002');
+      expect(screen.getByText('Maria Santos')).toBeInTheDocument();
+      expect(screen.getByText('APG-2026-002')).toBeInTheDocument();
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+
+      await user.clear(search);
+      await user.selectOptions(department, 'Engineering');
+      expect(screen.getByText('Maria Santos')).toBeInTheDocument();
+      expect(screen.getByText('Jose Rizal')).toBeInTheDocument();
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+
+      // Nothing matches: a plain message and a way back; the counts never change.
+      await user.type(search, 'Juan');
+      expect(screen.getByText('No one matches')).toBeInTheDocument();
+      expect(screen.queryByRole('table')).not.toBeInTheDocument();
+      expect(countText()).toEqual(['2 in office', '1 timed out', '3 timed in']);
+      const attendanceCalls = fetchSpy.mock.calls.filter(([input]) => String(input) === '/api/attendance').length;
+      await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+      expect(search).toHaveValue('');
+      expect(department).toHaveValue('');
+      // The Clear filters button goes away with the message, so focus returns to the search box.
+      expect(search).toHaveFocus();
+      ['Juan Dela Cruz', 'Maria Santos', 'Jose Rizal'].forEach((name) => expect(screen.getByText(name)).toBeInTheDocument());
+      // Filtering works on the loaded rows only.
+      expect(fetchSpy.mock.calls.filter(([input]) => String(input) === '/api/attendance').length).toBe(attendanceCalls);
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -2999,6 +4079,7 @@ describe('N7 concurrent voice regen ownership', () => {
       vi.spyOn(api, 'regenerateVoiceClip').mockImplementation((personId: string) => (personId === 'uA' ? regenA : regenB));
       vi.spyOn(api, 'pollVoiceClipReady').mockImplementation((personId: string) => (personId === 'uA' ? pollA : pollB));
       render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /users and rfid/i }));
       await screen.findByText('Ada Alpha');
       await screen.findByText('Zed Beta');
       const adaRow = (await screen.findByText('Ada Alpha')).closest('tr');
@@ -3165,6 +4246,8 @@ describe('Weekly-grace clamp display extension', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
+      // The record's Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
+      fireEvent.click(screen.getByRole('button', { name: 'All cutoffs' }));
       fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       const chip = await screen.findByTestId('clamped-payroll-time-in');
       expect(chip).toHaveTextContent('9:00 AM');
@@ -3263,24 +4346,21 @@ describe('hourly late clamp', () => {
       expect(chips).toHaveLength(6);
       expect(chips.filter((chip) => chip.textContent === '10:00 AM')).toHaveLength(4);
       expect(chips.filter((chip) => chip.textContent === '11:00 AM')).toHaveLength(1);
-      expect(screen.getByDisplayValue('09:03')).toBeInTheDocument();
-      expect(screen.getAllByDisplayValue('09:15')).toHaveLength(3);
-      expect(screen.getAllByDisplayValue('08:15')).toHaveLength(2);
-      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
-      expect(screen.getAllByDisplayValue('09:16')).toHaveLength(2);
-      expect(screen.getByDisplayValue('10:16')).toBeInTheDocument();
-      const boundaryGraceInput = screen.getAllByDisplayValue('08:15').find((input) =>
-        input.closest('tr')?.textContent?.includes('Grace Hopper'),
-      );
-      expect(boundaryGraceInput?.closest('tr')).toHaveTextContent('9:00 AM');
-      const exactGraceInput = screen.getAllByDisplayValue('08:15').find((input) =>
-        input.closest('tr')?.textContent?.includes('Charles Babbage'),
-      );
-      expect(exactGraceInput?.closest('tr')).not.toHaveTextContent('clamped');
-      const subMillisecondClampInput = screen.getAllByDisplayValue('09:15').find((input) =>
-        input.closest('tr')?.textContent?.includes('2026-08-03'),
-      );
-      expect(subMillisecondClampInput?.closest('tr')).toHaveTextContent('10:00 AM');
+      // Each chip keeps the actual scan in its tooltip; rows that are not clamped show the actual time.
+      const actualScan = (time: string) => `Actual scan: ${time} (payable time clamped)`;
+      const chipsFor = (time: string) => chips.filter((chip) => chip.getAttribute('title') === actualScan(time));
+      expect(chipsFor('9:16 AM')).toHaveLength(2);
+      expect(chipsFor('10:16 AM')).toHaveLength(1);
+      // 09:15:00.001 and the next week's 09:15 plus a nanosecond are both past :15.
+      expect(chipsFor('9:15 AM').map((chip) => chip.textContent)).toEqual(['10:00 AM', '10:00 AM']);
+      expect(screen.getByText('9:03 AM')).toBeInTheDocument();
+      expect(screen.getByText('9:15 AM')).toBeInTheDocument();
+      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
+      // A nanosecond past the 08:15 grace window clamps to 9:00; exactly 08:15 stays the actual grace arrival.
+      const [boundaryGraceChip] = chipsFor('8:15 AM');
+      expect(boundaryGraceChip).toHaveTextContent('9:00 AM');
+      expect(boundaryGraceChip.closest('tr')).toHaveTextContent('Grace Hopper');
+      expect(screen.getByText('8:15 AM').closest('tr')).toHaveTextContent('Charles Babbage');
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -3311,8 +4391,10 @@ describe('hourly late clamp', () => {
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
 
-      expect(await screen.findByTestId('clamped-time-in')).toHaveTextContent('10:00 AM');
-      expect(screen.getByDisplayValue('09:30')).toBeInTheDocument();
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('10:00 AM');
+      expect(chip.getAttribute('title')).toBe('Actual scan: 9:30 AM (payable time clamped)');
+      expect(screen.getByText('8:06 AM')).toBeInTheDocument();
 
       await user.click(await screen.findByRole('button', { name: /export csv/i }));
       await waitFor(() => expect(exportedBlobs.length).toBeGreaterThan(0));
@@ -3364,7 +4446,7 @@ describe('hourly late clamp', () => {
       // SAFETY: the chip renders inside its attendance row
       expect((chips[0] as HTMLElement).closest('tr')).toHaveTextContent('Charles Babbage');
       // u3's first grace-window arrival stays actual.
-      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -3389,14 +4471,14 @@ describe('hourly late clamp', () => {
 
       const chips = await screen.findAllByTestId('clamped-time-in');
       expect(chips).toHaveLength(2);
-      const dates = chips.map((chip) => {
-        // SAFETY: the chip renders inside its attendance row
-        const rowElement = chip.closest('tr') as HTMLTableRowElement;
-        return within(rowElement).getAllByRole('cell')[1].textContent;
-      });
-      expect(dates).toEqual(expect.arrayContaining(['2026-07-28', '2026-08-04']));
-      // New week's graced first late keeps its actual time.
-      expect(screen.getByDisplayValue('08:10')).toBeInTheDocument();
+      // The chipped rows are Tuesday 2026-07-28 (08:30) and Tuesday 2026-08-04 (08:20).
+      expect(chips.map((chip) => chip.getAttribute('title'))).toEqual(expect.arrayContaining([
+        'Actual scan: 8:30 AM (payable time clamped)',
+        'Actual scan: 8:20 AM (payable time clamped)',
+      ]));
+      // Each week's graced first late keeps its actual time.
+      expect(screen.getByText('8:06 AM')).toBeInTheDocument();
+      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -3456,6 +4538,8 @@ describe('hourly late clamp', () => {
         calculationBreakdown: JSON.stringify(breakdown), approvedWorkingDayOverage: false, status: 'DRAFT', finalizedAt: null,
       };
       render(<PayrollWorkspace records={[internRecord]} onSaved={vi.fn()} />);
+      // The record's Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
+      fireEvent.click(screen.getByRole('button', { name: 'All cutoffs' }));
       fireEvent.click(screen.getByRole('button', { name: 'Breakdown' }));
       // The payroll details use the same hourly display clamp.
       expect(await screen.findByTestId('clamped-payroll-time-in')).toHaveTextContent('10:00 AM');
@@ -3484,7 +4568,10 @@ describe('Payroll total-deductions fallback', () => {
   function renderRecords(records: PayrollCutoffRecord[]) {
     vi.restoreAllMocks();
     vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
-    return render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
+    const view = render(<PayrollWorkspace records={records} onSaved={vi.fn()} />);
+    // The rows' Aug 1–15 cutoff isn't the pre-filled one, so show every cutoff's records.
+    fireEvent.click(screen.getByRole('button', { name: 'All cutoffs' }));
+    return view;
   }
 
   it('derives total deductions from components when a legacy cutoff row omits the field', () => {
@@ -3505,5 +4592,1460 @@ describe('Payroll total-deductions fallback', () => {
     const row = screen.getByRole('row', { name: /Backend Row/ });
     expect(within(row).getByText('PHP 420.00')).toBeInTheDocument();
     expect(within(row).queryByText('PHP 90.00')).not.toBeInTheDocument();
+  });
+});
+
+describe('Users and RFID: registration form on demand', () => {
+  const people = [
+    { userId: 'APG-1', rfidUid: 'UID-1', fullName: 'Ada Lovelace', department: 'IT', status: 'ACTIVE', employeeType: 'INTERN', gender: null, dailyRate: null, photoUrl: null },
+    { userId: 'APG-2', rfidUid: 'UID-2', fullName: 'Grace Hopper', department: 'IT', status: 'ACTIVE', employeeType: 'INTERN', gender: null, dailyRate: null, photoUrl: null },
+  ];
+  function mockAdminFetch() {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/bathroom/status')) {
+        // SAFETY: Mock bathroom status
+        return { ok: true, json: async () => ({ success: true, date: '2026-08-27', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-27T10:00:00Z' }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, attendance, payroll)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', attendance: [], payroll: [], profiles: [] }) } as Response;
+    });
+  }
+  async function openUsersTab() {
+    mockAdminFetch();
+    window.history.pushState({}, '', '/admin');
+    const user = userEvent.setup();
+    render(<App />);
+    // Admin opens on Attendance corrections; this tab is second.
+    await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+    await screen.findByText('Ada Lovelace');
+    return user;
+  }
+
+  it('keeps the form closed until Add user, and closes it again', async () => {
+    const user = await openUsersTab();
+    expect(screen.queryByLabelText(/^user id/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^add user$/i }));
+    expect(screen.getByLabelText(/^user id/i)).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: /close user form/i }));
+    expect(screen.queryByLabelText(/^user id/i)).not.toBeInTheDocument();
+  });
+
+  it('asks before a tab switch throws away unsaved typing', async () => {
+    const user = await openUsersTab();
+    await user.click(screen.getByRole('button', { name: /^add user$/i }));
+    await user.type(screen.getByLabelText(/full name/i), 'Katherine Johnson');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+    expect(screen.getByRole('dialog', { name: /discard unsaved changes/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /keep editing/i }));
+    expect(screen.getByLabelText(/full name/i)).toHaveValue('Katherine Johnson');
+    expect(screen.getByRole('button', { name: /users and rfid/i })).toHaveClass('is-active');
+
+    await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+    await user.click(screen.getByRole('button', { name: /discard changes/i }));
+    expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveClass('is-active');
+    expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+  });
+
+  it('asks before Edit or Cancel throws away unsaved typing, not when nothing changed, and ignores the 2 key while open', async () => {
+    const user = await openUsersTab();
+    const adaRow = screen.getByText('Ada Lovelace').closest('tr');
+    const graceRow = screen.getByText('Grace Hopper').closest('tr');
+    await user.click(within(adaRow!).getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByRole('heading', { name: 'Editing Ada Lovelace' })).toBeInTheDocument();
+
+    // Nothing typed yet: Edit switches straight away.
+    await user.click(within(graceRow!).getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByRole('heading', { name: 'Editing Grace Hopper' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText(/department/i));
+    await user.type(screen.getByLabelText(/department/i), 'Finance');
+    await user.click(within(adaRow!).getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByRole('dialog', { name: /discard unsaved changes/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /keep editing/i }));
+    expect(screen.getByRole('heading', { name: 'Editing Grace Hopper' })).toBeInTheDocument();
+
+    // While the pop-up is open the 1/2 shortcut does nothing, so it can't throw the typing away.
+    fireEvent.keyDown(window, { key: '2' });
+    expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Editing Grace Hopper' })).toBeInTheDocument();
+
+    // Cancel with unsaved typing asks too; discarding closes the pop-up.
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await user.click(screen.getByRole('button', { name: /discard changes/i }));
+    expect(screen.queryByRole('dialog', { name: 'Editing Grace Hopper' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Pop-ups and admin lists: keyboard, toasts and Retry', () => {
+  const people = [
+    { userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE', cardType: 'EMPLOYEE' },
+  ];
+  const attendanceRow = {
+    attendanceId: 'att-1', attendanceDate: '2026-07-28', userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales',
+    timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED', source: 'RFID',
+  };
+  /** Admin with one user and one attendance row; `failUsersOnce` makes the first users load fail. */
+  function mockAdmin(failUsersOnce = false) {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const calls = { users: 0, attendance: 0 };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        calls.users += 1;
+        if (failUsersOnce && calls.users === 1) throw new Error('offline');
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        calls.attendance += 1;
+        // SAFETY: Mock attendance list
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [attendanceRow] }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, bathroom)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [] }) } as Response;
+    });
+    return calls;
+  }
+
+  it('closes Add missed attendance with Escape, keeps Tab inside it and gives focus back to its button', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      const opener = screen.getByRole('button', { name: /^add missed attendance$/i });
+      await user.click(opener);
+
+      const dialog = await screen.findByRole('dialog', { name: /add missed attendance/i });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      // Far more Tabs (forwards and back) than the pop-up has controls: focus never leaves it.
+      for (let index = 0; index < 12; index += 1) {
+        await user.tab();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+      for (let index = 0; index < 12; index += 1) {
+        await user.tab({ shift: true });
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: /add missed attendance/i })).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('answers Escape in the top pop-up only: the discard question first, then the form', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+      await screen.findByText('Juan Dela Cruz');
+      const addUser = screen.getByRole('button', { name: /^add user$/i });
+      await user.click(addUser);
+      await user.type(screen.getByLabelText(/full name/i), 'Maria Clara');
+
+      // Escape on the form asks first; the destructive question starts on its safe button.
+      await user.keyboard('{Escape}');
+      const ask = screen.getByRole('dialog', { name: /discard unsaved changes/i });
+      expect(within(ask).getByRole('button', { name: /keep editing/i })).toHaveFocus();
+
+      // Escape closes only the question; the form and its typing stay.
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: /discard unsaved changes/i })).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/full name/i)).toHaveValue('Maria Clara');
+
+      await user.keyboard('{Escape}');
+      await user.click(screen.getByRole('button', { name: /discard changes/i }));
+      expect(screen.queryByRole('dialog', { name: /add user/i })).not.toBeInTheDocument();
+      expect(addUser).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows a failed users list with Retry that reloads only that list, while other tabs still load', async () => {
+    const calls = mockAdmin(true);
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      // The failure does not block Attendance corrections, where the admin page opens.
+      expect(await screen.findByText('1 record')).toBeInTheDocument();
+      const attendanceLoads = calls.attendance;
+
+      await user.click(screen.getByRole('button', { name: /users and rfid/i }));
+      expect(await screen.findByText("Couldn't load users.")).toBeInTheDocument();
+      expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /retry/i }));
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByText("Couldn't load users.")).not.toBeInTheDocument();
+      expect(calls.users).toBe(2);
+      expect(calls.attendance).toBe(attendanceLoads);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows placeholder rows while the users list loads', async () => {
+    mockAdmin();
+    let releaseUsers: () => void = () => {};
+    const usersGate = new Promise<void>((resolve) => {
+      releaseUsers = resolve;
+    });
+    vi.spyOn(api, 'loadAdminUsers').mockImplementation(async () => {
+      await usersGate;
+      // SAFETY: Mock users response in the shared contract's form
+      return { success: true, users: people } as Awaited<ReturnType<typeof api.loadAdminUsers>>;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /users and rfid/i }));
+      expect(await screen.findByText('Loading users…')).toBeInTheDocument();
+      expect(screen.queryByText('No users yet. Use Add user to register the first one.')).not.toBeInTheDocument();
+      act(() => releaseUsers());
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByText('Loading users…')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Admin results and date changes', () => {
+  const people = [
+    { userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE', cardType: 'EMPLOYEE' },
+  ];
+  const attendanceRow = {
+    attendanceId: 'att-1', attendanceDate: '2026-07-28', userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales',
+    timeIn: '2026-07-28T08:00:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED', source: 'RFID',
+  };
+  /** Admin with one user; attendance for `failDate` fails, every other date has one row. */
+  function mockAdmin(failDate = '') {
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        if (failDate && url.includes(`date=${failDate}`)) throw new Error('offline');
+        // SAFETY: Mock attendance list
+        return { ok: true, json: async () => ({ success: true, date: '2026-07-28', attendance: [attendanceRow] }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, bathroom)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [] }) } as Response;
+    });
+  }
+
+  it('clears an earlier save error once the save works', async () => {
+    mockAdmin();
+    vi.spyOn(api, 'saveAdminUser')
+      .mockResolvedValueOnce({ success: false, error: { message: 'This RFID card is already assigned.' } })
+      .mockResolvedValueOnce({ success: true });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /users and rfid/i }));
+      await screen.findByText('Juan Dela Cruz');
+      await user.click(screen.getByRole('button', { name: /^add user$/i }));
+      await user.type(screen.getByLabelText(/^user id/i), 'APG-2026-002');
+      await user.type(screen.getByLabelText(/rfid uid/i), 'RFID-2');
+      await user.type(screen.getByLabelText(/full name/i), 'Maria Clara');
+
+      await user.click(screen.getByRole('button', { name: 'Save user' }));
+      expect(await screen.findByText('This RFID card is already assigned.')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Save user' }));
+      expect(await screen.findByText('User saved.')).toBeInTheDocument();
+      expect(screen.queryByText('This RFID card is already assigned.')).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('drops the old date’s rows, selection and actions while another date fails to load', async () => {
+    mockAdmin('2026-07-01');
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      expect(await screen.findByText('1 record')).toBeInTheDocument();
+      await user.click(screen.getByRole('checkbox', { name: /select attendance for juan dela cruz/i }));
+      expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Filter attendance date'), { target: { value: '2026-07-01' } });
+
+      expect(await screen.findByText("Couldn't load attendance for this date.")).toBeInTheDocument();
+      expect(screen.getByText('0 records')).toBeInTheDocument();
+      expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Selected attendance records' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /select attendance for juan dela cruz/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /export csv/i })).toBeDisabled();
+      expect(screen.getByRole('checkbox', { name: /select all attendance records/i })).toBeDisabled();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Attendance corrections: rows open on Edit', () => {
+  type MockRow = {
+    attendanceId: string; attendanceDate: string; userId: string; fullName: string; department: string;
+    timeIn: string; timeOut: string | null; status: string; source: string;
+  };
+  const people = [
+    { userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', rfidUid: 'RFID-1', employeeType: 'EMPLOYEE', status: 'ACTIVE', cardType: 'EMPLOYEE' },
+  ];
+  /** One day: Juan late 1h 05m, Maria late 5h 22m (still working), Jose late 20m. */
+  const day = (date: string, juanIn = '09:05:00'): MockRow[] => [
+    { attendanceId: `${date}-juan`, attendanceDate: date, userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales', timeIn: `${date}T${juanIn}+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+    { attendanceId: `${date}-maria`, attendanceDate: date, userId: 'APG-2026-002', fullName: 'Maria Clara', department: 'Sales', timeIn: `${date}T13:22:00+08:00`, timeOut: null, status: 'WORKING', source: 'RFID' },
+    { attendanceId: `${date}-jose`, attendanceDate: date, userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Sales', timeIn: `${date}T08:20:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+  ];
+  type SaveBody = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null };
+
+  /** The mocked server's rows by date (a test may change them to stand for a new scan). */
+  let stored = new Map<string, MockRow[]>();
+  type SaveError = { code: string; message: string };
+  /**
+   * Admin whose attendance for any date is `day(date)`; a save updates the stored row. `holdSave` delays the save's
+   * answer; `failSave` may answer a save with an error instead (the record then stays as stored).
+   */
+  function mockAdmin(holdSave?: Promise<void>, juanIn?: string, failSave?: () => SaveError | null) {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    stored = new Map<string, MockRow[]>();
+    const saves: SaveBody[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users list
+        return { ok: true, json: async () => ({ success: true, users: people }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance/') && init?.method === 'PATCH') {
+        // SAFETY: Parse the mocked save body
+        const body = JSON.parse(String(init.body)) as SaveBody;
+        saves.push(body);
+        await holdSave;
+        const error = failSave?.() ?? null;
+        if (error) {
+          // SAFETY: Mock failed save response
+          return { ok: true, json: async () => ({ success: false, error }) } as Response;
+        }
+        for (const list of stored.values()) {
+          const row = list.find((item) => url.includes(`/api/admin/attendance/${item.attendanceId}`));
+          if (row) {
+            row.timeIn = body.timeIn ?? '';
+            row.timeOut = body.timeOut ?? null;
+          }
+        }
+        // SAFETY: Mock save response
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance/backdate')) {
+        // SAFETY: Mock missed-attendance add
+        return { ok: true, json: async () => ({ success: true }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        const date = /date=([^&]+)/.exec(url)?.[1] ?? '2026-07-28';
+        if (!stored.has(date)) stored.set(date, day(date, juanIn));
+        const rows = (stored.get(date) ?? []).map((row) => ({ ...row }));
+        // SAFETY: Mock attendance list for the requested date
+        return { ok: true, json: async () => ({ success: true, date, attendance: rows }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, payroll PDFs, bathroom)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [], payrollPdfs: [] }) } as Response;
+    });
+    return saves;
+  }
+
+  /** Opens Attendance corrections on Tue, Jul 28, 2026 and returns Juan's row. */
+  async function openDay(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+    fireEvent.change(screen.getByLabelText('Filter attendance date'), { target: { value: '2026-07-28' } });
+    expect(await screen.findByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+    return rowOf(await screen.findByText('Juan Dela Cruz'));
+  }
+  function rowOf(element: HTMLElement): HTMLElement {
+    const row = element.closest('tr');
+    if (!row) throw new Error('not in a table row');
+    return row;
+  }
+  /** The day with Jose's time-out after office hours, so his record is a late time-out. */
+  const withLateJose = (date: string, juanIn?: string): MockRow[] =>
+    day(date, juanIn).map((row) => (row.fullName === 'Jose Rizal' ? { ...row, timeOut: `${date}T18:40:00+08:00`, status: 'LATE_TIMEOUT' } : row));
+  /** Records every attendance delete the page sends (by record); `fail` answers the chosen ones with an error. */
+  function trackDeletes(fail: (attendanceId: string) => boolean = () => false): string[] {
+    const deleted: string[] = [];
+    const base = vi.mocked(globalThis.fetch).getMockImplementation();
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      if (init?.method === 'DELETE') {
+        const attendanceId = decodeURIComponent(/\/api\/admin\/attendance\/([^?]+)/.exec(String(input))?.[1] ?? '');
+        deleted.push(attendanceId);
+        const body = fail(attendanceId) ? { success: false, error: { message: 'Could not delete.' } } : { success: true };
+        // SAFETY: Mock delete response
+        return { ok: true, json: async () => body } as Response;
+      }
+      if (!base) throw new Error('fetch is not mocked');
+      return base(input, init);
+    });
+    return deleted;
+  }
+
+  it('shows each row read-only with plain times until Edit, and Cancel closes it again', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+
+      // Read-only: plain times, "—" for a missing time-out, quiet Edit and Delete, no time fields anywhere.
+      expect(within(juan).getByText('9:05 AM')).toBeInTheDocument();
+      expect(within(juan).getByText('5:00 PM')).toBeInTheDocument();
+      expect(within(rowOf(screen.getByText('Maria Clara'))).getByText('—')).toBeInTheDocument();
+      expect(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' })).toBeInTheDocument();
+      expect(within(juan).getByRole('button', { name: "Delete Juan Dela Cruz's record" })).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^time (in|out) for/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument();
+
+      // Edit opens only that row: its time fields (focus on time in), Save and Cancel instead of Edit and Delete.
+      await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      expect(within(juan).getByLabelText('Time in for Juan Dela Cruz')).toHaveValue('09:05');
+      expect(within(juan).getByLabelText('Time in for Juan Dela Cruz')).toHaveFocus();
+      expect(within(juan).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:00');
+      expect(within(juan).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+      expect(within(juan).queryByRole('button', { name: "Delete Juan Dela Cruz's record" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Time in for Maria Clara')).not.toBeInTheDocument();
+      // Opening a row changes nothing yet.
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+
+      // A change shows "Unsaved" (and the gold edge); Cancel throws it away and goes back to plain times.
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+      expect(within(juan).getByText('Unsaved')).toBeInTheDocument();
+      expect(juan).toHaveClass('is-unsaved');
+      await user.click(within(juan).getByRole('button', { name: 'Cancel' }));
+      expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument();
+      expect(within(juan).getByText('5:00 PM')).toBeInTheDocument();
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+      expect(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' })).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps unsaved times through a search, and asks before another date discards them', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+
+      // Searching hides the row; clearing the search brings it back with the typing kept.
+      const search = screen.getByPlaceholderText('Name or ID');
+      await user.type(search, 'Maria');
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+      await user.clear(search);
+      const back = rowOf(await screen.findByText('Juan Dela Cruz'));
+      expect(within(back).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(within(back).getByText('Unsaved')).toBeInTheDocument();
+
+      // Another date asks first; Keep editing stays on this day with the typing.
+      const dateInput = screen.getByLabelText('Filter attendance date');
+      fireEvent.change(dateInput, { target: { value: '2026-07-29' } });
+      const ask = screen.getByRole('dialog', { name: 'Discard unsaved changes?' });
+      expect(ask).toHaveTextContent('Some times on Tue, Jul 28, 2026 are not saved yet. Showing Wed, Jul 29, 2026 discards them.');
+      await user.click(within(ask).getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+      expect(dateInput).toHaveValue('2026-07-28');
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // Discard changes shows the other date, every row read-only.
+      fireEvent.change(dateInput, { target: { value: '2026-07-29' } });
+      await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+      expect(await screen.findByText('Wed, Jul 29, 2026')).toBeInTheDocument();
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^time (in|out) for/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('Unsaved')).not.toBeInTheDocument();
+
+      // With nothing unsaved, a date change just happens.
+      fireEvent.change(dateInput, { target: { value: '2026-07-28' } });
+      expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+      expect(await screen.findByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('saves only the changed time, shows Saving… and then the row read-only with its new time', async () => {
+    let releaseSave: () => void = () => {};
+    // Time in with seconds: it must go back exactly as stored, while the edited time-out is rebuilt.
+    const saves = mockAdmin(new Promise<void>((resolve) => { releaseSave = resolve; }), '09:05:42');
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+
+      expect(await within(juan).findByRole('button', { name: 'Saving…' })).toBeDisabled();
+      act(() => releaseSave());
+
+      // The untouched time-in keeps its exact stamp (seconds and all); the edited time-out is rebuilt as HH:MM:00.
+      expect(saves).toEqual([{
+        attendanceDate: '2026-07-28',
+        timeIn: '2026-07-28T09:05:42+08:00',
+        timeOut: '2026-07-28T17:30:00+08:00',
+        expectedTimeIn: '2026-07-28T09:05:42+08:00',
+        expectedTimeOut: '2026-07-28T17:00:00+08:00',
+      }]);
+      await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
+      expect(within(juan).getByText('5:30 PM')).toBeInTheDocument();
+      expect(await screen.findByText("Saved Juan Dela Cruz's times.")).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows the chosen day once above the table and late arrivals in hours and minutes', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+
+      // The day sits once beside the count; no Date column and no 2026-07-28 anywhere in the table.
+      expect(screen.getAllByText('Tue, Jul 28, 2026')).toHaveLength(1);
+      expect(screen.getByText('3 records')).toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: 'Date' })).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-07-28')).not.toBeInTheDocument();
+
+      // "Late 1h 05m", "Late 5h 22m", "Late 20m"; the tooltip keeps the minutes.
+      expect(within(juan).getByText('Late 1h 05m')).toHaveAttribute('title', 'Late arrival (65 minutes)');
+      expect(screen.getByText('Late 5h 22m')).toBeInTheDocument();
+      expect(screen.getByText('Late 20m')).toBeInTheDocument();
+
+      // A confirmation that names the day uses the same date style.
+      await user.click(within(juan).getByRole('button', { name: "Delete Juan Dela Cruz's record" }));
+      expect(screen.getByRole('dialog', { name: 'Delete attendance record?' })).toHaveTextContent(
+        "This will permanently delete Juan Dela Cruz's time-in/time-out record for Tue, Jul 28, 2026.",
+      );
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+  it('orders the status filters with Late time-out after All, counts each record once and keeps Late as a separate toggle (filters)', async () => {
+    // Juan on time; Maria (working) and Jose (late time-out) arrived late.
+    mockAdmin(undefined, '07:55:00');
+    stored.set('2026-07-28', withLateJose('2026-07-28', '07:55:00'));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+
+      const statuses = screen.getByRole('group', { name: 'Filter by status' });
+      const buttons = within(statuses).getAllByRole('button');
+      expect(buttons.map((button) => button.textContent)).toEqual(['All 3', 'Late time-out 1', 'Working 1', 'Completed 1', 'Missed 0']);
+      // A record is counted once: the statuses add up to All.
+      const counted = buttons.slice(1).map((button) => Number(button.querySelector('.filter-count')?.textContent));
+      expect(counted.reduce((sum, count) => sum + count, 0)).toBe(3);
+      // The late time-out count is coral while there are any; an empty status is dimmed.
+      expect(buttons[1].querySelector('.filter-count')).toHaveClass('is-alert');
+      expect(buttons[3].querySelector('.filter-count')).not.toHaveClass('is-alert');
+      expect(buttons[4]).toHaveClass('is-empty');
+
+      // Late is an arrival toggle beside Assisted and Backdated; the ones with nothing to show are dimmed.
+      const showOnly = screen.getByRole('group', { name: 'Show only' });
+      expect(within(showOnly).getAllByRole('button').map((button) => button.textContent)).toEqual(['Late 2', 'Assisted 0', 'Backdated 0']);
+      const late = within(showOnly).getByRole('button', { name: 'Late 2' });
+      expect(late).not.toHaveClass('is-empty');
+      expect(within(showOnly).getByRole('button', { name: 'Assisted 0' })).toHaveClass('is-empty');
+      expect(within(showOnly).getByRole('button', { name: 'Backdated 0' })).toHaveClass('is-empty');
+
+      // Late combines with a status. The statuses count what the other filters let through, so All matches the rows
+      // shown and a status Late leaves empty is dimmed.
+      await user.click(late);
+      expect(late).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('2 of 3 records')).toBeInTheDocument();
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+      expect(within(statuses).getAllByRole('button').map((button) => button.textContent)).toEqual(['All 2', 'Late time-out 1', 'Working 1', 'Completed 0', 'Missed 0']);
+      expect(within(statuses).getByRole('button', { name: 'Completed 0' })).toHaveClass('is-empty');
+      await user.click(within(statuses).getByRole('button', { name: 'Working 1' }));
+      expect(late).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('1 of 3 records')).toBeInTheDocument();
+      expect(screen.getByText('Maria Clara')).toBeInTheDocument();
+      expect(screen.queryByText('Jose Rizal')).not.toBeInTheDocument();
+      // The toggles count with the chosen status: one working record arrived late.
+      expect(within(showOnly).getAllByRole('button').map((button) => button.textContent)).toEqual(['Late 1', 'Assisted 0', 'Backdated 0']);
+      // Turning Late off keeps the status, and the statuses count the whole day again.
+      await user.click(late);
+      expect(late).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByText('1 of 3 records')).toBeInTheDocument();
+      expect(within(statuses).getAllByRole('button').map((button) => button.textContent)).toEqual(['All 3', 'Late time-out 1', 'Working 1', 'Completed 1', 'Missed 0']);
+      // A search narrows the counts too.
+      await user.type(screen.getByPlaceholderText('Name or ID'), 'Juan');
+      expect(within(statuses).getAllByRole('button').map((button) => button.textContent)).toEqual(['All 1', 'Late time-out 0', 'Working 0', 'Completed 1', 'Missed 0']);
+      expect(within(showOnly).getByRole('button', { name: 'Late 0' })).toHaveClass('is-empty');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('puts one short late time-out line under a late time-out row, in its own note line', async () => {
+    mockAdmin();
+    stored.set('2026-07-28', withLateJose('2026-07-28'));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+
+      const jose = rowOf(screen.getByText('Jose Rizal'));
+      expect(within(jose).getByText('Late time-out')).toHaveClass('status-word', 'is-late_timeout');
+      // Plain words for the other statuses, as a dot and a word.
+      expect(within(rowOf(screen.getByText('Maria Clara'))).getByText('Working')).toHaveClass('status-word', 'is-working');
+      const note = jose.nextElementSibling;
+      expect(note).toHaveClass('attendance-row-note');
+      expect(note).toHaveTextContent('Timed out after office hours. Click Edit and enter the real time-out.');
+      // No long paragraph above the row any more, and no note under the other rows.
+      expect(screen.queryByText(/manual correction required/i)).not.toBeInTheDocument();
+      expect(jose.previousElementSibling).not.toHaveTextContent(/office hours/);
+      expect(rowOf(screen.getByText('Maria Clara')).nextElementSibling).not.toHaveClass('attendance-row-note');
+
+      // While the row is open the line says what to do there.
+      await user.click(within(jose).getByRole('button', { name: 'Edit times for Jose Rizal' }));
+      expect(jose.nextElementSibling).toHaveTextContent('Timed out after office hours. Enter the real time-out and click Save.');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('swaps the table bar for a selection bar while rows are ticked (selection bar)', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+      const header = screen.getByRole('checkbox', { name: 'Select all attendance records' });
+
+      // One count, the header tick box only (no Select all button), no selection bar yet.
+      expect(screen.getByText('3 records')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^select all/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Selected attendance records' })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Maria Clara' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' }));
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+      expect(header).toBePartiallyChecked();
+      // The list bar is hidden meanwhile (both stay in the same place), so its buttons can't be reached.
+      expect(screen.queryByRole('button', { name: /^add missed attendance$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /export csv/i })).not.toBeInTheDocument();
+      expect(within(bar).getByRole('button', { name: 'Export selected' })).toBeEnabled();
+
+      // Delete selected asks first; cancelling keeps the selection.
+      await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
+      expect(screen.getByRole('dialog', { name: 'Delete selected attendance records?' })).toHaveTextContent('2 selected attendance record(s)');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+
+      // Clear empties it: the list bar comes back and the focus lands on the header tick box.
+      await user.click(within(bar).getByRole('button', { name: 'Clear' }));
+      expect(screen.queryByRole('group', { name: 'Selected attendance records' })).not.toBeInTheDocument();
+      expect(header).not.toBeChecked();
+      expect(header).toHaveFocus();
+      expect(screen.getByRole('button', { name: /^add missed attendance$/i })).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('acts only on ticked rows still shown after Late and Assisted narrow the list (selection bar)', async () => {
+    // Juan on time; Maria late and assisted; Jose late.
+    mockAdmin(undefined, '07:55:00');
+    stored.set('2026-07-28', withLateJose('2026-07-28', '07:55:00').map((row) => (row.fullName === 'Maria Clara' ? { ...row, source: 'ADMIN_ASSISTED_SCAN' } : row)));
+    const deleted = trackDeletes();
+    const exported: Blob[] = [];
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: (blob: Blob) => {
+        exported.push(blob);
+        return 'blob:attendance-export';
+      },
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+      for (const name of ['Juan Dela Cruz', 'Maria Clara', 'Jose Rizal']) {
+        await user.click(screen.getByRole('checkbox', { name: `Select attendance for ${name}` }));
+      }
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      expect(within(bar).getByText('3 selected')).toBeInTheDocument();
+
+      // Late hides on-time Juan, then Assisted hides Jose: only Maria stays ticked.
+      const showOnly = screen.getByRole('group', { name: 'Show only' });
+      await user.click(within(showOnly).getByRole('button', { name: 'Late 2' }));
+      expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+      await user.click(within(showOnly).getByRole('button', { name: 'Assisted 1' }));
+      expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+
+      // Export selected writes exactly that one record.
+      await user.click(within(bar).getByRole('button', { name: 'Export selected' }));
+      await waitFor(() => expect(exported).toHaveLength(1));
+      const csv = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(exported[0]);
+      });
+      const dataLines = csv.split('\r\n').filter(Boolean).slice(1);
+      expect(dataLines).toHaveLength(1);
+      expect(dataLines[0]).toContain('Maria Clara');
+
+      // Delete selected deletes exactly that one record.
+      await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
+      expect(screen.getByRole('dialog', { name: 'Delete selected attendance records?' })).toHaveTextContent('1 selected attendance record(s)');
+      await user.click(screen.getByRole('button', { name: 'Delete records' }));
+      await waitFor(() => expect(deleted).toEqual(['2026-07-28-maria']));
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps the focus on the selection bar when some selected records could not be deleted (selection bar)', async () => {
+    mockAdmin();
+    const deleted = trackDeletes((attendanceId) => attendanceId === '2026-07-28-jose');
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      await openDay(user);
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Maria Clara' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' }));
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
+      await user.click(screen.getByRole('button', { name: 'Delete records' }));
+
+      // Jose's record failed: it stays ticked, the bar stays, and the focus is back on Delete selected, not the page.
+      await waitFor(() => expect(within(bar).getByText('1 selected')).toBeInTheDocument());
+      expect(deleted).toEqual(expect.arrayContaining(['2026-07-28-maria', '2026-07-28-jose']));
+      expect(deleted).toHaveLength(2);
+      expect(within(bar).getByRole('button', { name: 'Delete selected' })).toHaveFocus();
+      expect(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' })).toBeChecked();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  /** Opens Juan's row and types a new time-out into it. */
+  async function editJuan(user: ReturnType<typeof userEvent.setup>, juan: HTMLElement, timeOut = '17:30') {
+    await user.click(within(juan).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+    fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: timeOut } });
+  }
+  const discardQuestion = () => screen.queryByRole('dialog', { name: 'Discard unsaved changes?' });
+
+  it('keeps the note about unsaved rows hidden by filters, and its Show, while rows are ticked (selection bar)', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      // Working hides Juan's unsaved row; then a row is ticked and the selection bar takes over.
+      await user.click(screen.getByRole('button', { name: 'Working 1' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Maria Clara' }));
+      const bar = screen.getByRole('group', { name: 'Selected attendance records' });
+      expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+      expect(within(bar).getByText(/1 unsaved row hidden by filters/)).toBeInTheDocument();
+
+      await user.click(within(bar).getByRole('button', { name: 'Show' }));
+      expect(screen.getByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(screen.queryByText(/unsaved row hidden by filters/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('asks before a tab, Bathroom mode (button or the 2 key) or Lock throws away unsaved times', { timeout: 20000 }, async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+
+      // Another tab asks, naming this section; Keep editing keeps the typing.
+      await user.click(screen.getByRole('button', { name: 'Payroll' }));
+      expect(discardQuestion()).toHaveTextContent('You have unsaved changes in Attendance corrections. Leaving now discards them.');
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByRole('button', { name: /attendance corrections/i })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // The System tab, last in the bar, asks the same way.
+      await user.click(screen.getByRole('button', { name: 'System' }));
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByRole('button', { name: 'System' })).not.toHaveAttribute('aria-current');
+
+      // The 2 key asks too, even with focus on the row's Save button.
+      const save = within(juan).getByRole('button', { name: 'Save' });
+      save.focus();
+      fireEvent.keyDown(save, { key: '2' });
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+
+      // So do the Bathroom Key Log button and Lock.
+      await user.click(screen.getByRole('tab', { name: /bathroom key log/i }));
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await user.click(screen.getByRole('button', { name: 'Lock' }));
+      expect(discardQuestion()).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+
+      // Discard changes goes ahead; afterwards nothing is guarded.
+      await user.click(screen.getByRole('button', { name: 'Payroll' }));
+      await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+      expect(screen.getByRole('button', { name: 'Payroll' })).toHaveAttribute('aria-current', 'page');
+      await user.click(screen.getByRole('button', { name: /attendance corrections/i }));
+      expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Payroll' }));
+      expect(discardQuestion()).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('asks before Today or an added missed attendance moves to another date, and Keep editing stays', { timeout: 20000 }, async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+
+      await user.click(screen.getByRole('button', { name: 'Today' }));
+      expect(discardQuestion()).toHaveTextContent('Some times on Tue, Jul 28, 2026 are not saved yet.');
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+
+      // A missed attendance added for yesterday would show that day: it asks first.
+      await user.click(screen.getByRole('button', { name: /^add missed attendance$/i }));
+      const add = await screen.findByRole('dialog', { name: /add missed attendance/i });
+      await user.type(within(add).getByLabelText(/reason \(mandatory audit trail\):/i), 'Forgot card');
+      await user.click(within(add).getByRole('button', { name: /add missed attendance/i }));
+      expect(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.getByText('Tue, Jul 28, 2026')).toBeInTheDocument();
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('holds a date typed by keyboard while rows are unsaved, asking only on Enter or leaving the field', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      const dateInput = screen.getByLabelText('Filter attendance date');
+
+      // A year typed digit by digit passes through 0002 and 2026: no question while typing.
+      fireEvent.keyDown(dateInput, { key: '2' });
+      fireEvent.change(dateInput, { target: { value: '0002-07-29' } });
+      expect(discardQuestion()).not.toBeInTheDocument();
+      expect(dateInput).toHaveValue('0002-07-29');
+      fireEvent.keyDown(dateInput, { key: '6' });
+      fireEvent.change(dateInput, { target: { value: '2026-07-29' } });
+      expect(discardQuestion()).not.toBeInTheDocument();
+
+      fireEvent.keyDown(dateInput, { key: 'Enter' });
+      expect(discardQuestion()).toHaveTextContent('Showing Wed, Jul 29, 2026 discards them.');
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(dateInput).toHaveValue('2026-07-28');
+
+      // Leaving the field asks too.
+      fireEvent.keyDown(dateInput, { key: '3' });
+      fireEvent.change(dateInput, { target: { value: '2026-07-30' } });
+      fireEvent.blur(dateInput);
+      expect(discardQuestion()).toHaveTextContent('Showing Thu, Jul 30, 2026 discards them.');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps a row open with the server times and the problem when the record changed before Save', async () => {
+    const conflict = 'This record was changed by another update. The list was reloaded — check the times and save again.';
+    mockAdmin(undefined, undefined, () => ({ code: 'ATTENDANCE_CONFLICT', message: conflict }));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      // Meanwhile the kiosk records a new time-out for Juan.
+      const stamped = stored.get('2026-07-28')?.find((row) => row.fullName === 'Juan Dela Cruz');
+      if (!stamped) throw new Error('no stored row for Juan');
+      stamped.timeOut = '2026-07-28T17:45:00+08:00';
+
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText(conflict)).toBeInTheDocument();
+      await waitFor(() => expect(within(juan).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:45'));
+      expect(within(juan).getByRole('button', { name: 'Save' })).toBeEnabled();
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+      // The server's message is enough: no second "record changed" note.
+      expect(screen.queryByText(/Your typed times were cleared/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('saves a time-out after 6:00 PM and keeps the late time-out note on its own line under the row', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan, '18:30');
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+
+      const note = await screen.findByText('Saved. Still a late time-out: enter the real time-out.');
+      await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
+      expect(within(juan).getByText('6:30 PM')).toBeInTheDocument();
+      expect(note.closest('tr')).toHaveClass('attendance-row-note');
+      expect(juan.nextElementSibling).toBe(note.closest('tr'));
+      expect(screen.queryByText("Saved Juan Dela Cruz's times.")).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('opens two rows at once, locks the date while one saves, and leaves focus where the admin is typing', async () => {
+    let releaseSave: () => void = () => {};
+    mockAdmin(new Promise<void>((resolve) => { releaseSave = resolve; }));
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      const maria = rowOf(screen.getByText('Maria Clara'));
+      await editJuan(user, juan);
+      await user.click(within(maria).getByRole('button', { name: 'Edit times for Maria Clara' }));
+      fireEvent.change(within(maria).getByLabelText('Time out for Maria Clara'), { target: { value: '17:10' } });
+      expect(within(juan).getByText('Unsaved')).toBeInTheDocument();
+      expect(within(maria).getByText('Unsaved')).toBeInTheDocument();
+
+      await user.click(within(juan).getByRole('button', { name: 'Save' }));
+      // While a row saves, the date stays put.
+      expect(screen.getByLabelText('Filter attendance date')).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Today' })).toBeDisabled();
+      // The admin carries on in Maria's row.
+      const mariaIn = within(maria).getByLabelText('Time in for Maria Clara');
+      mariaIn.focus();
+      act(() => releaseSave());
+
+      await waitFor(() => expect(within(juan).queryByLabelText('Time out for Juan Dela Cruz')).not.toBeInTheDocument());
+      expect(mariaIn).toHaveFocus();
+      expect(within(maria).getByLabelText('Time out for Maria Clara')).toHaveValue('17:10');
+      expect(screen.getByLabelText('Filter attendance date')).toBeEnabled();
+
+      // Cancel closes only Maria's row and gives focus to its Edit.
+      await user.click(within(maria).getByRole('button', { name: 'Cancel' }));
+      expect(within(maria).getByRole('button', { name: 'Edit times for Maria Clara' })).toHaveFocus();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('says so when a refresh replaced typed times because the record changed on the server', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      const maria = rowOf(screen.getByText('Maria Clara'));
+      await editJuan(user, juan);
+      // A new scan changes Juan's record; Maria's save refreshes the list.
+      const stamped = stored.get('2026-07-28')?.find((row) => row.fullName === 'Juan Dela Cruz');
+      if (!stamped) throw new Error('no stored row for Juan');
+      stamped.timeOut = '2026-07-28T17:45:00+08:00';
+      await user.click(within(maria).getByRole('button', { name: 'Edit times for Maria Clara' }));
+      fireEvent.change(within(maria).getByLabelText('Time out for Maria Clara'), { target: { value: '17:10' } });
+      await user.click(within(maria).getByRole('button', { name: 'Save' }));
+
+      expect(await screen.findByText('This record changed (for example a new scan). Your typed times were cleared; check and edit again.')).toBeInTheDocument();
+      expect(within(juan).getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:45');
+      expect(within(juan).queryByText('Unsaved')).not.toBeInTheDocument();
+      // Typing again answers the note.
+      fireEvent.change(within(juan).getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:50' } });
+      expect(screen.queryByText(/Your typed times were cleared/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('points out unsaved rows hidden by the filters and shows them again', async () => {
+    mockAdmin();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      const juan = await openDay(user);
+      await editJuan(user, juan);
+      await user.type(screen.getByPlaceholderText('Name or ID'), 'Maria');
+      expect(screen.queryByText('Juan Dela Cruz')).not.toBeInTheDocument();
+      // The note sits in both bar layers (so ticking rows never hides it); the shown one has the reachable Show.
+      expect(screen.getByRole('button', { name: 'Show' }).parentElement).toHaveTextContent(/^1 unsaved row hidden by filters/);
+
+      await user.click(screen.getByRole('button', { name: 'Show' }));
+      expect(screen.getByPlaceholderText('Name or ID')).toHaveValue('');
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(screen.queryByText(/hidden by filters/)).not.toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Sort by time in: Attendance corrections and Live attendance', () => {
+  /** Four people on one day: Maria last in (1:22 PM), Juan, Jose first in (8:20 AM), Andres with no time in. */
+  const rowsFor = (date: string) => [
+    { attendanceId: 'r-juan', attendanceDate: date, userId: 'APG-2026-001', fullName: 'Juan Dela Cruz', department: 'Sales', timeIn: `${date}T09:05:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+    { attendanceId: 'r-andres', attendanceDate: date, userId: 'APG-2026-004', fullName: 'Andres Bonifacio', department: 'Operations', timeIn: '', timeOut: null, status: 'MISSED', source: 'RFID' },
+    { attendanceId: 'r-maria', attendanceDate: date, userId: 'APG-2026-002', fullName: 'Maria Clara', department: 'Sales', timeIn: `${date}T13:22:00+08:00`, timeOut: null, status: 'WORKING', source: 'RFID' },
+    { attendanceId: 'r-jose', attendanceDate: date, userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Operations', timeIn: `${date}T08:20:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
+  ];
+  function mockFetch() {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/attendance') || url === '/api/attendance') {
+        const date = /date=([^&]+)/.exec(url)?.[1] ?? '2026-07-28';
+        // SAFETY: Mock attendance list (admin date list and the live snapshot)
+        return { ok: true, json: async () => ({ success: true, date, fetchedAt: `${date}T15:00:00+08:00`, attendance: rowsFor(date) }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, users, payroll, LAN)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', users: [], payroll: [], profiles: [], attendance: [] }) } as Response;
+    });
+  }
+  /** Names in the order the table shows them. */
+  const shownNames = () => [...document.querySelectorAll('tbody tr')].flatMap((row) => {
+    const name = row.querySelector('td strong')?.textContent;
+    return name ? [name] : [];
+  });
+
+  it('sorts corrections by time in, newest first, empty time in last, keeping filters, ticks and open rows', async () => {
+    localStorage.clear();
+    mockFetch();
+    window.history.pushState({}, '', '/admin');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+
+      // Newest first by default; the heading says so to screen readers and its button names the other order.
+      const heading = screen.getByRole('columnheader', { name: /time in/i });
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Jose Rizal', 'Andres Bonifacio']);
+
+      // An open row with a change and a ticked row survive the re-sort.
+      const juan = screen.getByText('Juan Dela Cruz').closest('tr');
+      expect(juan).not.toBeNull();
+      // SAFETY: closest('tr') is checked non-null above
+      await user.click(within(juan as HTMLElement).getByRole('button', { name: 'Edit times for Juan Dela Cruz' }));
+      fireEvent.change(screen.getByLabelText('Time out for Juan Dela Cruz'), { target: { value: '17:30' } });
+      await user.click(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' }));
+
+      // The heading keeps its name; the tooltip says what a click does.
+      const sortButton = within(heading).getByRole('button', { name: 'Time in' });
+      expect(sortButton).toHaveAttribute('title', 'Sort by time in, oldest first');
+      await user.click(sortButton);
+      expect(heading).toHaveAttribute('aria-sort', 'ascending');
+      expect(sortButton).toHaveAttribute('title', 'Sort by time in, newest first');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+      expect(screen.getByLabelText('Time out for Juan Dela Cruz')).toHaveValue('17:30');
+      expect(screen.getByRole('checkbox', { name: 'Select attendance for Jose Rizal' })).toBeChecked();
+      expect(localStorage.getItem('alpha_premier_sort_attendance_corrections')).toBe('oldest');
+
+      // A status filter and a search keep the order.
+      await user.click(screen.getByRole('button', { name: /^completed \d+$/i }));
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz']);
+      await user.click(screen.getByRole('button', { name: /^all \d+$/i }));
+      await user.type(screen.getByPlaceholderText('Name or ID'), 'c');
+      expect(shownNames()).toEqual(['Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+
+      // Phones get the same choice as a small toggle beside the count (hidden on wide screens). It sits in both bar
+      // layers; this is the one in the bar that is showing.
+      const toggle = screen.getAllByText('Oldest first').find((element) => !element.closest('[aria-hidden="true"]'));
+      if (!toggle) throw new Error('no sort toggle in the shown bar');
+      expect(toggle).toHaveClass('time-order-toggle');
+      fireEvent.click(toggle);
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(toggle).toHaveTextContent('Newest first');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Andres Bonifacio']);
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('opens corrections in the order the viewer chose last time', async () => {
+    localStorage.clear();
+    localStorage.setItem('alpha_premier_sort_attendance_corrections', 'oldest');
+    mockFetch();
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      expect(screen.getByRole('columnheader', { name: /time in/i })).toHaveAttribute('aria-sort', 'ascending');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('sorts Live attendance by time in together with the search and department filter', async () => {
+    localStorage.clear();
+    mockFetch();
+    window.history.pushState({}, '', '/attendance');
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText('Juan Dela Cruz');
+      const heading = screen.getByRole('columnheader', { name: /time in/i });
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Jose Rizal', 'Andres Bonifacio']);
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Department' }), 'Operations');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Andres Bonifacio']);
+      await user.click(within(heading).getByRole('button', { name: 'Time in' }));
+      expect(heading).toHaveAttribute('aria-sort', 'ascending');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Andres Bonifacio']);
+      expect(localStorage.getItem('alpha_premier_sort_live_attendance')).toBe('oldest');
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Department' }), '');
+      expect(shownNames()).toEqual(['Jose Rizal', 'Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+      await user.type(screen.getByRole('searchbox', { name: 'Search name or ID' }), 'c');
+      expect(shownNames()).toEqual(['Juan Dela Cruz', 'Maria Clara', 'Andres Bonifacio']);
+
+      // The phone toggle flips the same order.
+      fireEvent.click(screen.getByText('Oldest first'));
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(shownNames()).toEqual(['Maria Clara', 'Juan Dela Cruz', 'Andres Bonifacio']);
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Sort by time in: clamped rows', () => {
+  it('sorts a clamped time-in by the payable time it shows, and the heading keeps its name', async () => {
+    localStorage.clear();
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Mock session check
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Mock users: one intern (clamped after the week's grace) and one employee
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', rfidUid: 'RFID-4', employeeType: 'INTERN', status: 'ACTIVE' },
+              { userId: 'APG-2026-005', fullName: 'Gabriela Silang', rfidUid: 'RFID-5', employeeType: 'EMPLOYEE', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Monday's grace for the intern, then Tuesday 8:30 (shown as 9:00 AM) and the employee's 8:45
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-07-28',
+            attendance: [
+              { attendanceId: 'l-mon', attendanceDate: '2026-07-27', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'g-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-005', fullName: 'Gabriela Silang', department: 'Finance', timeIn: '2026-07-28T08:45:00+08:00', timeOut: null, status: 'WORKING' },
+              { attendanceId: 'l-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response (config, payroll, week history)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', payroll: [], profiles: [], attendance: [] }) } as Response;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      const chip = await screen.findByTestId('clamped-time-in');
+      expect(chip).toHaveTextContent('9:00 AM');
+      // Newest first by what the table shows: 9:00 AM (an 8:30 scan) comes before 8:45 AM.
+      const firstRows = [...document.querySelectorAll('tbody tr.attendance-row')].slice(0, 2);
+      expect(firstRows[0]).toContainElement(chip);
+      expect(firstRows[1]).toHaveTextContent('Gabriela Silang');
+      expect(firstRows[1]).toHaveTextContent('8:45 AM');
+      // The heading's name stays "Time in"; the order is in aria-sort and the action in the tooltip.
+      const heading = screen.getByRole('columnheader', { name: 'Time in' });
+      expect(heading).toHaveAttribute('aria-sort', 'descending');
+      expect(within(heading).getByRole('button', { name: 'Time in' })).toHaveAttribute('title', 'Sort by time in, oldest first');
+    } finally {
+      localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Admin page: the saved session is checked before the unlock card', () => {
+  /** /admin with the session answer held until the returned function gives it (an expiry, or null for none). */
+  function mockHeldSession() {
+    let answer: (expiresAt: string | null) => void = () => {};
+    const held = new Promise<string | null>((resolve) => { answer = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        const expiresAt = await held;
+        // SAFETY: Session check answers 200 with the expiry, or 401 when no one is signed in
+        return { ok: Boolean(expiresAt), status: expiresAt ? 200 : 401, json: async () => ({ expiresAt }) } as Response;
+      }
+      // SAFETY: Config, lock and the empty admin lists
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, users: [], attendance: [], payroll: [], profiles: [] }) } as Response;
+    });
+    return answer;
+  }
+  /** Lets config and the other requests answer while the session answer is still out. */
+  const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
+  it('goes straight to the dashboard while the admin is still signed in, with no unlock card first', async () => {
+    window.history.pushState({}, '', '/admin');
+    try {
+      const answer = mockHeldSession();
+      const { container } = render(<App />);
+      await settle();
+      expect(container.querySelector('main.admin-shell')).toHaveAttribute('aria-busy', 'true');
+      expect(screen.getByText('Checking admin session…')).toHaveClass('visually-hidden');
+      expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/administrator pin/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Manage attendance' })).not.toBeInTheDocument();
+
+      await act(async () => { answer(new Date(Date.now() + 900_000).toISOString()); });
+      expect(await screen.findByRole('button', { name: 'Attendance corrections' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
+      expect(screen.queryByText('Checking admin session…')).not.toBeInTheDocument();
+      // The tab bar first shows when the check ends: its gold thumb is placed then too.
+      expect(document.querySelector('.admin-tabs-thumb')).not.toBeNull();
+      expect(container.querySelector('main.admin-shell')).not.toHaveAttribute('aria-busy');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows the unlock card only after the check finds no session, and listens for an admin card only then', async () => {
+    window.history.pushState({}, '', '/admin');
+    try {
+      const answer = mockHeldSession();
+      render(<App />);
+      await settle();
+      expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
+      expect(rfidHandlers).toHaveLength(0);
+
+      await act(async () => { answer(null); });
+      expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
+      expect(screen.getByLabelText(/administrator pin/i)).toHaveFocus();
+      await waitFor(() => expect(rfidHandlers).toHaveLength(1));
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('still shows the unlock card with the expired message when the session runs out', async () => {
+    // Real time still passes (the page loads as usual); the minute until expiry is skipped.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const answer = mockHeldSession();
+      render(<App />);
+      await act(async () => { answer(new Date(Date.now() + 60_000).toISOString()); });
+      expect(await screen.findByRole('button', { name: 'Attendance corrections' })).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(await screen.findByText('Admin session expired. Please unlock again.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
+      expect(screen.queryByText('Checking admin session…')).not.toBeInTheDocument();
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/admin/lock', expect.anything());
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Admin tabs: the gold thumb slides on its own', () => {
+  /** /admin signed in, with empty lists. */
+  function mockSignedInAdmin() {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        // SAFETY: Session check answers with an expiry an hour away
+        return { ok: true, json: async () => ({ expiresAt: new Date(Date.now() + 3_600_000).toISOString() }) } as Response;
+      }
+      // SAFETY: Config and the empty admin lists
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, users: [], attendance: [], payroll: [], profiles: [], payrollPdfs: [] }) } as Response;
+    });
+  }
+  /**
+   * jsdom lays nothing out: give the tab buttons made-up positions and widths (Payroll narrower than Attendance
+   * corrections, as on screen). `grow` widens the active button, as a font or zoom change would.
+   */
+  function layOutTabs() {
+    const size = { grow: 0 };
+    const tabIndex = (el: HTMLElement) => (el.matches('.admin-tabs > button') ? [...(el.parentElement?.querySelectorAll(':scope > button') ?? [])].indexOf(el) : -1);
+    const widthOf = (el: HTMLElement) => (el.textContent ?? '').length * 7 + 40 + (el.classList.contains('is-active') ? size.grow : 0);
+    vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(function (this: HTMLElement) {
+      const index = tabIndex(this);
+      return index < 0 ? 0 : 4 + index * 200;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+      return tabIndex(this) < 0 ? 0 : 4;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return tabIndex(this) < 0 ? 0 : widthOf(this);
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return tabIndex(this) < 0 ? 0 : 36;
+    });
+    return size;
+  }
+  const thumbParts = () => [...document.querySelectorAll<HTMLElement>('.admin-tabs-thumb > span')];
+
+  it('moves the thumb in the commit of the click, before the new page is built, and never remounts it', async () => {
+    mockSignedInAdmin();
+    layOutTabs();
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      const payroll = await screen.findByRole('button', { name: 'Payroll' });
+      const thumb = document.querySelector('.admin-tabs-thumb');
+      const [startCap, fill, endCap] = thumbParts();
+      // Attendance corrections: 4px in, 22 letters (194px wide); the middle strip fills between the 6px caps.
+      expect(startCap.style.transform).toBe('translate(4px, 4px)');
+      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(1.84)');
+      expect(endCap.style.transform).toBe('translate(192px, 4px)');
+
+      // The order of DOM changes after the click: the thumb's move, then the Payroll page going in.
+      const changes: string[] = [];
+      const note = (records: MutationRecord[]) => {
+        for (const record of records) {
+          if (record.type === 'attributes' && record.target === startCap) changes.push('thumb');
+          if (record.type === 'childList' && [...record.addedNodes].some((node) => node instanceof Element && node.matches('.payroll-workspace'))) changes.push('page');
+        }
+      };
+      const watcher = new MutationObserver(note);
+      watcher.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] });
+      act(() => { fireEvent.click(payroll); });
+      note(watcher.takeRecords());
+      watcher.disconnect();
+
+      // The thumb took Payroll's place (the second tab, 7 letters: 89px) before the Payroll page went in.
+      expect(changes.indexOf('thumb')).toBeGreaterThanOrEqual(0);
+      expect(changes.indexOf('thumb')).toBeLessThan(changes.indexOf('page'));
+      expect(startCap.style.transform).toBe('translate(204px, 4px)');
+      expect(fill.style.transform).toBe('translate(209px, 4px) scaleX(0.79)');
+      expect(endCap.style.transform).toBe('translate(287px, 4px)');
+      expect(document.querySelector('.admin-tabs-thumb')).toBe(thumb);
+      expect(thumbParts()).toEqual([startCap, fill, endCap]);
+      expect(screen.getByRole('button', { name: 'Payroll' })).toHaveAttribute('aria-current', 'page');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('changes nothing when the bar reports a resize but no tab moved, and follows a real size change', async () => {
+    const resized: Array<() => void> = [];
+    class FakeResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resized.push(() => callback([], this));
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    mockSignedInAdmin();
+    const size = layOutTabs();
+    const onRender = vi.fn();
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<Profiler id="admin" onRender={onRender}><App /></Profiler>);
+      await screen.findByRole('button', { name: 'Payroll' });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(resized.length).toBeGreaterThan(0);
+      const [, fill] = thumbParts();
+      const before = fill.style.transform;
+
+      onRender.mockClear();
+      act(() => resized.forEach((fire) => fire()));
+      expect(onRender).not.toHaveBeenCalled();
+      expect(fill.style.transform).toBe(before);
+
+      // The active tab grows by 20px: one new placement.
+      size.grow = 20;
+      act(() => resized.forEach((fire) => fire()));
+      expect(onRender).toHaveBeenCalledTimes(1);
+      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(2.04)');
+    } finally {
+      vi.unstubAllGlobals();
+      window.history.pushState({}, '', '/');
+    }
   });
 });

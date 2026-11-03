@@ -13,6 +13,7 @@ import {
   testVoice,
 } from './services/ttsService';
 import { tauriApi } from './tauri-api';
+import { NoticeLine } from './notice';
 
 export interface VoiceSettingsPanelProps {
   onSettingsChange?: (settings: TtsSettings) => void;
@@ -196,7 +197,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
   const isBeaActive = mode.kind === 'enabled' && mode.engine === 'cloned-bea';
 
   return (
-    <section className="lan-panel" aria-label="Voice Announcements">
+    <section className="lan-panel voice-panel" aria-label="Voice Announcements">
       <div className="lan-panel-head">
         <div>
           <p className="section-kicker">Audio &amp; Feedback</p>
@@ -295,14 +296,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         </div>
       )}
 
-      {feedback && (
-        <p
-          className={`dashboard-alert ${feedbackType === 'error' ? '' : 'db-notice'}`}
-          role={feedbackType === 'error' ? 'alert' : 'status'}
-        >
-          {feedback}
-        </p>
-      )}
+      <NoticeLine notice={feedback ? { tone: feedbackType, text: feedback } : null} />
 
       <div className="voice-settings-grid">
         {/* Audio Settings Card: on/off switch, speech rate + volume */}
@@ -453,7 +447,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
 
         <button
           type="button"
-          className="text-button"
+          className="admin-button"
           onClick={() => {
             setSettings(DEFAULT_TTS_SETTINGS);
             saveTtsSettings(DEFAULT_TTS_SETTINGS);

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { KeyRound, LoaderCircle, Mail } from 'lucide-react';
 import { confirmAdminPinReset, requestAdminPinReset } from './api';
+import { NoticeLine } from './notice';
 
 export const PIN_RESET_SUCCESS =
   'Admin PIN updated. Unlock with the new PIN. Registered admin RFID cards still work.';
@@ -61,11 +62,7 @@ export function PinResetPanel({ onDone }: PinResetPanelProps) {
     onDone(PIN_RESET_SUCCESS);
   };
 
-  const errorLine = error && (
-    <p className="setup-error" role="alert">
-      {error}
-    </p>
-  );
+  const errorLine = <NoticeLine notice={error ? { tone: 'error', text: error } : null} />;
   const backButton = (
     <button className="text-button" type="button" onClick={() => onDone()} disabled={busy}>
       Back to unlock
@@ -150,7 +147,7 @@ export function PinResetPanel({ onDone }: PinResetPanelProps) {
           onChange={(event) => setConfirmPin(event.target.value)}
         />
       </label>
-      {notice && <p className="setup-success">{notice}</p>}
+      <NoticeLine notice={notice ? { tone: 'success', text: notice } : null} />
       {errorLine}
       <button
         className="submit-button setup-submit"
