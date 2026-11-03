@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -132,7 +132,7 @@ import type { FileActionResult } from "./api";
 import type { DtrSyncHealth } from "./api";
 import "./styles.css";
 import { BathroomKioskView, ResultPortrait } from "./bathroom-kiosk-view";
-import type { BathroomScanResponse, BathroomScanSuccessResponse, BathroomStatusResponse, VoiceClipState, VoiceWorkerStatus } from "@rfid-attendance/shared";
+import type { BathroomScanResponse, BathroomStatusResponse, VoiceClipState, VoiceWorkerStatus } from "@rfid-attendance/shared";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
@@ -257,8 +257,6 @@ const emptySetupForm: SetupForm = {
 
 /** The native pipeline deduplicates device events before they reach the UI. */
 const SCAN_DEDUP_WINDOW_MS = 2000;
-/** How long a bathroom key card flashes after a scan (the bathroom-key-flash animation in styles.css). */
-const KEY_FLASH_MS = 1_800;
 
 export function greetingForDate(date: Date, timeZone: string): string {
   const hourPart = new Intl.DateTimeFormat("en-US", {
@@ -354,20 +352,6 @@ export default function App() {
   const [bathroomStatus, setBathroomStatus] = useState<BathroomStatusResponse | null>(null);
   const [bathroomScanResult, setBathroomScanResult] = useState<BathroomScanResponse | null>(null);
   const bathroomResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The key cards show the holder's ID photo, which the status feed doesn't carry: each successful scan's photo is
-  // remembered here. Memory only (a photo can be a large data URI), so after a restart initials show until the
-  // person scans again.
-  // A successful bathroom scan shows on its key card, which flashes for a moment, instead of on a result card.
-  const [keyFlash, setKeyFlash] = useState<BathroomScanSuccessResponse | null>(null);
-  const keyFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [holderPhotos, setHolderPhotos] = useState<ReadonlyMap<string, string>>(() => new Map<string, string>());
-  useEffect(() => {
-    const scanned = result?.success ? result.user : keyFlash?.user ?? null;
-    const photoUrl = scanned?.photoUrl;
-    if (!scanned || !photoUrl) return;
-    const { userId } = scanned;
-    setHolderPhotos((current) => (current.get(userId) === photoUrl ? current : new Map(current).set(userId, photoUrl)));
-  }, [result, keyFlash]);
 
   const fetchBathroomStatus = useCallback(async () => {
     try {
@@ -434,7 +418,7 @@ export default function App() {
   useEffect(
     () => () => {
       if (resetTimer.current) clearTimeout(resetTimer.current);
-      if (keyFlashTimer.current) clearTimeout(keyFlashTimer.current);
+      if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
       requestController.current?.abort();
       if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
       if (setupSessionTimer.current) {
@@ -933,17 +917,15 @@ export default function App() {
         if (controller.signal.aborted) return;
 
         closeManualEntry();
+        // The key cards refresh under the result card, so a taken key already shows as in use.
         void fetchBathroomStatus();
+
+        // A success shows the person's ID card in the title's place (photo, key, times); an error its error card.
+        setBathroomScanResult(response);
+        setState(response.success ? "success" : "error");
 
         // Voice announcement
         if (response.success) {
-          // A success shows only on its key card (which flashes on its own timer) and to screen readers, so the
-          // kiosk is ready for the next card straight away.
-          setState("ready");
-          setUid("");
-          setKeyFlash(response);
-          if (keyFlashTimer.current) clearTimeout(keyFlashTimer.current);
-          keyFlashTimer.current = setTimeout(() => setKeyFlash(null), KEY_FLASH_MS);
           if (document.visibilityState === "hidden" || !document.hasFocus()) {
             void notifyScanSuccess(response.user.fullName).catch(() => undefined);
           }
@@ -953,19 +935,17 @@ export default function App() {
             employeeName: response.user.fullName,
             personId: response.user.userId,
           });
-          return;
+        } else {
+          void announceScanError({
+            errorCode: response.error.code,
+            message: response.error.message,
+            activeHolderName: response.activeHolder?.fullName,
+            activeHolderId: response.activeHolder?.userId,
+            genderKey: response.genderKey,
+          });
         }
-
-        setBathroomScanResult(response);
-        setState("error");
-        void announceScanError({
-          errorCode: response.error.code,
-          message: response.error.message,
-          activeHolderName: response.activeHolder?.fullName,
-          activeHolderId: response.activeHolder?.userId,
-          genderKey: response.genderKey,
-        });
-        // The error card stays for the reset delay; same reset as attendance, so the card ID box is cleared too.
+        // Either card stays for the reset delay, like the time-in card; same reset as attendance, so the card ID box is
+        // cleared too. A card tapped meanwhile is read at once (arming it clears this timer) and replaces the card.
         bathroomResetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
       } catch {
         if (controller.signal.aborted) return;
@@ -1218,13 +1198,15 @@ export default function App() {
     setManualUid("");
   };
 
-  // Each mode starts ready, in reader mode: an open card ID box or a result card never carries over to the other
-  // mode (attendance would read a bathroom result as "Saved offline" or "Can't reach the system").
+  // Each mode starts ready, in reader mode: an open card ID box, a scan still being read or a result card never
+  // carries over to the other mode (attendance would read a bathroom result as "Saved offline" or "Can't reach the
+  // system"). resetToReady aborts a scan in flight; its late answer is dropped by the aborted checks after each await,
+  // which also cover the desktop app, where the IPC call itself can't be cancelled.
   const switchKioskMode = (mode: "attendance" | "bathroom") => {
     if (mode === kioskMode) return;
     setKioskMode(mode);
     closeManualEntry();
-    if (state === "success" || state === "error") {
+    if (state !== "ready") {
       if (resetTimer.current) clearTimeout(resetTimer.current);
       if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
       resetToReady();
@@ -1467,7 +1449,47 @@ export default function App() {
           </div>
         )}
 
-        {/* A bathroom scan that went through has no result card: its key card flashes (BathroomKioskView). */}
+        {/* BATHROOM SCAN SUCCESS: the person's ID card in the title's place, with the key cards still below it. */}
+        {kioskMode === "bathroom" && state === "success" && bathroomScanResult?.success && (
+          <div
+            className="kiosk-result is-success"
+            data-testid="kiosk-result-success"
+            role="status"
+            aria-live="polite"
+          >
+            <div className={`result-card ${bathroomScanResult.action === "CHECKOUT" ? "is-in" : "is-out"}`}>
+              <ResultPortrait photoUrl={bathroomScanResult.user.photoUrl} fullName={bathroomScanResult.user.fullName} />
+              <div className="result-body">
+                <span className="result-status">
+                  <KeyRound size={15} aria-hidden="true" />
+                  {bathroomScanResult.genderKey === "MALE" ? "Male" : "Female"} key {bathroomScanResult.action === "CHECKOUT" ? "taken" : "returned"}
+                </span>
+                <h2 className="result-name">{bathroomScanResult.user.fullName}</h2>
+                <p className="result-user-id">
+                  {bathroomScanResult.user.userId}
+                  {bathroomScanResult.user.department ? ` · ${bathroomScanResult.user.department}` : ""}
+                </p>
+                <dl className="result-times">
+                  {bathroomScanResult.action === "RETURN" && (
+                    <div className="result-time is-secondary">
+                      <dt>Taken</dt>
+                      <dd>{formatTime(bathroomScanResult.timeOut, config.timezone)}</dd>
+                    </div>
+                  )}
+                  <div className="result-time">
+                    <dt>{bathroomScanResult.action === "CHECKOUT" ? "Taken" : "Returned"}</dt>
+                    <dd>
+                      {formatTime(
+                        (bathroomScanResult.action === "CHECKOUT" ? bathroomScanResult.timeOut : bathroomScanResult.timeIn) ?? bathroomScanResult.timestamp,
+                        config.timezone,
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ATTENDANCE SCAN ERROR */}
         {kioskMode === "attendance" && state === "error" && error && error.error.code === "DUPLICATE_SCAN" && (
@@ -1550,7 +1572,15 @@ export default function App() {
           </div>
         )}
 
-        {/* READY / PROCESSING HERO (in bathroom mode only the error card replaces it) */}
+        {/* The countdown sits right under the result card (bathroom mode: above the key cards). */}
+        {(state === "success" || state === "error") && (
+          <div className="reset-progress" role="progressbar" aria-label="Returning to ready mode">
+            {/* Keyed per scan so the bar restarts when a new result replaces the last one. */}
+            <span key={result?.requestId ?? (bathroomScanResult?.success ? bathroomScanResult.timestamp : state)} style={{ animationDuration: `${config.resultResetDelayMs}ms` }} />
+          </div>
+        )}
+
+        {/* READY / PROCESSING HERO (in bathroom mode the ID card or the error card replaces it) */}
         {((kioskMode === "attendance" && (state === "ready" || state === "processing")) ||
           (kioskMode === "bathroom" && !bathroomScanResult)) && (
           <div className="kiosk-hero">
@@ -1635,21 +1665,20 @@ export default function App() {
           </div>
         )}
 
-        {/* KEY CARDS (always shown in mode 2), right under the title */}
+        {/* KEY CARDS (always shown in mode 2), right under the title or the result card */}
         {kioskMode === "bathroom" && (
           <BathroomKioskView
             status={bathroomStatus}
-            photos={holderPhotos}
-            flash={keyFlash}
             timezone={config.timezone}
             nowMs={now.getTime()}
           />
         )}
 
         {/* Cards arrive through the wedge listener and native scanner events, so bathroom mode shows no reader box:
-            Type card ID opens a small box for someone without their ID. It steps aside while an error card shows,
-            so the error, the cards and the countdown still fit a laptop screen. */}
-        {kioskMode === "bathroom" && !bathroomScanResult && (manualMode ? (
+            Type card ID opens a small box for someone without their ID. Under an ID card it stays, greyed out (a card
+            tap still works); it steps aside while an error card shows, so the error, the cards and the countdown still
+            fit a laptop screen. */}
+        {kioskMode === "bathroom" && !(bathroomScanResult && !bathroomScanResult.success) && (manualMode ? (
           <div className="bathroom-manual-box" role="group" aria-label="Type card ID">
             <div className="input-row">
               <input
@@ -1696,19 +1725,6 @@ export default function App() {
           <p className="input-hint" role="status" data-testid="kiosk-scan-notice">
             {scanNotice}
           </p>
-        )}
-        {/* Screen readers hear each bathroom success, which shows only on its key card. */}
-        {kioskMode === "bathroom" && (
-          <p className="visually-hidden" role="status" aria-live="polite">
-            {keyFlash ? bathroomAnnouncement(keyFlash, config.timezone) : ""}
-          </p>
-        )}
-
-        {(state === "success" || state === "error") && (
-          <div className="reset-progress" role="progressbar" aria-label="Returning to ready mode">
-            {/* Keyed per scan so the bar restarts when a new result replaces the last one. */}
-            <span key={result?.requestId ?? state} style={{ animationDuration: `${config.resultResetDelayMs}ms` }} />
-          </div>
         )}
       </section>
 
@@ -1810,12 +1826,6 @@ function formatAction(action: ScanSuccessResponse["action"]) {
 /** The action band already says what was recorded, so the backend's stock confirmation is not repeated. */
 function isStockScanMessage(message: string): boolean {
   return /^time (in|out) recorded( successfully)?\.?$/i.test(message.trim());
-}
-
-/** What screen readers hear after a bathroom scan: "Male key checked out by Juan Dela Cruz at 8:14 PM". */
-function bathroomAnnouncement(scan: BathroomScanSuccessResponse, timeZone: string): string {
-  const at = formatTime((scan.action === "CHECKOUT" ? scan.timeOut : scan.timeIn) ?? scan.timestamp, timeZone);
-  return `${scan.genderKey === "MALE" ? "Male" : "Female"} key ${scan.action === "CHECKOUT" ? "checked out" : "returned"} by ${scan.user.fullName} at ${at}`;
 }
 
 /** What the kiosk says for a failed scan: a title and, when people can act on it, a next step. */
@@ -3463,12 +3473,12 @@ function AttendanceTable({
 
 type AdminTab = "users" | "attendance" | "payroll" | "data" | "voice" | "system";
 
-// Attendance corrections first: it is the main reason an admin opens this page. System (updates, startup, the reader
-// and technical details) last: it is rarely needed.
+// Attendance corrections first: it is the main reason an admin opens this page. Payroll second, then Users and RFID.
+// System (updates, startup, the reader and technical details) last: it is rarely needed.
 const ADMIN_TABS = [
   { id: "attendance", label: "Attendance corrections", Icon: ClipboardCheck },
-  { id: "users", label: "Users and RFID", Icon: Users },
   { id: "payroll", label: "Payroll", Icon: Wallet },
+  { id: "users", label: "Users and RFID", Icon: Users },
   { id: "data", label: "Data and backup", Icon: Database },
   { id: "voice", label: "Voice announcements", Icon: Volume2 },
   { id: "system", label: "System", Icon: Settings },
@@ -3478,19 +3488,27 @@ type ActiveThumb = { x: number; y: number; width: number; height: number };
 
 /**
  * Where the active button (`button.is-active`) sits inside `ref`, so a thumb or underline can slide to it.
- * Re-measured when `activeKey` changes and whenever the bar or one of its buttons changes size.
+ * Re-measured when `activeKey` changes and whenever the bar or one of its buttons changes size; a measurement that
+ * matches the last one changes nothing, so a resize that leaves the button where it was never restarts a slide.
  */
 function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey: string): ActiveThumb | null {
   const [thumb, setThumb] = useState<ActiveThumb | null>(null);
+  const placedRef = useRef<ActiveThumb | null>(null);
   useLayoutEffect(() => {
     const bar = ref.current;
     if (!bar) {
+      placedRef.current = null;
       setThumb(null);
       return;
     }
     const place = () => {
       const active = bar.querySelector<HTMLElement>("button.is-active");
-      if (active) setThumb({ x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight });
+      if (!active) return;
+      const next = { x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight };
+      const last = placedRef.current;
+      if (last && last.x === next.x && last.y === next.y && last.width === next.width && last.height === next.height) return;
+      placedRef.current = next;
+      setThumb(next);
     };
     place();
     if (!("ResizeObserver" in window)) return;
@@ -3501,6 +3519,29 @@ function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey
     return () => observer.disconnect();
   }, [ref, activeKey]);
   return thumb;
+}
+
+/** The middle strip's own width; it is stretched with scaleX to fill between the two caps (.admin-tabs-thumb). */
+const TABS_THUMB_FILL_PX = 100;
+/** Each cap's width: the thumb's 6px corners. */
+const TABS_THUMB_CAP_PX = 6;
+
+/**
+ * The admin tabs' gold thumb, moved with transforms only, so the browser slides it on its own (compositor) thread and
+ * a big page being built for the new tab can't make it jump. It is three pieces sliding together: a left cap and a
+ * right cap that keep the rounded corners, and a middle strip stretched with scaleX to the tab's width; they overlap
+ * by 1px so no seam shows.
+ */
+function TabsThumb({ thumb }: { thumb: ActiveThumb }) {
+  const { x, y, width, height } = thumb;
+  const fillScale = Math.max(0, width - 2 * TABS_THUMB_CAP_PX + 2) / TABS_THUMB_FILL_PX;
+  return (
+    <span className="admin-tabs-thumb" aria-hidden="true" style={{ height }}>
+      <span style={{ transform: `translate(${x}px, ${y}px)` }} />
+      <span style={{ transform: `translate(${x + TABS_THUMB_CAP_PX - 1}px, ${y}px) scaleX(${fillScale})` }} />
+      <span style={{ transform: `translate(${x + width - TABS_THUMB_CAP_PX}px, ${y}px)` }} />
+    </span>
+  );
 }
 
 /** The newest time-in or time-out among the rows; null when there is none. */
@@ -3516,6 +3557,9 @@ function newestPunchAt(rows: readonly AttendanceListItem[]): string | null {
 
 function AdminPanel() {
   const [unlocked, setUnlocked] = useState(false);
+  // False until the saved session has been checked: the page stays empty meanwhile, so an admin who is still signed
+  // in goes straight to the dashboard instead of seeing the unlock card flash first.
+  const [sessionChecked, setSessionChecked] = useState(false);
   useScannerPause(unlocked);
   const office = useOfficeIdentity();
   const [sessionExpiresAt, setSessionExpiresAt] = useState("");
@@ -3573,7 +3617,11 @@ function AdminPanel() {
     if (!unlocked) setPendingLeave(null);
   }, [unlocked]);
 
-  const tabThumb = useActiveThumb(tabsRef, `${unlocked}:${adminMode}:${tab}`);
+  // sessionChecked too: the bar first appears when the session check ends, which can be a render after `unlocked`.
+  const tabThumb = useActiveThumb(tabsRef, `${sessionChecked}:${unlocked}:${adminMode}:${tab}`);
+  // The page under the tabs follows the chosen tab at low priority, so the tab bar and its thumb update (and start
+  // sliding) in the same frame as the click, even when the new page is a big one like Payroll.
+  const shownTab = useDeferredValue(tab);
 
   const unlockWithPinOrRfid = useCallback(
     async (candidate: string) => {
@@ -3622,8 +3670,9 @@ function AdminPanel() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [unlocked, guardUnsaved]);
 
+  // An admin card tap unlocks, but only once the session check is done, so a tap can't race its answer.
   useEffect(() => {
-    if (unlocked) return;
+    if (unlocked || !sessionChecked) return;
     let unlisten: (() => void) | undefined;
     void listenForGlobalRfid((scannedUid) => {
       void unlockWithPinOrRfid(scannedUid);
@@ -3635,7 +3684,7 @@ function AdminPanel() {
     return () => {
       unlisten?.();
     };
-  }, [unlocked, unlockWithPinOrRfid]);
+  }, [sessionChecked, unlocked, unlockWithPinOrRfid]);
 
   const nukeSheets = async () => {
     setNukeConfirmOpen(false);
@@ -3690,10 +3739,12 @@ function AdminPanel() {
     await Promise.all([refreshUsers(), refreshRowsRef.current(), refreshCutoffs()]);
   }, [refreshUsers, refreshCutoffs]);
   useEffect(() => {
-    void checkAdminSession().then((expiresAt) => {
-      setSessionExpiresAt(expiresAt ?? "");
-      setUnlocked(Boolean(expiresAt));
-    });
+    void checkAdminSession()
+      .then((expiresAt) => {
+        setSessionExpiresAt(expiresAt ?? "");
+        setUnlocked(Boolean(expiresAt));
+      })
+      .finally(() => setSessionChecked(true));
   }, []);
   useEffect(() => {
     if (!unlocked || !sessionExpiresAt) return;
@@ -3713,6 +3764,53 @@ function AdminPanel() {
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [sessionExpiresAt, unlocked]);
+  // The chosen tab's page, rebuilt only when the deferred tab or its own data changes: a tab click's urgent render
+  // (tab bar and thumb) skips it, and the new page follows at low priority.
+  const tabPage = useMemo(
+    () =>
+      shownTab === "users" ? (
+        <UserEditor
+          users={users}
+          editing={editing}
+          setEditing={setEditing}
+          onSaved={load}
+          onDirtyChange={setUsersDirty}
+          loadStatus={usersList.status}
+          onRetry={() => void usersList.reload()}
+        />
+      ) : shownTab === "attendance" ? (
+        <AdminAttendance
+          rows={rowsList.data}
+          date={date}
+          setDate={setDate}
+          users={users}
+          onSaved={load}
+          onDirtyChange={setAttendanceDirty}
+          loadStatus={rowsList.status}
+          onRetry={() => void rowsList.reload()}
+        />
+      ) : shownTab === "payroll" ? (
+        <PayrollWorkspace
+          records={cutoffsList.data}
+          onSaved={load}
+          loadStatus={cutoffsList.status}
+          onRetry={() => void cutoffsList.reload()}
+        />
+      ) : shownTab === "voice" ? (
+        <VoiceSettingsPanel />
+      ) : shownTab === "system" ? (
+        <SystemPanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} lastScanAt={lastScanAt} />
+      ) : (
+        <DatabasePanel />
+      ),
+    [shownTab, users, editing, load, usersList.status, usersList.reload, rowsList.data, rowsList.status, rowsList.reload, date, cutoffsList.data, cutoffsList.status, cutoffsList.reload, lastScanAt],
+  );
+  if (!sessionChecked)
+    return (
+      <main className="dashboard-shell admin-shell" aria-busy="true">
+        <p className="visually-hidden" role="status">Checking admin session…</p>
+      </main>
+    );
   if (!unlocked && resettingPin)
     return (
       <main className="dashboard-shell admin-login admin-shell">
@@ -3819,13 +3917,7 @@ function AdminPanel() {
       <div className="admin-toolbar">
         {adminMode === "attendance" && (
           <div className="admin-tabs" ref={tabsRef}>
-            {tabThumb && (
-              <span
-                className="admin-tabs-thumb"
-                aria-hidden="true"
-                style={{ width: tabThumb.width, height: tabThumb.height, transform: `translate(${tabThumb.x}px, ${tabThumb.y}px)` }}
-              />
-            )}
+            {tabThumb && <TabsThumb thumb={tabThumb} />}
             {ADMIN_TABS.map(({ id, label, Icon }) => (
               <button
                 key={id}
@@ -3868,41 +3960,7 @@ function AdminPanel() {
       ) : (
         <>
           {error && <p className="dashboard-alert">{error}</p>}
-          {tab === "users" ? (
-            <UserEditor
-              users={users}
-              editing={editing}
-              setEditing={setEditing}
-              onSaved={load}
-              onDirtyChange={setUsersDirty}
-              loadStatus={usersList.status}
-              onRetry={() => void usersList.reload()}
-            />
-          ) : tab === "attendance" ? (
-            <AdminAttendance
-              rows={rowsList.data}
-              date={date}
-              setDate={setDate}
-              users={users}
-              onSaved={load}
-              onDirtyChange={setAttendanceDirty}
-              loadStatus={rowsList.status}
-              onRetry={() => void rowsList.reload()}
-            />
-          ) : tab === "payroll" ? (
-            <PayrollWorkspace
-              records={cutoffsList.data}
-              onSaved={load}
-              loadStatus={cutoffsList.status}
-              onRetry={() => void cutoffsList.reload()}
-            />
-          ) : tab === "voice" ? (
-            <VoiceSettingsPanel />
-          ) : tab === "system" ? (
-            <SystemPanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} lastScanAt={lastScanAt} />
-          ) : (
-            <DatabasePanel />
-          )}
+          {tabPage}
         </>
       )}
       <ConfirmDialog

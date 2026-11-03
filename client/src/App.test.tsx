@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Profiler } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { greetingForDate, shouldRouteGlobalRfidToSetup, ScannerDiagnostics, PayrollWorkspace } from './App';
@@ -7,6 +8,7 @@ import * as api from './api';
 import * as ttsService from './services/ttsService';
 import * as tauriApi from './tauri-api';
 import { resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
+import { formatTime } from './format';
 import type { BathroomActiveHolder, BathroomScanResponse, BathroomScanSuccessResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
 
 let rfidHandlers: Array<(uid: string) => void> = [];
@@ -684,10 +686,11 @@ describe('RFID kiosk', () => {
       expect.objectContaining({ body: JSON.stringify({ rfidUid: 'BATH-001', source: 'MANUAL_TEST' }) }),
     ));
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/attendance/scan', expect.anything());
-    // A recorded scan closes the box, and the kiosk is ready again at once (the key card shows the result).
-    expect(await screen.findByText('Male key checked out by Ada Lovelace at 9:00 AM')).toBeInTheDocument();
+    // A recorded scan closes the box and shows the ID card; Type card ID is back, greyed out until the card goes.
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent('Ada Lovelace');
     expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /type card id/i })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
   });
 
   it('renders an API error and returns to ready after the reset delay', async () => {
@@ -3108,8 +3111,8 @@ describe('Admin Attendance Corrections', () => {
       expect(inHeader.getByRole('button', { name: 'Lock' })).toBeInTheDocument();
 
       // Below the header, one row with two separate bars: the six section tabs, then the mode switch.
-      // Attendance corrections comes first and is where the admin page opens; System comes last.
-      const tabNames = ['Attendance corrections', 'Users and RFID', 'Payroll', 'Data and backup', 'Voice announcements', 'System'];
+      // Attendance corrections comes first and is where the admin page opens; Payroll second; System comes last.
+      const tabNames = ['Attendance corrections', 'Payroll', 'Users and RFID', 'Data and backup', 'Voice announcements', 'System'];
       const tabs = screen.getByRole('button', { name: 'Payroll' }).parentElement;
       expect(within(tabs!).getAllByRole('button').map((tab) => tab.textContent)).toEqual(tabNames);
       expect(within(tabs!).getByRole('button', { name: 'Attendance corrections' })).toHaveAttribute('aria-current', 'page');
@@ -3186,7 +3189,7 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByRole('button', { name: /type card id/i }));
     // Enter records, like the Record button.
     await user.type(screen.getByLabelText(/manual card id/i), 'FEMALE-CARD-01{Enter}');
-    expect(await screen.findByText('Female key checked out by Jane Smith at 10:00 AM')).toBeInTheDocument();
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Female key taken\s*Jane Smith.*Taken\s*10:00 AM/);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/bathroom/scan',
       expect.objectContaining({ body: JSON.stringify({ rfidUid: 'FEMALE-CARD-01', source: 'MANUAL_TEST' }) }),
@@ -3250,7 +3253,7 @@ describe('Admin Attendance Corrections', () => {
 
     // 1. Scan for checkout
     act(() => emitRfidScan('MALE-CARD-01'));
-    expect(await screen.findByText('Male key checked out by John Doe at 10:00 AM')).toBeInTheDocument();
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key taken\s*John Doe.*Taken\s*10:00 AM/);
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'CHECKOUT',
       genderKey: 'MALE',
@@ -3276,8 +3279,9 @@ describe('Admin Attendance Corrections', () => {
       message: 'Female floor key returned',
       timestamp: '2026-08-28T10:00:00+08:00',
     };
+    // Tapped while John's ID card still shows: it is recorded and replaces the card.
     act(() => emitRfidScan('FEMALE-CARD-01'));
-    expect(await screen.findByText('Female key returned by Jane Smith at 10:00 AM')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Female key returned\s*Jane Smith.*Taken\s*9:50 AM\s*Returned\s*10:00 AM/));
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'RETURN',
       genderKey: 'FEMALE',
@@ -3351,7 +3355,7 @@ describe('Admin Attendance Corrections', () => {
   });
 });
 
-describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
+describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type card ID', () => {
   // Made-up people only.
   const holder = (userId: string, fullName: string, genderKey: 'MALE' | 'FEMALE'): BathroomActiveHolder => ({
     logId: `log-${userId}`,
@@ -3363,12 +3367,12 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
   });
   type BathroomDay = { maleActive: BathroomActiveHolder | null; femaleActive: BathroomActiveHolder | null };
 
-  /** Bathroom status answers with `day` as it is at each request; scans answer in turn from `scans`. */
   /**
    * Bathroom status answers with `day` as it is at each request; scans answer in turn from `scans`, after `scanDelayMs`
-   * when set (rejecting like fetch if the request is aborted first). `resetDelayMs` is the kiosk's result reset delay.
+   * when set (rejecting like fetch if the request is aborted first, unless `cancellable` is false, as with the desktop
+   * app's IPC calls). `resetDelayMs` is the kiosk's result reset delay.
    */
-  function mockBathroomKiosk(day: BathroomDay, scans: BathroomScanResponse[] = [], resetDelayMs = 300, scanDelayMs = 0) {
+  function mockBathroomKiosk(day: BathroomDay, scans: BathroomScanResponse[] = [], resetDelayMs = 300, scanDelayMs = 0, cancellable = true) {
     const queue = [...scans];
     return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -3384,7 +3388,7 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
         if (!scanDelayMs) return answer;
         return new Promise<Response>((resolve, reject) => {
           const timer = setTimeout(() => resolve(answer), scanDelayMs);
-          init?.signal?.addEventListener('abort', () => {
+          if (cancellable) init?.signal?.addEventListener('abort', () => {
             clearTimeout(timer);
             reject(new DOMException('The operation was aborted.', 'AbortError'));
           });
@@ -3404,12 +3408,21 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
     message: 'Floor key checked out',
     timestamp: person.timeOut,
   });
+  const giveBack = (person: BathroomActiveHolder, photoUrl: string | null): BathroomScanSuccessResponse => ({
+    ...checkout(person, photoUrl),
+    action: 'RETURN',
+    timeIn: new Date().toISOString(),
+    durationSeconds: 395,
+    timestamp: new Date().toISOString(),
+  });
+  /** The time the kiosk shows for an ISO time (Asia/Manila, as configured). */
+  const shown = (iso: string) => formatTime(iso, 'Asia/Manila');
+  const photo = 'data:image/png;base64,iVBORw0KGgo=';
 
   it('shows no reader box in bathroom mode, and a wedge scan still checks a key out and back in', async () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
-    const giveBack: BathroomScanSuccessResponse = { ...checkout(paolo, null), action: 'RETURN', timeIn: new Date().toISOString(), durationSeconds: 395 };
-    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(paolo, null), giveBack]);
+    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(paolo, null), giveBack(paolo, null)]);
     const user = userEvent.setup();
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
@@ -3424,7 +3437,7 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
     };
     const bathroomScans = () => vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url) === '/api/bathroom/scan');
     wedge('0000004242');
-    expect(await screen.findByText(/^Male key checked out by Paolo Aquino at/)).toBeInTheDocument();
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key takenPaolo Aquino/);
     expect(bathroomScans()[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ rfidUid: '0000004242', source: 'RFID' }) }));
 
     // Back to ready; the same card, a little later than the repeat-tap guard (2s), returns the key.
@@ -3432,7 +3445,7 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
     const realNow = Date.now.bind(Date);
     vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 5_000);
     wedge('0000004242');
-    expect(await screen.findByText(/^Male key returned by Paolo Aquino at/)).toBeInTheDocument();
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key returnedPaolo Aquino/);
     expect(bathroomScans()).toHaveLength(2);
     expect(bathroomScans()[1][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ rfidUid: '0000004242', source: 'RFID' }) }));
   });
@@ -3486,88 +3499,88 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
     }
   });
 
-  it('shows the holder photo on the key card after a bathroom checkout scan', async () => {
-    const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
-    const photo = 'data:image/png;base64,iVBORw0KGgo=';
-    const day: BathroomDay = { maleActive: null, femaleActive: null };
-    mockBathroomKiosk(day, [checkout(paolo, photo)]);
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
-    expect(within(await screen.findByTestId('bathroom-kiosk-card-male')).getByText('Ready to take')).toBeInTheDocument();
-
-    day.maleActive = paolo;
-    act(() => emitRfidScan('MALE-CARD-07'));
-    await waitFor(() => expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino'));
-    expect(within(screen.getByTestId('bathroom-kiosk-card-male')).getByRole('img', { name: 'Paolo Aquino ID' })).toHaveAttribute('src', photo);
-  });
-
-  it('shows initials while the holder photo is unknown, and the in-use and available card copy', async () => {
+  it('shows the in-use and free key card copy in capsules, with initials and no photo on the key cards', async () => {
     mockBathroomKiosk({ maleActive: holder('APG-2026-007', 'Paolo Aquino', 'MALE'), femaleActive: null });
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
 
-    const male = within(await screen.findByTestId('bathroom-kiosk-card-male'));
+    const maleCard = await screen.findByTestId('bathroom-kiosk-card-male');
+    const male = within(maleCard);
     expect(await male.findByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
-    expect(male.getByLabelText('ID photo unavailable')).toHaveTextContent('PA');
+    expect(maleCard).toHaveClass('is-in-use', 'gender-male');
+    expect(male.getByTestId('bathroom-kiosk-status-male')).toHaveTextContent(/^IN USE$/);
+    expect(male.getByText('Currently with')).toBeInTheDocument();
+    expect(male.getByText('APG-2026-007').closest('.holder-dept')).toHaveTextContent(/^Operations · APG-2026-007$/);
+    expect(male.getByText('PA')).toHaveClass('holder-avatar');
+    expect(male.getByText('Time Out')).toBeInTheDocument();
+    expect(male.getByText('Elapsed').nextElementSibling).toHaveTextContent(/^\d+m \d{2}s$/);
     expect(male.queryByRole('img')).not.toBeInTheDocument();
-    expect(male.getByTestId('bathroom-kiosk-status-male')).toHaveTextContent(/^In use$/);
-    expect(male.getByText('Key taken')).toBeInTheDocument();
-    expect(male.getByText('APG-2026-007 · Operations')).toBeInTheDocument();
-    expect(male.getByText('Taken')).toBeInTheDocument();
-    expect(male.getByText(/^Out for/)).toHaveTextContent(/^Out for \d+m \d{2}s$/);
 
-    const female = within(screen.getByTestId('bathroom-kiosk-card-female'));
-    expect(female.getByTestId('bathroom-kiosk-status-female')).toHaveTextContent(/^Available$/);
-    expect(female.getByText('Ready to take')).toBeInTheDocument();
-    expect(female.getByText('Tap your ID to take this key')).toBeInTheDocument();
+    const femaleCard = screen.getByTestId('bathroom-kiosk-card-female');
+    const female = within(femaleCard);
+    expect(femaleCard).toHaveClass('is-available', 'gender-female');
+    expect(female.getByTestId('bathroom-kiosk-status-female')).toHaveTextContent(/^AVAILABLE$/);
+    expect(female.getByText('Key is Available')).toBeInTheDocument();
+    expect(female.getByText('Tap female employee RFID card to check out')).toBeInTheDocument();
+    expect(female.queryByRole('img')).not.toBeInTheDocument();
   });
 
   /** Lets the mocked requests answer and React settle while fake timers run. */
   const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(50); });
 
-  it('shows no result card after a checkout: the key card flashes for a moment and screen readers hear it', async () => {
+  it('shows the ID card with the photo, chip and Taken time after a checkout, above the updated key cards, for the reset delay', async () => {
     vi.useFakeTimers();
     try {
       const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
       const day: BathroomDay = { maleActive: null, femaleActive: null };
-      mockBathroomKiosk(day, [checkout(paolo, null)]);
-      render(<App />);
+      mockBathroomKiosk(day, [checkout(paolo, photo)], 4_000);
+      const { container } = render(<App />);
       fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
       await settle();
+      expect(within(screen.getByTestId('bathroom-kiosk-card-male')).getByText('Key is Available')).toBeInTheDocument();
 
       day.maleActive = paolo;
       act(() => emitRfidScan('MALE-CARD-07'));
       await settle();
+      const card = screen.getByTestId('kiosk-result-success');
+      expect(card).toHaveAttribute('role', 'status');
+      expect(card).toHaveAttribute('aria-live', 'polite');
+      expect(within(card).getByRole('img', { name: 'Paolo Aquino ID' })).toHaveAttribute('src', photo);
+      expect(within(card).getByText(/Male key taken/)).toHaveClass('result-status');
+      expect(within(card).getByRole('heading', { name: 'Paolo Aquino' })).toBeInTheDocument();
+      expect(within(card).getByText('APG-2026-007 · Operations')).toBeInTheDocument();
+      expect(within(card).getByText('Taken').nextElementSibling).toHaveTextContent(shown(paolo.timeOut));
+      expect(within(card).queryByText('Returned')).not.toBeInTheDocument();
+      // In the title's place, with the countdown under it and the key cards, already updated, still below.
+      expect(screen.queryByRole('heading', { name: 'Bathroom Key Log' })).not.toBeInTheDocument();
+      expect(card.nextElementSibling).toHaveAttribute('role', 'progressbar');
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+      expect(screen.getByTestId('bathroom-kiosk-view').querySelector('img')).toBeNull();
+      // Type card ID stays, greyed out; a card tap still works (next tests).
+      expect(screen.getByRole('button', { name: /type card id/i })).toBeDisabled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_900); });
+      expect(screen.getByTestId('kiosk-result-success')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
       expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
       expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
-      const male = screen.getByTestId('bathroom-kiosk-card-male');
-      expect(male).toHaveClass('is-flashing', 'is-in-use');
-      expect(within(male).getByText('Key taken')).toBeInTheDocument();
-      expect(screen.getByTestId('bathroom-kiosk-card-female')).not.toHaveClass('is-flashing');
-      const spoken = screen.getByText(/^Male key checked out by Paolo Aquino at \d{1,2}:\d{2} (AM|PM)$/);
-      expect(spoken).toHaveAttribute('aria-live', 'polite');
-      expect(spoken).toHaveClass('visually-hidden');
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_800); });
-      expect(male).not.toHaveClass('is-flashing');
-      expect(male).toHaveClass('is-in-use');
-      // The flash is over, so the announcement is cleared for the next scan.
-      expect(spoken).toBeEmptyDOMElement();
+      expect(container.querySelector('.kiosk-hero .hero-icon')).toHaveClass('icon-ready');
+      expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled();
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('flashes the key card on a return, saying who brought it back until the flash ends', async () => {
+  it('shows Taken and Returned on the ID card after a return, with initials when there is no photo, and frees the key card', async () => {
     vi.useFakeTimers();
     try {
       const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
       const day: BathroomDay = { maleActive: paolo, femaleActive: null };
-      const giveBack: BathroomScanSuccessResponse = { ...checkout(paolo, null), action: 'RETURN', timeIn: new Date().toISOString(), durationSeconds: 395 };
-      mockBathroomKiosk(day, [giveBack]);
+      const returned = giveBack(paolo, null);
+      mockBathroomKiosk(day, [returned], 4_000);
       render(<App />);
       fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
       await settle();
@@ -3576,46 +3589,71 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
       day.maleActive = null;
       act(() => emitRfidScan('MALE-CARD-07'));
       await settle();
+      const card = screen.getByTestId('kiosk-result-success');
+      expect(within(card).getByText(/Male key returned/)).toBeInTheDocument();
+      expect(within(card).getByLabelText('ID photo unavailable')).toHaveTextContent('PA');
+      expect(within(card).getByText('Taken').nextElementSibling).toHaveTextContent(shown(paolo.timeOut));
+      expect(within(card).getByText('Returned').nextElementSibling).toHaveTextContent(shown(returned.timeIn ?? ''));
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
       const male = screen.getByTestId('bathroom-kiosk-card-male');
-      expect(male).toHaveClass('is-flashing', 'is-available');
-      expect(within(male).getByText(/^Returned by Paolo Aquino · \d{1,2}:\d{2} (AM|PM)$/)).toBeInTheDocument();
-      expect(within(male).queryByText('Tap your ID to take this key')).not.toBeInTheDocument();
-      expect(screen.getByText(/^Male key returned by Paolo Aquino at \d{1,2}:\d{2} (AM|PM)$/)).toBeInTheDocument();
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_800); });
-      expect(male).not.toHaveClass('is-flashing');
-      expect(within(male).getByText('Tap your ID to take this key')).toBeInTheDocument();
-      expect(within(male).queryByText(/^Returned by/)).not.toBeInTheDocument();
+      expect(male).toHaveClass('is-available');
+      expect(within(male).getByTestId('bathroom-kiosk-status-male')).toHaveTextContent('AVAILABLE');
+      expect(within(male).getByText('Key is Available')).toBeInTheDocument();
+      expect(within(male).queryByText('Currently with')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('is ready again right after a success: ready key icon and Type card ID enabled', async () => {
-    mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000);
-    const user = userEvent.setup();
-    const { container } = render(<App />);
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
-    act(() => emitRfidScan('MALE-CARD-07'));
-    expect(await screen.findByText(/^Male key checked out by Paolo Aquino/)).toBeInTheDocument();
-    expect(container.querySelector('.kiosk-hero .hero-icon')).toHaveClass('icon-ready');
-    expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled();
-    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  it('cross-fades a key card when it changes hands and glows its edge once, but not on the first load', async () => {
+    vi.useFakeTimers();
+    try {
+      const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
+      const day: BathroomDay = { maleActive: null, femaleActive: holder('APG-2026-006', 'Bea Castillo', 'FEMALE') };
+      mockBathroomKiosk(day, [checkout(paolo, null)], 4_000);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      const female = screen.getByTestId('bathroom-kiosk-card-female');
+      // Bea held the key before the kiosk opened: no change to show.
+      expect(female.querySelector('.bathroom-kiosk-glow, .is-leaving')).toBeNull();
+
+      day.maleActive = paolo;
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await settle();
+      // The free box fades out (hidden from screen readers) under the new in-use box; the edge glows.
+      const leaving = male.querySelector('.available-prompt-box.is-leaving');
+      expect(leaving).toHaveAttribute('aria-hidden', 'true');
+      expect(male.querySelector('.active-holder-box:not(.is-leaving)')).not.toBeNull();
+      expect(male.querySelectorAll('.bathroom-kiosk-glow')).toHaveLength(1);
+      expect(screen.getAllByTestId('bathroom-kiosk-holder-male')).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(male.querySelector('.is-leaving')).toBeNull();
+      expect(within(male).queryByText('Key is Available')).not.toBeInTheDocument();
+      expect(female.querySelector('.bathroom-kiosk-glow')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('switching to Attendance right after a bathroom success shows the reader box, not a result', async () => {
+  it('switching to Attendance while the ID card shows leaves no result card there', async () => {
     mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000);
     const user = userEvent.setup();
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
     act(() => emitRfidScan('MALE-CARD-07'));
-    expect(await screen.findByText(/^Male key checked out by Paolo Aquino/)).toBeInTheDocument();
+    expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent('Paolo Aquino');
     await user.click(screen.getByTestId('kiosk-mode-attendance'));
+    expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
     expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/scanner card id/i)).toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    // And back in Bathroom mode the title is there, not the old ID card.
+    await user.click(screen.getByTestId('kiosk-mode-bathroom'));
+    expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
   });
 
   it('switching to Attendance right after a bathroom error drops the error too', async () => {
@@ -3637,7 +3675,7 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 
-  it('records a second card tapped 3.9s after a success (the old reset no longer aborts it)', async () => {
+  it('records a second card tapped while the ID card shows, 3.9s in (the old reset no longer aborts it), and shows its card', async () => {
     vi.useFakeTimers();
     try {
       const paolo = holder('APG-2026-007', 'Paolo Aquino', 'MALE');
@@ -3649,17 +3687,21 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
 
       act(() => emitRfidScan('MALE-CARD-07'));
       await act(async () => { await vi.advanceTimersByTimeAsync(250); });
-      expect(screen.getByText(/^Male key checked out by Paolo Aquino/)).toBeInTheDocument();
+      expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Male key takenPaolo Aquino/);
 
-      // Paolo's answer came at 200ms; Bea taps 3.9s after it.
+      // Paolo's answer came at 200ms; Bea taps 3.9s after it, while his ID card still shows.
       await act(async () => { await vi.advanceTimersByTimeAsync(3_850); });
       act(() => emitRfidScan('FEMALE-CARD-06'));
-      // Bea's request is still out when Paolo's result would have been reset (4s).
+      // Bea's request is still out when Paolo's card would have been reset (4s).
       await act(async () => { await vi.advanceTimersByTimeAsync(300); });
-      expect(screen.getByText(/^Female key checked out by Bea Castillo/)).toBeInTheDocument();
-      expect(screen.getByTestId('bathroom-kiosk-card-female')).toHaveClass('is-flashing');
+      expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Female key takenBea Castillo/);
       expect(screen.queryByText('Bathroom service is temporarily unavailable.')).not.toBeInTheDocument();
       expect(vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url) === '/api/bathroom/scan')).toHaveLength(2);
+      // Bea's card gets the full reset delay of its own.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_800); });
+      expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent('Bea Castillo');
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -3683,6 +3725,98 @@ describe('Kiosk Bathroom Key Log: ID-card key cards and Type card ID', () => {
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByTestId('scanner-uid')).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toHaveFocus());
+  });
+
+  it('drops a bathroom answer that lands after a switch to Attendance, even when the request can not be cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      // As in the desktop app, where the IPC call can't be aborted: the answer comes 500ms later whatever happens.
+      mockBathroomKiosk({ maleActive: null, femaleActive: null }, [checkout(holder('APG-2026-007', 'Paolo Aquino', 'MALE'), null)], 4_000, 500, false);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      act(() => emitRfidScan('MALE-CARD-07'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.getByRole('heading', { name: 'Reading card…' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('kiosk-mode-attendance'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/scanner card id/i)).toBeEnabled();
+      expect(ttsService.announceBathroom).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops an attendance answer that lands after the 2 key switches to Bathroom, even when the request can not be cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/api/config')) {
+          // SAFETY: Fetch returns config with a 4s reset delay
+          return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 4_000 }) } as Response;
+        }
+        if (url.includes('/api/attendance/scan')) {
+          // SAFETY: A time-in that answers after 500ms, ignoring the abort (as the desktop app's IPC call does)
+          return new Promise<Response>((resolve) => setTimeout(() => resolve({ ok: true, json: async () => successResponse } as Response), 500));
+        }
+        // SAFETY: Bathroom status and other requests get an empty day
+        return { ok: true, json: async () => ({ success: true, date: '2026-08-28', maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [], fetchedAt: '2026-08-28T10:00:00Z' }) } as Response;
+      });
+      render(<App />);
+      await settle();
+      act(() => emitRfidScan('DEADBEEF'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.getByRole('heading', { name: 'Reading card…' })).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: '2' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(screen.getByTestId('kiosk-mode-bathroom')).toHaveClass('active');
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Bathroom Key Log' })).toBeInTheDocument();
+      expect(ttsService.announceAttendance).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not show a change made while the kiosk was in Attendance as the key changing hands, but does for the next one', async () => {
+    vi.useFakeTimers();
+    try {
+      const day: BathroomDay = { maleActive: holder('APG-2026-007', 'Paolo Aquino', 'MALE'), femaleActive: null };
+      mockBathroomKiosk(day);
+      render(<App />);
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
+
+      // While the kiosk shows Attendance, Paolo returns the key and Mark takes it (on another device).
+      fireEvent.click(screen.getByTestId('kiosk-mode-attendance'));
+      await settle();
+      day.maleActive = holder('APG-2026-009', 'Mark Villanueva', 'MALE');
+      fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
+      await settle();
+      const male = screen.getByTestId('bathroom-kiosk-card-male');
+      expect(within(male).getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Mark Villanueva');
+      expect(male.querySelector('.bathroom-kiosk-glow')).toBeNull();
+      expect(male.querySelector('.is-leaving')).toBeNull();
+
+      // Mark returns it while the kiosk is here: the next status refresh shows that change.
+      day.maleActive = null;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(male.querySelector('.bathroom-kiosk-glow')).not.toBeNull();
+      expect(male.querySelector('.active-holder-box.is-leaving')).not.toBeNull();
+      expect(within(male).getByText('Key is Available')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -5710,6 +5844,207 @@ describe('Sort by time in: clamped rows', () => {
       expect(within(heading).getByRole('button', { name: 'Time in' })).toHaveAttribute('title', 'Sort by time in, oldest first');
     } finally {
       localStorage.clear();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Admin page: the saved session is checked before the unlock card', () => {
+  /** /admin with the session answer held until the returned function gives it (an expiry, or null for none). */
+  function mockHeldSession() {
+    let answer: (expiresAt: string | null) => void = () => {};
+    const held = new Promise<string | null>((resolve) => { answer = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        const expiresAt = await held;
+        // SAFETY: Session check answers 200 with the expiry, or 401 when no one is signed in
+        return { ok: Boolean(expiresAt), status: expiresAt ? 200 : 401, json: async () => ({ expiresAt }) } as Response;
+      }
+      // SAFETY: Config, lock and the empty admin lists
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, users: [], attendance: [], payroll: [], profiles: [] }) } as Response;
+    });
+    return answer;
+  }
+  /** Lets config and the other requests answer while the session answer is still out. */
+  const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
+  it('goes straight to the dashboard while the admin is still signed in, with no unlock card first', async () => {
+    window.history.pushState({}, '', '/admin');
+    try {
+      const answer = mockHeldSession();
+      const { container } = render(<App />);
+      await settle();
+      expect(container.querySelector('main.admin-shell')).toHaveAttribute('aria-busy', 'true');
+      expect(screen.getByText('Checking admin session…')).toHaveClass('visually-hidden');
+      expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/administrator pin/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Manage attendance' })).not.toBeInTheDocument();
+
+      await act(async () => { answer(new Date(Date.now() + 900_000).toISOString()); });
+      expect(await screen.findByRole('button', { name: 'Attendance corrections' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
+      expect(screen.queryByText('Checking admin session…')).not.toBeInTheDocument();
+      // The tab bar first shows when the check ends: its gold thumb is placed then too.
+      expect(document.querySelector('.admin-tabs-thumb')).not.toBeNull();
+      expect(container.querySelector('main.admin-shell')).not.toHaveAttribute('aria-busy');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('shows the unlock card only after the check finds no session, and listens for an admin card only then', async () => {
+    window.history.pushState({}, '', '/admin');
+    try {
+      const answer = mockHeldSession();
+      render(<App />);
+      await settle();
+      expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
+      expect(rfidHandlers).toHaveLength(0);
+
+      await act(async () => { answer(null); });
+      expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
+      expect(screen.getByLabelText(/administrator pin/i)).toHaveFocus();
+      await waitFor(() => expect(rfidHandlers).toHaveLength(1));
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('still shows the unlock card with the expired message when the session runs out', async () => {
+    // Real time still passes (the page loads as usual); the minute until expiry is skipped.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const answer = mockHeldSession();
+      render(<App />);
+      await act(async () => { answer(new Date(Date.now() + 60_000).toISOString()); });
+      expect(await screen.findByRole('button', { name: 'Attendance corrections' })).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(await screen.findByText('Admin session expired. Please unlock again.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
+      expect(screen.queryByText('Checking admin session…')).not.toBeInTheDocument();
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/admin/lock', expect.anything());
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('Admin tabs: the gold thumb slides on its own', () => {
+  /** /admin signed in, with empty lists. */
+  function mockSignedInAdmin() {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        // SAFETY: Session check answers with an expiry an hour away
+        return { ok: true, json: async () => ({ expiresAt: new Date(Date.now() + 3_600_000).toISOString() }) } as Response;
+      }
+      // SAFETY: Config and the empty admin lists
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, users: [], attendance: [], payroll: [], profiles: [], payrollPdfs: [] }) } as Response;
+    });
+  }
+  /**
+   * jsdom lays nothing out: give the tab buttons made-up positions and widths (Payroll narrower than Attendance
+   * corrections, as on screen). `grow` widens the active button, as a font or zoom change would.
+   */
+  function layOutTabs() {
+    const size = { grow: 0 };
+    const tabIndex = (el: HTMLElement) => (el.matches('.admin-tabs > button') ? [...(el.parentElement?.querySelectorAll(':scope > button') ?? [])].indexOf(el) : -1);
+    const widthOf = (el: HTMLElement) => (el.textContent ?? '').length * 7 + 40 + (el.classList.contains('is-active') ? size.grow : 0);
+    vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(function (this: HTMLElement) {
+      const index = tabIndex(this);
+      return index < 0 ? 0 : 4 + index * 200;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+      return tabIndex(this) < 0 ? 0 : 4;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return tabIndex(this) < 0 ? 0 : widthOf(this);
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return tabIndex(this) < 0 ? 0 : 36;
+    });
+    return size;
+  }
+  const thumbParts = () => [...document.querySelectorAll<HTMLElement>('.admin-tabs-thumb > span')];
+
+  it('moves the thumb in the commit of the click, before the new page is built, and never remounts it', async () => {
+    mockSignedInAdmin();
+    layOutTabs();
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      const payroll = await screen.findByRole('button', { name: 'Payroll' });
+      const thumb = document.querySelector('.admin-tabs-thumb');
+      const [startCap, fill, endCap] = thumbParts();
+      // Attendance corrections: 4px in, 22 letters (194px wide); the middle strip fills between the 6px caps.
+      expect(startCap.style.transform).toBe('translate(4px, 4px)');
+      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(1.84)');
+      expect(endCap.style.transform).toBe('translate(192px, 4px)');
+
+      // The order of DOM changes after the click: the thumb's move, then the Payroll page going in.
+      const changes: string[] = [];
+      const note = (records: MutationRecord[]) => {
+        for (const record of records) {
+          if (record.type === 'attributes' && record.target === startCap) changes.push('thumb');
+          if (record.type === 'childList' && [...record.addedNodes].some((node) => node instanceof Element && node.matches('.payroll-workspace'))) changes.push('page');
+        }
+      };
+      const watcher = new MutationObserver(note);
+      watcher.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] });
+      act(() => { fireEvent.click(payroll); });
+      note(watcher.takeRecords());
+      watcher.disconnect();
+
+      // The thumb took Payroll's place (the second tab, 7 letters: 89px) before the Payroll page went in.
+      expect(changes.indexOf('thumb')).toBeGreaterThanOrEqual(0);
+      expect(changes.indexOf('thumb')).toBeLessThan(changes.indexOf('page'));
+      expect(startCap.style.transform).toBe('translate(204px, 4px)');
+      expect(fill.style.transform).toBe('translate(209px, 4px) scaleX(0.79)');
+      expect(endCap.style.transform).toBe('translate(287px, 4px)');
+      expect(document.querySelector('.admin-tabs-thumb')).toBe(thumb);
+      expect(thumbParts()).toEqual([startCap, fill, endCap]);
+      expect(screen.getByRole('button', { name: 'Payroll' })).toHaveAttribute('aria-current', 'page');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('changes nothing when the bar reports a resize but no tab moved, and follows a real size change', async () => {
+    const resized: Array<() => void> = [];
+    class FakeResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resized.push(() => callback([], this));
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    mockSignedInAdmin();
+    const size = layOutTabs();
+    const onRender = vi.fn();
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<Profiler id="admin" onRender={onRender}><App /></Profiler>);
+      await screen.findByRole('button', { name: 'Payroll' });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(resized.length).toBeGreaterThan(0);
+      const [, fill] = thumbParts();
+      const before = fill.style.transform;
+
+      onRender.mockClear();
+      act(() => resized.forEach((fire) => fire()));
+      expect(onRender).not.toHaveBeenCalled();
+      expect(fill.style.transform).toBe(before);
+
+      // The active tab grows by 20px: one new placement.
+      size.grow = 20;
+      act(() => resized.forEach((fire) => fire()));
+      expect(onRender).toHaveBeenCalledTimes(1);
+      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(2.04)');
+    } finally {
+      vi.unstubAllGlobals();
       window.history.pushState({}, '', '/');
     }
   });

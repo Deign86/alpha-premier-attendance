@@ -1927,3 +1927,50 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 571 tests passed (payroll.test.tsx 61).
+
+## UI revamp batch 13: Bathroom ID card first, original key cards made livelier, Payroll second, no login flash, smooth admin tab slide (client only; owner requests 2026-11-03)
+
+- [x] After a successful bathroom tap, the intern's ID card shows above the key cards for resultResetDelayMs, then the title comes back:
+  - photo or initials;
+  - "Male key taken" / "Female key returned";
+  - name and "ID · department";
+  - Taken, plus Returned on a return;
+  - role=status and the countdown bar.
+  The batch 11 reset fixes are kept, and a mode switch now also resets while a scan is in flight. Late answers are dropped, including on the desktop, where the IPC can't be cancelled.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Kiosk Bathroom Key Log"
+  EXPECT: all pass, including "drops a bathroom answer that lands after a switch to Attendance, even when the request can not be cancelled".
+  EVIDENCE: 1366x768, ID card showing: ID card 142–352, key cards 392–644, Type card ID 666–700, scrollHeight 768. Without it: cards 355–607 and scrollHeight 768 (checked live on the dev server).
+- [x] The key cards are back in the original layout (owner's screenshot), with no photos:
+  - a gold or soft-rose key tile, "Male Key" / "Female Key", "Floor Restroom Key 1", and an AVAILABLE / IN USE capsule;
+  - the dashed "Key is Available" box;
+  - the "Currently with" box (initials, name, "dept · ID", Time Out / Elapsed).
+
+  They're made livelier:
+  - top-lit depth, a gold glow when in use and a green edge when available;
+  - the key floats (3.6 s);
+  - the dashed border marches (1.6 s per dash, stepped);
+  - an arc turns around the initials (7 s);
+  - the IN USE dot pulses (2 s);
+  - a cross-fade (280 ms) and a single edge glow (900 ms) when a key changes hands, never for a stale status on reopening;
+  - a 70 ms staggered entrance.
+
+  With prefers-reduced-motion, every loop is off and changes are instant.
+  EVIDENCE: equal card heights in both states, also with a 24-character name: 308/308 at 320 and 360, 284/284 at 390 and 768, 252/252 at 1366. No sideways scroll.
+- [x] The admin tab order is Attendance corrections, Payroll, Users and RFID, Data and backup, Voice announcements, System.
+- [x] The admin page no longer flashes the unlock card while the saved session is checked (sessionChecked; the RFID unlock waits for it).
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "saved session is checked"
+  EXPECT: 3 pass.
+- [x] The admin tab highlight slides smoothly:
+  - the tab page renders from useDeferredValue(tab) and is memoised;
+  - the 3-piece thumb animates transform only;
+  - identical placements are skipped.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "gold thumb slides"
+  EXPECT: 2 pass.
+  EVIDENCE: Corrections → Payroll, before vs after (2 runs each):
+  - first move: none / 210 ms before, 54 / 19 ms after;
+  - compositor frames during the slide: 3 / 28 before, 31 / 34 after;
+  - the 119–315 ms long task at the click is gone.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 578 tests passed.
