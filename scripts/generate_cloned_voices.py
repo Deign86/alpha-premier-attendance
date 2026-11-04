@@ -4,12 +4,14 @@ Alpha Premier Attendance — VoiceStudio Voice Generation.
 Clean, deduplicated master catalog for "Ma'am Bea" Cloned Voice.
 """
 
+import math
 import os
 import re
 import subprocess
 import sys
 import json
 import shutil
+import struct
 import urllib.request
 import urllib.error
 import wave
@@ -24,6 +26,9 @@ TAURI_OUTPUT_BASE = REPO_ROOT / "src-tauri" / "resources" / "voices" / "bea"
 # Every clip lands at the same loudness so spliced prefix + name + suffix play level.
 TARGET_LUFS = -15.0
 PEAK_LIMIT = 0.794  # -2 dBFS sample ceiling keeps the mp3 true peak under ~-1 dBTP
+# A take that opens with a breath or blip before the first word is re-rolled.
+LEAD_IN_LIMIT_MS = 50
+MAX_TAKES = 4
 
 # Deduplicated Master Phrase Catalog
 PHRASE_CATALOG = [
@@ -402,11 +407,42 @@ def transcode_normalized(wav: Path, out_file: Path) -> None:
         gain += shortfall
 
 
-def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) -> bool:
-    """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes).
+def lead_in_ms(audio: Path) -> int:
+    """Sound before the first word (a breath or blip), in ms.
 
-    The API returns WAV; the repo standard is MP3 (64k mono), so the WAV is
-    transcoded via ffmpeg and only the `.mp3` is kept. Requires ffmpeg."""
+    The first word is the first run of sound (within 40 dB of the peak) that lasts
+    250 ms and has a loud, low zero-crossing (voiced) frame; a breath is noisy and a
+    blip is short, so anything audible before that run counts."""
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(audio), "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    pcm = struct.unpack(f"<{len(raw) // 2}h", raw[: len(raw) // 2 * 2])
+    db, zcr = [], []
+    for start in range(0, len(pcm) - 320 + 1, 160):  # 20 ms frames, 10 ms hop
+        frame = pcm[start:start + 320]
+        db.append(10 * math.log10(sum(s * s for s in frame) / 320 + 1e-9))
+        zcr.append(sum(1 for a, b in zip(frame, frame[1:]) if (a < 0) != (b < 0)) / 319)
+    if not db:
+        return 0
+    peak = max(db)
+    i = 0
+    while i < len(db):
+        if db[i] <= peak - 40:
+            i += 1
+            continue
+        j = i
+        while j < len(db) and db[j] > peak - 40:
+            j += 1
+        voiced = any(db[k] > peak - 20 and zcr[k] < 0.15 for k in range(i, j))
+        if j - i >= 25 and voiced:
+            return 10 * sum(1 for d in db[:i] if d > peak - 40)
+        i = j
+    return 0
+
+
+def request_take(profile_id: str, phrase: str) -> bytes | None:
+    """One VoiceStudio /generate take as raw WAV bytes, or None."""
     body, content_type = _multipart_fields({
         "text": phrase,
         "profile_id": profile_id,
@@ -423,21 +459,43 @@ def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) ->
             audio = res.read()
     except Exception as e:
         print(f"  [Offline/Pending] VoiceStudio generation unavailable: {e}", file=sys.stderr)
-        return False
+        return None
     if len(audio) <= 1000 or audio[:4] != b"RIFF":
         print(f"  VoiceStudio returned invalid audio for '{phrase}' ({len(audio)} bytes)", file=sys.stderr)
-        return False
+        return None
     try:
         with wave.open(BytesIO(audio), "rb") as w:
             if w.getframerate() != 24000 or w.getnchannels() != 1:
                 print(f"  Unexpected VoiceStudio format for '{phrase}': {w.getframerate()}Hz/{w.getnchannels()}ch", file=sys.stderr)
-                return False
+                return None
     except Exception as e:
         print(f"  VoiceStudio audio parse failed for '{phrase}': {e}", file=sys.stderr)
-        return False
+        return None
+    return audio
+
+
+def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) -> bool:
+    """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes).
+
+    The API returns WAV; the repo standard is MP3 (64k mono), so the WAV is
+    transcoded via ffmpeg and only the `.mp3` is kept. Requires ffmpeg. Takes that
+    open with a breath are re-rolled (MAX_TAKES); the cleanest one is kept."""
     tmp_wav = out_file.with_suffix(".tmp.wav")
-    tmp_wav.write_bytes(audio)
+    best = None
     try:
+        for _ in range(MAX_TAKES):
+            audio = request_take(profile_id, phrase)
+            if audio is None:
+                return False
+            tmp_wav.write_bytes(audio)
+            lead = lead_in_ms(tmp_wav)
+            if best is None or lead < best[0]:
+                best = (lead, audio)
+            if lead < LEAD_IN_LIMIT_MS:
+                break
+        if best[0] >= LEAD_IN_LIMIT_MS:
+            print(f"  Warning: every take of '{phrase}' opens with ~{best[0]} ms of breath; kept the shortest", file=sys.stderr)
+        tmp_wav.write_bytes(best[1])
         transcode_normalized(tmp_wav, out_file)
     except Exception as e:
         print(f"  ffmpeg transcode failed for '{phrase}': {e}", file=sys.stderr)

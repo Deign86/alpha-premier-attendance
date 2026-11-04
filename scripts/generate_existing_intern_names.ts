@@ -38,10 +38,14 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const VOICESTUDIO_BASE = process.env.VOICESTUDIO_BASE_URL || 'http://127.0.0.1:3900';
 const VOICESTUDIO_BEA_PROFILE_ID = '1b3e828b';
 // v2 = Bea reference rebuilt from the FB Ad Tutorial VO clips (2026-11-04).
-const VOICE_PROFILE_VERSION = 'voicestudio-bea-v2';
+// v3 = the v2 reference + 0.4 s trailing silence; without it most takes opened with a breath.
+const VOICE_PROFILE_VERSION = 'voicestudio-bea-v3';
 // Every clip lands at the same loudness so spliced prefix + name + suffix play level.
 const TARGET_LUFS = -15;
 const PEAK_LIMIT = 0.794; // -2 dBFS sample ceiling keeps the mp3 true peak under ~-1 dBTP
+// A take that opens with a breath or blip before the first word is re-rolled.
+const LEAD_IN_LIMIT_MS = 50;
+const MAX_TAKES = 4;
 const CLIENT_NAMES_DIR = path.join(REPO_ROOT, 'client', 'public', 'voices', 'bea', 'names');
 const TAURI_NAMES_DIR = path.join(REPO_ROOT, 'src-tauri', 'resources', 'voices', 'bea', 'names');
 const CLIENT_MANIFEST_PATH = path.join(REPO_ROOT, 'client', 'public', 'voices', 'bea', 'bea-name-manifest.json');
@@ -180,14 +184,88 @@ function transcodeNormalized(wavPath: string, outPath: string): void {
   }
 }
 
+/**
+ * Sound before the first word (a breath or blip), in ms, from 16 kHz mono PCM.
+ *
+ * The first word is the first run of sound (within 40 dB of the peak) that lasts
+ * 250 ms and has a loud, low zero-crossing (voiced) frame; a breath is noisy and a
+ * blip is short, so anything audible before that run counts.
+ */
+export function leadInMsFromPcm(pcm: Int16Array): number {
+  const db: number[] = [];
+  const zcr: number[] = [];
+  for (let start = 0; start + 320 <= pcm.length; start += 160) {
+    // 20 ms frames, 10 ms hop
+    let energy = 0;
+    let crossings = 0;
+    for (let k = start; k < start + 320; k++) {
+      energy += pcm[k] * pcm[k];
+      if (k > start && (pcm[k] < 0) !== (pcm[k - 1] < 0)) crossings++;
+    }
+    db.push(10 * Math.log10(energy / 320 + 1e-9));
+    zcr.push(crossings / 319);
+  }
+  if (db.length === 0) return 0;
+  const peak = Math.max(...db);
+  for (let i = 0; i < db.length; ) {
+    if (db[i] <= peak - 40) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < db.length && db[j] > peak - 40) j++;
+    let voiced = false;
+    for (let k = i; k < j; k++) voiced ||= db[k] > peak - 20 && zcr[k] < 0.15;
+    if (j - i >= 25 && voiced) return 10 * db.slice(0, i).filter((d) => d > peak - 40).length;
+    i = j;
+  }
+  return 0;
+}
+
+function leadInMs(audioPath: string): number {
+  const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', audioPath, '-ac', '1', '-ar', '16000', '-f', 's16le', '-'], { maxBuffer: 64 * 1024 * 1024 });
+  const pcm = new Int16Array(raw.length >> 1);
+  for (let i = 0; i < pcm.length; i++) pcm[i] = raw.readInt16LE(i * 2);
+  return leadInMsFromPcm(pcm);
+}
+
 export async function generateVoicestudioClip(
   profileId: string,
   text: string,
   outPath: string,
 ): Promise<boolean> {
+  const tmpWav = /\.mp3$/i.test(outPath) ? outPath.replace(/\.mp3$/i, '.tmp.wav') : `${outPath}.tmp.wav`;
+  try {
+    // Takes that open with a breath are re-rolled; the cleanest one is kept.
+    // Repo standard is MP3 (64k mono): transcode via ffmpeg, keep only the `.mp3`.
+    let best: { leadMs: number; audio: Buffer } | null = null;
+    for (let take = 0; take < MAX_TAKES; take++) {
+      const audio = await requestTake(profileId, text);
+      if (!audio) return false;
+      fs.writeFileSync(tmpWav, audio);
+      const leadMs = leadInMs(tmpWav);
+      if (!best || leadMs < best.leadMs) best = { leadMs, audio };
+      if (leadMs < LEAD_IN_LIMIT_MS) break;
+    }
+    if (!best) return false;
+    if (best.leadMs >= LEAD_IN_LIMIT_MS) {
+      console.warn(`[VoiceStudio] Every take of "${text}" opens with ~${best.leadMs} ms of breath; kept the shortest`);
+    }
+    fs.writeFileSync(tmpWav, best.audio);
+    transcodeNormalized(tmpWav, outPath);
+    return fs.existsSync(outPath) && fs.statSync(outPath).size > 100;
+  } catch (err) {
+    console.error(`[VoiceStudio] Error during generation for "${text}":`, err);
+  } finally {
+    fs.rmSync(tmpWav, { force: true });
+  }
+  return false;
+}
+
+/** One VoiceStudio /generate take as raw WAV bytes, or null. */
+async function requestTake(profileId: string, text: string): Promise<Buffer | null> {
   try {
     // VoiceStudio POST /generate accepts multipart form fields and returns raw WAV bytes.
-    // Repo standard is MP3 (64k mono): transcode via ffmpeg, keep only the `.mp3`.
     const boundary = '----bea' + crypto.randomBytes(8).toString('hex');
     const chunks: Buffer[] = [];
     const pushField = (name: string, value: string): void => {
@@ -224,23 +302,13 @@ export async function generateVoicestudioClip(
     });
     if (audio.length <= 1000 || audio.subarray(0, 4).toString('ascii') !== 'RIFF') {
       console.error(`[VoiceStudio] Invalid audio for "${text}" (${audio.length} bytes)`);
-      return false;
+      return null;
     }
-    const tmpWav = /\.mp3$/i.test(outPath) ? outPath.replace(/\.mp3$/i, '.tmp.wav') : `${outPath}.tmp.wav`;
-    fs.writeFileSync(tmpWav, audio);
-    try {
-      transcodeNormalized(tmpWav, outPath);
-    } catch (err) {
-      console.error(`[VoiceStudio] ffmpeg transcode failed for "${text}":`, err);
-      return false;
-    } finally {
-      fs.rmSync(tmpWav, { force: true });
-    }
-    return fs.existsSync(outPath) && fs.statSync(outPath).size > 100;
+    return audio;
   } catch (err) {
     console.error(`[VoiceStudio] Error during generation for "${text}":`, err);
   }
-  return false;
+  return null;
 }
 
 function findPythonBinary(): string {

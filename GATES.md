@@ -2069,10 +2069,11 @@ unchanged.
 
 ## Kiosk plays the bundled Bea v2 name clips (2026-11-04)
 
-- [ ] On the first start with a new bundled `bea-name-manifest.json` (new `generatedAt`), the kiosk deletes worker clips (`<data_dir>/voices/bea/names/<id>.mp3`) and `voice_jobs` rows for every bundled person whose roster name still matches the bundle (or who is no longer on the roster). The bundled clips then play on every path (webview and native).
+- [x] On the first start with a new bundled `bea-name-manifest.json` (new `generatedAt`), the kiosk deletes worker clips (`<data_dir>/voices/bea/names/<id>.mp3`) and `voice_jobs` rows for every bundled person whose roster name still matches the bundle (or who is no longer on the roster). The bundled clips then play on every path (webview and native).
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml voice_pull
   EXPECT: new tests pass: matching and off-roster people lose their clip and job; a renamed person keeps both; a second run with the same bundle is a no-op, so a later Regenerate survives restarts.
   EVIDENCE (local): test target compiles (`Finished test profile`); the test exe cannot start on this PC (0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND, identical with the change stashed), so it runs in CI `Rust Backend Verification` (windows-latest).
+  EVIDENCE (CI, PR #29 run): `retire_superseded_clips_runs_once_per_bundle_and_spares_renames ... ok`; lib tests 360 passed, 0 failed.
 - [x] The kiosk backup's queue (APG-2026-102/113/117/119/120/121/122/123/124) is fully superseded: every job ID is bundled under its current roster name.
   CHECK: scratch name_match.py over the 2026-11-04 backup DB + bundled manifest.
   EXPECT: 9/9 "bundled match".
@@ -2081,3 +2082,25 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass.
   EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 39, client 604, server 288).
+
+## Bea clips start without a breath (2026-11-04)
+
+- [x] Root cause is measured, not guessed: lead-in (sound before the first word, separated from it by a pause) per reference on the same 6 test phrases.
+  CHECK: scratch leadin_zcr.py over the A/B renders (v2 reference unpadded vs padded 0.4/0.8/1.5 s vs candidate D vs the old reference).
+  EXPECT: the unpadded v2 reference breathes on most takes; a padded variant cuts that to a small minority.
+  EVIDENCE: takes with a lead-in >= 50 ms: v2 unpadded 15/18 (seeds 42/7/1234; voice starts up to 1 s in), +0.4 s silence 3/30, +0.8 s 7/30, +1.5 s 3/30 (5 seeds); candidate D 22/24 (a ~120 ms voiced blip: its clip stops mid-sound); old v1 reference 0/6. The model continues from where the reference stops.
+- [x] The VoiceStudio "Ma'am Bea" profile (0b2d3e9f) uses the v2 reference + 0.4 s trailing silence; v2 stays restorable.
+  CHECK: GET /profiles/0b2d3e9f -> new ref_audio_path; Downloads/bea-voice-profile-backup-20261104 has v2- and v3-reference.wav.
+  EVIDENCE: ref_audio_path 0b2d3e9f-f27cc748.wav (v2 11.27 s + 0.4 s silence), ref_text unchanged; v2-/v3-reference.wav + README restore steps in the backup folder.
+- [x] Both generators re-roll a take that opens with a lead-in (>= 50 ms), up to 4 takes, keeping the cleanest; Python and TS detectors agree.
+  CHECK: npm test -w server -- intern-names-generator; scratch parity.mts vs parity.py over 58 real clips.
+  EXPECT: detector unit tests pass (breath before a pause, voiced blip, word-initial fricative, clean speech); TS and Python give identical ms on every file.
+  EVIDENCE: intern-names-generator.test.ts 6/6 (3 new detector tests); TS vs Python identical on 58 files (A/B renders + shipped clips).
+- [x] Every shipped Bea clip (50 phrases + 35 names) starts without a lead-in, stays at -15 LUFS, and Whisper still hears it at least as well as before; client/public and src-tauri/resources are byte-identical and manifest hashes match.
+  CHECK: scratch regen_clean.jsonl + leadin_zcr.py over both trees + verify_all.py.
+  EXPECT: 0 clips with lead-in >= 50 ms; no score regressions left unexplained.
+  EVIDENCE: lead-in >= 50 ms: 61/85 before, 0/85 after (max 30 ms, both trees). 144 takes for 85 clips; Whisper letters-similarity mean 0.953 -> 0.965; phrases WER 0.026, 44/50 exact: 4 "time out" -> "timeout" and 2 "Male" -> "Mail" (homophone; 12/12 extra takes heard "Mail"). APG-2026-117 kept its old take (no lead-in, heard better). APG-2026-112 re-rendered for true peak (-0.2 -> -2.5 dBTP). -15.5..-15.0 LUFS, true peak max -0.5 dBTP; 0 tree byte-diffs; 0/35 hash mismatches; 34 entries voicestudio-bea-v3 + 1 v2.
+- [x] Repo gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 39, client 604, server 291).
