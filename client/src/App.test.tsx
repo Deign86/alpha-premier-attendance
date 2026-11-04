@@ -1290,7 +1290,12 @@ describe('ScannerDiagnostics', () => {
       await waitFor(() => expect(scannerStatusHandlers.length).toBeGreaterThan(0));
       const status = (state: ScannerStatus['state']): ScannerStatus => ({ state, message: 'Reader update', detail: null, mode: 'keyboard', paused: false });
       act(() => emitScannerStatus(status('offline')));
-      expect(screen.getByRole('button', { name: 'Reader missing' })).toHaveClass('is-missing');
+      const missing = screen.getByRole('button', { name: 'Reader missing' });
+      expect(missing).toHaveClass('is-missing');
+      // The tone stays on the button while its details are open (styles.css keeps those words coral then too).
+      fireEvent.click(missing);
+      expect(missing).toHaveAttribute('aria-expanded', 'true');
+      expect(missing).toHaveClass('reader-status-button', 'is-missing');
       act(() => emitScannerStatus(status('error')));
       expect(screen.getByRole('button', { name: 'Reader error' })).toHaveClass('is-error');
       act(() => emitScannerStatus(status('connected')));
@@ -3165,15 +3170,24 @@ describe('Admin Attendance Corrections', () => {
     // Initially in Attendance mode
     expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
 
-    const attendanceModeBtn = screen.getByRole('tab', { name: /^attendance$/i });
-    const bathroomModeBtn = screen.getByRole('tab', { name: /^bathroom key log$/i });
+    // Minimal switch: icons, with only the chosen mode's name on screen; each name and tooltip carries its 1/2 key.
+    const attendanceModeBtn = screen.getByRole('tab', { name: 'Attendance (shortcut 1)' });
+    const bathroomModeBtn = screen.getByRole('tab', { name: 'Bathroom Key Log (shortcut 2)' });
     expect(attendanceModeBtn).toHaveClass('is-active');
+    expect(attendanceModeBtn).toHaveAttribute('aria-selected', 'true');
     expect(bathroomModeBtn).not.toHaveClass('is-active');
+    expect(attendanceModeBtn).toHaveTextContent(/^Attendance$/);
+    expect(bathroomModeBtn).toHaveTextContent(/^$/);
+    expect(bathroomModeBtn).toHaveAttribute('title', 'Bathroom Key Log (shortcut 2)');
+    expect(screen.getByRole('tablist', { name: 'Administrator mode switcher' }).querySelector('.admin-tabs-thumb')).not.toBeNull();
 
     // 1. Click button to switch to Bathroom Key Log mode
     await user.click(bathroomModeBtn);
     expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /users and rfid/i })).not.toBeInTheDocument();
+    expect(bathroomModeBtn).toHaveAttribute('aria-selected', 'true');
+    expect(bathroomModeBtn).toHaveTextContent(/^Bathroom Key Log$/);
+    expect(attendanceModeBtn).toHaveTextContent(/^$/);
 
     // 2. Press "1" key to switch back to Attendance mode
     fireEvent.keyDown(window, { key: '1' });
@@ -3219,7 +3233,8 @@ describe('Admin Attendance Corrections', () => {
       const header = heading.closest('header');
       expect(header).not.toBeNull();
       const inHeader = within(header!);
-      expect(inHeader.getByText('ALPHA PREMIER REALTY')).toBeInTheDocument();
+      expect(inHeader.getByText('ALPHA PREMIER')).toBeInTheDocument();
+      expect(inHeader.queryByText(/realty/i)).not.toBeInTheDocument();
       expect(inHeader.getByText('Administrator access')).toBeInTheDocument();
       expect(inHeader.getByRole('button', { name: 'Browser mode' })).toBeInTheDocument();
       expect(inHeader.getByRole('link', { name: 'Scanner' })).toHaveAttribute('href', '/');
@@ -3241,10 +3256,39 @@ describe('Admin Attendance Corrections', () => {
       expect(switcher.previousElementSibling).toBe(tabs);
 
       // Bathroom mode hides the tabs bar; the switch stays in its row.
-      await user.click(within(switcher).getByRole('tab', { name: /^bathroom key log$/i }));
+      await user.click(within(switcher).getByRole('tab', { name: 'Bathroom Key Log (shortcut 2)' }));
       expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Users and RFID' })).not.toBeInTheDocument();
       expect(screen.getByRole('tablist', { name: 'Administrator mode switcher' })).toBe(switcher);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('names the admin unlock card ALPHA PREMIER, while Live attendance keeps ALPHA PREMIER REALTY for now', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        // SAFETY: Mock signed-out session check
+        return { ok: false, status: 401, json: async () => ({ success: false }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, Live attendance)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, attendance: [] }) } as Response;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const { unmount } = render(<App />);
+      const unlockCard = (await screen.findByRole('button', { name: /unlock admin/i })).closest('form');
+      expect(unlockCard).not.toBeNull();
+      expect(within(unlockCard!).getByText('ALPHA PREMIER')).toBeInTheDocument();
+      expect(screen.queryByText(/realty/i)).not.toBeInTheDocument();
+      unmount();
+
+      window.history.pushState({}, '', '/attendance');
+      render(<App />);
+      const liveHeader = (await screen.findByRole('heading', { level: 1, name: 'Today’s timing' })).closest('header');
+      expect(liveHeader).not.toBeNull();
+      expect(within(liveHeader!).getByText('ALPHA PREMIER REALTY')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -6001,7 +6045,7 @@ describe('Admin page: the saved session is checked before the unlock card', () =
       expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
       expect(screen.queryByText('Checking admin session…')).not.toBeInTheDocument();
       // The tab bar first shows when the check ends: its gold thumb is placed then too.
-      expect(document.querySelector('.admin-tabs-thumb')).not.toBeNull();
+      expect(document.querySelector('.admin-tabs .admin-tabs-thumb')).not.toBeNull();
       expect(container.querySelector('main.admin-shell')).not.toHaveAttribute('aria-busy');
     } finally {
       window.history.pushState({}, '', '/');
@@ -6082,7 +6126,8 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
     });
     return size;
   }
-  const thumbParts = () => [...document.querySelectorAll<HTMLElement>('.admin-tabs-thumb > span')];
+  // The section tabs' thumb (the mode switch has one of its own).
+  const thumbParts = () => [...document.querySelectorAll<HTMLElement>('.admin-tabs .admin-tabs-thumb > span')];
 
   it('moves the thumb in the commit of the click, before the new page is built, and never remounts it', async () => {
     mockSignedInAdmin();
@@ -6091,12 +6136,14 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
     try {
       render(<App />);
       const payroll = await screen.findByRole('button', { name: 'Payroll' });
-      const thumb = document.querySelector('.admin-tabs-thumb');
+      const thumb = document.querySelector('.admin-tabs .admin-tabs-thumb');
       const [startCap, fill, endCap] = thumbParts();
-      // Attendance corrections: 4px in, 22 letters (194px wide); the middle strip fills between the 6px caps.
+      // Attendance corrections: 4px in, 22 letters (194px wide); the middle strip fills between the two caps, each
+      // half the 36px height wide (18px), so the ends are half circles.
       expect(startCap.style.transform).toBe('translate(4px, 4px)');
-      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(1.84)');
-      expect(endCap.style.transform).toBe('translate(192px, 4px)');
+      expect(fill.style.transform).toBe('translate(21px, 4px) scaleX(1.6)');
+      expect(endCap.style.transform).toBe('translate(180px, 4px)');
+      expect([startCap.style.width, fill.style.width, endCap.style.width]).toEqual(['18px', '', '18px']);
 
       // The order of DOM changes after the click: the thumb's move, then the Payroll page going in.
       const changes: string[] = [];
@@ -6116,9 +6163,9 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
       expect(changes.indexOf('thumb')).toBeGreaterThanOrEqual(0);
       expect(changes.indexOf('thumb')).toBeLessThan(changes.indexOf('page'));
       expect(startCap.style.transform).toBe('translate(204px, 4px)');
-      expect(fill.style.transform).toBe('translate(209px, 4px) scaleX(0.79)');
-      expect(endCap.style.transform).toBe('translate(287px, 4px)');
-      expect(document.querySelector('.admin-tabs-thumb')).toBe(thumb);
+      expect(fill.style.transform).toBe('translate(221px, 4px) scaleX(0.55)');
+      expect(endCap.style.transform).toBe('translate(275px, 4px)');
+      expect(document.querySelector('.admin-tabs .admin-tabs-thumb')).toBe(thumb);
       expect(thumbParts()).toEqual([startCap, fill, endCap]);
       expect(screen.getByRole('button', { name: 'Payroll' })).toHaveAttribute('aria-current', 'page');
     } finally {
@@ -6158,7 +6205,72 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
       size.grow = 20;
       act(() => resized.forEach((fire) => fire()));
       expect(onRender).toHaveBeenCalledTimes(1);
-      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(2.04)');
+      expect(fill.style.transform).toBe('translate(21px, 4px) scaleX(1.8)');
+    } finally {
+      vi.unstubAllGlobals();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('places the mode switch thumb counted from the right edge, in both modes and when the switch changes width', async () => {
+    const resized: Array<() => void> = [];
+    class FakeResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resized.push(() => callback([], this));
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        // SAFETY: Session check answers with an expiry an hour away
+        return { ok: true, json: async () => ({ expiresAt: new Date(Date.now() + 3_600_000).toISOString() }) } as Response;
+      }
+      // SAFETY: Config, the empty admin lists and an empty bathroom day
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, users: [], attendance: [], payroll: [], profiles: [], payrollPdfs: [], maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [] }) } as Response;
+    });
+    // jsdom lays nothing out: the chosen mode's button is its icon and name (Attendance 117px, Bathroom Key Log 156px),
+    // the other one a 40px icon, side by side 3px inside the switch, which is as wide as both plus its padding (and
+    // `grow` more, as if the window or a font changed it).
+    const size = { grow: 0 };
+    const modeButtons = (el: Element) => [...(el.parentElement?.querySelectorAll(':scope > button') ?? [])];
+    const isModeButton = (el: Element) => el.matches('.admin-mode-switcher > button');
+    const widthOf = (el: Element) => (!el.classList.contains('is-active') ? 40 : el.textContent === 'Attendance' ? 117 : 156);
+    vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? 3 + modeButtons(this).slice(0, modeButtons(this).indexOf(this)).reduce((sum, button) => sum + widthOf(button), 0) : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? 3 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? widthOf(this) : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? 32 : 0;
+    });
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(function (this: Element) {
+      return this.matches('.admin-mode-switcher') ? 6 + [...this.querySelectorAll(':scope > button')].reduce((sum, button) => sum + widthOf(button), 0) + size.grow : 0;
+    });
+    const modeThumb = () => [...document.querySelectorAll<HTMLElement>('.admin-mode-switcher .admin-tabs-thumb > span')];
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      const bathroom = await screen.findByRole('tab', { name: 'Bathroom Key Log (shortcut 2)' });
+      // Attendance: its 117px button starts 3px in; the switch is 6 + 117 + 40 = 163px wide, so 160px from the right.
+      expect(modeThumb()[0].style.transform).toBe('translate(-160px, 3px)');
+      expect(modeThumb()[2].style.transform).toBe('translate(-59px, 3px)');
+
+      // Bathroom Key Log: its 156px button starts after the 40px icon (43px in); the switch is 202px, so 159px.
+      await act(async () => { fireEvent.click(bathroom); });
+      expect(bathroom).toHaveAttribute('aria-selected', 'true');
+      expect(modeThumb()[0].style.transform).toBe('translate(-159px, 3px)');
+
+      // The switch grows by 10px with the button where it was: counted from the right, the thumb is placed again.
+      size.grow = 10;
+      act(() => resized.forEach((fire) => fire()));
+      expect(modeThumb()[0].style.transform).toBe('translate(-169px, 3px)');
     } finally {
       vi.unstubAllGlobals();
       window.history.pushState({}, '', '/');

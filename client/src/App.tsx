@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowRight,
   BookOpen,
+  CalendarCheck,
   CalendarPlus,
   Check,
   ChevronDown,
@@ -2870,7 +2871,7 @@ function LiveAttendance() {
     <main className="dashboard-shell live-shell">
       <header className="dashboard-header">
         <div>
-          <DashboardBrand />
+          <DashboardBrand realty />
           <p className="section-kicker">Live attendance</p>
           <h1>Today’s timing</h1>
           <p className="section-description">
@@ -3396,8 +3397,9 @@ function ReaderStatusLine({ lastScanAt }: { lastScanAt: string | null }) {
   );
 }
 
-/** Compact brand lockup for the shared dashboard header (live + admin screens). */
-function DashboardBrand() {
+/** Compact brand lockup for the shared dashboard header (live + admin screens). "ALPHA PREMIER", as on the kiosk;
+    Live attendance passes `realty` to keep its longer name until its own overhaul stage. */
+function DashboardBrand({ realty = false }: { realty?: boolean }) {
   return (
     <div className="dashboard-brand">
       <img
@@ -3406,7 +3408,7 @@ function DashboardBrand() {
         alt=""
         aria-hidden="true"
       />
-      <span className="dashboard-brand-name">ALPHA PREMIER REALTY</span>
+      <span className="dashboard-brand-name">{realty ? "ALPHA PREMIER REALTY" : "ALPHA PREMIER"}</span>
     </div>
   );
 }
@@ -3520,8 +3522,10 @@ type ActiveThumb = { x: number; y: number; width: number; height: number };
  * Where the active button (`button.is-active`) sits inside `ref`, so a thumb or underline can slide to it.
  * Re-measured when `activeKey` changes and whenever the bar or one of its buttons changes size; a measurement that
  * matches the last one changes nothing, so a resize that leaves the button where it was never restarts a slide.
+ * `fromRight`: x is the button's left edge counted from the bar's right edge (negative), for a right-aligned bar whose
+ * width changes with the choice; its thumb (anchored at the right) then starts each slide exactly where it was.
  */
-function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey: string): ActiveThumb | null {
+function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey: string, fromRight = false): ActiveThumb | null {
   const [thumb, setThumb] = useState<ActiveThumb | null>(null);
   const placedRef = useRef<ActiveThumb | null>(null);
   useLayoutEffect(() => {
@@ -3534,7 +3538,8 @@ function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey
     const place = () => {
       const active = bar.querySelector<HTMLElement>("button.is-active");
       if (!active) return;
-      const next = { x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight };
+      const x = fromRight ? active.offsetLeft - bar.clientWidth : active.offsetLeft;
+      const next = { x, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight };
       const last = placedRef.current;
       if (last && last.x === next.x && last.y === next.y && last.width === next.width && last.height === next.height) return;
       placedRef.current = next;
@@ -3547,29 +3552,29 @@ function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey
     observer.observe(bar, { box: "border-box" });
     bar.querySelectorAll("button").forEach((button) => observer.observe(button, { box: "border-box" }));
     return () => observer.disconnect();
-  }, [ref, activeKey]);
+  }, [ref, activeKey, fromRight]);
   return thumb;
 }
 
 /** The middle strip's own width; it is stretched with scaleX to fill between the two caps (.admin-tabs-thumb). */
 const TABS_THUMB_FILL_PX = 100;
-/** Each cap's width: the thumb's 6px corners. */
-const TABS_THUMB_CAP_PX = 6;
 
 /**
- * The admin tabs' gold thumb, moved with transforms only, so the browser slides it on its own (compositor) thread and
- * a big page being built for the new tab can't make it jump. It is three pieces sliding together: a left cap and a
- * right cap that keep the rounded corners, and a middle strip stretched with scaleX to the tab's width; they overlap
- * by 1px so no seam shows.
+ * The admin tabs' (and mode switch's) gold thumb, moved with transforms only, so the browser slides it on its own
+ * (compositor) thread and a big page being built for the new tab can't make it jump. It is three pieces sliding
+ * together: a left cap and a right cap, each half as wide as the thumb is tall so the round ends are perfect half
+ * circles at every width, and a middle strip stretched with scaleX to the tab's width; they overlap by 1px so no seam
+ * shows.
  */
 function TabsThumb({ thumb }: { thumb: ActiveThumb }) {
   const { x, y, width, height } = thumb;
-  const fillScale = Math.max(0, width - 2 * TABS_THUMB_CAP_PX + 2) / TABS_THUMB_FILL_PX;
+  const cap = height / 2;
+  const fillScale = Math.max(0, width - 2 * cap + 2) / TABS_THUMB_FILL_PX;
   return (
     <span className="admin-tabs-thumb" aria-hidden="true" style={{ height }}>
-      <span style={{ transform: `translate(${x}px, ${y}px)` }} />
-      <span style={{ transform: `translate(${x + TABS_THUMB_CAP_PX - 1}px, ${y}px) scaleX(${fillScale})` }} />
-      <span style={{ transform: `translate(${x + width - TABS_THUMB_CAP_PX}px, ${y}px)` }} />
+      <span style={{ width: cap, transform: `translate(${x}px, ${y}px)` }} />
+      <span style={{ transform: `translate(${x + cap - 1}px, ${y}px) scaleX(${fillScale})` }} />
+      <span style={{ width: cap, transform: `translate(${x + width - cap}px, ${y}px)` }} />
     </span>
   );
 }
@@ -3599,6 +3604,8 @@ function AdminPanel() {
   const [tab, setTab] = useState<AdminTab>("attendance");
   // The gold thumb behind the current tab; measured so it can slide between tabs of different widths.
   const tabsRef = useRef<HTMLDivElement>(null);
+  // The same kind of thumb behind the chosen mode; only the chosen mode shows its name, so it grows and shrinks too.
+  const modeRef = useRef<HTMLDivElement>(null);
   const [date, setDate] = useState(localDate());
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
@@ -3649,6 +3656,8 @@ function AdminPanel() {
 
   // sessionChecked too: the bar first appears when the session check ends, which can be a render after `unlocked`.
   const tabThumb = useActiveThumb(tabsRef, `${sessionChecked}:${unlocked}:${adminMode}:${tab}`);
+  // Counted from the right: the switch sits at the right and widens or narrows to the left with the chosen name.
+  const modeThumb = useActiveThumb(modeRef, `${sessionChecked}:${unlocked}:${adminMode}`, true);
   // The page under the tabs follows the chosen tab at low priority, so the tab bar and its thumb update (and start
   // sliding) in the same frame as the click, even when the new page is a big one like Payroll.
   const shownTab = useDeferredValue(tab);
@@ -3962,26 +3971,32 @@ function AdminPanel() {
             ))}
           </div>
         )}
-        <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher" data-active={adminMode}>
+        {/* Minimal: icons, with the name of the chosen mode only; the 1/2 keys are in each name and tooltip. */}
+        <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher" ref={modeRef}>
+          {modeThumb && <TabsThumb thumb={modeThumb} />}
           <button
             type="button"
             role="tab"
             aria-selected={adminMode === "attendance"}
+            aria-label="Attendance (shortcut 1)"
+            title="Attendance (shortcut 1)"
             className={`admin-mode-btn ${adminMode === "attendance" ? "is-active" : ""}`}
             onClick={() => setAdminMode("attendance")}
           >
-            <span className="admin-mode-key-badge" aria-hidden="true">1</span>
-            <span>Attendance</span>
+            <CalendarCheck size={15} aria-hidden="true" />
+            {adminMode === "attendance" && <span className="admin-mode-label">Attendance</span>}
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={adminMode === "bathroom"}
+            aria-label="Bathroom Key Log (shortcut 2)"
+            title="Bathroom Key Log (shortcut 2)"
             className={`admin-mode-btn ${adminMode === "bathroom" ? "is-active" : ""}`}
             onClick={() => leaveSection(() => setAdminMode("bathroom"))}
           >
-            <span className="admin-mode-key-badge" aria-hidden="true">2</span>
-            <span>Bathroom Key Log</span>
+            <KeyRound size={15} aria-hidden="true" />
+            {adminMode === "bathroom" && <span className="admin-mode-label">Bathroom Key Log</span>}
           </button>
         </div>
       </div>
@@ -4478,9 +4493,11 @@ export function DatabasePanel() {
       : `${Math.max(1, Math.round(bytes / 1024))} KB`;
   const formatWhen = (value: string | null) => (value ? formatDateTime(value) : "—");
 
-  // One fold per calendar month; backups arrive newest-first, so the first month is the latest.
+  // One fold per calendar month, newest first. The desktop app lists backups by file name (every "pre-restore-" snapshot
+  // before the "attendance-backup-" files), not by date, so they are sorted here: newest first, undated ones last.
   const backupMonths: { label: string; backups: DatabaseInfoResponse["backups"] }[] = [];
-  for (const backup of info?.backups ?? []) {
+  const backupsByDate = [...(info?.backups ?? [])].sort((a, b) => (Date.parse(b.modifiedAt ?? "") || 0) - (Date.parse(a.modifiedAt ?? "") || 0));
+  for (const backup of backupsByDate) {
     const date = backup.modifiedAt ? new Date(backup.modifiedAt) : null;
     const label = date && !Number.isNaN(date.getTime()) ? formatMonth(date) : "Unknown date";
     const month = backupMonths.find((group) => group.label === label);

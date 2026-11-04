@@ -1996,3 +1996,22 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 600 tests passed (builder run). A coordinator re-run had one known-slow admin test hit its 20 s limit under load. It passes alone (18/18 in its group, 16.4 s).
+
+## UI overhaul 2, stage 2: Admin pages (gold line, round glassy tabs, minimal switch and links, text 10% smaller, 150% fit) + backup order fix (client only; owner requests 2026-11-04)
+
+- [x] The admin header gets the kiosk's thin gold line, a tighter title block and the brand "ALPHA PREMIER" (`DashboardBrand({ realty })`; Live attendance still passes realty). The header actions (reader status, Scanner, Live view, the dev-only Nuke, Lock) are minimal text links with small icons and hairline separators. Live attendance's Scanner and Admin use the same links.
+- [x] Section tabs: a round dark glass bar. The 3-piece transform-only thumb now has half-circle caps (cap = height / 2), the glassy gold look and a soft drop-shadow glow. It still moves on the first frame after the click.
+- [x] Mode switch, minimal: only the active mode shows its label ("[icon] Attendance | [icon]" / "[icon] | [icon] Bathroom Key Log"), with no visible 1/2 badges. The shortcuts are in aria-label/title. It shares TabsThumb (anchored right).
+- [x] In Bathroom mode the "Bathroom Key Log" title sits on the switch row (20px), which removes the empty row.
+- [x] Admin text is about 10% smaller (admin-scoped --fs-* overrides, 12px floor). Kiosk office address 11px (owner exception), smaller than the brand.
+- [x] 150% scaling (1920x1080 laptop):
+  - at 1280x640 and 1280x720, tabs and switch sit on one row and content starts at y=205 (was 309);
+  - no sideways scroll on any tab;
+  - every admin pop-up fits with its buttons visible (Add missed attendance was cut off before).
+- [x] Bug fix: Existing backups are sorted by date, newest first, before the month grouping. The desktop app returns them by file name, which showed September > November > October.
+  CHECK: cd client && npx vitest run src/database-panel.test.tsx
+  EXPECT: all pass, including the deployed-order test (which fails without the sort).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 602 of 603 passed (builder full run; the one failure is the known slow test "asks before a tab…" timing out under load). Coordinator re-run: database-panel 66/66; thumb, reader, session and slow-test group 12/12. GitHub CI ran the same suite green on main in about 5 min.

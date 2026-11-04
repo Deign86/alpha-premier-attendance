@@ -2783,26 +2783,6 @@ textarea.input {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 
-.admin-mode-key-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  background: #110f0b;
-  border: 1px solid var(--line-bright);
-  color: var(--gold-soft);
-  font-size: var(--fs-12);
-  font-weight: 700;
-}
-
-.admin-mode-btn.is-active .admin-mode-key-badge {
-  background: var(--gold-bright);
-  border-color: var(--gold-bright);
-  color: #110f0b;
-}
-
 /* ==========================================================================
    Bathroom Key Log Workspace
    ========================================================================== */
@@ -3423,13 +3403,11 @@ textarea.input {
 .office-count { border-color: rgba(198, 162, 84, .4); }
 @media (min-width: 901px) { .kiosk-topbar .clock { padding-left: 12px; border-left: 1px solid rgba(198, 162, 84, .2); } }
 
-/* Mode switch: two equal tabs and one gold thumb that slides between them (polished on the admin; the kiosk's round
-   glass look: "Kiosk, overhaul 2" at the end of the file). */
-.kiosk-mode-switcher, .admin-shell .admin-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 3px; isolation: isolate; }
-.admin-shell .admin-mode-switcher { background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 162, 84, .26); border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .04); }
-.kiosk-mode-switcher::before, .admin-shell .admin-mode-switcher::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; z-index: -1; width: calc((100% - 6px) / 2); transition: transform 340ms var(--ease-soft); }
-.admin-shell .admin-mode-switcher::before { background: linear-gradient(180deg, #ecd28c, #cfac5e 50%, #b48f45); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .2), 0 4px 16px rgba(198, 162, 84, .3); }
-.kiosk-mode-switcher[data-active="bathroom"]::before, .admin-shell .admin-mode-switcher[data-active="bathroom"]::before { transform: translateX(100%); }
+/* Mode switch: two equal tabs and one gold thumb that slides between them (the round glass look: "Kiosk, overhaul 2" at
+   the end of the file). */
+.kiosk-mode-switcher { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 3px; isolation: isolate; }
+.kiosk-mode-switcher::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; z-index: -1; width: calc((100% - 6px) / 2); transition: transform 340ms var(--ease-soft); }
+.kiosk-mode-switcher[data-active="bathroom"]::before { transform: translateX(100%); }
 .kiosk-mode-tab, .kiosk-mode-tab.active { justify-content: center; background: transparent; border-color: transparent; box-shadow: none; transition: color 200ms ease-out; }
 .kiosk-mode-tab:hover { color: var(--ink); background: transparent; }
 .kiosk-mode-tab.active, .kiosk-mode-tab.active:hover { color: #11100c; }
@@ -3531,9 +3509,9 @@ body:has(.live-shell) { background-color: #080807 !important; }
 .live-shell .dashboard-header .section-kicker { letter-spacing: .14em; }
 .live-shell .dashboard-header h1 { font-family: 'Orbitron', sans-serif; font-size: var(--fs-20); font-weight: 600; line-height: 1.2; letter-spacing: .02em; text-wrap: balance; }
 .live-shell .dashboard-header .section-description { max-width: none; font-size: var(--fs-14); }
-/* Scanner and Admin: small outlined glass buttons with icons, the same size as the admin header buttons. */
-.live-shell .dashboard-header nav a { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; font-size: var(--fs-12); font-weight: 600; }
-.live-shell .dashboard-header nav a svg { width: 15px; height: 15px; }
+/* Scanner and Admin: icons and words in a row (quiet text links since overhaul 2: "Admin, overhaul 2" at the end of the
+   file). */
+.live-shell .dashboard-header nav a { display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-12); }
 .live-shell .dashboard-header nav a:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; }
 
 /* Toolbar: today's counts, the live status and the LAN viewer toggle on one wrapping row. */
@@ -3801,35 +3779,37 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 }
 
 /* --- Admin: page, header, mode switch, tabs ------------------------------- */
-/* More room around the page: wider side margins and space above the header, still wide enough for the tables. */
-.admin-shell:not(.admin-login) { width: min(1600px, calc(100% - 2 * clamp(20px, 4vw, 72px))); padding: clamp(24px, 3vw, 40px) 0 48px; }
+/* More room around the page: wider side margins, still wide enough for the tables; the header starts 14px under the
+   window's top, like the kiosk's. */
+.admin-shell:not(.admin-login) { width: min(1600px, calc(100% - 2 * clamp(20px, 4vw, 72px))); padding: 14px 0 48px; }
 
 /* Header: on the page itself, no card (layout in "Admin: header on the page" at the end of the file). */
 .admin-shell .dashboard-header { position: relative; animation: kiosk-enter 600ms var(--ease-soft) backwards; }
-/* Attendance / Bathroom Key Log: the kiosk's sliding thumb, at the original small size (a quiet outline, end of file). */
-.admin-shell .admin-mode-switcher { margin: 0; padding: 3px; border-radius: 8px; }
-.admin-shell .admin-mode-switcher::before { top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); border-radius: 6px; }
-.admin-shell .admin-mode-btn { justify-content: center; gap: 7px; min-height: 32px; padding: 5px 14px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; box-shadow: none; font-size: var(--fs-12); transition: color 200ms ease-out; }
+/* Attendance / Bathroom Key Log, minimal: the two modes as icons in the kiosk's round glass bar ("Kiosk, overhaul 2" at
+   the end of the file); the chosen one shows its name on the tabs' gold thumb, the other is a round icon-only button. */
+.admin-shell .admin-mode-switcher { position: relative; display: inline-flex; align-items: center; gap: 0; margin: 0; padding: 3px; isolation: isolate; }
+.admin-shell .admin-mode-btn { flex: 1 1 auto; justify-content: center; gap: 6px; min-height: 32px; padding: 0 12px; color: var(--muted); background: transparent; border: 0; border-radius: 999px; box-shadow: none; font-size: var(--fs-12); white-space: nowrap; transition: color 200ms ease-out, background-color 160ms ease-out; }
+/* 40px wide, so the bar, narrowing to the left as a name goes, still holds the wider name's thumb as it starts sliding. */
+.admin-shell .admin-mode-btn:not(.is-active) { flex: none; width: 40px; padding: 0; }
 .admin-shell .admin-mode-btn:hover { color: var(--ink); background: transparent; }
-.admin-shell .admin-mode-key-badge { width: 18px; height: 18px; border-radius: 4px; font-size: var(--fs-12); }
+.admin-shell .admin-mode-btn svg { flex: none; color: var(--gold); transition: color 200ms ease-out; }
+.admin-shell .admin-mode-btn.is-active svg { color: currentColor; }
+.admin-shell .admin-mode-btn:not(.is-active):is(:hover, :focus-visible) { background: rgba(198, 162, 84, .1); }
+.admin-shell .admin-mode-btn:not(.is-active):is(:hover, :focus-visible) svg { color: var(--gold-bright); }
 
-/* Scanner, Live view and Lock: small outlined buttons with icons, no lift or glow; the dev-only Sheets reset in coral. */
+/* Scanner, Live view and Lock: small outlined buttons with icons, no lift or glow; the dev-only Sheets reset in coral
+   (quiet text links since overhaul 2: "Admin, overhaul 2" at the end of the file). */
 .admin-shell .dashboard-header nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.admin-shell .dashboard-header nav :is(a, button) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; color: var(--ink); background: transparent; background-image: none; border: 1px solid rgba(198, 162, 84, .28); border-radius: 6px; box-shadow: none; font-size: var(--fs-12); font-weight: 600; text-decoration: none; white-space: nowrap; }
-.admin-shell .dashboard-header nav :is(a, button) svg { width: 15px; height: 15px; }
+.admin-shell .dashboard-header nav :is(a, button) { display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-12); text-decoration: none; white-space: nowrap; }
 .admin-shell .dashboard-header nav :is(a, button):hover:not(:disabled) { color: var(--gold-bright); background-color: rgba(198, 162, 84, .07); border-color: rgba(198, 162, 84, .6); box-shadow: none; transform: none; }
-.admin-shell .dashboard-header nav .is-danger { color: var(--danger); border-color: rgba(239, 170, 146, .35); }
 .admin-shell .dashboard-header nav .is-danger svg { color: currentColor; }
-.admin-shell .dashboard-header nav .is-danger:hover:not(:disabled) { color: var(--danger); background-color: rgba(239, 170, 146, .07); border-color: rgba(239, 170, 146, .7); }
-
-@media (max-width: 600px) { .admin-shell .admin-mode-key-badge { display: none; } }
 
 /* Section tabs: icons and plain words in their own glass bar (end of file); the gold thumb slides to the chosen one. */
 .admin-shell .admin-tabs { display: flex; flex: 0 1 auto; flex-wrap: wrap; min-width: 0; max-width: 100%; margin: 0; }
 .admin-shell .admin-tabs button { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: var(--fs-12); font-weight: 600; white-space: nowrap; transition: color 180ms ease-out, background-color 180ms ease-out; }
-.admin-shell .admin-tabs button svg { width: 15px; height: 15px; color: var(--gold); }
+.admin-shell .admin-tabs button svg { width: 14px; height: 14px; color: var(--gold); }
 .admin-shell .admin-tabs button:hover { color: var(--ink); background: rgba(198, 162, 84, .07); }
-.admin-shell .admin-tabs button.is-active { color: #11100c; background: linear-gradient(180deg, #e6ca82, #c6a254); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); }
+.admin-shell .admin-tabs button.is-active { color: #11100c; background: linear-gradient(180deg, rgba(255, 248, 225, .2), rgba(255, 248, 225, 0) 55%), linear-gradient(180deg, #d8b866, #c6a254 55%, #b08d46); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .38); }
 .admin-shell .admin-tabs button.is-active svg { color: currentColor; }
 .admin-shell > .dashboard-alert { margin: 0 0 14px; padding: 10px 14px; border-radius: 6px; font-size: var(--fs-12); }
 @media (max-width: 900px) {
@@ -3977,14 +3957,15 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 .card-setup-dialog .setup-form-save .setup-fields > *, .admin-shell .user-form-dialog form > :is(label, .photo-field, .modal-audit-callout) { animation: admin-fade 240ms ease-out backwards; }
 
 /* Admin tabs: the gold thumb slides to the chosen tab (TabsThumb in App.tsx). Only transforms move, so the slide runs
-   on the browser's compositor and stays smooth while the new tab's page is built: a 6px left cap and right cap keep
-   the corners, and the 100px middle strip is stretched with scaleX between them; all three share one transition. */
+   on the browser's compositor and stays smooth while the new tab's page is built: a left cap and a right cap (each
+   half the thumb's height wide, set inline) make the round ends, and the 100px middle strip is stretched with scaleX
+   between them; all three share one transition. Its glass gold look: "Admin, overhaul 2" at the end of the file. */
 .admin-shell .admin-tabs { position: relative; isolation: isolate; }
 .admin-tabs-thumb { position: absolute; top: 0; left: 0; z-index: -1; width: 0; pointer-events: none; }
-.admin-tabs-thumb > span { position: absolute; top: 0; left: 0; width: 6px; height: 100%; background: linear-gradient(180deg, #e6ca82, #c6a254); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); transform-origin: 0 0; transition: transform 320ms var(--ease-soft); will-change: transform; }
-.admin-tabs-thumb > span:first-child { border-radius: 6px 0 0 6px; }
+.admin-tabs-thumb > span { position: absolute; top: 0; left: 0; height: 100%; transform-origin: 0 0; transition: transform 320ms var(--ease-soft); will-change: transform; }
+.admin-tabs-thumb > span:first-child { border-radius: 999px 0 0 999px; }
 .admin-tabs-thumb > span:nth-child(2) { width: 100px; }
-.admin-tabs-thumb > span:last-child { border-radius: 0 6px 6px 0; }
+.admin-tabs-thumb > span:last-child { border-radius: 0 999px 999px 0; }
 @media (prefers-reduced-motion: reduce) { .admin-tabs-thumb > span { transition: none; } }
 .admin-shell .admin-tabs:has(.admin-tabs-thumb) button.is-active { background: transparent; box-shadow: none; }
 .admin-shell .admin-tabs button { transition: color 200ms ease-out, background-color 180ms ease-out; }
@@ -4157,25 +4138,24 @@ body:has(.admin-shell) { background-color: #080807 !important; }
    sits on the page at the top left, and the reader status and page buttons at the top right. Below them one row
    holds two separate glass bars: the section tabs on the left and the Attendance / Bathroom Key Log switch on the
    right. When the row runs out of width the switch wraps under the tabs (right-aligned; full width on phones).
-   Spacing: 12px between the reader and the buttons, 10px between buttons, 24px from the header to the bars and
-   from the bars to the page. */
-.admin-shell .dashboard-header { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px 32px; margin: 0; padding: 0; border: 0; }
+   Overhaul 2: the kiosk's thin gold line, fading out at both ends, runs under the header, and the brand, kicker,
+   title and address sit close together for a short window (1280x640 at 150%). The reader and the page links sit side
+   by side (their hairlines and padding space them), 14px from the line to the bars and 16px from the bars to the page. */
+.admin-shell .dashboard-header { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px 32px; margin: 0; padding: 8px 0 12px; border: 0; border-bottom: 1px solid transparent; border-image: linear-gradient(90deg, transparent, rgba(198, 162, 84, .55) 50%, transparent) 1; }
 .admin-title { min-width: 0; }
-.admin-title .dashboard-brand { margin: 0 0 12px; }
+.admin-title .dashboard-brand { margin: 0 0 6px; }
 .admin-title .section-kicker { margin: 0; letter-spacing: .14em; }
-.admin-title h1 { margin: 4px 0; font-family: 'Orbitron', sans-serif; font-size: var(--fs-20); font-weight: 600; line-height: 1.2; letter-spacing: .02em; }
-.admin-title .section-description { margin: 0; font-size: var(--fs-14); }
-.admin-header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px 12px; }
-.admin-shell .dashboard-header nav { width: auto; gap: 10px; }
+.admin-title h1 { margin: 2px 0 1px; font-family: 'Orbitron', sans-serif; font-size: var(--fs-20); font-weight: 600; line-height: 1.2; letter-spacing: .02em; }
+.admin-title .section-description { margin: 0; font-size: var(--fs-14); line-height: 1.4; }
+.admin-header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 0; }
+.admin-shell .dashboard-header nav { width: auto; gap: 0; }
 
-/* The bars: equal heights (36px buttons in a 4px-padded bar), roomier buttons and 4px between tabs. Sized so both
-   bars share one row at 1366px wide. */
-.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; margin: 24px 0; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
-.admin-shell .admin-tabs { gap: 4px; padding: 4px; background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-edge); border-radius: 8px; box-shadow: var(--glass-shadow); }
-.admin-shell .admin-tabs button { gap: 7px; min-height: 36px; padding: 7px 14px; font-size: var(--fs-12); }
-.admin-shell .admin-mode-switcher { margin-left: auto; padding: 4px; background: var(--glass); border-color: var(--glass-edge); box-shadow: var(--glass-shadow); }
-.admin-shell .admin-mode-switcher::before { top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 2); }
-.admin-shell .admin-mode-btn { min-height: 36px; padding: 8px 12px; font-size: var(--fs-12); }
+/* The bars: equal heights (32px buttons in a 3px-padded bar, 40px in all) and sized so both share one row from 1280px
+   wide (a 1920x1080 laptop at 150%), with room for the page's scroll bar; their look is in "Admin, overhaul 2". */
+.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 12px; margin: 14px 0 16px; animation: kiosk-enter 600ms var(--ease-soft) 80ms backwards; }
+.admin-shell .admin-tabs { gap: 0; padding: 3px; }
+.admin-shell .admin-tabs button { gap: 6px; min-height: 32px; padding: 0 9px; border-radius: 999px; font-size: var(--fs-12); }
+.admin-shell .admin-mode-switcher { margin-left: auto; }
 /* The page below starts the same distance under the bars in both modes. */
 .admin-shell .bathroom-key-log-workspace { margin-top: 0; }
 
@@ -4183,7 +4163,6 @@ body:has(.admin-shell) { background-color: #080807 !important; }
    Green ready, amber checking, red missing or failing, grey in a web browser (no reader there). */
 .reader-status { position: relative; }
 .reader-status-button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 10px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: var(--fs-12); font-weight: 600; white-space: nowrap; transition: color 160ms ease-out, background-color 160ms ease-out; }
-.reader-status-button:hover, .reader-status-button[aria-expanded="true"] { color: var(--ink); background: rgba(198, 162, 84, .07); }
 .reader-status-button:active:not(:disabled) { transform: none; }
 .reader-status-button i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
 .reader-status-button.is-ready i { background: var(--success); box-shadow: 0 0 0 3px rgba(152, 210, 168, .14); }
@@ -4200,20 +4179,15 @@ body:has(.admin-shell) { background-color: #080807 !important; }
 @media (max-width: 900px) {
   .admin-header-actions, .admin-shell .dashboard-header nav { justify-content: flex-start; }
 }
-/* Phones: the reader keeps its word on its own line above the buttons, the buttons fill their row and the switch
-   takes the full width. */
+/* Phones: the reader keeps its word on its own line above the page links (they wrap, spaced instead of divided) and
+   the switch takes the full width. */
 @media (max-width: 600px) {
   .admin-header-actions { flex: 1 1 100%; flex-wrap: wrap; align-items: flex-start; }
   .admin-header-actions .reader-status { flex: 1 1 100%; }
-  .reader-status-button { padding-inline: 10px; }
-  .admin-shell .dashboard-header nav { flex: 1 1 0; min-width: 0; }
-  .admin-shell .dashboard-header nav > * { flex: 1 1 auto; }
+  .admin-shell .dashboard-header nav { gap: 8px 18px; }
   .admin-shell .admin-tabs button { padding-inline: 10px; }
   .admin-shell .admin-mode-switcher { flex: 1 1 100%; }
-  .admin-shell .admin-mode-btn { padding-inline: 8px; }
 }
-/* Very small phones (about 320px): tighter mode buttons so "Bathroom Key Log" stays on one line. */
-@media (max-width: 360px) { .admin-shell .admin-mode-btn { padding-inline: 4px; font-size: var(--fs-12); } }
 
 /* --- Live attendance: search and department filter ------------------------------------------------------- */
 /* A compact search box and a department dropdown above the table, the same size as the LAN viewer toggle. They
@@ -4475,14 +4449,6 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 .bathroom-panels-grid { grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); }
 
 /* --- Data and backup, System, Friday backup reminder ------------------------------------------------------------ */
-/* Six section tabs and the mode switch still share one row at 1366px: slightly tighter tab and switch buttons
-   (narrower screens already give the tabs a row of their own). */
-@media (min-width: 901px) {
-  .admin-toolbar { column-gap: 12px; }
-  .admin-shell .admin-tabs button { gap: 6px; padding-inline: 10px; font-size: var(--fs-12); }
-  .admin-shell .admin-mode-btn { padding-inline: 8px; font-size: var(--fs-12); }
-}
-
 /* Friday reminder: one calm gold line under the header (every tab) with a gold Create backup now and a quiet Later.
    Phones: the words on top, the two buttons on a row below. */
 .backup-reminder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 20px 0 0; padding: 7px 8px 7px 14px; color: var(--ink); background: linear-gradient(180deg, rgba(198, 162, 84, .12), rgba(198, 162, 84, .05)); border: 1px solid rgba(198, 162, 84, .4); border-radius: 8px; font-size: var(--fs-12); line-height: 1.4; animation: admin-fade 200ms ease-out; }
@@ -4792,13 +4758,6 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
   .admin-shell .attendance-list-bar .table-batch-actions { flex: 1 1 100%; }
   .admin-shell .attendance-list-bar .table-batch-actions > button { flex: 1 1 auto; padding-inline: 8px; }
 }
-
-/* Attendance / Bathroom Key Log: a quiet switch, so the section tab stays the page's one filled-gold "you are here".
-   The chosen side has gold words and a thin gold outline that still slides; the 1 and 2 keys follow it. */
-.admin-shell .admin-mode-switcher::before { box-sizing: border-box; background: transparent; border: 1px solid rgba(225, 196, 119, .6); box-shadow: none; }
-.admin-shell .admin-mode-btn.is-active, .admin-shell .admin-mode-btn.is-active:hover { color: var(--gold-bright); }
-.admin-shell .admin-mode-btn .admin-mode-key-badge { color: var(--quiet); background: transparent; border-color: rgba(198, 162, 84, .3); }
-.admin-shell .admin-mode-btn.is-active .admin-mode-key-badge { color: var(--gold-bright); border-color: rgba(225, 196, 119, .6); }
 
 @media (prefers-reduced-motion: reduce) {
   .admin-shell :is(.attendance-list-bar, .attendance-bar-layer, .attendance-bar-layer[aria-hidden="true"]) { transition: none; }
@@ -5112,6 +5071,9 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
    ends. */
 .kiosk-shell .kiosk-topbar { width: min(1760px, calc(100% - 2 * var(--kiosk-gutter))); min-height: 58px; margin: 14px auto 0; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; border-image: linear-gradient(90deg, transparent, rgba(198, 162, 84, .55) 50%, transparent) 1; }
 @media (max-width: 600px) { .kiosk-shell .kiosk-topbar { width: calc(100% - 32px); margin-top: 10px; } }
+/* The office address reads a step below the brand (the owner's choice: 11px, the one exception to the 12px floor), in
+   the same quiet colour. */
+.kiosk-shell .kiosk-topbar .brand-subtitle { font-size: .6875rem; }
 /* The count and the reader: two small round pills of the switch's dark glass and hairline edge, the same height; the
    reader keeps its coloured dot and word. Phones show the reader's dot alone, in a round pill. */
 .kiosk-shell .kiosk-topbar :is(.office-count, .scanner-pill) { box-sizing: border-box; height: 28px; padding: 0 12px; background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .3)); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); font-weight: 500; letter-spacing: .02em; }
@@ -5120,11 +5082,11 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 .kiosk-shell .kiosk-topbar .office-count svg { color: var(--gold); }
 .kiosk-shell .kiosk-topbar .office-count strong { color: var(--ink); }
 
-/* Mode switch: a round pill of dark glass with a hairline edge. The chosen mode sits on one gold glass thumb that slides:
-   a soft gold fall with a lighter top half, a thin light line along its top and a faint warm lift (no hard bevel or
-   strong shadow). Its 1/2 key is a small dark bronze coin with a gold number; the other mode reads as quiet text with
-   an outlined key. */
-.kiosk-shell .kiosk-mode-switcher { background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .3)); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
+/* Mode switch: a round pill of dark glass with a hairline edge (the admin's switch shares the bar). The chosen mode sits
+   on one gold glass thumb that slides: a soft gold fall with a lighter top half, a thin light line along its top and a
+   faint warm lift (no hard bevel or strong shadow). Its 1/2 key is a small dark bronze coin with a gold number; the
+   other mode reads as quiet text with an outlined key. */
+.kiosk-shell .kiosk-mode-switcher, .admin-shell .admin-mode-switcher { background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .3)); border: 1px solid rgba(198, 162, 84, .2); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
 .kiosk-shell .kiosk-mode-switcher::before { background: linear-gradient(180deg, rgba(255, 248, 225, .2), rgba(255, 248, 225, 0) 55%), linear-gradient(180deg, #d8b866, #c6a254 55%, #b08d46); border-radius: 999px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .38), 0 2px 10px rgba(198, 162, 84, .2); }
 .kiosk-shell .mode-shortcut-badge { border-radius: 999px; }
 .kiosk-shell .kiosk-mode-tab:not(.active) .mode-shortcut-badge { color: var(--quiet); background: transparent; border-color: rgba(246, 242, 233, .2); }
@@ -5149,3 +5111,75 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 .kiosk-dtr-notice-close:hover { color: var(--ink); background: rgba(198, 162, 84, .1); }
 .kiosk-dtr-notice.is-urgent { border-color: rgba(239, 170, 146, .45); }
 .kiosk-dtr-notice.is-urgent .kiosk-dtr-notice-title { color: var(--danger); }
+
+/* --- Admin, overhaul 2: one-line header, round tabs bar, smaller text, 150% scaling ------------------------------- */
+/* Text about 10% smaller on every admin page, its pop-ups and the unlock card, for the front desk's laptop at 150%
+   scaling (1280x640 in a maximized window): the kiosk's step-down of the size scale, with 12px as the floor. */
+.admin-shell { --fs-14: .7875rem; --fs-16: .9rem; --fs-20: 1.125rem; --fs-28: 1.575rem; --fs-40: 2.25rem; --fs-60: 3.375rem; }
+
+/* Header (its gold line and spacing: "Admin: header on the page"): the reader status, Scanner, Live view, Lock and the
+   dev-only Sheets reset are quiet text links with their small icons, no frames, divided by thin gold hairlines, so the
+   row takes little room. Gold words with a quiet underline on hover and keyboard focus (the focus ring stays). The
+   reader keeps its coloured dot, the reset its coral. Live attendance's Scanner and Admin are the same links (the rest
+   of its header keeps its card for now). */
+.admin-shell .dashboard-header nav :is(a, button), .admin-shell .reader-status-button, .live-shell .dashboard-header nav a { box-sizing: border-box; gap: 6px; height: 22px; min-height: 22px; padding: 0 10px; color: var(--muted); background: none; border: 0; border-radius: 0; box-shadow: none; font-weight: 500; letter-spacing: .02em; }
+.admin-shell .dashboard-header nav :is(a, button), .live-shell .dashboard-header nav a + a { border-left: 1px solid rgba(198, 162, 84, .22); }
+.admin-shell .dashboard-header nav :is(a, button) svg, .live-shell .dashboard-header nav a svg { width: 13px; height: 13px; }
+.admin-shell .reader-status-button, .live-shell .dashboard-header nav > :first-child { padding-left: 0; }
+:is(.admin-shell, .live-shell) .dashboard-header nav > :last-child { padding-right: 0; }
+.live-shell .dashboard-header nav { gap: 0; }
+.admin-shell .dashboard-header nav :is(a, button):is(:hover, :focus-visible):not(:disabled), .admin-shell .reader-status-button:is(:hover, :focus-visible, [aria-expanded="true"]), .live-shell .dashboard-header nav a:is(:hover, :focus-visible) { color: var(--gold-bright); background: none; border-color: rgba(198, 162, 84, .22); box-shadow: none; text-decoration: underline; text-decoration-color: rgba(225, 196, 119, .45); text-underline-offset: 3px; }
+.admin-shell .dashboard-header nav .is-danger, .admin-shell .dashboard-header nav .is-danger:hover:not(:disabled) { color: var(--danger); background: none; border-color: rgba(198, 162, 84, .22); text-decoration-color: rgba(239, 170, 146, .5); }
+.admin-shell .reader-status-button:is(.is-missing, .is-error), .admin-shell .reader-status-button:is(.is-missing, .is-error):is(:hover, :focus-visible, [aria-expanded="true"]) { color: var(--danger); text-decoration-color: rgba(239, 170, 146, .5); }
+@media (max-width: 600px) {
+  .admin-shell .dashboard-header nav :is(a, button), .live-shell .dashboard-header nav :is(a, a + a) { padding: 0; border-left: 0; }
+  .live-shell .dashboard-header nav { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+}
+
+/* Section tabs: the mode switch's round dark glass bar. 20px corners are half the one-row bar's 40px (fully round),
+   and still follow the round buttons when the tabs wrap onto two rows on tablets and phones. */
+.admin-shell .admin-tabs { background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(0, 0, 0, .3)); -webkit-backdrop-filter: none; backdrop-filter: none; border: 1px solid rgba(198, 162, 84, .2); border-radius: 20px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
+/* The gold thumb (TabsThumb in App.tsx) in the switch thumb's glass gold: each of its three pieces has the soft gold fall
+   with a lighter top half and the thin light line along the top; one faint warm glow surrounds the whole thumb (a drop
+   shadow on the holder, so the stretched middle piece never smears it). */
+.admin-tabs-thumb { filter: drop-shadow(0 2px 5px rgba(198, 162, 84, .2)); }
+.admin-tabs-thumb > span { background: linear-gradient(180deg, rgba(255, 248, 225, .2), rgba(255, 248, 225, 0) 55%), linear-gradient(180deg, #d8b866, #c6a254 55%, #b08d46); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .38); }
+/* Mode switch: the tabs' thumb behind the chosen mode, with its dark icon and name. The thumb is anchored at the bar's
+   right edge (the bar widens or narrows to the left with the chosen name, so each slide starts where the thumb was) and
+   the name fades in as it appears. */
+.admin-shell .admin-mode-switcher .admin-tabs-thumb { left: auto; right: 0; }
+.admin-shell .admin-mode-btn.is-active, .admin-shell .admin-mode-btn.is-active:hover { color: #11100c; }
+.admin-shell .admin-mode-label { animation: admin-fade 200ms ease-out; }
+/* Bathroom Key Log mode (from 701px): the page's title moves up onto the mode switch's row, on the left where the
+   section tabs sit in Attendance mode, one step larger (20px), so no empty row is left above it; the description and
+   Date / Today follow on the next line. The page is pulled up by the 40px bar and its 16px gap; the bar stays on top
+   (passing clicks through its empty part to the title) so the switch is always clickable. */
+@media (min-width: 701px) {
+  .admin-shell .admin-toolbar:has(+ .bathroom-key-log-workspace) { position: relative; z-index: 1; pointer-events: none; }
+  .admin-shell .admin-toolbar:has(+ .bathroom-key-log-workspace) .admin-mode-switcher { pointer-events: auto; }
+  .admin-shell .admin-toolbar + .bathroom-key-log-workspace { margin-top: -56px; }
+  .admin-shell .admin-toolbar + .bathroom-key-log-workspace .bathroom-header-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title ." "desc date"; align-items: center; gap: 4px 16px; }
+  .admin-shell .admin-toolbar + .bathroom-key-log-workspace .bathroom-header-controls > div:first-child { display: contents; }
+  .admin-shell .admin-toolbar + .bathroom-key-log-workspace .bathroom-header-controls h2 { grid-area: title; display: flex; align-items: center; min-height: 40px; margin: 0; font-size: 1.25rem; }
+  .admin-shell .admin-toolbar + .bathroom-key-log-workspace .bathroom-header-controls .section-description { grid-area: desc; }
+  .admin-shell .admin-toolbar + .bathroom-key-log-workspace .bathroom-date-filter { grid-area: date; }
+}
+
+/* Add missed attendance and Edit bathroom key log hold their fields and buttons in a form: it now shares the pop-up's
+   height, so on a short window (1280x640) only the fields scroll and Cancel and the main button stay in view. */
+.admin-shell .assisted-modal > form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+/* Their fields at the admin pop-up size (40px, like the user form) with a little less air, so Add missed attendance
+   still fits 1280x640 whole. */
+.admin-shell .assisted-modal-body { gap: 12px; padding: 16px 22px; }
+.admin-shell .assisted-modal :is(.input, .select) { height: 40px; }
+.admin-shell .assisted-modal textarea.input { height: auto; min-height: 64px; }
+/* Short windows (a 1280x640 maximized window): the user pop-up gets a little closer to the window's edges and a little
+   less air inside, so Edit user (with its record line) shows every field and its buttons without scrolling. */
+@media (min-width: 701px) and (max-height: 700px) {
+  .user-form-backdrop { padding-block: 12px; }
+  .admin-shell .user-form-dialog { max-height: calc(100dvh - 24px); }
+  .admin-shell .user-form-dialog .editor-heading { padding-block: 14px 12px; }
+  .admin-shell .user-form-dialog .edit-context { margin-top: 10px; }
+  .admin-shell .user-form-dialog form { row-gap: 10px; padding-top: 12px; }
+  .admin-shell .user-form-dialog .user-form-actions { margin-top: 0; padding-block: 12px 14px; }
+}
