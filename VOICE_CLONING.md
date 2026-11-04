@@ -83,6 +83,7 @@ To deliver studio-quality voice cloning without demanding GPU hardware or high-l
 - `resources/voices/bea/main.wav` (Neutral/Welcoming greeting tone, $F_0 \approx 130\text{ Hz}$)
 - `resources/voices/bea/neutral.wav` (Clear alert tone for scan errors)
 - `resources/voices/bea/warm.wav` (Warm tone for bathroom checkouts)
+- **Live profile reference (v2, 2026-11-04)**: the `Ma'am Bea` profile's clip was rebuilt from the "FB Ad Tutorial VO Clips (Maam Bea)" studio recordings (Step 14 + Step 7, word-aligned, 11.3 s, −20 LUFS, 24 kHz mono) with an exact `ref_text`. It replaced a noisier, muffled clip (noise floor −47 dB vs −71 dB). To swap it again, use `PUT /profiles/<id>/audio` (keeps the id/name) and back up `GET /profiles/<id>/audio` first. Keep references ≤ 12 s: longer ones exhaust the 6 GB GPU (see §7).
 
 ---
 
@@ -122,7 +123,7 @@ npm run voice:generate-existing-names -- --missing-only
 1. Connects to Google Sheets / SQLite database and discovers all active `INTERN` and `EMPLOYEE` records.
 2. Normalizes full names for Filipino/English speech phonetics.
 3. Sends generation requests to VoiceStudio (`Ma'am Bea` profile `1b3e828b`).
-4. Transcodes each clip to 64k mono MP3 via ffmpeg and saves to:
+4. Normalizes each clip to −15 LUFS behind a −2 dBFS peak limiter (re-encoding short, peak-limited clips up to twice so they still reach the target) so greeting + name + status splice at one level, then transcodes to 64k mono MP3 via ffmpeg and saves to:
    - `client/public/voices/bea/names/<personId>.mp3`
    - `src-tauri/resources/voices/bea/names/<personId>.mp3`
    - `client/dist/voices/bea/names/<personId>.mp3` (on next frontend build)
@@ -242,6 +243,7 @@ If Ma'am Bea or an employee revokes consent to use their cloned voice profile:
 | `Cannot reach VoiceStudio (... connection timed out)` | Host IP points to VirtualBox (`192.168.56.x`) or Hyper-V (`172.x.x.x`) adapter | Change host URL to `http://<COMPUTERNAME>:3901` (e.g. `http://DEIGN-GAMING:3901`) or physical Wi-Fi IP (`192.168.1.x`) |
 | `VoiceStudio replied with HTTP 401` | Missing or outdated Share PIN | VoiceStudio regenerates a new PIN when sharing restarts; copy the 6-digit PIN from the bottom of VoiceStudio's sharing popup |
 | `Generation failed` | VoiceStudio profile missing or backend error | Confirm the `Ma'am Bea` profile exists in VoiceStudio and retry |
+| Generation slows from ~10 s to minutes per clip | 6 GB GPU out of VRAM (long or many different reference clips; WhisperX ASR loaded next to the TTS model can crash VoiceStudio) | `curl -X POST http://127.0.0.1:3900/system/flush-memory`, keep the reference ≤ 12 s, and run transcription outside VoiceStudio |
 | `Name pronounced with "dot"` | Middle initial not cleaned | Ensure name is run through `normalizePronunciation()` or add to `CUSTOM_PRONUNCIATION_OVERRIDES` |
 | `Kiosk plays Piper name instead of Bea` | Missing manifest entry or missing MP3 file | Check `bea-name-manifest.json` and ensure `names/<personId>.mp3` exists in resources |
 

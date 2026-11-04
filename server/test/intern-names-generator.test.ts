@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runBatchInternNameGeneration } from '../../scripts/generate_existing_intern_names.js';
+import { normalizePronunciation, runBatchInternNameGeneration } from '../../scripts/generate_existing_intern_names.js';
 import type { SheetUser } from '../src/sheets.js';
 
 describe('batch intern name voice generation', () => {
@@ -113,5 +113,10 @@ describe('batch intern name voice generation', () => {
 
     expect(profiles['USR_EMP_001']).toBeUndefined();
     expect(profiles['USR_EMP_002']).toBeUndefined();
+  });
+
+  it('drops the hyphen from "Ar-jee" whatever its casing', () => {
+    expect(normalizePronunciation('Ar-jee Felizarte')).toBe('Arjee Felizarte');
+    expect(normalizePronunciation('Ar-Jee Felizarte')).toBe('Arjee Felizarte');
   });
 });

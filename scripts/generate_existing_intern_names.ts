@@ -9,7 +9,7 @@
  *   npx tsx scripts/generate_existing_intern_names.ts [--dry-run] [--missing-only] [--force] [--person-id <id>]
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -37,6 +37,11 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 
 const VOICESTUDIO_BASE = process.env.VOICESTUDIO_BASE_URL || 'http://127.0.0.1:3900';
 const VOICESTUDIO_BEA_PROFILE_ID = '1b3e828b';
+// v2 = Bea reference rebuilt from the FB Ad Tutorial VO clips (2026-11-04).
+const VOICE_PROFILE_VERSION = 'voicestudio-bea-v2';
+// Every clip lands at the same loudness so spliced prefix + name + suffix play level.
+const TARGET_LUFS = -15;
+const PEAK_LIMIT = 0.794; // -2 dBFS sample ceiling keeps the mp3 true peak under ~-1 dBTP
 const CLIENT_NAMES_DIR = path.join(REPO_ROOT, 'client', 'public', 'voices', 'bea', 'names');
 const TAURI_NAMES_DIR = path.join(REPO_ROOT, 'src-tauri', 'resources', 'voices', 'bea', 'names');
 const CLIENT_MANIFEST_PATH = path.join(REPO_ROOT, 'client', 'public', 'voices', 'bea', 'bea-name-manifest.json');
@@ -74,6 +79,8 @@ export type BatchGeneratorOptions = {
 export const CUSTOM_PRONUNCIATION_OVERRIDES: Record<string, string> = {
   // 'PERSON_ID': 'Phonetic Spoken Name'
   'APG-2026-121': 'John Ma-rey Raphael Rodriguez',
+  // Filipino "Bar-to-lo-meh"; the v2 voice otherwise says "Bartholomew".
+  'APG-2026-123': 'Lord Bar-to-lo-meh',
 };
 
 export function normalizePronunciation(rawName: string, personId?: string): string {
@@ -102,7 +109,7 @@ export function normalizePronunciation(rawName: string, personId?: string): stri
 
   let spoken = speechParts.join(' ');
   // Clean hyphens in first names like "Ar-jee" -> "Arjee"
-  spoken = spoken.replace(/Ar-jee/g, 'Arjee');
+  spoken = spoken.replace(/Ar-jee/gi, 'Arjee');
   return normalizeName(spoken);
 }
 
@@ -145,6 +152,32 @@ async function getVoicestudioBeaProfileId(): Promise<string | null> {
     console.warn(`[VoiceStudio] Failed to query profiles from ${VOICESTUDIO_BASE}:`, err);
   }
   return null;
+}
+
+/** Integrated loudness (EBU R128) of an audio file. */
+function measureLufs(filePath: string): number {
+  const meter = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', filePath, '-af', 'ebur128', '-f', 'null', '-'], { encoding: 'utf8' });
+  const readings = [...meter.stderr.matchAll(/I:\s+(-?[\d.]+) LUFS/g)];
+  const lufs = Number(readings[readings.length - 1]?.[1]);
+  if (!Number.isFinite(lufs) || lufs < -50) {
+    throw new Error(`no usable loudness reading for ${filePath}`);
+  }
+  return lufs;
+}
+
+/**
+ * WAV -> 64k mono MP3 at TARGET_LUFS behind a peak limiter. Limiting costs short,
+ * punchy clips loudness, so the measured shortfall is added back and the clip
+ * re-encoded, at most twice.
+ */
+function transcodeNormalized(wavPath: string, outPath: string): void {
+  let gain = TARGET_LUFS - measureLufs(wavPath);
+  for (let pass = 0; pass < 3; pass++) {
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', wavPath, '-af', `volume=${gain.toFixed(2)}dB,alimiter=limit=${PEAK_LIMIT}:level=false`, '-codec:a', 'libmp3lame', '-b:a', '64k', '-ac', '1', outPath]);
+    const shortfall = TARGET_LUFS - measureLufs(outPath);
+    if (shortfall <= 0.5) return;
+    gain += shortfall;
+  }
 }
 
 export async function generateVoicestudioClip(
@@ -196,7 +229,7 @@ export async function generateVoicestudioClip(
     const tmpWav = /\.mp3$/i.test(outPath) ? outPath.replace(/\.mp3$/i, '.tmp.wav') : `${outPath}.tmp.wav`;
     fs.writeFileSync(tmpWav, audio);
     try {
-      execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', tmpWav, '-codec:a', 'libmp3lame', '-b:a', '64k', '-ac', '1', outPath]);
+      transcodeNormalized(tmpWav, outPath);
     } catch (err) {
       console.error(`[VoiceStudio] ffmpeg transcode failed for "${text}":`, err);
       return false;
@@ -397,7 +430,7 @@ export async function runBatchInternNameGeneration(
         displayName: user.fullName,
         normalizedSpeechText: speechName,
         employeeType: user.employeeType,
-        voiceProfileVersion: 'voicestudio-bea-1b3e828b-v1',
+        voiceProfileVersion: VOICE_PROFILE_VERSION,
         audioFile: relativeUrl,
         generatedAt: new Date().toISOString(),
         audioHash: 'dry-run-hash',
@@ -421,7 +454,7 @@ export async function runBatchInternNameGeneration(
         displayName: user.fullName,
         normalizedSpeechText: speechName,
         employeeType: user.employeeType,
-        voiceProfileVersion: 'voicestudio-bea-1b3e828b-v1',
+        voiceProfileVersion: VOICE_PROFILE_VERSION,
         audioFile: relativeUrl,
         generatedAt: new Date().toISOString(),
         audioHash: hash,
