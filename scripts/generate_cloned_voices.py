@@ -5,6 +5,7 @@ Clean, deduplicated master catalog for "Ma'am Bea" Cloned Voice.
 """
 
 import os
+import re
 import subprocess
 import sys
 import json
@@ -20,6 +21,9 @@ VOICESTUDIO_BEA_PROFILE_ID = "1b3e828b"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_OUTPUT_BASE = REPO_ROOT / "client" / "public" / "voices" / "bea"
 TAURI_OUTPUT_BASE = REPO_ROOT / "src-tauri" / "resources" / "voices" / "bea"
+# Every clip lands at the same loudness so spliced prefix + name + suffix play level.
+TARGET_LUFS = -15.0
+PEAK_LIMIT = 0.794  # -2 dBFS sample ceiling keeps the mp3 true peak under ~-1 dBTP
 
 # Deduplicated Master Phrase Catalog
 PHRASE_CATALOG = [
@@ -367,6 +371,37 @@ def _multipart_fields(fields: dict) -> tuple:
     return buf.getvalue(), f"multipart/form-data; boundary={boundary}"
 
 
+def measure_lufs(path: Path) -> float:
+    """Integrated loudness (EBU R128) of an audio file."""
+    meter = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", "ebur128", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+    ).stderr
+    readings = re.findall(r"I:\s+(-?[\d.]+) LUFS", meter)
+    if not readings or float(readings[-1]) < -50:
+        raise ValueError(f"no usable loudness reading for {path.name}")
+    return float(readings[-1])
+
+
+def transcode_normalized(wav: Path, out_file: Path) -> None:
+    """WAV -> 64k mono MP3 at TARGET_LUFS behind a peak limiter.
+
+    Limiting costs short, punchy clips ("Thank you,") loudness, so the measured
+    shortfall is added back and the clip re-encoded, at most twice."""
+    gain = TARGET_LUFS - measure_lufs(wav)
+    for _ in range(3):
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(wav),
+             "-af", f"volume={gain:.2f}dB,alimiter=limit={PEAK_LIMIT}:level=false",
+             "-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1", str(out_file)],
+            check=True,
+        )
+        shortfall = TARGET_LUFS - measure_lufs(out_file)
+        if shortfall <= 0.5:
+            return
+        gain += shortfall
+
+
 def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) -> bool:
     """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes).
 
@@ -403,11 +438,7 @@ def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) ->
     tmp_wav = out_file.with_suffix(".tmp.wav")
     tmp_wav.write_bytes(audio)
     try:
-        subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-i", str(tmp_wav),
-             "-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1", str(out_file)],
-            check=True,
-        )
+        transcode_normalized(tmp_wav, out_file)
     except Exception as e:
         print(f"  ffmpeg transcode failed for '{phrase}': {e}", file=sys.stderr)
         return False

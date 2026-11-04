@@ -2047,3 +2047,22 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 604 tests passed.
+
+## Bea voice v2: new reference + full regeneration (2026-11-04)
+
+- [x] VoiceStudio "Ma'am Bea" profile (0b2d3e9f) uses a reference built from the FB Ad Tutorial VO clips (<=20 s, word-aligned cut, accurate ref_text); the original reference is backed up and restorable.
+  CHECK: GET /profiles/0b2d3e9f shows the new ref_text; backup wav + profile json exist outside the repo.
+  EXPECT: new ref beats the old one on the A/B set (same 6 phrases, seed 42): mean WER not worse, pitch/brightness closer to the real samples.
+  EVIDENCE: PUT /profiles/0b2d3e9f/audio -> ref_audio_path 0b2d3e9f-15cdad31.wav, new ref_text (Step 14 + Step 7, 11.3 s, -20 LUFS); original wav + profile JSON + restore command saved on the admin PC (Downloads/bea-voice-profile-backup-20261104). A/B vs real samples (f0 205 Hz, IQR 66, centroid 1622): old ref f0 184 (32% of frames < 140 Hz), centroid 614; chosen ref C f0 211, IQR 62, centroid 1721; 5 candidates, all 0 phrase errors (name spelling variants only). Old ref noise floor -47 dB vs -71 dB for the new samples.
+- [x] APG-2026-124 (new intern) has a cloned name clip and manifest entry in client/public and src-tauri/resources.
+  CHECK: node -e manifest lookup for APG-2026-124 in both bea-name-manifest.json files; file exists and hash matches.
+  EXPECT: present, identical in both trees, sha256 matches audioHash.
+  EVIDENCE: hash check: entries=35, manifests identical, 0 hash/parity/version mismatches, APG-2026-124 present; clip -15.4 LUFS.
+- [x] Every shipped Bea clip (50 phrases + every name in bea-name-manifest.json) is regenerated with the new reference; client/public and src-tauri/resources copies are byte-identical; every manifest hash matches its file.
+  CHECK: scratch verify script over both trees + ASR intelligibility pass over all regenerated clips.
+  EXPECT: 0 missing, 0 mismatched, 0 stale (pre-2026-11-04) name entries; no clip with WER > 0.34 left unexplained.
+  EVIDENCE: 85/85 clips changed vs HEAD and byte-identical across trees; 0 stale entries. Loudness -15.5..-15.2 LUFS, true peak <= -0.4 dBTP (before: -21.3..-14.9 LUFS, greetings ~4 dB under the status lines). Whisper large-v3 old vs new on 84 shared clips: mean WER 0.243 vs 0.255 before best-of; then best-of-4 on 17 flagged clips made all 7 flagged phrases exact ("Card scanned", "checked out for", "time in", "Male", "Attendance service"). Remaining phrase mismatches are "time out"->"timeout" spacing; remaining name mismatches are spelling-level (Lorenz/Laurence, Luang) or equal to the old voice. APG-2026-123 needed an override ("Bar-to-lo-meh") - 0/5 takes said it Filipino-style without it.
+- [x] Repo gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 39, client 393, server 288 incl. new Ar-Jee casing test).
