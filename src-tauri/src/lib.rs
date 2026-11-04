@@ -6159,6 +6159,26 @@ pub fn run() {
             let sync_state = state.clone();
             let sync_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // A newly bundled Bea name set replaces older worker clips before the
+                // first scan; log-only, a failure just leaves the old clips playing.
+                let name_manifest = crate::tts::paths::first_existing(
+                    &crate::tts::paths::search_roots(&sync_app),
+                    std::path::Path::new("voices/bea/bea-name-manifest.json"),
+                );
+                if let Some(manifest) = name_manifest {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    match crate::services::voice_pull::retire_superseded_clips(
+                        &sync_state.db,
+                        &sync_state.data_dir,
+                        &manifest,
+                        &now,
+                    )
+                    .await
+                    {
+                        Ok(removed) => log::info!("bundled Bea names checked; {removed} worker clips retired"),
+                        Err(error) => log::warn!("retiring superseded voice clips failed: {error}"),
+                    }
+                }
                 // Initial 5-second grace period on cold boot prevents network contention
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 loop {

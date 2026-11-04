@@ -2066,3 +2066,18 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass.
   EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 39, client 393, server 288 incl. new Ar-Jee casing test).
+
+## Kiosk plays the bundled Bea v2 name clips (2026-11-04)
+
+- [ ] On the first start with a new bundled `bea-name-manifest.json` (new `generatedAt`), the kiosk deletes worker clips (`<data_dir>/voices/bea/names/<id>.mp3`) and `voice_jobs` rows for every bundled person whose roster name still matches the bundle (or who is no longer on the roster). The bundled clips then play on every path (webview and native).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml voice_pull
+  EXPECT: new tests pass: matching and off-roster people lose their clip and job; a renamed person keeps both; a second run with the same bundle is a no-op, so a later Regenerate survives restarts.
+  EVIDENCE (local): test target compiles (`Finished test profile`); the test exe cannot start on this PC (0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND, identical with the change stashed), so it runs in CI `Rust Backend Verification` (windows-latest).
+- [x] The kiosk backup's queue (APG-2026-102/113/117/119/120/121/122/123/124) is fully superseded: every job ID is bundled under its current roster name.
+  CHECK: scratch name_match.py over the 2026-11-04 backup DB + bundled manifest.
+  EXPECT: 9/9 "bundled match".
+  EVIDENCE: 9/9 "bundled match" (backup has 8 RETRY rows failing on 192.168.1.19:3901 + 1 DONE).
+- [x] Repo gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 39, client 604, server 288).

@@ -198,6 +198,9 @@ New registrations need **no manual generation**:
    (Bea profile auto-discovered, mp3) → `<data_dir>/voices/bea/names/<personId>.mp3`.
 3. Playback checks the worker clip first (asset URL), then the bundled manifest.
 4. Host offline → job retries with backoff (1m → 6h cap); Piper Tier 2 covers playback meanwhile.
+5. The first start of a release with a new `bea-name-manifest.json` (new `generatedAt`) deletes
+   the worker clips and queued jobs the bundle covers, so regenerated bundled clips win. People
+   renamed since the bundle keep their worker clip. Regenerate after that sticks until the next bundle.
 
 The batch script (`--missing-only`) remains as the backfill tool for cohorts enrolled
 while the host was unreachable.
