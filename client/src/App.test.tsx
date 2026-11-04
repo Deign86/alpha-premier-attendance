@@ -85,7 +85,14 @@ beforeEach(() => {
 });
 
 describe('RFID kiosk', () => {
-  it('marks the kiosk DTR badge as attention when DEAD items exist', async () => {
+  it('names the kiosk ALPHA PREMIER in its one-line header', async () => {
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByText('ALPHA PREMIER').closest('header')).toHaveClass('kiosk-topbar');
+    expect(screen.queryByText(/realty/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the DTR sync pop-up in coral, outside the header, when DEAD items exist', async () => {
     const emittedAt = new Date().toISOString();
     act(() => {
       setDtrSyncHealthSnapshot({
@@ -99,7 +106,13 @@ describe('RFID kiosk', () => {
       });
     });
     render(<App />);
-    expect(await screen.findByLabelText('Intern DTR sync health')).toHaveClass('attention');
+    const notice = await screen.findByTestId('kiosk-dtr-notice');
+    expect(notice).toHaveClass('is-urgent');
+    expect(notice.parentElement).toHaveAttribute('role', 'status');
+    expect(notice.parentElement).toHaveAttribute('aria-live', 'polite');
+    expect(notice).toHaveTextContent('DTR sync');
+    expect(notice).toHaveTextContent('Attendance needs admin attention for DTR sync.');
+    expect(document.querySelector('.kiosk-topbar')).not.toContainElement(notice);
     act(() => {
       setDtrSyncHealthSnapshot({
         activity: 'idle',
@@ -138,7 +151,110 @@ describe('RFID kiosk', () => {
     });
 
     expect(await screen.findByText('2 punches are waiting for retry; attempts are bounded.')).toBeInTheDocument();
+    expect(screen.getByTestId('kiosk-dtr-notice')).not.toHaveClass('is-urgent');
     expect(screen.queryByText('No DTR items queued')).not.toBeInTheDocument();
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('shows no DTR sync pop-up while sync is idle, syncing or simply queued', async () => {
+    const fine = { queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() };
+    act(() => setDtrSyncHealthSnapshot({ ...fine, activity: 'idle' }));
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => setDtrSyncHealthSnapshot({ ...fine, activity: 'syncing', queued: 2 }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => setDtrSyncHealthSnapshot({ ...fine, activity: 'queued', queued: 3 }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    for (const copy of ['No DTR items queued', 'Syncing', '3 queued']) expect(screen.queryByText(copy)).not.toBeInTheDocument();
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('keeps the DTR sync live region mounted while it is empty, so the card is announced when it appears', async () => {
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const region = document.querySelector('.kiosk-dtr-notice-region');
+    expect(region).toHaveAttribute('role', 'status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toBeEmptyDOMElement();
+    act(() => setDtrSyncHealthSnapshot({ activity: 'offline', queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() }));
+    expect(document.querySelector('.kiosk-dtr-notice-region')).toBe(region);
+    expect(region).toContainElement(screen.getByTestId('kiosk-dtr-notice'));
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('shows no DTR sync pop-up for a late heartbeat alone, and keeps the real problem\'s sentence when one is late', async () => {
+    const lateAt = new Date(Date.now() - 2 * 60_000).toISOString();
+    const base = { activity: 'idle' as const, queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false };
+    act(() => setDtrSyncHealthSnapshot({ ...base, emittedAt: lateAt }));
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => setDtrSyncHealthSnapshot({ ...base, dead: 1, emittedAt: lateAt }));
+    const notice = screen.getByTestId('kiosk-dtr-notice');
+    expect(notice).toHaveTextContent('Attendance needs admin attention for DTR sync.');
+    expect(notice).not.toHaveTextContent('DTR status update delayed');
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('hides each kind of DTR sync problem with × until sync is fine again', async () => {
+    const base = { activity: 'idle' as const, queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false };
+    const attention = (count: number) => setDtrSyncHealthSnapshot({ ...base, needsAttention: count, emittedAt: new Date().toISOString() });
+    const retry = (count: number) => setDtrSyncHealthSnapshot({ ...base, activity: 'retrying', retryablePending: count, emittedAt: new Date().toISOString() });
+    act(() => attention(1));
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide DTR sync message' }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    // The same kind stays hidden, even with new counts; another kind shows.
+    act(() => attention(2));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => retry(2));
+    expect(screen.getByTestId('kiosk-dtr-notice')).toHaveTextContent('2 punches are waiting for retry; attempts are bounded.');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide DTR sync message' }));
+    act(() => retry(3));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    // Hiding the second kind doesn't bring the first one back.
+    act(() => attention(1));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    // Fine again: the card goes by itself and every × is forgotten, so a problem coming back later shows again.
+    act(() => setDtrSyncHealthSnapshot({ ...base, emittedAt: new Date().toISOString() }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    act(() => attention(1));
+    expect(screen.getByTestId('kiosk-dtr-notice')).toHaveTextContent('Attendance needs admin attention for DTR sync.');
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('keeps the focus in Manual entry when the DTR sync pop-up is closed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('kiosk-manual-toggle'));
+    const field = screen.getByLabelText('Manual card ID');
+    await waitFor(() => expect(field).toHaveFocus());
+    act(() => setDtrSyncHealthSnapshot({ activity: 'offline', queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() }));
+    await user.click(screen.getByRole('button', { name: 'Hide DTR sync message' }));
+    expect(screen.queryByTestId('kiosk-dtr-notice')).not.toBeInTheDocument();
+    expect(field).toHaveFocus();
+    await user.keyboard('42');
+    expect(field).toHaveValue('42');
+    act(() => resetDtrSyncGuardForTests());
+  });
+
+  it('never moves focus to the DTR sync pop-up, so a card tap still reaches the reader', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    act(() => setDtrSyncHealthSnapshot({ activity: 'offline', queued: 0, retryablePending: 0, needsAttention: 0, dead: 0, persistenceFailure: false, emittedAt: new Date().toISOString() }));
+    const notice = screen.getByTestId('kiosk-dtr-notice');
+    expect(notice).toHaveTextContent('Sync unavailable');
+    expect(notice).not.toHaveClass('is-urgent');
+    expect(document.activeElement).toBe(document.body);
+    for (const key of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'Enter']) fireEvent.keyDown(window, { key });
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/attendance/scan',
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }) }),
+    ));
+    expect(document.activeElement).toBe(document.body);
+    act(() => resetDtrSyncGuardForTests());
   });
 
   it('uses Manila local time for the welcoming greeting', () => {
@@ -1174,7 +1290,12 @@ describe('ScannerDiagnostics', () => {
       await waitFor(() => expect(scannerStatusHandlers.length).toBeGreaterThan(0));
       const status = (state: ScannerStatus['state']): ScannerStatus => ({ state, message: 'Reader update', detail: null, mode: 'keyboard', paused: false });
       act(() => emitScannerStatus(status('offline')));
-      expect(screen.getByRole('button', { name: 'Reader missing' })).toHaveClass('is-missing');
+      const missing = screen.getByRole('button', { name: 'Reader missing' });
+      expect(missing).toHaveClass('is-missing');
+      // The tone stays on the button while its details are open (styles.css keeps those words coral then too).
+      fireEvent.click(missing);
+      expect(missing).toHaveAttribute('aria-expanded', 'true');
+      expect(missing).toHaveClass('reader-status-button', 'is-missing');
       act(() => emitScannerStatus(status('error')));
       expect(screen.getByRole('button', { name: 'Reader error' })).toHaveClass('is-error');
       act(() => emitScannerStatus(status('connected')));
@@ -3049,15 +3170,24 @@ describe('Admin Attendance Corrections', () => {
     // Initially in Attendance mode
     expect(await screen.findByRole('button', { name: /users and rfid/i })).toBeInTheDocument();
 
-    const attendanceModeBtn = screen.getByRole('tab', { name: /^attendance$/i });
-    const bathroomModeBtn = screen.getByRole('tab', { name: /^bathroom key log$/i });
+    // Minimal switch: icons, with only the chosen mode's name on screen; each name and tooltip carries its 1/2 key.
+    const attendanceModeBtn = screen.getByRole('tab', { name: 'Attendance (shortcut 1)' });
+    const bathroomModeBtn = screen.getByRole('tab', { name: 'Bathroom Key Log (shortcut 2)' });
     expect(attendanceModeBtn).toHaveClass('is-active');
+    expect(attendanceModeBtn).toHaveAttribute('aria-selected', 'true');
     expect(bathroomModeBtn).not.toHaveClass('is-active');
+    expect(attendanceModeBtn).toHaveTextContent(/^Attendance$/);
+    expect(bathroomModeBtn).toHaveTextContent(/^$/);
+    expect(bathroomModeBtn).toHaveAttribute('title', 'Bathroom Key Log (shortcut 2)');
+    expect(screen.getByRole('tablist', { name: 'Administrator mode switcher' }).querySelector('.admin-tabs-thumb')).not.toBeNull();
 
     // 1. Click button to switch to Bathroom Key Log mode
     await user.click(bathroomModeBtn);
     expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /users and rfid/i })).not.toBeInTheDocument();
+    expect(bathroomModeBtn).toHaveAttribute('aria-selected', 'true');
+    expect(bathroomModeBtn).toHaveTextContent(/^Bathroom Key Log$/);
+    expect(attendanceModeBtn).toHaveTextContent(/^$/);
 
     // 2. Press "1" key to switch back to Attendance mode
     fireEvent.keyDown(window, { key: '1' });
@@ -3103,7 +3233,8 @@ describe('Admin Attendance Corrections', () => {
       const header = heading.closest('header');
       expect(header).not.toBeNull();
       const inHeader = within(header!);
-      expect(inHeader.getByText('ALPHA PREMIER REALTY')).toBeInTheDocument();
+      expect(inHeader.getByText('ALPHA PREMIER')).toBeInTheDocument();
+      expect(inHeader.queryByText(/realty/i)).not.toBeInTheDocument();
       expect(inHeader.getByText('Administrator access')).toBeInTheDocument();
       expect(inHeader.getByRole('button', { name: 'Browser mode' })).toBeInTheDocument();
       expect(inHeader.getByRole('link', { name: 'Scanner' })).toHaveAttribute('href', '/');
@@ -3125,10 +3256,39 @@ describe('Admin Attendance Corrections', () => {
       expect(switcher.previousElementSibling).toBe(tabs);
 
       // Bathroom mode hides the tabs bar; the switch stays in its row.
-      await user.click(within(switcher).getByRole('tab', { name: /^bathroom key log$/i }));
+      await user.click(within(switcher).getByRole('tab', { name: 'Bathroom Key Log (shortcut 2)' }));
       expect(await screen.findByRole('heading', { name: /bathroom key log/i })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Users and RFID' })).not.toBeInTheDocument();
       expect(screen.getByRole('tablist', { name: 'Administrator mode switcher' })).toBe(switcher);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('names the admin unlock card ALPHA PREMIER, while Live attendance keeps ALPHA PREMIER REALTY for now', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        // SAFETY: Mock signed-out session check
+        return { ok: false, status: 401, json: async () => ({ success: false }) } as Response;
+      }
+      // SAFETY: Fallback mock response (config, Live attendance)
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, attendance: [] }) } as Response;
+    });
+    window.history.pushState({}, '', '/admin');
+    try {
+      const { unmount } = render(<App />);
+      const unlockCard = (await screen.findByRole('button', { name: /unlock admin/i })).closest('form');
+      expect(unlockCard).not.toBeNull();
+      expect(within(unlockCard!).getByText('ALPHA PREMIER')).toBeInTheDocument();
+      expect(screen.queryByText(/realty/i)).not.toBeInTheDocument();
+      unmount();
+
+      window.history.pushState({}, '', '/attendance');
+      render(<App />);
+      const liveHeader = (await screen.findByRole('heading', { level: 1, name: 'Today’s timing' })).closest('header');
+      expect(liveHeader).not.toBeNull();
+      expect(within(liveHeader!).getByText('ALPHA PREMIER REALTY')).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -5885,7 +6045,7 @@ describe('Admin page: the saved session is checked before the unlock card', () =
       expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
       expect(screen.queryByText('Checking admin session…')).not.toBeInTheDocument();
       // The tab bar first shows when the check ends: its gold thumb is placed then too.
-      expect(document.querySelector('.admin-tabs-thumb')).not.toBeNull();
+      expect(document.querySelector('.admin-tabs .admin-tabs-thumb')).not.toBeNull();
       expect(container.querySelector('main.admin-shell')).not.toHaveAttribute('aria-busy');
     } finally {
       window.history.pushState({}, '', '/');
@@ -5966,7 +6126,8 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
     });
     return size;
   }
-  const thumbParts = () => [...document.querySelectorAll<HTMLElement>('.admin-tabs-thumb > span')];
+  // The section tabs' thumb (the mode switch has one of its own).
+  const thumbParts = () => [...document.querySelectorAll<HTMLElement>('.admin-tabs .admin-tabs-thumb > span')];
 
   it('moves the thumb in the commit of the click, before the new page is built, and never remounts it', async () => {
     mockSignedInAdmin();
@@ -5975,12 +6136,14 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
     try {
       render(<App />);
       const payroll = await screen.findByRole('button', { name: 'Payroll' });
-      const thumb = document.querySelector('.admin-tabs-thumb');
+      const thumb = document.querySelector('.admin-tabs .admin-tabs-thumb');
       const [startCap, fill, endCap] = thumbParts();
-      // Attendance corrections: 4px in, 22 letters (194px wide); the middle strip fills between the 6px caps.
+      // Attendance corrections: 4px in, 22 letters (194px wide); the middle strip fills between the two caps, each
+      // half the 36px height wide (18px), so the ends are half circles.
       expect(startCap.style.transform).toBe('translate(4px, 4px)');
-      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(1.84)');
-      expect(endCap.style.transform).toBe('translate(192px, 4px)');
+      expect(fill.style.transform).toBe('translate(21px, 4px) scaleX(1.6)');
+      expect(endCap.style.transform).toBe('translate(180px, 4px)');
+      expect([startCap.style.width, fill.style.width, endCap.style.width]).toEqual(['18px', '', '18px']);
 
       // The order of DOM changes after the click: the thumb's move, then the Payroll page going in.
       const changes: string[] = [];
@@ -6000,9 +6163,9 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
       expect(changes.indexOf('thumb')).toBeGreaterThanOrEqual(0);
       expect(changes.indexOf('thumb')).toBeLessThan(changes.indexOf('page'));
       expect(startCap.style.transform).toBe('translate(204px, 4px)');
-      expect(fill.style.transform).toBe('translate(209px, 4px) scaleX(0.79)');
-      expect(endCap.style.transform).toBe('translate(287px, 4px)');
-      expect(document.querySelector('.admin-tabs-thumb')).toBe(thumb);
+      expect(fill.style.transform).toBe('translate(221px, 4px) scaleX(0.55)');
+      expect(endCap.style.transform).toBe('translate(275px, 4px)');
+      expect(document.querySelector('.admin-tabs .admin-tabs-thumb')).toBe(thumb);
       expect(thumbParts()).toEqual([startCap, fill, endCap]);
       expect(screen.getByRole('button', { name: 'Payroll' })).toHaveAttribute('aria-current', 'page');
     } finally {
@@ -6042,7 +6205,72 @@ describe('Admin tabs: the gold thumb slides on its own', () => {
       size.grow = 20;
       act(() => resized.forEach((fire) => fire()));
       expect(onRender).toHaveBeenCalledTimes(1);
-      expect(fill.style.transform).toBe('translate(9px, 4px) scaleX(2.04)');
+      expect(fill.style.transform).toBe('translate(21px, 4px) scaleX(1.8)');
+    } finally {
+      vi.unstubAllGlobals();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('places the mode switch thumb counted from the right edge, in both modes and when the switch changes width', async () => {
+    const resized: Array<() => void> = [];
+    class FakeResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resized.push(() => callback([], this));
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/admin/session')) {
+        // SAFETY: Session check answers with an expiry an hour away
+        return { ok: true, json: async () => ({ expiresAt: new Date(Date.now() + 3_600_000).toISOString() }) } as Response;
+      }
+      // SAFETY: Config, the empty admin lists and an empty bathroom day
+      return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true, users: [], attendance: [], payroll: [], profiles: [], payrollPdfs: [], maleActive: null, femaleActive: null, maleLogs: [], femaleLogs: [] }) } as Response;
+    });
+    // jsdom lays nothing out: the chosen mode's button is its icon and name (Attendance 117px, Bathroom Key Log 156px),
+    // the other one a 40px icon, side by side 3px inside the switch, which is as wide as both plus its padding (and
+    // `grow` more, as if the window or a font changed it).
+    const size = { grow: 0 };
+    const modeButtons = (el: Element) => [...(el.parentElement?.querySelectorAll(':scope > button') ?? [])];
+    const isModeButton = (el: Element) => el.matches('.admin-mode-switcher > button');
+    const widthOf = (el: Element) => (!el.classList.contains('is-active') ? 40 : el.textContent === 'Attendance' ? 117 : 156);
+    vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? 3 + modeButtons(this).slice(0, modeButtons(this).indexOf(this)).reduce((sum, button) => sum + widthOf(button), 0) : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? 3 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? widthOf(this) : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return isModeButton(this) ? 32 : 0;
+    });
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(function (this: Element) {
+      return this.matches('.admin-mode-switcher') ? 6 + [...this.querySelectorAll(':scope > button')].reduce((sum, button) => sum + widthOf(button), 0) + size.grow : 0;
+    });
+    const modeThumb = () => [...document.querySelectorAll<HTMLElement>('.admin-mode-switcher .admin-tabs-thumb > span')];
+    window.history.pushState({}, '', '/admin');
+    try {
+      render(<App />);
+      const bathroom = await screen.findByRole('tab', { name: 'Bathroom Key Log (shortcut 2)' });
+      // Attendance: its 117px button starts 3px in; the switch is 6 + 117 + 40 = 163px wide, so 160px from the right.
+      expect(modeThumb()[0].style.transform).toBe('translate(-160px, 3px)');
+      expect(modeThumb()[2].style.transform).toBe('translate(-59px, 3px)');
+
+      // Bathroom Key Log: its 156px button starts after the 40px icon (43px in); the switch is 202px, so 159px.
+      await act(async () => { fireEvent.click(bathroom); });
+      expect(bathroom).toHaveAttribute('aria-selected', 'true');
+      expect(modeThumb()[0].style.transform).toBe('translate(-159px, 3px)');
+
+      // The switch grows by 10px with the button where it was: counted from the right, the thumb is placed again.
+      size.grow = 10;
+      act(() => resized.forEach((fire) => fire()));
+      expect(modeThumb()[0].style.transform).toBe('translate(-169px, 3px)');
     } finally {
       vi.unstubAllGlobals();
       window.history.pushState({}, '', '/');
