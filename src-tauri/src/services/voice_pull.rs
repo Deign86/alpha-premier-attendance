@@ -16,6 +16,7 @@ use std::path::PathBuf;
 pub const DEFAULT_VOICESTUDIO_BASE_URL: &str = "http://127.0.0.1:3900";
 const SETTINGS_HOST_KEY: &str = "voicestudio_base_url";
 const SETTINGS_PIN_KEY: &str = "voicestudio_pin";
+const SETTINGS_BUNDLE_KEY: &str = "bea_name_bundle_generated_at";
 const PIN_HEADER: &str = "X-OmniVoice-Pin";
 const VOICE_MODEL: &str = "tts-1";
 const MAX_BACKOFF_SECS: i64 = 6 * 3600;
@@ -180,6 +181,60 @@ pub fn clip_path(data_dir: &std::path::Path, person_id: &str) -> PathBuf {
         .join("bea")
         .join("names")
         .join(format!("{person_id}.mp3"))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledNameManifest {
+    generated_at: String,
+    profiles: std::collections::BTreeMap<String, BundledNameProfile>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledNameProfile {
+    display_name: String,
+}
+
+/// Once per bundled name manifest (keyed by its `generatedAt`), delete the
+/// worker clips and queued jobs it supersedes, so a regenerated bundle plays
+/// instead of older worker clips. A person renamed since the bundle keeps both:
+/// their worker clip is the only one saying the new name. Returns clips removed.
+pub async fn retire_superseded_clips(
+    db: &SqlitePool,
+    data_dir: &std::path::Path,
+    manifest_path: &std::path::Path,
+    now: &str,
+) -> Result<usize, String> {
+    let raw = std::fs::read_to_string(manifest_path).map_err(|e| format!("read name manifest failed: {e}"))?;
+    let manifest: BundledNameManifest =
+        serde_json::from_str(&raw).map_err(|e| format!("parse name manifest failed: {e}"))?;
+    if read_setting(db, SETTINGS_BUNDLE_KEY).await.as_deref() == Some(manifest.generated_at.as_str()) {
+        return Ok(0);
+    }
+    let mut removed = 0;
+    for (person_id, profile) in &manifest.profiles {
+        let roster_name: Option<String> = sqlx::query_scalar("SELECT full_name FROM users WHERE user_id = ?")
+            .bind(person_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| e.to_string())?;
+        if roster_name.is_some_and(|name| name.trim() != profile.display_name.trim()) {
+            continue;
+        }
+        match std::fs::remove_file(clip_path(data_dir, person_id)) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("remove worker clip for {person_id} failed: {e}")),
+        }
+        sqlx::query("DELETE FROM voice_jobs WHERE person_id = ?")
+            .bind(person_id)
+            .execute(db)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    store_setting(db, SETTINGS_BUNDLE_KEY, &manifest.generated_at, now).await?;
+    Ok(removed)
 }
 
 async fn discover_bea_profile(client: &reqwest::Client, host: &str, pin: &str) -> Result<String, String> {
@@ -662,6 +717,52 @@ mod tests {
         assert_eq!(states[0].person_id, "APG-7");
         assert!(!states[0].worker_clip);
         assert_eq!(states[0].job_status.as_deref(), Some("PENDING"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn retire_superseded_clips_runs_once_per_bundle_and_spares_renames() {
+        let db = memory_db().await;
+        let now = "2026-11-04T00:00:00Z";
+        for (id, name) in [("APG-1", "Ada Lovelace"), ("APG-2", "Grace Hopper-Reyes")] {
+            sqlx::query("INSERT INTO users (user_id, full_name) VALUES (?, ?)")
+                .bind(id)
+                .bind(name)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("alpha-voice-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("voices").join("bea").join("names")).unwrap();
+        // APG-1 matches the bundle, APG-2 was renamed since, APG-3 left the roster.
+        for (id, name) in [("APG-1", "Ada Lovelace"), ("APG-2", "Grace Hopper-Reyes"), ("APG-3", "Old Intern")] {
+            std::fs::write(clip_path(&dir, id), [0xFFu8; 128]).unwrap();
+            enqueue_voice_job(&db, id, name, now).await;
+        }
+        let manifest = dir.join("bea-name-manifest.json");
+        std::fs::write(
+            &manifest,
+            r#"{"generatedAt":"2026-11-04T04:14:47Z","profiles":{
+                "APG-1":{"displayName":"Ada Lovelace","audioFile":"/voices/bea/names/APG-1.mp3"},
+                "APG-2":{"displayName":"Grace Hopper","audioFile":"/voices/bea/names/APG-2.mp3"},
+                "APG-3":{"displayName":"Old Intern","audioFile":"/voices/bea/names/APG-3.mp3"}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(retire_superseded_clips(&db, &dir, &manifest, now).await.unwrap(), 2);
+        assert!(!clip_path(&dir, "APG-1").exists());
+        assert!(clip_path(&dir, "APG-2").exists());
+        assert!(!clip_path(&dir, "APG-3").exists());
+        let jobs: Vec<(String,)> = sqlx::query_as("SELECT person_id FROM voice_jobs ORDER BY person_id")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(jobs, vec![("APG-2".to_string(),)]);
+
+        // Same bundle again: a clip regenerated after the upgrade survives restarts.
+        std::fs::write(clip_path(&dir, "APG-1"), [0xFFu8; 128]).unwrap();
+        assert_eq!(retire_superseded_clips(&db, &dir, &manifest, now).await.unwrap(), 0);
+        assert!(clip_path(&dir, "APG-1").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
