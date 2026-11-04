@@ -115,6 +115,34 @@ describe('DatabasePanel', () => {
     expect(screen.queryByRole('checkbox', { name: /when you log in/i })).not.toBeInTheDocument();
   });
 
+  it('lists the existing backups by date, newest month and newest backup first, whatever order they arrive in', async () => {
+    // The desktop app returns backups by file name, so a September "pre-restore-" snapshot comes before the newer
+    // "attendance-backup-" files, and November and October arrive mixed; an undated file goes last.
+    const backup = (fileName: string, modifiedAt: string | null) => ({ ...mockDbInfo.backups[0], fileName, filePath: `C:\\backups\\${fileName}`, modifiedAt });
+    loadDatabaseInfoSpy.mockResolvedValue({
+      ...mockDbInfo,
+      backups: [
+        backup('pre-restore-20260912-101500.apbackup', '2026-09-12T10:15:00+08:00'),
+        backup('attendance-backup-20261015-080200.apbackup', '2026-10-15T08:02:00+08:00'),
+        backup('attendance-backup-20261101-080200.apbackup', '2026-11-01T08:02:00+08:00'),
+        backup('copied-backup.apbackup', null),
+        backup('attendance-backup-20261028-080200.apbackup', '2026-10-28T08:02:00+08:00'),
+        backup('attendance-backup-20261103-080200.apbackup', '2026-11-03T08:02:00+08:00'),
+      ],
+    });
+    render(<DatabasePanel />);
+
+    await screen.findByText('pre-restore-20260912-101500.apbackup');
+    const months = [...document.querySelectorAll('.db-backup-month')];
+    expect(months.map((month) => month.querySelector('summary')?.textContent)).toEqual(['November 2026 2', 'October 2026 2', 'September 2026 1', 'Unknown date 1']);
+    expect(months.map((month) => [...month.querySelectorAll('code')].map((name) => name.textContent))).toEqual([
+      ['attendance-backup-20261103-080200.apbackup', 'attendance-backup-20261101-080200.apbackup'],
+      ['attendance-backup-20261028-080200.apbackup', 'attendance-backup-20261015-080200.apbackup'],
+      ['pre-restore-20260912-101500.apbackup'],
+      ['copied-backup.apbackup'],
+    ]);
+  });
+
   it('shows two sections one after the other: Backups, then Google Sheets with its own Sync now and on/off', async () => {
     render(<DatabasePanel />);
 

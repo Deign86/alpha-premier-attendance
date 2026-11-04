@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowRight,
   BookOpen,
+  CalendarCheck,
   CalendarPlus,
   Check,
   ChevronDown,
@@ -145,7 +146,8 @@ import {
   setScannerPaused,
   notifyScanSuccess,
 } from "./tauri-api";
-import { dtrSyncHealthCopy, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
+import { dtrSyncHealthCopy, dtrSyncNoticeKind, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
+import type { DtrSyncHealthSnapshot, DtrSyncNoticeKind } from "./dtr-sync-guard";
 
 type ScannerStatus = {
   state: "connected" | "scanning" | "offline" | "error";
@@ -1314,7 +1316,7 @@ export default function App() {
             <img src={logoPhoenix} alt="" />
           </div>
           <div className="brand-text">
-            <p className="brand-name">ALPHA PREMIER REALTY</p>
+            <p className="brand-name">ALPHA PREMIER</p>
             <p className="brand-subtitle">
               {resolveOfficeDisplay(config.office, "short")}
             </p>
@@ -1359,11 +1361,6 @@ export default function App() {
             <i aria-hidden="true" />
             <span className="scanner-pill-label">{scannerPill.label}</span>
           </span>
-          {syncSnapshot && (
-            <span className={`sync-badge ${syncSnapshot.needsAttention > 0 || syncSnapshot.dead > 0 ? "attention" : syncSnapshot.queued > 0 ? "pending" : "idle"}`} role="status" aria-label="Intern DTR sync health">
-              {dtrSyncHealthCopy(syncSnapshot)}
-            </span>
-          )}
           <div
             className="clock"
             aria-label={`Current time in ${config.timezone}`}
@@ -1763,6 +1760,8 @@ export default function App() {
         </footer>
       )}
 
+      <KioskDtrNotice snapshot={syncSnapshot} />
+
       {setupDialogOpen && (
         <SetupDialog
           token={setupToken}
@@ -1870,6 +1869,38 @@ type SetupDialogProps = {
 
 /** The kiosk's rising gold sparkles; each one's position, size and timing come from styles.css. */
 const KIOSK_SPARKLES = Array.from({ length: 18 }, (_, index) => <i key={index} />);
+
+/** Desktop app only: a small card when Intern DTR sync needs a look; nothing while it is idle, syncing or simply queued.
+    It never takes focus. × hides that kind of problem (a changing count doesn't bring it back) until sync is fine again.
+    The live region is always there, so a screen reader announces the card when it appears. */
+function KioskDtrNotice({ snapshot }: { snapshot: DtrSyncHealthSnapshot | null }) {
+  const kind = snapshot ? dtrSyncNoticeKind(snapshot) : null;
+  const [dismissed, setDismissed] = useState<ReadonlySet<DtrSyncNoticeKind>>(() => new Set());
+  // Fine again forgets every ×, so a problem coming back later shows again.
+  if (!kind && dismissed.size > 0) setDismissed(new Set());
+  return (
+    <div className="kiosk-dtr-notice-region" role="status" aria-live="polite">
+      {snapshot && kind && !dismissed.has(kind) && (
+        <div className={`kiosk-dtr-notice${kind === "persistence" || kind === "attention" ? " is-urgent" : ""}`} data-testid="kiosk-dtr-notice">
+          <p className="kiosk-dtr-notice-title">DTR sync</p>
+          {/* The problem's own sentence even when the heartbeat is late (the kiosk's card never says "delayed"). */}
+          <p className="kiosk-dtr-notice-text">{dtrSyncHealthCopy({ ...snapshot, stale: false })}</p>
+          {/* No mousedown default, so a click never takes the focus from Manual entry or Type card ID. */}
+          <button
+            className="kiosk-dtr-notice-close"
+            type="button"
+            aria-label="Hide DTR sync message"
+            title="Hide"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setDismissed(new Set(dismissed).add(kind))}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Card setup progress: the step on screen is highlighted and earlier steps show as done. */
 function SetupSteps({ current }: { current: 1 | 2 | 3 }) {
@@ -2840,7 +2871,7 @@ function LiveAttendance() {
     <main className="dashboard-shell live-shell">
       <header className="dashboard-header">
         <div>
-          <DashboardBrand />
+          <DashboardBrand realty />
           <p className="section-kicker">Live attendance</p>
           <h1>Today’s timing</h1>
           <p className="section-description">
@@ -3366,8 +3397,9 @@ function ReaderStatusLine({ lastScanAt }: { lastScanAt: string | null }) {
   );
 }
 
-/** Compact brand lockup for the shared dashboard header (live + admin screens). */
-function DashboardBrand() {
+/** Compact brand lockup for the shared dashboard header (live + admin screens). "ALPHA PREMIER", as on the kiosk;
+    Live attendance passes `realty` to keep its longer name until its own overhaul stage. */
+function DashboardBrand({ realty = false }: { realty?: boolean }) {
   return (
     <div className="dashboard-brand">
       <img
@@ -3376,7 +3408,7 @@ function DashboardBrand() {
         alt=""
         aria-hidden="true"
       />
-      <span className="dashboard-brand-name">ALPHA PREMIER REALTY</span>
+      <span className="dashboard-brand-name">{realty ? "ALPHA PREMIER REALTY" : "ALPHA PREMIER"}</span>
     </div>
   );
 }
@@ -3490,8 +3522,10 @@ type ActiveThumb = { x: number; y: number; width: number; height: number };
  * Where the active button (`button.is-active`) sits inside `ref`, so a thumb or underline can slide to it.
  * Re-measured when `activeKey` changes and whenever the bar or one of its buttons changes size; a measurement that
  * matches the last one changes nothing, so a resize that leaves the button where it was never restarts a slide.
+ * `fromRight`: x is the button's left edge counted from the bar's right edge (negative), for a right-aligned bar whose
+ * width changes with the choice; its thumb (anchored at the right) then starts each slide exactly where it was.
  */
-function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey: string): ActiveThumb | null {
+function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey: string, fromRight = false): ActiveThumb | null {
   const [thumb, setThumb] = useState<ActiveThumb | null>(null);
   const placedRef = useRef<ActiveThumb | null>(null);
   useLayoutEffect(() => {
@@ -3504,7 +3538,8 @@ function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey
     const place = () => {
       const active = bar.querySelector<HTMLElement>("button.is-active");
       if (!active) return;
-      const next = { x: active.offsetLeft, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight };
+      const x = fromRight ? active.offsetLeft - bar.clientWidth : active.offsetLeft;
+      const next = { x, y: active.offsetTop, width: active.offsetWidth, height: active.offsetHeight };
       const last = placedRef.current;
       if (last && last.x === next.x && last.y === next.y && last.width === next.width && last.height === next.height) return;
       placedRef.current = next;
@@ -3517,29 +3552,29 @@ function useActiveThumb(ref: { readonly current: HTMLElement | null }, activeKey
     observer.observe(bar, { box: "border-box" });
     bar.querySelectorAll("button").forEach((button) => observer.observe(button, { box: "border-box" }));
     return () => observer.disconnect();
-  }, [ref, activeKey]);
+  }, [ref, activeKey, fromRight]);
   return thumb;
 }
 
 /** The middle strip's own width; it is stretched with scaleX to fill between the two caps (.admin-tabs-thumb). */
 const TABS_THUMB_FILL_PX = 100;
-/** Each cap's width: the thumb's 6px corners. */
-const TABS_THUMB_CAP_PX = 6;
 
 /**
- * The admin tabs' gold thumb, moved with transforms only, so the browser slides it on its own (compositor) thread and
- * a big page being built for the new tab can't make it jump. It is three pieces sliding together: a left cap and a
- * right cap that keep the rounded corners, and a middle strip stretched with scaleX to the tab's width; they overlap
- * by 1px so no seam shows.
+ * The admin tabs' (and mode switch's) gold thumb, moved with transforms only, so the browser slides it on its own
+ * (compositor) thread and a big page being built for the new tab can't make it jump. It is three pieces sliding
+ * together: a left cap and a right cap, each half as wide as the thumb is tall so the round ends are perfect half
+ * circles at every width, and a middle strip stretched with scaleX to the tab's width; they overlap by 1px so no seam
+ * shows.
  */
 function TabsThumb({ thumb }: { thumb: ActiveThumb }) {
   const { x, y, width, height } = thumb;
-  const fillScale = Math.max(0, width - 2 * TABS_THUMB_CAP_PX + 2) / TABS_THUMB_FILL_PX;
+  const cap = height / 2;
+  const fillScale = Math.max(0, width - 2 * cap + 2) / TABS_THUMB_FILL_PX;
   return (
     <span className="admin-tabs-thumb" aria-hidden="true" style={{ height }}>
-      <span style={{ transform: `translate(${x}px, ${y}px)` }} />
-      <span style={{ transform: `translate(${x + TABS_THUMB_CAP_PX - 1}px, ${y}px) scaleX(${fillScale})` }} />
-      <span style={{ transform: `translate(${x + width - TABS_THUMB_CAP_PX}px, ${y}px)` }} />
+      <span style={{ width: cap, transform: `translate(${x}px, ${y}px)` }} />
+      <span style={{ transform: `translate(${x + cap - 1}px, ${y}px) scaleX(${fillScale})` }} />
+      <span style={{ width: cap, transform: `translate(${x + width - cap}px, ${y}px)` }} />
     </span>
   );
 }
@@ -3569,6 +3604,8 @@ function AdminPanel() {
   const [tab, setTab] = useState<AdminTab>("attendance");
   // The gold thumb behind the current tab; measured so it can slide between tabs of different widths.
   const tabsRef = useRef<HTMLDivElement>(null);
+  // The same kind of thumb behind the chosen mode; only the chosen mode shows its name, so it grows and shrinks too.
+  const modeRef = useRef<HTMLDivElement>(null);
   const [date, setDate] = useState(localDate());
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
@@ -3619,6 +3656,8 @@ function AdminPanel() {
 
   // sessionChecked too: the bar first appears when the session check ends, which can be a render after `unlocked`.
   const tabThumb = useActiveThumb(tabsRef, `${sessionChecked}:${unlocked}:${adminMode}:${tab}`);
+  // Counted from the right: the switch sits at the right and widens or narrows to the left with the chosen name.
+  const modeThumb = useActiveThumb(modeRef, `${sessionChecked}:${unlocked}:${adminMode}`, true);
   // The page under the tabs follows the chosen tab at low priority, so the tab bar and its thumb update (and start
   // sliding) in the same frame as the click, even when the new page is a big one like Payroll.
   const shownTab = useDeferredValue(tab);
@@ -3932,26 +3971,32 @@ function AdminPanel() {
             ))}
           </div>
         )}
-        <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher" data-active={adminMode}>
+        {/* Minimal: icons, with the name of the chosen mode only; the 1/2 keys are in each name and tooltip. */}
+        <div className="admin-mode-switcher" role="tablist" aria-label="Administrator mode switcher" ref={modeRef}>
+          {modeThumb && <TabsThumb thumb={modeThumb} />}
           <button
             type="button"
             role="tab"
             aria-selected={adminMode === "attendance"}
+            aria-label="Attendance (shortcut 1)"
+            title="Attendance (shortcut 1)"
             className={`admin-mode-btn ${adminMode === "attendance" ? "is-active" : ""}`}
             onClick={() => setAdminMode("attendance")}
           >
-            <span className="admin-mode-key-badge" aria-hidden="true">1</span>
-            <span>Attendance</span>
+            <CalendarCheck size={15} aria-hidden="true" />
+            {adminMode === "attendance" && <span className="admin-mode-label">Attendance</span>}
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={adminMode === "bathroom"}
+            aria-label="Bathroom Key Log (shortcut 2)"
+            title="Bathroom Key Log (shortcut 2)"
             className={`admin-mode-btn ${adminMode === "bathroom" ? "is-active" : ""}`}
             onClick={() => leaveSection(() => setAdminMode("bathroom"))}
           >
-            <span className="admin-mode-key-badge" aria-hidden="true">2</span>
-            <span>Bathroom Key Log</span>
+            <KeyRound size={15} aria-hidden="true" />
+            {adminMode === "bathroom" && <span className="admin-mode-label">Bathroom Key Log</span>}
           </button>
         </div>
       </div>
@@ -4448,9 +4493,11 @@ export function DatabasePanel() {
       : `${Math.max(1, Math.round(bytes / 1024))} KB`;
   const formatWhen = (value: string | null) => (value ? formatDateTime(value) : "—");
 
-  // One fold per calendar month; backups arrive newest-first, so the first month is the latest.
+  // One fold per calendar month, newest first. The desktop app lists backups by file name (every "pre-restore-" snapshot
+  // before the "attendance-backup-" files), not by date, so they are sorted here: newest first, undated ones last.
   const backupMonths: { label: string; backups: DatabaseInfoResponse["backups"] }[] = [];
-  for (const backup of info?.backups ?? []) {
+  const backupsByDate = [...(info?.backups ?? [])].sort((a, b) => (Date.parse(b.modifiedAt ?? "") || 0) - (Date.parse(a.modifiedAt ?? "") || 0));
+  for (const backup of backupsByDate) {
     const date = backup.modifiedAt ? new Date(backup.modifiedAt) : null;
     const label = date && !Number.isNaN(date.getTime()) ? formatMonth(date) : "Unknown date";
     const month = backupMonths.find((group) => group.label === label);
@@ -6528,22 +6575,10 @@ export function PayrollWorkspace({
 
   return (
     <section className="payroll-workspace">
-      {/* Two panels side by side: make the cutoff's payroll (the page's one gold button) and export it. */}
+      {/* One row: make the cutoff's payroll (the page's one gold button ends the fields) and export it. */}
       <div className="payroll-toolbar">
         <form className="payroll-generate-panel" onSubmit={save} aria-labelledby="payroll-generate-heading">
-          <div className="payroll-panel-heading">
-            <h2 id="payroll-generate-heading">Generate cutoff payroll</h2>
-            {/* Also how to generate again: only drafts are replaced, and the pop-up says so. */}
-            <button
-              ref={generateButtonRef}
-              className="submit-button payroll-generate-submit"
-              type="submit"
-              disabled={saving || Boolean(generateReason)}
-              aria-describedby={generateReason ? "payroll-generate-reason" : undefined}
-            >
-              {saving ? "Generating…" : "Generate from attendance"}
-            </button>
-          </div>
+          <h2 className="visually-hidden" id="payroll-generate-heading">Generate cutoff payroll</h2>
           <div className="payroll-generate-controls">
             <div className="cutoff-period">
               <label>
@@ -6612,6 +6647,16 @@ export function PayrollWorkspace({
                 onChange={(event) => update("standardWorkingDays", event.target.value)}
               />
             </label>
+            {/* Also how to generate again: only drafts are replaced, and the pop-up says so. */}
+            <button
+              ref={generateButtonRef}
+              className="submit-button payroll-generate-submit"
+              type="submit"
+              disabled={saving || Boolean(generateReason)}
+              aria-describedby={generateReason ? "payroll-generate-reason" : undefined}
+            >
+              {saving ? "Generating…" : "Generate from attendance"}
+            </button>
           </div>
           {/* A date problem in coral; "Loading payroll…" and the like stay muted. Read out when it appears or changes. */}
           {generateReason && (
@@ -6637,9 +6682,8 @@ export function PayrollWorkspace({
         </form>
 
         <section className="payroll-export-panel" aria-labelledby="payroll-export-heading">
-          <div className="payroll-panel-heading">
-            <h2 id="payroll-export-heading">Export payroll</h2>
-          </div>
+          {/* A small label like the fields' labels; the buttons keep their full names for screen readers. */}
+          <h2 id="payroll-export-heading">Export payroll</h2>
           <div className="payroll-actions">
             <button
               ref={pdfButtonRef}
@@ -6649,7 +6693,7 @@ export function PayrollWorkspace({
               aria-describedby={exportReason ? "payroll-export-reason" : undefined}
               onClick={() => void generatePdf()}
             >
-              {generating ? "Generating…" : "Generate Intern Payroll PDF"}
+              {generating ? "Saving…" : <><span className="visually-hidden">Generate Intern </span>Payroll PDF</>}
             </button>
             <button
               className="admin-button"
@@ -6658,7 +6702,7 @@ export function PayrollWorkspace({
               aria-describedby={exportReason ? "payroll-export-reason" : undefined}
               onClick={() => void generatePayslips()}
             >
-              {generatingPayslips ? "Generating…" : "Generate Intern Payslips"}
+              {generatingPayslips ? "Saving…" : <><span className="visually-hidden">Generate Intern </span>Payslips</>}
             </button>
           </div>
           {/* One quiet line: why the exports are off, or where this cutoff's PDF stands; its links under it. */}
@@ -6669,7 +6713,7 @@ export function PayrollWorkspace({
           ) : (
             latestPdf && (
               <p className="payroll-export-status">
-                {currentPdf ? `PDF made ${formatDateTime(currentPdf.generatedAt)}` : "Payroll changed since the last PDF. Generate it again."}
+                {currentPdf ? `PDF made ${formatDateTime(currentPdf.generatedAt)}` : "The last PDF is out of date."}
               </p>
             )
           )}
@@ -8085,7 +8129,7 @@ function PayrollPdfList({ pdfs, records }: { pdfs: PayrollPdfRecord[]; records: 
   const sorted = [...pdfs].sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
   if (!sorted.length)
     return (
-      <div className="empty-state">No PDFs yet. Finalize the cutoff, then select Generate Intern Payroll PDF.</div>
+      <div className="empty-state">No PDFs yet. Finalize the cutoff, then select Payroll PDF.</div>
     );
   // "Latest" marks each cutoff's newest copy, and only while it still matches that cutoff's approved pay.
   const latestIds = new Set<string>();

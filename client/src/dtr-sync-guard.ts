@@ -30,6 +30,22 @@ export function dtrSyncHealthCopy(snapshot: DtrSyncHealthSnapshot): string {
   return "No DTR items queued";
 }
 
+export type DtrSyncNoticeKind = "persistence" | "attention" | "paused" | "retry" | "throttled" | "retrying" | "offline" | "unavailable";
+
+/** What the kiosk's DTR card is about (in dtrSyncHealthCopy's order), or null while sync is idle, syncing or simply
+    queued. A late heartbeat alone is not a problem: the kiosk doesn't poll, and pushes can come 30s or more apart. */
+export function dtrSyncNoticeKind(snapshot: DtrSyncHealthSnapshot): DtrSyncNoticeKind | null {
+  if (snapshot.activity === "unavailable") return "unavailable";
+  if (snapshot.persistenceFailure) return "persistence";
+  if (snapshot.dead > 0 || snapshot.needsAttention > 0) return "attention";
+  if (snapshot.activity === "disabled") return "paused";
+  if (snapshot.retryablePending > 0) return "retry";
+  if (snapshot.activity === "throttled") return "throttled";
+  if (snapshot.activity === "retrying") return "retrying";
+  if (snapshot.activity === "offline") return "offline";
+  return null;
+}
+
 let dtrSyncActive = false;
 let dtrSyncHealthSnapshot: DtrSyncHealthSnapshot | null = null;
 const dtrSyncListeners = new Set<() => void>();

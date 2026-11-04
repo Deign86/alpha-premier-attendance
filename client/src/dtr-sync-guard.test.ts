@@ -9,6 +9,7 @@ import {
   subscribeDtrSyncActive,
   useDtrSyncActive,
   dtrSyncHealthCopy,
+  dtrSyncNoticeKind,
   isDtrSyncAlreadyRunning,
   refreshDtrSyncHealth,
   startDtrSyncHealthPolling,
@@ -212,6 +213,38 @@ describe("DTR sync guard", () => {
     [{ ...baseCopySnapshot, retryablePending: 2 }, "2 punches are waiting for retry; attempts are bounded."],
   ] as const)("maps health state to kiosk copy", (snapshot, expected) => {
     expect(dtrSyncHealthCopy(snapshot)).toBe(expected);
+  });
+
+  it.each([
+    [{ ...baseCopySnapshot }, null],
+    [{ ...baseCopySnapshot, activity: "syncing", queued: 2 }, null],
+    [{ ...baseCopySnapshot, activity: "queued", queued: 2 }, null],
+    [{ ...baseCopySnapshot, queued: 2 }, null],
+    [{ ...baseCopySnapshot, activity: "unavailable" }, "unavailable"],
+    [{ ...baseCopySnapshot, persistenceFailure: true }, "persistence"],
+    [{ ...baseCopySnapshot, dead: 1 }, "attention"],
+    [{ ...baseCopySnapshot, activity: "syncing", needsAttention: 1 }, "attention"],
+    [{ ...baseCopySnapshot, activity: "disabled" }, "paused"],
+    [{ ...baseCopySnapshot, activity: "syncing", retryablePending: 2 }, "retry"],
+    [{ ...baseCopySnapshot, activity: "throttled", queued: 2 }, "throttled"],
+    [{ ...baseCopySnapshot, activity: "retrying" }, "retrying"],
+    [{ ...baseCopySnapshot, activity: "offline" }, "offline"],
+  ] as const)("names the kind of DTR problem the kiosk card shows (%o)", (snapshot, expected) => {
+    expect(dtrSyncNoticeKind(snapshot)).toBe(expected);
+  });
+
+  it("shows no kiosk card for a late heartbeat alone (the kiosk doesn't poll; pushes can be 30s or more apart)", () => {
+    expect(dtrSyncNoticeKind({ ...baseCopySnapshot, stale: true })).toBeNull();
+    expect(dtrSyncNoticeKind({ ...baseCopySnapshot, activity: "syncing", queued: 4, stale: true })).toBeNull();
+  });
+
+  it("keeps a real problem when its heartbeat is late, so the kiosk card keeps that problem's sentence", () => {
+    expect(dtrSyncNoticeKind({ ...baseCopySnapshot, dead: 1, stale: true })).toBe("attention");
+    expect(dtrSyncNoticeKind({ ...baseCopySnapshot, needsAttention: 2, stale: true })).toBe("attention");
+    expect(dtrSyncNoticeKind({ ...baseCopySnapshot, persistenceFailure: true, stale: true })).toBe("persistence");
+    // The guard's own copy says "delayed" for any late snapshot; the kiosk reads it as fresh to get the real sentence.
+    expect(dtrSyncHealthCopy({ ...baseCopySnapshot, dead: 1, stale: true })).toBe("DTR status update delayed");
+    expect(dtrSyncHealthCopy({ ...baseCopySnapshot, dead: 1, stale: false })).toBe("Attendance needs admin attention for DTR sync.");
   });
 
   it("detects the backend-owned in-progress result", () => {

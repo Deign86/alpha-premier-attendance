@@ -227,12 +227,23 @@ describe("PayrollWorkspace", () => {
     expect(screen.queryByRole("button", { name: "Change dates" })).not.toBeInTheDocument();
   });
 
+  it("keeps the cutoff header to one row: the fields, then Generate; the exports show short words but keep their full names", () => {
+    renderWorkspace([]);
+    const generate = within(generatePanel()).getByRole("button", { name: "Generate from attendance" });
+    // Generate ends the fields' row, so it also comes after them in the tab order.
+    expect(generate.parentElement).toHaveClass("payroll-generate-controls");
+    expect(screen.getByLabelText("Standard days").compareDocumentPosition(generate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // No heading row: the panel's heading is for screen readers only.
+    expect(screen.getByRole("heading", { name: "Generate cutoff payroll" })).toHaveClass("visually-hidden");
+    expect(exportButtons().map((button) => button.querySelector(".visually-hidden")?.textContent)).toEqual(["Generate Intern ", "Generate Intern "]);
+  });
+
   it("says under the exports why they are off, or where the cutoff's PDF stands", async () => {
     const draft = (id: string) => internRecord({ payrollId: id, status: "DRAFT" });
     const final = (id: string) => internRecord({ payrollId: id, status: "FINALIZED" });
     const julyDraft = internRecord({ payrollId: "JUL", status: "DRAFT", cutoffStart: "2026-07-16", cutoffEnd: "2026-07-31" });
     const made = "PDF made Aug 14, 2026, 10:30 AM";
-    const changed = "Payroll changed since the last PDF. Generate it again.";
+    const changed = "The last PDF is out of date.";
     // [records, PDFs, the line under the exports, whether the exports are on]
     const cases: [PayrollCutoffRecord[], PayrollPdfRecord[], string, boolean][] = [
       // No payroll yet.
@@ -363,7 +374,7 @@ describe("PayrollWorkspace", () => {
       loadPayrollPdfsSpy.mockResolvedValue({ success: true, payrollPdfs: [pdf] });
       const { unmount } = renderWorkspace(records);
       await screen.findByRole("button", { name: "Past payroll PDFs 1" });
-      await waitFor(() => expect(exportLine()).toBe("Payroll changed since the last PDF. Generate it again."));
+      await waitFor(() => expect(exportLine()).toBe("The last PDF is out of date."));
       expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Open PDF" })).not.toBeInTheDocument();
       // The stale copy keeps its place in the history, without "Latest".
@@ -668,7 +679,7 @@ describe("PayrollWorkspace", () => {
     renderWorkspace([internRecord()]);
     await user.click(screen.getByRole("button", { name: "Generate Intern Payslips" }));
 
-    const busyButton = screen.getByRole("button", { name: "Generating…" });
+    const busyButton = screen.getByRole("button", { name: "Saving…" });
     expect(busyButton).toBeDisabled();
     await user.click(busyButton);
     expect(generateInternPayslipImagesSpy).toHaveBeenCalledTimes(1);
@@ -711,7 +722,7 @@ describe("PayrollWorkspace", () => {
     ).toBeInTheDocument();
     openHistory();
     expect(
-      await screen.findByText("No PDFs yet. Finalize the cutoff, then select Generate Intern Payroll PDF."),
+      await screen.findByText("No PDFs yet. Finalize the cutoff, then select Payroll PDF."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/No cutoff payroll has been created/)).not.toBeInTheDocument();
   });

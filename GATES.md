@@ -1974,3 +1974,76 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 578 tests passed.
+
+## UI overhaul 2, stage 1: Kiosk, a gold-line header, round glassy switch, DTR notice, text 10% smaller, 150% scaling (client only; owner requests 2026-11-03)
+
+- [x] The header is one row on the page (no box) with a 1px fading gold line under it, inside the page gutters, with more top and side room. The brand reads "ALPHA PREMIER". The in-office count and the reader status are minimal round pills.
+- [x] The mode switch is a fully round dark glass pill. The active thumb is round gold with a soft gradient, a 1px top light line and a faint warm glow, and still slides with transform only. The active number badge is a dark bronze coin (#33291a) with a gold number. Admin keeps its own switch rule for now.
+- [x] The DTR status left the header. A minimalist "DTR sync" card shows only when there is a real problem (dtrSyncNoticeKind: persistence | attention | paused | retry | throttled | retrying | offline | unavailable). It:
+  - ignores a late heartbeat;
+  - is dismissed by kind until sync is fine again;
+  - never takes focus (× keeps focus in Manual entry);
+  - sits in an always-present live region;
+  - is fixed top-right under the header line from 901px up, and in the flow on phones.
+  CHECK: cd client && npx vitest run src/dtr-sync-guard.test.ts && npx vitest run src/App.test.tsx -t "DTR"
+  EXPECT: all pass.
+- [x] Kiosk text is about 10% smaller (kiosk-scoped --fs-* overrides, 12px floor). Greeting 60 → 54 at 1366x768; result name and time 28 → 25.2; bathroom title 40 → 36.
+- [x] The kiosk fits a 1920x1080 laptop at 150% scaling.
+  EVIDENCE:
+  - At 1280x640 (maximized) and 1280x720, page scrollHeight = viewport in all 8 states (attendance idle, time-in, error, Manual entry, bathroom in use, bathroom ID card, bathroom key error, Type card ID), with and without the DTR card.
+  - Also at 1366x768 and 1366x657. No sideways scroll at 320–1920.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 600 tests passed (builder run). A coordinator re-run had one known-slow admin test hit its 20 s limit under load. It passes alone (18/18 in its group, 16.4 s).
+
+## UI overhaul 2, stage 2: Admin pages (gold line, round glassy tabs, minimal switch and links, text 10% smaller, 150% fit) + backup order fix (client only; owner requests 2026-11-04)
+
+- [x] The admin header gets the kiosk's thin gold line, a tighter title block and the brand "ALPHA PREMIER" (`DashboardBrand({ realty })`; Live attendance still passes realty). The header actions (reader status, Scanner, Live view, the dev-only Nuke, Lock) are minimal text links with small icons and hairline separators. Live attendance's Scanner and Admin use the same links.
+- [x] Section tabs: a round dark glass bar. The 3-piece transform-only thumb now has half-circle caps (cap = height / 2), the glassy gold look and a soft drop-shadow glow. It still moves on the first frame after the click.
+- [x] Mode switch, minimal: only the active mode shows its label ("[icon] Attendance | [icon]" / "[icon] | [icon] Bathroom Key Log"), with no visible 1/2 badges. The shortcuts are in aria-label/title. It shares TabsThumb (anchored right).
+- [x] In Bathroom mode the "Bathroom Key Log" title sits on the switch row (20px), which removes the empty row.
+- [x] Admin text is about 10% smaller (admin-scoped --fs-* overrides, 12px floor). Kiosk office address 11px (owner exception), smaller than the brand.
+- [x] 150% scaling (1920x1080 laptop):
+  - at 1280x640 and 1280x720, tabs and switch sit on one row and content starts at y=205 (was 309);
+  - no sideways scroll on any tab;
+  - every admin pop-up fits with its buttons visible (Add missed attendance was cut off before).
+- [x] Bug fix: Existing backups are sorted by date, newest first, before the month grouping. The desktop app returns them by file name, which showed September > November > October.
+  CHECK: cd client && npx vitest run src/database-panel.test.tsx
+  EXPECT: all pass, including the deployed-order test (which fails without the sort).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 602 of 603 passed (builder full run; the one failure is the known slow test "asks before a tab…" timing out under load). Coordinator re-run: database-panel 66/66; thumb, reader, session and slow-test group 12/12. GitHub CI ran the same suite green on main in about 5 min.
+
+## UI overhaul 2: Payroll header in one row (client only; owner request 2026-11-04)
+
+- [x] The Payroll header is one slim glass strip:
+  - the cutoff fields (month, half-month pair, start, end, standard days), then the gold "Generate from attendance" at the end of their row;
+  - a thin divider, then Export payroll's two buttons under a small "Export payroll" label;
+  - the visible "Generate cutoff payroll" heading row is gone (the heading stays for screen readers);
+  - the export buttons show "Payroll PDF" and "Payslips", and their names stay "Generate Intern Payroll PDF" / "Generate Intern Payslips";
+  - the record and PDF notes stay as one quiet line under each side.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: all pass, including the one-row test (Generate after the fields, hidden heading, full export names).
+  EVIDENCE: 62/62 passed. The new test failed before the change.
+- [x] At 1280x640 and 1280x720 the fields, Generate and both exports sit on one row, and the strip is about half its old height (244px before). No sideways scroll at 320-1920. Tablets and phones stack it as before.
+  EVIDENCE: measured with headless Chrome on the mocked admin page:
+  - strip 119px at 1280x640 and 1280x720; the table starts at y=340 (was 465);
+  - one row at 1258px wide and up (1258, 1280, 1366, 1920);
+  - two lines below that (1257 and 1024: 186px);
+  - stacked at 768, phone layout at 390 and 320;
+  - with a current PDF and its links, 137px; with an out-of-date PDF, 125px;
+  - no sideways scroll at any measured width.
+- [x] Review fixes:
+  - the month field is 140px with 8px input padding, so September, November and December 2026 and the widest dates (30/09/2026) show in full;
+  - the export buttons say "Saving…" while busy, which is no wider than "Payslips", so a busy button never spills past the strip (901-1280px);
+  - the out-of-date note reads "The last PDF is out of date." (no more "Generate it again" now that the button reads "Payroll PDF").
+  EVIDENCE: headless Chrome:
+  - month 2026-09/11/12 at 1280x640, text not clipped;
+  - busy buttons 76.4px each, right edge inside the strip at 1280, 1258, 1257, 1024 and 901;
+  - stale note on one line (strip 119px).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 604 tests passed.
