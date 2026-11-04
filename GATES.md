@@ -1458,6 +1458,523 @@ unchanged.
   EXPECT: all pass; only tests of removed code dropped.
   EVIDENCE: harnesses 11 + 18 + 69 + 34 + 52 + 23 = 207 passed (4 removed tests covered deleted employee payslip/workbook code); oxlint 0, typecheck 0; npm test 39 + 395 + 287 passed.
 
+## UI revamp Stage 1: kiosk scan result (client only; K1, K2, K3, K4, K5)
+
+- [x] Time In and Time Out are told apart at a glance: an action band with the action and recorded time (filled gold for In, gold outline for Out); the generic "recorded successfully" sentence is gone, any other server message still shows.
+  CHECK: npm test -w client -- App.test.tsx
+  EXPECT: existing kiosk tests pass unchanged (name, photo class, error heading); new assertions find "Time in"/"Time out" bands with the formatted time.
+  EVIDENCE: 80/80 (74 existing unchanged + 6 new: action band, non-stock message kept, initials, repeat tap, offline card, can't-reach card). Screenshots after-laptop-time-in/out show filled vs outline bands.
+- [x] No-photo results show an initials circle (~120px) instead of the 250px silhouette; real ID photos are unchanged.
+  CHECK: screenshots at 1366x768, 1920x1080, 768x1024, 390x844 with `npm run dev:seed`
+  EXPECT: initials circle visible; photo path untouched in code.
+  EVIDENCE: initials circle in all four sizes; photo branch still renders `result-photo result-photo-full` (existing photo test passes).
+- [x] A 4-second progress bar replaces "Returning to ready mode in a few seconds..."; reset timing is unchanged (`resultResetDelayMs`).
+  CHECK: npm test -w client
+  EXPECT: reset-to-ready tests pass unchanged.
+  EVIDENCE: bar visible mid-drain in every after screenshot; existing reset tests pass.
+- [x] Offline-saved and can't-reach scans show a card instead of a blank stage; a repeat tap (DUPLICATE_SCAN) reads "Already scanned" in plain words. No backend files change in this stage.
+  CHECK: git diff --stat -- client/src/App.tsx client/src/App.test.tsx client/src/styles.css
+  EXPECT: Stage 1 touches only these client files (plus GATES.md); client tests cover the three cards.
+  EVIDENCE: 3 client files, 175 insertions / 63 deletions; server/ diff is the earlier demo-seed work only, untouched this stage.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 409 + 295 passed.
+- [x] Revision after review: the solid gold band was too heavy. The result is now an ID-style card (3:4 portrait beside name, status chip, times; gold limited to a 2px top line, the chip and the time text); notices and errors share the card frame. Demo interns get faceless placeholder portraits (demo seed only).
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test; screenshots v2-* at 1366x768, 1920x1080, 768x1024, 390x844
+  EXPECT: all pass; card stacks to one column under 600px.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 409 + 295; v2 screenshots show card layout on all four sizes, single column on phone; 40/40 demo interns have portraits via /api/admin/users.
+- [x] Second revision: Orbitron name and times, gold employee line and gold photo frame restored; a featured real person (photo + details) can be shown from git-ignored credentials/demo.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test; git check-ignore credentials/demo/featured-person.jpg
+  EXPECT: all pass; private files ignored; card 3000000000 shows the featured person.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 409 + 297 (2 new seed tests); check-ignore matches; /api/admin/users first row is the featured person with a JPEG photo; screenshots v3-*.
+
+## UI revamp Stage 2: kiosk idle screen (client only; K7, K9, D5, L2 kiosk part)
+
+- [x] Header fits every screen: one row on wide screens, mode switch on its own row at 900px and below, logo-only brand and a dot-only reader pill at 600px and below.
+  CHECK: headless check of header elements past the viewport edge at 1366, 1280, 1024, 768, 390 and 320px
+  EXPECT: 0 elements past the edge and no horizontal page scroll at every width.
+  EVIDENCE: 0 / no overflow at all six widths (320px needed a tighter-tab rule, added).
+- [x] "In office now" count from today's attendance (timed in, not timed out), refreshed every minute and after each recorded scan; no backend change.
+  CHECK: npm test -w client -- App.test.tsx; live check after timing in 14 demo interns
+  EXPECT: chip shows the WORKING count; "2 in office" for 2 WORKING + 2 finished rows in the test.
+  EVIDENCE: new test passes; live header read "14 in office" (API: 14 WORKING of 16 rows today).
+- [x] Kiosk text at least 14px; Admin and Admin setup quieter but in place; Manual entry focuses its field; greeting, reader and options centred on tall screens; reader row and hint no longer break on phones.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test; screenshots s2-before-* vs s2-after-*
+  EXPECT: all pass; focus lands on #scanner-uid.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 411 + 297 (2 new: headcount, manual focus; one existing test now answers the headcount request separately); activeElement is scanner-uid.
+- [x] Review follow-up: Admin and Admin setup outlines restored (quiet style removed).
+  CHECK: footer crop of s2-9-after; npm test -w client -- App.test.tsx
+  EXPECT: four outlined buttons; tests pass.
+  EVIDENCE: crop shows four gold-outlined buttons; 82/82.
+
+## UI revamp Stage 3: kiosk finish (client only; K6, K8, X5, D5)
+
+- [x] Plain-word errors: "Card not registered" / "Card inactive" with a next step; raw error codes hidden; other errors keep the system message; voice unchanged.
+  CHECK: npm test -w client -- App.test.tsx
+  EXPECT: new tests for inactive and an unmapped error pass; updated unknown-card tests pass; announceScanError still receives the original message.
+  EVIDENCE: 85/85 App tests.
+- [x] Bathroom Key Log fits 1366x768 and the reader box clears after a bathroom result.
+  CHECK: headless measurement of key-card blocks and #scanner-uid value after reset
+  EXPECT: key status blocks end inside 768px; reader value "" after reset (was "••••••••••").
+  EVIDENCE: cards start at 444px (was 590), status blocks end at 701px; reader value "" after reset.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0 (after naming the ScanErrorCopy type for the anti-slop rule), typecheck 0, npm test 39 + 414 + 297.
+
+## UI revamp: kiosk design pass and glass revision (client only, styles.css + two footer icons)
+
+- [x] Switch highlight slides instead of jumping; mode change replays a short fade.
+  CHECK: headless sampling of the switch thumb transform and the hero title opacity after clicking Bathroom
+  EXPECT: thumb x rises through middle values to the second tab; title opacity climbs from 0 to 1.
+  EVIDENCE: thumb 0 → 148 → 189px; title opacity 0 → .17 → .88 → 1 within about 0.8 seconds.
+- [x] Entrance animations end fully visible; glass and grain are active.
+  CHECK: computed opacity of greeting, reader and 4th footer button 4.5s after load; backdrop-filter of the reader; ::after background of the shell
+  EXPECT: opacity 1 for all three; blur(18px) saturate(1.4); grain data URI present.
+  EVIDENCE: "1", "1", "1"; blur(18px) saturate(1.4); url("data:image/svg+xml,...").
+- [x] No sideways overflow; Bathroom Key Log still fits a laptop.
+  CHECK: headless count of kiosk elements past the right edge at 1920, 1366, 768, 390, 320 (both modes) and the lowest card bottom at 1366x768
+  EXPECT: 0 past the edge, no page scroll sideways; bathroom cards end inside 768px.
+  EVIDENCE: 0 everywhere after hiding the 1/2 badges on phones (390px Bathroom tab overflowed its half before that); cards end at 737px.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 414 + 297.
+
+## UI revamp: kiosk header width and centring (client only)
+
+- [x] Mode switch centred on screen; header wider with side margins; nothing spills out.
+  CHECK: headless measurement at 2560, 1920, 1600, 1536, 1440, 1366, 1280, 1279, 1180, 1100, 1024, 960, 901, 768, 600, 390, 320px: switch centre minus screen centre, header items past the bar edge, sideways page scroll
+  EXPECT: 0px off-centre and 0 items past the edge at every width; no sideways scroll.
+  EVIDENCE: 0px everywhere (was -57px at 1366 and up to -113px at 1024-1100); 0 past the edge (was 3 at 1280, 4 at 901-960); no sideways scroll. Bar margins 16-40px (80px at 1920, capped at 1760px wide).
+- [x] Bathroom Key Log still fits short laptop screens with the two-row header.
+  CHECK: lowest key-card edge in Bathroom mode at 1024x768, 1180x800 and 1366x768
+  EXPECT: inside the screen height.
+  EVIDENCE: 761 of 768 (782 before the short-screen spacing rule), 765 of 800, 737 of 768.
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 414 + 297.
+
+## UI revamp batch 2: Live attendance (client only; App.tsx, styles.css, App.test.tsx)
+
+- [x] Existing Live attendance tests still pass unchanged.
+  CHECK (client/): npx vitest run src/App.test.tsx -t "live attendance view|newest snapshot when overlapping|Live Attendance table|on the live table|in the live table"
+  EXPECT: 6 passed.
+  EVIDENCE: 6 passed (run together with the 3 new tests: 9 passed).
+- [x] LAN viewer collapsed by default yet still auto-started; header links are buttons with icons; at-a-glance counts from loaded rows.
+  CHECK (client/): npx vitest run src/App.test.tsx -t "Live attendance revamp"
+  EXPECT: 3 passed.
+  EVIDENCE: 3 passed. The counts fixture includes a MISSED row with an empty time in (review finding): counts read 0 in office / 2 timed out / 2 timed in / 1 need correction.
+- [x] Phones and tablets show Time in, Time out and Status for every row; no sideways scroll.
+  EVIDENCE: no sideways scroll and 0 cells past the edge at 320, 375, 381, 389, 390, 414, 430, 480, 600, 601, 700, 768, 820, 900, 1366, 1920, 2560 (16 rows). Time in/Time out columns sit at one x-position per width from 320 to 900 (review finding: per-row auto tracks shifted them; fixed with equal halves on phones and an 11rem status column on tablets). Injected LATE TIMEOUT + hint row: no overlap at 320-600.
+- [x] Scanner/Admin read as buttons; 14px text floor inside the page.
+  EVIDENCE: both links 44px tall with border rgba(198, 162, 84, 0.4) at rest and an svg, at 1366 and 390; 0 visible text nodes under 14px inside .live-shell at 1366 and 390.
+- [x] Workflow unchanged: LAN viewer still started on page open; attendance still polled every 5 s; week history requested once.
+  CHECK: grep -c "void startLanViewer().then(setLan)" client/src/App.tsx
+  EXPECT: 1 (inside LiveAttendance).
+  EVIDENCE: 1; over 31 s on /attendance: /api/attendance 7 requests, ?date= history 5 requests for 5 distinct days (once each).
+- [x] No look change on kiosk or Admin; new CSS scoped to .live-shell.
+  EVIDENCE: kiosk keeps 3 fixed radial lights, glass topbar blur(18px) saturate(1.4), body background-image none; /admin (login, no session) renders the original card and has no .live-shell; every new rule in the live block starts with .live-shell or body:has(.live-shell). Review finding fixed: the inline body color in index.html beat the live base color; body:has(.live-shell) now computes rgb(8, 8, 7).
+- [x] Client only: no new server, src-tauri or shared changes.
+  CHECK: git diff --stat -- server src-tauri shared
+  EXPECT: unchanged from before this batch (3 files, +25 -7: the temporary demo-seed hooks only).
+  EVIDENCE: 3 files changed, 25 insertions(+), 7 deletions(-).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0, npm test 39 + 417 + 297.
+
+## UI revamp batch 3: card setup dialog and admin shell + Users and RFID (client only)
+
+- [x] Card setup dialog, save step: every field shows without scrolling at 1366x768 and 1920x960; on phones it may scroll but Save stays in view.
+  EVIDENCE: before 560px wide, scrollHeight 893 vs clientHeight 688 (1366x768) and 737 (1920x960). After 1000x657 with no scrolling element at both sizes; phone: form scrolls 1002/698 with the sticky Save bar.
+- [x] Dropdown arrows sit clear of the right edge in the dialog and the admin forms.
+  EVIDENCE: dialog selects appearance none, background-position calc(100% - 16px) 50%, padding-right 44px (before: native arrow about 4px from the edge); admin forms right 14px / 40px.
+- [x] Dialog (unknown-card setup and kiosk Admin setup, incl. Forgot PIN and scan step) uses the glass look and shows its 3 steps on every step; existing setup dialog tests pass unchanged.
+  EVIDENCE: 0 text nodes under 14px in the dialog at 1366, 1920 and 390; client suite passes with no edits to the setup dialog tests.
+- [x] Admin: no page-level sideways scroll and no table sideways scroll from 320 to 1920.
+  EVIDENCE: document scrollWidth equals the viewport and the users table width equals its wrapper at 320, 390, 768, 1024, 1280, 1366, 1920 (with and without the registration pop-up).
+- [x] Admin header and tabs: compact original sizes (34px buttons and tabs), icons, clear active tab; the 1/2 shortcuts, tab order and every action are unchanged.
+  EVIDENCE: header buttons 34px at every width; mode switch test and tab tests pass.
+- [x] Registration form opens on demand in a pop-up and protects unsaved typing.
+  CHECK (client/): npx vitest run src/App.test.tsx -t "registration form on demand"
+  EXPECT: 3 passed (closed by default; Add user opens and focuses User ID; tab switch, Edit and Cancel ask "Discard unsaved changes?"; Keep editing keeps the typing; the 2 key does nothing while open).
+  EVIDENCE: 3 passed. Pop-up 860x589 (Add) and 860x640 (Edit) at 1366x768 with no scrolling. Review findings fixed: blur clean-ups no longer count as changes; uploads in progress count as unsaved and never land on another record; no second browser prompt after Discard on a link; modified clicks keep their new tab; no stale prompt after a lock; updates ask first.
+- [x] Kiosk and Live attendance look unchanged.
+  EVIDENCE: kiosk topbar blur(18px) saturate(1.4) and 12px buttons; Live header radius 20px, 44px buttons, body rgb(8, 8, 7), no .admin-shell on /attendance.
+- [x] Client only: no new server, src-tauri or shared changes.
+  CHECK: git diff --stat -- server src-tauri shared
+  EXPECT: unchanged (3 files, +25 -7: the temporary demo-seed hooks only).
+  EVIDENCE: 3 files changed, 25 insertions(+), 7 deletions(-).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test
+  EXPECT: all pass.
+  EVIDENCE: oxlint 0, typecheck 0; full npm test 39 + 420 + 297 and verify:mcp passed before the pop-up change; client suite re-run after it (see the final report).
+
+## UI revamp batch 3b: compact kiosk and Live, sliding selections, one pop-up design, kiosk sparkles (client only)
+
+- [x] Kiosk home and Live attendance at compact sizes with 8px panels and 6px controls; no sideways scroll.
+  EVIDENCE: kiosk header 64px (was 76), Live header 179px (was 203), Live buttons 34px (were 44). Width sweep 320, 360, 390, 414, 600, 768, 900, 1024, 1280, 1366, 1440, 1500, 1920, 2560: no page sideways scroll on kiosk (attendance and bathroom) or Live; kiosk switch centred (offset 0) at every width; no mode tab clipped. Bathroom 1024x768 fits (768px; was 774 after the size change, 783 at 1366x768 before).
+- [x] "Register card as" and the admin tabs slide; the registration pop-up and kiosk card setup keep their size when switching card type.
+  EVIDENCE: admin pop-up 860x583 both ways; kiosk save step 656.5px both ways; thumb width equals the option width (223.5px) and lands on it; tab thumb rect equals the active tab rect for Users, Payroll and Voice at 1366 and when wrapped at 800; focus stays on the radio after switching.
+- [x] Cancel and Save user the same size; paired pop-up buttons equal.
+  EVIDENCE: Cancel and Save user 132x40 each (Save was 48px tall); confirmations 201x40 each; Edit payroll and Add missed attendance 220x40 each.
+- [x] One pop-up design; destructive confirmations are coral; test names unchanged.
+  EVIDENCE: 11 ConfirmDialog usages pass tone="danger" (delete user/selected, delete attendance record/selected, delete payroll/selected/cutoff records, restore database, wipe Sheets, discard unsaved changes x2); Finalize and Generate stay gold; "Confirm"/"Cancel" labels kept (12 tests use /confirm/i).
+- [x] Kiosk sparkles are light and out of the way.
+  EVIDENCE: 18 elements, transform and opacity only; no scroll added (scrollWidth 1366 at 1366); clicks reach the controls (elementFromPoint at the footer returns .kiosk-actions); paused while the card setup dialog is open; hidden with prefers-reduced-motion; positioned in the side bands, clear of the frosted centre cards.
+- [x] Review: 9 confirmed findings fixed (thumb box-sizing, pop-up hover and busy states, kiosk focus on card-type switch, kiosk row heights, phone reader dot, gleam in scrolling pop-ups, stale tab thumb).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
+  EXPECT: all pass; server, src-tauri and shared unchanged (3 files, +25 -7 demo-seed hooks only).
+  EVIDENCE: oxlint 0, typecheck 0, client 20 files / 420 tests passed; git diff --stat -- server src-tauri shared: 3 files changed, 25 insertions(+), 7 deletions(-).
+
+## UI revamp batch 3c: backup tree, payroll PDFs by month, calm attendance filters, bathroom alignment (client only)
+
+- [x] Existing backups opens by default with every month closed; the tree indents stay.
+  EVIDENCE: database-panel test updated (list open, October and September closed) and passing; shot e-after-backups shows the list open with 3 closed months.
+- [x] Generated payroll PDFs are grouped by cutoff month (newest month first), latest month open, older months closed; one header row; Open PDF and Show in Folder unchanged.
+  CHECK: npm test -w client -- payroll.test.tsx
+  EXPECT: all pass (list, open and reveal tests unchanged).
+  EVIDENCE: payroll.test.tsx passes, plus a new test: October 2026 (2) open, September 2026 (1) closed even when regenerated last, toggling both ways.
+- [x] Attendance filters are calmer and still one click: status filters as an underline bar with a sliding gold line and small counts (zero counts dimmed); Assisted and Backdated as separate on/off toggles; names stay "Assisted 1" / "Backdated 1".
+  CHECK: npm test -w client -- App.test.tsx -t "filter pills"
+  EXPECT: pass.
+  EVIDENCE: test passes with new aria-pressed checks; underline 59px = All button 59px, 70px = Late 70px, 51px = 51px at 390 (border-box observed), offset 0; page width 390 at 390.
+- [x] Bathroom Key Log: the date picker lines up with the page title and sits clear of the header; "Assign Key to Staff" and "Selected: …" are spaced apart.
+  EVIDENCE: page starts 28px below the header card (was 8px); date bottom-aligned with the title block; "Selected: …" pushed to the right end of the label row (shot e-after-bath-assign).
+- [x] Repository gates.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test -w client
+  EXPECT: all pass; git diff --stat -- server src-tauri shared unchanged (3 files, +25 -7).
+  EVIDENCE: oxlint exit 0, typecheck exit 0, client 20 files / 421 tests passed; 3 files changed, 25 insertions(+), 7 deletions(-).
+
+## UI revamp batch 4: admin header on the page, reader status dot, kiosk pill, Live search (client only; A1, A3, K3, L4)
+
+- [x] A1: brand block (kicker, visible "Manage attendance" h1, office address) and the action buttons sit on the page background; section tabs and the 1/2 switch are two separate bars on one row; switch wraps under the tabs on smaller screens; names, guards and sliding thumbs unchanged.
+  EVIDENCE: at 1366x768 the brand block is 119px, the bars 46px, and the content starts at y=253; tabs bar 852px and switch 350px share the row; one h1 "Manage attendance"; page width 1356/1366 and 390/390 (no sideways scroll); in Bathroom mode the tabs bar hides and the switch stays at the right.
+- [x] A3: reader status as a dot plus a word (Reader ready / Checking / Reader missing / Reader error / Browser mode) with a details popover (Escape, click outside, aria-expanded).
+  EVIDENCE: shot b4-after-reader-popover; ScannerDiagnostics tests updated and the new state tests pass.
+- [x] K3: kiosk header pill reads Reading…, Done or Error during a scan result, then the reader's own state.
+  EVIDENCE: captured pill text Ready -> Done after a demo scan, Error after an unknown card; test "header pill follows the scan" passes in the full suite (result window widened to 1.2 s so it is not flaky).
+- [x] L4: Live attendance search (name or ID) and department filter, on screen only, "No one matches" with Clear filters; the at-a-glance counts still cover the whole day.
+  EVIDENCE: shot b4-after-live-search ("Ma" -> 3 rows) and b4-after-live-empty; test passes with no extra requests.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass; server, src-tauri and shared untouched.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 20 files / 429 tests passed.
+- [x] Review (3 lenses, each finding verified): fixed a red "Error" pill on a repeat tap (now calm "Done" like the "Already scanned" card), reader details now close when focus leaves and Escape elsewhere no longer pulls focus to the header, Clear filters returns focus to the search box, the reader keeps its word on phones, and the actions align with the top of the brand block.
+
+## UI revamp batch 5: pop-ups and messages (client only; X1, X2, X3, X4, X6, X7)
+
+- [x] X1: every confirmation names its action (ConfirmDialog now requires confirmLabel); deleting one user needs the user ID typed first.
+  EVIDENCE: shot b5-after-delete-user (button "Delete user" stays disabled with a partial ID); b5-after-restore-confirm ("Restore database", coral); requireText test passes.
+- [x] X7: one dialog keyboard hook for every pop-up: Escape closes (not while busy), Tab stays inside, focus moves in (Cancel first on destructive ones) and returns to the opener; only the top pop-up answers Escape; links get a gold focus outline.
+  EVIDENCE: use-dialog-keys tests; Escape tests for the restore confirmation, Add missed attendance and the backup guide; stacked Escape test (discard question first, then the form).
+- [x] X2: messages carry an explicit type (success gold with a tick, info grey, error coral); word-guessing removed from card setup and the user form.
+  EVIDENCE: notice.tsx used by card setup, UserEditor, Payroll, Data and backup, attendance messages, file actions, PIN reset, voice settings.
+- [x] X3: short notes (toasts) for routine results; problems stay inline.
+  EVIDENCE: shot b5-after-toast ("User saved." bottom right); toasts tests (shows, hides at 3.5 s, dismiss, max 3).
+- [x] X4: loading rows and "Couldn't load … Retry" per list; one failure does not block the other tabs.
+  EVIDENCE: list-load tests; Retry reloads only the failed users list; backup list Retry test.
+- [x] X6: shared Manila date helpers (Fri, Oct 30, 2026 / 1:26 PM / Oct 16–31, 2026 / 2m 30s) for dates shown in admin; values sent to the server, CSV and date inputs unchanged.
+  EVIDENCE: format.test.ts; shot b5-after-pdf-dates (Oct 16–31, 2026 ranges, "Nov 1, 2026, 11:15 AM").
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass; server, src-tauri, shared and client/src/api.ts untouched by this batch.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 24 files / 460 tests passed.
+- [x] Review (3 lenses, each finding verified, 10 distinct problems fixed): earlier coral errors now clear when a later action succeeds; Attendance corrections drops the old date's rows, count, selection and export while a new date loads or fails; batch actions report partial failures inline instead of a success note; the backup list shows the reason and no futile Retry in the browser; payroll See all survives Retry; the update's release date uses Manila time; notes sit above the update banner; the users load error has margins; the note region no longer re-reads every note; dead CSS removed.
+
+## UI revamp batch 6: Users and RFID (client only; U6, U7)
+
+- [x] U6: one count ("41 users" / "39 of 41 match"), See all / Show fewer without a number, the header tick box selects the rows shown (half-ticked when some are), and ticking rows swaps the list bar for "N selected · Clear" with Set active, Set inactive and Delete (existing batch handlers; partial failures inline); focus returns to the tick box when the bar hides; Sync DTR has no batch version, so it stays as "Sync Interns to DTR" on the normal bar.
+  EVIDENCE: live shots b6-after-list, b6-after-selected (1366) and b6-after-selected-390; tests for the bar, Clear, Delete confirm and Set inactive pass.
+- [x] U7: User ID placeholder "e.g. APG-2026-001" in the registration pop-up and the kiosk card setup; a muted "Usual format: APG-YYYY-NNN" hint while the value doesn't match, never blocking Save (demo IDs still save); off for admin cards and edit mode.
+  EVIDENCE: shots b6-after-add-hint and b6-after-kiosk-hint; pop-up 860x591 and kiosk dialog 677px at 1366x768, no scrolling.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 24 files / 469 tests passed.
+- [x] Review (3 lenses, each finding verified, 7 distinct problems fixed): the kiosk hint shows only for new cards; both bar layers share one grid cell so the list never jumps (measured equal heights at 320, 390, 430, 480, 540, 768, 1366); a search unticks rows it hides and the count and actions use shown rows only; focus hand-off only when the bar started the action and never behind a pop-up; kiosk 24px row gap only above 600px; the hint is a description (aria-describedby), not part of the field name; focus returns to the bar after a partial failure.
+
+## UI revamp batch 7: Attendance corrections, attendance-first admin, time sorting (client only; C1, C2, C3, C4 + user requests)
+
+- [x] C1: rows are read-only (plain times, arrival, status, Edit and coral Delete); Edit opens only that row with the time inputs, Save and Cancel; per-record drafts survive search, filters and sorting; an "Unsaved" tag and gold edge while changed; changing the date with unsaved rows asks first; the save payload and original-stamp logic are unchanged.
+  EVIDENCE: live shots b7-after-readonly and b7-after-editing (Maria Ramos open with "Unsaved", others read-only); 10 attendance tests now click Edit first; new tests for read-only, Edit/Cancel, Unsaved, search keeping drafts and the date-change question.
+- [x] C2/C3/C4: the day shows once ("Fri, Oct 30, 2026 · Total records: 35") with no Date column (CSV unchanged); one time format ("8:12 AM", late time-out note "6:00 PM"); arrival badges "Late 13m" / "Late 1h 12m".
+  EVIDENCE: b7-after-readonly; format.test.ts covers formatLateMinutes.
+- [x] User request: tabs ordered Attendance corrections, Users and RFID, Payroll, Data and backup, Voice announcements; admin opens on Attendance corrections.
+  EVIDENCE: captured tab list after unlock: ["*Attendance corrections","Users and RFID","Payroll","Data and backup","Voice announcements"].
+- [x] User request: a quiet newest/oldest sort (heading arrow with aria-sort, tiny phone toggle, remembered per page) by time in on Attendance corrections and Live attendance, and by time out on the admin bathroom key logs; empty times last.
+  EVIDENCE: corrections rows flip from 9:11 AM first to 7:30 AM first (b7-after-oldest); time-sort.test.tsx and page tests pass.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 25 files / 490 tests passed.
+- [x] Review (3 lenses, 17 verified findings, 12 distinct problems fixed, plus the lead's bathroom word-break): unsaved corrections now trigger the leave question on tab switch, the 2 key, Bathroom, Lock, page links, reload and update install, naming the section; focus returns after a save only if it was still in that row; the exact-stamp test uses seconds; clamped rows sort by the time shown; sort headings keep their names and row actions name the person; the date is locked while a row saves and load uses the current date's loader; a record changed by a refresh shows a note; unsaved rows hidden by filters are announced with Show; keyboard-typed dates commit on Enter or blur; row messages sit on their own line; bathroom log headings and pills never break mid-word (bathroom cards no longer scroll sideways at 390).
+
+## UI revamp batch 8: Payroll (client only; P1, P2, P3, P4, P5)
+
+- [x] P1: the Generate panel opens on the most recently ended half-month cutoff (Asia/Manila), with month, preset and standard days to match; a disabled Generate says why.
+  EVIDENCE: live on Nov 1, 2026 the dates read 2026-10-16 to 2026-10-31 with "16th–last day" pressed (b8-after-top); boundary tests include the 15th and 16th.
+- [x] P2: "Download payroll PDF" and "Download payslips", disabled with a reason until the chosen cutoff has payroll; values sent to the server unchanged.
+  EVIDENCE: b8-after-top; payroll tests updated to the new names.
+- [x] P3: display-only step bar Cutoff · Review · Finalize · Export (current step gold with aria-current, done steps ticked).
+  EVIDENCE: step-bar tests for drafts, partly finalized, all finalized and PDF present.
+- [x] P4: empty states give the next step ("No payroll for this cutoff yet. Pick a cutoff above, then select Generate from attendance."; "No PDFs yet. Finalize the cutoff, then Download payroll PDF.").
+- [x] P5: "PDFs for Oct 16–31, 2026" beside the export buttons (newest first, Open PDF / Show in Folder), month-grouped history kept at the bottom.
+  EVIDENCE: b8-after-top shows the two Oct 16–31 PDFs; no sideways scroll at 1366 (1356/1366) or 390 (390/390).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 25 files / 500 tests passed.
+- [x] Review (3 lenses, 15 verified findings, 7 distinct problems fixed): the cutoff label now follows the dates (a half-month preset's label, otherwise "<start> to <end>"), so hand-typed dates never save the pre-filled name; the step bar goes in order (Review current while drafts exist, Export done only when all finalized and a PDF exists); the regenerate banner shows only with drafts, otherwise a calm "All N records … finalized" line, and deleting finalized records needs DELETE typed; the table shows the chosen cutoff with a "Show all cutoffs" toggle and a Period column; Generate and exports say why while payroll loads or fails; preset and hand-typed paths tested; focus rings no longer clipped.
+
+## UI revamp batch 9: System tab, Data and backup in plain words, Friday backup reminder (client only; O1, O2, O3 + audit S1-S5, D1-D4)
+
+- [x] O1/S1-S5: a sixth "System" tab (last; same unsaved-changes guard) with one flat "This PC" card: version beside Check for updates now, "Check for updates automatically", "Open the attendance screen when Windows starts" (disabled in a browser with "Only in the desktop app"; failure says so), one card reader line, and a closed "Technical details (for support)" fold; no developer lines left.
+  EVIDENCE: live shot b9-live-system (1366) and b9-live-system-390.
+- [x] O2/D1-D4: Data and backup has two sections, "Backups" (last backup line, Create backup now, Restore from backup file, Open backups folder, Existing backups with every month closed, date first in each row, "How to move to a new PC" link, restore-waiting line) and "Google Sheets" (one plain-words badge, one Sync now, a plain "Upload attendance to Google Sheets from this PC" checkbox, a closed "Details for support" fold); 34px buttons; no paths or storage mode outside the folds.
+  EVIDENCE: live shot b9-live-data; page width 1356/1366, 390/390.
+- [x] O3: "Last backup: today, 8:02 AM" (coral when over 7 days or none); a Friday banner under the admin header on every tab when it is Friday in Manila, at least one intern timed in today, no intern is still timed in and no backup was made today; Create backup now runs the shared backup action; Later hides it for the day; checks every 5 minutes, no requests on other days.
+  EVIDENCE: backup-reminder.test.tsx (rules, polling, Later, shared action) passes.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 534 tests passed (run with 2 workers; the PC was low on memory).
+- [x] Review (3 lenses, 17 verified findings, 8 distinct problems fixed): the reminder asks nothing on other days, after Later or once a backup covers the day, reads backups before attendance, and the App tests pin a Thursday clock so they pass on Fridays; it is due when the newest backup is older than the last intern time-out; one backup at a time with a shared "Saving backup…" state; the card reader shows the real last scan from today's attendance; the startup setting is read back after a change; backup and upload actions have separate busy states; upload wording in plain words; Sync now is disabled while uploads are off.
+
+## UI revamp fix round: Payroll done properly (client only; audit P1, P2, P4-P10)
+
+- [x] P1: three steps that say their status in words (Make payroll / Check and finalize / Export; circles: done gold tick, current filled gold, upcoming grey outline; about 640px, left-aligned) and one Next line holding the page's one gold button: no payroll → Generate from attendance; drafts → Finalize all (N) with Generate again · Delete all records; all finalized without PDF → Make payroll PDF (+ Make payslips); done → "Done. PDF made …" with Open PDF · Show in folder · Make payslips · Make PDF again. The yellow banner, the finalized line and the Export panel are gone; Generate's pop-up only mentions drafts when there are drafts.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: tests for each step state and Next line (no records / drafts / all finalized no PDF / done) and for Finalize all pass.
+  EVIDENCE: payroll.test.tsx 52/52 passed (was 43; new: step words per state, loading/failed words, one Next line per state, Finalize all + partial failure, all-finalized Generate pop-up, PDF open failure, selection bar, switch, row layout).
+- [x] P2: the PDF and payslips can't be made while any draft of the cutoff is left ("Finalize all N drafts first.").
+  CHECK: cd client && npx vitest run src/payroll.test.tsx -t "blocks the payroll PDF"
+  EXPECT: no export call is made while drafts exist.
+  EVIDENCE: passes; the buttons appear only once every record is finalized and say "Loading payroll…" while the list reloads.
+- [x] P4/P5: Net Pay bold gold text (no #fef08a/#854d0e), Total Deductions plain bold ink; rows: Employee = name with the ID under it, a Status column with a dot and a word, actions on one line, money right-aligned with tabular numbers.
+  CHECK: grep -c "fef08a\|854d0e" client/src/App.tsx client/src/styles.css
+  EXPECT: 0 and 0.
+  EVIDENCE: 0 and 0. Measured at 1366: rows 53px (a name over ~180px wraps to 70px), table 1235/1235px with no sideways scroll in the drafts state.
+- [x] P6/P7: "Make payroll PDF" / "Make payslips"; a made PDF opens straight away; only the latest PDF in the Next line; history is a closed "Past payroll PDFs" fold (by month), newest copy per cutoff tagged "Latest", no Type column, money column "Total earnings".
+- [x] P8/P9: table bar "Oct 16–31, 2026 · 37 records", See all without a number, a sliding "This cutoff | All cutoffs" switch, header tick box only, selection bar "3 selected · Clear | Finalize selected · Delete selected"; cutoff picker keeps month + half with a read-only "Oct 16–31, 2026 · 11 working days" line and a "Change dates" link for start, end and standard days; labels sent to the server unchanged.
+- [x] P10: payroll rows become cards at 900px and below; no sideways page scroll at 320–1920; screenshots of the four states at 1366x768, 1024 and 390 in the scratchpad folder shots-fixpay.
+  EVIDENCE: 28 width/state checks (320, 390, 600, 768, 1024, 1366, 1920 × 4 states, folds open and All cutoffs on): page width never above the window; 12 screenshots saved (made-up data, temporary harness deleted).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 543 tests passed (an earlier run hit two 5s timeouts in unrelated Users/Corrections tests while the PC had ~180 MB free; both pass alone and the rerun was clean).
+- [x] Review fixes (A–G): a PDF counts as current only with the cutoff's headcount and made after the last finalize (Date.parse; older or other-headcount PDFs show "Ready · PDF out of date" and "Next: the payroll changed since the last PDF. Make a new payroll PDF.", and lose "Latest"); loading/failed say so with no gold button; payslip folder and notes reset when the dates change; Net Pay pinned beside the pinned actions, and Standard, Daily rate, Basic pay, Absent, Late / Halfday step aside at 901–1300px (and 1301–1600px with extra columns); standard days outside 0–31 or not whole/half refused before generating; focus moves to the new gold button (or the Next sentence) when an action removes the focused one, Next sentence is aria-live; steps stack at 680px and below.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: all pass, including out-of-date PDF (older than finalizedAt, headcount mismatch), loading/failed Next line, 45 days refused, payslip folder reset, focus after Finalize all.
+  EVIDENCE: 56/56 passed. Headless layout checks: Net Pay fully visible beside the actions at window widths 901, 1024, 1093, 1300, 1349, 1366, 1440, 1600 (drafts, drafts with All cutoffs, done with All cutoffs); steps text never under a hairline from 601 to 900px.
+- [x] Test stability: client/vite.config.ts sets testTimeout 15000, because full admin flows passed 5 s on the busy front-desk PC (one test took 6.6 s on its own); full suite 26 files / 547 tests passed with 2 workers.
+
+## UI revamp fix round: Attendance corrections and admin polish (client only; audit C1-C5, E1 + Live status words)
+
+- [x] C1: rows are calm: status as a dot and a word ("Working", "Completed", "Missed", "Late time-out"; no capsule pills), "Late 38m" plain gold text, "On time" muted, Delete grey that turns coral only on hover/focus (still confirms); the clamp chip keeps its title and test id.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Attendance corrections"
+  EXPECT: row tests pass with the new words; no "LATE TIMEOUT" or uppercase status text in the attendance tables.
+  EVIDENCE: passes; `grep "LATE TIMEOUT" client/src/App.tsx` finds nothing; shots corrections-normal-*.
+- [x] C2: one name, "Late time-out", for the status word, the filter and the row note; Live's chip reads "N late time-out". Status filters in order All, Late time-out (coral count above 0), Working, Completed, Missed, adding up to All; "Late" is a toggle beside Assisted and Backdated; all three dim at 0.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "filters"
+  EXPECT: a test reads the status buttons in that order with counts that add up to All, and the Late toggle combines with a status.
+  EVIDENCE: new test reads ["All 3", "Late time-out 1", "Working 1", "Completed 1", "Missed 0"] (1+1+1+0 = 3) and ["Late 2", "Assisted 0", "Backdated 0"]; Late + Working shows "1 of 3 records". Live test reads "1 late time-out".
+- [x] C3: the filter row is 34px (date, Today, Name or ID, Department); "Add missed attendance" (outline) and "Export CSV" sit at the right of the table bar; Today has white text when enabled.
+  EVIDENCE: measured at 1366: the four filter controls 34/34/34/34px, the bar buttons 34px; Today enabled rgb(246, 242, 233) (--ink), disabled dimmed. Shots corrections-normal-*.
+- [x] C4: table bar "Fri, Oct 30, 2026 · 35 records", "See all" without a number, header checkbox only, and while rows are ticked "3 selected · Clear | Export selected · Delete selected" in the same grid cell (nothing moves).
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "selection bar"
+  EXPECT: the bar swaps in and out, Clear empties it and returns focus to the header checkbox, Delete selected confirms.
+  EVIDENCE: passes; both layers 34px at 1366 (phone 390: 90px and 76px in one cell, so the rows stay put). Shots corrections-ticked-*.
+- [x] C5: a late time-out row has one short coral line in its own note line under it: "Timed out after office hours. Click Edit and enter the real time-out." (no box, no paragraph above the row).
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "late time-out line"
+  EXPECT: the line sits in the note line right after the row; the old "manual correction required" paragraph is gone.
+  EVIDENCE: passes; shots corrections-late-* (Late time-out filter on).
+- [x] E1: the Attendance / Bathroom Key Log switch is quiet: the active option has gold text and a thin gold outline thumb that still slides; the 1/2 badges stay; only the section tab is filled gold.
+  EVIDENCE: computed thumb: no background image, transparent background, 1px rgba(225, 196, 119, .6) border, no shadow; active text rgb(225, 196, 119). Shots admin-header-1366x300 and admin-header-390x540.
+- [x] Batch 7 behaviour unchanged: Edit/Save/Cancel, per-record drafts, leave and date guards, time sort, save payload and record-changed note.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "rows open on Edit"
+  EXPECT: all pass.
+  EVIDENCE: 15 passed (12 before + 3 new).
+- [x] No sideways page scroll; screenshots (made-up data, temporary harness deleted) in the scratchpad folder shots-fixcorr.
+  EVIDENCE: page scroll width never above the window at 320, 768, 1024, 1366 and 1920 in all four states (normal, one row open, late time-out, rows ticked); 16 screenshots saved.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 550 tests passed.
+- [x] Review fixes (A–G): the unsaved-rows-hidden note, the phone sort toggle and See all sit in both bar layers, so ticking rows never hides them; status counts leave out the status filter and each toggle leaves out its own filter, so All matches "N of M" and dimming follows the other filters; Export/Delete selected act only on ticked rows still shown; a partly failed Delete selected puts the focus back on the bar; the late time-out line says "Enter the real time-out and click Save." while the row is open and a still-late save says "Saved. Still a late time-out: enter the real time-out."; a ticked row's note line shares its tint and gold edge; Live's chip pluralises ("2 late time-outs").
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass, including new tests for the note while ticked, Late + Assisted narrowing the selection (one CSV row, one delete), the partial delete focus, counts with Late on and a search, and the plural chip.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 553 tests passed. Live check at 1366: Late on → "All 13" with 2 + 4 + 7 + 0 = 13 and "13 of 35 records"; a ticked late time-out row's note cell has the row's rgba(198, 162, 84, .08) tint and 3px gold edge.
+
+## UI revamp batch 10: One text-size scale, three button types, calm status and notes (client only; D2, D4 + audit consistency)
+
+- [x] D2: `:root` defines --fs-12, --fs-14, --fs-16, --fs-20, --fs-28, --fs-40 and --fs-60, and every rem font size in styles.css plus the inline fontSize values in App.tsx and bathroom-key-log.tsx use them. Nothing is below 12px. The kiosk greeting stays fluid between 40 and 60. One deliberate exception: the short-screen greeting cap (max-height 760px) keeps 3.2rem.
+  CHECK: node -e "const s=require('fs').readFileSync('client/src/styles.css','utf8'); for (const t of ['--fs-12','--fs-14','--fs-16','--fs-20','--fs-28','--fs-40','--fs-60']) if(!s.includes(t+':')) process.exit(1); const free=(s.match(/font-size:\s*[\d.]+rem/g)||[]).length; if(free>1) {console.log(free); process.exit(1);}"
+  EXPECT: exit 0; no plain `font-size: Nrem` left (the short-screen cap sits inside a clamp), and no px font size outside the tokens.
+  EVIDENCE: live at 1366: Live attendance text uses 12/14/16/20px only; the kiosk uses 12/14/16 and a 60px greeting (54.7px at 390). No sideways scroll on either.
+- [x] Sizes that moved by more than 2px were listed and accepted as calmer:
+  - page titles: 24 → 20;
+  - small labels: 9.92 → 12;
+  - the time-in card name and time: 33.6 → 28 at 1366;
+  - notice titles: 30.4 → 28;
+  - the admin login title: 24 → 20;
+  - the bathroom key titles: 18.4 → 16.
+  EVIDENCE: before/after pairs at 1366 and 390 in the scratchpad folder shots-b10 (kiosk idle, success, already scanned, login, Live, corrections, users, payroll, data, system, voice, bathroom log).
+- [x] Badges, counts and small times use Poppins: Live times and counts, backup counts, slider badges, the 1/2 key badges, bathroom pills, the elapsed timer, update dialog numbers, the assisted countdown and the corrections date. The clock, greeting, brand and headings stay Orbitron.
+- [x] D4: Data and backup, System, Voice announcements and the admin Bathroom Key Log use the three button types:
+  - gold filled for the main action and outline for the rest;
+  - 34px in toolbars, 40px on the bathroom card actions, 6px corners;
+  - disabled buttons dim and don't change on hover.
+  On the bathroom page, Time In (Return Key) is outline (label and test ids kept), Time Out is filled, and Today is a 34px outline button. The page title is 20px, above the 16px key titles. The old green and gold bathroom button rules and the old Users selection-bar rules are deleted.
+- [x] Users status reads "● Active" (green) and "● Inactive" (grey) in sentence case.
+  CHECK: cd client && npx vitest run src/database-panel.test.tsx
+  EXPECT: the new test finds "Active"/"Inactive" with the dot class, and "ACTIVE" is gone.
+- [x] Assisted/Backdated notes are small muted text with the icon ("Assisted by …", "Backdated by Admin — reason"). On the desktop table (901px and up) they are cut to one line with the full text in the title. On tablet and phone cards they wrap in full.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Assisted"
+  EXPECT: the wording, the full text in the title, and no inline style.
+- [x] Review fixes:
+  - the open Voice help bubbles stay inside the screen and their card;
+  - the notes wrap on cards;
+  - the bathroom title is 20px;
+  - the corrections date is Poppins with tabular-nums;
+  - dead CSS is removed;
+  - a test comment is trimmed.
+  EVIDENCE: each of the 5 info bubbles focused at 320 and 390: scrollWidth equals the viewport and every bubble is inside its card; also checked at 768 and 1366.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 554 tests passed.
+
+## UI revamp batch 11: Kiosk Bathroom Key Log, ID-card key cards, Type card ID, flash instead of pop-up (client only; owner requests 2026-11-02)
+
+- [x] The key cards look like the time-in ID card.
+  - In use: gold-framed photo (or initials), a "Key taken" chip, the name, "ID · department", and "Taken" in gold with a ticking "Out for".
+  - Available: an empty frame with a key, "Ready to take" and "Tap your ID to take this key".
+  - Status is "● In use" / "● Available".
+  - The cards are equal height in both states at every width.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "ID-card key cards"
+  EXPECT: all pass, including the holder photo after a checkout, initials when the photo is unknown, and the card wording.
+  EVIDENCE: card heights match whether a key is in use or free: 281/281 at 721, 768 and 900; 270/270 at 390; 279/279 at 360 and 320; 286/286 at 1366.
+- [x] The cards come first. The hero is smaller, and its title is 40px with a 56px icon (owner asked for a little bigger; 28px at 600px and narrower). At 1366x768 the hero, both cards and Type card ID fit without page scroll. No sideways scroll from 320 to 1366.
+  EVIDENCE:
+  - 1366x768: hero 172–309, cards 328–614, button 636–670, scrollHeight 768. Before: reader box 267–422, cards 441–716.
+  - Live check on the dev server: scrollHeight 768.
+- [x] The reader box is hidden in bathroom mode. A "Type card ID" button opens an inline box (focused input, Record, ×). The box closes and clears:
+  - after a recorded scan;
+  - on × or Escape (from anywhere);
+  - on a mode switch;
+  - after 60 s without typing.
+  A card tap while the box is open shows "Close Type card ID to scan your card". Wedge scans still check keys out and in with the box hidden.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Type card ID"
+  EXPECT: all pass (60 s close with fake timers).
+- [x] A successful bathroom scan shows no pop-up (owner request). Instead:
+  - the scanned key's card flashes gold for 1.8 s (a static highlight with reduced motion);
+  - a return briefly shows "Returned by <full name> · time";
+  - a visually hidden live region announces the result.
+  The kiosk goes straight back to ready. Errors keep their card and the reset delay. A mode switch clears any result and its timers.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Kiosk Bathroom Key Log"
+  EXPECT: all pass, including:
+  - no success card or countdown bar;
+  - switching to Attendance right after a success or an error shows no offline/unreachable card;
+  - a second card tapped 3.9 s after a success records normally.
+  EVIDENCE: live on the dev server with a made-up demo card (APG-DEMO-002), at 1366:
+  - **Checkout:** the female card was "is-in-use is-flashing" with the photo; the hero icon kept the ready class; Type card ID was enabled; there was no success card; the live text read "Female key checked out by Maria Ramos at 9:12 PM".
+  - **Switch to Attendance:** no offline card, reader box present.
+  - **Return:** "Returned by Maria Ramos · 9:13 PM", and the flash cleared after 1.8 s.
+- [x] The photo is remembered in memory (userId → photoUrl) from every successful attendance and bathroom scan. Nothing is persisted, and the backend is unchanged. ResultPortrait is shared from bathroom-kiosk-view.tsx.
+- [x] Dead kiosk CSS removed (old holder box, available box, gender bubbles, kiosk status capsules, breathing glow, scan-console toggle, `.mode-bathroom .scan-console`).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 566 tests passed.
+
+## UI revamp batch 12: Payroll back to the two original panels, coral Total Deductions (client only; owner request 2026-11-02)
+
+- [x] The top of Payroll is the original two panels again (same words as commit 84b6e31), in today's style:
+  - **"Generate cutoff payroll":** cutoff month, the 1st–15th / 16th–last day pair, Cutoff start, Cutoff end and Standard days are always visible, with the gold "Generate from attendance" button on the heading row.
+  - **"Export payroll":** "Generate Intern Payroll PDF" and "Generate Intern Payslips".
+  - **Removed:** the 3 steps, the Next line, Change dates and their CSS. The pre-fill and every validation are kept.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: all pass, including both panels with the old labels, no steps/Next line/Change dates, and one gold button in every state.
+  EVIDENCE:
+  - 1366: Generate 919×185 and Export 312×185, top offset 0, height difference 0; controls on one row.
+  - 1024: 636×261 and 280×261, aligned.
+  - ≤900: stacked.
+  - scrollWidth never above the viewport from 320 to 1366.
+- [x] Every old action is still reachable:
+  - Generate again is the gold button (with its confirm);
+  - Finalize all is on the table bar ("Finalize all (N)"; "Finalize all for <cutoff> (N)" under All cutoffs);
+  - Delete all records is a coral text button on the record-count line, with its confirm;
+  - Open PDF / Show in folder / Open payslip folder are quiet links under the export status.
+- [x] Exports stay blocked until every draft is finalized, with "Finalize all drafts first." or "Generate payroll first.". The status line reads "PDF made <date time>", or "Payroll changed since the last PDF. Generate it again.".
+  CHECK: cd client && npx vitest run src/payroll.test.tsx -t "export"
+  EXPECT: the reason and status cases pass.
+- [x] Total Deductions above zero are coral (`money-deduction`, var(--danger)), and zero is muted (`money-zero`). This applies to the table cells, both Edit payroll summaries, the Breakdown row and both formula totals. No inline styles; net pay stays gold.
+  EVIDENCE: computed colour rgb(239, 170, 146) for amounts above zero and rgb(170, 167, 158) for zero. Shot after-table-deductions-crop.
+- [x] Review fixes:
+  - focus goes to "Generate from attendance" when Delete all records or a row Delete leaves the cutoff empty;
+  - the pressed half of the cutoff pair has a dark focus ring;
+  - the date fields get aria-invalid and aria-describedby, and both reason lines are role=status;
+  - Finalize all is labelled with its cutoff under All cutoffs;
+  - a vacuous test check was replaced.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: 61 tests pass.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 571 tests passed (payroll.test.tsx 61).
+
+## UI revamp batch 13: Bathroom ID card first, original key cards made livelier, Payroll second, no login flash, smooth admin tab slide (client only; owner requests 2026-11-03)
+
+- [x] After a successful bathroom tap, the intern's ID card shows above the key cards for resultResetDelayMs, then the title comes back:
+  - photo or initials;
+  - "Male key taken" / "Female key returned";
+  - name and "ID · department";
+  - Taken, plus Returned on a return;
+  - role=status and the countdown bar.
+  The batch 11 reset fixes are kept, and a mode switch now also resets while a scan is in flight. Late answers are dropped, including on the desktop, where the IPC can't be cancelled.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "Kiosk Bathroom Key Log"
+  EXPECT: all pass, including "drops a bathroom answer that lands after a switch to Attendance, even when the request can not be cancelled".
+  EVIDENCE: 1366x768, ID card showing: ID card 142–352, key cards 392–644, Type card ID 666–700, scrollHeight 768. Without it: cards 355–607 and scrollHeight 768 (checked live on the dev server).
+- [x] The key cards are back in the original layout (owner's screenshot), with no photos:
+  - a gold or soft-rose key tile, "Male Key" / "Female Key", "Floor Restroom Key 1", and an AVAILABLE / IN USE capsule;
+  - the dashed "Key is Available" box;
+  - the "Currently with" box (initials, name, "dept · ID", Time Out / Elapsed).
+
+  They're made livelier:
+  - top-lit depth, a gold glow when in use and a green edge when available;
+  - the key floats (3.6 s);
+  - the dashed border marches (1.6 s per dash, stepped);
+  - an arc turns around the initials (7 s);
+  - the IN USE dot pulses (2 s);
+  - a cross-fade (280 ms) and a single edge glow (900 ms) when a key changes hands, never for a stale status on reopening;
+  - a 70 ms staggered entrance.
+
+  With prefers-reduced-motion, every loop is off and changes are instant.
+  EVIDENCE: equal card heights in both states, also with a 24-character name: 308/308 at 320 and 360, 284/284 at 390 and 768, 252/252 at 1366. No sideways scroll.
+- [x] The admin tab order is Attendance corrections, Payroll, Users and RFID, Data and backup, Voice announcements, System.
+- [x] The admin page no longer flashes the unlock card while the saved session is checked (sessionChecked; the RFID unlock waits for it).
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "saved session is checked"
+  EXPECT: 3 pass.
+- [x] The admin tab highlight slides smoothly:
+  - the tab page renders from useDeferredValue(tab) and is memoised;
+  - the 3-piece thumb animates transform only;
+  - identical placements are skipped.
+  CHECK: cd client && npx vitest run src/App.test.tsx -t "gold thumb slides"
+  EXPECT: 2 pass.
+  EVIDENCE: Corrections → Payroll, before vs after (2 runs each):
+  - first move: none / 210 ms before, 54 / 19 ms after;
+  - compositor frames during the slide: 3 / 28 before, 31 / 34 after;
+  - the 119–315 ms long task at the click is gone.
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint:oxlint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, oxlint exit 0, client 26 files / 578 tests passed.
+
 ## Bea voice v2: new reference + full regeneration (2026-11-04)
 
 - [x] VoiceStudio "Ma'am Bea" profile (0b2d3e9f) uses a reference built from the FB Ad Tutorial VO clips (<=20 s, word-aligned cut, accurate ref_text); the original reference is backed up and restorable.

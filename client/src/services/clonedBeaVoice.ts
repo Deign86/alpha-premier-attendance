@@ -354,14 +354,8 @@ export function isClonedBeaAudioPlaying(): boolean {
  */
 export function stopClonedBeaAudio(): void {
   clonedAudioEpoch += 1;
-  if (activeAudioCancel) {
-    try {
-      activeAudioCancel();
-    } catch {
-      // Ignore cancel errors
-    }
-    activeAudioCancel = null;
-  }
+  // Pause before cancelling: the cancel callback clears activeAudioElement,
+  // which would otherwise skip the pause and let the clip play to the end.
   if (activeAudioElement) {
     try {
       activeAudioElement.volume = 0;
@@ -372,6 +366,14 @@ export function stopClonedBeaAudio(): void {
       // Ignore pause errors
     }
     activeAudioElement = null;
+  }
+  if (activeAudioCancel) {
+    try {
+      activeAudioCancel();
+    } catch {
+      // Ignore cancel errors
+    }
+    activeAudioCancel = null;
   }
 }
 

@@ -502,6 +502,32 @@ mod tests {
     }
 
     #[test]
+    fn payroll_sheet_long_names_wrap_inside_the_name_column() {
+        let name_w = SHEET_COL_WIDTHS_MM[1] - 3.0;
+        for name in [
+            "AUREO, CHRISTOPHER JOSEPH V.",
+            "CORDOVA, JENNIRILLE LHOIZE S.",
+            "RODRIGUEZ, JOHNMARE RAPHAEL J.",
+            "DELA CRUZ-VILLANUEVA, MARIA KRISTINA ALEXANDRA JR.",
+        ] {
+            let (lines, size) = fit_cell_text(name, name_w, SHEET_ROW_H_MM, 7.0);
+            assert_eq!(lines.join(" "), name, "no words lost for {name}");
+            for line in &lines {
+                assert!(
+                    text_width_mm(line, size) <= name_w,
+                    "{line:?} overflows at {size}pt"
+                );
+            }
+            assert!(lines.len() as f32 * line_height_mm(size) <= SHEET_ROW_H_MM);
+        }
+        let (short, size) = fit_cell_text("DIOLA, NOEME P.", name_w, SHEET_ROW_H_MM, 7.0);
+        assert_eq!((short.len(), size), (1, 7.0));
+        let absent_w = SHEET_COL_WIDTHS_MM[10] - 2.0;
+        let (amount, size) = fit_cell_text("PHP 560.00", absent_w, SHEET_ROW_H_MM, 7.0);
+        assert_eq!((amount.len(), size), (1, 7.0));
+    }
+
+    #[test]
     fn payroll_sheet_paginates_long_registers_onto_multiple_pages() {
         let rows: Vec<PayrollSheetRow> = (0..(SHEET_ROWS_PER_PAGE + 3))
             .map(|index| PayrollSheetRow {
@@ -1303,10 +1329,74 @@ fn format_days(value: f64) -> String {
     }
 }
 
-/// Estimated width of `text` at `size_pt` in millimeters (Helvetica averages
-/// about 0.5em per glyph) — used to center cell text without font measuring.
+/// Helvetica advance widths (1/1000 em) for ASCII 32..=126, from the standard
+/// Adobe AFM metrics of the builtin font the sheet is drawn with.
+const HELVETICA_WIDTHS: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 222, 333, 333, 389, 584, 278, 333, 278, 278, // ' '..'/'
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // '0'..'?'
+    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, // '@'..'O'
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // 'P'..'_'
+    222, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, // '`'..'o'
+    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, // 'p'..'~'
+];
+
+/// Width of `text` at `size_pt` in millimeters using Helvetica metrics
+/// (non-ASCII glyphs are counted as a wide capital so estimates stay safe).
 fn text_width_mm(text: &str, size_pt: f32) -> f32 {
-    text.chars().count() as f32 * size_pt * 0.5 * 25.4 / 72.0
+    let units: u32 = text
+        .chars()
+        .map(|c| {
+            (c as usize)
+                .checked_sub(32)
+                .and_then(|i| HELVETICA_WIDTHS.get(i))
+                .map_or(722, |w| u32::from(*w))
+        })
+        .sum();
+    units as f32 / 1000.0 * size_pt * 25.4 / 72.0
+}
+
+/// Line height in millimeters for text set at `size_pt`.
+fn line_height_mm(size_pt: f32) -> f32 {
+    size_pt * 25.4 / 72.0 * 1.15
+}
+
+/// Greedy word wrap of `text` (honoring explicit `\n`) into lines no wider
+/// than `max_w_mm`. A single word wider than the cell stays on its own line.
+fn wrap_lines(text: &str, max_w_mm: f32, size_pt: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if line.is_empty() || text_width_mm(&candidate, size_pt) <= max_w_mm {
+                line = candidate;
+            } else {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+/// Fits `text` into lines no wider than `max_w` within a cell `h_mm` tall:
+/// wraps first, then steps the font down (to 5pt at most) until every line
+/// fits. Returns the lines and the font size to draw them at.
+fn fit_cell_text(text: &str, max_w: f32, h_mm: f32, size_pt: f32) -> (Vec<String>, f32) {
+    let mut size = size_pt;
+    loop {
+        let lines = wrap_lines(text, max_w, size);
+        let fits = lines.len() as f32 * line_height_mm(size) <= h_mm - 0.8
+            && lines.iter().all(|line| text_width_mm(line, size) <= max_w);
+        if fits || size <= 5.0 {
+            return (lines, size);
+        }
+        size = (size - 0.5).max(5.0);
+    }
 }
 
 fn mm_to_pt(mm: f32) -> Pt {
@@ -1386,8 +1476,10 @@ fn sheet_cell(
     ops.push(Op::RestoreGraphicsState);
 
     if !text.is_empty() {
-        let lines: Vec<&str> = text.split('\n').collect();
-        let line_h_mm = size_pt * 25.4 / 72.0 * 1.15;
+        // Left-aligned text starts 2 mm in; centered text keeps 1 mm per side.
+        let max_w = w_mm - if align_left { 3.0 } else { 2.0 };
+        let (lines, size_pt) = fit_cell_text(text, max_w, h_mm, size_pt);
+        let line_h_mm = line_height_mm(size_pt);
         let total_h = lines.len() as f32 * line_h_mm;
         let start_y = y_mm + (h_mm - total_h) / 2.0 + (lines.len() as f32 - 1.0) * line_h_mm + 0.2;
 
@@ -1412,7 +1504,7 @@ fn sheet_cell(
                 size: Pt(size_pt),
             });
             ops.push(Op::ShowText {
-                items: vec![TextItem::Text(line.to_string())],
+                items: vec![TextItem::Text(line.clone())],
             });
             ops.push(Op::EndTextSection);
         }
@@ -1422,7 +1514,7 @@ fn sheet_cell(
 /// Column widths of the reference payroll sheet in millimeters (usable width
 /// is 297 - 2 * 12 = 273 mm).
 const SHEET_COL_WIDTHS_MM: [f32; 13] = [
-    24.0, 37.0, 22.0, 20.0, 18.0, 18.0, 23.0, 16.0, 15.0, 20.0, 16.0, 22.0, 22.0,
+    21.0, 44.0, 22.0, 20.0, 18.0, 18.0, 23.0, 16.0, 15.0, 20.0, 16.0, 22.0, 18.0,
 ];
 const SHEET_LEFT_MM: f32 = 12.0;
 const SHEET_ROW_H_MM: f32 = 7.0;

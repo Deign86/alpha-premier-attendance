@@ -9,6 +9,7 @@ import {
   resolveWavFallbackUrl,
   isClonedBeaPhraseAvailable,
   setNameManifest,
+  stopClonedBeaAudio,
 } from './clonedBeaVoice';
 import { tauriApi } from '../tauri-api';
 import { buildScanErrorPhrase } from './ttsService';
@@ -212,6 +213,38 @@ describe('clonedBeaVoice', () => {
       } finally {
         // SAFETY: Type refinement to delete test mock property on window
         delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      }
+    });
+  });
+
+  describe('stopClonedBeaAudio', () => {
+    it('pauses the clip that is playing in the browser', async () => {
+      const pause = vi.fn();
+      class FakeAudio {
+        volume = 1;
+        playbackRate = 1;
+        currentTime = 0;
+        paused = false;
+        onended: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        constructor(public src: string) {}
+        play(): Promise<void> {
+          return Promise.resolve();
+        }
+        pause(): void {
+          pause();
+          this.paused = true;
+        }
+      }
+      vi.stubGlobal('Audio', FakeAudio);
+
+      try {
+        const playing = playClonedBeaAudio('/voices/bea/general/test-voice.mp3');
+        stopClonedBeaAudio();
+        expect(pause).toHaveBeenCalledTimes(1);
+        await expect(playing).resolves.toBe(false);
+      } finally {
+        vi.unstubAllGlobals();
       }
     });
   });

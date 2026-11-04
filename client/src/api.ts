@@ -37,7 +37,7 @@ import type {
 } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
+import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { renderInternPayslipPng } from './intern-payslip-image';
 import { tauriApi } from './tauri-api';
 import type { ManualSyncReport, NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
@@ -1046,6 +1046,27 @@ export async function dismissRestoreFailure(): Promise<{ success: true; message:
 /** Desktop-only: open the backups folder in the OS file explorer. */
 export function openDatabaseBackupsFolder(): Promise<FileActionResult> {
   return runFileAction((token) => tauriApi.dbOpenBackupsDir(token));
+}
+
+/** Desktop-only: ask where to save (e.g. a USB drive), then copy one saved backup there. Resolves null when the save dialog is cancelled. */
+export async function saveBackupCopy(sourcePath: string, fileName: string): Promise<FileActionResult | null> {
+  if (!runningInTauri()) return { ok: false, message: 'Download is available in the desktop application.' };
+  let destination: string | null;
+  try {
+    destination = await saveFileDialog({
+      defaultPath: fileName,
+      filters: [{ name: 'Alpha Premier portable backup', extensions: ['apbackup', 'db'] }],
+    });
+  } catch {
+    return { ok: false, message: 'Unable to open the save dialog.' };
+  }
+  if (!destination) return null;
+  try {
+    await tauriApi.dbSaveBackupCopy(nativeAdminToken ?? '', sourcePath, destination);
+    return { ok: true, message: `Backup saved to ${destination}.` };
+  } catch (error) {
+    return fileActionError(error, 'The backup could not be saved.');
+  }
 }
 
 async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {

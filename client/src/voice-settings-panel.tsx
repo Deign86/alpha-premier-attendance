@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Info, PlugZap } from 'lucide-react';
 import type { TtsSettings, TtsStatusResponse, VoiceWorkerStatus } from '@rfid-attendance/shared';
 import {
   DEFAULT_TTS_SETTINGS,
@@ -12,6 +13,7 @@ import {
   testVoice,
 } from './services/ttsService';
 import { tauriApi } from './tauri-api';
+import { NoticeLine } from './notice';
 
 export interface VoiceSettingsPanelProps {
   onSettingsChange?: (settings: TtsSettings) => void;
@@ -148,19 +150,22 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     const result = await testVoice(settings);
     setTesting(false);
 
-    if (result && result.success) {
+    // null means Stop (or a newer announcement) cancelled the test; keep that message.
+    if (result === null) return;
+
+    if (result.success) {
       const engineLabel =
         result.engineUsed === 'cloned-bea'
           ? "Ma'am Bea (Cloned voice)"
           : result.engineUsed === 'piper'
             ? 'Piper (local neural voice)'
             : result.engineUsed === 'system'
-              ? 'Windows SAPI (system voice)'
+              ? 'System voice (Windows SAPI / macOS)'
               : 'No voice played';
       setFeedback(`Voice played successfully via ${engineLabel}.`);
       setFeedbackType('success');
     } else {
-      setFeedback(result?.message ?? 'Speech synthesis failed. Check if local TTS engines are available.');
+      setFeedback(result.message ?? 'Speech synthesis failed. Check if local TTS engines are available.');
       setFeedbackType('error');
     }
     void refreshStatus();
@@ -192,11 +197,10 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
   const isBeaActive = mode.kind === 'enabled' && mode.engine === 'cloned-bea';
 
   return (
-    <section className="lan-panel" aria-label="Voice Announcements">
+    <section className="lan-panel voice-panel" aria-label="Voice Announcements">
       <div className="lan-panel-head">
         <div>
           <p className="section-kicker">Audio &amp; Feedback</p>
-          <h2>Voice Announcements</h2>
         </div>
         {status && (
           <span
@@ -217,7 +221,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
                   : status.piperAvailable
                     ? `Piper neural TTS active (${status.piperPath ?? 'bundled'})`
                     : status.systemSapiAvailable
-                      ? 'Windows SAPI system voice active'
+                      ? 'System voice active (Windows SAPI / macOS)'
                       : 'No offline TTS engine detected'
             }
           >
@@ -229,7 +233,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
                 : status.piperAvailable
                   ? 'Piper TTS Ready'
                   : status.systemSapiAvailable
-                    ? 'SAPI Ready'
+                    ? 'System Voice Ready'
                     : 'Offline TTS Unavailable'}
           </span>
         )}
@@ -292,119 +296,131 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         </div>
       )}
 
-      {feedback && (
-        <p
-          className={`dashboard-alert ${feedbackType === 'error' ? '' : 'db-notice'}`}
-          role={feedbackType === 'error' ? 'alert' : 'status'}
-        >
-          {feedback}
-        </p>
-      )}
+      <NoticeLine notice={feedback ? { tone: feedbackType, text: feedback } : null} />
 
       <div className="voice-settings-grid">
-        {/* Enable / Disable Toggle Card */}
-        <div className="voice-control-card">
-          <label className="voice-toggle-label" htmlFor="tts-enabled-toggle">
+        {/* Audio Settings Card: on/off switch, speech rate + volume */}
+        <div className="voice-control-card voice-settings-card">
+          <h3 className="voice-card-title">Audio Settings</h3>
+          <div className="voice-enable-row">
+            <label className="voice-switch-label" htmlFor="tts-enabled-toggle">
+              <input
+                type="checkbox"
+                role="switch"
+                id="tts-enabled-toggle"
+                className="voice-switch"
+                checked={settings.enabled}
+                onChange={(e) => updateSetting('enabled', e.target.checked)}
+              />
+              <span>Enable Voice Announcements</span>
+            </label>
+            <InfoTip id="tts-enabled-tip">
+              When on, attendance scans greet employees on time-in and say goodbye on time-out.
+            </InfoTip>
+          </div>
+          <div className={`voice-slider-row ${isTtsDisabled ? 'is-disabled' : ''}`}>
+            <div className="voice-control-header">
+              <span className="voice-label-with-tip">
+                <label htmlFor="tts-rate-slider" className="voice-control-label">
+                  Speech Rate
+                </label>
+                <InfoTip id="tts-rate-tip">How fast announcements are spoken. 1.0x is the default.</InfoTip>
+              </span>
+              <span className="slider-badge">{settings.rate.toFixed(1)}x</span>
+            </div>
             <input
-              type="checkbox"
-              id="tts-enabled-toggle"
-              checked={settings.enabled}
-              onChange={(e) => updateSetting('enabled', e.target.checked)}
+              type="range"
+              id="tts-rate-slider"
+              min="0.5"
+              max="2.0"
+              step="0.1"
+              value={settings.rate}
+              disabled={isTtsDisabled}
+              onChange={(e) => updateSetting('rate', parseFloat(e.target.value))}
             />
-            <span>Enable Voice Announcements</span>
-          </label>
-          <p className="form-help">
-            When enabled, attendance scans greet employees on time-in and say goodbye on time-out.
-          </p>
-        </div>
-
-        {/* Speech Rate Slider Card */}
-        <div className={`voice-control-card ${isTtsDisabled ? 'is-disabled' : ''}`}>
-          <div className="voice-control-header">
-            <label htmlFor="tts-rate-slider" className="voice-control-label">
-              Speech Rate
-            </label>
-            <span className="slider-badge">{settings.rate.toFixed(1)}x</span>
           </div>
-          <input
-            type="range"
-            id="tts-rate-slider"
-            min="0.5"
-            max="2.0"
-            step="0.1"
-            value={settings.rate}
-            disabled={isTtsDisabled}
-            onChange={(e) => updateSetting('rate', parseFloat(e.target.value))}
-          />
-          <p className="form-help">Adjust the speed of spoken announcements (1.0x is default).</p>
-        </div>
-
-        {/* Volume Slider Card */}
-        <div className={`voice-control-card ${isTtsDisabled ? 'is-disabled' : ''}`}>
-          <div className="voice-control-header">
-            <label htmlFor="tts-volume-slider" className="voice-control-label">
-              Volume
-            </label>
-            <span className="slider-badge">{Math.round(settings.volume * 100)}%</span>
+          <div className={`voice-slider-row ${isTtsDisabled ? 'is-disabled' : ''}`}>
+            <div className="voice-control-header">
+              <span className="voice-label-with-tip">
+                <label htmlFor="tts-volume-slider" className="voice-control-label">
+                  Volume
+                </label>
+                <InfoTip id="tts-volume-tip">How loud announcements play.</InfoTip>
+              </span>
+              <span className="slider-badge">{Math.round(settings.volume * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              id="tts-volume-slider"
+              min="0.0"
+              max="1.0"
+              step="0.05"
+              value={settings.volume}
+              disabled={isTtsDisabled}
+              onChange={(e) => updateSetting('volume', parseFloat(e.target.value))}
+            />
           </div>
-          <input
-            type="range"
-            id="tts-volume-slider"
-            min="0.0"
-            max="1.0"
-            step="0.05"
-            value={settings.volume}
-            disabled={isTtsDisabled}
-            onChange={(e) => updateSetting('volume', parseFloat(e.target.value))}
-          />
-          <p className="form-help">Adjust audio playback volume for announcements.</p>
         </div>
 
         {/* VoiceStudio Server Card */}
-        <div className="voice-control-card">
+        <div className="voice-control-card voice-settings-card">
           <div className="voice-control-header">
-            <label htmlFor="tts-voicestudio-url" className="voice-control-label">
-              VoiceStudio Server
-            </label>
+            <h3 className="voice-card-title">VoiceStudio Server</h3>
             <button
               type="button"
-              className="text-button"
+              className="admin-button voice-test-connection"
               disabled={checkingStudio}
               onClick={() => void handleCheckVoiceStudio()}
             >
+              <PlugZap size={14} aria-hidden="true" />
               {checkingStudio ? 'Checking…' : 'Test Connection'}
             </button>
           </div>
-          <input
-            type="url"
-            id="tts-voicestudio-url"
-            className="input"
-            inputMode="url"
-            placeholder="http://192.168.1.50:3901"
-            value={settings.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL}
-            onChange={(e) => {
-              updateSetting('voiceStudioBaseUrl', e.target.value);
-              persistHostToNative(e.target.value);
-            }}
-          />
-          <p className="form-help">LAN address of the PC hosting VoiceStudio (typically port 3901 for Network Sharing or 3900).</p>
-          <label htmlFor="tts-voicestudio-pin" className="voice-control-label">
-            Share PIN
-          </label>
-          <input
-            type="password"
-            id="tts-voicestudio-pin"
-            className="input"
-            inputMode="numeric"
-            autoComplete="off"
-            placeholder="6-digit PIN from the host's Network screen"
-            value={settings.voiceStudioPin ?? ''}
-            onChange={(e) => {
-              updateSetting('voiceStudioPin', e.target.value);
-              persistPinToNative(e.target.value);
-            }}
-          />
-          <p className="form-help">Shown on the host PC while Network sharing is on. Leave empty for PIN-less hosts.</p>
+          <div className="voice-field">
+            <span className="voice-label-with-tip">
+              <label htmlFor="tts-voicestudio-url" className="voice-control-label">
+                Server address
+              </label>
+              <InfoTip id="tts-voicestudio-url-tip">
+                Address of the PC running VoiceStudio. Use port 3901 when it is shared from another PC (Network sharing on), or 3900 when VoiceStudio runs on this PC.
+              </InfoTip>
+            </span>
+            <input
+              type="url"
+              id="tts-voicestudio-url"
+              className="input"
+              inputMode="url"
+              placeholder="http://192.168.1.50:3901"
+              value={settings.voiceStudioBaseUrl ?? DEFAULT_VOICESTUDIO_BASE_URL}
+              onChange={(e) => {
+                updateSetting('voiceStudioBaseUrl', e.target.value);
+                persistHostToNative(e.target.value);
+              }}
+            />
+          </div>
+          <div className="voice-field">
+            <span className="voice-label-with-tip">
+              <label htmlFor="tts-voicestudio-pin" className="voice-control-label">
+                Share PIN
+              </label>
+              <InfoTip id="tts-voicestudio-pin-tip">
+                Shown on the host PC&apos;s Network screen while sharing is on. Leave empty if the host has no PIN.
+              </InfoTip>
+            </span>
+            <input
+              type="password"
+              id="tts-voicestudio-pin"
+              className="input"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="6-digit PIN"
+              value={settings.voiceStudioPin ?? ''}
+              onChange={(e) => {
+                updateSetting('voiceStudioPin', e.target.value);
+                persistPinToNative(e.target.value);
+              }}
+            />
+          </div>
         </div>
       </div>
 
@@ -431,7 +447,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
 
         <button
           type="button"
-          className="text-button"
+          className="admin-button"
           onClick={() => {
             setSettings(DEFAULT_TTS_SETTINGS);
             saveTtsSettings(DEFAULT_TTS_SETTINGS);
@@ -449,10 +465,24 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           <strong>Zero-cloud, offline speech synthesis:</strong>
         </p>
         <p>
-          Runs 100% locally with Ma&apos;am Bea cloned voice (multi-tone pre-rendered clips) and high-quality Piper neural voices (ONNX) with Windows SAPI fallback.
+          Runs 100% locally with Ma&apos;am Bea cloned voice (multi-tone pre-rendered clips) and high-quality Piper neural voices (ONNX) with a system voice fallback (Windows SAPI or macOS speech).
           Spoken greetings are triggered immediately on successful RFID card scans with zero internet latency.
         </p>
       </div>
     </section>
+  );
+}
+
+// Small info icon whose help text shows on hover or keyboard focus.
+function InfoTip({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <span className="info-tip">
+      <button type="button" className="info-tip-button" aria-label="More info" aria-describedby={id}>
+        <Info size={14} aria-hidden="true" />
+      </button>
+      <span className="info-tip-bubble" role="tooltip" id={id}>
+        {children}
+      </span>
+    </span>
   );
 }

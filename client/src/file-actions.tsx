@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Check, Copy, ExternalLink, FolderOpen, Search } from 'lucide-react';
+import { Copy, ExternalLink, FolderOpen, Search } from 'lucide-react';
 import type { GeneratedFileKind } from '@rfid-attendance/shared';
 import { openGeneratedDirectory, openGeneratedFile, revealGeneratedFile, type FileActionResult } from './api';
+import { NoticeLine, type Notice } from './notice';
+import { showToast } from './toasts';
 
 export type GeneratedFileResult = {
   filePath: string | null;
@@ -23,7 +25,7 @@ type FileActionResultProps = {
  * and falls back to opening the containing directory when needed.
  */
 export function GeneratedFileActions({ result, label = 'Generated file' }: FileActionResultProps) {
-  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [clipboardFailed, setClipboardFailed] = useState(false);
 
@@ -33,7 +35,7 @@ export function GeneratedFileActions({ result, label = 'Generated file' }: FileA
     setBusy(name);
     setNotice(null);
     const outcome = await action();
-    setNotice({ text: outcome.ok ? okMessage : outcome.message, ok: outcome.ok });
+    setNotice(outcome.ok ? { tone: 'success', text: okMessage } : { tone: 'error', text: outcome.message });
     setBusy(null);
   };
 
@@ -41,10 +43,11 @@ export function GeneratedFileActions({ result, label = 'Generated file' }: FileA
     const value = result.filePath ?? result.directoryPath ?? '';
     try {
       await navigator.clipboard.writeText(value);
-      setNotice({ text: 'Path copied to clipboard.', ok: true });
+      setNotice(null);
+      showToast('Path copied.');
     } catch {
       setClipboardFailed(true);
-      setNotice({ text: 'Unable to copy the path automatically.', ok: false });
+      setNotice({ tone: 'error', text: 'Unable to copy the path automatically.' });
     }
   };
 
@@ -104,12 +107,7 @@ export function GeneratedFileActions({ result, label = 'Generated file' }: FileA
           />
         </div>
       )}
-      {notice && (
-        <p className={`file-result-notice${notice.ok ? ' is-success' : ' is-error'}`} role={notice.ok ? 'status' : 'alert'}>
-          {notice.ok && <Check size={13} />}
-          {notice.text}
-        </p>
-      )}
+      <NoticeLine notice={notice} className="file-result-notice" />
     </div>
   );
 }

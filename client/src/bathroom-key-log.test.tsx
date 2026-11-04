@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminUser, BathroomStatusResponse } from "@rfid-attendance/shared";
 import { BathroomKeyLogPanel } from "./bathroom-key-log";
+import { Toasts } from "./toasts";
 import * as api from "./api";
 import * as ttsService from "./services/ttsService";
 
@@ -246,7 +247,7 @@ describe("BathroomKeyLogPanel", () => {
     });
 
     const user = userEvent.setup();
-    render(<BathroomKeyLogPanel users={mockUsers} />);
+    render(<><BathroomKeyLogPanel users={mockUsers} /><Toasts /></>);
 
     // Click Edit button
     const editBtn = await screen.findByRole("button", { name: /edit key log for john doe/i });
@@ -276,8 +277,9 @@ describe("BathroomKeyLogPanel", () => {
       notes: "Forgot to time in",
     });
 
-    // Success message is displayed
+    // The routine success shows as a toast and the pop-up closes.
     expect(await screen.findByText(/saved — bathroom key times updated/i)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /edit bathroom key log/i })).not.toBeInTheDocument();
   });
 
   it("prevents saving and shows validation error when timeIn precedes timeOut", async () => {
@@ -342,3 +344,72 @@ function withinList(element: HTMLElement, text: string): HTMLElement | null {
   }
   return null;
 }
+
+describe("BathroomKeyLogPanel: sort by time out", () => {
+  const log = (logId: string, fullName: string, genderKey: "MALE" | "FEMALE", hhmm: string): BathroomStatusResponse["maleLogs"][number] => ({
+    logId,
+    logDate: "2026-08-27",
+    userId: logId,
+    fullName,
+    department: "Engineering",
+    genderKey,
+    timeOut: `2026-08-27T${hhmm}:00+08:00`,
+    timeIn: `2026-08-27T${hhmm.slice(0, 3)}59:00+08:00`,
+    durationSeconds: 600,
+    status: "RETURNED",
+    notes: "",
+    createdAt: `2026-08-27T${hhmm}:00+08:00`,
+    updatedAt: `2026-08-27T${hhmm}:00+08:00`,
+  });
+  const status: BathroomStatusResponse = {
+    success: true,
+    date: "2026-08-27",
+    maleActive: null,
+    femaleActive: null,
+    maleLogs: [log("m1", "John Doe", "MALE", "10:00"), log("m2", "Mark Cruz", "MALE", "14:30"), log("m3", "Paul Reyes", "MALE", "08:15")],
+    femaleLogs: [log("f1", "Jane Smith", "FEMALE", "09:00"), log("f2", "Ana Santos", "FEMALE", "11:00")],
+    fetchedAt: "2026-08-27T15:00:00Z",
+  };
+  /** Each key log's names in the order shown, with its Time Out heading. */
+  const logTable = (title: RegExp) => {
+    const section = screen.getByRole("heading", { name: title }).closest(".bathroom-log-history-section");
+    if (!(section instanceof HTMLElement)) throw new Error("key log section not found");
+    return {
+      heading: within(section).getByRole("columnheader", { name: /time out/i }),
+      names: () => [...section.querySelectorAll("tbody strong")].map((name) => name.textContent),
+    };
+  };
+
+  it("sorts both key logs by time out, newest first, and remembers the choice", async () => {
+    localStorage.clear();
+    vi.spyOn(api, "loadBathroomStatus").mockResolvedValue(status);
+    try {
+      const user = userEvent.setup();
+      const { unmount } = render(<BathroomKeyLogPanel users={mockUsers} />);
+      await screen.findByText("Mark Cruz");
+      const male = logTable(/^male key log/i);
+      const female = logTable(/^female key log/i);
+      expect(male.heading).toHaveAttribute("aria-sort", "descending");
+      expect(male.names()).toEqual(["Mark Cruz", "John Doe", "Paul Reyes"]);
+      expect(female.names()).toEqual(["Ana Santos", "Jane Smith"]);
+
+      // One choice for the page: both logs turn oldest first.
+      const sortButton = within(male.heading).getByRole("button", { name: "Time Out" });
+      expect(sortButton).toHaveAttribute("title", "Sort by time out, oldest first");
+      await user.click(sortButton);
+      expect(male.heading).toHaveAttribute("aria-sort", "ascending");
+      expect(female.heading).toHaveAttribute("aria-sort", "ascending");
+      expect(male.names()).toEqual(["Paul Reyes", "John Doe", "Mark Cruz"]);
+      expect(female.names()).toEqual(["Jane Smith", "Ana Santos"]);
+      expect(localStorage.getItem("alpha_premier_sort_bathroom_key_log")).toBe("oldest");
+
+      // Opening the page again keeps the viewer's choice.
+      unmount();
+      render(<BathroomKeyLogPanel users={mockUsers} />);
+      await screen.findByText("Mark Cruz");
+      expect(logTable(/^male key log/i).names()).toEqual(["Paul Reyes", "John Doe", "Mark Cruz"]);
+    } finally {
+      localStorage.clear();
+    }
+  });
+});

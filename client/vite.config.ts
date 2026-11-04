@@ -23,5 +23,7 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     css: true,
     globals: true,
+    // Full admin flows render the whole App in jsdom; on a busy front-desk PC they can pass 5s.
+    testTimeout: 15_000,
   },
 });

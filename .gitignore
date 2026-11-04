@@ -31,6 +31,9 @@ Thumbs.db
 src-tauri/target/
 src-tauri/gen/
 
+# Duplicates of committed .agents/skills (registry installs per agent dir)
+.agent/skills/
+
 # Local agent scratch
 .pi/
 .cargo/

@@ -1,0 +1,66 @@
+# Manual macOS build: produces Apple Silicon and Intel .dmg files as workflow
+# artifacts without publishing a release. Actions tab -> "macOS Build" -> Run
+# workflow, then download "macos-dmg-<target>" from the run summary.
+name: macOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+          key: ${{ matrix.target }}
+
+      - name: Install dependencies and build frontend
+        run: |
+          npm ci
+          npm run build:fast
+
+      - name: Build .app / .dmg
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
+          ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tauri build --target ${{ matrix.target }} 2>&1 | tee build.log
+
+      # Surface the failure tail as an annotation, readable via the API
+      # without downloading the full log.
+      - name: Report build failure tail
+        if: failure()
+        shell: bash
+        run: |
+          tail -n 80 build.log | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}' > tail.txt
+          echo "::error title=tauri build tail::$(cat tail.txt)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
