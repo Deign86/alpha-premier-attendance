@@ -6575,22 +6575,10 @@ export function PayrollWorkspace({
 
   return (
     <section className="payroll-workspace">
-      {/* Two panels side by side: make the cutoff's payroll (the page's one gold button) and export it. */}
+      {/* One row: make the cutoff's payroll (the page's one gold button ends the fields) and export it. */}
       <div className="payroll-toolbar">
         <form className="payroll-generate-panel" onSubmit={save} aria-labelledby="payroll-generate-heading">
-          <div className="payroll-panel-heading">
-            <h2 id="payroll-generate-heading">Generate cutoff payroll</h2>
-            {/* Also how to generate again: only drafts are replaced, and the pop-up says so. */}
-            <button
-              ref={generateButtonRef}
-              className="submit-button payroll-generate-submit"
-              type="submit"
-              disabled={saving || Boolean(generateReason)}
-              aria-describedby={generateReason ? "payroll-generate-reason" : undefined}
-            >
-              {saving ? "Generating…" : "Generate from attendance"}
-            </button>
-          </div>
+          <h2 className="visually-hidden" id="payroll-generate-heading">Generate cutoff payroll</h2>
           <div className="payroll-generate-controls">
             <div className="cutoff-period">
               <label>
@@ -6659,6 +6647,16 @@ export function PayrollWorkspace({
                 onChange={(event) => update("standardWorkingDays", event.target.value)}
               />
             </label>
+            {/* Also how to generate again: only drafts are replaced, and the pop-up says so. */}
+            <button
+              ref={generateButtonRef}
+              className="submit-button payroll-generate-submit"
+              type="submit"
+              disabled={saving || Boolean(generateReason)}
+              aria-describedby={generateReason ? "payroll-generate-reason" : undefined}
+            >
+              {saving ? "Generating…" : "Generate from attendance"}
+            </button>
           </div>
           {/* A date problem in coral; "Loading payroll…" and the like stay muted. Read out when it appears or changes. */}
           {generateReason && (
@@ -6684,9 +6682,8 @@ export function PayrollWorkspace({
         </form>
 
         <section className="payroll-export-panel" aria-labelledby="payroll-export-heading">
-          <div className="payroll-panel-heading">
-            <h2 id="payroll-export-heading">Export payroll</h2>
-          </div>
+          {/* A small label like the fields' labels; the buttons keep their full names for screen readers. */}
+          <h2 id="payroll-export-heading">Export payroll</h2>
           <div className="payroll-actions">
             <button
               ref={pdfButtonRef}
@@ -6696,7 +6693,7 @@ export function PayrollWorkspace({
               aria-describedby={exportReason ? "payroll-export-reason" : undefined}
               onClick={() => void generatePdf()}
             >
-              {generating ? "Generating…" : "Generate Intern Payroll PDF"}
+              {generating ? "Saving…" : <><span className="visually-hidden">Generate Intern </span>Payroll PDF</>}
             </button>
             <button
               className="admin-button"
@@ -6705,7 +6702,7 @@ export function PayrollWorkspace({
               aria-describedby={exportReason ? "payroll-export-reason" : undefined}
               onClick={() => void generatePayslips()}
             >
-              {generatingPayslips ? "Generating…" : "Generate Intern Payslips"}
+              {generatingPayslips ? "Saving…" : <><span className="visually-hidden">Generate Intern </span>Payslips</>}
             </button>
           </div>
           {/* One quiet line: why the exports are off, or where this cutoff's PDF stands; its links under it. */}
@@ -6716,7 +6713,7 @@ export function PayrollWorkspace({
           ) : (
             latestPdf && (
               <p className="payroll-export-status">
-                {currentPdf ? `PDF made ${formatDateTime(currentPdf.generatedAt)}` : "Payroll changed since the last PDF. Generate it again."}
+                {currentPdf ? `PDF made ${formatDateTime(currentPdf.generatedAt)}` : "The last PDF is out of date."}
               </p>
             )
           )}
@@ -8132,7 +8129,7 @@ function PayrollPdfList({ pdfs, records }: { pdfs: PayrollPdfRecord[]; records: 
   const sorted = [...pdfs].sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
   if (!sorted.length)
     return (
-      <div className="empty-state">No PDFs yet. Finalize the cutoff, then select Generate Intern Payroll PDF.</div>
+      <div className="empty-state">No PDFs yet. Finalize the cutoff, then select Payroll PDF.</div>
     );
   // "Latest" marks each cutoff's newest copy, and only while it still matches that cutoff's approved pay.
   const latestIds = new Set<string>();

@@ -2015,3 +2015,35 @@ unchanged.
   CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
   EXPECT: all pass.
   EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 602 of 603 passed (builder full run; the one failure is the known slow test "asks before a tab…" timing out under load). Coordinator re-run: database-panel 66/66; thumb, reader, session and slow-test group 12/12. GitHub CI ran the same suite green on main in about 5 min.
+
+## UI overhaul 2: Payroll header in one row (client only; owner request 2026-11-04)
+
+- [x] The Payroll header is one slim glass strip:
+  - the cutoff fields (month, half-month pair, start, end, standard days), then the gold "Generate from attendance" at the end of their row;
+  - a thin divider, then Export payroll's two buttons under a small "Export payroll" label;
+  - the visible "Generate cutoff payroll" heading row is gone (the heading stays for screen readers);
+  - the export buttons show "Payroll PDF" and "Payslips", and their names stay "Generate Intern Payroll PDF" / "Generate Intern Payslips";
+  - the record and PDF notes stay as one quiet line under each side.
+  CHECK: cd client && npx vitest run src/payroll.test.tsx
+  EXPECT: all pass, including the one-row test (Generate after the fields, hidden heading, full export names).
+  EVIDENCE: 62/62 passed. The new test failed before the change.
+- [x] At 1280x640 and 1280x720 the fields, Generate and both exports sit on one row, and the strip is about half its old height (244px before). No sideways scroll at 320-1920. Tablets and phones stack it as before.
+  EVIDENCE: measured with headless Chrome on the mocked admin page:
+  - strip 119px at 1280x640 and 1280x720; the table starts at y=340 (was 465);
+  - one row at 1258px wide and up (1258, 1280, 1366, 1920);
+  - two lines below that (1257 and 1024: 186px);
+  - stacked at 768, phone layout at 390 and 320;
+  - with a current PDF and its links, 137px; with an out-of-date PDF, 125px;
+  - no sideways scroll at any measured width.
+- [x] Review fixes:
+  - the month field is 140px with 8px input padding, so September, November and December 2026 and the widest dates (30/09/2026) show in full;
+  - the export buttons say "Saving…" while busy, which is no wider than "Payslips", so a busy button never spills past the strip (901-1280px);
+  - the out-of-date note reads "The last PDF is out of date." (no more "Generate it again" now that the button reads "Payroll PDF").
+  EVIDENCE: headless Chrome:
+  - month 2026-09/11/12 at 1280x640, text not clipped;
+  - busy buttons 76.4px each, right edge inside the strip at 1280, 1258, 1257, 1024 and 901;
+  - stale note on one line (strip 119px).
+- [x] Repository gates.
+  CHECK: npx tsc --noEmit -p client && npm run lint && npm test -w client -- --maxWorkers=2 --minWorkers=1
+  EXPECT: all pass.
+  EVIDENCE: tsc exit 0, full lint exit 0, client 26 files / 604 tests passed.
