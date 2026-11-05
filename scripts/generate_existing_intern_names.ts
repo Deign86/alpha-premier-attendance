@@ -43,6 +43,14 @@ const VOICE_PROFILE_VERSION = 'voicestudio-bea-v3';
 // Every clip lands at the same loudness so spliced prefix + name + suffix play level.
 const TARGET_LUFS = -15;
 const PEAK_LIMIT = 0.794; // -2 dBFS sample ceiling keeps the mp3 true peak under ~-1 dBTP
+// De-esser for Bea's sharp "s": above 4.5 kHz, peaks over -18 dBFS (input already at
+// TARGET_LUFS) are compressed 3:1: "s" peaks drop from ~4.5 to ~11 dB under the vowels, which barely change.
+const DEESS =
+  'acrossover=split=4500:order=8th[lo][hi];' +
+  '[hi]acompressor=threshold=-18dB:ratio=3:attack=0.5:release=40:knee=3[hic];' +
+  '[lo][hic]amix=inputs=2:normalize=0';
+// 64k MP3 punched holes into the "s" band that sounded like static; 128k leaves none.
+const MP3_BITRATE = '128k';
 // A take that opens with a breath or blip before the first word is re-rolled.
 const LEAD_IN_LIMIT_MS = 50;
 const MAX_TAKES = 4;
@@ -170,17 +178,19 @@ function measureLufs(filePath: string): number {
 }
 
 /**
- * WAV -> 64k mono MP3 at TARGET_LUFS behind a peak limiter. Limiting costs short,
- * punchy clips loudness, so the measured shortfall is added back and the clip
- * re-encoded, at most twice.
+ * WAV -> de-essed mono MP3 at TARGET_LUFS behind a peak limiter. De-essing and
+ * limiting cost loudness, so the measured shortfall is added back after the
+ * de-esser (whose input level stays fixed) and the clip re-encoded, at most twice.
  */
-function transcodeNormalized(wavPath: string, outPath: string): void {
-  let gain = TARGET_LUFS - measureLufs(wavPath);
+export function transcodeNormalized(wavPath: string, outPath: string): void {
+  const gain = TARGET_LUFS - measureLufs(wavPath);
+  let makeup = 0;
   for (let pass = 0; pass < 3; pass++) {
-    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', wavPath, '-af', `volume=${gain.toFixed(2)}dB,alimiter=limit=${PEAK_LIMIT}:level=false`, '-codec:a', 'libmp3lame', '-b:a', '64k', '-ac', '1', outPath]);
+    const filters = `volume=${gain.toFixed(2)}dB,${DEESS},volume=${makeup.toFixed(2)}dB,alimiter=limit=${PEAK_LIMIT}:level=false`;
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', wavPath, '-af', filters, '-codec:a', 'libmp3lame', '-b:a', MP3_BITRATE, '-ac', '1', outPath]);
     const shortfall = TARGET_LUFS - measureLufs(outPath);
     if (shortfall <= 0.5) return;
-    gain += shortfall;
+    makeup += shortfall;
   }
 }
 
@@ -237,7 +247,7 @@ export async function generateVoicestudioClip(
   const tmpWav = /\.mp3$/i.test(outPath) ? outPath.replace(/\.mp3$/i, '.tmp.wav') : `${outPath}.tmp.wav`;
   try {
     // Takes that open with a breath are re-rolled; the cleanest one is kept.
-    // Repo standard is MP3 (64k mono): transcode via ffmpeg, keep only the `.mp3`.
+    // Repo standard is MP3 (128k mono): transcode via ffmpeg, keep only the `.mp3`.
     let best: { leadMs: number; audio: Buffer } | null = null;
     for (let take = 0; take < MAX_TAKES; take++) {
       const audio = await requestTake(profileId, text);

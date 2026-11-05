@@ -124,7 +124,7 @@ npm run voice:generate-existing-names -- --missing-only
 1. Connects to Google Sheets / SQLite database and discovers all active `INTERN` and `EMPLOYEE` records.
 2. Normalizes full names for Filipino/English speech phonetics.
 3. Sends generation requests to VoiceStudio (`Ma'am Bea` profile `1b3e828b`). A take that opens with a breath or blip before the first word is re-rolled (up to 4 takes; the cleanest is kept, with a warning if all of them breathe).
-4. Normalizes each clip to −15 LUFS behind a −2 dBFS peak limiter (re-encoding short, peak-limited clips up to twice so they still reach the target) so greeting + name + status splice at one level, then transcodes to 64k mono MP3 via ffmpeg and saves to:
+4. Normalizes each clip to −15 LUFS, de-esses it (Ma'am Bea has a sharp "s": above 4.5 kHz, peaks over −18 dBFS are compressed 3:1), and puts it behind a −2 dBFS peak limiter (re-encoding short, peak-limited clips up to twice so they still reach the target) so greeting + name + status splice at one level, then transcodes to 128k mono MP3 via ffmpeg (64k sounded staticky on every "s") and saves to:
    - `client/public/voices/bea/names/<personId>.mp3`
    - `src-tauri/resources/voices/bea/names/<personId>.mp3`
    - `client/dist/voices/bea/names/<personId>.mp3` (on next frontend build)
@@ -249,6 +249,7 @@ If Ma'am Bea or an employee revokes consent to use their cloned voice profile:
 | `Generation failed` | VoiceStudio profile missing or backend error | Confirm the `Ma'am Bea` profile exists in VoiceStudio and retry |
 | Generation slows from ~10 s to minutes per clip | 6 GB GPU out of VRAM (long or many different reference clips; WhisperX ASR loaded next to the TTS model can crash VoiceStudio) | `curl -X POST http://127.0.0.1:3900/system/flush-memory`, keep the reference ≤ 12 s, and run transcription outside VoiceStudio |
 | Clips open with a gasp or "mm" before the voice | Profile reference ends right on a word (or mid-sound); the model continues it | Give the reference ≥ 0.4 s of trailing silence (`ffmpeg -i ref.wav -af apad=pad_dur=0.4 ref-pad.wav`, then `PUT /profiles/<id>/audio`) and regenerate |
+| "s" sounds sharp or staticky | Ma'am Bea's real "s" is nearly as loud as her vowels and the clone copies it; 64k MP3 also drops parts of the "s" band | Encode with the generators' `transcode_normalized` / `transcodeNormalized` (de-esser + 128k). The raw takes behind the 2026-11-05 clips are in `Downloads/bea-voice-profile-backup-20261104/raw-takes-v3` (`index.json` maps clip → WAV) |
 | `Name pronounced with "dot"` | Middle initial not cleaned | Ensure name is run through `normalizePronunciation()` or add to `CUSTOM_PRONUNCIATION_OVERRIDES` |
 | `Kiosk plays Piper name instead of Bea` | Missing manifest entry or missing MP3 file | Check `bea-name-manifest.json` and ensure `names/<personId>.mp3` exists in resources |
 
