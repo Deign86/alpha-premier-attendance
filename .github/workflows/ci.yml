@@ -5,7 +5,8 @@
 #   1. Split monolithic CI into parallel 'frontend-quality' and 'rust-quality' jobs.
 #   2. Added swatinem/rust-cache@v2 to cache target/ and Cargo dependencies.
 #   3. Added actions/setup-node@v4 with cache: npm to reuse node_modules between runs.
-#   4. Added paths-ignore filters for documentation and non-code files.
+#   4. Added paths-ignore filters for documentation and non-code files (pushes only:
+#      main requires these checks, so every PR must report them, docs-only PRs too).
 #   5. Added concurrency groups with cancel-in-progress to abort stale CI runs on rapid pushes.
 #
 # Expected Impact on Build Time:
@@ -29,12 +30,6 @@ on:
       - '.gitignore'
       - 'LICENSE'
   pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.vscode/**'
-      - '.gitignore'
-      - 'LICENSE'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

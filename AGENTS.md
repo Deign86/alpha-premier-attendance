@@ -73,6 +73,7 @@ Exceptions: explain fully when asked to explain. Confirm before destructive acti
 
 ### Release Policy (GitHub CI/CD Releases)
 - **Automated releases on push to main**: Pushing to `main` (or pushing a `v*` tag) triggers `.github/workflows/release.yml`. If the current version already has an existing release, CI automatically bumps the patch version, commits back with `[skip ci]`, runs typecheck/lint/test, builds the frontend, and builds/signs the Windows Tauri bundle via `tauri-action`, attaching installers plus updater artifacts (`latest.json`) to the GitHub Release.
+- **Required checks + auto-merge**: the `main: CI must pass` ruleset requires `Frontend Quality & Tests`, `Rust Backend Verification` and `Anti-Slop PR Quality Check` on every PR (only deploy keys bypass it: `release.yml` checks out with the `RELEASE_DEPLOY_KEY` write deploy key so its version-bump push still lands), so `gh pr merge --auto --merge` queues a PR until they pass. Keep PR triggers free of `paths-ignore`, or docs-only PRs wait forever on checks that never run.
 - **Signing**: `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets must stay configured for updater artifacts.
 - **Local builds** (`npm run tauri:build`) remain available for manual verification, but official release bundles come from CI.
 

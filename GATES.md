@@ -2131,3 +2131,22 @@ unchanged.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass.
   EVIDENCE: oxlint exit 0; typecheck exit 0; npm test exit 0 (shared 39, client 604, server 291).
+
+## Auto-merge on main waits for green CI (2026-11-05)
+
+- [x] main has an active ruleset requiring Frontend Quality & Tests, Rust Backend Verification and Anti-Slop PR Quality Check (from GitHub Actions); only deploy keys bypass it, and the repo's only deploy key is the release one.
+  CHECK: gh api repos/Deign86/alpha-premier-attendance/rulesets/26578932; gh api repos/Deign86/alpha-premier-attendance/keys
+  EXPECT: enforcement active, ~DEFAULT_BRANCH, 3 required contexts, bypass DeployKey; 1 write key.
+  EVIDENCE: ruleset 26578932 "main: CI must pass": active, ~DEFAULT_BRANCH, the 3 contexts pinned to integration 15368, bypass_actors [DeployKey always]. GitHub refused GitHub Actions (app 15368) as a bypass actor on a user-owned repo ("must be part of the ruleset source or owner organization"), hence the deploy key. Keys: 1 (id 168821590 "Release version bump (bypasses main ruleset)", write); private half only in secret RELEASE_DEPLOY_KEY, local copy deleted.
+- [x] Every PR reports the 3 required checks, docs-only ones too.
+  CHECK: grep paths-ignore in .github/workflows/ci.yml and pr-quality.yml.
+  EXPECT: only ci.yml's push trigger keeps paths-ignore.
+  EVIDENCE: ci.yml: paths-ignore only under push (line 26); pull_request has no filter. pr-quality.yml: none. (pr-quality runs on pull_request_target, so its new trigger applies from the next PR after this one merges.)
+- [ ] GitHub accepts auto-merge on a PR whose checks are still running, and merges it once they pass.
+  CHECK: enable auto-merge on this PR right after opening it; gh pr view --json state,autoMergeRequest.
+  EXPECT: auto-merge accepted while checks pend; PR merged after all 3 pass.
+  EVIDENCE:
+- [ ] The release version-bump push still lands on main.
+  CHECK: the first Release run after this ruleset (release.yml checks out with ssh-key RELEASE_DEPLOY_KEY): a "chore(release): bump version" commit on main.
+  EXPECT: pushed via the deploy key; if refused, bump-version.mjs only warns and the release still publishes, but main's version files stop advancing.
+  EVIDENCE:
