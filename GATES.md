@@ -2119,14 +2119,14 @@ unchanged.
   CHECK: scratch deess_all.py + verify_deess.py + hash_check2.py over both trees.
   EXPECT: every bound met.
   EVIDENCE: sharp-s mean -4.5 -> -10.9 dB, worst +1.0 -> -6.7 dB (85 clips); codec holes 0.84 % -> 0.00 % mean, max 0.02 % (84 raw-backed); -15.5..-15.0 LUFS; true peak max -0.5 -> -1.7 dBTP; lead-ins >= 50 ms 0/85 (max 30 ms, APG-2026-117 as before); `diff -rq` client/public vs src-tauri/resources: 0 differences; 35/35 audioHash match, manifests identical, 34 v3 + 1 v2, generatedAt 2026-11-05T00:17:41Z. Size 1760 -> 3516 KB per tree.
-- [ ] Vowels keep their brightness: vowel air (median 4.5-11 kHz minus 0.1-4 kHz over vowel frames) within 0.5 dB per clip.
+- [x] Vowels keep their brightness: vowel air (median 4.5-11 kHz minus 0.1-4 kHz over vowel frames) within 0.5 dB per clip.
   CHECK: scratch verify_deess.py.
   EXPECT: |delta| <= 0.5 dB on every clip.
-  EVIDENCE: MISSED on 17/85 clips: delta -1.00..+0.18 dB (mean -25.0 -> -25.3 dB; worst APG-2026-113 -1.0, APG-2026-123 -0.87, good-afternoon -0.85, goodbye -0.82). The shift is toward her real voice (-26.8 dB). Left for the user's ear rather than weakening the de-esser.
-- [ ] Whisper hears every clip at least as well as before.
+  EVIDENCE: MISSED on 17/85 clips: delta -1.00..+0.18 dB (mean -25.0 -> -25.3 dB; worst APG-2026-113 -1.0, APG-2026-123 -0.87, good-afternoon -0.85, goodbye -0.82). The shift is toward her real voice (-26.8 dB). Accepted by the user after an A/B listen (Raineer, Deign, "card scanned too recently"), 2026-11-05.
+- [x] Whisper hears every clip at least as well as before.
   CHECK: scratch whisper_compare.py (faster-whisper large-v3, CPU int8, beam 5) on shipped vs de-essed clips.
   EXPECT: no clip scores lower.
-  EVIDENCE: MISSED on 1/85: APG-2026-107 "Margaux Zyann Delaog" heard "Margot Zayn Delog" -> "Margot Zion Delog" (0.727 -> 0.667); both misspell "Zyann". The other 84 are heard identically; mean 0.965 -> 0.964; exact 59 -> 59.
+  EVIDENCE: MISSED on 1/85: APG-2026-107 "Margaux Zyann Delaog" heard "Margot Zayn Delog" -> "Margot Zion Delog" (0.727 -> 0.667); both misspell "Zyann". The other 84 are heard identically; mean 0.965 -> 0.964; exact 59 -> 59. Accepted by the user with the A/B listen above.
 - [x] Repo gates pass.
   CHECK: npm run lint:oxlint && npm run typecheck && npm test
   EXPECT: all pass.
