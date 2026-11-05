@@ -28,11 +28,14 @@ jobs:
       tag: ${{ steps.version_step.outputs.tag }}
       version: ${{ steps.version_step.outputs.version }}
     steps:
+      # The version bump is pushed straight to main, which the "main: CI must
+      # pass" ruleset blocks for everyone but deploy keys, so check out (and
+      # push) with the write deploy key instead of GITHUB_TOKEN.
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - parallel:
           - name: Setup Node
