@@ -26,6 +26,13 @@ TAURI_OUTPUT_BASE = REPO_ROOT / "src-tauri" / "resources" / "voices" / "bea"
 # Every clip lands at the same loudness so spliced prefix + name + suffix play level.
 TARGET_LUFS = -15.0
 PEAK_LIMIT = 0.794  # -2 dBFS sample ceiling keeps the mp3 true peak under ~-1 dBTP
+# De-esser for Bea's sharp "s": above 4.5 kHz, peaks over -18 dBFS (input already at
+# TARGET_LUFS) are compressed 3:1: "s" peaks drop from ~4.5 to ~11 dB under the vowels, which barely change.
+DEESS = ("acrossover=split=4500:order=8th[lo][hi];"
+         "[hi]acompressor=threshold=-18dB:ratio=3:attack=0.5:release=40:knee=3[hic];"
+         "[lo][hic]amix=inputs=2:normalize=0")
+# 64k MP3 punched holes into the "s" band that sounded like static; 128k leaves none.
+MP3_BITRATE = "128k"
 # A take that opens with a breath or blip before the first word is re-rolled.
 LEAD_IN_LIMIT_MS = 50
 MAX_TAKES = 4
@@ -389,22 +396,24 @@ def measure_lufs(path: Path) -> float:
 
 
 def transcode_normalized(wav: Path, out_file: Path) -> None:
-    """WAV -> 64k mono MP3 at TARGET_LUFS behind a peak limiter.
+    """WAV -> de-essed mono MP3 at TARGET_LUFS behind a peak limiter.
 
-    Limiting costs short, punchy clips ("Thank you,") loudness, so the measured
-    shortfall is added back and the clip re-encoded, at most twice."""
+    De-essing and limiting cost loudness, so the measured shortfall is added back
+    after the de-esser (whose input level stays fixed) and the clip re-encoded,
+    at most twice."""
     gain = TARGET_LUFS - measure_lufs(wav)
+    makeup = 0.0
     for _ in range(3):
         subprocess.run(
             ["ffmpeg", "-v", "error", "-y", "-i", str(wav),
-             "-af", f"volume={gain:.2f}dB,alimiter=limit={PEAK_LIMIT}:level=false",
-             "-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1", str(out_file)],
+             "-af", f"volume={gain:.2f}dB,{DEESS},volume={makeup:.2f}dB,alimiter=limit={PEAK_LIMIT}:level=false",
+             "-codec:a", "libmp3lame", "-b:a", MP3_BITRATE, "-ac", "1", str(out_file)],
             check=True,
         )
         shortfall = TARGET_LUFS - measure_lufs(out_file)
         if shortfall <= 0.5:
             return
-        gain += shortfall
+        makeup += shortfall
 
 
 def lead_in_ms(audio: Path) -> int:
@@ -477,7 +486,7 @@ def request_take(profile_id: str, phrase: str) -> bytes | None:
 def generate_phrase_voicestudio(profile_id: str, phrase: str, out_file: Path) -> bool:
     """Generate one phrase via VoiceStudio /generate (returns raw WAV bytes).
 
-    The API returns WAV; the repo standard is MP3 (64k mono), so the WAV is
+    The API returns WAV; the repo standard is MP3 (128k mono), so the WAV is
     transcoded via ffmpeg and only the `.mp3` is kept. Requires ffmpeg. Takes that
     open with a breath are re-rolled (MAX_TAKES); the cleanest one is kept."""
     tmp_wav = out_file.with_suffix(".tmp.wav")
