@@ -2153,41 +2153,41 @@ unchanged.
 
 ## State-machine bug hunt: confirmed bugs fixed with regression tests (2026-11-06)
 
-Model and issue list: `docs/STATE-MACHINES.md`. Each gate is one root-cause group; the regression test reaches the invalid state on the old code.
+Model and issue list: `docs/STATE-MACHINES.md` (F1–F21 fixed; D1–D6 need a product call; O1–O11 open; S1–S7 suspected). Each gate is one root-cause group; "fails on old code" was measured by running the new test against the original logic (guard toggled off or the HEAD function swapped back in), then restoring.
 
-- [ ] I1 Finalizing a cutoff whose dates overlap an already FINALIZED cutoff for the same intern is refused (no double pay).
+- [x] I1 Finalizing a cutoff whose dates overlap an already FINALIZED cutoff for the same intern is refused (no double pay).
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib finalize_refuses_overlapping_finalized_cutoff
-  EXPECT: overlapping DRAFT stays DRAFT with error PAYROLL_PERIOD_ALREADY_FINALIZED; a non-overlapping DRAFT still finalizes.
-  EVIDENCE:
-- [ ] I2 An admin correction saved from a stale WORKING row cannot erase a time-out (and its payroll) recorded after the row was loaded.
-  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_update_stale_null_expectation_conflicts
-  EXPECT: ATTENDANCE_CONFLICT; time_out, status and payroll row unchanged.
-  EVIDENCE:
-- [ ] I3 The sync queue pushes the payload it claimed, and a queued DELETE retires its UPSERT sibling.
-  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib sync_claim_ && cargo test --manifest-path src-tauri/Cargo.toml --lib delete_supersedes_
-  EXPECT: a row re-queued after the batch read is pushed with its new payload and attempts; a PENDING/RETRY/DEAD UPSERT is retired when its DELETE is queued; admin retry refuses SYNCED rows.
-  EVIDENCE:
-- [ ] I4 A failed restore leaves the current database untouched; pruning never deletes the backup it just made.
+  EXPECT: overlapping DRAFT stays DRAFT with error PAYROLL_PERIOD_ALREADY_FINALIZED; an adjacent DRAFT still finalizes.
+  EVIDENCE: passes; FAILED with the overlap guard disabled (panic at the unwrap_err).
+- [x] I2 An admin correction saved from a stale WORKING row cannot erase a time-out (and its payroll) recorded after the row was loaded.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_update_partial_payload_coalesces
+  EXPECT: step 6 gets ATTENDANCE_CONFLICT; time_out, COMPLETED and the payroll row survive.
+  EVIDENCE: FAILED on the old code (stale save succeeded, lib.rs:8262 unwrap_err panic); passes with explicit-null expectations; admin_update_rolls_back_attendance_when_payroll_write_fails still passes.
+- [x] I3 The sync queue pushes the payload it claimed, and a queued op retires its unapplied opposite op.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- sync_claim_ delete_supersedes_
+  EXPECT: a row re-queued after the batch read is pushed with its new payload and fresh attempts (RETRY, not DEAD); DELETE retires a RETRY UPSERT and a later UPSERT retires the DELETE.
+  EVIDENCE: both FAILED with the snapshot-payload claim and no supersede; both pass now (loopback axum endpoint for the claim test).
+- [x] I4 A failed restore leaves the current database untouched; pruning never deletes the backup it just made.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib database::tests
-  EXPECT: restore that fails on config copy keeps the old DB bytes; with 10+ pre-restore snapshots the newest regular backup survives.
-  EVIDENCE:
-- [ ] I5 DTR sync errors classify and admit correctly: OAuth transport and DTR clear 429/5xx are transient; a backfill larger than one minute's budget makes progress.
-  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib sync_retry && cargo test --manifest-path src-tauri/Cargo.toml --lib dtr_sync
-  EXPECT: classifier marks GOOGLE_OAUTH_TRANSPORT transient; a 60-day backfill is admitted in chunks of at most 50 writes.
-  EVIDENCE:
-- [ ] I6 Kiosk/admin async lifecycles cannot land in a stale or stuck state: setup closed mid-unlock stays closed and locked; assisted offline confirm closes the modal; admin unlock clears busy on throw; bathroom log ignores stale responses; DTR progress `completed` clears the sync guard; offline replay is single-flight and never re-enqueues.
+  EXPECT: restore failing on the config step keeps the old DB ("Current Person"); with 11 pre-restore snapshots the new regular backup survives.
+  EVIDENCE: 14 passed; the 2 new tests FAILED against the HEAD database.rs logic.
+- [x] I5 DTR sync errors classify and admit correctly.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- sync_retry dtr_sync sheets_sync
+  EXPECT: GOOGLE_OAUTH_TRANSPORT is transient at any attempt count; a 60-write backfill is trimmed to an admitted 50.
+  EVIDENCE: transient_classifier FAILED without the marker; oversized_backfill_is_trimmed_to_an_admissible_slice passes (shows the untrimmed request is denied in every window); 117 dtr_sync/sheets_sync tests pass. The DTR clear PUT now uses dtr_call_with_retry + dtr_error_for_response (no URL seam to test it directly).
+- [x] I6 Kiosk/admin async lifecycles cannot land in a stale or stuck state.
   CHECK: npm test -w client
-  EXPECT: new regression tests pass; all existing client tests pass.
-  EVIDENCE:
-- [ ] I7 Multi-write admin operations are atomic: attendance delete reads cascaded ids inside its transaction; user delete is one transaction; cutoff delete removes snapshot and cutoff together; bathroom admin edit refuses a row changed since it was read.
-  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib
-  EXPECT: new regression tests pass.
-  EVIDENCE:
-- [ ] I8 Background sync lifecycles: nuke-and-resync takes the sync guard; a failed reconciliation run is recorded FAILED (never left RUNNING) and boot reclaims leftovers.
-  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib dtr_recon
-  EXPECT: new regression tests pass.
-  EVIDENCE:
-- [ ] Repo gates pass.
-  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
-  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux (config::tests::service_account_path_resolves_against_config_dir, paths::tests::db_path_override_*), which fail identically on the untouched baseline.
-  EVIDENCE:
+  EXPECT: 7 new regression tests pass; all existing client tests pass.
+  EVIDENCE: 611 passed (604 before). Each new test FAILED on the old code: setup reopened unlocked (lock never called), assisted offline modal stayed open, unlockAdmin rejected, bathroom showed Aug 1 logs under Aug 2, offline queue grew 2 -> 6, Ada announced after Grace, sync guard stayed true after "completed". S4 (assist countdown) did NOT reproduce under fake timers, so it stays Suspected and no test was kept.
+- [x] I7 Multi-write admin operations are atomic.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- user_deletion cutoff_delete_never bathroom_edit_rejects_dates_outside_log_date
+  EXPECT: blocked user delete keeps user, attendance and cutoff; blocked cutoff delete keeps the snapshot; a stale bathroom save conflicts and a current one re-opens.
+  EVIDENCE: user_deletion_is_all_or_nothing and cutoff_delete_never_leaves_a_finalized_cutoff_without_its_snapshot FAILED on the old code; the bathroom stale-save step FAILED on the old code; all pass now. Attendance delete reads moved into its transaction (structural; no seam for the interleaving).
+- [x] I8 Background sync lifecycles.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- nuke_and_resync_waits dtr_recon
+  EXPECT: nuke refuses with DTR_SYNC_IN_PROGRESS and leaves the running guard alone; RUNNING runs are reclaimed at boot; scheduled retries wait 30 min; a failed run is FAILED once with one audit row.
+  EVIDENCE: nuke test FAILED with the guard lines removed; 8 dtr_recon tests pass. Reclaim and the retry gate are new functions, so there is no old code to fail against.
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 611, server 291). Rust lib 369 passed / 3 failed (baseline before any change: 357 / 3, the same 3: config::tests::service_account_path_resolves_against_config_dir, paths::tests::db_path_override_treats_a_directory_by_appending_attendance_db, paths::tests::db_path_override_treats_a_dot_extension_as_a_file; CI runs on Windows). Integration suites 11/18/69/35/52/24 passed.
