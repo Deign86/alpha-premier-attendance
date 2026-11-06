@@ -2216,3 +2216,24 @@ Each test was run against the code with its rule disabled (then restored) and fa
   CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
   EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 613, server 291). Rust lib 373 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed.
+
+## State-machine decisions D5–D7 (owner answers 2026-11-06: "d5 keep queuing, d6 do ur recommendations, d7 do ur recommendations")
+
+Each new test was run before its fix and failed there.
+
+- [x] D5 With DTR upload switched off, punches and corrections are still queued (dispatch stays paused), so switching it back on pushes current data.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib dtr_upload_off_keeps_queuing
+  EXPECT: with upload off, a scan queues its InternDtr row, a correction updates the queued payload, and run_once leaves the row PENDING.
+  EVIDENCE: FAILED before the fix ("time-in queued while upload is off"); passes now; 116 other dtr_sync/sheets_sync tests still pass. The Data card already said "uploads when it's turned back on", which is now true.
+- [x] D6 Attendance is never saved offline: an unreachable service is a visible error the person can tap again after; items saved by older versions still drain.
+  CHECK: npm test -w client
+  EXPECT: submitScan rethrows (no localStorage item); the kiosk shows "Can't reach the system"; an assisted confirm keeps the modal open with a retry message; leftover queue items still drain once, in order.
+  EVIDENCE: the 3 new/rewritten tests FAILED before the change; client 613 passed after. OfflineScanResponse was removed from the shared ScanResponse union, so the compiler confirmed every offlineQueued branch was gone; the "Saved offline" card and two tests for it were removed with the feature.
+- [x] D7 A correction cannot leave a day without a time-in; deleting the record is the way to remove a day.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_update_keeps_a_time_in && npm test -w client -- api.test.ts
+  EXPECT: clearing time-in (with or without a time-out) returns ATTENDANCE_TIME_IN_REQUIRED and the row is unchanged; the client shows "A record needs a time-in…".
+  EVIDENCE: both tests FAILED before the change and pass now; the now-unreachable MISSED branch in the status derivation was removed.
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 613, server 291). Rust lib 375 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed.

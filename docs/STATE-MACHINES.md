@@ -1,6 +1,6 @@
 # State machines
 
-Every explicit and implicit state machine in the app, the rules they must keep, and the bugs found by checking which invalid states the code can actually reach. Written 2026-11-06 from a full-repo hunt and updated the same day with the owner's decisions D1–D4; line numbers are from that commit.
+Every explicit and implicit state machine in the app, the rules they must keep, and the bugs found by checking which invalid states the code can actually reach. Written 2026-11-06 from a full-repo hunt and updated the same day with the owner's decisions D1–D7; line numbers are from that commit.
 
 **Labels.** *Fixed*: a regression test reached the invalid state on the old code and passes now. *Open*: confirmed, not fixed yet (reason given). *Decision*: confirmed, but the fix needs a product call. *Suspected*: plausible; the note says what would confirm it.
 
@@ -10,23 +10,23 @@ Every explicit and implicit state machine in the app, the rules they must keep, 
 
 ### M1 Attendance day (one row per person per Manila date)
 
-`src-tauri/src/lib.rs`: scan `scan_rfid_at` :5421 (time-in INSERT :5578, time-out UPDATE :5633), admin correction :1552, admin delete :1954, backdated create :1723, frozen-day check `day_in_finalized_cutoff` :1536. Schema `UNIQUE(user_id, attendance_date)` in `src-tauri/db/migrations/0001_core.sql`.
+`src-tauri/src/lib.rs`: scan `scan_rfid_at` :5422 (time-in INSERT :5579, time-out UPDATE :5634), admin correction :1552, admin delete :1954, backdated create :1723, frozen-day check `day_in_finalized_cutoff` :1536. Schema `UNIQUE(user_id, attendance_date)` in `src-tauri/db/migrations/0001_core.sql`.
 
 States: NONE · WORKING (time_in set, time_out NULL) · COMPLETED · LATE_TIMEOUT (time-out at/after 18:00) · MISSED (time_in NULL, admin-made).
 
-Invariants: a COMPLETED day has exactly one payroll row (a LATE_TIMEOUT day has one unless the engine cannot price it, D3); a correction never overwrites a value it did not see; no admin create, edit or delete touches a day inside a FINALIZED cutoff (kiosk scans are not blocked); a time-out is at least 1 minute after the time-in.
+Invariants: a COMPLETED day has exactly one payroll row (a LATE_TIMEOUT day has one unless the engine cannot price it, D3); a correction never overwrites a value it did not see; no admin create, edit or delete touches a day inside a FINALIZED cutoff (kiosk scans are not blocked); a time-out is at least 1 minute after the time-in; a day always keeps its time-in.
 
 | From | Event | Guard | To | Side effects | Code |
 | --- | --- | --- | --- | --- | --- |
-| NONE | scan | active user, debounce passes | WORKING | queue Attendance + InternDtr UPSERT | lib.rs:5578 |
-| WORKING | scan < 1 min after time-in | — | WORKING (rejected as DUPLICATE_SCAN) | — | lib.rs:5613 |
-| WORKING | scan | 10 s debounce; `time_out IS NULL` and revision match | COMPLETED / LATE_TIMEOUT | payroll in a savepoint of the same tx; a LATE_TIMEOUT the engine cannot price is kept without payroll | lib.rs:5633, :5647, :5854 |
-| COMPLETED / LATE / MISSED | scan | — | rejected | — | lib.rs:5599, :5604 |
-| any | admin correction | stored times equal the editor's expected times; neither the old nor the new date is in a FINALIZED cutoff | by times set | payroll rebuilt in the same tx | lib.rs:1552, :1600, :1647 |
+| NONE | scan | active user, debounce passes | WORKING | queue Attendance + InternDtr UPSERT (even while DTR upload is off) | lib.rs:5579 |
+| WORKING | scan < 1 min after time-in | — | WORKING (rejected as DUPLICATE_SCAN) | — | lib.rs:5614 |
+| WORKING | scan | 10 s debounce; `time_out IS NULL` and revision match | COMPLETED / LATE_TIMEOUT | payroll in a savepoint of the same tx; a LATE_TIMEOUT the engine cannot price is kept without payroll | lib.rs:5634, :5648, :5855 |
+| COMPLETED / LATE / MISSED | scan | — | rejected | — | lib.rs:5600, :5605 |
+| any | admin correction | stored times equal the editor's expected times; neither the old nor the new date is in a FINALIZED cutoff; the result keeps a time-in | WORKING / COMPLETED / LATE | payroll rebuilt in the same tx | lib.rs:1552, :1600, :1627, :1647 |
 | any | admin delete | date not in a FINALIZED cutoff | NONE | payroll + grace deleted in one tx; Sheets DELETEs queued | lib.rs:1954, :2008 |
 | NONE (past) | backdated create | no FINALIZED cutoff covers the date | WORKING / COMPLETED / LATE | — | lib.rs:1812 |
 
-Invalid state the variables still allow: MISSED with a time-out, after an admin clears the time-in (D7).
+Invalid states left: none reachable. MISSED could only come from a correction that cleared the time-in, which is now refused (D7); a MISSED row made before that can be fixed by entering a time-in, or deleted.
 
 ### M2 Scan debounce (in memory)
 
@@ -46,7 +46,7 @@ States: FREE · OUT (row with `time_in IS NULL`) · RETURNED log rows.
 
 ### M4 Payroll cutoff
 
-`lib.rs`: generate :2620, finalize `payroll_finalize_cutoff_impl` :3231, delete :3272; frozen-days rule :5998; user delete keeps FINALIZED cutoffs :590.
+`lib.rs`: generate :2620, finalize `payroll_finalize_cutoff_impl` :3231, delete :3272; frozen-days rule :5999; user delete keeps FINALIZED cutoffs :590.
 
 States: DRAFT · FINALIZED (with snapshot). Invariants: never FINALIZED without a snapshot; **a day belongs to at most one FINALIZED cutoff per person** (F1); a FINALIZED cutoff and its snapshot outlive the person (D2).
 
@@ -79,11 +79,11 @@ Invariants: the payload pushed is the payload claimed; per remote row the newest
 
 ### M6 Shared sync guard
 
-`src-tauri/src/state.rs:415` (acquire) / :449 (release): an `AtomicBool` plus a persisted owner row. Taken by the background tick (lib.rs:6338), Sync now (:4756), DTR sync (:4847) and nuke-and-resync (:4935).
+`src-tauri/src/state.rs:415` (acquire) / :449 (release): an `AtomicBool` plus a persisted owner row. Taken by the background tick (lib.rs:6339), Sync now (:4756), DTR sync (:4847) and nuke-and-resync (:4935).
 
 ### M7 DTR throttle and pending backfill
 
-`sync_retry.rs:339` bucket (50 writes and 10 calls per 60 s window); `trim_to_throttle_window` :315; backfill `dtr_sync.rs:2779`; `dtr_pending` rows processed at :2827. A pending person is cleared only after a complete backfill.
+`sync_retry.rs:339` bucket (50 writes and 10 calls per 60 s window); `trim_to_throttle_window` :315; backfill `dtr_sync.rs:2779`; `dtr_pending` rows processed at :2827. A pending person is cleared only after a complete backfill. The per-PC upload switch only pauses dispatch: InternDtr rows are still queued (and updated) while it is off (`enqueue_intern_dtr` lib.rs:5337), so switching it back on pushes current data (D5).
 
 ### M8 DTR reconciliation run
 
@@ -103,9 +103,9 @@ States: locked · unlocking · unlocked(token, expiry) · PIN locked out (5 wron
 
 `client/src/App.tsx`: `KioskState` :232 (ready · processing · success · error), refs `scanInFlightRef`, `resetTimer`, scan sequence :332, assisted confirm :866. Invariant: only the newest scan writes the screen, the voice and the reset timer.
 
-### M12 Offline scan queue (browser / legacy server mode only)
+### M12 Offline scan queue (drain-only)
 
-`client/src/network.ts` (localStorage `alpha_premier_offline_scans`), replay `App.tsx:465`, `submitScan` `client/src/api.ts:251`. Item: queued → replaying → removed. Invariants: one replay pass at a time; a replay never re-queues; taps replay in order.
+Attendance is never saved offline any more (D6): `submitScan` (`client/src/api.ts:251`) rethrows a network failure, so the kiosk shows its "Can't reach the system" card and the person taps again. `client/src/network.ts` and the replay in `App.tsx:465` only drain items an older version saved (localStorage `alpha_premier_offline_scans`). Item: saved by an old version → replaying → removed. Invariants: nothing new is ever queued; one replay pass at a time; taps replay in order.
 
 ### M13 DTR sync progress → client guard
 
@@ -144,16 +144,13 @@ Checked and sound: voice job queue (`voice_pull.rs`, conditional finishes plus a
 | F23 | 2 | D2: admin could edit, move into or delete a day inside a FINALIZED cutoff; user delete erased approved pay | refuse with ATTENDANCE_IN_FINALIZED_CUTOFF; user delete keeps FINALIZED cutoffs and snapshots | `finalized_cutoff_freezes_its_days_and_outlives_the_user`; `api.test.ts` "explains that a day in a finalized payroll cutoff …" |
 | F24 | 2 | D3: time-in after 17:00 could never be timed out (payroll validation failed and rolled back every tap) | payroll in a savepoint; an unpriceable LATE_TIMEOUT is kept without payroll for the admin correction | `scan_records_unpriceable_time_out_as_late_without_payroll` |
 | F25 | 2 | D4: a second tap 10 s after time-in closed the day | taps < 1 min after the stored time-in are DUPLICATE_SCAN | `scan_needs_a_minute_between_time_in_and_time_out` |
+| F26 | 2 | D5: with DTR upload off, new punches were not queued, and on resume the stale queued payloads were pushed | queue while off; only dispatch pauses | `dtr_upload_off_keeps_queuing_and_resumes_with_current_data` |
+| F27 | 1 | D6: a scan saved offline was recorded at replay time, not tap time | never save attendance offline; unreachable shows "Can't reach the system"; old saved items still drain | `App.test.tsx` "never saves attendance offline …", "keeps the Assisted Attendance modal open … unreachable"; `api.test.ts` "reports an unreachable service … saves nothing offline" |
+| F28 | 2 | D7: clearing a day's time-in made it MISSED and the scan then refused the person | a correction must keep a time-in (ATTENDANCE_TIME_IN_REQUIRED); delete removes a day | `admin_update_keeps_a_time_in`; `api.test.ts` "explains that a correction must keep a time-in" |
 
-### Decision (confirmed, needs a product call)
+### Decisions
 
-D1–D4 were decided on 2026-11-06 ("D1 yes, D2 refuse, D3 record, D4 1 min") and are fixed as F22–F25.
-
-| # | Impact | Bug | Options |
-| --- | --- | --- | --- |
-| D5 | 2 | DTR kill switch drops new punches while paused, and on resume pushes payloads frozen at pause time | queue while paused (dispatch is already gated) or keep dropping |
-| D6 | 1 (browser mode) | An offline-queued scan is recorded at replay time, not tap time (`ScanRequest` has no timestamp) | add `capturedAt` to the contract (server trusts the kiosk clock), or stop queueing attendance offline |
-| D7 | 2 | An admin who clears a day's time-in leaves MISSED (with any time-out kept), and the scan then refuses the person for that day | reject clearing time-in while a time-out exists, or let the scan start the day again |
+All seven were decided on 2026-11-06 ("D1 yes, D2 refuse, D3 record, D4 1 min"; "d5 keep queuing, d6 and d7 as recommended") and are fixed as F22–F28.
 
 ### Open (confirmed, not fixed in this pass)
 

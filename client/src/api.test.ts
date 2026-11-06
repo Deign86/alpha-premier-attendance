@@ -22,13 +22,13 @@ describe('scan requests', () => {
     await expect(submitScan({ rfidUid: 'RFID-001', source: 'RFID' })).resolves.toMatchObject({ success: true });
   });
 
-  it('returns a network error when the service is unreachable', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'));
+  it('reports an unreachable service to the kiosk and saves nothing offline', async () => {
+    // Owner decision D6: a queued scan was later recorded at replay time.
+    localStorage.removeItem('alpha_premier_offline_scans');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
 
-    await expect(submitScan({ rfidUid: 'RFID-002', source: 'RFID' })).resolves.toMatchObject({
-      success: true,
-      offlineQueued: true,
-    });
+    await expect(submitScan({ rfidUid: 'RFID-002', source: 'RFID' })).rejects.toThrow('Failed to fetch');
+    expect(localStorage.getItem('alpha_premier_offline_scans')).toBeNull();
   });
 });
 
@@ -433,6 +433,15 @@ describe('readable native errors (manual audit)', () => {
     await expect(saveAdminAttendance('ATT-1', {})).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(frozen) } });
     vi.spyOn(tauriApi, 'adminDeleteAttendance').mockRejectedValueOnce('ATTENDANCE_IN_FINALIZED_CUTOFF');
     await expect(deleteAdminAttendance('ATT-1', '2026-08-05')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(frozen) } });
+  });
+
+  it('explains that a correction must keep a time-in', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'adminUpdateAttendance').mockRejectedValueOnce('ATTENDANCE_TIME_IN_REQUIRED');
+    await expect(saveAdminAttendance('ATT-1', { timeIn: null })).resolves.toMatchObject({
+      success: false,
+      error: { message: expect.stringMatching(/needs a time-in.*delete the record/i) },
+    });
   });
 
   it('says admin access is off when config disables it', async () => {

@@ -962,15 +962,20 @@ describe('RFID kiosk', () => {
     expect(screen.queryByText('DUPLICATE SCAN')).not.toBeInTheDocument();
   });
 
-  it('shows a saved-offline card for a queued scan', async () => {
-    mockFetch({
-      success: true,
-      offlineQueued: true,
-      message: 'Attendance saved offline. Will automatically sync when reconnected.',
+  it('never saves attendance offline: an unreachable service shows the cannot-reach card and keeps nothing', async () => {
+    // Owner decision D6: a replayed scan was recorded at replay time, not tap time.
+    localStorage.removeItem('alpha_premier_offline_scans');
+    mockFetch();
+    const fetchSpy = vi.mocked(globalThis.fetch);
+    const answer = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).includes('/api/attendance/scan')) throw new TypeError('Failed to fetch');
+      return answer ? answer(input, init) : Promise.reject(new Error('no mock'));
     });
     render(<App />);
     act(() => emitRfidScan('OFFLINE01'));
-    expect(within(await screen.findByTestId('kiosk-result-offline')).getByText('Saved offline')).toBeInTheDocument();
+    expect(within(await screen.findByTestId('kiosk-result-unreachable')).getByText("Can't reach the system")).toBeInTheDocument();
+    expect(localStorage.getItem('alpha_premier_offline_scans')).toBeNull();
   });
 
   it('shows a cannot-reach card when the scan gets no answer', async () => {
@@ -979,18 +984,6 @@ describe('RFID kiosk', () => {
     render(<App />);
     act(() => emitRfidScan('04A1B2C3'));
     expect(within(await screen.findByTestId('kiosk-result-unreachable')).getByText("Can't reach the system")).toBeInTheDocument();
-  });
-
-  it('handles offline queued scans and returns to ready after reset delay', async () => {
-    mockFetch({
-      success: true,
-      offlineQueued: true,
-      message: 'Attendance saved offline. Will automatically sync when reconnected.',
-    });
-    render(<App />);
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-    act(() => emitRfidScan('OFFLINE01'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeInTheDocument(), { timeout: 1_000 });
   });
 
   it('shows the canonical office short address on the kiosk', async () => {
@@ -2616,7 +2609,7 @@ describe('Admin Attendance Corrections', () => {
     });
   });
 
-  it('replays the offline queue without duplicating items and drops scans the service answered', async () => {
+  it('drains scans an older version saved offline, without duplicating them, and drops answered ones', async () => {
     const key = 'alpha_premier_offline_scans';
     const queued = [
       { id: 'queue-1', request: { rfidUid: 'RFID-001', source: 'RFID' } },
@@ -2662,7 +2655,7 @@ describe('Admin Attendance Corrections', () => {
     }
   });
 
-  it('closes the Assisted Attendance modal and shows Saved offline when the confirm is queued offline', async () => {
+  it('keeps the Assisted Attendance modal open with a retry message when the service is unreachable', async () => {
     localStorage.removeItem('alpha_premier_offline_scans');
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -2696,10 +2689,10 @@ describe('Admin Attendance Corrections', () => {
     expect(await screen.findByRole('dialog', { name: /assisted attendance/i })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /bob smith/i }));
     await user.click(screen.getByRole('button', { name: /confirm attendance/i }));
-    // Not stuck: the modal (which blocks every scan) closes, and the kiosk says where the record went.
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /assisted attendance/i })).not.toBeInTheDocument());
-    expect(screen.getByText('Saved offline')).toBeInTheDocument();
-    localStorage.removeItem('alpha_premier_offline_scans');
+    // Nothing is saved offline (owner decision D6): the admin sees why and can confirm again or cancel.
+    expect(await screen.findByText('Failed to record assisted attendance. Please try again.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /confirm attendance/i })).toBeEnabled();
+    expect(localStorage.getItem('alpha_premier_offline_scans')).toBeNull();
   });
 
   it('renders assisted/backdated badges, filter pills, and supports backdated attendance creation in Admin panel', async () => {
@@ -3976,7 +3969,6 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
     expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent('Paolo Aquino');
     await user.click(screen.getByTestId('kiosk-mode-attendance'));
     expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/scanner card id/i)).toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     // And back in Bathroom mode the title is there, not the old ID card.
@@ -4070,7 +4062,6 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
 
       fireEvent.click(screen.getByTestId('kiosk-mode-attendance'));
       await act(async () => { await vi.advanceTimersByTimeAsync(600); });
-      expect(screen.queryByTestId('kiosk-result-offline')).not.toBeInTheDocument();
       expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
       expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
       expect(screen.getByLabelText(/scanner card id/i)).toBeEnabled();

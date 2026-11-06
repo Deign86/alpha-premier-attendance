@@ -1620,20 +1620,20 @@ async fn admin_update_attendance_impl(
             serde_json::json!({"success":true,"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":current_status}),
         );
     }
+    // A correction keeps a time-in (owner decision D7): without one the day
+    // turned MISSED and the scan refused the person for the rest of it. To
+    // remove a day, delete the record.
+    if time_in.is_none() {
+        return Err("ATTENDANCE_TIME_IN_REQUIRED".into());
+    }
     // The office does not allow overtime: an admin-saved time-out after
     // office hours stays flagged LATE_TIMEOUT instead of COMPLETED until the
     // official time is re-entered.
     let late = time_out.is_some_and(|value| crate::services::office_hours::is_late_timeout(value));
-    let status = if time_in.is_some() && time_out.is_some() {
-        if late {
-            "LATE_TIMEOUT"
-        } else {
-            "COMPLETED"
-        }
-    } else if time_in.is_some() {
-        "WORKING"
-    } else {
-        "MISSED"
+    let status = match (time_out.is_some(), late) {
+        (true, true) => "LATE_TIMEOUT",
+        (true, false) => "COMPLETED",
+        (false, _) => "WORKING",
     };
     let now = chrono::Utc::now().to_rfc3339();
     // One transaction: attendance update + payroll/grace rebuild commit together.
@@ -5344,9 +5344,10 @@ async fn enqueue_intern_dtr(
     time_in: Option<&str>,
     time_out: Option<&str>,
 ) {
+    // Queued even while upload is switched off (owner decision D5): the
+    // sync tick leaves InternDtr rows waiting until it is switched back on.
     if employee_type.to_uppercase() != "INTERN"
         || crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_none()
-        || !crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await
     {
         return;
     }
@@ -5771,10 +5772,10 @@ async fn scan_rfid_at(
     .await;
     // Intern-DTR auto-push: same success path covers TIME_IN and TIME_OUT.
     // Enqueue-only (the 30s sync loop does the network); a DTR failure can
-    // never fail the scan. Skipped for non-interns and when explicitly disabled.
+    // never fail the scan. Skipped for non-interns; queued even while upload
+    // is switched off, which only pauses dispatch (owner decision D5).
     if effective_user.get::<String, _>("employee_type").to_uppercase() == "INTERN"
         && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some()
-        && crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await
         && (effective_source == "RFID" || effective_source == "ADMIN_ASSISTED_SCAN")
     {
         enqueue_sync(
@@ -8539,6 +8540,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_update_keeps_a_time_in() {
+        // Owner decision D7: a correction that leaves no time-in made the day
+        // MISSED, and the scan then refused the person for the rest of it.
+        let temp = std::env::temp_dir().join(format!("alpha-keep-time-in-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+        super::upsert_user_record(
+            &state.db, "INT_KEEP", "C0FFEE0A", "Keep Intern", Some("IT"), "ACTIVE", "INTERN",
+            Some("MALE"), None, Some("BEA_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-keep','2026-08-12','INT_KEEP','C0FFEE0A','Keep Intern','IT','2026-08-12T08:00:00+08:00','2026-08-12T17:00:00+08:00','COMPLETED','RFID','2026-08-12T00:00:00Z','2026-08-12T00:00:00Z')")
+            .execute(&state.db).await.unwrap();
+        for payload in [
+            serde_json::json!({"timeIn": serde_json::Value::Null}),
+            serde_json::json!({"timeIn": serde_json::Value::Null, "timeOut": serde_json::Value::Null}),
+        ] {
+            let err = super::admin_update_attendance_impl(&state, &token, "att-keep", &payload).await.unwrap_err();
+            assert_eq!(err, "ATTENDANCE_TIME_IN_REQUIRED", "{payload}");
+        }
+        let row = sqlx::query("SELECT time_in, status FROM attendance WHERE attendance_id='att-keep'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.get::<Option<String>, _>("time_in").as_deref(), Some("2026-08-12T08:00:00+08:00"));
+        assert_eq!(row.get::<String, _>("status"), "COMPLETED");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn admin_update_partial_payload_coalesces() {
         // Serialize DTR env access; a parallel blank-env test would otherwise
         // switch the resolver off mid-test and drop the InternDtr enqueue.
@@ -8936,6 +8984,77 @@ mod tests {
 
     fn manila(at: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(at).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[tokio::test]
+    async fn dtr_upload_off_keeps_queuing_and_resumes_with_current_data() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let saved_env = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        std::env::remove_var(crate::config::ENV_DTR_SHEET_ID);
+        let temp = std::env::temp_dir().join(format!("alpha-dtr-off-queue-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut lan = LanConfig::default();
+        lan.google_dtr_spreadsheet_id = Some("sheet-test".to_string());
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+        super::upsert_user_record(
+            &state.db, "INT_OFF", "C0FFEE09", "Paused Intern", Some("IT"), "ACTIVE", "INTERN",
+            Some("MALE"), None, Some("BEA_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        crate::services::dtr_sync::set_dtr_sync_enabled(&state.db, false).await.unwrap();
+
+        // Owner decision D5: punches made while upload is off are still queued.
+        let tap = serde_json::json!({"rfidUid": "C0FFEE09", "source": "RFID"});
+        let res = super::scan_rfid_at(None, &state, tap, manila("2026-11-05T08:00:00+08:00")).await.unwrap();
+        assert_eq!(res["success"], true, "{res}");
+        let aid = res["attendance"]["attendanceId"].as_str().unwrap().to_string();
+        let queued = |aid: String| {
+            let db = state.db.clone();
+            async move {
+                sqlx::query("SELECT status, payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=? AND operation='UPSERT'")
+                    .bind(aid)
+                    .fetch_optional(&db)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert!(queued(aid.clone()).await.is_some(), "time-in queued while upload is off");
+
+        // A correction while off replaces the queued payload, so resuming
+        // pushes the current day, not the one frozen at pause time.
+        super::admin_update_attendance_impl(&state, &token, &aid, &serde_json::json!({"timeOut": "2026-11-05T17:00:00+08:00"})).await.unwrap();
+        let row = queued(aid.clone()).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&row.get::<String, _>("payload_json")).unwrap();
+        assert_eq!(payload["timeOut"], "2026-11-05T17:00:00+08:00");
+
+        // Dispatch stays paused: the row is left waiting, never dropped.
+        let _ = crate::services::sheets_sync::run_once(&state, Some("http://127.0.0.1:9/__dtr_off")).await;
+        assert_eq!(queued(aid).await.unwrap().get::<String, _>("status"), "PENDING");
+
+        match saved_env {
+            Some(value) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, value),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[tokio::test]

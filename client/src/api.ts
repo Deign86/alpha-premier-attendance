@@ -248,7 +248,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
   }
 }
 
-export async function submitScan(request: ScanRequest, signal?: AbortSignal, queueOffline = true): Promise<ScanResponse> {
+export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanResponse> {
   try {
     const scanRequest = runningInTauri()
       ? tauriApi.scanRfid(request)
@@ -267,11 +267,10 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal, que
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
     const isNetworkError = !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
-    if (isNetworkError && queueOffline) {
-      const { enqueueOfflineScan } = await import('./network');
-      enqueueOfflineScan(request);
-      return { success: true, offlineQueued: true, message: 'Attendance saved offline. Will automatically sync when reconnected.' };
-    }
+    // Attendance is never saved offline (owner decision D6): a replay was
+    // recorded at replay time, not tap time. The kiosk shows its
+    // "Can't reach the system" card and the person taps again.
+    if (isNetworkError) throw error;
     return networkError('Unable to reach the attendance service. Please try again.');
   }
 }
@@ -531,6 +530,7 @@ const attendanceSaveMessages = {
   ADMIN_VALIDATION_ERROR: 'The date or time is not valid. Check the times and try again.',
   ADMIN_AUTH_REQUIRED: 'Administrator session expired. Unlock admin to continue.',
   ATTENDANCE_IN_FINALIZED_CUTOFF: 'This day is in a finalized payroll cutoff, so it can\'t be changed.',
+  ATTENDANCE_TIME_IN_REQUIRED: 'A record needs a time-in. To remove the day, delete the record instead.',
 };
 
 export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { code?: string; message?: string } }> {

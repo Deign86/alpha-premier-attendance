@@ -10,7 +10,6 @@ import {
   CircleAlert,
   ClipboardCheck,
   Clock,
-  CloudOff,
   CreditCard,
   Database,
   Download,
@@ -460,8 +459,9 @@ export default function App() {
     };
   }, [setupToken, setupExpiresAt]);
 
-  // BUG-ATT-02: Re-sync offline scans when network comes back online (and at
-  // start, for a queue left by a service outage that never fired "online").
+  // Attendance is no longer saved offline (owner decision D6); this only
+  // drains scans an older version saved, when the network comes back and at
+  // start (a service outage never fires "online").
   const replayingOffline = useRef(false);
   useEffect(() => {
     const replay = async () => {
@@ -470,11 +470,11 @@ export default function App() {
       replayingOffline.current = true;
       try {
         for (const item of getOfflineQueue()) {
-          // Never re-enqueue here: a failed replay used to add a copy each time.
-          const res = await submitScan(item.request, undefined, false);
-          // Still unreachable: stop and keep order (a later tap must not land
-          // as a time-in before an earlier one). Any other answer is final.
-          if (!res.success && res.error.code === "INTERNAL_SERVER_ERROR") break;
+          // Still unreachable (throws) or failing: stop and keep order (a later
+          // tap must not land as a time-in before an earlier one). Any other
+          // answer is final.
+          const res = await submitScan(item.request).catch(() => null);
+          if (!res || (!res.success && res.error.code === "INTERNAL_SERVER_ERROR")) break;
           removeQueuedScan(item.id);
         }
       } finally {
@@ -816,13 +816,6 @@ export default function App() {
         void announceAdminAssist();
         return;
       }
-      if (response.success && "offlineQueued" in response) {
-        setResult(null);
-        setState("success");
-        if (resetTimer.current) clearTimeout(resetTimer.current);
-        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
-        return;
-      }
       setResult(response);
       const nextState = response.success ? "success" : "error";
       setState(nextState);
@@ -880,15 +873,7 @@ export default function App() {
       });
       setAssistedBusy(false);
       assistConfirmRef.current = false;
-      if (response.success && "offlineQueued" in response) {
-        // Same outcome as an offline tap: close the modal (it blocks every
-        // scan) instead of leaving it open with no message.
-        setAdminAssistData(null);
-        setResult(null);
-        setState("success");
-        if (resetTimer.current) clearTimeout(resetTimer.current);
-        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
-      } else if (response.success && "attendance" in response) {
+      if (response.success && "attendance" in response) {
         setAdminAssistData(null);
         setResult(response);
         setState("success");
@@ -1231,8 +1216,8 @@ export default function App() {
   };
 
   // Each mode starts ready, in reader mode: an open card ID box, a scan still being read or a result card never
-  // carries over to the other mode (attendance would read a bathroom result as "Saved offline" or "Can't reach the
-  // system"). resetToReady aborts a scan in flight; its late answer is dropped by the aborted checks after each await,
+  // carries over to the other mode (attendance would read a bathroom result as "Can't reach the system").
+  // resetToReady aborts a scan in flight; its late answer is dropped by the aborted checks after each await,
   // which also cover the desktop app, where the IPC call itself can't be cancelled.
   const switchKioskMode = (mode: "attendance" | "bathroom") => {
     if (mode === kioskMode) return;
@@ -1457,22 +1442,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* ATTENDANCE SAVED OFFLINE: the scan is queued and will sync later */}
-        {kioskMode === "attendance" && state === "success" && !result && (
-          <div
-            className="kiosk-result is-notice"
-            data-testid="kiosk-result-offline"
-            role="status"
-            aria-live="polite"
-          >
-            <CloudOff className="result-notice-icon" size={42} aria-hidden="true" />
-            <h2 className="result-name">Saved offline</h2>
-            <p className="result-message">
-              Your scan is saved on this computer and will sync automatically when the connection is back.
-            </p>
           </div>
         )}
 

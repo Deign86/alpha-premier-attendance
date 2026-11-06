@@ -769,13 +769,7 @@ export type ScanErrorResponse = {
   };
 };
 
-export type OfflineScanResponse = {
-  success: true;
-  offlineQueued: true;
-  message: string;
-};
-
-export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse | OfflineScanResponse;
+export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse;
 
 export type HealthResponse = {
   success: true;

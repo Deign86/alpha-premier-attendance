@@ -52,24 +52,6 @@ export function getOfflineQueue(): QueuedScan[] {
   }
 }
 
-/** Enqueue a scan when offline */
-export function enqueueOfflineScan(request: ScanRequest): QueuedScan {
-  const queue = getOfflineQueue();
-  const queuedItem: QueuedScan = {
-    id: `queue-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    request,
-  };
-  queue.push(queuedItem);
-  try {
-    if ('localStorage' in globalThis) {
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-    }
-  } catch (err) {
-    console.error('Failed to save scan to offline queue:', err);
-  }
-  return queuedItem;
-}
-
 /** Remove a successfully synced item from the queue */
 export function removeQueuedScan(id: string): void {
   const queue = getOfflineQueue().filter((item) => item.id !== id);
