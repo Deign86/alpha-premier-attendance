@@ -1548,14 +1548,19 @@ async fn admin_update_attendance_impl(
     {
         return Err("ADMIN_VALIDATION_ERROR".into());
     }
-    let expected_in = payload
-        .get("expectedTimeIn")
-        .and_then(|v| v.as_str())
-        .or(current_in.as_deref());
-    let expected_out = payload
-        .get("expectedTimeOut")
-        .and_then(|v| v.as_str())
-        .or(current_out.as_deref());
+    // Same absent/null split as the values: an explicit null expectation
+    // means "it was empty when I loaded it" and must conflict once a scan
+    // has filled it, never fall back to the fresh stored value.
+    let expected_in: Option<&str> = match payload.get("expectedTimeIn") {
+        None => current_in.as_deref(),
+        Some(serde_json::Value::Null) => None,
+        Some(v) => v.as_str().or(current_in.as_deref()),
+    };
+    let expected_out: Option<&str> = match payload.get("expectedTimeOut") {
+        None => current_out.as_deref(),
+        Some(serde_json::Value::Null) => None,
+        Some(v) => v.as_str().or(current_out.as_deref()),
+    };
     // No-op guard: resolved values identical and no conflicting expectation
     // => return current state without bumping revision or re-enqueueing.
     if date == current_date
@@ -3163,13 +3168,27 @@ async fn payroll_finalize_cutoff(
     token: String,
     payroll_id: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
+    payroll_finalize_cutoff_impl(&state, &token, &payroll_id).await
+}
+
+async fn payroll_finalize_cutoff_impl(
+    state: &AppState,
+    token: &str,
+    payroll_id: &str,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(state, token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let now = chrono::Utc::now().to_rfc3339();
     // Status flip + snapshot commit together: never FINALIZED without a snapshot.
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
-    let result = sqlx::query("UPDATE payroll_cutoffs SET status='FINALIZED', finalized_at=?, revision=revision+1, updated_at=? WHERE payroll_id=? AND status='DRAFT'").bind(&now).bind(&now).bind(&payroll_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    // A day may sit in at most one FINALIZED cutoff per person: an
+    // overlapping draft re-counts frozen days and would pay them twice.
+    let overlaps: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_cutoffs d JOIN payroll_cutoffs f ON f.employee_id=d.employee_id AND f.payroll_id<>d.payroll_id AND f.status='FINALIZED' AND f.cutoff_start<=d.cutoff_end AND f.cutoff_end>=d.cutoff_start WHERE d.payroll_id=?").bind(payroll_id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+    if overlaps > 0 {
+        return Err("PAYROLL_PERIOD_ALREADY_FINALIZED".into());
+    }
+    let result = sqlx::query("UPDATE payroll_cutoffs SET status='FINALIZED', finalized_at=?, revision=revision+1, updated_at=? WHERE payroll_id=? AND status='DRAFT'").bind(&now).bind(&now).bind(payroll_id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
     if result.rows_affected() == 0 {
         return Err("PAYROLL_NOT_FOUND_OR_FINALIZED".into());
     }
@@ -4646,7 +4665,9 @@ async fn admin_retry_sync_item(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let now = chrono::Utc::now().to_rfc3339();
-    let updated = sqlx::query("UPDATE sync_queue SET status='PENDING', attempts=0, last_error=NULL, last_error_code=NULL, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=?").bind(&now).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
+    // Only rows still waiting can be retried: re-arming a SYNCED (or
+    // superseded) row would replay an intent a newer one already replaced.
+    let updated = sqlx::query("UPDATE sync_queue SET status='PENDING', attempts=0, last_error=NULL, last_error_code=NULL, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status IN ('PENDING','RETRY','DEAD')").bind(&now).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
     if updated.rows_affected() != 1 {
         return Err("SYNC_ITEM_NOT_FOUND".into());
     }
@@ -6745,6 +6766,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finalize_refuses_overlapping_finalized_cutoff() {
+        // Double pay: Aug 1-15 is FINALIZED; a custom Aug 1-31 draft for the
+        // same intern re-counts those frozen days and must never finalize.
+        let temp = std::env::temp_dir().join(format!("alpha-cutoff-overlap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = super::setup_unlock_impl(&state, "1234".to_string()).await.unwrap()["token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        insert_cutoff_row(&state.db, "PAY-FIN", "FINALIZED").await;
+        insert_cutoff_row(&state.db, "PAY-OVERLAP", "DRAFT").await;
+        insert_cutoff_row(&state.db, "PAY-NEXT", "DRAFT").await;
+        sqlx::query("UPDATE payroll_cutoffs SET cutoff_end='2026-08-31' WHERE payroll_id='PAY-OVERLAP'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE payroll_cutoffs SET cutoff_start='2026-08-16', cutoff_end='2026-08-31' WHERE payroll_id='PAY-NEXT'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        let refused = super::payroll_finalize_cutoff_impl(&state, &token, "PAY-OVERLAP").await;
+        assert_eq!(refused.unwrap_err(), "PAYROLL_PERIOD_ALREADY_FINALIZED");
+        let status: String = sqlx::query_scalar("SELECT status FROM payroll_cutoffs WHERE payroll_id='PAY-OVERLAP'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(status, "DRAFT");
+        let snapshots: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_snapshots WHERE payroll_id='PAY-OVERLAP'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(snapshots, 0);
+
+        let adjacent = super::payroll_finalize_cutoff_impl(&state, &token, "PAY-NEXT").await.unwrap();
+        assert_eq!(adjacent["status"], "FINALIZED");
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn finalized_cutoff_can_be_deleted() {
         // Finalized and draft cutoffs can both be deleted with confirmation.
         let temp = std::env::temp_dir().join(format!("alpha-cutoff-delete-{}", uuid::Uuid::new_v4()));
@@ -8174,6 +8253,28 @@ mod tests {
         let final_row = sqlx::query("SELECT attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id='aid-a'")
             .fetch_one(&state.db).await.unwrap();
         assert!(final_row.get::<Option<String>, _>("time_in").as_deref().is_some());
+        // 6. Stale save: the admin loaded aid-b while WORKING (time-out empty),
+        // then the intern's tap-out committed time-out + payroll. Saving the
+        // stale draft sends timeOut:null with expectedTimeOut:null; that
+        // expectation no longer holds, so it must conflict instead of wiping
+        // the fresh time-out and deleting the day's payroll.
+        let tapped = super::admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
+        assert_eq!(tapped["status"], "COMPLETED");
+        let stale = super::admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({
+            "attendanceDate": "2026-08-12",
+            "timeIn": "2026-08-12T08:07:00+08:00",
+            "timeOut": serde_json::Value::Null,
+            "expectedTimeIn": "2026-08-12T08:06:00+08:00",
+            "expectedTimeOut": serde_json::Value::Null,
+        })).await.unwrap_err();
+        assert_eq!(stale, "ATTENDANCE_CONFLICT");
+        let kept = sqlx::query("SELECT time_out,status FROM attendance WHERE attendance_id='aid-b'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(kept.get::<Option<String>, _>("time_out").as_deref(), Some("2026-08-12T17:00:00+08:00"));
+        assert_eq!(kept.get::<String, _>("status"), "COMPLETED");
+        let payroll_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll WHERE attendance_id='aid-b'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(payroll_rows, 1);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
         match saved_env {

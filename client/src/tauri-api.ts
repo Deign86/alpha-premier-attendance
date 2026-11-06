@@ -166,12 +166,15 @@ export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: st
 
 export type DtrSyncSource = "queue" | "manual";
 
+/** Exactly what `dtr_sync.rs` emits; a sync always ends with "completed". */
+export type DtrSyncProgressStatus = "starting" | "syncing" | "completed";
+
 export interface DtrSyncProgress {
   current: number;
   total: number;
   userId: string;
   fullName: string;
-  status: string;
+  status: DtrSyncProgressStatus;
   source?: DtrSyncSource;
 }
 

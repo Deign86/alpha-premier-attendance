@@ -401,10 +401,25 @@ pub async fn prune_backups(dir: &Path, keep: usize) -> Result<Vec<PathBuf>, Stri
     }
     entries.sort();
     let mut removed = Vec::new();
-    while entries.len() > keep {
-        let oldest = entries.remove(0);
-        if std::fs::remove_file(&oldest).is_ok() {
-            removed.push(oldest);
+    // Each family keeps its own newest `keep`: `pre-restore-*` sorts after
+    // `attendance-backup-*`, so one shared list let 10 safety snapshots
+    // delete every new backup the moment it was written.
+    for pre_restore in [false, true] {
+        let mut family: Vec<PathBuf> = entries
+            .iter()
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("pre-restore-"))
+                    == pre_restore
+            })
+            .cloned()
+            .collect();
+        while family.len() > keep {
+            let oldest = family.remove(0);
+            if std::fs::remove_file(&oldest).is_ok() {
+                removed.push(oldest);
+            }
         }
     }
     Ok(removed)
@@ -633,6 +648,23 @@ async fn restore_portable_backup(
     let staging_db = staging.join("database/attendance.db");
     validate_database_file(&staging_db).await?;
 
+    // Every step that can still fail runs before the live database is
+    // touched, so a Failed outcome really means "current database kept"
+    // (the old order swapped the database first, then a config or data
+    // error reported "nothing was replaced" over a replaced database with
+    // the old -wal still beside it). The temp copy is made after the data
+    // step because clearing the data folder would delete it.
+    if staging.join("data").is_dir() {
+        clear_restorable_data(data_dir)?;
+        copy_directory_contents(&staging.join("data"), data_dir)?;
+    }
+    let restored_config = staging.join("config/config.toml");
+    if restored_config.is_file() {
+        std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        std::fs::copy(restored_config, config_dir.join("config.toml"))
+            .map_err(|e| format!("cannot restore config: {e}"))?;
+    }
+
     let temp_restore = db_path.with_extension("tmp-restore");
     if temp_restore.is_file() {
         let _ = std::fs::remove_file(&temp_restore);
@@ -661,22 +693,10 @@ async fn restore_portable_backup(
         pool.close().await;
     }
 
-    if db_path.is_file() {
-        let _ = std::fs::remove_file(db_path);
-    }
+    // Last step, one rename: it replaces the file in place on every
+    // platform, so there is no moment with no database at all.
     std::fs::rename(&temp_restore, db_path)
         .map_err(|e| format!("cannot finalize restored database: {e}"))?;
-
-    if staging.join("data").is_dir() {
-        clear_restorable_data(data_dir)?;
-        copy_directory_contents(&staging.join("data"), data_dir)?;
-    }
-    let restored_config = staging.join("config/config.toml");
-    if restored_config.is_file() {
-        std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-        std::fs::copy(restored_config, config_dir.join("config.toml"))
-            .map_err(|e| format!("cannot restore config: {e}"))?;
-    }
     std::fs::remove_dir_all(&staging).ok();
     Ok(())
 }
@@ -897,6 +917,62 @@ mod tests {
             .filter_map(|entry| entry.ok())
             .count();
         assert_eq!(remaining, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn prune_backups_never_deletes_the_new_backup_behind_safety_snapshots() {
+        let dir = std::env::temp_dir().join(format!("alpha-prune-family-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for day in 1..=11 {
+            std::fs::write(dir.join(format!("pre-restore-202608{day:02}-000000.db")), "x").unwrap();
+        }
+        let newest = "attendance-backup-20261106-120000.apbackup";
+        std::fs::write(dir.join(newest), "x").unwrap();
+        let removed = prune_backups(&dir, 10).await.expect("prune");
+        assert!(dir.join(newest).is_file(), "the backup just written must survive");
+        assert_eq!(removed.len(), 1, "only the oldest safety snapshot goes");
+        assert_eq!(removed[0].file_name().unwrap(), "pre-restore-20260801-000000.db");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn failed_portable_restore_keeps_the_current_database() {
+        let dir = std::env::temp_dir().join(format!("alpha-restore-halfway-{}", uuid::Uuid::new_v4()));
+        let source_dir = dir.join("source");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        // Backup carries a config, so restore must write one.
+        std::fs::write(source_dir.join("config.toml"), "[lan]\n").unwrap();
+        let source = seed_database(&source_dir).await;
+        let backup = create_portable_backup(&source.db, &source_dir, &source_dir, &source.db_path)
+            .await
+            .expect("portable backup");
+        source.db.close().await;
+
+        let target_dir = dir.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let current = seed_database(&target_dir).await;
+        sqlx::query("UPDATE users SET full_name='Current Person'")
+            .execute(&current.db)
+            .await
+            .unwrap();
+        current.db.close().await;
+        // The config folder path is a file, so the config step fails.
+        let config_blocker = dir.join("config-blocker");
+        std::fs::write(&config_blocker, "not a folder").unwrap();
+        std::fs::write(restore_request_path(&target_dir), backup.to_string_lossy().into_owned()).unwrap();
+
+        let db_path = target_dir.join("attendance.db");
+        let outcome = process_restore_request(&target_dir, &config_blocker, &db_path).await;
+        assert!(matches!(outcome, RestoreOutcome::Failed { .. }), "{outcome:?}");
+
+        let pool = open_readonly(&db_path).await.unwrap();
+        let name: String = sqlx::query_scalar("SELECT full_name FROM users LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert_eq!(name, "Current Person", "Failed must mean the current database was kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

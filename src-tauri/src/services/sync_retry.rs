@@ -87,8 +87,12 @@ pub fn is_transient_sync_error(error: &str) -> bool {
     if is_rate_limited_error(error) {
         return true;
     }
+    // An unreachable token endpoint is a network outage, not a bad key:
+    // classifying it finite sent every queued DTR row DEAD after ~2.5 min
+    // offline.
     if error.contains(GOOGLE_SERVER_ERROR)
         || error.contains(GOOGLE_TRANSPORT_FAILED)
+        || error.contains("GOOGLE_OAUTH_TRANSPORT")
         || error.contains("rateLimitExceeded")
         || error.contains("userRateLimitExceeded")
         || error.contains("quotaExceeded")
@@ -304,6 +308,19 @@ pub const DTR_THROTTLE_REASON: &str = "DTR_THROTTLE: 50-writes/min budget spent"
 /// infinite-RETRY queue growth visibility (todo 10).
 pub const PENDING_AGE_ALERT_SECS: i64 = 6 * 3600;
 
+/// Trims a queue-path backfill to what one throttle window can ever admit.
+/// `take` denies any request above the per-minute write budget in every
+/// window, so an untrimmed >50-day backfill was deferred forever. Returns
+/// true when writes were left for a later pass.
+pub fn trim_to_throttle_window<T>(writes: &mut Vec<T>) -> bool {
+    let cap = DTR_THROTTLE_WRITES_PER_MIN as usize;
+    if writes.len() <= cap {
+        return false;
+    }
+    writes.truncate(cap);
+    true
+}
+
 impl DtrThrottleBucket {
     pub fn new(now_ms: u64) -> Self {
         Self {
@@ -455,7 +472,7 @@ mod tests {
         TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
         is_transient_sync_error,
         processing_lease_stale_secs, split_dtr_batch, sync_guard_busy_error,
-        sync_guard_row_releasable,
+        sync_guard_row_releasable, trim_to_throttle_window,
     };
 
     #[test]
@@ -639,6 +656,26 @@ mod tests {
     }
 
     #[test]
+    fn oversized_backfill_is_trimmed_to_an_admissible_slice() {
+        // 60 missing days: the whole batch can never fit a 50-write window.
+        let mut bucket = DtrThrottleBucket::new(0);
+        assert!(bucket.take(60, 2, 0) > 0, "untrimmed request is denied");
+        let mut later = DtrThrottleBucket::new(0);
+        let far_future = DTR_THROTTLE_WINDOW_MS * 1_000;
+        assert!(later.take(60, 2, far_future) > 0, "and denied in every later window");
+
+        let mut writes: Vec<u32> = (0..60).collect();
+        assert!(trim_to_throttle_window(&mut writes), "rest left for the next pass");
+        assert_eq!(writes, (0..50).collect::<Vec<u32>>(), "oldest days first");
+        let mut fresh = DtrThrottleBucket::new(0);
+        assert_eq!(fresh.take(writes.len() as u32, 1, 0), 0, "trimmed slice is admitted");
+
+        let mut small: Vec<u32> = (0..DTR_THROTTLE_WRITES_PER_MIN).collect();
+        assert!(!trim_to_throttle_window(&mut small));
+        assert_eq!(small.len(), DTR_THROTTLE_WRITES_PER_MIN as usize);
+    }
+
+    #[test]
     fn transient_classifier() {
         // RETRY-forever inputs: 429 / 5xx / timeout-after-connect / 403-rateLimit.
         assert!(is_transient_google_error(429, "Too Many Requests", ""));
@@ -665,6 +702,8 @@ mod tests {
                 "GOOGLE_SERVER_ERROR: execute push: 503",
                 "timeout-after-connect: deadline exceeded",
                 "403 rateLimitExceeded: quota exceeded",
+                // Offline kiosk: the token endpoint itself is unreachable.
+                "GOOGLE_OAUTH_TRANSPORT: token endpoint connection failed",
             ] {
                 let (_, status, _) = calculate_retry_backoff(attempts, error);
                 assert_eq!(status, "RETRY", "attempts={attempts} error={error}");

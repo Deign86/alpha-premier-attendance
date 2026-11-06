@@ -2150,3 +2150,44 @@ unchanged.
   CHECK: the first Release run after this ruleset (release.yml checks out with ssh-key RELEASE_DEPLOY_KEY): a "chore(release): bump version" commit on main.
   EXPECT: pushed via the deploy key; if refused, bump-version.mjs only warns and the release still publishes, but main's version files stop advancing.
   EVIDENCE:
+
+## State-machine bug hunt: confirmed bugs fixed with regression tests (2026-11-06)
+
+Model and issue list: `docs/STATE-MACHINES.md`. Each gate is one root-cause group; the regression test reaches the invalid state on the old code.
+
+- [ ] I1 Finalizing a cutoff whose dates overlap an already FINALIZED cutoff for the same intern is refused (no double pay).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib finalize_refuses_overlapping_finalized_cutoff
+  EXPECT: overlapping DRAFT stays DRAFT with error PAYROLL_PERIOD_ALREADY_FINALIZED; a non-overlapping DRAFT still finalizes.
+  EVIDENCE:
+- [ ] I2 An admin correction saved from a stale WORKING row cannot erase a time-out (and its payroll) recorded after the row was loaded.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_update_stale_null_expectation_conflicts
+  EXPECT: ATTENDANCE_CONFLICT; time_out, status and payroll row unchanged.
+  EVIDENCE:
+- [ ] I3 The sync queue pushes the payload it claimed, and a queued DELETE retires its UPSERT sibling.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib sync_claim_ && cargo test --manifest-path src-tauri/Cargo.toml --lib delete_supersedes_
+  EXPECT: a row re-queued after the batch read is pushed with its new payload and attempts; a PENDING/RETRY/DEAD UPSERT is retired when its DELETE is queued; admin retry refuses SYNCED rows.
+  EVIDENCE:
+- [ ] I4 A failed restore leaves the current database untouched; pruning never deletes the backup it just made.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib database::tests
+  EXPECT: restore that fails on config copy keeps the old DB bytes; with 10+ pre-restore snapshots the newest regular backup survives.
+  EVIDENCE:
+- [ ] I5 DTR sync errors classify and admit correctly: OAuth transport and DTR clear 429/5xx are transient; a backfill larger than one minute's budget makes progress.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib sync_retry && cargo test --manifest-path src-tauri/Cargo.toml --lib dtr_sync
+  EXPECT: classifier marks GOOGLE_OAUTH_TRANSPORT transient; a 60-day backfill is admitted in chunks of at most 50 writes.
+  EVIDENCE:
+- [ ] I6 Kiosk/admin async lifecycles cannot land in a stale or stuck state: setup closed mid-unlock stays closed and locked; assisted offline confirm closes the modal; admin unlock clears busy on throw; bathroom log ignores stale responses; DTR progress `completed` clears the sync guard; offline replay is single-flight and never re-enqueues.
+  CHECK: npm test -w client
+  EXPECT: new regression tests pass; all existing client tests pass.
+  EVIDENCE:
+- [ ] I7 Multi-write admin operations are atomic: attendance delete reads cascaded ids inside its transaction; user delete is one transaction; cutoff delete removes snapshot and cutoff together; bathroom admin edit refuses a row changed since it was read.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib
+  EXPECT: new regression tests pass.
+  EVIDENCE:
+- [ ] I8 Background sync lifecycles: nuke-and-resync takes the sync guard; a failed reconciliation run is recorded FAILED (never left RUNNING) and boot reclaims leftovers.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib dtr_recon
+  EXPECT: new regression tests pass.
+  EVIDENCE:
+- [ ] Repo gates pass.
+  CHECK: npm run lint:oxlint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux (config::tests::service_account_path_resolves_against_config_dir, paths::tests::db_path_override_*), which fail identically on the untouched baseline.
+  EVIDENCE:

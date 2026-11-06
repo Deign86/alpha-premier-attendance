@@ -4135,11 +4135,7 @@ function dtrSyncSourceLabel(source: DtrSyncSource | undefined): string {
 }
 
 function applyDtrProgressToGuard(progress: DtrSyncProgress): void {
-  if (progress.status === "starting" || progress.status === "syncing") {
-    setDtrSyncActive(true);
-  } else if (progress.status === "done" || progress.status === "complete" || progress.status === "error") {
-    setDtrSyncActive(false);
-  }
+  setDtrSyncActive(progress.status !== "completed");
 }
 
 type SyncHealthState =
@@ -4339,7 +4335,7 @@ export function DatabasePanel() {
     void listenForDtrSyncProgress((progress) => {
       setDtrProgress(progress);
       applyDtrProgressToGuard(progress);
-      if (progress.status === "done" || progress.status === "complete" || progress.status === "error") void refreshDtrSyncHealth(() => refreshSyncHealth());
+      if (progress.status === "completed") void refreshDtrSyncHealth(() => refreshSyncHealth());
     })
       .then((cleanup) => {
         unlisten = cleanup;
