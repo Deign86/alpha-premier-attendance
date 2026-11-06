@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { InternPayslip, VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, deleteAdminAttendance, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
 import * as payslipRenderer from './intern-payslip-image';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
@@ -415,6 +415,24 @@ describe('readable native errors (manual audit)', () => {
     desktop();
     vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('INVALID_ADMIN_PIN');
     await expect(unlockSetup('000000')).resolves.toMatchObject({ success: false, error: { message: 'The administrator PIN or admin RFID card is invalid.' } });
+  });
+
+  it('says PIN unlock is paused after too many wrong PINs, on both unlock screens', async () => {
+    desktop();
+    const locked = /too many wrong PINs.*5 minutes.*admin card/i;
+    vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_PIN_LOCKED');
+    await expect(unlockSetup('2468')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(locked) } });
+    vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_PIN_LOCKED');
+    await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(locked) } });
+  });
+
+  it('explains that a day in a finalized payroll cutoff cannot be edited or deleted', async () => {
+    desktop();
+    const frozen = /finalized payroll cutoff/i;
+    vi.spyOn(tauriApi, 'adminUpdateAttendance').mockRejectedValueOnce('ATTENDANCE_IN_FINALIZED_CUTOFF');
+    await expect(saveAdminAttendance('ATT-1', {})).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(frozen) } });
+    vi.spyOn(tauriApi, 'adminDeleteAttendance').mockRejectedValueOnce('ATTENDANCE_IN_FINALIZED_CUTOFF');
+    await expect(deleteAdminAttendance('ATT-1', '2026-08-05')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(frozen) } });
   });
 
   it('says admin access is off when config disables it', async () => {

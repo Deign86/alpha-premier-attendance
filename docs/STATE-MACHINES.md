@@ -1,6 +1,6 @@
 # State machines
 
-Every explicit and implicit state machine in the app, the rules they must keep, and the bugs found by checking which invalid states the code can actually reach. Written 2026-11-06 from a full-repo hunt; line numbers are from that commit.
+Every explicit and implicit state machine in the app, the rules they must keep, and the bugs found by checking which invalid states the code can actually reach. Written 2026-11-06 from a full-repo hunt and updated the same day with the owner's decisions D1–D4; line numbers are from that commit.
 
 **Labels.** *Fixed*: a regression test reached the invalid state on the old code and passes now. *Open*: confirmed, not fixed yet (reason given). *Decision*: confirmed, but the fix needs a product call. *Suspected*: plausible; the note says what would confirm it.
 
@@ -10,50 +10,53 @@ Every explicit and implicit state machine in the app, the rules they must keep, 
 
 ### M1 Attendance day (one row per person per Manila date)
 
-`src-tauri/src/lib.rs`: scan `scan_rfid_impl` :5372 (time-in INSERT :5529, time-out UPDATE :5573), admin correction :1531, admin delete :1935, backdated create :1695. Schema `UNIQUE(user_id, attendance_date)` in `src-tauri/db/migrations/0001_core.sql`.
+`src-tauri/src/lib.rs`: scan `scan_rfid_at` :5421 (time-in INSERT :5578, time-out UPDATE :5633), admin correction :1552, admin delete :1954, backdated create :1723, frozen-day check `day_in_finalized_cutoff` :1536. Schema `UNIQUE(user_id, attendance_date)` in `src-tauri/db/migrations/0001_core.sql`.
 
 States: NONE · WORKING (time_in set, time_out NULL) · COMPLETED · LATE_TIMEOUT (time-out at/after 18:00) · MISSED (time_in NULL, admin-made).
 
-Invariants: a COMPLETED/LATE_TIMEOUT day has exactly one payroll row; a correction never overwrites a value it did not see; a day inside a FINALIZED cutoff does not change (only enforced for backdated create, see D2).
+Invariants: a COMPLETED day has exactly one payroll row (a LATE_TIMEOUT day has one unless the engine cannot price it, D3); a correction never overwrites a value it did not see; no admin create, edit or delete touches a day inside a FINALIZED cutoff (kiosk scans are not blocked); a time-out is at least 1 minute after the time-in.
 
 | From | Event | Guard | To | Side effects | Code |
 | --- | --- | --- | --- | --- | --- |
-| NONE | scan | active user, debounce passes | WORKING | queue Attendance + InternDtr UPSERT | lib.rs:5529 |
-| WORKING | scan | 10 s debounce; `time_out IS NULL` and revision match | COMPLETED / LATE_TIMEOUT | payroll in the same tx | lib.rs:5573, :5772 |
-| COMPLETED / LATE / MISSED | scan | — | rejected | — | lib.rs:5555, :5577 |
-| any | admin correction | stored times equal the editor's expected times | by times set | payroll rebuilt in the same tx | lib.rs:1531, :1579 |
-| any | admin delete | — | NONE | payroll + grace deleted in one tx; Sheets DELETEs queued | lib.rs:1935 |
-| NONE (past) | backdated create | no FINALIZED cutoff covers the date | WORKING / COMPLETED / LATE | — | lib.rs:1793 |
+| NONE | scan | active user, debounce passes | WORKING | queue Attendance + InternDtr UPSERT | lib.rs:5578 |
+| WORKING | scan < 1 min after time-in | — | WORKING (rejected as DUPLICATE_SCAN) | — | lib.rs:5613 |
+| WORKING | scan | 10 s debounce; `time_out IS NULL` and revision match | COMPLETED / LATE_TIMEOUT | payroll in a savepoint of the same tx; a LATE_TIMEOUT the engine cannot price is kept without payroll | lib.rs:5633, :5647, :5854 |
+| COMPLETED / LATE / MISSED | scan | — | rejected | — | lib.rs:5599, :5604 |
+| any | admin correction | stored times equal the editor's expected times; neither the old nor the new date is in a FINALIZED cutoff | by times set | payroll rebuilt in the same tx | lib.rs:1552, :1600, :1647 |
+| any | admin delete | date not in a FINALIZED cutoff | NONE | payroll + grace deleted in one tx; Sheets DELETEs queued | lib.rs:1954, :2008 |
+| NONE (past) | backdated create | no FINALIZED cutoff covers the date | WORKING / COMPLETED / LATE | — | lib.rs:1812 |
 
-Invalid states the variables allow: MISSED with a time-out (D4); WORKING forever after a time-in past 17:00 (D3); a day changed inside a FINALIZED cutoff (D2).
+Invalid state the variables still allow: MISSED with a time-out, after an admin clears the time-in (D7).
 
 ### M2 Scan debounce (in memory)
 
-`src-tauri/src/state.rs:190`, `lib.rs:5487`. Per card: `fast` (500 ms, stamped before the write) and `slow` (10 s, stamped after a successful write). Cleared by restart. Admin-assisted scans key on the target's card.
+`src-tauri/src/state.rs:190`, `lib.rs:5536`. Per card: `fast` (500 ms, stamped before the write) and `slow` (10 s, stamped after a successful write). Cleared by restart. Admin-assisted scans key on the target's card.
 
 ### M3 Bathroom key (per gender)
 
-`lib.rs`: scan `process_bathroom_scan` :1263, admin edit `bathroom_update_log_impl` :1086. Partial unique index allows one OUT row per gender (`0015_bathroom_guard_on_time_in.sql`).
+`lib.rs`: scan `process_bathroom_scan` :1265, admin edit `bathroom_update_log_impl` :1088. Partial unique index allows one OUT row per gender (`0015_bathroom_guard_on_time_in.sql`).
 
 States: FREE · OUT (row with `time_in IS NULL`) · RETURNED log rows.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
-| FREE | scan / admin checkout | unique OUT index | OUT | lib.rs:1263 |
-| OUT | scan / admin return | `time_in IS NULL` | RETURNED | lib.rs:1263 |
-| any | admin edit | row `updated_at` = the one the dialog opened | OUT / RETURNED | lib.rs:1230 |
+| FREE | scan / admin checkout | unique OUT index | OUT | lib.rs:1265 |
+| OUT | scan / admin return | `time_in IS NULL` | RETURNED | lib.rs:1265 |
+| any | admin edit | row `updated_at` = the one the dialog opened | OUT / RETURNED | lib.rs:1232 |
 
 ### M4 Payroll cutoff
 
-`lib.rs`: generate :2591, finalize `payroll_finalize_cutoff_impl` :3202, delete :3243; frozen-days rule :5916.
+`lib.rs`: generate :2620, finalize `payroll_finalize_cutoff_impl` :3231, delete :3272; frozen-days rule :5998; user delete keeps FINALIZED cutoffs :590.
 
-States: DRAFT · FINALIZED (with snapshot). Invariants: never FINALIZED without a snapshot; **a day belongs to at most one FINALIZED cutoff per person** (now enforced, F1).
+States: DRAFT · FINALIZED (with snapshot). Invariants: never FINALIZED without a snapshot; **a day belongs to at most one FINALIZED cutoff per person** (F1); a FINALIZED cutoff and its snapshot outlive the person (D2).
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
-| — | generate | person has no FINALIZED cutoff with the same dates | DRAFT (old drafts replaced) | lib.rs:2591 |
-| DRAFT | finalize | `status='DRAFT'` and no overlapping FINALIZED cutoff | FINALIZED + snapshot (one tx) | lib.rs:3202, :3217 |
-| any | delete | — | gone (snapshot + cutoff in one tx) | lib.rs:3243 |
+| — | generate | person has no FINALIZED cutoff with the same dates | DRAFT (old drafts replaced) | lib.rs:2620 |
+| DRAFT | finalize | `status='DRAFT'` and no overlapping FINALIZED cutoff | FINALIZED + snapshot (one tx) | lib.rs:3231, :3246 |
+| any | admin delete | — | gone (snapshot + cutoff in one tx) | lib.rs:3272 |
+| DRAFT | user deleted | — | gone | lib.rs:590 |
+| FINALIZED | user deleted | — | kept, with its snapshot | lib.rs:590 |
 
 ### M5 Sync queue row (`sync_queue`)
 
@@ -72,11 +75,11 @@ Invariants: the payload pushed is the payload claimed; per remote row the newest
 | PROCESSING | transient error | — | RETRY (attempts unchanged) | sheets_sync.rs:2821 |
 | PROCESSING | finite error | — | RETRY, or DEAD at 5 strikes | sync_retry.rs:427 |
 | PROCESSING | lease older than 5 min | — | RETRY | sheets_sync.rs:852 |
-| PENDING / RETRY / DEAD | admin retry | not SYNCED or PROCESSING | PENDING | lib.rs:4690 |
+| PENDING / RETRY / DEAD | admin retry | not SYNCED or PROCESSING | PENDING | lib.rs:4727 |
 
 ### M6 Shared sync guard
 
-`src-tauri/src/state.rs:415` (acquire) / :449 (release): an `AtomicBool` plus a persisted owner row. Taken by the background tick (lib.rs:6256), Sync now (:4719), DTR sync (:4810) and nuke-and-resync (:4898).
+`src-tauri/src/state.rs:415` (acquire) / :449 (release): an `AtomicBool` plus a persisted owner row. Taken by the background tick (lib.rs:6338), Sync now (:4756), DTR sync (:4847) and nuke-and-resync (:4935).
 
 ### M7 DTR throttle and pending backfill
 
@@ -92,9 +95,9 @@ Invariants: the payload pushed is the payload claimed; per remote row the newest
 
 ### M10 Admin session and setup unlock
 
-Rust: one global session slot `state.rs:193`, unlock `lib.rs:3988`, check `lib.rs:5259`. Client: setup dialog `client/src/App.tsx:531` / close :569 (attempt counter :354), admin page unlock :3695.
+Rust: one global session slot `state.rs:193`, unlock `lib.rs:4017`, check `lib.rs:5296`, wrong-PIN guard `services/admin_pin.rs:73` (stored in `app_settings`). Client: setup dialog `client/src/App.tsx:531` / close :569 (attempt counter :354), admin page unlock :3695.
 
-States: locked · unlocking · unlocked(token, expiry). Invariant: closing setup leaves it locked, even if an unlock answers afterwards.
+States: locked · unlocking · unlocked(token, expiry) · PIN locked out (5 wrong PINs in a row → 5 minutes; survives a restart; admin cards still unlock; any success resets the count). Invariants: closing setup leaves it locked, even if an unlock answers afterwards; while locked out a PIN is never checked.
 
 ### M11 Kiosk scan pipeline (client)
 
@@ -102,7 +105,7 @@ States: locked · unlocking · unlocked(token, expiry). Invariant: closing setup
 
 ### M12 Offline scan queue (browser / legacy server mode only)
 
-`client/src/network.ts` (localStorage `alpha_premier_offline_scans`), replay `App.tsx:465`, `submitScan` `client/src/api.ts:249`. Item: queued → replaying → removed. Invariants: one replay pass at a time; a replay never re-queues; taps replay in order.
+`client/src/network.ts` (localStorage `alpha_premier_offline_scans`), replay `App.tsx:465`, `submitScan` `client/src/api.ts:251`. Item: queued → replaying → removed. Invariants: one replay pass at a time; a replay never re-queues; taps replay in order.
 
 ### M13 DTR sync progress → client guard
 
@@ -137,17 +140,20 @@ Checked and sound: voice job queue (`voice_pull.rs`, conditional finishes plus a
 | F19 | 2 | Bathroom admin edit wrote unconditionally → a key returned while the dialog was open flipped back to OUT | optimistic `updated_at`; dialog sends `expectedUpdatedAt` | `bathroom_edit_rejects_dates_outside_log_date` (stale-save steps) |
 | F20 | 3 | Nuke-and-resync skipped the sync guard → an in-flight push landed after the wipe | takes the guard | `nuke_and_resync_waits_for_a_running_sync` |
 | F21 | 3 | `?` exits left recon runs RUNNING; failed scheduled runs retried every 30 s tick (≈720 FAILED rows + audits per Friday) | wrapper closes every failure once; boot reclaim; 30-min retry gap | `a_run_cut_off_by_closing_the_app_is_closed_as_failed_at_boot`, `scheduled_retries_wait_after_an_attempt`, `a_failed_run_is_recorded_once_and_never_left_running` |
+| F22 | 1 | D1: admin PIN unlock had no attempt limit | 5 wrong PINs in a row lock PIN unlock for 5 min, stored in `app_settings`; admin cards still work | `admin_pin_lockout_after_five_wrong_pins_survives_a_restart`; `api.test.ts` "says PIN unlock is paused …" |
+| F23 | 2 | D2: admin could edit, move into or delete a day inside a FINALIZED cutoff; user delete erased approved pay | refuse with ATTENDANCE_IN_FINALIZED_CUTOFF; user delete keeps FINALIZED cutoffs and snapshots | `finalized_cutoff_freezes_its_days_and_outlives_the_user`; `api.test.ts` "explains that a day in a finalized payroll cutoff …" |
+| F24 | 2 | D3: time-in after 17:00 could never be timed out (payroll validation failed and rolled back every tap) | payroll in a savepoint; an unpriceable LATE_TIMEOUT is kept without payroll for the admin correction | `scan_records_unpriceable_time_out_as_late_without_payroll` |
+| F25 | 2 | D4: a second tap 10 s after time-in closed the day | taps < 1 min after the stored time-in are DUPLICATE_SCAN | `scan_needs_a_minute_between_time_in_and_time_out` |
 
 ### Decision (confirmed, needs a product call)
 
+D1–D4 were decided on 2026-11-06 ("D1 yes, D2 refuse, D3 record, D4 1 min") and are fixed as F22–F25.
+
 | # | Impact | Bug | Options |
 | --- | --- | --- | --- |
-| D1 | 1 | Admin PIN unlock has no attempt limit (`lib.rs:3988`); config PINs can be 4 digits | lock after N wrong PINs for M minutes, persisted in `app_settings` |
-| D2 | 2 | Attendance inside a FINALIZED cutoff can be edited or deleted (only backdated create checks), and deleting a user hard-deletes their FINALIZED cutoffs and snapshots | refuse, or allow with an audit note; keep or delete approved pay on user delete |
-| D3 | 2 | Time-in after 17:00 cannot be closed at or after 18:00: payroll validation fails and the scan rolls back on every tap | refuse time-in after 17:00, or record LATE_TIMEOUT and leave payroll to the correction |
-| D4 | 2 | No minimum time between time-in and time-out (a second tap after 10 s closes the day); admin clearing time-in makes MISSED and the scan then refuses the person | minimum minutes before a time-out; reject clearing time-in while a time-out exists |
 | D5 | 2 | DTR kill switch drops new punches while paused, and on resume pushes payloads frozen at pause time | queue while paused (dispatch is already gated) or keep dropping |
 | D6 | 1 (browser mode) | An offline-queued scan is recorded at replay time, not tap time (`ScanRequest` has no timestamp) | add `capturedAt` to the contract (server trusts the kiosk clock), or stop queueing attendance offline |
+| D7 | 2 | An admin who clears a day's time-in leaves MISSED (with any time-out kept), and the scan then refuses the person for that day | reject clearing time-in while a time-out exists, or let the scan start the day again |
 
 ### Open (confirmed, not fixed in this pass)
 

@@ -189,6 +189,8 @@ export function setupErrorFrom<T>(error: T, fallback: SetupErrorCode): SetupErro
     case 'ADMIN_DISABLED':
     case 'SETUP_DISABLED':
       return { success: false, error: { code: 'SETUP_DISABLED', message: 'Admin setup is disabled in the configuration.' } };
+    case 'ADMIN_PIN_LOCKED':
+      return { success: false, error: { code: 'ADMIN_PIN_LOCKED', message: pinResetMessages.ADMIN_PIN_LOCKED } };
     case 'SETUP_VALIDATION_ERROR':
       return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'Some form fields are missing or invalid.' } };
     case 'USER_CONFLICT':
@@ -408,7 +410,9 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
       nativeAdminExpiresAt = response.expiresAt;
       return { success: true, expiresAt: response.expiresAt };
     } catch (error) {
-      return { success: false, error: { message: errorString(error) === 'ADMIN_DISABLED' ? pinResetMessages.ADMIN_DISABLED : 'The administrator PIN is invalid.' } };
+      const code = errorString(error);
+      const message = code === 'ADMIN_DISABLED' || code === 'ADMIN_PIN_LOCKED' ? pinResetMessages[code] : 'The administrator PIN is invalid.';
+      return { success: false, error: { message } };
     }
   }
   // Never throws: callers hold a busy flag across this call.
@@ -423,6 +427,7 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
 
 const pinResetMessages = {
   ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
+  ADMIN_PIN_LOCKED: 'Too many wrong PINs. PIN unlock is paused for 5 minutes; an admin card still works.',
   RESET_EMAIL_NOT_CONFIGURED: 'Email reset is not set up in this app build. Contact IT.',
   RESET_EMAIL_FAILED: 'The reset email could not be sent. Check the internet connection and try again.',
   RESET_RATE_LIMITED: 'A code was requested less than a minute ago. Use the newest reset email, or wait a minute and request another.',
@@ -525,6 +530,7 @@ const attendanceSaveMessages = {
   ATTENDANCE_NOT_FOUND: 'This attendance record no longer exists. The list was reloaded.',
   ADMIN_VALIDATION_ERROR: 'The date or time is not valid. Check the times and try again.',
   ADMIN_AUTH_REQUIRED: 'Administrator session expired. Unlock admin to continue.',
+  ATTENDANCE_IN_FINALIZED_CUTOFF: 'This day is in a finalized payroll cutoff, so it can\'t be changed.',
 };
 
 export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { code?: string; message?: string } }> {
@@ -586,8 +592,14 @@ export async function deleteAdminUser(userId: string): Promise<{ success: boolea
 }
 export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<{ success: boolean; error?: { message?: string } }> {
   if (runningInTauri()) {
-    // SAFETY: Backend delete attendance returns success response
-    return (await tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date)) as { success: boolean; error?: { message?: string } };
+    try {
+      // SAFETY: Backend delete attendance returns success response
+      return (await tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date)) as { success: boolean; error?: { message?: string } };
+    } catch (err) {
+      const raw = errorString(err);
+      const known = Object.entries(attendanceSaveMessages).find(([key]) => key === raw);
+      return { success: false, error: { message: known ? known[1] : raw || 'Unable to delete record.' } };
+    }
   }
   const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`), { method: 'DELETE' });
   // SAFETY: Parsing admin delete attendance response JSON

@@ -32,6 +32,11 @@ const PIN_HASH_KEY: &str = "admin_pin_hash";
 const CONFIG_FINGERPRINT_KEY: &str = "admin_pin_config_fingerprint";
 const RESET_KEY: &str = "admin_pin_reset";
 const GUARD_KEY: &str = "admin_pin_reset_guard";
+const UNLOCK_GUARD_KEY: &str = "admin_unlock_guard";
+/// Owner decision D1 (2026-11-06): five wrong PINs in a row pause PIN
+/// unlock for five minutes. Admin cards still unlock.
+const UNLOCK_MAX_FAILURES: u32 = 5;
+const UNLOCK_LOCK_MINUTES: i64 = 5;
 const ITERATIONS: NonZeroU32 = match NonZeroU32::new(100_000) {
     Some(value) => value,
     None => panic!("PBKDF2 iterations must be non-zero"),
@@ -53,6 +58,41 @@ struct ResetGuard {
     last_request_at: Option<DateTime<Utc>>,
     failures: u32,
     failure_window_start: Option<DateTime<Utc>>,
+}
+
+/// Wrong-PIN counter and lockout, stored in `app_settings` so a restart
+/// does not lift the lock.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UnlockGuard {
+    failures: u32,
+    locked_until: Option<DateTime<Utc>>,
+}
+
+/// True while a wrong-PIN lockout is running.
+pub async fn unlock_locked(db: &SqlitePool, now: DateTime<Utc>) -> Result<bool, String> {
+    let guard: UnlockGuard = load_json(db, UNLOCK_GUARD_KEY).await?.unwrap_or_default();
+    Ok(guard.locked_until.is_some_and(|until| until > now))
+}
+
+/// Counts one wrong PIN. Returns true when this one started the lockout.
+pub async fn record_unlock_failure(db: &SqlitePool, now: DateTime<Utc>) -> Result<bool, String> {
+    let mut guard: UnlockGuard = load_json(db, UNLOCK_GUARD_KEY).await?.unwrap_or_default();
+    guard.failures += 1;
+    let locked = guard.failures >= UNLOCK_MAX_FAILURES;
+    if locked {
+        guard = UnlockGuard {
+            failures: 0,
+            locked_until: Some(now + Duration::minutes(UNLOCK_LOCK_MINUTES)),
+        };
+    }
+    save_json(db, UNLOCK_GUARD_KEY, &guard, now).await?;
+    Ok(locked)
+}
+
+/// A successful unlock starts the count again.
+pub async fn clear_unlock_failures(db: &SqlitePool) -> Result<(), String> {
+    delete_setting(db, UNLOCK_GUARD_KEY).await
 }
 
 /// A code that has been generated but is only stored once the email is sent.

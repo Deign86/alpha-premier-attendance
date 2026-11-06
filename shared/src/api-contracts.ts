@@ -854,6 +854,7 @@ export const setupErrorCodes = [
   'SETUP_VALIDATION_ERROR',
   'USER_CONFLICT',
   'GOOGLE_SHEETS_UNAVAILABLE',
+  'ADMIN_PIN_LOCKED',
 ] as const;
 export type SetupErrorCode = (typeof setupErrorCodes)[number];
 

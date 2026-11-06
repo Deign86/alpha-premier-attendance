@@ -533,7 +533,7 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
 
     // 1. Capture cutoff payroll records to delete & sync
     let cutoff_rows = sqlx::query(
-        "SELECT payroll_id, employee_id, employee_name, payroll_cutoff_label, cutoff_start, cutoff_end FROM payroll_cutoffs WHERE employee_id = ?"
+        "SELECT payroll_id, employee_id, employee_name, payroll_cutoff_label, cutoff_start, cutoff_end FROM payroll_cutoffs WHERE employee_id = ? AND status <> 'FINALIZED'"
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -578,14 +578,16 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
 
     // Execute deletions in database
     sqlx::query(
-        "DELETE FROM payroll_snapshots WHERE payroll_id IN (SELECT payroll_id FROM payroll_cutoffs WHERE employee_id = ?)"
+        "DELETE FROM payroll_snapshots WHERE payroll_id IN (SELECT payroll_id FROM payroll_cutoffs WHERE employee_id = ? AND status <> 'FINALIZED')"
     )
     .bind(user_id)
     .execute(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
 
-    sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id = ?")
+    // Approved pay outlives the person (owner decision D2, 2026-11-06):
+    // FINALIZED cutoffs and their snapshots stay; only drafts go.
+    sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id = ? AND status <> 'FINALIZED'")
         .bind(user_id)
         .execute(&mut *tx)
         .await
@@ -1528,6 +1530,25 @@ async fn admin_update_attendance(
     admin_update_attendance_impl(&state, &token, &attendance_id, &payload).await
 }
 
+/// A day inside one of the person's FINALIZED cutoffs is approved pay: no
+/// admin create, edit or delete may change it (owner decision D2,
+/// 2026-11-06). Kiosk scans are not blocked.
+async fn day_in_finalized_cutoff<'c, E>(executor: E, user_id: &str, date: &str) -> Result<bool, String>
+where
+    E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
+{
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id = ? AND status = 'FINALIZED' AND ? >= cutoff_start AND ? <= cutoff_end",
+    )
+    .bind(user_id)
+    .bind(date)
+    .bind(date)
+    .fetch_one(executor)
+    .await
+    .map(|count| count > 0)
+    .map_err(|e| e.to_string())
+}
+
 async fn admin_update_attendance_impl(
     state: &AppState,
     token: &str,
@@ -1538,7 +1559,7 @@ async fn admin_update_attendance_impl(
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     let row = sqlx::query(
-        "SELECT attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id=?",
+        "SELECT user_id,attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id=?",
     )
     .bind(&attendance_id)
     .fetch_optional(&state.db)
@@ -1618,6 +1639,13 @@ async fn admin_update_attendance_impl(
     // One transaction: attendance update + payroll/grace rebuild commit together.
     // Sync/audit side effects run only after commit.
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+    // Neither the day it is on nor the day it moves to may be approved pay.
+    let owner: &str = row.get("user_id");
+    if day_in_finalized_cutoff(&mut *tx, owner, current_date).await?
+        || day_in_finalized_cutoff(&mut *tx, owner, date).await?
+    {
+        return Err("ATTENDANCE_IN_FINALIZED_CUTOFF".into());
+    }
     let updated = sqlx::query("UPDATE attendance SET attendance_date=?,time_in=?,time_out=?,status=?,revision=revision+1,updated_at=? WHERE attendance_id=? AND time_in IS ? AND time_out IS ? AND revision=?")
         .bind(date).bind(time_in).bind(time_out).bind(status).bind(&now).bind(attendance_id).bind(expected_in).bind(expected_out).bind(row.get::<i64,_>("revision")).execute(&mut *tx).await.map_err(|e|e.to_string())?;
     if updated.rows_affected() != 1 {
@@ -1780,16 +1808,7 @@ async fn admin_create_backdated_attendance_impl(
         return Err("ATTENDANCE_ALREADY_EXISTS_FOR_DATE".into());
     }
 
-    let finalized_cutoff = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id = ? AND status = 'FINALIZED' AND ? >= cutoff_start AND ? <= cutoff_end"
-    )
-    .bind(user_id)
-    .bind(attendance_date)
-    .bind(attendance_date)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
-    if finalized_cutoff > 0 {
+    if day_in_finalized_cutoff(&state.db, user_id, attendance_date).await? {
         return Err("BACKDATE_LIMIT_EXCEEDED".into());
     }
 
@@ -1979,6 +1998,16 @@ async fn admin_delete_attendance_impl(
                 )
             })
             .collect();
+    let owner: Option<String> = sqlx::query_scalar("SELECT user_id FROM attendance WHERE attendance_id=?")
+        .bind(attendance_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(owner) = owner {
+        if day_in_finalized_cutoff(&mut *tx, &owner, date).await? {
+            return Err("ATTENDANCE_IN_FINALIZED_CUTOFF".into());
+        }
+    }
     let result = sqlx::query("DELETE FROM attendance WHERE attendance_id=? AND attendance_date=?")
         .bind(attendance_id)
         .bind(date)
@@ -3995,11 +4024,15 @@ async fn setup_unlock_impl(
     }
     let configured = state.lan.admin_pin.as_deref();
     let pin_trimmed = pin.trim();
+    let now = chrono::Utc::now();
+    // While locked out a PIN is never checked, so a guess cannot be confirmed.
+    let pin_locked = crate::services::admin_pin::unlock_locked(&state.db, now).await?;
     // No PIN anywhere (not set in config, not reset yet) means only admin cards unlock.
-    let is_pin_match = match crate::services::admin_pin::effective_pin_hash(&state.db, configured).await? {
-        Some(hash) => crate::services::admin_pin::verify_secret(&hash, pin_trimmed),
-        None => configured.is_some_and(|pin| pin == pin_trimmed),
-    };
+    let is_pin_match = !pin_locked
+        && match crate::services::admin_pin::effective_pin_hash(&state.db, configured).await? {
+            Some(hash) => crate::services::admin_pin::verify_secret(&hash, pin_trimmed),
+            None => configured.is_some_and(|pin| pin == pin_trimmed),
+        };
     let mut is_admin_card_match = false;
     if !is_pin_match {
         let uid = pin_trimmed.to_ascii_uppercase();
@@ -4014,8 +4047,12 @@ async fn setup_unlock_impl(
         is_admin_card_match = row.is_some();
     }
     if !is_pin_match && !is_admin_card_match {
+        if pin_locked || crate::services::admin_pin::record_unlock_failure(&state.db, now).await? {
+            return Err("ADMIN_PIN_LOCKED".into());
+        }
         return Err("INVALID_ADMIN_PIN".into());
     }
+    crate::services::admin_pin::clear_unlock_failures(&state.db).await?;
     let token = uuid::Uuid::new_v4().to_string();
     let expires = std::time::Instant::now()
         + std::time::Duration::from_secs(state.lan.admin_session_minutes * 60);
@@ -5369,10 +5406,23 @@ async fn scan_rfid(
     scan_rfid_impl(Some(&app), &state, request).await
 }
 
+/// Shortest time between a time-in and the tap that times the person out
+/// (owner decision D4, 2026-11-06): anything sooner is a double tap.
+const MIN_SECS_FROM_TIME_IN_TO_TIME_OUT: i64 = 60;
+
 async fn scan_rfid_impl(
     app: Option<&tauri::AppHandle>,
     state: &AppState,
     request: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    scan_rfid_at(app, state, request, chrono::Utc::now()).await
+}
+
+async fn scan_rfid_at(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    request: serde_json::Value,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<serde_json::Value, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let uid = request
@@ -5406,7 +5456,6 @@ async fn scan_rfid_impl(
             serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INVALID_SCAN_INPUT","message":"rfidUid and source are required."}}),
         );
     }
-    let now = chrono::Utc::now();
     let user = match sqlx::query("SELECT user_id, full_name, department, employee_type, daily_rate_centavos, photo_url, status, gender, card_type, rfid_uid FROM users WHERE rfid_uid = ?")
         .bind(&uid).fetch_optional(&state.db).await {
         Ok(Some(row)) => row,
@@ -5555,6 +5604,17 @@ async fn scan_rfid_impl(
                     serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"ATTENDANCE_DATA_CONFLICT","message":"Attendance data is inconsistent."}}),
                 );
             }
+            // Measured from the stored time-in, so it also holds across a
+            // restart (the in-memory debounce only covers 10 s).
+            let secs_since_in = tin
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|time_in| (now - time_in.with_timezone(&chrono::Utc)).num_seconds());
+            if secs_since_in.is_some_and(|secs| secs < MIN_SECS_FROM_TIME_IN_TO_TIME_OUT) {
+                return Ok(
+                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"DUPLICATE_SCAN","message":"Already timed in. Tap again after a minute to time out."}}),
+                );
+            }
             // The office does not allow overtime: a time-out after office
             // hours is saved as LATE_TIMEOUT (pending manual correction),
             // never as a normal COMPLETED shift.
@@ -5579,8 +5639,18 @@ async fn scan_rfid_impl(
             }
             // LATE_TIMEOUT still pays: the engines cap the clock-out to 17:00
             // (cap_late_timeout_out) before any math, so the day is a full capped shift.
+            // Payroll runs in a savepoint: a late time-out the engine cannot
+            // price (time-in after 17:00 caps the time-out below it) is still
+            // recorded, with no payroll, for the admin correction (owner
+            // decision D3, 2026-11-06). Before, every tap failed and the day
+            // stayed WORKING for good.
+            let Ok(mut payroll) = sqlx::Connection::begin(&mut *tx).await else {
+                return Ok(
+                    serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
+                );
+            };
             let pending = match ensure_payroll_tx(
-                &mut tx,
+                &mut payroll,
                 &id,
                 &user_id,
                 effective_user.get::<String, _>("full_name"),
@@ -5590,7 +5660,19 @@ async fn scan_rfid_impl(
             )
             .await
             {
-                Ok(pending) => pending,
+                Ok(pending) => {
+                    if payroll.commit().await.is_err() {
+                        return Ok(
+                            serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
+                        );
+                    }
+                    pending
+                }
+                Err(error) if new_status == "LATE_TIMEOUT" => {
+                    let _ = payroll.rollback().await;
+                    log::warn!("late time-out {id} recorded without payroll, pending correction: {error}");
+                    Vec::new()
+                }
                 Err(error) => {
                     return Ok(
                         serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"PAYROLL_GENERATION_FAILED","message":error}}),
@@ -6944,6 +7026,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finalized_cutoff_freezes_its_days_and_outlives_the_user() {
+        let temp = std::env::temp_dir().join(format!("alpha-cutoff-freeze-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+        super::upsert_user_record(
+            &state.db, "EMP-1", "RFID-FREEZE", "Ada Lovelace", Some("QA"), "ACTIVE", "INTERN",
+            Some("FEMALE"), None, Some("BEA_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        // Aug 1-15 is approved pay; Aug 20 is not.
+        insert_cutoff_row(&state.db, "PAY-FIN", "FINALIZED").await;
+        insert_cutoff_row(&state.db, "PAY-DRAFT", "DRAFT").await;
+        sqlx::query("UPDATE payroll_cutoffs SET cutoff_start='2026-08-16', cutoff_end='2026-08-31' WHERE payroll_id='PAY-DRAFT'")
+            .execute(&state.db).await.unwrap();
+        sqlx::query("INSERT INTO payroll_snapshots (snapshot_id,payroll_id,revision,status,snapshot_json,snapshot_sha256,created_at) VALUES ('snap-1','PAY-FIN',1,'FINALIZED','{}','x','2026-08-16T00:00:00Z')")
+            .execute(&state.db).await.unwrap();
+        for (aid, date) in [("att-in", "2026-08-05"), ("att-out", "2026-08-20")] {
+            sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES (?,?,'EMP-1','RFID-FREEZE','Ada Lovelace','QA',?,?,'COMPLETED','RFID','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z')")
+                .bind(aid).bind(date)
+                .bind(format!("{date}T08:00:00+08:00")).bind(format!("{date}T17:00:00+08:00"))
+                .execute(&state.db).await.unwrap();
+        }
+
+        let edit = super::admin_update_attendance_impl(&state, &token, "att-in", &serde_json::json!({"timeOut": "2026-08-05T16:00:00+08:00"})).await;
+        assert_eq!(edit.unwrap_err(), "ATTENDANCE_IN_FINALIZED_CUTOFF");
+        let move_in = super::admin_update_attendance_impl(&state, &token, "att-out", &serde_json::json!({"attendanceDate": "2026-08-06"})).await;
+        assert_eq!(move_in.unwrap_err(), "ATTENDANCE_IN_FINALIZED_CUTOFF", "moving a day into approved pay");
+        let delete = super::admin_delete_attendance_impl(&state, &token, "att-in", "2026-08-05").await;
+        assert_eq!(delete.unwrap_err(), "ATTENDANCE_IN_FINALIZED_CUTOFF");
+        let frozen = sqlx::query("SELECT time_out, attendance_date FROM attendance WHERE attendance_id='att-in'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(frozen.get::<Option<String>, _>("time_out").as_deref(), Some("2026-08-05T17:00:00+08:00"));
+        // Days outside approved pay still correct normally.
+        let open = super::admin_update_attendance_impl(&state, &token, "att-out", &serde_json::json!({"timeOut": "2026-08-20T16:30:00+08:00"})).await.unwrap();
+        assert_eq!(open["success"], true);
+
+        // Deleting the person keeps the approved cutoff and its snapshot.
+        super::delete_user_and_cascade(&state, "EMP-1").await.unwrap();
+        let count = |sql: &'static str| {
+            let db = state.db.clone();
+            async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(&db).await.unwrap() }
+        };
+        assert_eq!(count("SELECT COUNT(*) FROM payroll_cutoffs WHERE payroll_id='PAY-FIN'").await, 1);
+        assert_eq!(count("SELECT COUNT(*) FROM payroll_snapshots WHERE payroll_id='PAY-FIN'").await, 1);
+        assert_eq!(count("SELECT COUNT(*) FROM payroll_cutoffs WHERE payroll_id='PAY-DRAFT'").await, 0);
+        assert_eq!(count("SELECT COUNT(*) FROM users WHERE user_id='EMP-1'").await, 0);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn finalized_cutoff_can_be_deleted() {
         // Finalized and draft cutoffs can both be deleted with confirmation.
         let temp = std::env::temp_dir().join(format!("alpha-cutoff-delete-{}", uuid::Uuid::new_v4()));
@@ -7390,11 +7541,13 @@ mod tests {
             .unwrap();
         assert_eq!(user_count, 0);
 
+        // D2 (owner decision 2026-11-06): the FINALIZED cutoff is approved
+        // pay and stays after the person is deleted.
         let cutoff_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id = 'EMP-DEL-TEST'")
             .fetch_one(&state.db)
             .await
             .unwrap();
-        assert_eq!(cutoff_count, 0);
+        assert_eq!(cutoff_count, 1);
 
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
@@ -7734,6 +7887,70 @@ mod tests {
         assert_eq!(super::normalize_name("o’neill"), "O’Neill");
         assert_eq!(super::normalize_name("ma. teresa"), "Ma. Teresa");
         assert_eq!(super::normalize_name(""), "");
+    }
+
+    #[tokio::test]
+    async fn admin_pin_lockout_after_five_wrong_pins_survives_a_restart() {
+        let temp = std::env::temp_dir().join(format!("alpha-pin-lockout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let open = || {
+            let temp = temp.clone();
+            async move {
+                let mut lan = LanConfig::default();
+                lan.admin_pin = Some("2468".to_string());
+                lan.admin_session_minutes = 30;
+                AppState::new(
+                    temp.clone(),
+                    temp.join("attendance.db"),
+                    temp.join("exports"),
+                    false,
+                    lan,
+                    OfficeConfig::default(),
+                    crate::config::ScannerConfig::default(),
+                    crate::config::TtsConfig::default(),
+                    crate::config::UpdaterConfig::default(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let state = open().await;
+        for attempt in 1..=4 {
+            let err = super::setup_unlock_impl(&state, "0000".to_string()).await.unwrap_err();
+            assert_eq!(err, "INVALID_ADMIN_PIN", "attempt {attempt}");
+        }
+        // The fifth wrong PIN starts the lock, and then even the right PIN is refused.
+        assert_eq!(super::setup_unlock_impl(&state, "0000".to_string()).await.unwrap_err(), "ADMIN_PIN_LOCKED");
+        assert_eq!(super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap_err(), "ADMIN_PIN_LOCKED");
+        state.db.close().await;
+
+        // Restarting the app does not lift it.
+        let state = open().await;
+        assert_eq!(super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap_err(), "ADMIN_PIN_LOCKED");
+
+        // Five minutes on (stored lock moved into the past), the right PIN works.
+        sqlx::query("UPDATE app_settings SET value = json_set(value, '$.lockedUntil', '2000-01-01T00:00:00Z') WHERE key = 'admin_unlock_guard'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap()["success"], true);
+        // A success starts the count again: one wrong PIN is just wrong.
+        assert_eq!(super::setup_unlock_impl(&state, "0000".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+
+        // An admin card is not a PIN guess and still unlocks during a lock.
+        super::upsert_user_record(
+            &state.db, "ADMIN_CARD", "ADC0DE01", "Front Desk", None, "ACTIVE", "INTERN",
+            None, None, None, None, "ADMIN_ASSIST", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        for _ in 0..5 {
+            let _ = super::setup_unlock_impl(&state, "0000".to_string()).await;
+        }
+        assert_eq!(super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap_err(), "ADMIN_PIN_LOCKED");
+        assert_eq!(super::setup_unlock_impl(&state, "ADC0DE01".to_string()).await.unwrap()["success"], true);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[tokio::test]
@@ -8685,6 +8902,85 @@ mod tests {
             Some(v) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, v),
             None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
         }
+    }
+
+    async fn scan_test_state(card: &str, time_in: &str) -> (AppState, std::path::PathBuf) {
+        let temp = std::env::temp_dir().join(format!("alpha-scan-rules-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        super::upsert_user_record(
+            &state.db, "INT_SCAN", card, "Scan Intern", Some("IT"), "ACTIVE", "INTERN",
+            Some("FEMALE"), None, Some("BEA_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-scan',?,'INT_SCAN',?,'Scan Intern','IT',?,NULL,'WORKING','RFID',?,?)")
+            .bind(&time_in[..10]).bind(card).bind(time_in).bind(time_in).bind(time_in)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        (state, temp)
+    }
+
+    fn manila(at: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(at).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[tokio::test]
+    async fn scan_needs_a_minute_between_time_in_and_time_out() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let (state, temp) = scan_test_state("C0FFEE01", "2026-11-05T09:00:00+08:00").await;
+        let tap = serde_json::json!({"rfidUid": "C0FFEE01", "source": "RFID"});
+        // A second tap 30 s after time-in is a double tap, not a time-out.
+        let early = super::scan_rfid_at(None, &state, tap.clone(), manila("2026-11-05T09:00:30+08:00")).await.unwrap();
+        assert_eq!(early["success"], false);
+        assert_eq!(early["error"]["code"], "DUPLICATE_SCAN");
+        let status: String = sqlx::query_scalar("SELECT status FROM attendance WHERE attendance_id='att-scan'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(status, "WORKING");
+        // Past the minute (the in-memory 10 s debounce is a separate guard).
+        state.scan_debounce.lock().await.clear();
+        let later = super::scan_rfid_at(None, &state, tap, manila("2026-11-05T09:01:01+08:00")).await.unwrap();
+        assert_eq!(later["success"], true, "{later}");
+        assert_eq!(later["action"], "TIME_OUT");
+        let payroll: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll WHERE attendance_id='att-scan'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(payroll, 1, "a normal time-out still writes payroll");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn scan_records_unpriceable_time_out_as_late_without_payroll() {
+        let _env_guard = crate::config::dtr_env_test_guard();
+        // Time-in after 17:00: the 18:00+ time-out caps to 17:00, before the
+        // time-in, so the engine cannot price the day.
+        let (state, temp) = scan_test_state("C0FFEE02", "2026-11-05T17:30:00+08:00").await;
+        let tap = serde_json::json!({"rfidUid": "C0FFEE02", "source": "RFID"});
+        let res = super::scan_rfid_at(None, &state, tap, manila("2026-11-05T18:05:00+08:00")).await.unwrap();
+        assert_eq!(res["success"], true, "{res}");
+        assert_eq!(res["action"], "TIME_OUT");
+        let row = sqlx::query("SELECT time_out, status FROM attendance WHERE attendance_id='att-scan'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.get::<String, _>("status"), "LATE_TIMEOUT");
+        assert!(row.get::<Option<String>, _>("time_out").is_some());
+        let payroll: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll WHERE attendance_id='att-scan'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(payroll, 0, "pay is left to the admin correction");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[tokio::test]

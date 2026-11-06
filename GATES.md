@@ -2191,3 +2191,28 @@ Model and issue list: `docs/STATE-MACHINES.md` (F1–F21 fixed; D1–D6 need a p
   CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
   EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 611, server 291). Rust lib 369 passed / 3 failed (baseline before any change: 357 / 3, the same 3: config::tests::service_account_path_resolves_against_config_dir, paths::tests::db_path_override_treats_a_directory_by_appending_attendance_db, paths::tests::db_path_override_treats_a_dot_extension_as_a_file; CI runs on Windows). Integration suites 11/18/69/35/52/24 passed.
+
+## State-machine decisions D1–D4 (owner answers 2026-11-06: "D1 yes, D2 refuse, D3 record, D4 1 min")
+
+Each test was run against the code with its rule disabled (then restored) and failed there.
+
+- [x] D1 Five wrong admin PINs lock PIN unlock for 5 minutes, and the lock survives a restart.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_pin_lockout && npm test -w client -- api.test.ts
+  EXPECT: 5th wrong PIN starts the lock; the right PIN is refused while locked (ADMIN_PIN_LOCKED); a fresh AppState on the same DB is still locked; after the lock time the right PIN unlocks and resets the count; an admin card still unlocks during a lock; both unlock screens show the lock message.
+  EVIDENCE: admin_pin_lockout_after_five_wrong_pins_survives_a_restart passes; FAILED with the lockout disabled (lib.rs:7923). api.test.ts "says PIN unlock is paused …" failed before the copy, passes now.
+- [x] D2 Attendance inside a FINALIZED cutoff cannot be edited or deleted, and deleting a user keeps their finalized pay records.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib finalized_cutoff_freezes
+  EXPECT: update (including moving a day into the period) and delete return ATTENDANCE_IN_FINALIZED_CUTOFF with the row unchanged; a day outside still corrects; user delete keeps the FINALIZED cutoff and snapshot and removes the draft.
+  EVIDENCE: passes; FAILED with the freeze check disabled and, separately, with the user-delete filter removed. user_deletion_cascades_to_payroll_and_attendance now expects the FINALIZED cutoff to stay (it encoded the old behavior). api.test.ts "explains that a day in a finalized payroll cutoff …" passes (the Tauri delete path now maps errors instead of rejecting).
+- [x] D3 A time-out the payroll engine cannot price (time-in after 17:00) is still recorded, as LATE_TIMEOUT with no payroll, for an admin correction.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib scan_records_unpriceable_time_out
+  EXPECT: 17:30 time-in + 18:05 tap succeeds, row LATE_TIMEOUT with the time-out, no payroll row.
+  EVIDENCE: passes; FAILED with the savepoint fallback disabled. Scan now takes an injected clock (`scan_rfid_at`) so the test does not depend on the wall clock.
+- [x] D4 A scan less than 1 minute after time-in does not time the person out.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib scan_needs_a_minute_between_time_in_and_time_out
+  EXPECT: tap 30 s after time-in is rejected as DUPLICATE_SCAN and the day stays WORKING; a tap 61 s after time-in records the time-out with payroll.
+  EVIDENCE: passes; FAILED with the minimum disabled.
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 613, server 291). Rust lib 373 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed.
