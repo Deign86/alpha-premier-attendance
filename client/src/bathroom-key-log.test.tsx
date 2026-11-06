@@ -275,6 +275,8 @@ describe("BathroomKeyLogPanel", () => {
       timeOut: "2026-08-27T10:05:00+08:00",
       timeIn: "2026-08-27T10:25:00+08:00",
       notes: "Forgot to time in",
+      // The row as the dialog saw it: a return landing meanwhile conflicts.
+      expectedUpdatedAt: "2026-08-27T10:10:00+08:00",
     });
 
     // The routine success shows as a toast and the pop-up closes.

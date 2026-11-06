@@ -526,13 +526,17 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
     if !user_exists {
         return Err("USER_NOT_FOUND".into());
     }
+    // One transaction: a failure part-way (or a scan racing the cascade)
+    // used to leave attendance, payroll and cutoffs deleted while the user
+    // stayed, with no Sheets deletes queued. Now it is all or nothing.
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
 
     // 1. Capture cutoff payroll records to delete & sync
     let cutoff_rows = sqlx::query(
         "SELECT payroll_id, employee_id, employee_name, payroll_cutoff_label, cutoff_start, cutoff_end FROM payroll_cutoffs WHERE employee_id = ?"
     )
     .bind(user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -541,7 +545,7 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
         "SELECT payroll_id FROM payroll WHERE user_id = ?"
     )
     .bind(user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| e.to_string())?
     .into_iter()
@@ -553,7 +557,7 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
         "SELECT attendance_id, attendance_date FROM attendance WHERE user_id = ?"
     )
     .bind(user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| e.to_string())?
     .into_iter()
@@ -565,7 +569,7 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
         "SELECT grace_id FROM intern_grace WHERE user_id = ?"
     )
     .bind(user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| e.to_string())?
     .into_iter()
@@ -573,57 +577,66 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
     .collect();
 
     // Execute deletions in database
-    let _ = sqlx::query(
+    sqlx::query(
         "DELETE FROM payroll_snapshots WHERE payroll_id IN (SELECT payroll_id FROM payroll_cutoffs WHERE employee_id = ?)"
     )
     .bind(user_id)
-    .execute(&state.db)
-    .await;
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id = ?")
+    sqlx::query("DELETE FROM payroll_cutoffs WHERE employee_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM payroll WHERE user_id = ?")
+    sqlx::query("DELETE FROM payroll WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM intern_grace WHERE user_id = ?")
+    sqlx::query("DELETE FROM intern_grace WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM attendance WHERE user_id = ?")
+    sqlx::query("DELETE FROM attendance WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM bathroom_log WHERE user_id = ?")
+    sqlx::query("DELETE FROM bathroom_log WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM dtr_pending WHERE user_id = ?")
+    sqlx::query("DELETE FROM dtr_pending WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = sqlx::query("DELETE FROM dtr_recon_discrepancies WHERE user_id = ?")
+    sqlx::query("DELETE FROM dtr_recon_discrepancies WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let result = sqlx::query("DELETE FROM users WHERE user_id = ?")
         .bind(user_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
     if result.rows_affected() != 1 {
         return Err("USER_NOT_FOUND".into());
     }
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     let photo_path = state.data_dir.join("photos").join(format!("{user_id}.webp"));
     if photo_path.exists() {
@@ -1190,9 +1203,17 @@ async fn bathroom_update_log_impl(
     };
 
     let now_utc = chrono::Utc::now().to_rfc3339();
+    // Optimistic check: the row must still be the one the admin edited (the
+    // dialog's copy, else the one read above). A key returned meanwhile
+    // would otherwise be flipped back to OUT by the stale empty return time.
+    let expected_updated_at: String = request
+        .get("expectedUpdatedAt")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| existing.get("updated_at"));
 
-    sqlx::query(
-        "UPDATE bathroom_log SET time_out = ?, time_in = ?, duration_seconds = ?, status = ?, notes = ?, updated_at = ? WHERE log_id = ?",
+    let updated = sqlx::query(
+        "UPDATE bathroom_log SET time_out = ?, time_in = ?, duration_seconds = ?, status = ?, notes = ?, updated_at = ? WHERE log_id = ? AND updated_at = ?",
     )
     .bind(&next_time_out)
     .bind(&next_time_in)
@@ -1201,9 +1222,13 @@ async fn bathroom_update_log_impl(
     .bind(&next_notes)
     .bind(&now_utc)
     .bind(&log_id)
+    .bind(&expected_updated_at)
     .execute(&state.db)
     .await
     .map_err(|e| format!("Failed to update bathroom log: {e}"))?;
+    if updated.rows_affected() != 1 {
+        return Err("BATHROOM_LOG_CONFLICT: This entry changed since it was opened (the key may have just been returned). Close it and try again.".into());
+    }
 
     Ok(serde_json::json!({
         "success": true,
@@ -1920,17 +1945,21 @@ async fn admin_delete_attendance_impl(
     // NOTE: deletions clear the date's B:E cells on the intern DTR sheet
     // (values only — rows are never removed, so the template grid
     // survives); only the ops-mirror rows below are deleted outright.
+    // Reads happen inside the delete's transaction: a time-out committing
+    // between a read and the delete used to lose its payroll row without a
+    // Sheets DELETE being queued for it.
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
     let dtr_owner: Option<(String, String, String)> = sqlx::query_as(
         "SELECT attendance.user_id, attendance.full_name, users.employee_type FROM attendance JOIN users ON users.user_id = attendance.user_id WHERE attendance.attendance_id=?",
     )
     .bind(attendance_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
     let payroll_ids: Vec<String> =
         sqlx::query("SELECT payroll_id FROM payroll WHERE attendance_id=?")
             .bind(attendance_id)
-            .fetch_all(&state.db)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -1939,7 +1968,7 @@ async fn admin_delete_attendance_impl(
     let grace_rows: Vec<(String, String)> =
         sqlx::query("SELECT grace_id, user_id FROM intern_grace WHERE attendance_id=?")
             .bind(attendance_id)
-            .fetch_all(&state.db)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -1950,7 +1979,6 @@ async fn admin_delete_attendance_impl(
                 )
             })
             .collect();
-    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
     let result = sqlx::query("DELETE FROM attendance WHERE attendance_id=? AND attendance_date=?")
         .bind(attendance_id)
         .bind(date)
@@ -3220,16 +3248,19 @@ async fn delete_cutoff_record(
         .bind(&payroll_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?
         .ok_or_else(|| "PAYROLL_NOT_FOUND".to_string())?;
     // Finalized cutoffs can be deleted by authorized admin with confirmation.
+    // Snapshot and cutoff go together: never a FINALIZED cutoff without one.
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM payroll_snapshots WHERE payroll_id=?")
         .bind(&payroll_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM payroll_cutoffs WHERE payroll_id=?")
         .bind(&payroll_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
     enqueue_sync(
         &state,
         "PayrollCutoffs",
@@ -4848,13 +4879,31 @@ async fn admin_sheets_nuke_resync(
     token: String,
     confirm: bool,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
+    admin_sheets_nuke_resync_impl(&state, &token, confirm).await
+}
+
+async fn admin_sheets_nuke_resync_impl(
+    state: &AppState,
+    token: &str,
+    confirm: bool,
+) -> Result<serde_json::Value, String> {
+    if !admin_authorized(state, token).await {
         return Err("ADMIN_AUTH_REQUIRED".into());
     }
     if !confirm {
         return Err("RESYNC_CONFIRMATION_REQUIRED".into());
     }
-    let result = crate::services::sheets_sync::nuke_and_resync(&state).await?;
+    // Same guard as every other sync: a push already in flight would land
+    // after the wipe (its queued DELETE just dropped) and orphan a row.
+    crate::state::sync_guard_try_acquire(
+        &state.db,
+        state.sync_in_progress.as_ref(),
+        "admin_sheets_nuke_resync",
+    )
+    .await?;
+    let result = crate::services::sheets_sync::nuke_and_resync(state).await;
+    crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+    let result = result?;
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(chrono::Utc::now().to_rfc3339())
@@ -6824,6 +6873,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cutoff_delete_never_leaves_a_finalized_cutoff_without_its_snapshot() {
+        let temp = std::env::temp_dir().join(format!("alpha-cutoff-del-atomic-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        insert_cutoff_row(&state.db, "PAY-FIN", "FINALIZED").await;
+        sqlx::query("INSERT INTO payroll_snapshots (snapshot_id,payroll_id,revision,status,snapshot_json,snapshot_sha256,created_at) VALUES ('snap-1','PAY-FIN',1,'FINALIZED','{}','x','2026-08-16T00:00:00Z')")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER block_cutoff_delete BEFORE DELETE ON payroll_cutoffs BEGIN SELECT RAISE(ABORT, 'forced cutoff delete failure'); END")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert!(super::delete_cutoff_record(&state, "PAY-FIN".to_string()).await.is_err());
+        let snapshots: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll_snapshots WHERE payroll_id='PAY-FIN'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(snapshots, 1, "approved-pay snapshot kept while its cutoff stays");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn nuke_and_resync_waits_for_a_running_sync() {
+        let temp = std::env::temp_dir().join(format!("alpha-nuke-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+        // A background pass is mid-push.
+        crate::state::sync_guard_try_acquire(&state.db, state.sync_in_progress.as_ref(), "background_sync")
+            .await
+            .unwrap();
+        let err = super::admin_sheets_nuke_resync_impl(&state, &token, true).await.unwrap_err();
+        assert!(err.starts_with("DTR_SYNC_IN_PROGRESS"), "{err}");
+        // The refused wipe left the running pass's guard alone.
+        assert!(state.sync_in_progress.load(std::sync::atomic::Ordering::SeqCst));
+        crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn finalized_cutoff_can_be_deleted() {
         // Finalized and draft cutoffs can both be deleted with confirmation.
         let temp = std::env::temp_dir().join(format!("alpha-cutoff-delete-{}", uuid::Uuid::new_v4()));
@@ -7276,6 +7396,54 @@ mod tests {
             .unwrap();
         assert_eq!(cutoff_count, 0);
 
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn user_deletion_is_all_or_nothing() {
+        // A user delete that fails at its last step must not have already
+        // removed the person's attendance and cutoffs.
+        let temp = std::env::temp_dir().join(format!("alpha-user-del-atomic-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        super::upsert_user_record(
+            &state.db, "EMP-1", "RFID-ATOMIC", "Ada Lovelace", Some("QA"), "ACTIVE", "INTERN",
+            Some("FEMALE"), None, Some("BEA_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-1','2026-08-03','EMP-1','RFID-ATOMIC','Ada Lovelace','QA','2026-08-03T08:00:00+08:00','2026-08-03T17:00:00+08:00','COMPLETED','RFID','2026-08-03T00:00:00Z','2026-08-03T00:00:00Z')")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        insert_cutoff_row(&state.db, "PAY-FIN", "FINALIZED").await;
+        // Stand-in for the last step failing (e.g. a bathroom tap's FK row).
+        sqlx::query("CREATE TRIGGER block_user_delete BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'forced user delete failure'); END")
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        assert!(super::delete_user_and_cascade(&state, "EMP-1").await.is_err());
+        let count = |sql: &'static str| {
+            let db = state.db.clone();
+            async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(&db).await.unwrap() }
+        };
+        assert_eq!(count("SELECT COUNT(*) FROM users WHERE user_id='EMP-1'").await, 1);
+        assert_eq!(count("SELECT COUNT(*) FROM attendance WHERE user_id='EMP-1'").await, 1);
+        assert_eq!(count("SELECT COUNT(*) FROM payroll_cutoffs WHERE employee_id='EMP-1'").await, 1);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -8881,6 +9049,35 @@ mod tests {
             .await
             .expect("same-date edit");
         assert_eq!(updated["entry"]["status"].as_str(), Some("RETURNED"));
+        // Stale dialog: opened while the key was OUT (updatedAt = now_utc), the
+        // return landed, then Save sent the old empty return time. It must
+        // conflict instead of showing the returned key as OUT again.
+        let stale = serde_json::json!({
+            "timeOut": "2026-08-31T10:00:00+08:00",
+            "timeIn": null,
+            "notes": "",
+            "expectedUpdatedAt": now_utc
+        });
+        let err = super::bathroom_update_log_impl(&state, &token, "LOG-1", &stale)
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("BATHROOM_LOG_CONFLICT"), "{err}");
+        let status: String = sqlx::query_scalar("SELECT status FROM bathroom_log WHERE log_id='LOG-1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(status, "RETURNED");
+        // A deliberate re-open from the current row still works.
+        let reopen = serde_json::json!({
+            "timeOut": "2026-08-31T10:00:00+08:00",
+            "timeIn": null,
+            "notes": "",
+            "expectedUpdatedAt": updated["entry"]["updatedAt"]
+        });
+        let reopened = super::bathroom_update_log_impl(&state, &token, "LOG-1", &reopen)
+            .await
+            .expect("current-row edit");
+        assert_eq!(reopened["entry"]["status"].as_str(), Some("OUT"));
     }
 
     #[tokio::test]

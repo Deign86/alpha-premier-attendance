@@ -523,6 +523,7 @@ function EditBathroomLogModal({
         timeOut: timeOutIso,
         timeIn: timeInIso,
         notes: notes.trim(),
+        expectedUpdatedAt: log.updatedAt,
       });
       setBusy(false);
       if (response.success && response.entry) {

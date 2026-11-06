@@ -996,6 +996,8 @@ export type BathroomUpdateRequest = {
   timeOut?: string;
   timeIn?: string | null;
   notes?: string;
+  /** The entry's `updatedAt` when the edit opened; a newer row conflicts. */
+  expectedUpdatedAt?: string;
 };
 
 export type BathroomActionResponse = {

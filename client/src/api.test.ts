@@ -39,7 +39,7 @@ describe('admin unlock', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'));
     await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false });
     // SAFETY: Mock Response whose body is not JSON
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: false, json: (): Promise<unknown> => Promise.reject(new SyntaxError('Unexpected token <')) } as Response);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: false, json: (): Promise<{ success: boolean }> => Promise.reject(new SyntaxError('Unexpected token <')) } as Response);
     await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false });
   });
 });
