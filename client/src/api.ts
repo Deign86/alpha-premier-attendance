@@ -246,7 +246,7 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
   }
 }
 
-export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanResponse> {
+export async function submitScan(request: ScanRequest, signal?: AbortSignal, queueOffline = true): Promise<ScanResponse> {
   try {
     const scanRequest = runningInTauri()
       ? tauriApi.scanRfid(request)
@@ -265,7 +265,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
     const isNetworkError = !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
-    if (isNetworkError) {
+    if (isNetworkError && queueOffline) {
       const { enqueueOfflineScan } = await import('./network');
       enqueueOfflineScan(request);
       return { success: true, offlineQueued: true, message: 'Attendance saved offline. Will automatically sync when reconnected.' };
@@ -411,9 +411,14 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
       return { success: false, error: { message: errorString(error) === 'ADMIN_DISABLED' ? pinResetMessages.ADMIN_DISABLED : 'The administrator PIN is invalid.' } };
     }
   }
-  const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
-  // SAFETY: Parsing admin unlock response JSON
-  return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
+  // Never throws: callers hold a busy flag across this call.
+  try {
+    const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+    // SAFETY: Parsing admin unlock response JSON
+    return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
+  } catch {
+    return { success: false, error: { message: 'Unable to reach the attendance service. Please try again.' } };
+  }
 }
 
 const pinResetMessages = {

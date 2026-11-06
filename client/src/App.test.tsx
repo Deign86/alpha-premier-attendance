@@ -435,6 +435,52 @@ describe('RFID kiosk', () => {
     expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
   });
 
+  it('does not let a slow time-in announcement talk over the next person who already scanned', async () => {
+    let releaseHistory: () => void = () => {};
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns mock Response for config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 4000 }) } as Response;
+      }
+      if (url === '/api/attendance/scan') {
+        // SAFETY: Parse mock scan body
+        const body = JSON.parse(String(init?.body ?? '{}')) as { rfidUid?: string };
+        const payload = body.rfidUid === 'CARD-A'
+          ? successResponse
+          : {
+              ...successResponse,
+              action: 'TIME_OUT',
+              attendance: { ...successResponse.attendance, attendanceId: 'att-2', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+              user: { ...successResponse.user, userId: 'u-2', fullName: 'Grace Hopper' },
+            };
+        // SAFETY: Fetch returns scan Response mock
+        return { ok: true, json: async () => payload } as Response;
+      }
+      if (url.startsWith('/api/attendance')) {
+        // The week history behind the time-in greeting answers slowly.
+        await historyGate;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true, attendance: [] }) } as Response;
+    });
+    render(<App />);
+    act(() => emitRfidScan('CARD-A'));
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    act(() => emitRfidScan('CARD-B'));
+    expect(await screen.findByText('Grace Hopper')).toBeInTheDocument();
+    await act(async () => {
+      releaseHistory();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const announced = vi.mocked(ttsService.announceAttendance).mock.calls.map(([call]) => call.employeeName);
+    expect(announced).toEqual(['Grace Hopper']);
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
+  });
+
   it('announces a time-in with employee name in TTS announcement', async () => {
     mockFetch({
       ...successResponse,
@@ -1020,6 +1066,43 @@ describe('RFID kiosk', () => {
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     await screen.findByLabelText(/setup card id/i);
     await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(false));
+  });
+
+  it('keeps setup closed and locked when it was closed while the unlock was still in flight', async () => {
+    vi.restoreAllMocks();
+    let resolveUnlock: (response: Response) => void = () => {};
+    const lockCalls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch returns config Response mock
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableCardSetup: true }) } as Response;
+      }
+      if (url.includes('/api/setup/unlock')) {
+        return new Promise<Response>((resolve) => {
+          resolveUnlock = resolve;
+        });
+      }
+      if (url.includes('/api/setup/lock')) {
+        lockCalls.push(url);
+      }
+      // SAFETY: Fetch returns success Response mock
+      return { ok: true, json: async () => successResponse } as Response;
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.click(screen.getByRole('button', { name: /unlock setup/i }));
+    // The admin walks away: closes the dialog before the unlock answers.
+    await user.click(screen.getByRole('button', { name: /close card setup/i }));
+    await act(async () => {
+      // SAFETY: Fetch returns unlock Response mock
+      resolveUnlock({ ok: true, json: async () => ({ success: true, setupToken: 'late-token', expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response);
+    });
+    await waitFor(() => expect(lockCalls).toHaveLength(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/setup card id/i)).not.toBeInTheDocument();
   });
 
   it('shows a late time-out as its own status word in the live attendance view', async () => {
@@ -2531,6 +2614,92 @@ describe('Admin Attendance Corrections', () => {
       targetUserId: 'EMP-01',
       reason: 'Forgot RFID card',
     });
+  });
+
+  it('replays the offline queue without duplicating items and drops scans the service answered', async () => {
+    const key = 'alpha_premier_offline_scans';
+    const queued = [
+      { id: 'queue-1', request: { rfidUid: 'RFID-001', source: 'RFID' } },
+      { id: 'queue-2', request: { rfidUid: 'RFID-001', source: 'RFID' } },
+    ];
+    localStorage.setItem(key, JSON.stringify(queued));
+    let serviceUp = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns mock Response for config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url.includes('/api/attendance/scan')) {
+        if (!serviceUp) throw new TypeError('Failed to fetch');
+        // SAFETY: Return a duplicate-scan rejection, a final answer
+        return { ok: true, json: async () => ({ success: false, requestId: 'r', error: { code: 'DUPLICATE_SCAN', message: 'Card scanned too recently.' } }) } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+    try {
+      render(<App />);
+      // Still unreachable: replays must not re-enqueue copies of what they replay.
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+        window.dispatchEvent(new Event('online'));
+      });
+      await waitFor(() => expect(vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).includes('/api/attendance/scan'))).toBe(true));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(JSON.parse(localStorage.getItem(key) ?? '[]')).toHaveLength(2);
+
+      // The service answers: a rejection is final, so the items leave the queue.
+      serviceUp = true;
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      await waitFor(() => expect(JSON.parse(localStorage.getItem(key) ?? '[]')).toHaveLength(0));
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
+  it('closes the Assisted Attendance modal and shows Saved offline when the confirm is queued offline', async () => {
+    localStorage.removeItem('alpha_premier_offline_scans');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns mock Response for config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      if (url.includes('/api/attendance/scan')) {
+        // SAFETY: Parse mock scan body
+        const body = JSON.parse(String(init?.body ?? '{}')) as { source?: string };
+        if (body.source === 'ADMIN_ASSISTED_SCAN') throw new TypeError('Failed to fetch');
+        // SAFETY: Return admin assist prompt
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            action: 'ADMIN_ASSIST',
+            adminCard: { rfidUid: 'ADMIN_CARD_UID', label: 'Duty Manager' },
+            activeEmployees: [{ userId: 'EMP-01', fullName: 'Bob Smith', department: 'Operations' }],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fallback mock response
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    act(() => {
+      emitRfidScan('ADMIN_CARD_UID');
+    });
+    expect(await screen.findByRole('dialog', { name: /assisted attendance/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /bob smith/i }));
+    await user.click(screen.getByRole('button', { name: /confirm attendance/i }));
+    // Not stuck: the modal (which blocks every scan) closes, and the kiosk says where the record went.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /assisted attendance/i })).not.toBeInTheDocument());
+    expect(screen.getByText('Saved offline')).toBeInTheDocument();
+    localStorage.removeItem('alpha_premier_offline_scans');
   });
 
   it('renders assisted/backdated badges, filter pills, and supports backdated attendance creation in Admin panel', async () => {

@@ -327,6 +327,9 @@ export default function App() {
   // Synchronous in-flight guard: set before the first await so two rapid native
   // scan events can never start two attendance writes for the same tap.
   const scanInFlightRef = useRef(false);
+  // Bumped by every armed scan: work that resumes after an await checks it
+  // so a slow earlier scan never announces over (or re-times) a newer one.
+  const scanSeq = useRef(0);
   // Synchronous assisted-confirm guard: prevents double-post when Confirm is
   // activated twice before busy state propagates, or the auto-close timer
   // fires mid-flight.
@@ -347,6 +350,8 @@ export default function App() {
   const [assistedError, setAssistedError] = useState("");
   const setupInputRef = useRef<HTMLInputElement>(null);
   const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped on close: an unlock that answers after the dialog was closed is stale.
+  const setupAttempt = useRef(0);
   const setupSessionTimer = useRef<number | null>(null);
 
   // Kiosk mode: 1 = Attendance, 2 = Bathroom Key Log
@@ -455,26 +460,31 @@ export default function App() {
     };
   }, [setupToken, setupExpiresAt]);
 
-  // BUG-ATT-02: Re-sync offline scans when network comes back online
+  // BUG-ATT-02: Re-sync offline scans when network comes back online (and at
+  // start, for a queue left by a service outage that never fired "online").
+  const replayingOffline = useRef(false);
   useEffect(() => {
-    const unsubscribe = onNetworkStatusChange((online) => {
-      if (!online) return;
-      const queue = getOfflineQueue();
-      if (queue.length === 0) return;
-      void (async () => {
-        for (const item of queue) {
-          try {
-            const res = await submitScan(item.request);
-            if (res.success && !("offlineQueued" in res)) {
-              removeQueuedScan(item.id);
-            }
-          } catch (err) {
-            console.warn('Failed to re-sync offline scan:', err);
-          }
+    const replay = async () => {
+      // One pass at a time: overlapping passes replayed the same items twice.
+      if (replayingOffline.current) return;
+      replayingOffline.current = true;
+      try {
+        for (const item of getOfflineQueue()) {
+          // Never re-enqueue here: a failed replay used to add a copy each time.
+          const res = await submitScan(item.request, undefined, false);
+          // Still unreachable: stop and keep order (a later tap must not land
+          // as a time-in before an earlier one). Any other answer is final.
+          if (!res.success && res.error.code === "INTERNAL_SERVER_ERROR") break;
+          removeQueuedScan(item.id);
         }
-      })();
+      } finally {
+        replayingOffline.current = false;
+      }
+    };
+    if (isOnline()) void replay();
+    return onNetworkStatusChange((online) => {
+      if (online) void replay();
     });
-    return unsubscribe;
   }, []);
 
   const resetToReady = useCallback(() => {
@@ -524,8 +534,14 @@ export default function App() {
       if (!candidate || setupBusy) return;
       setSetupBusy(true);
       setSetupNotice(null);
+      const attempt = setupAttempt.current;
       try {
         const response = await unlockSetup(candidate);
+        if (attempt !== setupAttempt.current) {
+          // Closed while unlocking: never reopen an unattended, unlocked setup.
+          if (response.success) void lockSetup(response.setupToken);
+          return;
+        }
         if (!response.success) {
           setSetupNotice({ tone: "error", text: response.error.message });
           return;
@@ -551,6 +567,7 @@ export default function App() {
   };
 
   const closeSetup = async () => {
+    setupAttempt.current += 1;
     if (setupToken) void lockSetup(setupToken);
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
     setSetupToken("");
@@ -746,6 +763,7 @@ export default function App() {
       }
     }
     scanInFlightRef.current = true;
+    scanSeq.current += 1;
     // A new scan takes over: the last result's reset must not fire mid-request and abort it.
     if (resetTimer.current) clearTimeout(resetTimer.current);
     if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
@@ -812,9 +830,13 @@ export default function App() {
       if (response.success) {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
+        const seq = scanSeq.current;
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
           ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
           : undefined;
+        // The next person scanned while the week history loaded: their result
+        // owns the screen, the voice and the reset timer now.
+        if (seq !== scanSeq.current) return;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
           employeeName: response.user.fullName,
@@ -858,7 +880,15 @@ export default function App() {
       });
       setAssistedBusy(false);
       assistConfirmRef.current = false;
-      if (response.success && "attendance" in response) {
+      if (response.success && "offlineQueued" in response) {
+        // Same outcome as an offline tap: close the modal (it blocks every
+        // scan) instead of leaving it open with no message.
+        setAdminAssistData(null);
+        setResult(null);
+        setState("success");
+        if (resetTimer.current) clearTimeout(resetTimer.current);
+        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
+      } else if (response.success && "attendance" in response) {
         setAdminAssistData(null);
         setResult(response);
         setState("success");

@@ -108,19 +108,24 @@ export function BathroomKeyLogPanel({
     return () => window.clearInterval(timer);
   }, []);
 
+  // Only the newest load may write: switching dates quickly let a slow
+  // earlier answer show its logs under the newer date.
+  const latestLoad = useRef(0);
   const refreshStatus = useCallback(async (targetDate: string) => {
+    const load = ++latestLoad.current;
     setLoading(true);
     try {
       const res = await loadBathroomStatus(targetDate);
+      if (load !== latestLoad.current) return;
       if (res.success) {
         setStatus(res);
       } else {
         setError("Unable to load bathroom key log status.");
       }
     } catch {
-      setError("Unable to load bathroom key log status.");
+      if (load === latestLoad.current) setError("Unable to load bathroom key log status.");
     } finally {
-      setLoading(false);
+      if (load === latestLoad.current) setLoading(false);
     }
   }, []);
 

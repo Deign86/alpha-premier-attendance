@@ -32,6 +32,18 @@ describe('scan requests', () => {
   });
 });
 
+describe('admin unlock', () => {
+  it('reports an unreachable or garbled unlock as a failure instead of throwing', async () => {
+    // A throw left the admin page's busy flag stuck true: the Unlock button
+    // stayed disabled and admin card taps were ignored until a reload.
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false });
+    // SAFETY: Mock Response whose body is not JSON
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: false, json: (): Promise<unknown> => Promise.reject(new SyntaxError('Unexpected token <')) } as Response);
+    await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false });
+  });
+});
+
 describe('DTR sync health parsing', () => {
   it('preserves Rust summary retry count, persistence flag, and timestamp', async () => {
     const emittedAt = '2026-10-03T08:15:00Z';
