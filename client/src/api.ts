@@ -513,11 +513,23 @@ export async function loadAdminAttendance(date: string, signal?: AbortSignal): P
   // SAFETY: Parsing admin attendance response JSON
   return (await fetch(apiUrl(`/api/admin/attendance?date=${encodeURIComponent(date)}`), { signal })).json() as Promise<AdminAttendanceResponse>;
 }
+const userSaveMessages = {
+  USER_HAS_OPEN_DAY: 'This person is still timed in today. Time them out (or correct the day) before deactivating.',
+  USER_HOLDS_BATHROOM_KEY: 'This person still has a bathroom key. Return it before deactivating.',
+};
+
 export async function saveAdminUser<T extends object>(user: T, userId?: string): Promise<{ success: boolean; error?: { message?: string } }> {
   if (runningInTauri()) {
     const payload = Object.assign({}, user, userId ? { userId } : undefined);
-    // SAFETY: Backend admin upsert user returns success response
-    return (await tauriApi.adminUpsertUser(nativeAdminToken ?? '', payload)) as { success: boolean; error?: { message?: string } };
+    try {
+      // SAFETY: Backend admin upsert user returns success response
+      return (await tauriApi.adminUpsertUser(nativeAdminToken ?? '', payload)) as { success: boolean; error?: { message?: string } };
+    } catch (err) {
+      const raw = errorString(err);
+      const known = Object.entries(userSaveMessages).find(([key]) => key === raw);
+      if (!known) throw err;
+      return { success: false, error: { message: known[1] } };
+    }
   }
   const url = userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users';
   const response = await fetch(apiUrl(url), { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) });

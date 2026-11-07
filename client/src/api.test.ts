@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { InternPayslip, VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, deleteAdminAttendance, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
+import { checkAdminSession, createAdminBackdatedAttendance, deleteAdminAttendance, saveAdminUser, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
 import * as payslipRenderer from './intern-payslip-image';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
@@ -442,6 +442,14 @@ describe('readable native errors (manual audit)', () => {
       success: false,
       error: { message: expect.stringMatching(/needs a time-in.*delete the record/i) },
     });
+  });
+
+  it('explains why a person who is timed in or holds a key cannot be deactivated', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'adminUpsertUser').mockRejectedValueOnce('USER_HAS_OPEN_DAY');
+    await expect(saveAdminUser({ status: 'INACTIVE' }, 'INT-1')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(/still timed in today/i) } });
+    vi.spyOn(tauriApi, 'adminUpsertUser').mockRejectedValueOnce('USER_HOLDS_BATHROOM_KEY');
+    await expect(saveAdminUser({ status: 'INACTIVE' }, 'INT-1')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(/bathroom key/i) } });
   });
 
   it('says admin access is off when config disables it', async () => {

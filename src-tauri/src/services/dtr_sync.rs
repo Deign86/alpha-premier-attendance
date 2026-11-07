@@ -899,7 +899,7 @@ fn manila_week_start(attendance_date: &str) -> Result<String, String> {
 /// Fetch later attendance rows in the changed date's Manila Monday-week so
 /// admin mutations can re-enqueue them for history-based DTR replanning.
 pub(crate) async fn later_attendance_in_manila_week(
-    db: &sqlx::SqlitePool,
+    db: &mut sqlx::SqliteConnection,
     user_id: &str,
     attendance_date: &str,
 ) -> Result<Vec<(String, String, Option<String>, Option<String>)>, String> {
@@ -3831,10 +3831,12 @@ mod tests {
                         Err(_) => break,
                     }
                 }
+                // Count before answering: the client may read `hits` the
+                // moment it has the response (counting after was flaky).
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let _ = stream.write_all(responses[served].as_bytes());
                 let _ = stream.flush();
                 drop(stream);
-                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 served += 1;
             }
         });
@@ -3930,10 +3932,12 @@ mod tests {
                 if let Ok(text) = String::from_utf8(body) {
                     bodies.lock().expect("bodies lock").push(text);
                 }
+                // Count before answering: the client may read `hits` the
+                // moment it has the response (counting after was flaky).
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let _ = stream.write_all(responses[served].as_bytes());
                 let _ = stream.flush();
                 drop(stream);
-                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 served += 1;
             }
         });

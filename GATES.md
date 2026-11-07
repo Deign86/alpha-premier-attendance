@@ -2259,3 +2259,41 @@ Each new test was run before its fix and failed there.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EXPECT: Rust suites pass except the 3 pre-existing Windows-path tests on Linux (JS untouched).
   EVIDENCE: Rust lib 377 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. No JS file changed.
+
+## Remaining confirmed bugs O2–O8, O10, O11 and suspected S1–S7 (owner: "fix all confirmed bugs and narrow down suspected ones", 2026-11-07)
+
+Each fix gets a regression test that fails on the old code. Each suspected item ends Confirmed (then fixed, same rule) or Refuted, with the trace or test that decided it.
+
+- [ ] O2 Transient sync failures back off with their own strike count (60 s doubling to the 960 s cap) and still never age into DEAD.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib transient_failures_back_off
+  EVIDENCE:
+- [ ] O3 Two grace deletes for one person both reach the sheet (no shared idempotency key).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib grace_deletes_for_one_person
+  EVIDENCE:
+- [ ] O4 Attendance writes and their sync-queue rows commit together (a failed queue write leaves no unsynced attendance change).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib queue_rows_commit_with
+  EVIDENCE:
+- [ ] O5 Cutoff generation is all-or-nothing and drafts it replaces are deleted on the sheet too.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cutoff_generate_
+  EVIDENCE:
+- [ ] O6 A browser-mode scan request that never answers gives up, so the kiosk cannot stay in "processing".
+  CHECK: npm test -w client -- api.test.ts
+  EVIDENCE:
+- [ ] O7 Deactivating a person cannot leave an open day or a held bathroom key stuck.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib deactivation_
+  EVIDENCE:
+- [ ] O8 VoiceStudio settings, check and regenerate need an admin session; Check does not save what was typed.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib voicestudio_ && npm test -w client
+  EVIDENCE:
+- [ ] O10 Legacy server: admin lock revokes the session token server-side.
+  CHECK: npm test -w server
+  EVIDENCE:
+- [ ] O11 Admin attendance changes reach open LAN viewers; native listeners are not leaked when a component unmounts before the listener attaches.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_changes_reach_lan_viewers && npm test -w client
+  EVIDENCE:
+- [ ] S1–S7 each narrowed to Confirmed (fixed with a test) or Refuted (with the deciding trace/test), recorded in docs/STATE-MACHINES.md.
+  EVIDENCE:
+- [ ] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE:

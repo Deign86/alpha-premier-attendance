@@ -60,7 +60,7 @@ pub const GOOGLE_NOT_FOUND: &str = "GOOGLE_NOT_FOUND";
 pub const GOOGLE_AUTH_FAILED: &str = "GOOGLE_AUTH_FAILED";
 pub use super::sync_retry::{
     GOOGLE_DAILY_LIMIT, GOOGLE_PERMISSION_DENIED, GOOGLE_RATE_LIMITED, GOOGLE_REQUEST_FAILED,
-    GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, calculate_retry_backoff, classify_403_body,
+    GOOGLE_SERVER_ERROR, PER_CALL_MAX_ATTEMPTS, classify_403_body,
     is_rate_limited_error, is_transient_sync_error, parse_retry_after_secs, per_call_budget_actual,
     per_call_should_retry, per_call_sleep_ms, wall_now_ms,
 };
@@ -2462,23 +2462,59 @@ pub(crate) async fn requeue_sync_row(
     now: &str,
     idempotency_key: &str,
 ) -> bool {
+    match db.acquire().await {
+        Ok(mut conn) => {
+            requeue_sync_row_on(&mut conn, table_name, row_id, operation, payload_json, now, idempotency_key).await
+        }
+        Err(error) => {
+            log::warn!("sync_queue write failed for {table_name}:{row_id} ({operation}): {error}");
+            false
+        }
+    }
+}
+
+/// `requeue_sync_row` on the caller's connection. Inside the caller's
+/// transaction the queue row commits with the change it mirrors, so a crash
+/// can no longer land between them (O4). It runs in a savepoint: a failed
+/// queue write rolls back only itself and never fails the caller.
+pub(crate) async fn requeue_sync_row_on(
+    conn: &mut sqlx::SqliteConnection,
+    table_name: &str,
+    row_id: &str,
+    operation: &str,
+    payload_json: &str,
+    now: &str,
+    idempotency_key: &str,
+) -> bool {
+    let mut savepoint = match sqlx::Connection::begin(&mut *conn).await {
+        Ok(savepoint) => savepoint,
+        Err(error) => {
+            log::warn!("sync_queue write failed for {table_name}:{row_id} ({operation}): {error}");
+            return false;
+        }
+    };
     // Fire-and-forget by design (a queue bookkeeping failure never fails
     // the caller), but a failed write must be observable: log it with the
     // row identity instead of discarding it silently (D2).
-    if let Err(error) = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',attempts=0,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
-        .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(db).await {
+    if let Err(error) = sqlx::query("INSERT INTO sync_queue (table_name,row_id,operation,payload_json,attempts,next_attempt_at,created_at,updated_at,idempotency_key) VALUES (?,?,?,?,0,?,?,?,?) ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET payload_json=excluded.payload_json,status='PENDING',attempts=0,transient_strikes=0,next_attempt_at=excluded.next_attempt_at,updated_at=excluded.updated_at,last_error=NULL,last_error_code=NULL")
+        .bind(table_name).bind(row_id).bind(operation).bind(payload_json).bind(now).bind(now).bind(now).bind(idempotency_key).execute(&mut *savepoint).await {
         log::warn!("sync_queue write failed for {table_name}:{row_id} ({operation}): {error}");
+        let _ = savepoint.rollback().await;
         return false;
     }
     // Latest intent wins per remote row: a DELETE queued behind a RETRY
     // UPSERT (or the reverse) must not let the older intent land last and
     // resurrect or remove the row. Retire the opposite op that has not
     // been applied yet; an in-flight one finishes first, so this newer row
-    // still runs after it. Retired after the insert so a failure here
-    // degrades to the old ordering, never to a lost intent.
+    // still runs after it. A failure here keeps the insert and degrades to
+    // the old ordering, never to a lost intent.
     if let Err(error) = sqlx::query("UPDATE sync_queue SET status='SYNCED', last_error_code='SUPERSEDED', locked_at=NULL, updated_at=? WHERE table_name=? AND row_id=? AND operation<>? AND status IN ('PENDING','RETRY','PROCESSING','DEAD')")
-        .bind(now).bind(table_name).bind(row_id).bind(operation).execute(db).await {
+        .bind(now).bind(table_name).bind(row_id).bind(operation).execute(&mut *savepoint).await {
         log::warn!("sync_queue supersede failed for {table_name}:{row_id} ({operation}): {error}");
+    }
+    if let Err(error) = savepoint.commit().await {
+        log::warn!("sync_queue write failed for {table_name}:{row_id} ({operation}): {error}");
+        return false;
     }
     true
 }
@@ -2684,10 +2720,11 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
         // stale (a scan or edit re-queues the row while earlier rows are
         // in flight), and pushing the snapshot payload would mark the newer
         // edit SYNCED without ever sending it.
-        let Some(claimed) = sqlx::query("UPDATE sync_queue SET status='PROCESSING',locked_at=?,updated_at=? WHERE id=? AND status IN ('PENDING','RETRY') RETURNING row_id, operation, payload_json, attempts").bind(&now).bind(&now).bind(id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? else {
+        let Some(claimed) = sqlx::query("UPDATE sync_queue SET status='PROCESSING',locked_at=?,updated_at=? WHERE id=? AND status IN ('PENDING','RETRY') RETURNING row_id, operation, payload_json, attempts, transient_strikes").bind(&now).bind(&now).bind(id).fetch_optional(&state.db).await.map_err(|e| e.to_string())? else {
             continue;
         };
         let attempts: i64 = claimed.get("attempts");
+        let transient_strikes: i64 = claimed.get("transient_strikes");
         let row_id: String = claimed.get("row_id");
         let operation: String = claimed.get("operation");
         let payload_json: String = claimed.get("payload_json");
@@ -2815,38 +2852,30 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                 // Drain-pause trigger stays rate-limit-only: other transient rows
                 // (5xx/timeout) ride RETRY without pausing the rest of the pass.
                 let is_rate_limited = is_rate_limited_error(&error);
-                let (backoff_secs, status, error_code) = calculate_retry_backoff(attempts, &error);
-                let next = Utc::now() + Duration::from_secs(backoff_secs);
+                // Transient-forever rows grow their own strike count (doubling
+                // backoff) and never spend `attempts`, so they never age into
+                // DEAD; finite rows spend `attempts` toward DEAD.
+                let step = crate::services::sync_retry::next_failure_step(attempts, transient_strikes, &error);
+                let next = Utc::now() + Duration::from_secs(step.backoff_secs);
+                sqlx::query("UPDATE sync_queue SET attempts=?, transient_strikes=?, status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
+                    .bind(step.attempts)
+                    .bind(step.transient_strikes)
+                    .bind(step.status)
+                    .bind(&error)
+                    .bind(step.error_code)
+                    .bind(next.to_rfc3339())
+                    .bind(&now)
+                    .bind(id)
+                    .execute(&state.db)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 if is_transient_sync_error(&error) {
-                    // Transient-forever: capped backoff, RETRY status, and NO
-                    // attempts increment, so the row can never age into DEAD.
-                    sqlx::query("UPDATE sync_queue SET status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
-                        .bind(status)
-                        .bind(&error)
-                        .bind(error_code)
-                        .bind(next.to_rfc3339())
-                        .bind(&now)
-                        .bind(id)
-                        .execute(&state.db)
-                        .await
-                        .map_err(|e| e.to_string())?;
                     if is_rate_limited {
                         // Drain protection: pause remaining queue items in this pass
                         log::warn!("Rate limit encountered during sync pass; pausing remaining queue items: {error}");
                         break;
                     }
                 } else {
-                    let last_error = error;
-                    sqlx::query("UPDATE sync_queue SET attempts=attempts+1, status=?, last_error=?, last_error_code=?, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status='PROCESSING'")
-                        .bind(status)
-                        .bind(last_error)
-                        .bind(error_code)
-                        .bind(next.to_rfc3339())
-                        .bind(&now)
-                        .bind(id)
-                        .execute(&state.db)
-                        .await
-                        .map_err(|e| e.to_string())?;
                     schema_mismatch |= is_schema_mismatch;
                 }
             }
@@ -2881,6 +2910,7 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::sync_retry::calculate_retry_backoff;
     use chrono::Duration as ChronoDuration;
     use serde_json::json;
 
@@ -3487,7 +3517,8 @@ mod tests {
 
     #[test]
     fn forbidden_vs_ratelimit() {
-        use super::{GOOGLE_DAILY_LIMIT, calculate_retry_backoff, google_status_error_with_body};
+        use super::{GOOGLE_DAILY_LIMIT, google_status_error_with_body};
+        use crate::services::sync_retry::calculate_retry_backoff;
         use reqwest::StatusCode;
 
         // Captured-shape Google 403 fixtures: routing rides errors[].reason.
@@ -3540,7 +3571,8 @@ mod tests {
 
     #[test]
     fn test_rate_limited_backoff() {
-        use super::{calculate_retry_backoff, GOOGLE_RATE_LIMITED};
+        use super::GOOGLE_RATE_LIMITED;
+        use crate::services::sync_retry::calculate_retry_backoff;
 
         // Rate-limited backoff: 60s base doubling (60, 120, 240, 480, 960
         // capped) with full-jitter ±50% sampled in [base/2, base + base/2].
@@ -3649,7 +3681,7 @@ mod tests {
     #[tokio::test]
     async fn requeue_resets_retry_budget() {
         let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        sqlx::query("CREATE TABLE sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, row_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_error_code TEXT, status TEXT NOT NULL DEFAULT 'PENDING', next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, idempotency_key TEXT)")
+        sqlx::query("CREATE TABLE sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, row_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, transient_strikes INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_error_code TEXT, status TEXT NOT NULL DEFAULT 'PENDING', next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, idempotency_key TEXT)")
             .execute(&db)
             .await
             .unwrap();
@@ -3677,7 +3709,7 @@ mod tests {
     #[tokio::test]
     async fn requeue_discards_queue_write_error_and_leaves_existing_row_unchanged() {
         let db = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        sqlx::query("CREATE TABLE sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, row_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_error_code TEXT, status TEXT NOT NULL DEFAULT 'PENDING', next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, idempotency_key TEXT)")
+        sqlx::query("CREATE TABLE sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, row_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, transient_strikes INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_error_code TEXT, status TEXT NOT NULL DEFAULT 'PENDING', next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, idempotency_key TEXT)")
             .execute(&db)
             .await
             .unwrap();
