@@ -23,6 +23,25 @@ describe('scan requests', () => {
     await expect(submitScan({ rfidUid: 'RFID-001', source: 'RFID' })).resolves.toMatchObject({ success: true });
   });
 
+  it('gives up on a scan request that never answers, so the kiosk cannot stay in processing', async () => {
+    // O6: browser mode had no timeout on the scan request.
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+          }),
+      );
+      const pending = submitScan({ rfidUid: 'RFID-003', source: 'RFID' });
+      const settled = expect(pending).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports an unreachable service to the kiosk and saves nothing offline', async () => {
     // Owner decision D6: a queued scan was later recorded at replay time.
     localStorage.removeItem('alpha_premier_offline_scans');
@@ -459,8 +478,14 @@ describe('readable native errors (manual audit)', () => {
     vi.spyOn(tauriApi, 'setupUnlock').mockResolvedValueOnce({ token: 'admin-tok', expiresAt: '2099-01-01T00:00:00Z' });
     await unlockAdmin('2468');
     const check = vi.spyOn(tauriApi, 'checkVoicestudio').mockResolvedValueOnce({ ok: true, message: 'ok' });
-    await checkVoiceStudioConnection('http://192.168.1.20:3901', '1234');
-    expect(check).toHaveBeenCalledWith('admin-tok', 'http://192.168.1.20:3901', '1234');
+    try {
+      await checkVoiceStudioConnection('http://192.168.1.20:3901', '1234');
+      expect(check).toHaveBeenCalledWith('admin-tok', 'http://192.168.1.20:3901', '1234');
+    } finally {
+      // The token is module state: lock again so later tests start locked.
+      vi.spyOn(tauriApi, 'setupLock').mockResolvedValueOnce({ success: true });
+      await lockAdmin();
+    }
   });
 
   it('says admin access is off when config disables it', async () => {

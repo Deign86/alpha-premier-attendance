@@ -252,7 +252,14 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
   }
 }
 
+/** A scan normally answers in well under a second; one that never does must not hold the kiosk in "processing". */
+const SCAN_TIMEOUT_MS = 15_000;
+
 export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanResponse> {
+  // The caller's abort (a newer scan, a mode switch) or the timeout, whichever comes first.
+  const limit = new AbortController();
+  const timer = setTimeout(() => limit.abort(), SCAN_TIMEOUT_MS);
+  signal?.addEventListener('abort', () => limit.abort(), { once: true });
   try {
     const scanRequest = runningInTauri()
       ? tauriApi.scanRfid(request)
@@ -260,7 +267,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
-      signal,
+      signal: limit.signal,
     }).then(async (response) => {
       // SAFETY: Parsing scan response JSON
       const data = (await response.json()) as ScanResponse;
@@ -270,12 +277,16 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
     return await scanRequest;
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
-    const isNetworkError = !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
+    // A timeout is an unreachable service too.
+    const timedOut = limit.signal.aborted && !signal?.aborted;
+    const isNetworkError = timedOut || !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
     // Attendance is never saved offline (owner decision D6): a replay was
     // recorded at replay time, not tap time. The kiosk shows its
     // "Can't reach the system" card and the person taps again.
     if (isNetworkError) throw error;
     return networkError('Unable to reach the attendance service. Please try again.');
+  } finally {
+    clearTimeout(timer);
   }
 }
 
