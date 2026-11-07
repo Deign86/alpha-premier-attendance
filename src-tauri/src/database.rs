@@ -492,6 +492,10 @@ pub async fn process_restore_request(
         .map(|value| value.to_string_lossy().into_owned())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    // Read once, then removed: Tauri's restart and the updater's relaunch
+    // spawn the app with this process's environment, so a kept value
+    // restored the same old backup again on the next relaunch (S2).
+    std::env::remove_var(ENV_RESTORE_FROM);
     let source_text = if marker.is_file() {
         match std::fs::read_to_string(&marker) {
             Ok(text) => Some(text.trim().to_string()),
@@ -933,6 +937,23 @@ mod tests {
         assert!(dir.join(newest).is_file(), "the backup just written must survive");
         assert_eq!(removed.len(), 1, "only the oldest safety snapshot goes");
         assert_eq!(removed[0].file_name().unwrap(), "pre-restore-20260801-000000.db");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn restore_env_var_is_used_once_not_on_every_relaunch() {
+        // S2 (confirmed): Tauri's restart and the updater's relaunch spawn
+        // the app with this process's environment, so a kept
+        // ALPHA_PREMIER_RESTORE_FROM restored the same old backup again on
+        // the next relaunch, reverting everything recorded since.
+        let dir = std::env::temp_dir().join(format!("alpha-restore-env-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let current = seed_database(&dir).await;
+        current.db.close().await;
+        std::env::set_var(ENV_RESTORE_FROM, dir.join("missing.apbackup"));
+        let outcome = process_restore_request(&dir, &dir, &dir.join("attendance.db")).await;
+        assert!(matches!(outcome, RestoreOutcome::SkippedMissingSource { .. }), "{outcome:?}");
+        assert!(std::env::var_os(ENV_RESTORE_FROM).is_none(), "a relaunch must not inherit the restore request");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

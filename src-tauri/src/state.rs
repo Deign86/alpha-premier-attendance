@@ -451,6 +451,12 @@ async fn sync_guard_write_row(db: &SqlitePool, owner: &str, started_at: &str) {
     .await;
 }
 
+/// `started_at` of the guard row this process last wrote. A row still
+/// carrying it while the in-memory flag is free is our own leftover from a
+/// release whose write failed, not another process's sync: claim it instead
+/// of refusing every sync for 5 minutes (S1).
+static OWN_GUARD_STARTED_AT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Acquire the shared guard. In-memory AtomicBool first (fast path); then
 /// the persisted row with 5-min stale release. The second caller gets
 /// DTR_SYNC_IN_PROGRESS and the flag is rolled back so a denial never
@@ -477,14 +483,22 @@ pub async fn sync_guard_try_acquire(
     let stored_secs = stored_started
         .as_deref()
         .and_then(sync_guard_epoch_secs);
-    if !sync_guard_row_releasable(stored_owner.as_deref(), stored_secs, now_secs) {
+    let own_leftover = stored_started.is_some()
+        && OWN_GUARD_STARTED_AT
+            .lock()
+            .is_ok_and(|own| own.as_deref() == stored_started.as_deref());
+    if !own_leftover && !sync_guard_row_releasable(stored_owner.as_deref(), stored_secs, now_secs) {
         flag.store(false, Ordering::SeqCst);
         return Err(sync_guard_busy_error(
             stored_owner.as_deref().unwrap_or("unknown"),
             stored_started.as_deref().unwrap_or("unknown"),
         ));
     }
-    sync_guard_write_row(db, owner, &chrono::Utc::now().to_rfc3339()).await;
+    let started_at = chrono::Utc::now().to_rfc3339();
+    sync_guard_write_row(db, owner, &started_at).await;
+    if let Ok(mut own) = OWN_GUARD_STARTED_AT.lock() {
+        *own = Some(started_at);
+    }
     Ok(())
 }
 
@@ -532,6 +546,45 @@ pub async fn sync_guard_status(db: &SqlitePool) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use crate::config::{LanConfig, ScannerConfig};
+
+    #[tokio::test]
+    async fn a_failed_release_write_does_not_wedge_the_sync_guard() {
+        // S1 (confirmed): release ignores DB errors, so a failed write (e.g.
+        // SQLITE_BUSY) left a fresh owner in the row and every sync was
+        // refused as "already running" for up to 5 minutes.
+        use crate::config::{OfficeConfig, TtsConfig, UpdaterConfig};
+        use crate::services::sync_retry::{SYNC_GUARD_COMPLETED, SYNC_GUARD_ROW};
+        let data_dir = std::env::temp_dir().join(format!("alpha-guard-wedge-{}", Uuid::new_v4()));
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let flag = state.sync_in_progress.as_ref();
+        sync_guard_try_acquire(&state.db, flag, "background_sync").await.unwrap();
+        sqlx::query(&format!("CREATE TRIGGER fail_guard_release BEFORE UPDATE ON sync_state WHEN NEW.row_id = '{SYNC_GUARD_ROW}' AND NEW.last_synced_hash = '{SYNC_GUARD_COMPLETED}' BEGIN SELECT RAISE(ABORT, 'database is locked'); END"))
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sync_guard_release(&state.db, flag).await;
+        sqlx::query("DROP TRIGGER fail_guard_release").execute(&state.db).await.unwrap();
+        // Nothing in this process holds the guard, so Sync now must start.
+        sync_guard_try_acquire(&state.db, flag, "admin_sync_now").await.unwrap();
+        sync_guard_release(&state.db, flag).await;
+        // A fresh row written by another process is still respected.
+        sync_guard_write_row(&state.db, "other_process", &chrono::Utc::now().to_rfc3339()).await;
+        assert!(sync_guard_try_acquire(&state.db, flag, "admin_sync_now").await.is_err());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
 
     #[tokio::test]
     async fn stop_during_start_wins() {

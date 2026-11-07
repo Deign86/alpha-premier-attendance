@@ -8078,6 +8078,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_wrong_reset_codes_still_spend_the_attempt_budget() {
+        // S3: complete_reset read the attempt count, checked the code, then
+        // wrote the count back, so concurrent wrong codes each wrote the same
+        // number and the 5-attempt limit could be outrun.
+        let (state, temp, _token) = admin_test_state("reset-race").await;
+        let now = chrono::Utc::now();
+        let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
+        crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
+        let wrong: Vec<_> = (0..10)
+            .map(|_| crate::services::admin_pin::complete_reset(&state.db, "000000", "13572468", None, now))
+            .collect();
+        for result in futures_util::future::join_all(wrong).await {
+            assert!(result.is_err());
+        }
+        let right = crate::services::admin_pin::complete_reset(&state.db, &reset.code, "13572468", None, now).await;
+        assert_eq!(right.unwrap_err(), "RESET_CODE_EXPIRED", "ten wrong codes spend the 5-attempt budget");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn concurrent_wrong_pins_still_reach_the_lockout() {
+        // Same race on the D1 wrong-PIN counter.
+        let (state, temp, _token) = admin_test_state("pin-race").await;
+        let now = chrono::Utc::now();
+        let wrong: Vec<_> = (0..5)
+            .map(|_| crate::services::admin_pin::record_unlock_failure(&state.db, now))
+            .collect();
+        futures_util::future::join_all(wrong).await;
+        assert!(crate::services::admin_pin::unlock_locked(&state.db, now).await.unwrap(), "five wrong PINs lock, however they interleave");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn admin_pin_lockout_after_five_wrong_pins_survives_a_restart() {
         let temp = std::env::temp_dir().join(format!("alpha-pin-lockout-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();

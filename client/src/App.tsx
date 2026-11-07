@@ -340,6 +340,9 @@ export default function App() {
   const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
   const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
   const [adminAssistData, setAdminAssistData] = useState<ScanAdminAssistResponse | null>(null);
+  // Stable on purpose: the clock re-renders App every second, and a new onClose
+  // each time restarted the modal's 1 s auto-cancel countdown before it fired (S4).
+  const closeAssist = useCallback(() => setAdminAssistData(null), []);
   const [assistedBusy, setAssistedBusy] = useState(false);
   const [assistedError, setAssistedError] = useState("");
   const setupInputRef = useRef<HTMLInputElement>(null);
@@ -1786,7 +1789,7 @@ export default function App() {
       {adminAssistData && (
         <AssistedAttendanceModal
           data={adminAssistData}
-          onClose={() => setAdminAssistData(null)}
+          onClose={closeAssist}
           onConfirm={handleAssistedConfirm}
           busy={assistedBusy}
           error={assistedError}

@@ -2670,6 +2670,37 @@ describe('Admin Attendance Corrections', () => {
     }
   });
 
+  it('counts the Assisted Attendance auto-cancel down in real time while the kiosk clock ticks', async () => {
+    // S4: App re-renders every second (clock) and passed a new onClose each
+    // time, restarting the modal's 1 s countdown interval before it fired.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/config') {
+        // SAFETY: Fetch returns mock Response for config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
+      }
+      // SAFETY: Return admin assist prompt
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          action: 'ADMIN_ASSIST',
+          adminCard: { rfidUid: 'ADMIN_CARD_UID', label: 'Duty Manager' },
+          activeEmployees: [{ userId: 'EMP-01', fullName: 'Bob Smith', department: 'Operations' }],
+        }),
+      } as Response;
+    });
+    render(<App />);
+    act(() => {
+      emitRfidScan('ADMIN_CARD_UID');
+    });
+    expect(await screen.findByText(/Auto-cancels in 25s/i)).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2_600));
+    });
+    expect(screen.getByText(/Auto-cancels in 2[2-3]s/i)).toBeInTheDocument();
+  }, 10_000);
+
   it('keeps the Assisted Attendance modal open with a retry message when the service is unreachable', async () => {
     localStorage.removeItem('alpha_premier_offline_scans');
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

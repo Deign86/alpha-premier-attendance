@@ -76,17 +76,27 @@ pub async fn unlock_locked(db: &SqlitePool, now: DateTime<Utc>) -> Result<bool, 
 }
 
 /// Counts one wrong PIN. Returns true when this one started the lockout.
+/// The count is one SQL statement, so concurrent wrong PINs each count
+/// (a read-then-write let them overwrite each other's count).
 pub async fn record_unlock_failure(db: &SqlitePool, now: DateTime<Utc>) -> Result<bool, String> {
-    let mut guard: UnlockGuard = load_json(db, UNLOCK_GUARD_KEY).await?.unwrap_or_default();
-    guard.failures += 1;
-    let locked = guard.failures >= UNLOCK_MAX_FAILURES;
+    let failures: i64 = sqlx::query_scalar(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, json_object('failures', 1), ?) \
+         ON CONFLICT(key) DO UPDATE SET value = json_set(value, '$.failures', COALESCE(json_extract(value, '$.failures'), 0) + 1), updated_at = excluded.updated_at \
+         RETURNING json_extract(value, '$.failures')",
+    )
+    .bind(UNLOCK_GUARD_KEY)
+    .bind(now.to_rfc3339())
+    .fetch_one(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let locked = failures >= i64::from(UNLOCK_MAX_FAILURES);
     if locked {
-        guard = UnlockGuard {
+        let guard = UnlockGuard {
             failures: 0,
             locked_until: Some(now + Duration::minutes(UNLOCK_LOCK_MINUTES)),
         };
+        save_json(db, UNLOCK_GUARD_KEY, &guard, now).await?;
     }
-    save_json(db, UNLOCK_GUARD_KEY, &guard, now).await?;
     Ok(locked)
 }
 
@@ -291,21 +301,38 @@ pub async fn complete_reset(
     now: DateTime<Utc>,
 ) -> Result<(), String> {
     validate_new_pin(new_pin)?;
-    let Some(mut pending) = load_json::<PendingReset>(db, RESET_KEY).await? else {
+    let Some(pending) = load_json::<PendingReset>(db, RESET_KEY).await? else {
         return Err("RESET_CODE_EXPIRED".into());
     };
     if now > pending.expires_at || pending.attempts >= MAX_CODE_ATTEMPTS {
         delete_setting(db, RESET_KEY).await?;
         return Err("RESET_CODE_EXPIRED".into());
     }
+    // Spend the attempt before checking the code, in one SQL statement: a
+    // read-check-write let concurrent wrong codes all write back the same
+    // count and outrun the 5-attempt limit (S3).
+    let spent: Option<i64> = sqlx::query_scalar(
+        "UPDATE app_settings SET value = json_set(value, '$.attempts', COALESCE(json_extract(value, '$.attempts'), 0) + 1), updated_at = ? \
+         WHERE key = ? RETURNING json_extract(value, '$.attempts')",
+    )
+    .bind(now.to_rfc3339())
+    .bind(RESET_KEY)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(spent) = spent else {
+        return Err("RESET_CODE_EXPIRED".into());
+    };
+    if spent > i64::from(MAX_CODE_ATTEMPTS) {
+        delete_setting(db, RESET_KEY).await?;
+        return Err("RESET_CODE_EXPIRED".into());
+    }
     if !verify_secret(&pending.code_hash, code.trim()) {
         record_failure(db, now).await?;
-        pending.attempts += 1;
-        if pending.attempts >= MAX_CODE_ATTEMPTS {
+        if spent >= i64::from(MAX_CODE_ATTEMPTS) {
             delete_setting(db, RESET_KEY).await?;
             return Err("RESET_CODE_EXPIRED".into());
         }
-        save_json(db, RESET_KEY, &pending, now).await?;
         return Err("RESET_CODE_INVALID".into());
     }
     put_setting(db, PIN_HASH_KEY, &hash_secret(new_pin)?, now).await?;
