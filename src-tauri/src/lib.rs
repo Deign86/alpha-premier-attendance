@@ -720,6 +720,7 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
         .await;
     }
 
+    let had_attendance = !attendance_rows.is_empty();
     for (aid, adate) in attendance_rows {
         enqueue_sync_on(
             state,
@@ -745,6 +746,10 @@ async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> Result<(), 
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+    if had_attendance {
+        let today = chrono::Utc::now().with_timezone(&Manila).date_naive().to_string();
+        publish_attendance_change(state, "", &today, "USER_DELETED", "refetch");
+    }
 
     let photo_path = state.data_dir.join("photos").join(format!("{user_id}.webp"));
     if photo_path.exists() {
@@ -1780,6 +1785,7 @@ async fn admin_update_attendance_impl(
         }
     }
     tx.commit().await.map_err(|e| e.to_string())?;
+    publish_attendance_change(state, attendance_id, date, "ADMIN_CORRECTION", "upsert");
     let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'ADMIN_ATTENDANCE_UPDATED',?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(format!("Attendance {attendance_id} corrected")).bind(format!("admin-{}",uuid::Uuid::new_v4())).execute(&state.db).await;
     Ok(
         serde_json::json!({"success":true,"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status}),
@@ -1951,6 +1957,7 @@ async fn admin_create_backdated_attendance_impl(
     enqueue_intern_dtr(state, &mut tx, &attendance_id, user_id, &full_name, &employee_type, attendance_date, Some(time_in), time_out).await;
     enqueue_later_weekly_intern_dtr(state, &mut tx, user_id, &full_name, &employee_type, attendance_date).await;
     tx.commit().await.map_err(|e| e.to_string())?;
+    publish_attendance_change(state, &attendance_id, attendance_date, "BACKDATED_ATTENDANCE", "upsert");
 
     let seq = state.next_sequence();
     let event_payload = serde_json::json!({
@@ -2141,6 +2148,7 @@ async fn admin_delete_attendance_impl(
         .await;
     }
     tx.commit().await.map_err(|e| e.to_string())?;
+    publish_attendance_change(state, attendance_id, date, "ADMIN_DELETE", "delete");
     Ok(serde_json::json!({"success":true,"attendanceId":attendance_id}))
 }
 
@@ -5421,6 +5429,28 @@ async fn admin_authorized(state: &AppState, token: &str) -> bool {
         return false;
     }
     value.token == token
+}
+
+/// Tell open LAN viewers that an attendance day changed; they refetch.
+/// Only scans used to publish, so admin changes reached viewers only on a
+/// manual refresh (O11).
+fn publish_attendance_change(state: &AppState, attendance_id: &str, attendance_date: &str, cause: &str, mutation: &str) {
+    let seq = state.next_sequence();
+    let _ = state
+        .bus
+        .sender
+        .send(crate::lan_server::LanAttendanceEvent::AttendanceUpdated {
+            event_id: format!("{}:{}", state.server_instance_id, seq),
+            server_instance_id: state.server_instance_id.to_string(),
+            sequence: seq,
+            occurred_at: chrono::Utc::now(),
+            request_id: format!("admin-{}", uuid::Uuid::new_v4()),
+            attendance_date: attendance_date.to_string(),
+            attendance_id: attendance_id.to_string(),
+            cause: cause.to_string(),
+            mutation: mutation.to_string(),
+            attendance: None,
+        });
 }
 
 /// Idempotency key of a queued sync row. InternGrace DELETE rows key on the
@@ -9276,6 +9306,27 @@ mod tests {
         assert!(!probe.ok, "nothing listens on port 9");
         assert_eq!(crate::services::voice_pull::get_host(&state.db).await, saved_host, "Check must not save the typed host");
         assert_eq!(crate::services::voice_pull::get_pin(&state.db).await, saved_pin, "Check must not save the typed PIN");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn admin_changes_reach_lan_viewers() {
+        // O11: only scans published to the LAN bus, so open viewers missed
+        // admin corrections, deletes and backdated days until a refresh.
+        let (state, temp, token) = admin_test_state("lan-admin").await;
+        add_intern(&state, "INT_L", "C0FFEE16").await;
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-l','2026-08-12','INT_L','C0FFEE16','INT_L','IT','2026-08-12T08:00:00+08:00',NULL,'WORKING','RFID','2026-08-12T00:00:00Z','2026-08-12T00:00:00Z')")
+            .execute(&state.db).await.unwrap();
+        let mut viewer = state.bus.sender.subscribe();
+        let mut next_event = || match viewer.try_recv() {
+            Ok(crate::lan_server::LanAttendanceEvent::AttendanceUpdated { attendance_id, mutation, .. }) => Some((attendance_id, mutation)),
+            Err(_) => None,
+        };
+        super::admin_update_attendance_impl(&state, &token, "att-l", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
+        assert_eq!(next_event(), Some(("att-l".to_string(), "upsert".to_string())));
+        super::admin_delete_attendance_impl(&state, &token, "att-l", "2026-08-12").await.unwrap();
+        assert_eq!(next_event(), Some(("att-l".to_string(), "delete".to_string())));
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

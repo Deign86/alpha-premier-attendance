@@ -15,7 +15,7 @@ import {
   type UpdateInfo,
   type UpdateProgress,
 } from './services/updateService';
-import { listenForCheckForUpdates } from './tauri-api';
+import { detachWhenDone, listenForCheckForUpdates } from './tauri-api';
 import { formatShortDate } from './format';
 import { useDialogKeys } from './use-dialog-keys';
 
@@ -150,22 +150,9 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
   }, [runCheck]);
 
   // Listen for tray menu "Check for updates…"
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForCheckForUpdates(() => {
-      void runCheck(true);
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {
-        // Ignore listener setup error
-      });
-
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [runCheck]);
+  useEffect(() => detachWhenDone(listenForCheckForUpdates(() => {
+    void runCheck(true);
+  })), [runCheck]);
 
   // Manual trigger from props (e.g. from admin panel)
   const prevTriggerRef = useRef<number | undefined>(0);

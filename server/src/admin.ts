@@ -107,9 +107,21 @@ export class AdminService {
     return { token: `${payload}.${signature}`, expiresAt: new Date(expiresAt).toISOString() };
   }
 
+  /** Tokens ended by lock, with the time each would have expired anyway. */
+  private readonly revoked = new Map<string, number>();
+
+  /** Lock ends the session itself, not just the browser cookie (O10). */
+  revoke(token: string | undefined): void {
+    const now = Date.now();
+    for (const [old, expiresAt] of this.revoked) if (expiresAt <= now) this.revoked.delete(old);
+    const expiresAt = Number(token?.split('.')[0]);
+    if (token && expiresAt > now) this.revoked.set(token, expiresAt);
+  }
+
   verify(token: string | undefined): void {
     this.assertEnabled();
     if (!token) throw new AdminError('ADMIN_AUTH_REQUIRED', 'Administrator authentication is required.', 401);
+    if (this.revoked.has(token)) throw new AdminError('ADMIN_SESSION_EXPIRED', 'Administrator session has ended.', 401);
     const parts = token.split('.');
     if (parts.length !== 3 || !/^\d+$/.test(parts[0])) throw new AdminError('ADMIN_AUTH_REQUIRED', 'Administrator session is invalid.', 401);
     const expected = crypto.createHmac('sha256', this.config.adminSessionSecret!).update(`${parts[0]}.${parts[1]}`).digest('base64url');

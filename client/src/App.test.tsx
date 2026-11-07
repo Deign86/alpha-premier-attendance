@@ -481,6 +481,21 @@ describe('RFID kiosk', () => {
     expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
   });
 
+  it('detaches the native card listener even when the kiosk unmounts before it attached', async () => {
+    // O11: the listener attached after cleanup and stayed live (StrictMode, quick re-subscribes).
+    mockFetch();
+    let attach: (fn: () => void) => void = () => {};
+    const unlisten = vi.fn();
+    vi.spyOn(tauriApi, 'listenForGlobalRfid').mockImplementation(() => new Promise<() => void>((resolve) => { attach = resolve; }));
+    const { unmount } = render(<App />);
+    unmount();
+    await act(async () => {
+      attach(unlisten);
+      await Promise.resolve();
+    });
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
   it('announces a time-in with employee name in TTS announcement', async () => {
     mockFetch({
       ...successResponse,

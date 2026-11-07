@@ -144,6 +144,7 @@ import {
   getScannerStatus,
   setScannerPaused,
   notifyScanSuccess,
+  detachWhenDone,
 } from "./tauri-api";
 import { dtrSyncHealthCopy, dtrSyncNoticeKind, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
 import type { DtrSyncHealthSnapshot, DtrSyncNoticeKind } from "./dtr-sync-guard";
@@ -313,13 +314,7 @@ export default function App() {
           paused: false,
         },
   );
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForDtrSyncHealth((health) => setDtrSyncHealthSnapshot(health))
-      .then((cleanup) => { unlisten = cleanup; })
-      .catch(() => { /* web mode or mock environment */ });
-    return () => { if (unlisten) unlisten(); };
-  }, []);
+  useEffect(() => detachWhenDone(listenForDtrSyncHealth((health) => setDtrSyncHealthSnapshot(health))), []);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestController = useRef<AbortController | null>(null);
   const recentScans = useRef(new Map<string, number>());
@@ -1168,30 +1163,16 @@ export default function App() {
   // any focused webview input. The listener also feeds the card-setup dialog
   // while it is open and awaiting a scan.
   useEffect(() => {
-    let unlistenScan: (() => void) | undefined;
-    let unlistenStatus: (() => void) | undefined;
-    void listenForGlobalRfid((value) => scanHandlerRef.current(value))
-      .then((cleanup) => {
-        unlistenScan = cleanup;
-      })
-      .catch(() => {
-        /* web mode */
-      });
-    void listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus))
-      .then((cleanup) => {
-        unlistenStatus = cleanup;
-      })
-      .catch(() => {
-        /* web mode */
-      });
+    const stopScan = detachWhenDone(listenForGlobalRfid((value) => scanHandlerRef.current(value)));
+    const stopStatus = detachWhenDone(listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus)));
     void getScannerStatus()
       .then((nextStatus) => setScannerStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
     return () => {
-      unlistenScan?.();
-      unlistenStatus?.();
+      stopScan();
+      stopStatus();
     };
   }, []);
 
@@ -2731,14 +2712,9 @@ function LiveAttendance() {
     void refresh();
 
     // 1. Listen for native desktop Tauri events
-    let unlistenUpdated: (() => void) | undefined;
-    void listenForAttendanceUpdates(() => {
+    const stopUpdated = detachWhenDone(listenForAttendanceUpdates(() => {
       void refresh();
-    }).then((cleanup) => {
-      unlistenUpdated = cleanup;
-    }).catch(() => {
-      /* web mode */
-    });
+    }));
 
     // 2. Connect to LAN SSE stream for remote browser viewer
     let sse: EventSource | null = null;
@@ -2765,7 +2741,7 @@ function LiveAttendance() {
     window.addEventListener("focus", onFocus);
 
     return () => {
-      unlistenUpdated?.();
+      stopUpdated();
       sse?.close();
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
@@ -3274,20 +3250,13 @@ function useReaderStatus(): ReaderState {
   const browserMode = !("__TAURI_INTERNALS__" in window);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForScannerStatus((nextStatus) => setStatus(nextStatus))
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {
-        /* web mode */
-      });
+    const stop = detachWhenDone(listenForScannerStatus((nextStatus) => setStatus(nextStatus)));
     void getScannerStatus()
       .then((nextStatus) => setStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
-    return () => unlisten?.();
+    return stop;
   }, []);
 
   const reader = !status
@@ -3711,17 +3680,9 @@ function AdminPanel() {
   // An admin card tap unlocks, but only once the session check is done, so a tap can't race its answer.
   useEffect(() => {
     if (unlocked || !sessionChecked) return;
-    let unlisten: (() => void) | undefined;
-    void listenForGlobalRfid((scannedUid) => {
+    return detachWhenDone(listenForGlobalRfid((scannedUid) => {
       void unlockWithPinOrRfid(scannedUid);
-    })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
+    }));
   }, [sessionChecked, unlocked, unlockWithPinOrRfid]);
 
   const nukeSheets = async () => {
@@ -4329,23 +4290,11 @@ export function DatabasePanel() {
     void refreshDtrSyncToggle();
   }, [refreshDtrSyncToggle]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForDtrSyncProgress((progress) => {
-      setDtrProgress(progress);
-      applyDtrProgressToGuard(progress);
-      if (progress.status === "completed") void refreshDtrSyncHealth(() => refreshSyncHealth());
-    })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {
-        /* web mode or mock environment */
-      });
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [refreshSyncHealth]);
+  useEffect(() => detachWhenDone(listenForDtrSyncProgress((progress) => {
+    setDtrProgress(progress);
+    applyDtrProgressToGuard(progress);
+    if (progress.status === "completed") void refreshDtrSyncHealth(() => refreshSyncHealth());
+  })), [refreshSyncHealth]);
 
   const infoList = useListLoad(fetchDatabaseInfo, null);
   const info = infoList.data;
@@ -4901,25 +4850,13 @@ export function UserEditor({
   const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForDtrSyncProgress((progress) => {
-      setDtrProgress(progress);
-      applyDtrProgressToGuard(progress);
-      if (progress.status === "syncing") {
-        setMessage({ tone: "info", text: `Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…` });
-      }
-    })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {
-        /* web mode or mock environment */
-      });
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, []);
+  useEffect(() => detachWhenDone(listenForDtrSyncProgress((progress) => {
+    setDtrProgress(progress);
+    applyDtrProgressToGuard(progress);
+    if (progress.status === "syncing") {
+      setMessage({ tone: "info", text: `Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…` });
+    }
+  })), []);
 
   const handleSyncDtr = async (userId?: string) => {
     if (dtrSyncActive) {

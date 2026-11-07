@@ -220,3 +220,25 @@ export const listenForCheckForUpdates = async (handler: () => void): Promise<() 
   };
 };
 
+/**
+ * Cleanup for a native listener that attaches asynchronously. With
+ * `listen().then(fn => unlisten = fn)`, a cleanup that ran before the listener
+ * attached (StrictMode remounts, quick re-subscribes) leaked it; here it is
+ * detached the moment it arrives.
+ */
+export function detachWhenDone(attaching: Promise<() => void>): () => void {
+  let detach: (() => void) | undefined;
+  let disposed = false;
+  attaching
+    .then((fn) => {
+      if (disposed) fn();
+      else detach = fn;
+    })
+    .catch(() => {
+      /* web mode: no desktop layer to listen to */
+    });
+  return () => {
+    disposed = true;
+    detach?.();
+  };
+}

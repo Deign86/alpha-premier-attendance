@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { InternPayslip, VoiceClipState } from '@rfid-attendance/shared';
-import { tauriApi } from './tauri-api';
+import { detachWhenDone, tauriApi } from './tauri-api';
 import { checkAdminSession, createAdminBackdatedAttendance, deleteAdminAttendance, saveAdminUser, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
 import * as payslipRenderer from './intern-payslip-image';
 import { checkVoiceStudioConnection } from './services/ttsService';
@@ -49,6 +49,30 @@ describe('scan requests', () => {
 
     await expect(submitScan({ rfidUid: 'RFID-002', source: 'RFID' })).rejects.toThrow('Failed to fetch');
     expect(localStorage.getItem('alpha_premier_offline_scans')).toBeNull();
+  });
+});
+
+describe('native listener cleanup', () => {
+  it('detaches a listener that attaches after its component already cleaned up', async () => {
+    // O11: `listen().then(fn => unlisten = fn)` lost the listener when cleanup ran first.
+    let attach: (fn: () => void) => void = () => {};
+    const unlisten = vi.fn();
+    const cleanup = detachWhenDone(new Promise<() => void>((resolve) => { attach = resolve; }));
+    cleanup();
+    attach(unlisten);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it('detaches an attached listener on cleanup', async () => {
+    const unlisten = vi.fn();
+    const cleanup = detachWhenDone(Promise.resolve(unlisten));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(unlisten).not.toHaveBeenCalled();
+    cleanup();
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });
 
