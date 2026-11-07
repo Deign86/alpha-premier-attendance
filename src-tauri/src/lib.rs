@@ -74,23 +74,27 @@ async fn tts_status(
 }
 
 #[tauri::command]
-async fn get_voicestudio_host(state: State<'_, AppState>) -> Result<String, String> {
+async fn get_voicestudio_host(state: State<'_, AppState>, token: String) -> Result<String, String> {
+    require_admin(&state, &token).await?;
     Ok(crate::services::voice_pull::get_host(&state.db).await)
 }
 
 #[tauri::command]
-async fn set_voicestudio_host(state: State<'_, AppState>, host: String) -> Result<String, String> {
+async fn set_voicestudio_host(state: State<'_, AppState>, token: String, host: String) -> Result<String, String> {
+    require_admin(&state, &token).await?;
     let now = chrono::Utc::now().to_rfc3339();
     crate::services::voice_pull::set_host(&state.db, &host, &now).await
 }
 
 #[tauri::command]
-async fn get_voicestudio_pin(state: State<'_, AppState>) -> Result<String, String> {
+async fn get_voicestudio_pin(state: State<'_, AppState>, token: String) -> Result<String, String> {
+    require_admin(&state, &token).await?;
     Ok(crate::services::voice_pull::get_pin(&state.db).await)
 }
 
 #[tauri::command]
-async fn set_voicestudio_pin(state: State<'_, AppState>, pin: String) -> Result<(), String> {
+async fn set_voicestudio_pin(state: State<'_, AppState>, token: String, pin: String) -> Result<(), String> {
+    require_admin(&state, &token).await?;
     let now = chrono::Utc::now().to_rfc3339();
     crate::services::voice_pull::set_pin(&state.db, &pin, &now).await
 }
@@ -98,19 +102,31 @@ async fn set_voicestudio_pin(state: State<'_, AppState>, pin: String) -> Result<
 #[tauri::command]
 async fn check_voicestudio(
     state: State<'_, AppState>,
+    token: String,
     host: Option<String>,
     pin: Option<String>,
 ) -> Result<crate::services::voice_pull::VoiceConnectionStatus, String> {
-    // Probe exactly what the caller typed (unsaved field values); fall back to
-    // the persisted worker settings when omitted.
-    let now = chrono::Utc::now().to_rfc3339();
-    if let Some(raw_host) = host.as_deref() {
-        let _ = crate::services::voice_pull::set_host(&state.db, raw_host, &now).await;
-    }
-    if let Some(raw_pin) = pin.as_deref() {
-        let _ = crate::services::voice_pull::set_pin(&state.db, raw_pin, &now).await;
-    }
-    Ok(crate::services::voice_pull::check_connection(&state.db).await)
+    check_voicestudio_impl(&state, &token, host, pin).await
+}
+
+/// Probes what the admin typed (falling back to the saved settings) without
+/// saving it: "Check" used to overwrite the worker's host and PIN (O8).
+async fn check_voicestudio_impl(
+    state: &AppState,
+    token: &str,
+    host: Option<String>,
+    pin: Option<String>,
+) -> Result<crate::services::voice_pull::VoiceConnectionStatus, String> {
+    require_admin(state, token).await?;
+    let host = match host {
+        Some(raw) => crate::services::voice_pull::normalize_host(&raw),
+        None => crate::services::voice_pull::get_host(&state.db).await,
+    };
+    let pin = match pin {
+        Some(raw) => raw.trim().to_string(),
+        None => crate::services::voice_pull::get_pin(&state.db).await,
+    };
+    Ok(crate::services::voice_pull::check_connection_to(&host, &pin).await)
 }
 
 #[tauri::command]
@@ -121,7 +137,8 @@ async fn voice_clip_states(
 }
 
 #[tauri::command]
-async fn voice_regenerate(state: State<'_, AppState>, person_id: String) -> Result<String, String> {
+async fn voice_regenerate(state: State<'_, AppState>, token: String, person_id: String) -> Result<String, String> {
+    require_admin(&state, &token).await?;
     crate::services::voice_pull::regenerate(&state.db, &person_id).await
 }
 
@@ -5382,15 +5399,28 @@ async fn open_generated_artifact(
     Ok(serde_json::json!({"success":true,"artifactId":artifact_id}))
 }
 
+/// `Err(ADMIN_AUTH_REQUIRED)` unless `token` is the live admin session.
+async fn require_admin(state: &AppState, token: &str) -> Result<(), String> {
+    if admin_authorized(state, token).await {
+        Ok(())
+    } else {
+        Err("ADMIN_AUTH_REQUIRED".into())
+    }
+}
+
 async fn admin_authorized(state: &AppState, token: &str) -> bool {
     let mut session = state.admin_session.lock().await;
-    if let Some(value) = session.as_ref() {
-        if value.token == token && value.expires_at > std::time::Instant::now() {
-            return true;
-        }
+    let Some(value) = session.as_ref() else {
+        return false;
+    };
+    // Only an expired session is cleared. A stale or empty token is just
+    // refused: clearing on any mismatch let one request still carrying an
+    // old token log out the admin who had just unlocked (S7).
+    if value.expires_at <= std::time::Instant::now() {
+        *session = None;
+        return false;
     }
-    *session = None;
-    false
+    value.token == token
 }
 
 /// Idempotency key of a queued sync row. InternGrace DELETE rows key on the
@@ -9218,6 +9248,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_session_survives_a_request_with_a_stale_token() {
+        // S7 (confirmed): a request with an old or empty token cleared the
+        // live session, logging out whoever had just unlocked.
+        let (state, temp, token) = admin_test_state("stale-token").await;
+        assert!(!super::admin_authorized(&state, "old-token").await);
+        assert!(!super::admin_authorized(&state, "").await);
+        assert!(super::admin_authorized(&state, &token).await, "the live session must survive");
+        // An expired session is still cleared.
+        state.admin_session.lock().await.as_mut().unwrap().expires_at = std::time::Instant::now();
+        assert!(!super::admin_authorized(&state, &token).await);
+        assert!(state.admin_session.lock().await.is_none());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn voicestudio_check_needs_admin_and_saves_nothing() {
+        // O8: the VoiceStudio commands took no admin token, and "Check"
+        // saved whatever host and PIN were typed before probing them.
+        let (state, temp, token) = admin_test_state("voice-check").await;
+        let saved_host = crate::services::voice_pull::get_host(&state.db).await;
+        let saved_pin = crate::services::voice_pull::get_pin(&state.db).await;
+        let refused = super::check_voicestudio_impl(&state, "wrong-token", Some("http://127.0.0.1:9".into()), Some("9999".into())).await;
+        assert_eq!(refused.unwrap_err(), "ADMIN_AUTH_REQUIRED");
+        let probe = super::check_voicestudio_impl(&state, &token, Some("http://127.0.0.1:9".into()), Some("9999".into())).await.unwrap();
+        assert!(!probe.ok, "nothing listens on port 9");
+        assert_eq!(crate::services::voice_pull::get_host(&state.db).await, saved_host, "Check must not save the typed host");
+        assert_eq!(crate::services::voice_pull::get_pin(&state.db).await, saved_pin, "Check must not save the typed PIN");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn grace_deletes_for_one_person_do_not_collapse() {
         // O3: InternGrace DELETE rows key on the person, so two of them
         // shared an idempotency key and the second overwrote the first.
@@ -9328,6 +9391,53 @@ mod tests {
         let status: String = sqlx::query_scalar("SELECT status FROM users WHERE user_id='INT_D'")
             .fetch_one(&state.db).await.unwrap();
         assert_eq!(status, "INACTIVE");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn moving_a_day_clears_the_old_date_on_the_dtr_sheet() {
+        // S6 (confirmed): the UPSERT only writes the new date, so the old
+        // date's cells stayed filled.
+        let _env_guard = crate::config::dtr_env_test_guard();
+        let saved_env = std::env::var(crate::config::ENV_DTR_SHEET_ID).ok();
+        std::env::remove_var(crate::config::ENV_DTR_SHEET_ID);
+        let (mut state, temp, token) = admin_test_state("move-day").await;
+        state.lan.google_dtr_spreadsheet_id = Some("sheet-test".to_string());
+        add_intern(&state, "INT_M", "C0FFEE14").await;
+        sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-m','2026-08-12','INT_M','C0FFEE14','INT_M','IT','2026-08-12T08:00:00+08:00','2026-08-12T17:00:00+08:00','COMPLETED','RFID','2026-08-12T00:00:00Z','2026-08-12T00:00:00Z')")
+            .execute(&state.db).await.unwrap();
+        super::admin_update_attendance_impl(&state, &token, "att-m", &serde_json::json!({
+            "attendanceDate": "2026-08-13",
+            "timeIn": "2026-08-13T08:00:00+08:00",
+            "timeOut": "2026-08-13T17:00:00+08:00",
+        })).await.unwrap();
+        let clear: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND operation='DELETE' AND status='PENDING'")
+            .fetch_optional(&state.db).await.unwrap();
+        let clear: serde_json::Value = serde_json::from_str(&clear.expect("old date is cleared on the DTR sheet")).unwrap();
+        assert_eq!(clear["attendanceDate"], "2026-08-12");
+        let upsert: String = sqlx::query_scalar("SELECT status FROM sync_queue WHERE table_name='InternDtr' AND row_id='att-m' AND operation='UPSERT'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(upsert, "PENDING", "the clear must not supersede the new date's push");
+        match saved_env {
+            Some(value) => std::env::set_var(crate::config::ENV_DTR_SHEET_ID, value),
+            None => std::env::remove_var(crate::config::ENV_DTR_SHEET_ID),
+        }
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn double_tap_racing_the_first_commit_is_a_repeat_tap() {
+        // S5 (narrowed): the other tap's time-in commits between this tap's
+        // lookup and its insert (simulated by a trigger inserting it first).
+        let (state, temp, _token) = admin_test_state("double-tap").await;
+        add_intern(&state, "INT_T", "C0FFEE15").await;
+        sqlx::query("CREATE TRIGGER other_tap_first BEFORE INSERT ON attendance WHEN NEW.attendance_id <> 'att-other' BEGIN INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-other',NEW.attendance_date,NEW.user_id,NEW.rfid_uid,NEW.full_name,NEW.department,NEW.time_in,NULL,'WORKING','RFID',NEW.created_at,NEW.updated_at); END")
+            .execute(&state.db).await.unwrap();
+        let tap = serde_json::json!({"rfidUid": "C0FFEE15", "source": "RFID"});
+        let res = super::scan_rfid_at(None, &state, tap, manila("2026-11-05T08:00:01+08:00")).await.unwrap();
+        assert_eq!(res["error"]["code"], "DUPLICATE_SCAN", "{res}");
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

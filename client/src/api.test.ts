@@ -3,6 +3,7 @@ import type { InternPayslip, VoiceClipState } from '@rfid-attendance/shared';
 import { tauriApi } from './tauri-api';
 import { checkAdminSession, createAdminBackdatedAttendance, deleteAdminAttendance, saveAdminUser, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
 import * as payslipRenderer from './intern-payslip-image';
+import { checkVoiceStudioConnection } from './services/ttsService';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
 afterEach(() => {
@@ -450,6 +451,16 @@ describe('readable native errors (manual audit)', () => {
     await expect(saveAdminUser({ status: 'INACTIVE' }, 'INT-1')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(/still timed in today/i) } });
     vi.spyOn(tauriApi, 'adminUpsertUser').mockRejectedValueOnce('USER_HOLDS_BATHROOM_KEY');
     await expect(saveAdminUser({ status: 'INACTIVE' }, 'INT-1')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(/bathroom key/i) } });
+  });
+
+  it('sends the admin session token with the VoiceStudio check', async () => {
+    // O8: the native VoiceStudio commands now refuse callers without the admin session.
+    desktop();
+    vi.spyOn(tauriApi, 'setupUnlock').mockResolvedValueOnce({ token: 'admin-tok', expiresAt: '2099-01-01T00:00:00Z' });
+    await unlockAdmin('2468');
+    const check = vi.spyOn(tauriApi, 'checkVoicestudio').mockResolvedValueOnce({ ok: true, message: 'ok' });
+    await checkVoiceStudioConnection('http://192.168.1.20:3901', '1234');
+    expect(check).toHaveBeenCalledWith('admin-tok', 'http://192.168.1.20:3901', '1234');
   });
 
   it('says admin access is off when config disables it', async () => {

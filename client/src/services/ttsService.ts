@@ -10,6 +10,7 @@ import type {
 } from '@rfid-attendance/shared';
 import { ATTENDANCE_TIMEZONE, isNoGraceDate } from '@rfid-attendance/shared';
 import { tauriApi } from '../tauri-api';
+import { nativeAdminSessionToken } from '../api';
 import {
   getClonedBeaAudioUrl,
   getClonedBeaNameAudioUrl,
@@ -80,7 +81,7 @@ export async function checkVoiceStudioConnection(baseUrl: string, pin?: string):
   // worker reads the same persisted host/PIN, so this tests the real path.
   if (runningInTauri()) {
     try {
-      return await tauriApi.checkVoicestudio(baseUrl, pin ?? '');
+      return await tauriApi.checkVoicestudio(nativeAdminSessionToken(), baseUrl, pin ?? '');
     } catch {
       // Fall through to direct fetch below.
     }

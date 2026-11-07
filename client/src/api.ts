@@ -64,7 +64,7 @@ export async function loadVoiceWorkerStatus(): Promise<VoiceWorkerStatus | null>
 export async function regenerateVoiceClip(personId: string): Promise<{ ok: boolean; spokenText?: string; error?: string }> {
   if (!runningInTauri()) return { ok: false, error: 'Voice regeneration needs the desktop app.' };
   try {
-    const spokenText = await tauriApi.voiceRegenerate(personId);
+    const spokenText = await tauriApi.voiceRegenerate(nativeAdminToken ?? '', personId);
     return { ok: true, spokenText };
   } catch (error) {
     return { ok: false, error: errorString(error) || 'Voice regeneration failed.' };
@@ -131,6 +131,10 @@ export async function pickRestoreBackupFile(): Promise<string | null> {
 
 const runningInTauri = () => globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 let nativeAdminToken: string | null = null;
+/** The desktop admin session token for native admin-only commands (empty when locked). */
+export function nativeAdminSessionToken(): string {
+  return nativeAdminToken ?? '';
+}
 let nativeAdminExpiresAt: string | null = null;
 
 function errorString<T>(error: T): string {

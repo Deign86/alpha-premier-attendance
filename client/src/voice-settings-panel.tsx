@@ -13,6 +13,7 @@ import {
   testVoice,
 } from './services/ttsService';
 import { tauriApi } from './tauri-api';
+import { nativeAdminSessionToken } from './api';
 import { NoticeLine } from './notice';
 
 export interface VoiceSettingsPanelProps {
@@ -31,7 +32,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
 
   const persistHostToNative = (host: string): void => {
     try {
-      void tauriApi.setVoicestudioHost(host).catch(() => undefined);
+      void tauriApi.setVoicestudioHost(nativeAdminSessionToken(), host).catch(() => undefined);
     } catch {
       // Browser dev: localStorage only.
     }
@@ -39,7 +40,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
 
   const persistPinToNative = (pin: string): void => {
     try {
-      void tauriApi.setVoicestudioPin(pin).catch(() => undefined);
+      void tauriApi.setVoicestudioPin(nativeAdminSessionToken(), pin).catch(() => undefined);
     } catch {
       // Browser dev: localStorage only.
     }
@@ -60,7 +61,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
     // adopt native host/PIN when present; only push up if native is unconfigured.
     try {
       void tauriApi
-        .getVoicestudioHost()
+        .getVoicestudioHost(nativeAdminSessionToken())
         .then((host) => {
           const trimmed = host.trim();
           setSettings((prev) => {
@@ -83,7 +84,7 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
         })
         .catch(() => undefined);
       void tauriApi
-        .getVoicestudioPin()
+        .getVoicestudioPin(nativeAdminSessionToken())
         .then((pin) => {
           const trimmed = pin.trim();
           setSettings((prev) => {
