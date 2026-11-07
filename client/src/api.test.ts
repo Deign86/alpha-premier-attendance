@@ -475,7 +475,7 @@ describe('readable native errors (manual audit)', () => {
   it('sends the admin session token with the VoiceStudio check', async () => {
     // O8: the native VoiceStudio commands now refuse callers without the admin session.
     desktop();
-    vi.spyOn(tauriApi, 'setupUnlock').mockResolvedValueOnce({ token: 'admin-tok', expiresAt: '2099-01-01T00:00:00Z' });
+    vi.spyOn(tauriApi, 'setupUnlock').mockResolvedValueOnce({ success: true, token: 'admin-tok', expiresAt: '2099-01-01T00:00:00Z' });
     await unlockAdmin('2468');
     const check = vi.spyOn(tauriApi, 'checkVoicestudio').mockResolvedValueOnce({ ok: true, message: 'ok' });
     try {
