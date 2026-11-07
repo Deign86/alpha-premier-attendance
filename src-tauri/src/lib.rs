@@ -8119,21 +8119,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn reset_guard_gives_one_code_to_simultaneous_requests() {
         // O12 (same family): two requests at once both passed the resend
-        // cooldown, so two codes were emailed.
-        let (state, temp, _token) = admin_test_state("reset-cooldown").await;
-        let now = chrono::Utc::now();
-        let (a, b) = futures_util::future::join(
-            crate::services::admin_pin::begin_reset(&state.db, now),
-            crate::services::admin_pin::begin_reset(&state.db, now),
-        )
-        .await;
-        let refused: Vec<String> = [a, b].into_iter().filter_map(Result::err).collect();
-        assert_eq!(refused, vec!["RESET_RATE_LIMITED".to_string()], "exactly one request gets a code");
-        state.db.close().await;
-        let _ = std::fs::remove_dir_all(&temp);
+        // cooldown, so two codes were emailed (32 of 40 tries on the old
+        // code with real threads).
+        for _ in 0..10 {
+            let (state, temp, _token) = admin_test_state("reset-cooldown").await;
+            let now = chrono::Utc::now();
+            let (a, b) = (state.db.clone(), state.db.clone());
+            let first = tokio::spawn(async move { crate::services::admin_pin::begin_reset(&a, now).await.err() });
+            let second = tokio::spawn(async move { crate::services::admin_pin::begin_reset(&b, now).await.err() });
+            let refused: Vec<String> = [first.await.unwrap(), second.await.unwrap()].into_iter().flatten().collect();
+            assert_eq!(refused, vec!["RESET_RATE_LIMITED".to_string()], "exactly one request gets a code");
+            state.db.close().await;
+            let _ = std::fs::remove_dir_all(&temp);
+        }
     }
 
     #[tokio::test]

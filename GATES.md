@@ -2300,10 +2300,10 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
 
 ## O12: PIN-reset daily cap and request cooldown are race-free (owner: "fix O12 too", 2026-11-07)
 
-- [ ] Concurrent wrong reset codes all count toward the 10-a-day cap; concurrent reset requests get one code, not two; a reset request never erases a counted failure.
+- [x] Concurrent wrong reset codes all count toward the 10-a-day cap; concurrent reset requests get one code, not two; a reset request never erases a counted failure.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib reset_guard_
   EXPECT: ten wrong codes over two codes (five at once each) lock new resets for the day; of two simultaneous requests one is RESET_RATE_LIMITED.
-  EVIDENCE:
-- [ ] Repo gates pass.
+  EVIDENCE: daily-cap test FAILED on the old code (no lock after ten wrong codes). Cooldown race: a real-thread probe on the old code (79ecccf) emailed two codes in 32 of 40 tries; the test now uses a multi-thread runtime, 10 tries per run, and passed 3/3 runs on the fix. Isolated harness (admin_pin_isolated) 11/11 pass after sharing the lazy table creation.
+- [x] Repo gates pass.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
-  EVIDENCE:
+  EVIDENCE: Rust lib 393 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. JS exit 0 (shared 39, client 620, server 292).

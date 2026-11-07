@@ -90,7 +90,7 @@ States: PENDING · RETRY · PROCESSING · SYNCED · DEAD. Counters: `attempts` (
 
 Rust: one global session slot `state.rs:237`, unlock `lib.rs:4131`, check `admin_authorized` :5419 (`require_admin` :5411), wrong-PIN guard `services/admin_pin.rs` :73/:81 (stored in `app_settings`), reset code `complete_reset` :296. Client: setup dialog `client/src/App.tsx:529` / close :567 (attempt counter :351), admin page unlock :3636.
 
-States: locked · unlocking · unlocked(token, expiry) · PIN locked out (5 wrong PINs in a row → 5 minutes; survives a restart; admin cards still unlock; any success resets the count). Invariants: closing setup leaves it locked even if an unlock answers afterwards; while locked out a PIN is never checked; a stale or empty token is refused but never ends a live session (only expiry does); wrong-PIN and reset-code attempts are counted in single SQL statements, so concurrent guesses all count.
+States: locked · unlocking · unlocked(token, expiry) · PIN locked out (5 wrong PINs in a row → 5 minutes; survives a restart; admin cards still unlock; any success resets the count). Invariants: closing setup leaves it locked even if an unlock answers afterwards; while locked out a PIN is never checked; a stale or empty token is refused but never ends a live session (only expiry does); wrong-PIN attempts, reset-code attempts, the daily reset-failure cap and the resend cooldown are each one SQL statement, so concurrent requests all count.
 
 ### M11 Kiosk scan pipeline (client)
 
@@ -164,6 +164,7 @@ Checked and sound: the voice job queue (`voice_pull.rs`, conditional finishes pl
 | F37 | 3 | O8: VoiceStudio commands had no admin check; Check saved what was typed | `require_admin`; probe without saving | `voicestudio_check_needs_admin_and_saves_nothing`; `api.test.ts` "sends the admin session token …" |
 | F38 | 3 | O10: legacy server lock only expired the cookie | server-side token revocation | `server/test/admin.test.ts` "revokes the session token on lock …" |
 | F39 | 3 | O11: admin changes never reached LAN viewers; native listeners leaked on early cleanup (the admin card listener re-subscribes on every busy toggle, so not only in dev) | publish after admin commits; `detachWhenDone` | `admin_changes_reach_lan_viewers`; `App.test.tsx` "detaches the native card listener …" |
+| F40 | 3 | O12: the PIN-reset daily failure cap and the resend cooldown were read-then-write: concurrent wrong codes undercounted the cap, two requests at once both got a code (32 of 40 tries with real threads), and a request wrote a stale failure count back | each is one SQL statement; a request claims only `lastRequestAt` | `reset_guard_counts_concurrent_wrong_codes_toward_the_daily_cap`, `reset_guard_gives_one_code_to_simultaneous_requests` |
 
 ### Suspected → verdict
 
@@ -179,6 +180,4 @@ Checked and sound: the voice job queue (`voice_pull.rs`, conditional finishes pl
 
 ### Still open
 
-| # | Impact | Bug | Note |
-| --- | --- | --- | --- |
-| O12 | 4 | The PIN-reset *daily* failure cap (`record_failure`, `admin_pin.rs`) is still read-then-write, so concurrent wrong codes can undercount it | each code's 5-attempt budget is atomic now (S3), so this only lets slightly more new codes be requested per day; the UI sends one request at a time |
+None. Every confirmed bug has a fix and a regression test, and every suspected item has a verdict.
