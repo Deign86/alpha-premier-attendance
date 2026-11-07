@@ -2262,38 +2262,38 @@ Each new test was run before its fix and failed there.
 
 ## Remaining confirmed bugs O2–O8, O10, O11 and suspected S1–S7 (owner: "fix all confirmed bugs and narrow down suspected ones", 2026-11-07)
 
-Each fix gets a regression test that fails on the old code. Each suspected item ends Confirmed (then fixed, same rule) or Refuted, with the trace or test that decided it.
+Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run against a worktree of the previous commit; the rest by disabling the fix in place, then restoring it.
 
-- [ ] O2 Transient sync failures back off with their own strike count (60 s doubling to the 960 s cap) and still never age into DEAD.
+- [x] O2 Transient sync failures back off with their own strike count (60 s doubling to the 960 s cap) and still never age into DEAD.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib transient_failures_back_off
-  EVIDENCE:
-- [ ] O3 Two grace deletes for one person both reach the sheet (no shared idempotency key).
+  EVIDENCE: FAILED when the backoff used `attempts` (old behaviour); passes with the new transient_strikes column (migration 0022). 126 sync tests pass.
+- [x] O3 Two grace deletes for one person both reach the sheet.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib grace_deletes_for_one_person
-  EVIDENCE:
-- [ ] O4 Attendance writes and their sync-queue rows commit together (a failed queue write leaves no unsynced attendance change).
+  EVIDENCE: previous commit: 1 queue row instead of 2 (FAILED); passes now.
+- [x] O4 Attendance writes and their sync-queue rows commit together.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib queue_rows_commit_with
-  EVIDENCE:
-- [ ] O5 Cutoff generation is all-or-nothing and drafts it replaces are deleted on the sheet too.
+  EVIDENCE: previous commit: attendance=1, queued=0 when the transaction died after the queue write (FAILED); passes now. Every writer (scan, admin update/delete/backdated, user save/delete, profiles, cutoff create/update/finalize/delete/generate) queues on its own transaction; the pool-only enqueue_sync was deleted as dead code.
+- [x] O5 Cutoff generation is all-or-nothing and replaced drafts are deleted on the sheet.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cutoff_generate_
-  EVIDENCE:
-- [ ] O6 A browser-mode scan request that never answers gives up, so the kiosk cannot stay in "processing".
+  EVIDENCE: previous commit: replaced draft never queued for deletion (FAILED); passes now, including a forced mid-generation failure that leaves the previous drafts intact.
+- [x] O6 A browser-mode scan request that never answers gives up after 15 s.
   CHECK: npm test -w client -- api.test.ts
-  EVIDENCE:
-- [ ] O7 Deactivating a person cannot leave an open day or a held bathroom key stuck.
+  EVIDENCE: old code: test timed out at 15 s with the request still pending (FAILED); passes now.
+- [x] O7 Deactivating a person cannot leave an open day or a held bathroom key stuck.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib deactivation_
-  EVIDENCE:
-- [ ] O8 VoiceStudio settings, check and regenerate need an admin session; Check does not save what was typed.
+  EVIDENCE: previous commit: deactivation succeeded with a day open (FAILED); passes now; client maps USER_HAS_OPEN_DAY / USER_HOLDS_BATHROOM_KEY to sentences (api.test.ts).
+- [x] O8 VoiceStudio settings, check and regenerate need an admin session; Check does not save what was typed.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib voicestudio_ && npm test -w client
-  EVIDENCE:
-- [ ] O10 Legacy server: admin lock revokes the session token server-side.
+  EVIDENCE: FAILED with the old save-on-check logic; passes now; client passes the session token (api.test.ts "sends the admin session token …").
+- [x] O10 Legacy server: admin lock revokes the session token server-side.
   CHECK: npm test -w server
-  EVIDENCE:
-- [ ] O11 Admin attendance changes reach open LAN viewers; native listeners are not leaked when a component unmounts before the listener attaches.
+  EVIDENCE: old code: GET /api/admin/session with the kept cookie returned 200 after lock (FAILED); 401 now; server 292 passed.
+- [x] O11 Admin attendance changes reach open LAN viewers; native listeners are not leaked.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_changes_reach_lan_viewers && npm test -w client
-  EVIDENCE:
-- [ ] S1–S7 each narrowed to Confirmed (fixed with a test) or Refuted (with the deciding trace/test), recorded in docs/STATE-MACHINES.md.
-  EVIDENCE:
-- [ ] Repo gates pass.
+  EVIDENCE: Rust test FAILED before (no bus event); App.test "detaches the native card listener …" FAILED with the old effect code; both pass now.
+- [x] S1–S7 each narrowed to Confirmed (fixed with a test) or Refuted, recorded in docs/STATE-MACHINES.md.
+  EVIDENCE: S1, S2, S3, S6, S7 confirmed and fixed (each test FAILED with the fix disabled); S3 also exposed the same race in the D1 wrong-PIN counter (fixed, test FAILED before). S5 half refuted (D4 makes an instant time-out impossible), half confirmed and fixed (racing double tap now DUPLICATE_SCAN; test FAILED before). S4: cause confirmed in code but not reproducible under Node with fake or real timers; cause removed (stable onClose) with a real-timer guard test. Open: O12 (impact 4, daily reset-failure cap undercount).
+- [x] Repo gates pass.
   CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
-  EVIDENCE:
+  EVIDENCE: JS exit 0 (shared 39, client 620, server 292). Rust lib 391 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. While here, a flaky DTR batch test fixture (counted hits after answering) was fixed; the lib suite then passed 4/4 consecutive runs.
