@@ -92,7 +92,7 @@ pub struct LanRuntimeStatus {
 
 struct LanRuntimeInner {
     status: LanRuntimeStatus,
-    task: Option<tauri::async_runtime::JoinHandle<()>>,
+    server: Option<lan_server::LanServerHandle>,
 }
 
 /// Owns the running LAN viewer task so the Live Attendance panel can start,
@@ -108,7 +108,7 @@ impl LanRuntime {
         Self {
             inner: std::sync::Arc::new(tokio::sync::Mutex::new(LanRuntimeInner {
                 status: LanRuntimeStatus::default(),
-                task: None,
+                server: None,
             })),
         }
     }
@@ -137,7 +137,7 @@ impl LanRuntime {
         }
 
         match lan_server::bind_and_serve(state.clone()).await {
-            Ok((address, task)) => {
+            Ok((address, server)) => {
                 let mut guard = self.inner.lock().await;
                 guard.status.phase = LanPhase::Running;
                 guard.status.bind_address = Some(address);
@@ -147,7 +147,7 @@ impl LanRuntime {
                         .unwrap_or_default()
                         .as_secs(),
                 );
-                guard.task = Some(task);
+                guard.server = Some(server);
                 Ok(())
             }
             Err(error) => {
@@ -157,19 +157,30 @@ impl LanRuntime {
                 guard.status.started_at = None;
                 guard.status.last_error = Some(error.to_string());
                 guard.status.issue = error.issue();
-                guard.task = None;
+                guard.server = None;
                 Err(error.to_string())
             }
         }
     }
 
-    /// Abort the serving task and reset to the stopped state.
+    /// Stop serving and reset to the stopped state. Graceful: open viewer
+    /// streams end and idle connections close (aborting the accept loop alone
+    /// left already-connected viewers streaming). Abort is the backstop.
     pub async fn stop(&self) {
-        let mut guard = self.inner.lock().await;
-        if let Some(task) = guard.task.take() {
-            task.abort();
+        let server = {
+            let mut guard = self.inner.lock().await;
+            guard.status = LanRuntimeStatus::default();
+            guard.server.take()
+        };
+        if let Some(mut server) = server {
+            let _ = server.stop.send(true);
+            if tokio::time::timeout(std::time::Duration::from_secs(2), &mut server.task)
+                .await
+                .is_err()
+            {
+                server.task.abort();
+            }
         }
-        guard.status = LanRuntimeStatus::default();
     }
 }
 

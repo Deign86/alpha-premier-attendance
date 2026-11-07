@@ -2237,3 +2237,14 @@ Each new test was run before its fix and failed there.
   CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
   EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 613, server 291). Rust lib 375 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed.
+
+## O1: stopping the LAN viewer disconnects viewers already connected (2026-11-06)
+
+- [x] Stop ends every open live-attendance stream and leaves nothing serving.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib lan_stop_disconnects_open_viewers
+  EXPECT: an SSE viewer connected before stop sees its stream end within 3 s of stop; a new request after stop is refused.
+  EVIDENCE: FAILED on the old code ("an open viewer kept streaming after stop", lan_server.rs:929); passes now, 5/5 repeated runs in 0.08–0.25 s (well under the 2 s abort backstop, so the graceful path does the work). All 18 LAN tests pass.
+- [x] Repo gates pass.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: Rust suites pass except the 3 pre-existing Windows-path tests on Linux; JS gates exit 0.
+  EVIDENCE: Rust lib 376 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. JS lint + typecheck + test exit 0 (shared 39, client 613, server 291).

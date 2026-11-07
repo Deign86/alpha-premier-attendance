@@ -111,6 +111,17 @@ Attendance is never saved offline any more (D6): `submitScan` (`client/src/api.t
 
 Backend emits `starting` · `syncing` · `completed` (`dtr_sync.rs:3383`); typed as `DtrSyncProgressStatus` in `client/src/tauri-api.ts`; mapped at `App.tsx:4167` onto `client/src/dtr-sync-guard.ts`.
 
+### M14 LAN viewer runtime
+
+`src-tauri/src/state.rs` `LanRuntime` (start :126, stop :169), `src-tauri/src/lan_server.rs` `bind_and_serve` :193 (graceful shutdown :216), SSE stream end :780.
+
+States: Stopped · Starting · Running(address, server) · Error(issue). Invariant: when Stopped, nothing serves and no viewer receives events.
+
+| From | Event | Guard | To | Side effects |
+| --- | --- | --- | --- | --- |
+| Stopped / Error | start | not already Starting/Running | Starting → Running or Error | bind, spawn serve |
+| Running | stop | — | Stopped | send shutdown: accept loop ends, every open SSE stream ends, idle connections close; abort after 2 s as a backstop |
+
 Checked and sound: voice job queue (`voice_pull.rs`, conditional finishes plus a 30-minute reclaim), server `KeyedMutex`, `list-load.tsx`, the backup single-flight, and the update banner's check-versus-install guard.
 
 ## Issues by root cause
@@ -147,6 +158,7 @@ Checked and sound: voice job queue (`voice_pull.rs`, conditional finishes plus a
 | F26 | 2 | D5: with DTR upload off, new punches were not queued, and on resume the stale queued payloads were pushed | queue while off; only dispatch pauses | `dtr_upload_off_keeps_queuing_and_resumes_with_current_data` |
 | F27 | 1 | D6: a scan saved offline was recorded at replay time, not tap time | never save attendance offline; unreachable shows "Can't reach the system"; old saved items still drain | `App.test.tsx` "never saves attendance offline …", "keeps the Assisted Attendance modal open … unreachable"; `api.test.ts` "reports an unreachable service … saves nothing offline" |
 | F28 | 2 | D7: clearing a day's time-in made it MISSED and the scan then refused the person | a correction must keep a time-in (ATTENDANCE_TIME_IN_REQUIRED); delete removes a day | `admin_update_keeps_a_time_in`; `api.test.ts` "explains that a correction must keep a time-in" |
+| F29 | 2 | O1: stopping the LAN viewer only aborted the accept loop; each connection runs on its own task, so viewers already connected kept streaming attendance | per-server shutdown signal: graceful serve shutdown plus every SSE stream `take_until` it; stop waits up to 2 s, then aborts | `lan_server` `lan_stop_disconnects_open_viewers` |
 
 ### Decisions
 
@@ -156,7 +168,6 @@ All seven were decided on 2026-11-06 ("D1 yes, D2 refuse, D3 record, D4 1 min"; 
 
 | # | Impact | Bug | Fix sketch |
 | --- | --- | --- | --- |
-| O1 | 2 | Stopping the LAN viewer leaves connected SSE clients streaming (`state.rs` stop only aborts the accept loop) | watch-channel shutdown + `with_graceful_shutdown` |
 | O2 | 3 | Transient backoff never grows (attempts are not counted on the transient path, so 30–90 s forever, against the documented doubling) | separate strike column (migration) |
 | O3 | 3 | `InternGrace` DELETE rows key on user id → several grace deletes for one person collapse to the last | put the grace id in the idempotency key |
 | O4 | 3 | Attendance/payroll commit and their queue rows are separate writes → a crash in between never syncs the ops row (weekly recon heals the DTR sheet) | outbox: queue rows in the same transaction |

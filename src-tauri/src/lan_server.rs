@@ -7,13 +7,14 @@ use axum::{
         Html, IntoResponse,
     },
     routing::get,
-    Json, Router,
+    Extension, Json, Router,
 };
 use chrono::{DateTime, Utc};
 use chrono_tz::Asia::Manila;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{convert::Infallible, net::SocketAddr, time::Duration};
+use tokio::sync::watch;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,13 +147,27 @@ impl LanStartError {
     }
 }
 
-pub fn router(state: AppState) -> Router {
+/// `shutdown` flips to true when the runtime stops the viewer; every open
+/// live-attendance stream ends on it.
+pub fn router(state: AppState, shutdown: watch::Receiver<bool>) -> Router {
     Router::new()
         .route("/attendance", get(attendance_page))
         .route("/api/attendance/today", get(attendance_today))
         .route("/api/events/attendance", get(attendance_events))
         .route("/api/health", get(health))
         .with_state(state)
+        .layer(Extension(shutdown))
+}
+
+/// A running viewer: its serve task and the switch that stops it.
+pub struct LanServerHandle {
+    pub task: tauri::async_runtime::JoinHandle<()>,
+    pub stop: watch::Sender<bool>,
+}
+
+/// Resolves once `stop` is sent (or the runtime dropped the sender).
+async fn stopped(mut shutdown: watch::Receiver<bool>) {
+    let _ = shutdown.wait_for(|stopped| *stopped).await;
 }
 
 /// The socket the viewer binds to: the configured `lan.bind_address` (never
@@ -170,12 +185,14 @@ fn resolve_bind_address(lan: &LanConfig) -> Result<SocketAddr, LanStartError> {
     ))
 }
 
-/// Bind the viewer to the resolved LAN address and serve until aborted.
-/// Returns the actual bound socket plus a task handle the runtime aborts on
-/// stop. The caller (LanRuntime) owns the handle.
+/// Bind the viewer to the resolved LAN address and serve until stopped.
+/// Returns the actual bound socket plus the handle the runtime stops it with.
+/// Aborting the serve task alone left connections already open (each runs on
+/// its own task) streaming after "stop", so stop is a graceful shutdown that
+/// also ends every SSE stream.
 pub async fn bind_and_serve(
     state: AppState,
-) -> Result<(SocketAddr, tauri::async_runtime::JoinHandle<()>), LanStartError> {
+) -> Result<(SocketAddr, LanServerHandle), LanStartError> {
     let address = resolve_bind_address(&state.lan)?;
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -189,14 +206,17 @@ pub async fn bind_and_serve(
     let actual = listener
         .local_addr()
         .map_err(|error| LanStartError::Bind(error.to_string()))?;
+    let (stop, shutdown) = watch::channel(false);
+    let on_stop = stopped(shutdown.clone());
     let task = tauri::async_runtime::spawn(async move {
         let _ = axum::serve(
             listener,
-            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+            router(state, shutdown).into_make_service_with_connect_info::<SocketAddr>(),
         )
+        .with_graceful_shutdown(on_stop)
         .await;
     });
-    Ok((actual, task))
+    Ok((actual, LanServerHandle { task, stop }))
 }
 
 /// Read-only status of the LAN attendance viewer, consumed by the in-app
@@ -714,6 +734,7 @@ impl Drop for SseClientGuard {
 
 async fn attendance_events(
     State(state): State<AppState>,
+    Extension(shutdown): Extension<watch::Receiver<bool>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Query(query): Query<DateQuery>,
@@ -754,6 +775,9 @@ async fn attendance_events(
             let _keep_guard_alive = &guard;
             item
         });
+    // Ends with the viewer: a stopped LAN viewer must not keep streaming
+    // attendance to devices that were already connected.
+    let stream = futures_util::StreamExt::take_until(stream, stopped(shutdown));
     Sse::new(stream)
         .keep_alive(
             KeepAlive::new()
@@ -894,6 +918,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lan_stop_disconnects_open_viewers() {
+        let data_dir =
+            std::env::temp_dir().join(format!("alpha-lan-stop-{}", uuid::Uuid::new_v4()));
+        let mut lan = LanConfig::default();
+        lan.port = 0;
+        lan.sse_keep_alive_seconds = 1;
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            lan,
+            crate::config::OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        state.lan_runtime.start(&state).await.unwrap();
+        let port = state.lan_runtime.snapshot().await.bind_address.unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/api/events/attendance");
+        let mut viewer = reqwest::get(&url).await.unwrap();
+        assert!(viewer.chunk().await.unwrap().is_some(), "viewer connected");
+
+        state.lan_runtime.stop().await;
+
+        // The open stream ends instead of streaming on (keep-alive every 1 s).
+        let drained = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Ok(Some(_)) = viewer.chunk().await {}
+        })
+        .await;
+        assert!(drained.is_ok(), "an open viewer kept streaming after stop");
+        assert!(reqwest::get(&url).await.is_err(), "nothing serves after stop");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[tokio::test]
     async fn router_serves_snapshot_and_health_without_mutation_routes() {
         let data_dir =
             std::env::temp_dir().join(format!("alpha-lan-test-{}", uuid::Uuid::new_v4()));
@@ -915,7 +978,8 @@ mod tests {
             .await
             .unwrap();
         let address = listener.local_addr().unwrap();
-        let app_router = router(state.clone());
+        let (_stop, shutdown) = watch::channel(false);
+        let app_router = router(state.clone(), shutdown);
         let task = tokio::spawn(async move {
             let _ = axum::serve(
                 listener,
