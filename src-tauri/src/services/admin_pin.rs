@@ -79,6 +79,7 @@ pub async fn unlock_locked(db: &SqlitePool, now: DateTime<Utc>) -> Result<bool, 
 /// The count is one SQL statement, so concurrent wrong PINs each count
 /// (a read-then-write let them overwrite each other's count).
 pub async fn record_unlock_failure(db: &SqlitePool, now: DateTime<Utc>) -> Result<bool, String> {
+    ensure_settings_table(db).await?;
     let failures: i64 = sqlx::query_scalar(
         "INSERT INTO app_settings (key, value, updated_at) VALUES (?, json_object('failures', 1), ?) \
          ON CONFLICT(key) DO UPDATE SET value = json_set(value, '$.failures', COALESCE(json_extract(value, '$.failures'), 0) + 1), updated_at = excluded.updated_at \
@@ -181,13 +182,20 @@ fn config_fingerprint(config_pin: &str) -> String {
     STANDARD_NO_PAD.encode(Sha256::digest(config_pin.as_bytes()))
 }
 
-async fn get_setting(db: &SqlitePool, key: &str) -> Result<Option<String>, String> {
+/// The settings table is created on first use (the module also runs on a
+/// bare database in the isolated harness).
+async fn ensure_settings_table(db: &SqlitePool) -> Result<(), String> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
     )
     .execute(db)
     .await
-    .map_err(|e| e.to_string())?;
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+async fn get_setting(db: &SqlitePool, key: &str) -> Result<Option<String>, String> {
+    ensure_settings_table(db).await?;
     sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
         .bind(key)
         .fetch_optional(db)
@@ -249,20 +257,40 @@ pub async fn effective_pin_hash(db: &SqlitePool, config_pin: Option<&str>) -> Re
 /// Generate a reset code after the cooldown and daily-failure checks. Nothing
 /// replaces the current code until `commit_reset` runs after a sent email.
 pub async fn begin_reset(db: &SqlitePool, now: DateTime<Utc>) -> Result<NewResetCode, String> {
-    let mut guard: ResetGuard = load_json(db, GUARD_KEY).await?.unwrap_or_default();
-    if guard
-        .last_request_at
-        .is_some_and(|at| now < at + Duration::seconds(RESEND_COOLDOWN_SECONDS))
-    {
-        return Err("RESET_RATE_LIMITED".into());
+    ensure_settings_table(db).await?;
+    // Claim the request in one statement: only when the resend cooldown has
+    // passed and the daily cap is not hit, and touching only lastRequestAt.
+    // The old read-check-write let two requests both pass (two codes
+    // emailed) and wrote a stale failure count back over a newer one (O12).
+    let now_text = now.to_rfc3339();
+    let claimed: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, json_object('lastRequestAt', ?, 'failures', 0), ?) \
+         ON CONFLICT(key) DO UPDATE SET value = json_set(value, '$.lastRequestAt', ?), updated_at = excluded.updated_at \
+         WHERE (json_extract(value, '$.lastRequestAt') IS NULL \
+                OR julianday(?) >= julianday(json_extract(value, '$.lastRequestAt')) + ? / 86400.0) \
+           AND NOT (COALESCE(json_extract(value, '$.failures'), 0) >= ? \
+                AND json_extract(value, '$.failureWindowStart') IS NOT NULL \
+                AND julianday(?) < julianday(json_extract(value, '$.failureWindowStart')) + 1.0) \
+         RETURNING 1",
+    )
+    .bind(GUARD_KEY)
+    .bind(&now_text)
+    .bind(&now_text)
+    .bind(&now_text)
+    .bind(&now_text)
+    .bind(RESEND_COOLDOWN_SECONDS)
+    .bind(MAX_DAILY_FAILURES)
+    .bind(&now_text)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    if claimed.is_none() {
+        // Refused: say why from the record that refused it.
+        let guard: ResetGuard = load_json(db, GUARD_KEY).await?.unwrap_or_default();
+        let locked = guard.failures >= MAX_DAILY_FAILURES
+            && guard.failure_window_start.is_some_and(|start| now < start + Duration::hours(24));
+        return Err(if locked { "RESET_LOCKED" } else { "RESET_RATE_LIMITED" }.into());
     }
-    if guard.failures >= MAX_DAILY_FAILURES
-        && guard.failure_window_start.is_some_and(|start| now < start + Duration::hours(24))
-    {
-        return Err("RESET_LOCKED".into());
-    }
-    guard.last_request_at = Some(now);
-    save_json(db, GUARD_KEY, &guard, now).await?;
 
     let mut bytes = [0u8; 7];
     fill_random(&mut bytes)?;
@@ -281,14 +309,29 @@ pub async fn commit_reset(db: &SqlitePool, reset: &NewResetCode, now: DateTime<U
     save_json(db, RESET_KEY, &reset.pending, now).await
 }
 
+/// Counts one wrong code toward the daily cap in one statement (a fresh
+/// 24-hour window starts at 1), so wrong codes sent at once all count (O12).
 async fn record_failure(db: &SqlitePool, now: DateTime<Utc>) -> Result<(), String> {
-    let mut guard: ResetGuard = load_json(db, GUARD_KEY).await?.unwrap_or_default();
-    if guard.failure_window_start.is_none_or(|start| now >= start + Duration::hours(24)) {
-        guard.failures = 0;
-        guard.failure_window_start = Some(now);
-    }
-    guard.failures += 1;
-    save_json(db, GUARD_KEY, &guard, now).await
+    ensure_settings_table(db).await?;
+    let now_text = now.to_rfc3339();
+    sqlx::query(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, json_object('failures', 1, 'failureWindowStart', ?), ?) \
+         ON CONFLICT(key) DO UPDATE SET value = CASE \
+             WHEN json_extract(value, '$.failureWindowStart') IS NULL \
+               OR julianday(?) >= julianday(json_extract(value, '$.failureWindowStart')) + 1.0 \
+             THEN json_set(value, '$.failures', 1, '$.failureWindowStart', ?) \
+             ELSE json_set(value, '$.failures', COALESCE(json_extract(value, '$.failures'), 0) + 1) \
+           END, updated_at = excluded.updated_at",
+    )
+    .bind(GUARD_KEY)
+    .bind(&now_text)
+    .bind(&now_text)
+    .bind(&now_text)
+    .bind(&now_text)
+    .execute(db)
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Check the emailed code and replace the admin PIN. A bad new PIN does not

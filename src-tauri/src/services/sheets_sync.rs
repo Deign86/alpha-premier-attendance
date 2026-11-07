@@ -2910,7 +2910,6 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::sync_retry::calculate_retry_backoff;
     use chrono::Duration as ChronoDuration;
     use serde_json::json;
 

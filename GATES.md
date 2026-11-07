@@ -2297,3 +2297,13 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
   EVIDENCE: JS exit 0 (shared 39, client 620, server 292). Rust lib 391 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. While here, a flaky DTR batch test fixture (counted hits after answering) was fixed; the lib suite then passed 4/4 consecutive runs.
+
+## O12: PIN-reset daily cap and request cooldown are race-free (owner: "fix O12 too", 2026-11-07)
+
+- [ ] Concurrent wrong reset codes all count toward the 10-a-day cap; concurrent reset requests get one code, not two; a reset request never erases a counted failure.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib reset_guard_
+  EXPECT: ten wrong codes over two codes (five at once each) lock new resets for the day; of two simultaneous requests one is RESET_RATE_LIMITED.
+  EVIDENCE:
+- [ ] Repo gates pass.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EVIDENCE:

@@ -8099,6 +8099,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reset_guard_counts_concurrent_wrong_codes_toward_the_daily_cap() {
+        // O12: the daily failure count was read-then-write, so wrong codes
+        // sent at once overwrote each other's count.
+        let (state, temp, _token) = admin_test_state("reset-daily-cap").await;
+        let mut now = chrono::Utc::now();
+        for _ in 0..2 {
+            let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
+            crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
+            let wrong: Vec<_> = (0..5)
+                .map(|_| crate::services::admin_pin::complete_reset(&state.db, "000000", "13572468", None, now))
+                .collect();
+            futures_util::future::join_all(wrong).await;
+            now += chrono::Duration::seconds(61);
+        }
+        let blocked = crate::services::admin_pin::begin_reset(&state.db, now).await;
+        assert_eq!(blocked.err().as_deref(), Some("RESET_LOCKED"), "ten wrong codes in a day lock new resets");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn reset_guard_gives_one_code_to_simultaneous_requests() {
+        // O12 (same family): two requests at once both passed the resend
+        // cooldown, so two codes were emailed.
+        let (state, temp, _token) = admin_test_state("reset-cooldown").await;
+        let now = chrono::Utc::now();
+        let (a, b) = futures_util::future::join(
+            crate::services::admin_pin::begin_reset(&state.db, now),
+            crate::services::admin_pin::begin_reset(&state.db, now),
+        )
+        .await;
+        let refused: Vec<String> = [a, b].into_iter().filter_map(Result::err).collect();
+        assert_eq!(refused, vec!["RESET_RATE_LIMITED".to_string()], "exactly one request gets a code");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
     async fn concurrent_wrong_pins_still_reach_the_lockout() {
         // Same race on the D1 wrong-PIN counter.
         let (state, temp, _token) = admin_test_state("pin-race").await;
