@@ -113,14 +113,15 @@ Backend emits `starting` · `syncing` · `completed` (`dtr_sync.rs:3383`); typed
 
 ### M14 LAN viewer runtime
 
-`src-tauri/src/state.rs` `LanRuntime` (start :126, stop :169), `src-tauri/src/lan_server.rs` `bind_and_serve` :193 (graceful shutdown :216), SSE stream end :780.
+`src-tauri/src/state.rs` `LanRuntime` (start :130, finish :152, stop :197), `src-tauri/src/lan_server.rs` `bind_and_serve` :193 (graceful shutdown :216), SSE stream end :780.
 
-States: Stopped · Starting · Running(address, server) · Error(issue). Invariant: when Stopped, nothing serves and no viewer receives events.
+States: Stopped · Starting · Running(address, server) · Error(issue). Invariants: when Stopped, nothing serves and no viewer receives events; a stop always wins over a start still binding (each stop bumps a generation the start must still match).
 
 | From | Event | Guard | To | Side effects |
 | --- | --- | --- | --- | --- |
 | Stopped / Error | start | not already Starting/Running | Starting → Running or Error | bind, spawn serve |
 | Running | stop | — | Stopped | send shutdown: accept loop ends, every open SSE stream ends, idle connections close; abort after 2 s as a backstop |
+| Starting | stop | — | Stopped (generation bumped) | when the bind finishes, the start sees the old generation and shuts its new server down |
 
 Checked and sound: voice job queue (`voice_pull.rs`, conditional finishes plus a 30-minute reclaim), server `KeyedMutex`, `list-load.tsx`, the backup single-flight, and the update banner's check-versus-install guard.
 
@@ -159,6 +160,7 @@ Checked and sound: voice job queue (`voice_pull.rs`, conditional finishes plus a
 | F27 | 1 | D6: a scan saved offline was recorded at replay time, not tap time | never save attendance offline; unreachable shows "Can't reach the system"; old saved items still drain | `App.test.tsx` "never saves attendance offline …", "keeps the Assisted Attendance modal open … unreachable"; `api.test.ts` "reports an unreachable service … saves nothing offline" |
 | F28 | 2 | D7: clearing a day's time-in made it MISSED and the scan then refused the person | a correction must keep a time-in (ATTENDANCE_TIME_IN_REQUIRED); delete removes a day | `admin_update_keeps_a_time_in`; `api.test.ts` "explains that a correction must keep a time-in" |
 | F29 | 2 | O1: stopping the LAN viewer only aborted the accept loop; each connection runs on its own task, so viewers already connected kept streaming attendance | per-server shutdown signal: graceful serve shutdown plus every SSE stream `take_until` it; stop waits up to 2 s, then aborts | `lan_server` `lan_stop_disconnects_open_viewers` |
+| F30 | 3 | O9: a stop pressed while the viewer was still binding found no server, reset to Stopped, and the finishing start overwrote it with Running | generation bumped by stop; the start checks it and sets its phase in one critical section, shutting a superseded server down | `state` `stop_during_start_wins` |
 
 ### Decisions
 
@@ -175,7 +177,6 @@ All seven were decided on 2026-11-06 ("D1 yes, D2 refuse, D3 record, D4 1 min"; 
 | O6 | 3 | Browser-mode scan request has no timeout → kiosk can sit in "processing" | `AbortSignal.timeout` with the controller |
 | O7 | 3 | Deactivating a user leaves their open day WORKING and a held bathroom key blocked | close or return on deactivate |
 | O8 | 3 | VoiceStudio settings/regenerate commands have no admin-token check; "Check" saves the typed host and PIN | add `admin_authorized` |
-| O9 | 3 | A LAN stop issued while the server is starting is overwritten | check a stop flag after bind |
 | O10 | 3 | Legacy server: admin lock only expires the cookie; tokens stay valid | server-side revocation |
 | O11 | 4 | Admin update/delete never publish to the LAN event bus (viewers stay stale until refresh); dev-only listener leaks under StrictMode | publish; `disposed` flag in listeners |
 

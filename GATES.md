@@ -2248,3 +2248,14 @@ Each new test was run before its fix and failed there.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EXPECT: Rust suites pass except the 3 pre-existing Windows-path tests on Linux; JS gates exit 0.
   EVIDENCE: Rust lib 376 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. JS lint + typecheck + test exit 0 (shared 39, client 613, server 291).
+
+## O9: a LAN stop pressed while the viewer is still starting wins (2026-11-07)
+
+- [x] A stop that arrives while the viewer is binding leaves it Stopped, and the server that finished binding is shut down.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib stop_during_start_wins
+  EXPECT: begin start → stop → bind finishes → phase Stopped and the bound port refuses connections; a start with no stop in between still runs.
+  EVIDENCE: with start split into begin/bind/finish but no generation check, the test FAILED ("the stop must win": left Running, right Stopped); with the check it passes, 3/3 repeated runs. Review found the first version re-locked between the check and setting Running (a smaller window for the same race); it now holds one lock across both.
+- [x] Repo gates pass.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: Rust suites pass except the 3 pre-existing Windows-path tests on Linux (JS untouched).
+  EVIDENCE: Rust lib 377 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. No JS file changed.

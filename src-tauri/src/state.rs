@@ -93,6 +93,9 @@ pub struct LanRuntimeStatus {
 struct LanRuntimeInner {
     status: LanRuntimeStatus,
     server: Option<lan_server::LanServerHandle>,
+    /// Bumped by every stop. A start whose bind finishes under an older
+    /// generation was stopped meanwhile and must not come up anyway.
+    generation: u64,
 }
 
 /// Owns the running LAN viewer task so the Live Attendance panel can start,
@@ -109,6 +112,7 @@ impl LanRuntime {
             inner: std::sync::Arc::new(tokio::sync::Mutex::new(LanRuntimeInner {
                 status: LanRuntimeStatus::default(),
                 server: None,
+                generation: 0,
             })),
         }
     }
@@ -124,21 +128,46 @@ impl LanRuntime {
     /// Bind the viewer to the configured/detected LAN address and serve until
     /// stopped. Idempotent: returns immediately when already running.
     pub async fn start(&self, state: &AppState) -> Result<(), String> {
-        {
-            let mut guard = self.inner.lock().await;
-            if guard.status.phase == LanPhase::Running
-                || guard.status.phase == LanPhase::Starting
-            {
-                return Ok(());
-            }
-            guard.status.phase = LanPhase::Starting;
-            guard.status.last_error = None;
-            guard.status.issue = LanIssue::None;
-        }
+        let Some(generation) = self.begin_start().await else {
+            return Ok(());
+        };
+        let bound = lan_server::bind_and_serve(state.clone()).await;
+        self.finish_start(generation, bound).await
+    }
 
-        match lan_server::bind_and_serve(state.clone()).await {
+    /// Starting, unless already Starting/Running. Returns the generation the
+    /// bind belongs to; the lock is released for the bind, so a stop can
+    /// arrive before `finish_start`.
+    async fn begin_start(&self) -> Option<u64> {
+        let mut guard = self.inner.lock().await;
+        if guard.status.phase == LanPhase::Running || guard.status.phase == LanPhase::Starting {
+            return None;
+        }
+        guard.status.phase = LanPhase::Starting;
+        guard.status.last_error = None;
+        guard.status.issue = LanIssue::None;
+        Some(guard.generation)
+    }
+
+    async fn finish_start(
+        &self,
+        generation: u64,
+        bound: Result<(std::net::SocketAddr, lan_server::LanServerHandle), lan_server::LanStartError>,
+    ) -> Result<(), String> {
+        // One critical section from the generation check to the new phase,
+        // so no stop can land between them.
+        let mut guard = self.inner.lock().await;
+        if guard.generation != generation {
+            // Stopped while binding: the stop wins, so the server that just
+            // came up is shut down instead of overwriting Stopped.
+            drop(guard);
+            if let Ok((_, server)) = bound {
+                Self::shut_down(server).await;
+            }
+            return Ok(());
+        }
+        match bound {
             Ok((address, server)) => {
-                let mut guard = self.inner.lock().await;
                 guard.status.phase = LanPhase::Running;
                 guard.status.bind_address = Some(address);
                 guard.status.started_at = Some(
@@ -151,7 +180,6 @@ impl LanRuntime {
                 Ok(())
             }
             Err(error) => {
-                let mut guard = self.inner.lock().await;
                 guard.status.phase = LanPhase::Error;
                 guard.status.bind_address = None;
                 guard.status.started_at = None;
@@ -169,17 +197,22 @@ impl LanRuntime {
     pub async fn stop(&self) {
         let server = {
             let mut guard = self.inner.lock().await;
+            guard.generation = guard.generation.wrapping_add(1);
             guard.status = LanRuntimeStatus::default();
             guard.server.take()
         };
-        if let Some(mut server) = server {
-            let _ = server.stop.send(true);
-            if tokio::time::timeout(std::time::Duration::from_secs(2), &mut server.task)
-                .await
-                .is_err()
-            {
-                server.task.abort();
-            }
+        if let Some(server) = server {
+            Self::shut_down(server).await;
+        }
+    }
+
+    async fn shut_down(mut server: lan_server::LanServerHandle) {
+        let _ = server.stop.send(true);
+        if tokio::time::timeout(std::time::Duration::from_secs(2), &mut server.task)
+            .await
+            .is_err()
+        {
+            server.task.abort();
         }
     }
 }
@@ -499,6 +532,47 @@ pub async fn sync_guard_status(db: &SqlitePool) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use crate::config::{LanConfig, ScannerConfig};
+
+    #[tokio::test]
+    async fn stop_during_start_wins() {
+        use crate::config::{OfficeConfig, TtsConfig, UpdaterConfig};
+        let data_dir = std::env::temp_dir().join(format!("alpha-lan-stop-start-{}", Uuid::new_v4()));
+        let mut lan = LanConfig::default();
+        lan.port = 0;
+        let state = AppState::new(
+            data_dir.clone(),
+            data_dir.join("attendance.db"),
+            data_dir.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let runtime = state.lan_runtime.clone();
+
+        // The admin presses Stop while the viewer is still binding.
+        let generation = runtime.begin_start().await.unwrap();
+        assert_eq!(runtime.phase().await, LanPhase::Starting);
+        runtime.stop().await;
+        let bound = lan_server::bind_and_serve(state.clone()).await;
+        let port = bound.as_ref().map(|(address, _)| address.port()).unwrap();
+        runtime.finish_start(generation, bound).await.unwrap();
+
+        assert_eq!(runtime.phase().await, LanPhase::Stopped, "the stop must win");
+        let url = format!("http://127.0.0.1:{port}/api/health");
+        assert!(reqwest::get(&url).await.is_err(), "the late server was shut down");
+
+        // A start with no stop in between still comes up.
+        runtime.start(&state).await.unwrap();
+        assert_eq!(runtime.phase().await, LanPhase::Running);
+        runtime.stop().await;
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
 
     #[tokio::test]
     async fn manual_sync_guard_rejects_overlap_and_release_allows_reacquisition() {
