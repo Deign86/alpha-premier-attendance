@@ -2150,3 +2150,160 @@ unchanged.
   CHECK: the first Release run after this ruleset (release.yml checks out with ssh-key RELEASE_DEPLOY_KEY): a "chore(release): bump version" commit on main.
   EXPECT: pushed via the deploy key; if refused, bump-version.mjs only warns and the release still publishes, but main's version files stop advancing.
   EVIDENCE:
+
+## State-machine bug hunt: confirmed bugs fixed with regression tests (2026-11-06)
+
+Model and issue list: `docs/STATE-MACHINES.md` (F1–F21 fixed; D1–D6 need a product call; O1–O11 open; S1–S7 suspected). Each gate is one root-cause group; "fails on old code" was measured by running the new test against the original logic (guard toggled off or the HEAD function swapped back in), then restoring.
+
+- [x] I1 Finalizing a cutoff whose dates overlap an already FINALIZED cutoff for the same intern is refused (no double pay).
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib finalize_refuses_overlapping_finalized_cutoff
+  EXPECT: overlapping DRAFT stays DRAFT with error PAYROLL_PERIOD_ALREADY_FINALIZED; an adjacent DRAFT still finalizes.
+  EVIDENCE: passes; FAILED with the overlap guard disabled (panic at the unwrap_err).
+- [x] I2 An admin correction saved from a stale WORKING row cannot erase a time-out (and its payroll) recorded after the row was loaded.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_update_partial_payload_coalesces
+  EXPECT: step 6 gets ATTENDANCE_CONFLICT; time_out, COMPLETED and the payroll row survive.
+  EVIDENCE: FAILED on the old code (stale save succeeded, lib.rs:8262 unwrap_err panic); passes with explicit-null expectations; admin_update_rolls_back_attendance_when_payroll_write_fails still passes.
+- [x] I3 The sync queue pushes the payload it claimed, and a queued op retires its unapplied opposite op.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- sync_claim_ delete_supersedes_
+  EXPECT: a row re-queued after the batch read is pushed with its new payload and fresh attempts (RETRY, not DEAD); DELETE retires a RETRY UPSERT and a later UPSERT retires the DELETE.
+  EVIDENCE: both FAILED with the snapshot-payload claim and no supersede; both pass now (loopback axum endpoint for the claim test).
+- [x] I4 A failed restore leaves the current database untouched; pruning never deletes the backup it just made.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib database::tests
+  EXPECT: restore failing on the config step keeps the old DB ("Current Person"); with 11 pre-restore snapshots the new regular backup survives.
+  EVIDENCE: 14 passed; the 2 new tests FAILED against the HEAD database.rs logic.
+- [x] I5 DTR sync errors classify and admit correctly.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- sync_retry dtr_sync sheets_sync
+  EXPECT: GOOGLE_OAUTH_TRANSPORT is transient at any attempt count; a 60-write backfill is trimmed to an admitted 50.
+  EVIDENCE: transient_classifier FAILED without the marker; oversized_backfill_is_trimmed_to_an_admissible_slice passes (shows the untrimmed request is denied in every window); 117 dtr_sync/sheets_sync tests pass. The DTR clear PUT now uses dtr_call_with_retry + dtr_error_for_response (no URL seam to test it directly).
+- [x] I6 Kiosk/admin async lifecycles cannot land in a stale or stuck state.
+  CHECK: npm test -w client
+  EXPECT: 7 new regression tests pass; all existing client tests pass.
+  EVIDENCE: 611 passed (604 before). Each new test FAILED on the old code: setup reopened unlocked (lock never called), assisted offline modal stayed open, unlockAdmin rejected, bathroom showed Aug 1 logs under Aug 2, offline queue grew 2 -> 6, Ada announced after Grace, sync guard stayed true after "completed". S4 (assist countdown) did NOT reproduce under fake timers, so it stays Suspected and no test was kept.
+- [x] I7 Multi-write admin operations are atomic.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- user_deletion cutoff_delete_never bathroom_edit_rejects_dates_outside_log_date
+  EXPECT: blocked user delete keeps user, attendance and cutoff; blocked cutoff delete keeps the snapshot; a stale bathroom save conflicts and a current one re-opens.
+  EVIDENCE: user_deletion_is_all_or_nothing and cutoff_delete_never_leaves_a_finalized_cutoff_without_its_snapshot FAILED on the old code; the bathroom stale-save step FAILED on the old code; all pass now. Attendance delete reads moved into its transaction (structural; no seam for the interleaving).
+- [x] I8 Background sync lifecycles.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib -- nuke_and_resync_waits dtr_recon
+  EXPECT: nuke refuses with DTR_SYNC_IN_PROGRESS and leaves the running guard alone; RUNNING runs are reclaimed at boot; scheduled retries wait 30 min; a failed run is FAILED once with one audit row.
+  EVIDENCE: nuke test FAILED with the guard lines removed; 8 dtr_recon tests pass. Reclaim and the retry gate are new functions, so there is no old code to fail against.
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 611, server 291). Rust lib 369 passed / 3 failed (baseline before any change: 357 / 3, the same 3: config::tests::service_account_path_resolves_against_config_dir, paths::tests::db_path_override_treats_a_directory_by_appending_attendance_db, paths::tests::db_path_override_treats_a_dot_extension_as_a_file; CI runs on Windows). Integration suites 11/18/69/35/52/24 passed.
+
+## State-machine decisions D1–D4 (owner answers 2026-11-06: "D1 yes, D2 refuse, D3 record, D4 1 min")
+
+Each test was run against the code with its rule disabled (then restored) and failed there.
+
+- [x] D1 Five wrong admin PINs lock PIN unlock for 5 minutes, and the lock survives a restart.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_pin_lockout && npm test -w client -- api.test.ts
+  EXPECT: 5th wrong PIN starts the lock; the right PIN is refused while locked (ADMIN_PIN_LOCKED); a fresh AppState on the same DB is still locked; after the lock time the right PIN unlocks and resets the count; an admin card still unlocks during a lock; both unlock screens show the lock message.
+  EVIDENCE: admin_pin_lockout_after_five_wrong_pins_survives_a_restart passes; FAILED with the lockout disabled (lib.rs:7923). api.test.ts "says PIN unlock is paused …" failed before the copy, passes now.
+- [x] D2 Attendance inside a FINALIZED cutoff cannot be edited or deleted, and deleting a user keeps their finalized pay records.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib finalized_cutoff_freezes
+  EXPECT: update (including moving a day into the period) and delete return ATTENDANCE_IN_FINALIZED_CUTOFF with the row unchanged; a day outside still corrects; user delete keeps the FINALIZED cutoff and snapshot and removes the draft.
+  EVIDENCE: passes; FAILED with the freeze check disabled and, separately, with the user-delete filter removed. user_deletion_cascades_to_payroll_and_attendance now expects the FINALIZED cutoff to stay (it encoded the old behavior). api.test.ts "explains that a day in a finalized payroll cutoff …" passes (the Tauri delete path now maps errors instead of rejecting).
+- [x] D3 A time-out the payroll engine cannot price (time-in after 17:00) is still recorded, as LATE_TIMEOUT with no payroll, for an admin correction.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib scan_records_unpriceable_time_out
+  EXPECT: 17:30 time-in + 18:05 tap succeeds, row LATE_TIMEOUT with the time-out, no payroll row.
+  EVIDENCE: passes; FAILED with the savepoint fallback disabled. Scan now takes an injected clock (`scan_rfid_at`) so the test does not depend on the wall clock.
+- [x] D4 A scan less than 1 minute after time-in does not time the person out.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib scan_needs_a_minute_between_time_in_and_time_out
+  EXPECT: tap 30 s after time-in is rejected as DUPLICATE_SCAN and the day stays WORKING; a tap 61 s after time-in records the time-out with payroll.
+  EVIDENCE: passes; FAILED with the minimum disabled.
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 613, server 291). Rust lib 373 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed.
+
+## State-machine decisions D5–D7 (owner answers 2026-11-06: "d5 keep queuing, d6 do ur recommendations, d7 do ur recommendations")
+
+Each new test was run before its fix and failed there.
+
+- [x] D5 With DTR upload switched off, punches and corrections are still queued (dispatch stays paused), so switching it back on pushes current data.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib dtr_upload_off_keeps_queuing
+  EXPECT: with upload off, a scan queues its InternDtr row, a correction updates the queued payload, and run_once leaves the row PENDING.
+  EVIDENCE: FAILED before the fix ("time-in queued while upload is off"); passes now; 116 other dtr_sync/sheets_sync tests still pass. The Data card already said "uploads when it's turned back on", which is now true.
+- [x] D6 Attendance is never saved offline: an unreachable service is a visible error the person can tap again after; items saved by older versions still drain.
+  CHECK: npm test -w client
+  EXPECT: submitScan rethrows (no localStorage item); the kiosk shows "Can't reach the system"; an assisted confirm keeps the modal open with a retry message; leftover queue items still drain once, in order.
+  EVIDENCE: the 3 new/rewritten tests FAILED before the change; client 613 passed after. OfflineScanResponse was removed from the shared ScanResponse union, so the compiler confirmed every offlineQueued branch was gone; the "Saved offline" card and two tests for it were removed with the feature.
+- [x] D7 A correction cannot leave a day without a time-in; deleting the record is the way to remove a day.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_update_keeps_a_time_in && npm test -w client -- api.test.ts
+  EXPECT: clearing time-in (with or without a time-out) returns ATTENDANCE_TIME_IN_REQUIRED and the row is unchanged; the client shows "A record needs a time-in…".
+  EVIDENCE: both tests FAILED before the change and pass now; the now-unreachable MISSED branch in the status derivation was removed.
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: lint + typecheck + test exit 0 (shared 39, client 613, server 291). Rust lib 375 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed.
+
+## O1: stopping the LAN viewer disconnects viewers already connected (2026-11-06)
+
+- [x] Stop ends every open live-attendance stream and leaves nothing serving.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib lan_stop_disconnects_open_viewers
+  EXPECT: an SSE viewer connected before stop sees its stream end within 3 s of stop; a new request after stop is refused.
+  EVIDENCE: FAILED on the old code ("an open viewer kept streaming after stop", lan_server.rs:929); passes now, 5/5 repeated runs in 0.08–0.25 s (well under the 2 s abort backstop, so the graceful path does the work). All 18 LAN tests pass.
+- [x] Repo gates pass.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: Rust suites pass except the 3 pre-existing Windows-path tests on Linux; JS gates exit 0.
+  EVIDENCE: Rust lib 376 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. JS lint + typecheck + test exit 0 (shared 39, client 613, server 291).
+
+## O9: a LAN stop pressed while the viewer is still starting wins (2026-11-07)
+
+- [x] A stop that arrives while the viewer is binding leaves it Stopped, and the server that finished binding is shut down.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib stop_during_start_wins
+  EXPECT: begin start → stop → bind finishes → phase Stopped and the bound port refuses connections; a start with no stop in between still runs.
+  EVIDENCE: with start split into begin/bind/finish but no generation check, the test FAILED ("the stop must win": left Running, right Stopped); with the check it passes, 3/3 repeated runs. Review found the first version re-locked between the check and setting Running (a smaller window for the same race); it now holds one lock across both.
+- [x] Repo gates pass.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: Rust suites pass except the 3 pre-existing Windows-path tests on Linux (JS untouched).
+  EVIDENCE: Rust lib 377 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. No JS file changed.
+
+## Remaining confirmed bugs O2–O8, O10, O11 and suspected S1–S7 (owner: "fix all confirmed bugs and narrow down suspected ones", 2026-11-07)
+
+Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run against a worktree of the previous commit; the rest by disabling the fix in place, then restoring it.
+
+- [x] O2 Transient sync failures back off with their own strike count (60 s doubling to the 960 s cap) and still never age into DEAD.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib transient_failures_back_off
+  EVIDENCE: FAILED when the backoff used `attempts` (old behaviour); passes with the new transient_strikes column (migration 0022). 126 sync tests pass.
+- [x] O3 Two grace deletes for one person both reach the sheet.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib grace_deletes_for_one_person
+  EVIDENCE: previous commit: 1 queue row instead of 2 (FAILED); passes now.
+- [x] O4 Attendance writes and their sync-queue rows commit together.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib queue_rows_commit_with
+  EVIDENCE: previous commit: attendance=1, queued=0 when the transaction died after the queue write (FAILED); passes now. Every writer (scan, admin update/delete/backdated, user save/delete, profiles, cutoff create/update/finalize/delete/generate) queues on its own transaction; the pool-only enqueue_sync was deleted as dead code.
+- [x] O5 Cutoff generation is all-or-nothing and replaced drafts are deleted on the sheet.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cutoff_generate_
+  EVIDENCE: previous commit: replaced draft never queued for deletion (FAILED); passes now, including a forced mid-generation failure that leaves the previous drafts intact.
+- [x] O6 A browser-mode scan request that never answers gives up after 15 s.
+  CHECK: npm test -w client -- api.test.ts
+  EVIDENCE: old code: test timed out at 15 s with the request still pending (FAILED); passes now.
+- [x] O7 Deactivating a person cannot leave an open day or a held bathroom key stuck.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib deactivation_
+  EVIDENCE: previous commit: deactivation succeeded with a day open (FAILED); passes now; client maps USER_HAS_OPEN_DAY / USER_HOLDS_BATHROOM_KEY to sentences (api.test.ts).
+- [x] O8 VoiceStudio settings, check and regenerate need an admin session; Check does not save what was typed.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib voicestudio_ && npm test -w client
+  EVIDENCE: FAILED with the old save-on-check logic; passes now; client passes the session token (api.test.ts "sends the admin session token …").
+- [x] O10 Legacy server: admin lock revokes the session token server-side.
+  CHECK: npm test -w server
+  EVIDENCE: old code: GET /api/admin/session with the kept cookie returned 200 after lock (FAILED); 401 now; server 292 passed.
+- [x] O11 Admin attendance changes reach open LAN viewers; native listeners are not leaked.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib admin_changes_reach_lan_viewers && npm test -w client
+  EVIDENCE: Rust test FAILED before (no bus event); App.test "detaches the native card listener …" FAILED with the old effect code; both pass now.
+- [x] S1–S7 each narrowed to Confirmed (fixed with a test) or Refuted, recorded in docs/STATE-MACHINES.md.
+  EVIDENCE: S1, S2, S3, S6, S7 confirmed and fixed (each test FAILED with the fix disabled); S3 also exposed the same race in the D1 wrong-PIN counter (fixed, test FAILED before). S5 half refuted (D4 makes an instant time-out impossible), half confirmed and fixed (racing double tap now DUPLICATE_SCAN; test FAILED before). S4: cause confirmed in code but not reproducible under Node with fake or real timers; cause removed (stable onClose) with a real-timer guard test. Open: O12 (impact 4, daily reset-failure cap undercount).
+- [x] Repo gates pass.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EXPECT: JS gates exit 0; Rust suites pass except the 3 pre-existing Windows-path tests on Linux.
+  EVIDENCE: JS exit 0 (shared 39, client 620, server 292). Rust lib 391 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. While here, a flaky DTR batch test fixture (counted hits after answering) was fixed; the lib suite then passed 4/4 consecutive runs.
+
+## O12: PIN-reset daily cap and request cooldown are race-free (owner: "fix O12 too", 2026-11-07)
+
+- [x] Concurrent wrong reset codes all count toward the 10-a-day cap; concurrent reset requests get one code, not two; a reset request never erases a counted failure.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib reset_guard_
+  EXPECT: ten wrong codes over two codes (five at once each) lock new resets for the day; of two simultaneous requests one is RESET_RATE_LIMITED.
+  EVIDENCE: daily-cap test FAILED on the old code (no lock after ten wrong codes). Cooldown race: a real-thread probe on the old code (79ecccf) emailed two codes in 32 of 40 tries; the test now uses a multi-thread runtime, 10 tries per run, and passed 3/3 runs on the fix. Isolated harness (admin_pin_isolated) 11/11 pass after sharing the lazy table creation.
+- [x] Repo gates pass.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EVIDENCE: Rust lib 393 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. JS exit 0 (shared 39, client 620, server 292).

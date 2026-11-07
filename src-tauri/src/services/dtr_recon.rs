@@ -362,7 +362,18 @@ pub async fn check_and_run_scheduled(state: &AppState) -> Result<Option<String>,
             .await
             .map_err(|e| e.to_string())?;
 
+    if is_boot {
+        reclaim_interrupted_runs(state).await?;
+    }
     if should_run_recon_scheduled(&now_manila, last_recon_week.as_deref(), is_boot) {
+        let last_started: Option<String> =
+            sqlx::query_scalar("SELECT MAX(started_at) FROM dtr_recon_runs")
+                .fetch_one(&state.db)
+                .await
+                .map_err(|e| e.to_string())?;
+        if !is_boot && !scheduled_retry_due(last_started.as_deref(), chrono::Utc::now()) {
+            return Ok(None);
+        }
         log::info!(
             "DTR reconciliation scheduled run triggered (is_boot={is_boot}, week={})",
             format_recon_week(&now_manila)
@@ -374,9 +385,48 @@ pub async fn check_and_run_scheduled(state: &AppState) -> Result<Option<String>,
     }
 }
 
+/// A scheduled run that did not complete waits this long before the next
+/// attempt: the scheduler ticks every 30 s, and a Friday-afternoon outage
+/// used to write a FAILED run plus an audit row on every tick.
+const SCHEDULED_RETRY_SECS: i64 = 30 * 60;
+
+fn scheduled_retry_due(last_started: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    last_started
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_none_or(|started| (now - started.with_timezone(&chrono::Utc)).num_seconds() >= SCHEDULED_RETRY_SECS)
+}
+
+/// Runs cut off by closing the app never finish on their own; at boot they
+/// are closed as FAILED so the report never shows a run "in progress" forever.
+pub async fn reclaim_interrupted_runs(state: &AppState) -> Result<u64, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let summary = serde_json::json!({ "error": "interrupted: the app closed during this run" });
+    let result = sqlx::query("UPDATE dtr_recon_runs SET completed_at = ?, status = 'FAILED', summary_json = ? WHERE status = 'RUNNING'")
+        .bind(&now)
+        .bind(summary.to_string())
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(result.rows_affected())
+}
+
 /// Entry point 2: Execute DTR reconciliation.
 pub async fn run_reconciliation(state: &AppState, report_only: bool) -> Result<String, String> {
     let run_id = format!("recon-{}", uuid::Uuid::new_v4());
+    let result = run_reconciliation_inner(state, report_only, &run_id).await;
+    if let Err(error) = &result {
+        // Every exit closes the run: an early `?` used to leave it RUNNING.
+        record_run_failure(state, &run_id, error).await?;
+    }
+    result
+}
+
+async fn run_reconciliation_inner(
+    state: &AppState,
+    report_only: bool,
+    run_id: &str,
+) -> Result<String, String> {
+    let run_id = run_id.to_string();
     let started_at = chrono::Utc::now().to_rfc3339();
     let report_only_int = if report_only { 1 } else { 0 };
 
@@ -680,12 +730,19 @@ pub async fn run_reconciliation(state: &AppState, report_only: bool) -> Result<S
 async fn record_run_failure(state: &AppState, run_id: &str, error: &str) -> Result<(), String> {
     let now = chrono::Utc::now().to_rfc3339();
     let summary = serde_json::json!({ "error": error });
-    let _ = sqlx::query("UPDATE dtr_recon_runs SET completed_at = ?, status = 'FAILED', summary_json = ? WHERE run_id = ?")
+    // Only a RUNNING run fails once: the wrapper in run_reconciliation may
+    // repeat a failure an inner branch already recorded.
+    let closed = sqlx::query("UPDATE dtr_recon_runs SET completed_at = ?, status = 'FAILED', summary_json = ? WHERE run_id = ? AND status = 'RUNNING'")
         .bind(&now)
         .bind(summary.to_string())
         .bind(run_id)
         .execute(&state.db)
-        .await;
+        .await
+        .map(|done| done.rows_affected() == 1)
+        .unwrap_or(false);
+    if !closed {
+        return Ok(());
+    }
 
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, message, request_id) VALUES (?, ?, 'DTR_RECON_FAILED', ?, ?)")
         .bind(uuid::Uuid::new_v4().to_string())
@@ -760,6 +817,69 @@ pub async fn get_latest_report(state: &AppState) -> Result<Option<serde_json::Va
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    async fn recon_state() -> (AppState, std::path::PathBuf) {
+        use crate::config::{LanConfig, OfficeConfig, ScannerConfig, TtsConfig, UpdaterConfig};
+        let dir = std::env::temp_dir().join(format!("alpha-recon-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(
+            dir.clone(),
+            dir.join("attendance.db"),
+            dir.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            ScannerConfig::default(),
+            TtsConfig::default(),
+            UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        (state, dir)
+    }
+
+    #[tokio::test]
+    async fn a_run_cut_off_by_closing_the_app_is_closed_as_failed_at_boot() {
+        let (state, dir) = recon_state().await;
+        sqlx::query("INSERT INTO dtr_recon_runs (run_id, started_at, status, report_only, summary_json) VALUES ('recon-cut', '2026-11-06T04:00:00Z', 'RUNNING', 1, '{}')")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(reclaim_interrupted_runs(&state).await.unwrap(), 1);
+        let status: String = sqlx::query_scalar("SELECT status FROM dtr_recon_runs WHERE run_id='recon-cut'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(status, "FAILED");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_is_recorded_once_and_never_left_running() {
+        let (state, dir) = recon_state().await;
+        // Unconfigured: the run fails and must close its own row.
+        assert!(run_reconciliation(&state, true).await.is_err());
+        let rows: Vec<String> = sqlx::query_scalar("SELECT status FROM dtr_recon_runs")
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(rows, vec!["FAILED".to_string()]);
+        let audits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE event_type='DTR_RECON_FAILED'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(audits, 1, "the wrapper must not log a failure the branch already logged");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scheduled_retries_wait_after_an_attempt() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-06T05:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        assert!(scheduled_retry_due(None, now), "never ran: run now");
+        assert!(!scheduled_retry_due(Some("2026-11-06T04:59:30Z"), now), "30 s after a failure: wait");
+        assert!(scheduled_retry_due(Some("2026-11-06T04:30:00Z"), now), "after 30 min: try again");
+    }
     use chrono::TimeZone;
 
     #[test]

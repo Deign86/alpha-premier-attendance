@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminUser, BathroomStatusResponse } from "@rfid-attendance/shared";
@@ -275,6 +275,8 @@ describe("BathroomKeyLogPanel", () => {
       timeOut: "2026-08-27T10:05:00+08:00",
       timeIn: "2026-08-27T10:25:00+08:00",
       notes: "Forgot to time in",
+      // The row as the dialog saw it: a return landing meanwhile conflicts.
+      expectedUpdatedAt: "2026-08-27T10:10:00+08:00",
     });
 
     // The routine success shows as a toast and the pop-up closes.
@@ -379,6 +381,23 @@ describe("BathroomKeyLogPanel: sort by time out", () => {
       names: () => [...section.querySelectorAll("tbody strong")].map((name) => name.textContent),
     };
   };
+
+  it("shows the date picked last even when an earlier date's load answers later", async () => {
+    const pending = new Map<string, (value: BathroomStatusResponse) => void>();
+    vi.spyOn(api, "loadBathroomStatus").mockImplementation(
+      (date) => new Promise<BathroomStatusResponse>((resolve) => pending.set(String(date), resolve)),
+    );
+    render(<BathroomKeyLogPanel users={mockUsers} />);
+    const input = screen.getByLabelText("Date:");
+    fireEvent.change(input, { target: { value: "2026-08-01" } });
+    fireEvent.change(input, { target: { value: "2026-08-02" } });
+    await waitFor(() => expect(pending.has("2026-08-02")).toBe(true));
+    // Aug 2 (empty) answers first, then the slow Aug 1 load with its logs.
+    await act(async () => pending.get("2026-08-02")?.({ ...status, date: "2026-08-02", maleLogs: [], femaleLogs: [] }));
+    await act(async () => pending.get("2026-08-01")?.({ ...status, date: "2026-08-01" }));
+    expect(input).toHaveValue("2026-08-02");
+    expect(screen.queryByText("Mark Cruz")).not.toBeInTheDocument();
+  });
 
   it("sorts both key logs by time out, newest first, and remembers the choice", async () => {
     localStorage.clear();

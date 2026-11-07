@@ -10,7 +10,6 @@ import {
   CircleAlert,
   ClipboardCheck,
   Clock,
-  CloudOff,
   CreditCard,
   Database,
   Download,
@@ -145,6 +144,7 @@ import {
   getScannerStatus,
   setScannerPaused,
   notifyScanSuccess,
+  detachWhenDone,
 } from "./tauri-api";
 import { dtrSyncHealthCopy, dtrSyncNoticeKind, isDtrSyncAlreadyRunning, refreshDtrSyncHealth, setDtrSyncActive, setDtrSyncHealthSnapshot, startDtrSyncHealthPolling, useDtrSyncActive, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
 import type { DtrSyncHealthSnapshot, DtrSyncNoticeKind } from "./dtr-sync-guard";
@@ -314,19 +314,16 @@ export default function App() {
           paused: false,
         },
   );
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForDtrSyncHealth((health) => setDtrSyncHealthSnapshot(health))
-      .then((cleanup) => { unlisten = cleanup; })
-      .catch(() => { /* web mode or mock environment */ });
-    return () => { if (unlisten) unlisten(); };
-  }, []);
+  useEffect(() => detachWhenDone(listenForDtrSyncHealth((health) => setDtrSyncHealthSnapshot(health))), []);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestController = useRef<AbortController | null>(null);
   const recentScans = useRef(new Map<string, number>());
   // Synchronous in-flight guard: set before the first await so two rapid native
   // scan events can never start two attendance writes for the same tap.
   const scanInFlightRef = useRef(false);
+  // Bumped by every armed scan: work that resumes after an await checks it
+  // so a slow earlier scan never announces over (or re-times) a newer one.
+  const scanSeq = useRef(0);
   // Synchronous assisted-confirm guard: prevents double-post when Confirm is
   // activated twice before busy state propagates, or the auto-close timer
   // fires mid-flight.
@@ -343,10 +340,15 @@ export default function App() {
   const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
   const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
   const [adminAssistData, setAdminAssistData] = useState<ScanAdminAssistResponse | null>(null);
+  // Stable on purpose: the clock re-renders App every second, and a new onClose
+  // each time restarted the modal's 1 s auto-cancel countdown before it fired (S4).
+  const closeAssist = useCallback(() => setAdminAssistData(null), []);
   const [assistedBusy, setAssistedBusy] = useState(false);
   const [assistedError, setAssistedError] = useState("");
   const setupInputRef = useRef<HTMLInputElement>(null);
   const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped on close: an unlock that answers after the dialog was closed is stale.
+  const setupAttempt = useRef(0);
   const setupSessionTimer = useRef<number | null>(null);
 
   // Kiosk mode: 1 = Attendance, 2 = Bathroom Key Log
@@ -455,26 +457,32 @@ export default function App() {
     };
   }, [setupToken, setupExpiresAt]);
 
-  // BUG-ATT-02: Re-sync offline scans when network comes back online
+  // Attendance is no longer saved offline (owner decision D6); this only
+  // drains scans an older version saved, when the network comes back and at
+  // start (a service outage never fires "online").
+  const replayingOffline = useRef(false);
   useEffect(() => {
-    const unsubscribe = onNetworkStatusChange((online) => {
-      if (!online) return;
-      const queue = getOfflineQueue();
-      if (queue.length === 0) return;
-      void (async () => {
-        for (const item of queue) {
-          try {
-            const res = await submitScan(item.request);
-            if (res.success && !("offlineQueued" in res)) {
-              removeQueuedScan(item.id);
-            }
-          } catch (err) {
-            console.warn('Failed to re-sync offline scan:', err);
-          }
+    const replay = async () => {
+      // One pass at a time: overlapping passes replayed the same items twice.
+      if (replayingOffline.current) return;
+      replayingOffline.current = true;
+      try {
+        for (const item of getOfflineQueue()) {
+          // Still unreachable (throws) or failing: stop and keep order (a later
+          // tap must not land as a time-in before an earlier one). Any other
+          // answer is final.
+          const res = await submitScan(item.request).catch(() => null);
+          if (!res || (!res.success && res.error.code === "INTERNAL_SERVER_ERROR")) break;
+          removeQueuedScan(item.id);
         }
-      })();
+      } finally {
+        replayingOffline.current = false;
+      }
+    };
+    if (isOnline()) void replay();
+    return onNetworkStatusChange((online) => {
+      if (online) void replay();
     });
-    return unsubscribe;
   }, []);
 
   const resetToReady = useCallback(() => {
@@ -524,8 +532,14 @@ export default function App() {
       if (!candidate || setupBusy) return;
       setSetupBusy(true);
       setSetupNotice(null);
+      const attempt = setupAttempt.current;
       try {
         const response = await unlockSetup(candidate);
+        if (attempt !== setupAttempt.current) {
+          // Closed while unlocking: never reopen an unattended, unlocked setup.
+          if (response.success) void lockSetup(response.setupToken);
+          return;
+        }
         if (!response.success) {
           setSetupNotice({ tone: "error", text: response.error.message });
           return;
@@ -551,6 +565,7 @@ export default function App() {
   };
 
   const closeSetup = async () => {
+    setupAttempt.current += 1;
     if (setupToken) void lockSetup(setupToken);
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
     setSetupToken("");
@@ -746,6 +761,7 @@ export default function App() {
       }
     }
     scanInFlightRef.current = true;
+    scanSeq.current += 1;
     // A new scan takes over: the last result's reset must not fire mid-request and abort it.
     if (resetTimer.current) clearTimeout(resetTimer.current);
     if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
@@ -798,13 +814,6 @@ export default function App() {
         void announceAdminAssist();
         return;
       }
-      if (response.success && "offlineQueued" in response) {
-        setResult(null);
-        setState("success");
-        if (resetTimer.current) clearTimeout(resetTimer.current);
-        resetTimer.current = setTimeout(resetToReady, config.resultResetDelayMs);
-        return;
-      }
       setResult(response);
       const nextState = response.success ? "success" : "error";
       setState(nextState);
@@ -812,9 +821,13 @@ export default function App() {
       if (response.success) {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
+        const seq = scanSeq.current;
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
           ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
           : undefined;
+        // The next person scanned while the week history loaded: their result
+        // owns the screen, the voice and the reset timer now.
+        if (seq !== scanSeq.current) return;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
           employeeName: response.user.fullName,
@@ -1153,30 +1166,16 @@ export default function App() {
   // any focused webview input. The listener also feeds the card-setup dialog
   // while it is open and awaiting a scan.
   useEffect(() => {
-    let unlistenScan: (() => void) | undefined;
-    let unlistenStatus: (() => void) | undefined;
-    void listenForGlobalRfid((value) => scanHandlerRef.current(value))
-      .then((cleanup) => {
-        unlistenScan = cleanup;
-      })
-      .catch(() => {
-        /* web mode */
-      });
-    void listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus))
-      .then((cleanup) => {
-        unlistenStatus = cleanup;
-      })
-      .catch(() => {
-        /* web mode */
-      });
+    const stopScan = detachWhenDone(listenForGlobalRfid((value) => scanHandlerRef.current(value)));
+    const stopStatus = detachWhenDone(listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus)));
     void getScannerStatus()
       .then((nextStatus) => setScannerStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
     return () => {
-      unlistenScan?.();
-      unlistenStatus?.();
+      stopScan();
+      stopStatus();
     };
   }, []);
 
@@ -1201,8 +1200,8 @@ export default function App() {
   };
 
   // Each mode starts ready, in reader mode: an open card ID box, a scan still being read or a result card never
-  // carries over to the other mode (attendance would read a bathroom result as "Saved offline" or "Can't reach the
-  // system"). resetToReady aborts a scan in flight; its late answer is dropped by the aborted checks after each await,
+  // carries over to the other mode (attendance would read a bathroom result as "Can't reach the system").
+  // resetToReady aborts a scan in flight; its late answer is dropped by the aborted checks after each await,
   // which also cover the desktop app, where the IPC call itself can't be cancelled.
   const switchKioskMode = (mode: "attendance" | "bathroom") => {
     if (mode === kioskMode) return;
@@ -1427,22 +1426,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* ATTENDANCE SAVED OFFLINE: the scan is queued and will sync later */}
-        {kioskMode === "attendance" && state === "success" && !result && (
-          <div
-            className="kiosk-result is-notice"
-            data-testid="kiosk-result-offline"
-            role="status"
-            aria-live="polite"
-          >
-            <CloudOff className="result-notice-icon" size={42} aria-hidden="true" />
-            <h2 className="result-name">Saved offline</h2>
-            <p className="result-message">
-              Your scan is saved on this computer and will sync automatically when the connection is back.
-            </p>
           </div>
         )}
 
@@ -1806,7 +1789,7 @@ export default function App() {
       {adminAssistData && (
         <AssistedAttendanceModal
           data={adminAssistData}
-          onClose={() => setAdminAssistData(null)}
+          onClose={closeAssist}
           onConfirm={handleAssistedConfirm}
           busy={assistedBusy}
           error={assistedError}
@@ -2732,14 +2715,9 @@ function LiveAttendance() {
     void refresh();
 
     // 1. Listen for native desktop Tauri events
-    let unlistenUpdated: (() => void) | undefined;
-    void listenForAttendanceUpdates(() => {
+    const stopUpdated = detachWhenDone(listenForAttendanceUpdates(() => {
       void refresh();
-    }).then((cleanup) => {
-      unlistenUpdated = cleanup;
-    }).catch(() => {
-      /* web mode */
-    });
+    }));
 
     // 2. Connect to LAN SSE stream for remote browser viewer
     let sse: EventSource | null = null;
@@ -2766,7 +2744,7 @@ function LiveAttendance() {
     window.addEventListener("focus", onFocus);
 
     return () => {
-      unlistenUpdated?.();
+      stopUpdated();
       sse?.close();
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
@@ -3275,20 +3253,13 @@ function useReaderStatus(): ReaderState {
   const browserMode = !("__TAURI_INTERNALS__" in window);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForScannerStatus((nextStatus) => setStatus(nextStatus))
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {
-        /* web mode */
-      });
+    const stop = detachWhenDone(listenForScannerStatus((nextStatus) => setStatus(nextStatus)));
     void getScannerStatus()
       .then((nextStatus) => setStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
-    return () => unlisten?.();
+    return stop;
   }, []);
 
   const reader = !status
@@ -3712,17 +3683,9 @@ function AdminPanel() {
   // An admin card tap unlocks, but only once the session check is done, so a tap can't race its answer.
   useEffect(() => {
     if (unlocked || !sessionChecked) return;
-    let unlisten: (() => void) | undefined;
-    void listenForGlobalRfid((scannedUid) => {
+    return detachWhenDone(listenForGlobalRfid((scannedUid) => {
       void unlockWithPinOrRfid(scannedUid);
-    })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
+    }));
   }, [sessionChecked, unlocked, unlockWithPinOrRfid]);
 
   const nukeSheets = async () => {
@@ -4135,11 +4098,7 @@ function dtrSyncSourceLabel(source: DtrSyncSource | undefined): string {
 }
 
 function applyDtrProgressToGuard(progress: DtrSyncProgress): void {
-  if (progress.status === "starting" || progress.status === "syncing") {
-    setDtrSyncActive(true);
-  } else if (progress.status === "done" || progress.status === "complete" || progress.status === "error") {
-    setDtrSyncActive(false);
-  }
+  setDtrSyncActive(progress.status !== "completed");
 }
 
 type SyncHealthState =
@@ -4334,23 +4293,11 @@ export function DatabasePanel() {
     void refreshDtrSyncToggle();
   }, [refreshDtrSyncToggle]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForDtrSyncProgress((progress) => {
-      setDtrProgress(progress);
-      applyDtrProgressToGuard(progress);
-      if (progress.status === "done" || progress.status === "complete" || progress.status === "error") void refreshDtrSyncHealth(() => refreshSyncHealth());
-    })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {
-        /* web mode or mock environment */
-      });
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [refreshSyncHealth]);
+  useEffect(() => detachWhenDone(listenForDtrSyncProgress((progress) => {
+    setDtrProgress(progress);
+    applyDtrProgressToGuard(progress);
+    if (progress.status === "completed") void refreshDtrSyncHealth(() => refreshSyncHealth());
+  })), [refreshSyncHealth]);
 
   const infoList = useListLoad(fetchDatabaseInfo, null);
   const info = infoList.data;
@@ -4906,25 +4853,13 @@ export function UserEditor({
   const [photoBuster, setPhotoBuster] = useState(() => Date.now());
   const masterUserCheckboxRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenForDtrSyncProgress((progress) => {
-      setDtrProgress(progress);
-      applyDtrProgressToGuard(progress);
-      if (progress.status === "syncing") {
-        setMessage({ tone: "info", text: `Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…` });
-      }
-    })
-      .then((cleanup) => {
-        unlisten = cleanup;
-      })
-      .catch(() => {
-        /* web mode or mock environment */
-      });
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, []);
+  useEffect(() => detachWhenDone(listenForDtrSyncProgress((progress) => {
+    setDtrProgress(progress);
+    applyDtrProgressToGuard(progress);
+    if (progress.status === "syncing") {
+      setMessage({ tone: "info", text: `Syncing intern ${progress.current} of ${progress.total}: ${progress.fullName}…` });
+    }
+  })), []);
 
   const handleSyncDtr = async (userId?: string) => {
     if (dtrSyncActive) {

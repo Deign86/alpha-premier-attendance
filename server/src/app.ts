@@ -155,7 +155,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     } catch (error) { sendAdminError(req, res, error); }
   });
   app.get('/api/admin/session', (req, res) => { try { const token = cookieValue(req, 'rfid_admin'); requireAdmin(req); res.json({ success: true, requestId: req.requestId, expiresAt: new Date(Number(token!.split('.')[0])).toISOString() }); } catch (error) { sendAdminError(req, res, error); } });
-  app.post('/api/admin/lock', (req, res) => { res.setHeader('Set-Cookie', 'rfid_admin=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'); res.json({ success: true, requestId: req.requestId }); });
+  app.post('/api/admin/lock', (req, res) => { admin.revoke(cookieValue(req, 'rfid_admin')); res.setHeader('Set-Cookie', 'rfid_admin=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'); res.json({ success: true, requestId: req.requestId }); });
   const requireAdmin = (req: Request) => admin.verify(cookieValue(req, 'rfid_admin'));
   app.get('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, users: await admin.users() }); } catch (error) { sendAdminError(req, res, error); } });
   app.post('/api/admin/users', async (req, res) => { try { requireAdmin(req); res.json({ success: true, ...(await admin.saveUser(req.body)) }); } catch (error) { sendAdminError(req, res, error); } });

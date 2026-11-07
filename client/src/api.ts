@@ -64,7 +64,7 @@ export async function loadVoiceWorkerStatus(): Promise<VoiceWorkerStatus | null>
 export async function regenerateVoiceClip(personId: string): Promise<{ ok: boolean; spokenText?: string; error?: string }> {
   if (!runningInTauri()) return { ok: false, error: 'Voice regeneration needs the desktop app.' };
   try {
-    const spokenText = await tauriApi.voiceRegenerate(personId);
+    const spokenText = await tauriApi.voiceRegenerate(nativeAdminToken ?? '', personId);
     return { ok: true, spokenText };
   } catch (error) {
     return { ok: false, error: errorString(error) || 'Voice regeneration failed.' };
@@ -131,6 +131,10 @@ export async function pickRestoreBackupFile(): Promise<string | null> {
 
 const runningInTauri = () => globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 let nativeAdminToken: string | null = null;
+/** The desktop admin session token for native admin-only commands (empty when locked). */
+export function nativeAdminSessionToken(): string {
+  return nativeAdminToken ?? '';
+}
 let nativeAdminExpiresAt: string | null = null;
 
 function errorString<T>(error: T): string {
@@ -189,6 +193,8 @@ export function setupErrorFrom<T>(error: T, fallback: SetupErrorCode): SetupErro
     case 'ADMIN_DISABLED':
     case 'SETUP_DISABLED':
       return { success: false, error: { code: 'SETUP_DISABLED', message: 'Admin setup is disabled in the configuration.' } };
+    case 'ADMIN_PIN_LOCKED':
+      return { success: false, error: { code: 'ADMIN_PIN_LOCKED', message: pinResetMessages.ADMIN_PIN_LOCKED } };
     case 'SETUP_VALIDATION_ERROR':
       return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'Some form fields are missing or invalid.' } };
     case 'USER_CONFLICT':
@@ -246,7 +252,14 @@ export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigR
   }
 }
 
+/** A scan normally answers in well under a second; one that never does must not hold the kiosk in "processing". */
+const SCAN_TIMEOUT_MS = 15_000;
+
 export async function submitScan(request: ScanRequest, signal?: AbortSignal): Promise<ScanResponse> {
+  // The caller's abort (a newer scan, a mode switch) or the timeout, whichever comes first.
+  const limit = new AbortController();
+  const timer = setTimeout(() => limit.abort(), SCAN_TIMEOUT_MS);
+  signal?.addEventListener('abort', () => limit.abort(), { once: true });
   try {
     const scanRequest = runningInTauri()
       ? tauriApi.scanRfid(request)
@@ -254,7 +267,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
-      signal,
+      signal: limit.signal,
     }).then(async (response) => {
       // SAFETY: Parsing scan response JSON
       const data = (await response.json()) as ScanResponse;
@@ -264,13 +277,16 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
     return await scanRequest;
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
-    const isNetworkError = !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
-    if (isNetworkError) {
-      const { enqueueOfflineScan } = await import('./network');
-      enqueueOfflineScan(request);
-      return { success: true, offlineQueued: true, message: 'Attendance saved offline. Will automatically sync when reconnected.' };
-    }
+    // A timeout is an unreachable service too.
+    const timedOut = limit.signal.aborted && !signal?.aborted;
+    const isNetworkError = timedOut || !navigator.onLine || err.includes('fetch') || err.includes('network') || err.includes('connectivity');
+    // Attendance is never saved offline (owner decision D6): a replay was
+    // recorded at replay time, not tap time. The kiosk shows its
+    // "Can't reach the system" card and the person taps again.
+    if (isNetworkError) throw error;
     return networkError('Unable to reach the attendance service. Please try again.');
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -408,16 +424,24 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
       nativeAdminExpiresAt = response.expiresAt;
       return { success: true, expiresAt: response.expiresAt };
     } catch (error) {
-      return { success: false, error: { message: errorString(error) === 'ADMIN_DISABLED' ? pinResetMessages.ADMIN_DISABLED : 'The administrator PIN is invalid.' } };
+      const code = errorString(error);
+      const message = code === 'ADMIN_DISABLED' || code === 'ADMIN_PIN_LOCKED' ? pinResetMessages[code] : 'The administrator PIN is invalid.';
+      return { success: false, error: { message } };
     }
   }
-  const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
-  // SAFETY: Parsing admin unlock response JSON
-  return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
+  // Never throws: callers hold a busy flag across this call.
+  try {
+    const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+    // SAFETY: Parsing admin unlock response JSON
+    return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
+  } catch {
+    return { success: false, error: { message: 'Unable to reach the attendance service. Please try again.' } };
+  }
 }
 
 const pinResetMessages = {
   ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
+  ADMIN_PIN_LOCKED: 'Too many wrong PINs. PIN unlock is paused for 5 minutes; an admin card still works.',
   RESET_EMAIL_NOT_CONFIGURED: 'Email reset is not set up in this app build. Contact IT.',
   RESET_EMAIL_FAILED: 'The reset email could not be sent. Check the internet connection and try again.',
   RESET_RATE_LIMITED: 'A code was requested less than a minute ago. Use the newest reset email, or wait a minute and request another.',
@@ -504,11 +528,23 @@ export async function loadAdminAttendance(date: string, signal?: AbortSignal): P
   // SAFETY: Parsing admin attendance response JSON
   return (await fetch(apiUrl(`/api/admin/attendance?date=${encodeURIComponent(date)}`), { signal })).json() as Promise<AdminAttendanceResponse>;
 }
+const userSaveMessages = {
+  USER_HAS_OPEN_DAY: 'This person is still timed in today. Time them out (or correct the day) before deactivating.',
+  USER_HOLDS_BATHROOM_KEY: 'This person still has a bathroom key. Return it before deactivating.',
+};
+
 export async function saveAdminUser<T extends object>(user: T, userId?: string): Promise<{ success: boolean; error?: { message?: string } }> {
   if (runningInTauri()) {
     const payload = Object.assign({}, user, userId ? { userId } : undefined);
-    // SAFETY: Backend admin upsert user returns success response
-    return (await tauriApi.adminUpsertUser(nativeAdminToken ?? '', payload)) as { success: boolean; error?: { message?: string } };
+    try {
+      // SAFETY: Backend admin upsert user returns success response
+      return (await tauriApi.adminUpsertUser(nativeAdminToken ?? '', payload)) as { success: boolean; error?: { message?: string } };
+    } catch (err) {
+      const raw = errorString(err);
+      const known = Object.entries(userSaveMessages).find(([key]) => key === raw);
+      if (!known) throw err;
+      return { success: false, error: { message: known[1] } };
+    }
   }
   const url = userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users';
   const response = await fetch(apiUrl(url), { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) });
@@ -520,6 +556,8 @@ const attendanceSaveMessages = {
   ATTENDANCE_NOT_FOUND: 'This attendance record no longer exists. The list was reloaded.',
   ADMIN_VALIDATION_ERROR: 'The date or time is not valid. Check the times and try again.',
   ADMIN_AUTH_REQUIRED: 'Administrator session expired. Unlock admin to continue.',
+  ATTENDANCE_IN_FINALIZED_CUTOFF: 'This day is in a finalized payroll cutoff, so it can\'t be changed.',
+  ATTENDANCE_TIME_IN_REQUIRED: 'A record needs a time-in. To remove the day, delete the record instead.',
 };
 
 export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { code?: string; message?: string } }> {
@@ -581,8 +619,14 @@ export async function deleteAdminUser(userId: string): Promise<{ success: boolea
 }
 export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<{ success: boolean; error?: { message?: string } }> {
   if (runningInTauri()) {
-    // SAFETY: Backend delete attendance returns success response
-    return (await tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date)) as { success: boolean; error?: { message?: string } };
+    try {
+      // SAFETY: Backend delete attendance returns success response
+      return (await tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date)) as { success: boolean; error?: { message?: string } };
+    } catch (err) {
+      const raw = errorString(err);
+      const known = Object.entries(attendanceSaveMessages).find(([key]) => key === raw);
+      return { success: false, error: { message: known ? known[1] : raw || 'Unable to delete record.' } };
+    }
   }
   const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`), { method: 'DELETE' });
   // SAFETY: Parsing admin delete attendance response JSON

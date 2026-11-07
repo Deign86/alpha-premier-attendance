@@ -87,8 +87,12 @@ pub fn is_transient_sync_error(error: &str) -> bool {
     if is_rate_limited_error(error) {
         return true;
     }
+    // An unreachable token endpoint is a network outage, not a bad key:
+    // classifying it finite sent every queued DTR row DEAD after ~2.5 min
+    // offline.
     if error.contains(GOOGLE_SERVER_ERROR)
         || error.contains(GOOGLE_TRANSPORT_FAILED)
+        || error.contains("GOOGLE_OAUTH_TRANSPORT")
         || error.contains("rateLimitExceeded")
         || error.contains("userRateLimitExceeded")
         || error.contains("quotaExceeded")
@@ -304,6 +308,19 @@ pub const DTR_THROTTLE_REASON: &str = "DTR_THROTTLE: 50-writes/min budget spent"
 /// infinite-RETRY queue growth visibility (todo 10).
 pub const PENDING_AGE_ALERT_SECS: i64 = 6 * 3600;
 
+/// Trims a queue-path backfill to what one throttle window can ever admit.
+/// `take` denies any request above the per-minute write budget in every
+/// window, so an untrimmed >50-day backfill was deferred forever. Returns
+/// true when writes were left for a later pass.
+pub fn trim_to_throttle_window<T>(writes: &mut Vec<T>) -> bool {
+    let cap = DTR_THROTTLE_WRITES_PER_MIN as usize;
+    if writes.len() <= cap {
+        return false;
+    }
+    writes.truncate(cap);
+    true
+}
+
 impl DtrThrottleBucket {
     pub fn new(now_ms: u64) -> Self {
         Self {
@@ -446,6 +463,42 @@ pub fn calculate_retry_backoff(attempts: i64, error: &str) -> (u64, &'static str
     }
 }
 
+/// What a failed queue row becomes: the counters to store, its status,
+/// error code and how long to wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailureStep {
+    pub attempts: i64,
+    pub transient_strikes: i64,
+    pub status: &'static str,
+    pub error_code: &'static str,
+    pub backoff_secs: u64,
+}
+
+/// Single owner of the fail-arm transition. Transient errors count their own
+/// strikes (so the 60 s base doubles to the 960 s cap) and leave `attempts`,
+/// the finite budget toward DEAD, untouched; finite errors spend `attempts`.
+pub fn next_failure_step(attempts: i64, transient_strikes: i64, error: &str) -> FailureStep {
+    if is_transient_sync_error(error) {
+        let (backoff_secs, status, error_code) = calculate_retry_backoff(transient_strikes, error);
+        FailureStep {
+            attempts,
+            transient_strikes: transient_strikes.saturating_add(1),
+            status,
+            error_code,
+            backoff_secs,
+        }
+    } else {
+        let (backoff_secs, status, error_code) = calculate_retry_backoff(attempts, error);
+        FailureStep {
+            attempts: attempts.saturating_add(1),
+            transient_strikes,
+            status,
+            error_code,
+            backoff_secs,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -455,7 +508,7 @@ mod tests {
         TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
         is_transient_sync_error,
         processing_lease_stale_secs, split_dtr_batch, sync_guard_busy_error,
-        sync_guard_row_releasable,
+        sync_guard_row_releasable, trim_to_throttle_window, next_failure_step, GENERIC_DEAD_STRIKES,
     };
 
     #[test]
@@ -639,6 +692,53 @@ mod tests {
     }
 
     #[test]
+    fn transient_failures_back_off_with_their_own_strike_count() {
+        // A long 503 outage: the wait must grow 60 s -> 960 s (with +/-50%
+        // jitter), and the row must never spend its DEAD budget.
+        let (mut attempts, mut strikes) = (0_i64, 0_i64);
+        let mut waits = Vec::new();
+        for _ in 0..6 {
+            let step = next_failure_step(attempts, strikes, "GOOGLE_SERVER_ERROR: 503");
+            assert_eq!(step.status, "RETRY");
+            attempts = step.attempts;
+            strikes = step.transient_strikes;
+            waits.push(step.backoff_secs);
+        }
+        assert_eq!(attempts, 0, "transient failures never spend the DEAD budget");
+        assert_eq!(strikes, 6);
+        assert!(waits[0] <= 90, "first wait around 60 s: {waits:?}");
+        assert!(waits[4] >= 480 && waits[5] >= 480, "later waits reach the 960 s cap: {waits:?}");
+
+        // Finite failures still spend attempts and go DEAD on the 5th.
+        let mut finite = next_failure_step(0, 3, "invalid payload");
+        assert_eq!((finite.attempts, finite.transient_strikes), (1, 3));
+        for _ in 1..GENERIC_DEAD_STRIKES {
+            finite = next_failure_step(finite.attempts, finite.transient_strikes, "invalid payload");
+        }
+        assert_eq!(finite.status, "DEAD");
+    }
+
+    #[test]
+    fn oversized_backfill_is_trimmed_to_an_admissible_slice() {
+        // 60 missing days: the whole batch can never fit a 50-write window.
+        let mut bucket = DtrThrottleBucket::new(0);
+        assert!(bucket.take(60, 2, 0) > 0, "untrimmed request is denied");
+        let mut later = DtrThrottleBucket::new(0);
+        let far_future = DTR_THROTTLE_WINDOW_MS * 1_000;
+        assert!(later.take(60, 2, far_future) > 0, "and denied in every later window");
+
+        let mut writes: Vec<u32> = (0..60).collect();
+        assert!(trim_to_throttle_window(&mut writes), "rest left for the next pass");
+        assert_eq!(writes, (0..50).collect::<Vec<u32>>(), "oldest days first");
+        let mut fresh = DtrThrottleBucket::new(0);
+        assert_eq!(fresh.take(writes.len() as u32, 1, 0), 0, "trimmed slice is admitted");
+
+        let mut small: Vec<u32> = (0..DTR_THROTTLE_WRITES_PER_MIN).collect();
+        assert!(!trim_to_throttle_window(&mut small));
+        assert_eq!(small.len(), DTR_THROTTLE_WRITES_PER_MIN as usize);
+    }
+
+    #[test]
     fn transient_classifier() {
         // RETRY-forever inputs: 429 / 5xx / timeout-after-connect / 403-rateLimit.
         assert!(is_transient_google_error(429, "Too Many Requests", ""));
@@ -665,6 +765,8 @@ mod tests {
                 "GOOGLE_SERVER_ERROR: execute push: 503",
                 "timeout-after-connect: deadline exceeded",
                 "403 rateLimitExceeded: quota exceeded",
+                // Offline kiosk: the token endpoint itself is unreachable.
+                "GOOGLE_OAUTH_TRANSPORT: token endpoint connection failed",
             ] {
                 let (_, status, _) = calculate_retry_backoff(attempts, error);
                 assert_eq!(status, "RETRY", "attempts={attempts} error={error}");

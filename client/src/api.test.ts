@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { InternPayslip, VoiceClipState } from '@rfid-attendance/shared';
-import { tauriApi } from './tauri-api';
-import { checkAdminSession, createAdminBackdatedAttendance, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
+import { detachWhenDone, tauriApi } from './tauri-api';
+import { checkAdminSession, createAdminBackdatedAttendance, deleteAdminAttendance, saveAdminUser, generateInternPayslipImages, generatePayrollPdf, loadDtrSyncHealth, lockAdmin, openGeneratedFile, pollVoiceClipReady, revealGeneratedFile, saveAdminAttendance, setupErrorFrom, submitScan, unlockAdmin, unlockSetup, updateBathroomLog } from './api';
 import * as payslipRenderer from './intern-payslip-image';
+import { checkVoiceStudioConnection } from './services/ttsService';
 import type { NativeSyncStatusResponse } from './tauri-api';
 
 afterEach(() => {
@@ -22,13 +23,68 @@ describe('scan requests', () => {
     await expect(submitScan({ rfidUid: 'RFID-001', source: 'RFID' })).resolves.toMatchObject({ success: true });
   });
 
-  it('returns a network error when the service is unreachable', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'));
+  it('gives up on a scan request that never answers, so the kiosk cannot stay in processing', async () => {
+    // O6: browser mode had no timeout on the scan request.
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+          }),
+      );
+      const pending = submitScan({ rfidUid: 'RFID-003', source: 'RFID' });
+      const settled = expect(pending).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    await expect(submitScan({ rfidUid: 'RFID-002', source: 'RFID' })).resolves.toMatchObject({
-      success: true,
-      offlineQueued: true,
-    });
+  it('reports an unreachable service to the kiosk and saves nothing offline', async () => {
+    // Owner decision D6: a queued scan was later recorded at replay time.
+    localStorage.removeItem('alpha_premier_offline_scans');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(submitScan({ rfidUid: 'RFID-002', source: 'RFID' })).rejects.toThrow('Failed to fetch');
+    expect(localStorage.getItem('alpha_premier_offline_scans')).toBeNull();
+  });
+});
+
+describe('native listener cleanup', () => {
+  it('detaches a listener that attaches after its component already cleaned up', async () => {
+    // O11: `listen().then(fn => unlisten = fn)` lost the listener when cleanup ran first.
+    let attach: (fn: () => void) => void = () => {};
+    const unlisten = vi.fn();
+    const cleanup = detachWhenDone(new Promise<() => void>((resolve) => { attach = resolve; }));
+    cleanup();
+    attach(unlisten);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it('detaches an attached listener on cleanup', async () => {
+    const unlisten = vi.fn();
+    const cleanup = detachWhenDone(Promise.resolve(unlisten));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(unlisten).not.toHaveBeenCalled();
+    cleanup();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('admin unlock', () => {
+  it('reports an unreachable or garbled unlock as a failure instead of throwing', async () => {
+    // A throw left the admin page's busy flag stuck true: the Unlock button
+    // stayed disabled and admin card taps were ignored until a reload.
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false });
+    // SAFETY: Mock Response whose body is not JSON
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: false, json: (): Promise<{ success: boolean }> => Promise.reject(new SyntaxError('Unexpected token <')) } as Response);
+    await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false });
   });
 });
 
@@ -403,6 +459,57 @@ describe('readable native errors (manual audit)', () => {
     desktop();
     vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('INVALID_ADMIN_PIN');
     await expect(unlockSetup('000000')).resolves.toMatchObject({ success: false, error: { message: 'The administrator PIN or admin RFID card is invalid.' } });
+  });
+
+  it('says PIN unlock is paused after too many wrong PINs, on both unlock screens', async () => {
+    desktop();
+    const locked = /too many wrong PINs.*5 minutes.*admin card/i;
+    vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_PIN_LOCKED');
+    await expect(unlockSetup('2468')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(locked) } });
+    vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_PIN_LOCKED');
+    await expect(unlockAdmin('2468')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(locked) } });
+  });
+
+  it('explains that a day in a finalized payroll cutoff cannot be edited or deleted', async () => {
+    desktop();
+    const frozen = /finalized payroll cutoff/i;
+    vi.spyOn(tauriApi, 'adminUpdateAttendance').mockRejectedValueOnce('ATTENDANCE_IN_FINALIZED_CUTOFF');
+    await expect(saveAdminAttendance('ATT-1', {})).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(frozen) } });
+    vi.spyOn(tauriApi, 'adminDeleteAttendance').mockRejectedValueOnce('ATTENDANCE_IN_FINALIZED_CUTOFF');
+    await expect(deleteAdminAttendance('ATT-1', '2026-08-05')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(frozen) } });
+  });
+
+  it('explains that a correction must keep a time-in', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'adminUpdateAttendance').mockRejectedValueOnce('ATTENDANCE_TIME_IN_REQUIRED');
+    await expect(saveAdminAttendance('ATT-1', { timeIn: null })).resolves.toMatchObject({
+      success: false,
+      error: { message: expect.stringMatching(/needs a time-in.*delete the record/i) },
+    });
+  });
+
+  it('explains why a person who is timed in or holds a key cannot be deactivated', async () => {
+    desktop();
+    vi.spyOn(tauriApi, 'adminUpsertUser').mockRejectedValueOnce('USER_HAS_OPEN_DAY');
+    await expect(saveAdminUser({ status: 'INACTIVE' }, 'INT-1')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(/still timed in today/i) } });
+    vi.spyOn(tauriApi, 'adminUpsertUser').mockRejectedValueOnce('USER_HOLDS_BATHROOM_KEY');
+    await expect(saveAdminUser({ status: 'INACTIVE' }, 'INT-1')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(/bathroom key/i) } });
+  });
+
+  it('sends the admin session token with the VoiceStudio check', async () => {
+    // O8: the native VoiceStudio commands now refuse callers without the admin session.
+    desktop();
+    vi.spyOn(tauriApi, 'setupUnlock').mockResolvedValueOnce({ success: true, token: 'admin-tok', expiresAt: '2099-01-01T00:00:00Z' });
+    await unlockAdmin('2468');
+    const check = vi.spyOn(tauriApi, 'checkVoicestudio').mockResolvedValueOnce({ ok: true, message: 'ok' });
+    try {
+      await checkVoiceStudioConnection('http://192.168.1.20:3901', '1234');
+      expect(check).toHaveBeenCalledWith('admin-tok', 'http://192.168.1.20:3901', '1234');
+    } finally {
+      // The token is module state: lock again so later tests start locked.
+      vi.spyOn(tauriApi, 'setupLock').mockResolvedValueOnce({ success: true });
+      await lockAdmin();
+    }
   });
 
   it('says admin access is off when config disables it', async () => {

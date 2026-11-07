@@ -130,14 +130,14 @@ export const tauriApi = {
   ttsSpeak: (text: string, options?: TtsSpeakOptions) => invoke<TtsSpeakResult>('tts_speak', { text, options }),
   ttsStop: () => invoke<void>('tts_stop'),
   ttsStatus: () => invoke<TtsStatusResponse>('tts_status'),
-  getVoicestudioHost: () => invoke<string>('get_voicestudio_host'),
-  setVoicestudioHost: (host: string) => invoke<string>('set_voicestudio_host', { host }),
-  getVoicestudioPin: () => invoke<string>('get_voicestudio_pin'),
-  setVoicestudioPin: (pin: string) => invoke<void>('set_voicestudio_pin', { pin }),
-  checkVoicestudio: (host?: string, pin?: string) => invoke<VoiceStudioConnection>('check_voicestudio', { host, pin }),
+  getVoicestudioHost: (token: string) => invoke<string>('get_voicestudio_host', { token }),
+  setVoicestudioHost: (token: string, host: string) => invoke<string>('set_voicestudio_host', { token, host }),
+  getVoicestudioPin: (token: string) => invoke<string>('get_voicestudio_pin', { token }),
+  setVoicestudioPin: (token: string, pin: string) => invoke<void>('set_voicestudio_pin', { token, pin }),
+  checkVoicestudio: (token: string, host?: string, pin?: string) => invoke<VoiceStudioConnection>('check_voicestudio', { token, host, pin }),
   voiceClipStates: () => invoke<VoiceClipState[]>('voice_clip_states'),
   voiceWorkerStatus: () => invoke<VoiceWorkerStatus>('voice_worker_status'),
-  voiceRegenerate: (personId: string) => invoke<string>('voice_regenerate', { personId }),
+  voiceRegenerate: (token: string, personId: string) => invoke<string>('voice_regenerate', { token, personId }),
   voiceNameAudioUrl: (personId: string) => invoke<string | null>('voice_name_audio_url', { personId }),
   autostartStatus: () => invoke<boolean>('autostart_status'),
   autostartSet: (enabled: boolean) => invoke<boolean>('autostart_set', { enabled }),
@@ -166,12 +166,15 @@ export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: st
 
 export type DtrSyncSource = "queue" | "manual";
 
+/** Exactly what `dtr_sync.rs` emits; a sync always ends with "completed". */
+export type DtrSyncProgressStatus = "starting" | "syncing" | "completed";
+
 export interface DtrSyncProgress {
   current: number;
   total: number;
   userId: string;
   fullName: string;
-  status: string;
+  status: DtrSyncProgressStatus;
   source?: DtrSyncSource;
 }
 
@@ -217,3 +220,25 @@ export const listenForCheckForUpdates = async (handler: () => void): Promise<() 
   };
 };
 
+/**
+ * Cleanup for a native listener that attaches asynchronously. With
+ * `listen().then(fn => unlisten = fn)`, a cleanup that ran before the listener
+ * attached (StrictMode remounts, quick re-subscribes) leaked it; here it is
+ * detached the moment it arrives.
+ */
+export function detachWhenDone(attaching: Promise<() => void>): () => void {
+  let detach: (() => void) | undefined;
+  let disposed = false;
+  attaching
+    .then((fn) => {
+      if (disposed) fn();
+      else detach = fn;
+    })
+    .catch(() => {
+      /* web mode: no desktop layer to listen to */
+    });
+  return () => {
+    disposed = true;
+    detach?.();
+  };
+}

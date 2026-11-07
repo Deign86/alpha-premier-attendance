@@ -31,6 +31,17 @@ describe('admin and live attendance API', () => {
     expect((await agent.get('/api/admin/payroll/cutoffs')).body.payroll).toHaveLength(0);
   });
 
+  it('revokes the session token on lock, even if the browser kept the cookie', async () => {
+    // O10: lock only expired the cookie; the token itself stayed valid until it timed out.
+    const sheets = new InMemorySheetsService();
+    const app = createApp({ sheets, config, logger: false });
+    const unlock = await request(app).post('/api/admin/unlock').send({ pin: '2468' }).expect(200);
+    const cookie = String(unlock.headers['set-cookie']).split(';')[0];
+    await request(app).get('/api/admin/session').set('Cookie', cookie).expect(200);
+    await request(app).post('/api/admin/lock').set('Cookie', cookie).expect(200);
+    await request(app).get('/api/admin/session').set('Cookie', cookie).expect(401);
+  });
+
   it('protects users, edits profiles, lists attendance, and applies time corrections', async () => {
     const sheets = new InMemorySheetsService([
       { userId: 'u1', fullName: 'Ada', rfidUid: 'AABB', department: 'Engineering', active: true },

@@ -899,7 +899,7 @@ fn manila_week_start(attendance_date: &str) -> Result<String, String> {
 /// Fetch later attendance rows in the changed date's Manila Monday-week so
 /// admin mutations can re-enqueue them for history-based DTR replanning.
 pub(crate) async fn later_attendance_in_manila_week(
-    db: &sqlx::SqlitePool,
+    db: &mut sqlx::SqliteConnection,
     user_id: &str,
     attendance_date: &str,
 ) -> Result<Vec<(String, String, Option<String>, Option<String>)>, String> {
@@ -2390,18 +2390,16 @@ pub async fn clear_dtr_row(
     }
     let range = urlencoding::encode(&format!("{}!B{}:E{}", quote_tab(&tab), row_number, row_number)).into_owned();
     let body = serde_json::json!({ "values": [["", "", "", ""]] });
-    client
-        .put(format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
-        ))
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?
-        .error_for_status()
-        .map(|_| ())
-        .map_err(|_| GOOGLE_REQUEST_FAILED.to_string())?;
+    // Same retry and error vocabulary as every other DTR call: a 429/5xx or
+    // dropped connection stays transient instead of aging the clear to DEAD.
+    let url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED"
+    );
+    let response =
+        dtr_call_with_retry(|| client.put(&url).bearer_auth(token).json(&body)).await?;
+    if !response.status().is_success() {
+        return Err(dtr_error_for_response(response).await);
+    }
     state.mark_dtr_write_success().await;
     // P1 rule: paint is cosmetic — log-only so a batchUpdate failure
     // after cleared values never fails the pass.
@@ -2776,6 +2774,12 @@ async fn backfill_user_history(
         // tick instead of sleeping or busy-looping. Manual path (None)
         // skips the bucket and keeps its 1000ms pacing floor.
         if let Some(throttle) = throttle.as_ref() {
+            // Oldest days first; the skip-identical planner picks up the
+            // rest on the next tick because these rows are then in sync.
+            if crate::services::sync_retry::trim_to_throttle_window(&mut pending_writes) {
+                wrote_total = pending_writes.len();
+                complete = false;
+            }
             let sizes: Vec<usize> = pending_writes.iter().map(dtr_batch_entry_bytes).collect();
             let calls = split_dtr_batch(&sizes).len() as u32;
             let wait_ms = throttle
@@ -3827,10 +3831,12 @@ mod tests {
                         Err(_) => break,
                     }
                 }
+                // Count before answering: the client may read `hits` the
+                // moment it has the response (counting after was flaky).
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let _ = stream.write_all(responses[served].as_bytes());
                 let _ = stream.flush();
                 drop(stream);
-                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 served += 1;
             }
         });
@@ -3926,10 +3932,12 @@ mod tests {
                 if let Ok(text) = String::from_utf8(body) {
                     bodies.lock().expect("bodies lock").push(text);
                 }
+                // Count before answering: the client may read `hits` the
+                // moment it has the response (counting after was flaky).
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let _ = stream.write_all(responses[served].as_bytes());
                 let _ = stream.flush();
                 drop(stream);
-                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 served += 1;
             }
         });

@@ -5,7 +5,7 @@ import { DatabasePanel, SystemPanel, UserEditor } from './App';
 import { Toasts } from './toasts';
 import * as api from './api';
 import * as tauriApi from './tauri-api';
-import { getDtrSyncHealthSnapshot, resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
+import { getDtrSyncActive, getDtrSyncHealthSnapshot, resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-guard';
 import type { AdminSyncDtrResponse, DatabaseInfoResponse } from '@rfid-attendance/shared';
 
 const successfulDtrSync: AdminSyncDtrResponse = {
@@ -780,6 +780,34 @@ describe('DatabasePanel', () => {
     expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Juan Dela Cruz \(APG-2026-103\): Google Sheets write failed/i);
     expect(errorsAlert).toHaveTextContent(/BACKFILL_FAILED: Marissa Dalisay \(APG-2026-116\): permission denied/i);
     expect(screen.getByText(/^2 records sent, but some didn't upload:/)).toBeInTheDocument();
+  });
+
+  it('clears the sync guard when the backend reports a sync it started itself as completed', async () => {
+    // The page opened mid-sync (queue backfill or another window's run), so
+    // only the progress events drive the guard; Rust ends with "completed".
+    let progressHandler: ((payload: tauriApi.DtrSyncProgress) => void) | null = null;
+    vi.spyOn(tauriApi, 'listenForDtrSyncProgress').mockImplementation((handler) => {
+      progressHandler = handler;
+      return Promise.resolve(() => {});
+    });
+    const syncSpy = vi.spyOn(api, 'syncInternDtr');
+    const user = userEvent.setup();
+    render(<DatabasePanel />);
+    const syncBtn = await screen.findByRole('button', { name: /^sync now$/i });
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+
+    act(() => {
+      progressHandler?.({ current: 0, total: 2, userId: '', fullName: '', status: 'starting', source: 'queue' });
+    });
+    expect(getDtrSyncActive()).toBe(true);
+    act(() => {
+      progressHandler?.({ current: 2, total: 2, userId: '', fullName: '', status: 'completed', source: 'queue' });
+    });
+    expect(getDtrSyncActive()).toBe(false);
+
+    await user.click(syncBtn);
+    expect(screen.queryByText('Sync already running.')).not.toBeInTheDocument();
+    expect(syncSpy).toHaveBeenCalled();
   });
 
   it('displays real-time progress bar when dtr-sync-progress events occur during sync', async () => {

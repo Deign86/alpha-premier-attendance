@@ -769,13 +769,7 @@ export type ScanErrorResponse = {
   };
 };
 
-export type OfflineScanResponse = {
-  success: true;
-  offlineQueued: true;
-  message: string;
-};
-
-export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse | OfflineScanResponse;
+export type ScanResponse = ScanSuccessResponse | ScanAdminAssistResponse | ScanErrorResponse;
 
 export type HealthResponse = {
   success: true;
@@ -854,6 +848,7 @@ export const setupErrorCodes = [
   'SETUP_VALIDATION_ERROR',
   'USER_CONFLICT',
   'GOOGLE_SHEETS_UNAVAILABLE',
+  'ADMIN_PIN_LOCKED',
 ] as const;
 export type SetupErrorCode = (typeof setupErrorCodes)[number];
 
@@ -996,6 +991,8 @@ export type BathroomUpdateRequest = {
   timeOut?: string;
   timeIn?: string | null;
   notes?: string;
+  /** The entry's `updatedAt` when the edit opened; a newer row conflicts. */
+  expectedUpdatedAt?: string;
 };
 
 export type BathroomActionResponse = {
