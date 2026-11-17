@@ -2340,3 +2340,17 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: npm run lint && npm run typecheck && npm test
   EXPECT: no import of the removed files remains; DTR-row assertions from the removed mixed tests are kept as DTR-only tests.
   EVIDENCE: JS exit 0 (shared 41, client 624, server 208; the server count dropped by the removed engine's own tests). Rust is unchanged by this step.
+
+## Verification practices from the Claude Code team's post (owner request, 2026-11-17)
+
+- [x] Property and differential tests cover the payroll engine with generated inputs and no new dependency.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test payroll_hours_accuracy property_ differential_
+  EXPECT: 3 tests pass over 20,000 generated days each: deductions are whole hours within the daily rate and match the arrival status; more time at work never pays less; V3 equals V2 except the approved undertime change.
+  EVIDENCE: 3 passed. The first run of the monotonic property failed on a real, already-documented rule (a time-out from 17:00 to 17:59 counts as worked, 18:00+ caps back to 17:00); that one step is excluded and named in the test.
+- [x] A Stop hook runs the checks that match uncommitted files and blocks the stop on failure.
+  CHECK: echo '{}' | node scripts/verify-changed.mjs
+  EXPECT: exit 0 on a clean or passing tree; exit 2 with the failing output when a check fails; exit 1 (reported, not blocking) on the second stop of a turn.
+  EVIDENCE: passing tree exit 0; an injected type error gave exit 2 with the tsc message, and exit 1 with stop_hook_active; probe reverted.
+- [x] `REVIEW.md` (diff-triggered checklist, read from the base branch), a payroll rubric in the verify skill, and the working rules in `AGENTS.md` exist.
+  CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
+  EVIDENCE: JS exit 0 (shared 41, client 624, server 208). Rust lib 401 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/75/36/58/24 passed.

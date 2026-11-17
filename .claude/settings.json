@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/verify-changed.mjs",
+            "timeout": 900,
+            "statusMessage": "Verifying uncommitted changes..."
+          }
+        ]
+      }
+    ]
+  }
+}
