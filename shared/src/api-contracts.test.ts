@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateArrivalWithBudget, evaluateAttendanceArrivals, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateArrivalWithBudget, evaluateAttendanceArrivals, hasWeeklyGrace, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -238,6 +238,20 @@ describe('evaluateAttendanceArrivals & grace period rules', () => {
     expect(evaluateArrivalFromTimestamp('2026-08-24T08:15:01+08:00')).toBe('LATE');
     expect(evaluateArrivalFromTimestamp('2026-08-24T09:00:00+08:00')).toBe('LATE');
     expect(evaluateArrivalFromTimestamp('invalid-date')).toBe('NONE');
+  });
+});
+
+describe('weekly grace resume date', () => {
+  it('is off from 2026-10-01 through 2026-11-15 and back on 2026-11-16', () => {
+    expect(['2026-09-30', '2026-10-01', '2026-11-15', '2026-11-16', '2027-01-04'].map(hasWeeklyGrace)).toEqual([true, false, false, true, true]);
+  });
+
+  it('grants one graced arrival per week again from the resume date', () => {
+    const at = (date: string) => `${date}T08:01:00+08:00`;
+    expect(evaluateArrivalWithBudget(at('2026-11-13'), false, undefined, '2026-11-13').arrivalStatus).toBe('LATE');
+    expect(evaluateArrivalWithBudget(at('2026-11-16'), false, undefined, '2026-11-16').arrivalStatus).toBe('GRACE_PERIOD');
+    expect(evaluateArrivalWithBudget(at('2026-11-17'), true, undefined, '2026-11-17').arrivalStatus).toBe('LATE');
+    expect(evaluateArrivalFromTimestamp(at('2026-11-16'), undefined, '2026-11-16')).toBe('GRACE_PERIOD');
   });
 });
 

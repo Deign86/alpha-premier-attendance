@@ -9,6 +9,8 @@ pub const INTERN_DAILY_RATE_PHP: i64 = 80;
 /// Payroll profile id stored on intern cutoff records (not a payroll_profiles row).
 pub const INTERN_PAYROLL_PROFILE_ID: &str = "INTERN_STANDARD";
 pub const NO_GRACE_CUTOFF_DATE: &str = "2026-10-01";
+/// First day the weekly grace claim applies again (a Monday, so grace weeks stay whole).
+pub const WEEKLY_GRACE_RESUME_DATE: &str = "2026-11-16";
 
 /// How late arrivals are converted to whole deductible hours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,12 +37,12 @@ pub struct PolicyRules {
 /// Dated payroll policy versions. Never edit a released version; add a new one
 /// and extend `policy_for_date` (see docs/payroll-policy.md).
 ///
-/// | rule                       | V1_WEEKLY_GRACE (< 2026-10-01) | V2_NO_GRACE (>= 2026-10-01) |
-/// |----------------------------|--------------------------------|-----------------------------|
-/// | weekly grace window        | 15 min when claim available    | none                        |
-/// | quarter-hour clamp         | yes (next full hour after :15) | no (actual clock-in)        |
-/// | late-hour rounding         | floored clamped hours, min 1   | ceil actual hours, min 1    |
-/// | same-Manila-date clock-in  | not enforced                   | required                    |
+/// | rule                       | V1_WEEKLY_GRACE (< 2026-10-01) | V2_NO_GRACE (>= 2026-10-01) | V3_WEEKLY_GRACE (>= 2026-11-16) |
+/// |----------------------------|--------------------------------|-----------------------------|---------------------------------|
+/// | weekly grace window        | 15 min when claim available    | none                        | 15 min when claim available     |
+/// | quarter-hour clamp         | yes (next full hour after :15) | no (actual clock-in)        | no (actual clock-in)            |
+/// | late-hour rounding         | floored clamped hours, min 1   | ceil actual hours, min 1    | ceil actual hours, min 1        |
+/// | same-Manila-date clock-in  | not enforced                   | required                    | required                        |
 ///
 /// Not date-gated (both versions): arrival at/after 12:00 is half-day
 /// undertime, never late.
@@ -48,6 +50,7 @@ pub struct PolicyRules {
 pub enum PolicyVersion {
     V1WeeklyGrace,
     V2NoGrace,
+    V3WeeklyGrace,
 }
 
 impl PolicyVersion {
@@ -56,6 +59,7 @@ impl PolicyVersion {
         match self {
             Self::V1WeeklyGrace => "V1_WEEKLY_GRACE",
             Self::V2NoGrace => "V2_NO_GRACE",
+            Self::V3WeeklyGrace => "V3_WEEKLY_GRACE",
         }
     }
 
@@ -73,6 +77,10 @@ impl PolicyVersion {
                 late_rounding: LateRounding::CeilActualHours,
                 require_same_manila_date: true,
             },
+            Self::V3WeeklyGrace => PolicyRules {
+                weekly_grace_window_minutes: Some(15),
+                ..Self::V2NoGrace.rules()
+            },
         }
     }
 }
@@ -82,7 +90,9 @@ impl PolicyVersion {
 pub fn policy_for_date(attendance_date: &str) -> PolicyVersion {
     let canonical = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d")
         .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == attendance_date);
-    if canonical && attendance_date >= NO_GRACE_CUTOFF_DATE {
+    if canonical && attendance_date >= WEEKLY_GRACE_RESUME_DATE {
+        PolicyVersion::V3WeeklyGrace
+    } else if canonical && attendance_date >= NO_GRACE_CUTOFF_DATE {
         PolicyVersion::V2NoGrace
     } else {
         PolicyVersion::V1WeeklyGrace
@@ -234,7 +244,9 @@ mod tests {
     fn policy_for_date_pins_boundary_dates() {
         assert_eq!(policy_for_date("2026-09-30"), PolicyVersion::V1WeeklyGrace);
         assert_eq!(policy_for_date("2026-10-01"), PolicyVersion::V2NoGrace);
-        assert_eq!(policy_for_date("2027-01-01"), PolicyVersion::V2NoGrace);
+        assert_eq!(policy_for_date("2026-11-15"), PolicyVersion::V2NoGrace);
+        assert_eq!(policy_for_date("2026-11-16"), PolicyVersion::V3WeeklyGrace);
+        assert_eq!(policy_for_date("2027-01-01"), PolicyVersion::V3WeeklyGrace);
         assert_eq!(policy_for_date("not-a-date"), PolicyVersion::V1WeeklyGrace);
     }
 
@@ -246,6 +258,10 @@ mod tests {
         assert_eq!(
             NO_GRACE_CUTOFF_DATE, "2026-10-01",
             "add a new PolicyVersion instead of moving the cutoff"
+        );
+        assert_eq!(
+            WEEKLY_GRACE_RESUME_DATE, "2026-11-16",
+            "add a new PolicyVersion instead of moving the resume date"
         );
         let released = [
             (
@@ -268,6 +284,16 @@ mod tests {
                     require_same_manila_date: true,
                 },
             ),
+            (
+                PolicyVersion::V3WeeklyGrace,
+                "V3_WEEKLY_GRACE",
+                PolicyRules {
+                    weekly_grace_window_minutes: Some(15),
+                    quarter_hour_clamp: false,
+                    late_rounding: LateRounding::CeilActualHours,
+                    require_same_manila_date: true,
+                },
+            ),
         ];
         for (version, id, rules) in released {
             assert_eq!(version.as_str(), id);
@@ -275,8 +301,51 @@ mod tests {
         }
         // Exhaustive: a new variant breaks this match until it is added above.
         match PolicyVersion::V2NoGrace {
-            PolicyVersion::V1WeeklyGrace | PolicyVersion::V2NoGrace => {}
+            PolicyVersion::V1WeeklyGrace
+            | PolicyVersion::V2NoGrace
+            | PolicyVersion::V3WeeklyGrace => {}
         }
+    }
+
+    #[test]
+    fn weekly_grace_resumes_on_november_16_without_the_quarter_hour_clamp() {
+        let day = |date: &str, time_in: &str, time_out: &str, grace_available: bool| {
+            calculate(
+                date,
+                &format!("{date}T{time_in}+08:00"),
+                &format!("{date}T{time_out}+08:00"),
+                grace_available,
+            )
+            .unwrap()
+        };
+        // Sunday before the resume date is still V2: 08:01 is one late hour.
+        let before = day("2026-11-15", "08:01:00", "17:00:00", true);
+        assert!(!before.grace_used);
+        assert_eq!(before.late_deduction_centavos, 1_000);
+        // 08:01-15:00 with the weekly claim: no late hour, two undertime hours.
+        let graced = day("2026-11-16", "08:01:00", "15:00:00", true);
+        assert!(graced.grace_used);
+        assert_eq!(graced.late_hours, 0);
+        assert_eq!(graced.half_day_deduction_centavos, 2_000);
+        assert_eq!(graced.daily_pay_centavos, 6_000);
+        // 08:15:00 is the last graced second; 08:15:01 is late.
+        assert!(day("2026-11-16", "08:15:00", "17:00:00", true).grace_used);
+        let past_window = day("2026-11-16", "08:15:01", "17:00:00", true);
+        assert!(!past_window.grace_used);
+        assert_eq!(past_window.late_hours, 1);
+        // Claim already used this week: priced exactly like V2.
+        let used = day("2026-11-17", "08:01:00", "15:00:00", false);
+        let v2 = day("2026-11-10", "08:01:00", "15:00:00", false);
+        assert!(!used.grace_used);
+        assert_eq!(
+            (used.late_hours, used.half_day_deduction_centavos, used.daily_pay_centavos),
+            (v2.late_hours, v2.half_day_deduction_centavos, v2.daily_pay_centavos)
+        );
+        assert_eq!(used.daily_pay_centavos, 5_000);
+        // No clamp: a 08:20 arrival keeps its actual payable clock-in.
+        let late = day("2026-11-16", "08:20:00", "17:00:00", true);
+        assert_eq!(late.computed_time_in, "2026-11-16T08:20:00+08:00");
+        assert_eq!(late.late_hours, 1);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { evaluateArrivalWithBudget, INTERN_DAILY_RATE_PHP, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, isNoGraceDate } from '@rfid-attendance/shared';
+import { evaluateArrivalWithBudget, INTERN_DAILY_RATE_PHP, hasWeeklyGrace, INTERN_LATE_DEDUCTION_PER_HOUR_PHP, isNoGraceDate } from '@rfid-attendance/shared';
 import { capLateTimeoutOut, computeShiftCore, effectiveHalfDayTimeOut, manilaTimestamp } from './lunch-break.js';
 
 export type InternPayrollInput = {
@@ -45,8 +45,8 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   if (noGrace && actualTimeIn.toISODate() !== input.attendanceDate) {
     throw new Error('Payroll clock-in date must match attendanceDate in Manila');
   }
-  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, noGrace || !input.graceAvailable, timezone, input.attendanceDate);
-  const graceUsed = !noGrace && arrival.arrivalStatus === 'GRACE_PERIOD';
+  const arrival = evaluateArrivalWithBudget(input.actualTimeIn, !hasWeeklyGrace(input.attendanceDate) || !input.graceAvailable, timezone, input.attendanceDate);
+  const graceUsed = arrival.arrivalStatus === 'GRACE_PERIOD';
   let effectiveTimeIn = actualTimeIn;
   let lateHours = 0;
   if (noGrace) {

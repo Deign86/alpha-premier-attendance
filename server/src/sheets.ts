@@ -6,7 +6,7 @@ import { google, type sheets_v4, type drive_v3 } from 'googleapis';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaTimestamp } from './time.js';
 import type { CardType, PayrollCalculationProfile, PayrollCutoffRecord, ScanSource } from '@rfid-attendance/shared';
-import { isLateTimeout, isNoGraceDate } from '@rfid-attendance/shared';
+import { hasWeeklyGrace, isLateTimeout } from '@rfid-attendance/shared';
 import { defaultPayrollProfiles } from './cutoff-payroll.js';
 
 export type SheetUser = {
@@ -1293,7 +1293,7 @@ function assertInternGraceClaimAllowed(grace: SheetInternGraceClaim): void {
   if (!parsedAttendanceDate.isValid || parsedAttendanceDate.toISODate() !== grace.attendanceDate) {
     throw new Error('Intern grace claim requires a valid attendance date');
   }
-  if (isNoGraceDate(grace.attendanceDate)) throw new Error('Intern grace discontinued since 2026-10-01');
+  if (!hasWeeklyGrace(grace.attendanceDate)) throw new Error('Intern grace discontinued since 2026-10-01');
 }
 
 function graceRecord(grace: SheetInternGraceClaim): SheetInternGrace {

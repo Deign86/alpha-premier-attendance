@@ -641,4 +641,21 @@ describe('intern payroll policy', () => {
     expect(result.isHalfDay).toBe(false);
     expect(result.computedTimeOut).toBe('2026-07-28T17:30:00+08:00');
   });
+
+  it('brings the weekly grace back on 2026-11-16 without the quarter-hour clamp', () => {
+    const day = (attendanceDate: string, timeIn: string, timeOut: string, graceAvailable: boolean) => calculateInternPayroll({
+      attendanceDate,
+      actualTimeIn: `${attendanceDate}T${timeIn}+08:00`,
+      actualTimeOut: `${attendanceDate}T${timeOut}+08:00`,
+      graceAvailable,
+    });
+
+    expect(day('2026-11-15', '08:01:00', '17:00:00', true)).toMatchObject({ graceUsed: false, lateDeduction: 10 });
+    // 08:01-15:00 with the weekly claim: no late hour, two undertime hours.
+    expect(day('2026-11-16', '08:01:00', '15:00:00', true)).toMatchObject({ graceUsed: true, lateHours: 0, halfDayDeduction: 20, dailyPay: 60 });
+    expect(day('2026-11-17', '08:01:00', '15:00:00', false)).toMatchObject({ graceUsed: false, lateDeduction: 10, halfDayDeduction: 20, dailyPay: 50 });
+    expect(day('2026-11-16', '08:15:00', '17:00:00', true).graceUsed).toBe(true);
+    expect(day('2026-11-16', '08:15:01', '17:00:00', true)).toMatchObject({ graceUsed: false, lateHours: 1 });
+    expect(day('2026-11-16', '08:20:00', '17:00:00', true)).toMatchObject({ computedTimeIn: '2026-11-16T08:20:00+08:00', lateHours: 1 });
+  });
 });

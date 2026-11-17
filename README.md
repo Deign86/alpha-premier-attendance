@@ -106,14 +106,15 @@ Rules are versioned by date (see [docs/payroll-policy.md](docs/payroll-policy.md
 | --- | --- |
 | Office hours | 08:00–17:00, `Asia/Manila` |
 | On time | Arrival up to 08:00:59 is on time; earlier arrival earns nothing extra |
-| Late | From 08:01:00 every started hour late costs the hourly late deduction, measured from 08:00 to the actual tap (08:08 → 1 hour, 09:30 → 2 hours). No grace period |
+| Late | From 08:01:00 every started hour late costs the hourly late deduction, measured from 08:00 to the actual tap (08:08 → 1 hour, 09:30 → 2 hours) |
+| Weekly grace (from 2026-11-16) | Once per Manila Monday–Sunday week, the first arrival from 08:01:00 to 08:15:00 is free: no late hour, payable from 08:00. Later ones that week are late |
 | Undertime | Each short hour of the 8-hour day costs one hour of pay (the daily rate ÷ 8), never counting hours already charged as late |
 | Afternoon arrival | Arriving at or after 12:00 books a half-day shortfall as undertime, not late hours |
 | Late time-out | A time-out at or after 18:00 is saved as `LATE_TIMEOUT` and flagged for correction; payroll prices the day with the time-out capped at 17:00 |
 | Lunch | 12:00–13:00 is unpaid and excluded from worked hours |
 | Intern rate | A fixed daily rate, set in the payroll engine; a day's pay never goes below PHP 0 |
 
-Before 2026-10-01 a weekly grace applied (first arrival up to 08:15 each Manila Monday–Sunday week was free, later ones late, with a quarter-hour clamp). Those days keep that pricing.
+Before 2026-10-01 a weekly grace applied (first arrival up to 08:15 each Manila Monday–Sunday week was free, later ones late, with a quarter-hour clamp). Those days keep that pricing. From 2026-10-01 through 2026-11-15 there was no grace at all.
 
 ### Admin
 
