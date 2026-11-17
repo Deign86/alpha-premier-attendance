@@ -8,7 +8,7 @@ import type {
   TtsStatusResponse,
   VoiceStudioConnection,
 } from '@rfid-attendance/shared';
-import { ATTENDANCE_TIMEZONE, isNoGraceDate } from '@rfid-attendance/shared';
+import { ATTENDANCE_TIMEZONE, hasWeeklyGrace } from '@rfid-attendance/shared';
 import { tauriApi } from '../tauri-api';
 import { nativeAdminSessionToken } from '../api';
 import {
@@ -366,7 +366,7 @@ function effectiveArrivalStatus(options: AttendancePhraseOptions): ArrivalStatus
     options.arrivalStatus === 'GRACE_PERIOD' &&
     options.employeeType === 'INTERN' &&
     options.attendanceDate !== undefined &&
-    isNoGraceDate(options.attendanceDate)
+    !hasWeeklyGrace(options.attendanceDate)
   ) {
     return 'LATE';
   }

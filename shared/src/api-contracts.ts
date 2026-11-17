@@ -32,8 +32,15 @@ export type AttendanceStatus = (typeof attendanceStatuses)[number];
  */
 export const ATTENDANCE_TIMEZONE = 'Asia/Manila';
 export const NO_GRACE_CUTOFF_DATE = '2026-10-01';
+/** On/after this date: actual clock-in is payable (no quarter-hour clamp) and late hours round up. */
 export function isNoGraceDate(attendanceDate: string): boolean {
   return attendanceDate >= NO_GRACE_CUTOFF_DATE;
+}
+/** First day the once-a-week 15-minute grace applies again (must equal the Rust constant). */
+export const WEEKLY_GRACE_RESUME_DATE = '2026-11-16';
+/** Whether an intern can claim the weekly grace on this date (off from 2026-10-01 until it resumed). */
+export function hasWeeklyGrace(attendanceDate: string): boolean {
+  return !isNoGraceDate(attendanceDate) || attendanceDate >= WEEKLY_GRACE_RESUME_DATE;
 }
 /** Official start of the workday. Arrivals at or before 08:00 are on time. */
 export const OFFICE_HOURS_START = '08:00';
@@ -63,7 +70,7 @@ export function evaluateArrivalWithBudget(
   const lateStartSeconds = startSeconds + 60;
   const graceEndSeconds = 8 * 3600 + 15 * 60;
   if (seconds < lateStartSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
-  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && !graceAlreadyUsed && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) {
+  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && !graceAlreadyUsed && (attendanceDate === undefined || hasWeeklyGrace(attendanceDate))) {
     return { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 };
   }
   return {
@@ -210,7 +217,7 @@ export function evaluateArrivalFromTimestamp(
   const graceEndSeconds = graceHour * 3600 + graceMinute * 60;
 
   if (seconds < lateStartSeconds) return 'ON_TIME';
-  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && !(attendanceDate !== undefined && isNoGraceDate(attendanceDate))) return 'GRACE_PERIOD';
+  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && (attendanceDate === undefined || hasWeeklyGrace(attendanceDate))) return 'GRACE_PERIOD';
   return 'LATE';
 }
 
@@ -688,13 +695,15 @@ export type InternPayslip = {
   basicCentavos: number;
   /** Standard working days x daily rate. */
   grossSalaryCentavos: number;
-  /** Balances Total Earnings - Total Deductions to the stored net pay (manual adjustments, approved extra days). */
+  /** Positive balance to the stored net pay (positive manual adjustments, approved extra days); never negative. */
   adjustmentCentavos: number;
   totalEarningsCentavos: number;
   absentCentavos: number;
   lateCentavos: number;
   halfdayCentavos: number;
   undertimeCentavos: number;
+  /** A negative balance to the stored net pay (e.g. a negative manual adjustment), as a positive deduction. */
+  deductionAdjustmentCentavos: number;
   totalDeductionsCentavos: number;
   netPayCentavos: number;
 };

@@ -6909,7 +6909,7 @@ function EditPayrollDialog({
 
   const halfDayDeduction = record.halfDayDeduction;
   const totalAllowance = record.totalAllowance;
-  const totalEarnings = record.grossCompensation;
+  const totalEarnings = payrollTotalEarnings(record);
   const totalDeductions = payrollTotalDeductions(record);
 
   const netPay = record.netPay;
@@ -7256,6 +7256,7 @@ const PAYROLL_OPTIONAL_DEDUCTIONS: PayrollAmountColumn[] = [
   { label: "PhilHealth", value: (row) => row.phic ?? 0 },
   { label: "HDMF", value: (row) => row.hdmf ?? 0 },
   { label: "Advance", value: (row) => row.salaryAdvance ?? 0 },
+  { label: "Adjustment", value: negativeAdjustment },
 ];
 
 function payrollDeptRole(row: PayrollCutoffRecord): string {
@@ -7300,7 +7301,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
       fields: [
         ["Basic pay", php(row.basicPay)],
         ...PAYROLL_OPTIONAL_EARNINGS.map((column): [string, string] => [column.label, php(column.value(row))]),
-        ["Total earnings", php(row.grossCompensation)],
+        ["Total earnings", php(payrollTotalEarnings(row))],
       ],
     },
     {
@@ -7334,21 +7335,22 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
         <div className="payroll-breakdown-formula">
           <p>
             <strong>Cutoff Rate:</strong> {php(row.totalCompensation || row.basicPay)} ({row.standardWorkingDays} std days at {php(INTERN_DAILY_RATE_PHP)}/day)
-            {row.manualAdjustment !== 0
+            {row.manualAdjustment > 0
               ? ` + ${php(row.manualAdjustment)} manual adjustment (${row.adjustmentReason})`
               : ""}
             {" = "}
-            <strong>{php(row.grossCompensation)}</strong> (Gross Earnings).
+            <strong>{php(payrollTotalEarnings(row))}</strong> (Gross Earnings).
             <br />
             <strong>Total Deductions:</strong>{" "}
             {php(row.absenceDeduction)} absent ({row.absentDays} day(s))
             {row.lateDeduction > 0 ? ` + ${php(row.lateDeduction)} late (${row.lateUnits} hr(s) at ${php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)` : ""}
             {row.halfDayDeduction > 0 ? ` + ${php(row.halfDayDeduction)} half-day / undertime (${row.halfDayCount} day(s))` : ""}
-            {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 ? "None" : ""}
+            {row.manualAdjustment < 0 ? ` + ${php(-row.manualAdjustment)} manual adjustment (${row.adjustmentReason})` : ""}
+            {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 && row.manualAdjustment >= 0 ? "None" : ""}
             {" = "}
             <strong className={`payroll-deductions-total ${deductionClass(totalDeductions)}`}>{php(totalDeductions)}</strong>.
             <br />
-            <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+            <strong>Net Pay:</strong> {php(payrollTotalEarnings(row))} - {php(totalDeductions)} ={" "}
             <strong className="payroll-net-pay-pill">
               {php(netPay)}
             </strong>
@@ -7364,12 +7366,12 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
             {php(row.regularHolidayPay)} reg. hol. +{" "}
             {php(row.specialHolidayPay)} spec. hol. +{" "}
             {php(row.overtimePay)} overtime ={" "}
-            <strong>{php(row.grossCompensation)}</strong> (Total Earnings).
+            <strong>{php(payrollTotalEarnings(row))}</strong> (Total Earnings).
             <br />
             <strong>Deductions:</strong> SSS {php(sss)} + Phic {php(phic)} + HDMF {php(hdmf)} + Advance {php(advance)} + Absent {php(row.absenceDeduction)} + Late/Halfday {php(row.lateDeduction + row.halfDayDeduction)} ={" "}
             <strong className={`payroll-deductions-total ${deductionClass(totalDeductions)}`}>{php(totalDeductions)}</strong> (Total Deductions).
             <br />
-            <strong>Net Pay:</strong> {php(row.grossCompensation)} - {php(totalDeductions)} ={" "}
+            <strong>Net Pay:</strong> {php(payrollTotalEarnings(row))} - {php(totalDeductions)} ={" "}
             <strong className="payroll-net-pay-pill">
               {php(netPay)}
             </strong>
@@ -7878,7 +7880,7 @@ function PayrollTable({
                   <td className="payroll-num payroll-extra">{php(row.basicPay)}</td>
                   {visibleEarnings.map((column) => <td key={column.label} className="payroll-num">{php(column.value(row))}</td>)}
                   <td className="payroll-num">
-                    <strong>{php(row.grossCompensation)}</strong>
+                    <strong>{php(payrollTotalEarnings(row))}</strong>
                   </td>
                   {visibleDeductions.map((column) => <td key={column.label} className="payroll-num">{php(column.value(row))}</td>)}
                   <td className="payroll-num payroll-extra">{php(row.absenceDeduction)}</td>
@@ -8027,8 +8029,7 @@ function deductionClass(amount: number): string {
  * from its components instead of showing ₱0 beside a reduced net pay.
  */
 function payrollTotalDeductions(record: PayrollCutoffRecord): number {
-  if (record.totalDeductions != null) return record.totalDeductions;
-  return (
+  const deductions = record.totalDeductions ?? (
     record.lateDeduction +
     record.halfDayDeduction +
     record.absenceDeduction +
@@ -8037,6 +8038,17 @@ function payrollTotalDeductions(record: PayrollCutoffRecord): number {
     (record.hdmf ?? 0) +
     (record.salaryAdvance ?? 0)
   );
+  return deductions + negativeAdjustment(record);
+}
+
+/** A negative manual adjustment, as a positive amount: shown with the deductions, never as lower earnings. */
+function negativeAdjustment(record: PayrollCutoffRecord): number {
+  return Math.max(0, -record.manualAdjustment);
+}
+
+/** Total earnings for display: stored gross with a negative manual adjustment added back (it is a deduction). */
+function payrollTotalEarnings(record: PayrollCutoffRecord): number {
+  return record.grossCompensation + negativeAdjustment(record);
 }
 
 function parseCalculationBreakdown(

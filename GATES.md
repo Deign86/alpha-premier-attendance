@@ -2307,3 +2307,22 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
 - [x] Repo gates pass.
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EVIDENCE: Rust lib 393 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/69/35/52/24 passed. JS exit 0 (shared 39, client 620, server 292).
+
+## Undertime in deductions and weekly grace resumed (owner request, 2026-11-17)
+
+- [x] A day with undertime keeps earnings at the full cutoff rate; the undertime amount is in the deductions on the cutoff row, the payroll sheet and the payslip.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib graced_undertime_day_lands_in_deductions_not_earnings
+  EXPECT: 08:01-15:00 on 2026-11-16 prices as grace used, no late hour, 2 undertime hours (2 x L); cutoff gross = 11 x D, payslip adjustment 0, total deductions = late + undertime.
+  EVIDENCE: test passed (1 passed). Before any change, a probe of six half-day/undertime mixes through generate + payslip gave adjustment 0 and undertime inside total deductions for all six.
+- [x] Weekly 15-minute grace applies again from 2026-11-16 as policy V3 (V2 rules otherwise); V1 and V2 days price exactly as before.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: frozen V1/V2 guard, golden fixtures and snapshot suites unchanged and green; new V3 boundary tests green in Rust and TS.
+  EVIDENCE: JS exit 0 (shared 41, client 621, server 293). Rust on Linux: lib 396 passed / 3 failed (the same 3 Windows-path tests in config.rs and paths.rs); integration suites 11/18/70/35/53/24 passed. No existing fixture, snapshot or expectation needed a change.
+- [x] A negative balancing amount (e.g. a negative manual adjustment) shows under deductions on the payslip image, the payroll table, the Breakdown and the Edit dialog; Total Earnings is never reduced and net pay is unchanged.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips negative_adjustment && npm test -w client -- payroll.test.tsx intern-payslip-image.test.ts
+  EXPECT: mock of the reported slip (10 std days, 5 worked, 400 absent, 10 late, 90 undertime, -10 adjustment, net 290) gives earnings 800, deductions 510, net 290.
+  EVIDENCE: Rust intern_payslips 36 passed; client 622 passed; lint, typecheck, npm test exit 0. Rust lib 396 passed / 3 failed (the same 3 Windows-path tests).
+- [x] From 2026-11-16 (V3) undertime is counted from the end of the charged late hours, so a partly missed late hour cannot hide an early time-out; V1/V2 days are unchanged.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml partly_missed_late_hour && npm test -w server -- intern-payroll.test.ts
+  EXPECT: 08:01 in with the claim used: out 15:00, 15:01 and 15:59 all give 1 late hour + 2 undertime hours on 2026-11-17; the same 15:01 day on 2026-11-10 (V2) still gives 1 + 1.
+  EVIDENCE: Rust and TS engines agree on all 10 cases. JS exit 0 (shared 41, client 622, server 294). Rust lib 397 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/71/36/54/24 passed.

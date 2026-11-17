@@ -106,6 +106,7 @@ const payslip: InternPayslip = {
   lateCentavos: 0,
   halfdayCentavos: 0,
   undertimeCentavos: 0,
+  deductionAdjustmentCentavos: 0,
   totalDeductionsCentavos: 8000,
   netPayCentavos: 80000,
 };
@@ -199,7 +200,10 @@ describe("drawInternPayslip", () => {
   it("shows the Adjustment row only when the adjustment is non-zero", () => {
     expect(draw(payslip).strings()).not.toContain("Adjustment");
     expect(draw({ ...payslip, adjustmentCentavos: 5000 }).after("Adjustment").text).toBe("50.00");
-    expect(draw({ ...payslip, adjustmentCentavos: -1200 }).after("Adjustment").text).toBe("-12.00");
+    // A negative balance is a deduction: it is drawn after Undertime, in the Deductions column.
+    const reduced = draw({ ...payslip, deductionAdjustmentCentavos: 1000 });
+    expect(reduced.after("Adjustment").text).toBe("10.00");
+    expect(reduced.strings().indexOf("Adjustment")).toBeGreaterThan(reduced.strings().indexOf("Undertime"));
   });
 
   it("shows a zero net pay as PHP 0.00", () => {

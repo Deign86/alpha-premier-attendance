@@ -10260,4 +10260,119 @@ mod tests {
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }
+
+    #[tokio::test]
+    async fn graced_undertime_day_lands_in_deductions_not_earnings() {
+        let temp = std::env::temp_dir().join(format!("alpha-undertime-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+        super::upsert_user_record(
+            &state.db, "INT_UT", "RFID-UT", "Under Time", Some("IT"), "ACTIVE", "INTERN",
+            Some("MALE"), Some(0), Some("INTERN_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        // Nov 16-30, 2026 has 11 weekdays. Mon the 16th: 08:01-15:00 (weekly
+        // grace, two undertime hours). Tue the 17th: 08:05, grace already used.
+        for day in [16, 17, 18, 19, 20, 23, 24, 25, 26, 27, 30] {
+            let (time_in, time_out) = match day {
+                16 => ("08:01:00", "15:00:00"),
+                17 => ("08:05:00", "17:00:00"),
+                _ => ("08:00:00", "17:00:00"),
+            };
+            let date = format!("2026-11-{day}");
+            sqlx::query(
+                "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) \
+                 VALUES (?, ?, 'INT_UT', 'RFID-UT', 'Under Time', 'IT', ?, ?, 'COMPLETED', 'KIOSK', ?, ?)",
+            )
+            .bind(format!("ATT-UT-{day}"))
+            .bind(&date)
+            .bind(format!("{date}T{time_in}+08:00"))
+            .bind(format!("{date}T{time_out}+08:00"))
+            .bind(&date)
+            .bind(&date)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+        super::payroll_generate_cutoff_impl(
+            &state,
+            token,
+            "2026-11-16".into(),
+            "2026-11-30".into(),
+            "November 16-30, 2026".into(),
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+        let day = |attendance_id: &'static str| {
+            let db = state.db.clone();
+            async move {
+                let row = sqlx::query(
+                    "SELECT grace_used, late_deduction_centavos, half_day_deduction_centavos, daily_pay_centavos, policy_version \
+                     FROM payroll WHERE attendance_id=?",
+                )
+                .bind(attendance_id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+                (
+                    row.get::<Option<i64>, _>(0),
+                    row.get::<i64, _>(1),
+                    row.get::<i64, _>(2),
+                    row.get::<i64, _>(3),
+                    row.get::<String, _>(4),
+                )
+            }
+        };
+        assert_eq!(day("ATT-UT-16").await, (Some(1), 0, 2_000, 6_000, "V3_WEEKLY_GRACE".to_string()));
+        assert_eq!(day("ATT-UT-17").await, (Some(0), 1_000, 0, 7_000, "V3_WEEKLY_GRACE".to_string()));
+        let claims: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM intern_grace WHERE user_id='INT_UT' AND week_start='2026-11-16'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(claims, 1, "one weekly grace claim");
+
+        let cutoff = sqlx::query(
+            "SELECT basic_pay_centavos, gross_compensation_centavos, late_deduction_centavos, half_day_deduction_centavos, net_pay_centavos FROM payroll_cutoffs",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        // Earnings stay the full cutoff rate; undertime only reduces net through deductions.
+        assert_eq!(
+            (0..5).map(|i| cutoff.get::<i64, _>(i)).collect::<Vec<_>>(),
+            [88_000, 88_000, 1_000, 2_000, 85_000]
+        );
+        let slips = crate::reporting::load_intern_payslips(&state.db, "2026-11-16", "2026-11-30")
+            .await
+            .unwrap();
+        let slip = &slips[0];
+        assert_eq!(slip.total_earnings_centavos, 88_000);
+        assert_eq!(slip.adjustment_centavos, 0);
+        assert_eq!((slip.late_centavos, slip.halfday_centavos, slip.undertime_centavos), (1_000, 0, 2_000));
+        assert_eq!(slip.total_deductions_centavos, 3_000);
+        assert_eq!(slip.net_pay_centavos, 85_000);
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }
