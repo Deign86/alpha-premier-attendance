@@ -10386,4 +10386,323 @@ mod tests {
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }
+
+    /// MOCK FIRST CUTOFF (Dec 1-15, 2026; 11 weekdays; weekly-grace rules).
+    /// Eight interns with different time-in/time-out patterns; every expected
+    /// figure below is worked out by hand from docs/payroll-policy.md, in pesos
+    /// x 100. Weeks: Nov 30-Dec 6, Dec 7-13, Dec 14-20.
+    #[tokio::test]
+    async fn mock_first_cutoff_with_varied_days_matches_hand_computed_pay() {
+        let temp = std::env::temp_dir().join(format!("alpha-mock-cutoff-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            LanConfig::default(),
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = "test-admin-token".to_string();
+        *state.admin_session.lock().await = Some(crate::state::AdminSession {
+            token: token.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+
+        const WORKDAYS: [u32; 11] = [1, 2, 3, 4, 7, 8, 9, 10, 11, 14, 15];
+        const FULL: (&str, &str) = ("08:00:00", "17:00:00");
+        struct Intern {
+            id: &'static str,
+            /// (day, time in, time out); a workday not listed is a full 08:00-17:00 day.
+            days: &'static [(u32, &'static str, &'static str)],
+            absent: &'static [u32],
+            /// Expected cutoff centavos: late, half-day + undertime, absence, net.
+            expected: (i64, i64, i64, i64),
+            grace_claims: i64,
+        }
+        let interns = [
+            // A: perfect attendance.
+            Intern { id: "A", days: &[], absent: &[], expected: (0, 0, 0, 88_000), grace_claims: 0 },
+            // B: in the grace window twice a week; the first is free, the second is one late hour.
+            //    Dec 14 08:01 is graced, Dec 15 08:00:59 is on time.
+            Intern {
+                id: "B",
+                days: &[
+                    (1, "08:10:00", "17:00:00"), (2, "08:10:00", "17:00:00"),
+                    (7, "08:15:00", "17:00:00"), (8, "08:15:01", "17:00:00"),
+                    (14, "08:01:00", "17:00:00"), (15, "08:00:59", "17:00:00"),
+                ],
+                absent: &[],
+                expected: (2_000, 0, 0, 86_000),
+                grace_claims: 3,
+            },
+            // C: early time-outs. Dec 1 out 15:00 = 2h; Dec 2 out 16:59 = 1h; Dec 3 08:01-15:30
+            //    graced = 2h; Dec 4 08:05-15:30 grace used = 1 late hour + 2h. Staying to 17:30,
+            //    18:30 (capped) or arriving 07:30 changes nothing.
+            Intern {
+                id: "C",
+                days: &[
+                    (1, "08:00:00", "15:00:00"), (2, "08:00:00", "16:59:00"),
+                    (3, "08:01:00", "15:30:00"), (4, "08:05:00", "15:30:00"),
+                    (7, "08:00:00", "17:30:00"), (8, "08:00:00", "18:30:00"), (9, "07:30:00", "17:00:00"),
+                ],
+                absent: &[],
+                expected: (1_000, 7_000, 0, 80_000),
+                grace_claims: 1,
+            },
+            // D: half-days and absences. Dec 1 morning half (40); Dec 2 13:00 afternoon half (40);
+            //    Dec 7 12:00 sharp (40); Dec 8 09:01 = 2 late hours; Dec 9 11:59 = 4 late hours;
+            //    Dec 10 08:20-12:30 = 1 late hour + 4 short hours; Dec 3-4 absent.
+            Intern {
+                id: "D",
+                days: &[
+                    (1, "08:00:00", "12:00:00"), (2, "13:00:00", "17:00:00"),
+                    (7, "12:00:00", "17:00:00"), (8, "09:01:00", "17:00:00"),
+                    (9, "11:59:00", "17:00:00"), (10, "08:20:00", "12:30:00"),
+                ],
+                absent: &[3, 4],
+                expected: (7_000, 16_000, 16_000, 49_000),
+                grace_claims: 0,
+            },
+            // E: the week's grace was already used on Mon Nov 30 (previous cutoff), so
+            //    Tue Dec 1 08:05 is late; Dec 7 08:14 is a new week and is graced.
+            Intern {
+                id: "E",
+                days: &[(1, "08:05:00", "17:00:00"), (7, "08:14:00", "17:00:00")],
+                absent: &[],
+                expected: (1_000, 0, 0, 87_000),
+                grace_claims: 2,
+            },
+            // F: Dec 7 08:05 graced, Dec 9 08:07 late. (Corrected further down.)
+            Intern {
+                id: "F",
+                days: &[(7, "08:05:00", "17:00:00"), (9, "08:07:00", "17:00:00")],
+                absent: &[],
+                expected: (1_000, 0, 0, 87_000),
+                grace_claims: 1,
+            },
+            // G: two near-empty days and nine absences: nothing left, never negative.
+            //    Dec 1 16:30-16:45 = 8 short hours; Dec 2 08:01-08:30 graced = 8 short hours.
+            Intern {
+                id: "G",
+                days: &[(1, "16:30:00", "16:45:00"), (2, "08:01:00", "08:30:00")],
+                absent: &[3, 4, 7, 8, 9, 10, 11, 14, 15],
+                expected: (0, 16_000, 72_000, 0),
+                grace_claims: 1,
+            },
+            // H: second-level boundaries. Dec 1 08:00:59 on time; Dec 2 08:01:00 graced;
+            //    Dec 3 08:14:59-16:00 grace used = 1 late hour + 1h; Dec 4 08:59:59 = 1 late hour;
+            //    Dec 7 09:00:00 = 1 late hour; Dec 8 09:00:01 = 2 late hours.
+            Intern {
+                id: "H",
+                days: &[
+                    (1, "08:00:59", "17:00:00"), (2, "08:01:00", "17:00:00"),
+                    (3, "08:14:59", "16:00:00"), (4, "08:59:59", "17:00:00"),
+                    (7, "09:00:00", "17:00:00"), (8, "09:00:01", "17:00:00"),
+                ],
+                absent: &[],
+                expected: (5_000, 1_000, 0, 82_000),
+                grace_claims: 1,
+            },
+        ];
+
+        for intern in &interns {
+            let user_id = format!("INT_{}", intern.id);
+            super::upsert_user_record(
+                &state.db, &user_id, &format!("RFID-{}", intern.id), &format!("Mock {}", intern.id), Some("IT"),
+                "ACTIVE", "INTERN", Some("MALE"), Some(0), Some("INTERN_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+            )
+            .await
+            .unwrap();
+            for day in WORKDAYS.iter().copied().filter(|day| !intern.absent.contains(day)) {
+                let (time_in, time_out) = intern.days.iter().find(|d| d.0 == day).map_or(FULL, |d| (d.1, d.2));
+                let date = format!("2026-12-{day:02}");
+                sqlx::query(
+                    "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) \
+                     VALUES (?, ?, ?, ?, ?, 'IT', ?, ?, 'COMPLETED', 'KIOSK', ?, ?)",
+                )
+                .bind(format!("ATT-{}-{day}", intern.id))
+                .bind(&date)
+                .bind(&user_id)
+                .bind(format!("RFID-{}", intern.id))
+                .bind(format!("Mock {}", intern.id))
+                .bind(format!("{date}T{time_in}+08:00"))
+                .bind(format!("{date}T{time_out}+08:00"))
+                .bind(&date)
+                .bind(&date)
+                .execute(&state.db)
+                .await
+                .unwrap();
+            }
+        }
+        // E's Monday of the straddling week, priced when it happened (previous cutoff).
+        sqlx::query(
+            "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) \
+             VALUES ('ATT-E-NOV30', '2026-11-30', 'INT_E', 'RFID-E', 'Mock E', 'IT', '2026-11-30T08:05:00+08:00', '2026-11-30T17:00:00+08:00', 'COMPLETED', 'KIOSK', '2026-11-30', '2026-11-30')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        super::ensure_payroll(&state, "ATT-E-NOV30", "INT_E", "Mock E".into(), "2026-11-30", "2026-11-30T08:05:00+08:00", "2026-11-30T17:00:00+08:00")
+            .await
+            .unwrap();
+
+        let generate = || {
+            super::payroll_generate_cutoff_impl(
+                &state,
+                token.clone(),
+                "2026-12-01".into(),
+                "2026-12-15".into(),
+                "December 1-15, 2026".into(),
+                serde_json::json!({}),
+            )
+        };
+        let cutoff_rows = || async {
+            sqlx::query(
+                "SELECT employee_id, late_deduction_centavos, half_day_deduction_centavos, absence_deduction_centavos, \
+                 net_pay_centavos, gross_compensation_centavos, calculation_breakdown FROM payroll_cutoffs ORDER BY employee_id",
+            )
+            .fetch_all(&state.db)
+            .await
+            .unwrap()
+        };
+        let figures = |rows: &[sqlx::sqlite::SqliteRow]| {
+            rows.iter()
+                .map(|row| (row.get::<String, _>(0), (row.get::<i64, _>(1), row.get::<i64, _>(2), row.get::<i64, _>(3), row.get::<i64, _>(4))))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(generate().await.unwrap()["generated"], 8);
+        let rows = cutoff_rows().await;
+        let expected = interns.iter().map(|intern| (format!("INT_{}", intern.id), intern.expected)).collect::<Vec<_>>();
+        assert_eq!(figures(&rows), expected, "(late, half-day + undertime, absence, net) per intern");
+
+        let slips = crate::reporting::load_intern_payslips(&state.db, "2026-12-01", "2026-12-15").await.unwrap();
+        for (row, intern) in rows.iter().zip(&interns) {
+            let user_id = format!("INT_{}", intern.id);
+            let (late, short, absence, net) = intern.expected;
+            // Earnings are never touched: the full cutoff rate, 11 x 80.
+            assert_eq!(row.get::<i64, _>("gross_compensation_centavos"), 88_000, "{user_id} gross");
+            // The Breakdown lines add up to the deductions exactly, with no balancing line.
+            let breakdown: serde_json::Value = serde_json::from_str(&row.get::<String, _>("calculation_breakdown")).unwrap();
+            let lines = breakdown["deductions"].as_array().unwrap();
+            assert!(lines.iter().all(|line| line["category"] != "RECONCILIATION"), "{user_id} has a balancing line");
+            let line_total: i64 = lines.iter().map(|line| (line["amount"].as_f64().unwrap() * 100.0).round() as i64).sum();
+            assert_eq!(line_total, late + short + absence, "{user_id} breakdown total");
+            let grace_lines = lines.iter().filter(|line| line["category"] == "GRACE").count() as i64;
+            // Payslip: earnings whole, no adjustment on either side, totals consistent.
+            let slip = slips.iter().find(|slip| slip.employee_id == user_id).unwrap();
+            assert_eq!((slip.total_earnings_centavos, slip.adjustment_centavos, slip.deduction_adjustment_centavos), (88_000, 0, 0), "{user_id} payslip earnings");
+            assert_eq!(slip.late_centavos + slip.halfday_centavos + slip.undertime_centavos + slip.absent_centavos, slip.total_deductions_centavos, "{user_id} payslip deductions");
+            assert_eq!((slip.total_deductions_centavos, slip.net_pay_centavos), ((late + short + absence).min(88_000), net), "{user_id} payslip totals");
+            // One grace claim per week at most, and as many as expected.
+            let claims: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM intern_grace WHERE user_id = ?").bind(&user_id).fetch_one(&state.db).await.unwrap();
+            assert_eq!(claims, intern.grace_claims, "{user_id} grace claims");
+            let in_cutoff = if intern.id == "E" { intern.grace_claims - 1 } else { intern.grace_claims };
+            assert_eq!(grace_lines, in_cutoff, "{user_id} grace lines in the Breakdown");
+            let most_per_week: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(n), 0) FROM (SELECT COUNT(*) AS n FROM intern_grace WHERE user_id = ? GROUP BY week_start)")
+                .bind(&user_id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+            assert!(most_per_week <= 1, "{user_id} claimed grace twice in one week");
+            // Every day's pay is within 0..=80 and equals 80 less its deductions.
+            let bad_days: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM payroll WHERE user_id = ? AND (daily_pay_centavos < 0 OR daily_pay_centavos > 8000 \
+                 OR daily_pay_centavos != 8000 - late_deduction_centavos - half_day_deduction_centavos OR policy_version != 'V3_WEEKLY_GRACE')",
+            )
+            .bind(&user_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+            assert_eq!(bad_days, 0, "{user_id} has an inconsistent day");
+        }
+
+        // The attendance list agrees with the pay for the boundary seconds (intern H).
+        let mut statuses = Vec::new();
+        for day in [1, 2, 3, 4, 7, 8] {
+            let rows = super::attendance_rows_json(&state.db, &format!("2026-12-{day:02}")).await.unwrap();
+            let row = rows.iter().find(|row| row["userId"] == "INT_H").unwrap();
+            statuses.push((row["arrivalStatus"].as_str().unwrap().to_string(), row["minutesLate"].as_i64().unwrap()));
+        }
+        assert_eq!(
+            statuses,
+            [("ON_TIME", 0), ("GRACE_PERIOD", 0), ("LATE", 15), ("LATE", 60), ("LATE", 60), ("LATE", 61)]
+                .map(|(status, minutes)| (status.to_string(), minutes))
+        );
+
+        // Generating again changes nothing: same figures, same grace claims.
+        let claims_before: Vec<(String, String)> = sqlx::query_as("SELECT user_id, attendance_id FROM intern_grace ORDER BY 1, 2").fetch_all(&state.db).await.unwrap();
+        sqlx::query("DELETE FROM payroll_cutoffs").execute(&state.db).await.unwrap();
+        generate().await.unwrap();
+        assert_eq!(figures(&cutoff_rows().await), expected, "regenerating changed the payroll");
+        let claims_after: Vec<(String, String)> = sqlx::query_as("SELECT user_id, attendance_id FROM intern_grace ORDER BY 1, 2").fetch_all(&state.db).await.unwrap();
+        assert_eq!(claims_after, claims_before, "regenerating moved a grace claim");
+
+        // Correction: F's graced Dec 7 arrival is fixed to 08:00. The claim is released and
+        // the Dec 9 08:07 arrival of the same week takes it; nobody else's pay moves.
+        sqlx::query("UPDATE attendance SET time_in = '2026-12-07T08:00:00+08:00' WHERE attendance_id = 'ATT-F-7'").execute(&state.db).await.unwrap();
+        sqlx::query("DELETE FROM payroll_cutoffs").execute(&state.db).await.unwrap();
+        generate().await.unwrap();
+        let corrected = figures(&cutoff_rows().await);
+        for ((user_id, got), (_, before)) in corrected.iter().zip(&expected) {
+            let want = if user_id == "INT_F" { (0, 0, 0, 88_000) } else { *before };
+            assert_eq!(*got, want, "{user_id} after F's correction");
+        }
+        let f_claim: Vec<String> = sqlx::query_scalar("SELECT attendance_id FROM intern_grace WHERE user_id = 'INT_F'").fetch_all(&state.db).await.unwrap();
+        assert_eq!(f_claim, ["ATT-F-9"]);
+
+        // Out of order: intern I forgot to time out on Mon Dec 7 (08:05), so Tue Dec 8 (08:06)
+        // was priced first and took the week's grace. The admin then completes Monday.
+        // Exactly one of the two days is graced and one is a late hour, and it stays that way.
+        super::upsert_user_record(
+            &state.db, "INT_I", "RFID-I", "Mock I", Some("IT"), "ACTIVE", "INTERN", Some("MALE"), Some(0),
+            Some("INTERN_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        for (day, time_in, time_out, status) in [(7, "08:05:00", None, "MISSED"), (8, "08:06:00", Some("17:00:00"), "COMPLETED")] {
+            let date = format!("2026-12-{day:02}");
+            sqlx::query(
+                "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, time_out, status, source, created_at, updated_at) \
+                 VALUES (?, ?, 'INT_I', 'RFID-I', 'Mock I', 'IT', ?, ?, ?, 'KIOSK', ?, ?)",
+            )
+            .bind(format!("ATT-I-{day}"))
+            .bind(&date)
+            .bind(format!("{date}T{time_in}+08:00"))
+            .bind(time_out.map(|out| format!("{date}T{out}+08:00")))
+            .bind(status)
+            .bind(&date)
+            .bind(&date)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+        super::ensure_payroll(&state, "ATT-I-8", "INT_I", "Mock I".into(), "2026-12-08", "2026-12-08T08:06:00+08:00", "2026-12-08T17:00:00+08:00")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE attendance SET time_out = '2026-12-07T17:00:00+08:00', status = 'COMPLETED' WHERE attendance_id = 'ATT-I-7'").execute(&state.db).await.unwrap();
+        for round in 0..2 {
+            sqlx::query("DELETE FROM payroll_cutoffs").execute(&state.db).await.unwrap();
+            generate().await.unwrap();
+            let days: Vec<(String, i64, i64)> = sqlx::query_as(
+                "SELECT attendance_id, grace_used, late_deduction_centavos FROM payroll WHERE user_id = 'INT_I' ORDER BY attendance_date",
+            )
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
+            assert_eq!(days, [("ATT-I-7".to_string(), 0, 1_000), ("ATT-I-8".to_string(), 1, 0)], "round {round}");
+            // 2 days worked, 9 absent: 880 - 720 absent - 10 late.
+            let net: i64 = sqlx::query_scalar("SELECT net_pay_centavos FROM payroll_cutoffs WHERE employee_id = 'INT_I'").fetch_one(&state.db).await.unwrap();
+            assert_eq!(net, 15_000, "round {round}");
+        }
+
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }
