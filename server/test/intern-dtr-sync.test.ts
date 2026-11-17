@@ -833,61 +833,8 @@ describe('auto-create tab alignment', () => {
   });
 });
 
-describe('DTR vs payroll independence (half-day decoupling)', () => {
+describe('DTR rows keep actual stamps', () => {
   const date = '2026-09-05';
-  it('08:00-15:00 DTR keeps actual stamps while payroll deducts 1 hour unrendered', async () => {
-    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
-    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
-      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '3:00:00 PM',
-    ]);
-    const pay = calculateInternPayroll({
-      attendanceDate: date,
-      actualTimeIn: '2026-09-05T08:00:00+08:00',
-      actualTimeOut: '2026-09-05T15:00:00+08:00',
-      graceAvailable: true,
-    });
-    expect(pay.workedHours).toBe(6);
-    expect(pay.isHalfDay).toBe(false);
-    expect(pay.halfDayDeduction).toBe(20);
-    expect(pay.dailyPay).toBe(60);
-    expect(pay.computedTimeIn).toBe('2026-09-05T08:00:00+08:00');
-    expect(pay.computedTimeOut).toBe('2026-09-05T15:00:00+08:00');
-  });
-  it('08:00-17:00 full day keeps actual stamps and full pay', async () => {
-    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
-    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
-      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
-    ]);
-    const pay = calculateInternPayroll({
-      attendanceDate: date,
-      actualTimeIn: '2026-09-05T08:00:00+08:00',
-      actualTimeOut: '2026-09-05T17:00:00+08:00',
-      graceAvailable: true,
-    });
-    expect(pay.isHalfDay).toBe(false);
-    expect(pay.dailyPay).toBe(80);
-  });
-  it('sub-4h first late arrival keeps DTR stamps and uses flat ungraced payroll', async () => {
-    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
-    expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
-      '11:30:00 AM', '12:00:00 PM', '1:00:00 PM', '2:30:00 PM',
-    ]);
-    const pay = calculateInternPayroll({
-      attendanceDate: date,
-      actualTimeIn: '2026-09-05T11:30:00+08:00',
-      actualTimeOut: '2026-09-05T14:30:00+08:00',
-      graceAvailable: true,
-    });
-    expect(pay).toMatchObject({
-      computedTimeIn: '2026-09-05T12:00:00+08:00',
-      graceUsed: false,
-      lateHours: 4,
-      workedHours: 1.5,
-      halfDayDeduction: 30,
-      dailyPay: 10,
-      isHalfDay: true,
-    });
-  });
   it('12:30 arrival keeps the actual in-time on the DTR', () => {
     expect(buildDtrRow('2026-09-05T12:30:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
       '', '', '12:30:00 PM', '5:00:00 PM',
@@ -903,6 +850,17 @@ describe('late time-out auto-cap (18:00+ renders/pays as 17:00)', () => {
     ]);
     expect(classifyRecordKind('2026-09-05T08:00:00+08:00', '2026-09-05T19:30:00+08:00', date)).toBe('full');
   });
+  it('keeps actual stamps for an early time-out, a full day and a sub-4h late arrival', () => {
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T15:00:00+08:00', date)).toEqual([
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '3:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:00:00+08:00', date)).toEqual([
+      '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
+    ]);
+    expect(buildDtrRow('2026-09-05T11:30:00+08:00', '2026-09-05T14:30:00+08:00', date)).toEqual([
+      '11:30:00 AM', '12:00:00 PM', '1:00:00 PM', '2:30:00 PM',
+    ]);
+  });
   it('18:00:00 boundary caps while 17:59:59 stays actual', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T18:00:00+08:00', date)).toEqual([
       '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:00:00 PM',
@@ -910,18 +868,6 @@ describe('late time-out auto-cap (18:00+ renders/pays as 17:00)', () => {
     expect(buildDtrRow('2026-09-05T08:00:00+08:00', '2026-09-05T17:59:59+08:00', date)).toEqual([
       '8:00:00 AM', '12:00:00 PM', '1:00:00 PM', '5:59:59 PM',
     ]);
-  });
-  it('08:00-19:30 payroll is full-day computed on capped 08:00-17:00', async () => {
-    const { calculateInternPayroll } = await import('../src/intern-payroll.js');
-    const pay = calculateInternPayroll({
-      attendanceDate: date,
-      actualTimeIn: '2026-09-05T08:00:00+08:00',
-      actualTimeOut: '2026-09-05T19:30:00+08:00',
-      graceAvailable: true,
-    });
-    expect(pay.isHalfDay).toBe(false);
-    expect(pay.computedTimeOut).toBe('2026-09-05T17:00:00+08:00');
-    expect(pay.dailyPay).toBe(80);
   });
 });
 

@@ -25,10 +25,6 @@ export const OFFICE_CLOSE_HOUR = 17;
  * BEFORE DTR row building and payroll math (single normalization point).
  * 17:59:59 stays actual; 18:00:00+ caps. Mirrors shared `LATE_TIMEOUT_THRESHOLD`. */
 export const LATE_TIMEOUT_HOUR = 18;
-/** Clock-in at/after this Manila hour is an afternoon half-day (missed morning). */
-export const HALF_DAY_LATE_ARRIVAL_HOUR = 12;
-/** Paid-hours threshold at or below which a shift is always a half-day. */
-export const HALF_DAY_MAX_HOURS = 4;
 const timezone = 'Asia/Manila';
 
 /**
@@ -68,17 +64,6 @@ export function paidWorkHours(start: DateTime, end: DateTime): number {
   return Math.min(8, paidWorkSeconds(start, end) / 3600);
 }
 
-/** Parses an ISO timestamp into Manila time, throwing on invalid input. */
-export function manilaTimestamp(value: string): DateTime {
-  // P6: require an explicit UTC offset (RFC3339) — offset-less local times
-  // are silently misread when client and server zones disagree.
-  const text = value.trim();
-  if (!/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) throw new Error('Payroll timestamps must include a UTC offset (RFC3339)');
-  const parsed = DateTime.fromISO(text, { setZone: true }).setZone(timezone);
-  if (!parsed.isValid) throw new Error('Payroll timestamps must be valid ISO values');
-  return parsed;
-}
-
 /** 17:00:00 Manila on the same calendar day as the given clock-out. */
 export function officeCloseFor(clockOut: DateTime): DateTime {
   return clockOut.set({ hour: OFFICE_CLOSE_HOUR, minute: 0, second: 0, millisecond: 0 });
@@ -96,64 +81,4 @@ export function capLateTimeoutOut(clockOut: DateTime): DateTime {
     return clockOut.set({ hour: OFFICE_CLOSE_HOUR, minute: 0, second: 0, millisecond: 0 });
   }
   return clockOut;
-}
-
-/** Shared half-day rule: short shifts (<=4h) or afternoon arrival (>=12:00 Manila). */
-export function isHalfDayWork(workedHours: number, _clockOut?: DateTime, clockIn?: DateTime): boolean {
-  if (!(workedHours > 0)) return false;
-  if (workedHours <= HALF_DAY_MAX_HOURS) return true;
-  return clockIn !== undefined && clockIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR;
-}
-
-/**
- * Shared morning-half-day rule: a half-day shift that clocked in before
- * 12:00 Manila but left before office close pays as an effective 08:00-12:00
- * window. Returns 12:00 same-day when that condition holds, otherwise null so
- * each caller keeps its own else-branch (employee floors to the hour, intern
- * passes the stamp through) instead of hiding that difference here.
- *
- * `timeOut` must already be the capped clock-out (`capLateTimeoutOut` applied),
- * matching the cap -> half-day -> window order used by both payroll engines.
- */
-export function effectiveHalfDayTimeOut(
-  isHalfDay: boolean,
-  timeIn: DateTime,
-  timeOut: DateTime,
-): DateTime | null {
-  if (!isHalfDay || timeIn.hour >= HALF_DAY_LATE_ARRIVAL_HOUR || timeOut >= officeCloseFor(timeOut)) return null;
-  return timeOut.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
-}
-
-/**
- * Shared shift core: paid seconds -> fractional hours -> half-day -> deductions.
- *
- * Byte-identical to the former inline blocks in `employee-payroll.ts:15-20`
- * and `intern-payroll.ts:48-53`. Callers keep their divergences OUTSIDE:
- * `payableIn` (employee 08:00 floor vs intern grace/late-policy choice),
- * `hourlyRate` (employee dailyRate/8 vs intern fixed/8), and the
- * computed-time-out else-branch (employee startOf-hour floor vs intern
- * passthrough) all stay in the engines. `paidWorkSeconds` subtracts lunch.
- */
-export type ShiftCoreResult = {
-  paidSeconds: number;
-  workedHours: number;
-  isHalfDay: boolean;
-  unrenderedHours: number;
-  halfDayDeduction: number;
-  dailyPay: number;
-};
-
-export function computeShiftCore(
-  payableIn: DateTime,
-  actualTimeOut: DateTime,
-  actualTimeIn: DateTime,
-  hourlyRate: number,
-): ShiftCoreResult {
-  const paidSeconds = paidWorkSeconds(payableIn, actualTimeOut);
-  const workedHours = Math.min(8, Math.max(0, paidSeconds / 3600));
-  const isHalfDay = isHalfDayWork(workedHours, actualTimeOut, actualTimeIn);
-  const unrenderedHours = Math.max(0, 8 - workedHours);
-  const halfDayDeduction = unrenderedHours * hourlyRate;
-  const dailyPay = workedHours * hourlyRate;
-  return { paidSeconds, workedHours, isHalfDay, unrenderedHours, halfDayDeduction, dailyPay };
 }

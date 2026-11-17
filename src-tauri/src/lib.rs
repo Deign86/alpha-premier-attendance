@@ -11,7 +11,7 @@ mod state;
 mod tts;
 
 use crate::services::intern_payroll::{INTERN_DAILY_RATE_PHP, INTERN_PAYROLL_PROFILE_ID};
-use chrono::{Datelike, TimeZone};
+use chrono::Datelike;
 use chrono_tz::Asia::Manila;
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqliteRow, Row};
@@ -830,8 +830,37 @@ async fn admin_attendance(
     {
         return Err("INVALID_DATE".into());
     }
-    let rows = sqlx::query("SELECT attendance_id, attendance_date, user_id, full_name, department, time_in, time_out, status, source, recorded_by, recorded_reason, recorded_at FROM attendance WHERE attendance_date = ? ORDER BY time_in, full_name").bind(&date).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    let attendance = rows.into_iter().map(|row| serde_json::json!({
+    let attendance = attendance_rows_json(&state.db, &date).await?;
+    Ok(
+        serde_json::json!({"success":true,"date":date,"attendance":attendance,"fetchedAt":chrono::Utc::now()}),
+    )
+}
+
+/// One day's attendance rows for the admin list. Arrival status is the payroll
+/// engine's: a priced day uses its stored grace decision, an open day the
+/// weekly claim it could still take.
+async fn attendance_rows_json(
+    db: &sqlx::SqlitePool,
+    date: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let rows = sqlx::query(
+        "SELECT a.attendance_id, a.attendance_date, a.user_id, a.full_name, a.department, a.time_in, a.time_out, a.status, a.source, a.recorded_by, a.recorded_reason, a.recorded_at, \
+         COALESCE(p.grace_used = 1, NOT EXISTS (SELECT 1 FROM intern_grace g WHERE g.user_id = a.user_id AND g.week_start = ? AND g.attendance_id != a.attendance_id)) AS grace_available \
+         FROM attendance a LEFT JOIN payroll p ON p.attendance_id = a.attendance_id \
+         WHERE a.attendance_date = ? ORDER BY a.time_in, a.full_name",
+    )
+    .bind(manila_week_start(date))
+    .bind(date)
+    .fetch_all(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let attendance = rows.into_iter().map(|row| {
+        let arrival = row.get::<Option<String>, _>("time_in").and_then(|time_in| {
+            crate::services::intern_payroll::arrival(date, &time_in, row.get::<bool, _>("grace_available"))
+        });
+        serde_json::json!({
+        "arrivalStatus": arrival.map(|a| a.status.as_str()),
+        "minutesLate": arrival.map(|a| a.minutes_late),
         "attendanceId": row.get::<String,_>("attendance_id"),
         "attendanceDate": row.get::<String,_>("attendance_date"),
         "userId": row.get::<String,_>("user_id"),
@@ -844,10 +873,8 @@ async fn admin_attendance(
         "recordedBy": row.get::<Option<String>,_>("recorded_by"),
         "recordedReason": row.get::<Option<String>,_>("recorded_reason"),
         "recordedAt": row.get::<Option<String>,_>("recorded_at"),
-    })).collect::<Vec<_>>();
-    Ok(
-        serde_json::json!({"success":true,"date":date,"attendance":attendance,"fetchedAt":chrono::Utc::now()}),
-    )
+    })}).collect::<Vec<_>>();
+    Ok(attendance)
 }
 
 #[tauri::command]
@@ -2579,7 +2606,7 @@ async fn payroll_intern_report(
     let rows = sqlx::query(
         "SELECT u.user_id, u.full_name, \
          COALESCE(COUNT(p.payroll_id), 0) AS actual_days, \
-         COALESCE(SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) < 18000 OR substr(p.actual_time_in, 12, 5) >= '12:00')) THEN 1 ELSE 0 END), 0) AS half_day_count, \
+         COALESCE(SUM(CASE WHEN p.is_half_day = 1 THEN 1 ELSE 0 END), 0) AS half_day_count, \
          COALESCE(SUM(p.half_day_deduction_centavos), 0) AS half_day_deduction_centavos, \
          COALESCE(SUM(p.base_pay_centavos), 0) AS basic_pay, \
          COALESCE(SUM(p.late_hours), 0) AS late_units, \
@@ -2783,7 +2810,7 @@ async fn payroll_generate_cutoff_impl(
         "SELECT p.user_id, MAX(p.full_name) AS full_name, MAX(p.employee_type) AS employee_type, \
          COALESCE(MAX(u.daily_rate_centavos), MAX(p.base_pay_centavos), 0) AS daily_rate_centavos, \
          COUNT(*) AS actual_days, \
-         SUM(CASE WHEN p.is_half_day = 1 OR (p.actual_time_in IS NOT NULL AND p.actual_time_out IS NOT NULL AND ((strftime('%s', p.actual_time_out) - strftime('%s', p.actual_time_in)) < 18000 OR substr(p.actual_time_in, 12, 5) >= '12:00')) THEN 1 ELSE 0 END) AS half_day_count, \
+         SUM(CASE WHEN p.is_half_day = 1 THEN 1 ELSE 0 END) AS half_day_count, \
          COALESCE(SUM(p.half_day_deduction_centavos), 0) AS half_day_deduction_centavos, \
          SUM(p.late_hours) AS late_units, \
          u.payroll_profile_id \
@@ -3018,123 +3045,27 @@ async fn payroll_generate_cutoff_impl(
             }
         }
 
-        // 2 & 3. Daily records with late or undertime / half-day
+        // 2 & 3. Weekly grace, late and undertime / half-day lines come from the payroll engine.
         for rec in &daily_records {
             let date_str: String = rec.get("attendance_date");
             let actual_in: Option<String> = rec.get("actual_time_in");
             let actual_out: Option<String> = rec.get("actual_time_out");
-            let rec_late_hours: i64 = rec.get("late_hours");
-            let rec_late_ded_centavos: i64 = rec.get("late_deduction_centavos");
-            let rec_is_half_day: i64 = rec.get("is_half_day");
-            let rec_half_day_ded_centavos: i64 = rec.get("half_day_deduction_centavos");
-            let rec_grace_used: Option<i64> = rec.get("grace_used");
-
-            let format_time = |iso_str: &Option<String>| -> Option<String> {
-                iso_str.as_ref().and_then(|s| {
-                    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| {
-                        let dt_manila = dt.with_timezone(&Manila);
-                        dt_manila.format("%I:%M %p").to_string()
-                    })
-                })
-            };
-
-            let in_label = format_time(&actual_in);
-            let out_label = format_time(&actual_out);
-
-            // Lateness
-            if rec_late_hours > 0 || rec_late_ded_centavos > 0 || rec_grace_used == Some(1) {
-                let is_grace = rec_grace_used == Some(1);
-                let in_str = in_label.as_deref().unwrap_or("—");
-                let out_str = out_label.as_deref().unwrap_or("—");
-                let details = if is_grace {
-                    format!("Late arrival at {} (Weekly grace applied — PHP 0.00 deduction)", in_str)
+            deduction_items.extend(crate::services::intern_payroll::explain_day(
+                &crate::services::intern_payroll::PricedDay {
+                    date: &date_str,
+                    actual_time_in: actual_in.as_deref(),
+                    actual_time_out: actual_out.as_deref(),
+                    late_hours: rec.get("late_hours"),
+                    is_half_day: rec.get::<i64, _>("is_half_day") == 1,
+                    half_day_deduction_centavos: rec.get("half_day_deduction_centavos"),
+                    grace_used: rec.get::<Option<i64>, _>("grace_used") == Some(1),
+                },
+                if is_intern {
+                    crate::services::intern_payroll::INTERN_DAILY_RATE_PHP as f64 / 8.0
                 } else {
-                    format!("Late arrival at {} ({} hr(s) late)", in_str, rec_late_hours)
-                };
-                let amount = if is_intern {
-                    (rec_late_hours as f64)
-                        * (crate::services::intern_payroll::INTERN_DAILY_RATE_PHP as f64 / 8.0)
-                } else {
-                    (rec_late_hours as f64) * late_rate
-                };
-                deduction_items.push(serde_json::json!({
-                    "date": date_str,
-                    "category": "LATE",
-                    "label": "Late",
-                    "details": details,
-                    "timeIn": in_str,
-                    "timeOut": out_str,
-                    "workedHours": null,
-                    "hoursShort": null,
-                    "lateHours": rec_late_hours,
-                    "amount": amount,
-                }));
-            }
-
-            // Incomplete Work Hours / Undertime / Half-Day
-            if rec_half_day_ded_centavos > 0 || rec_is_half_day == 1 {
-                let in_str = in_label.as_deref().unwrap_or("—");
-                let out_str = out_label.as_deref().unwrap_or("—");
-                let (worked_hrs, unrendered_hrs) = if let (Some(t_in_str), Some(t_out_str)) = (&actual_in, &actual_out) {
-                    if let (Ok(t_in), Ok(t_out)) = (
-                        chrono::DateTime::parse_from_rfc3339(t_in_str),
-                        chrono::DateTime::parse_from_rfc3339(t_out_str)
-                    ) {
-                        let in_m = t_in.with_timezone(&Manila);
-                        let out_m = t_out.with_timezone(&Manila);
-                        let capped_out = crate::services::payroll::cap_late_timeout_out(out_m);
-                        let day_start = Manila
-                            .with_ymd_and_hms(in_m.year(), in_m.month(), in_m.day(), 8, 0, 0)
-                            .single()
-                            .unwrap_or(in_m);
-                        let nine_am = day_start + chrono::Duration::hours(1);
-                        let in_effective = if rec_grace_used == Some(1) {
-                            day_start
-                        } else if rec_late_hours > 0 && in_m > day_start && in_m <= nine_am {
-                            nine_am
-                        } else {
-                            in_m.max(day_start)
-                        };
-                        let paid_sec = crate::services::lunch_break::paid_work_seconds(in_effective, capped_out);
-                        let wh = (paid_sec.max(0) as f64 / 3600.0).min(8.0);
-                        let late_hours_already_removed = if is_intern { rec_late_hours as f64 } else { 0.0 };
-                        let uh = (8.0 - wh - late_hours_already_removed).max(0.0);
-                        (wh, uh)
-                    } else {
-                        (0.0, 4.0)
-                    }
-                } else {
-                    (0.0, 4.0)
-                };
-
-                let details = if unrendered_hrs > 0.0 {
-                    format!("Incomplete hours: {} worked of 8 hrs ({} short), {} – {}",
-                        if worked_hrs == 1.0 { "1 hr".to_string() } else { format!("{} hrs", worked_hrs) },
-                        if unrendered_hrs == 1.0 { "1 hr".to_string() } else { format!("{} hrs", unrendered_hrs) },
-                        in_str, out_str)
-                } else {
-                    format!("Half-day: {} – {}", in_str, out_str)
-                };
-
-                let amount = if rec_half_day_ded_centavos > 0 {
-                    rec_half_day_ded_centavos as f64 / 100.0
-                } else {
-                    (unrendered_hrs as f64) * (daily_rate_centavos as f64 / 100.0 / 8.0)
-                };
-
-                deduction_items.push(serde_json::json!({
-                    "date": date_str,
-                    "category": "UNDERTIME",
-                    "label": if rec_is_half_day == 1 { "Half-day" } else { "Undertime" },
-                    "details": details,
-                    "timeIn": in_str,
-                    "timeOut": out_str,
-                    "workedHours": worked_hrs,
-                    "hoursShort": unrendered_hrs,
-                    "lateHours": null,
-                    "amount": amount,
-                }));
-            }
+                    late_rate
+                },
+            ));
         }
 
         deduction_items.sort_by(|a, b| {
@@ -5980,6 +5911,10 @@ async fn scan_rfid_at(
     };
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&timestamp).bind(&uid).bind(&user_id).bind(audit_msg).bind(&request_id).execute(&state.db).await;
     let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, effective_user.get::<Option<String>,_>("photo_url"));
+    let arrival = match serde_json::json!(&time_in).as_str() {
+        Some(time_in) => attendance_arrival(&state.db, &user_id, &attendance_id, &date, time_in).await,
+        None => None,
+    };
     Ok(
         serde_json::json!({
             "success": true,
@@ -5993,6 +5928,8 @@ async fn scan_rfid_at(
                 "timeOut": time_out,
                 "status": attendance_status,
                 "isFirstArrivalToday": if action == "TIME_IN" { Some(is_first_arrival_today) } else { None },
+                "arrivalStatus": arrival.map(|a| a.status.as_str()),
+                "minutesLate": arrival.map(|a| a.minutes_late),
                 "source": effective_source,
                 "recordedBy": recorded_by,
                 "recordedReason": recorded_reason,
@@ -6023,6 +5960,37 @@ async fn flush_pending_sync(
     for (table, row_id, operation, payload) in pending {
         enqueue_sync_on(state, &mut *conn, table, &row_id, operation, &payload).await;
     }
+}
+
+/// Monday (`YYYY-MM-DD`) of the Manila week of `date`: the key of a weekly
+/// grace claim. An unreadable date maps to itself, which matches no claim.
+fn manila_week_start(date: &str) -> String {
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|day| (day - chrono::Duration::days(day.weekday().num_days_from_monday() as i64)).to_string())
+        .unwrap_or_else(|_| date.to_string())
+}
+
+/// Arrival status of one attendance row, as the payroll engine decides it
+/// (same rule as `attendance_rows_json`).
+async fn attendance_arrival(
+    db: &sqlx::SqlitePool,
+    user_id: &str,
+    attendance_id: &str,
+    date: &str,
+    time_in: &str,
+) -> Option<crate::services::intern_payroll::Arrival> {
+    let grace_available: bool = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT grace_used = 1 FROM payroll WHERE attendance_id = ?), \
+         NOT EXISTS (SELECT 1 FROM intern_grace WHERE user_id = ? AND week_start = ? AND attendance_id != ?))",
+    )
+    .bind(attendance_id)
+    .bind(user_id)
+    .bind(manila_week_start(date))
+    .bind(attendance_id)
+    .fetch_one(db)
+    .await
+    .ok()?;
+    crate::services::intern_payroll::arrival(date, time_in, grace_available)
 }
 
 /// Atomic wrapper: grace claim + payroll upsert commit together or not at all.
@@ -10362,6 +10330,49 @@ mod tests {
             (0..5).map(|i| cutoff.get::<i64, _>(i)).collect::<Vec<_>>(),
             [88_000, 88_000, 1_000, 2_000, 85_000]
         );
+        // The Breakdown names the graced day; the attendance list shows the same decision.
+        let breakdown: String = sqlx::query_scalar("SELECT calculation_breakdown FROM payroll_cutoffs")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        let breakdown: serde_json::Value = serde_json::from_str(&breakdown).unwrap();
+        let lines = breakdown["deductions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| (item["date"].as_str().unwrap(), item["category"].as_str().unwrap(), item["amount"].as_f64().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            [
+                ("2026-11-16", "GRACE", 0.0),
+                ("2026-11-16", "UNDERTIME", 20.0),
+                ("2026-11-17", "LATE", 10.0),
+            ]
+        );
+        // An open (not yet priced) 08:10 arrival the next week can still take that week's claim.
+        sqlx::query(
+            "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, status, source, created_at, updated_at) \
+             VALUES ('ATT-UT-OPEN', '2026-12-01', 'INT_UT', 'RFID-UT', 'Under Time', 'IT', '2026-12-01T08:10:00+08:00', 'WORKING', 'KIOSK', '2026-12-01', '2026-12-01')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        let mut statuses = Vec::new();
+        for date in ["2026-11-16", "2026-11-17", "2026-11-18", "2026-12-01"] {
+            let rows = super::attendance_rows_json(&state.db, date).await.unwrap();
+            statuses.push((rows[0]["arrivalStatus"].as_str().unwrap().to_string(), rows[0]["minutesLate"].as_i64().unwrap()));
+        }
+        assert_eq!(
+            statuses,
+            [
+                ("GRACE_PERIOD".to_string(), 0),
+                ("LATE".to_string(), 5),
+                ("ON_TIME".to_string(), 0),
+                ("GRACE_PERIOD".to_string(), 0),
+            ]
+        );
+
         let slips = crate::reporting::load_intern_payslips(&state.db, "2026-11-16", "2026-11-30")
             .await
             .unwrap();

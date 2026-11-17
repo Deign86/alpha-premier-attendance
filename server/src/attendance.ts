@@ -13,7 +13,6 @@ import { KeyedMutex } from './mutex.js';
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { AuditEvent, GoogleSheetsService, SheetAttendance, SheetUser } from './sheets.js';
-import { PayrollService } from './payroll.js';
 
 export type AttendanceServiceConfig = { timezone: string; scanCooldownMs: number };
 type Clock = () => Date;
@@ -32,7 +31,7 @@ export class AttendanceService {
   private readonly lastScans = new Map<string, number>();
   private now: Clock;
 
-  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AttendanceServiceConfig, now: Clock = () => new Date(), private readonly payroll = new PayrollService(sheets)) {
+  constructor(private readonly sheets: GoogleSheetsService, private readonly config: AttendanceServiceConfig, now: Clock = () => new Date()) {
     this.now = now;
   }
 
@@ -142,10 +141,6 @@ export class AttendanceService {
           const isMissed = attendance.status === 'MISSED';
           if (isMissed) {
             if (hasTimeOut) {
-              if (!await this.sheets.findPayrollByAttendanceId(attendance.attendanceId)) {
-                try { await this.payroll.ensureForCompletedAttendance(attendance, effectiveUser); }
-                catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance is complete but payroll could not be generated.', 503); }
-              }
               throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
             }
             throw new ScanError('ATTENDANCE_DATA_CONFLICT', 'Attendance data is inconsistent.', 409);
@@ -173,10 +168,6 @@ export class AttendanceService {
           } else if (isDoneStatus) {
             if (attendance.status === 'LATE_TIMEOUT') {
               throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance timed out after office hours and is pending manual correction.', 409);
-            }
-            if (!await this.sheets.findPayrollByAttendanceId(attendance.attendanceId)) {
-              try { await this.payroll.ensureForCompletedAttendance(attendance, effectiveUser); }
-              catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance is complete but payroll could not be generated.', 503); }
             }
             throw new ScanError('ATTENDANCE_ALREADY_COMPLETED', 'Attendance is already complete for today.', 409);
           } else if (isAssist) {
@@ -206,10 +197,6 @@ export class AttendanceService {
             }
           }
           action = 'TIME_OUT';
-          if (saved.status === 'COMPLETED') {
-            try { await this.payroll.ensureForCompletedAttendance(saved, effectiveUser); }
-            catch { throw new ScanError('PAYROLL_GENERATION_FAILED', 'Attendance was completed but payroll could not be generated.', 503); }
-          }
         }
 
         this.lastScans.set(effectiveUser.userId, currentMs);

@@ -126,6 +126,152 @@ pub struct InternPayrollResult {
     pub worked_hours: f64,
 }
 
+/// 08:01:00 through the end of the weekly grace window of `rules`, if it has one.
+fn in_grace_window(
+    rules: PolicyRules,
+    start: DateTime<chrono_tz::Tz>,
+    time_in: DateTime<chrono_tz::Tz>,
+) -> bool {
+    rules.weekly_grace_window_minutes.is_some_and(|minutes| {
+        time_in >= start + chrono::Duration::minutes(1)
+            && time_in <= start + chrono::Duration::minutes(minutes)
+    })
+}
+
+/// How one arrival is shown and priced: on time, covered by the weekly grace, or late.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrivalStatus {
+    OnTime,
+    GracePeriod,
+    Late,
+}
+
+impl ArrivalStatus {
+    /// Identifier used by the UI contract (`ArrivalStatus` in api-contracts.ts).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OnTime => "ON_TIME",
+            Self::GracePeriod => "GRACE_PERIOD",
+            Self::Late => "LATE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Arrival {
+    pub status: ArrivalStatus,
+    /// Whole minutes after 08:00, rounded up; 0 unless late.
+    pub minutes_late: i64,
+}
+
+/// Arrival status of one time-in under the policy of `attendance_date`, with
+/// the same grace decision as [`calculate`]. `None` for unreadable input.
+pub fn arrival(attendance_date: &str, actual_time_in: &str, grace_available: bool) -> Option<Arrival> {
+    let date = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d").ok()?;
+    let time_in = DateTime::parse_from_rfc3339(actual_time_in)
+        .ok()?
+        .with_timezone(&Manila);
+    let start = Manila
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
+        .single()?;
+    let on_time = Arrival { status: ArrivalStatus::OnTime, minutes_late: 0 };
+    if time_in < start + chrono::Duration::minutes(1) {
+        return Some(on_time);
+    }
+    if grace_available && in_grace_window(policy_for_date(attendance_date).rules(), start, time_in) {
+        return Some(Arrival { status: ArrivalStatus::GracePeriod, ..on_time });
+    }
+    Some(Arrival {
+        status: ArrivalStatus::Late,
+        minutes_late: ((time_in - start).num_seconds() + 59) / 60,
+    })
+}
+
+/// One priced day as stored in the `payroll` table.
+pub struct PricedDay<'a> {
+    pub date: &'a str,
+    pub actual_time_in: Option<&'a str>,
+    pub actual_time_out: Option<&'a str>,
+    pub late_hours: i64,
+    pub is_half_day: bool,
+    pub half_day_deduction_centavos: i64,
+    pub grace_used: bool,
+}
+
+/// The cutoff Breakdown lines for one priced day: a weekly-grace or late line,
+/// then an undertime / half-day line. Amounts come from the stored engine
+/// result; nothing is re-priced here.
+pub fn explain_day(day: &PricedDay<'_>, late_rate_php: f64) -> Vec<serde_json::Value> {
+    let clock = |stamp: Option<&str>| {
+        stamp
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Manila).format("%I:%M %p").to_string())
+            .unwrap_or_else(|| "—".to_string())
+    };
+    let (time_in, time_out) = (clock(day.actual_time_in), clock(day.actual_time_out));
+    let item = |category: &str, label: &str, details: String, worked: Option<f64>, short: Option<f64>, late: Option<i64>, amount: f64| {
+        serde_json::json!({
+            "date": day.date,
+            "category": category,
+            "label": label,
+            "details": details,
+            "timeIn": time_in,
+            "timeOut": time_out,
+            "workedHours": worked,
+            "hoursShort": short,
+            "lateHours": late,
+            "amount": amount,
+        })
+    };
+    let mut items = Vec::new();
+    if day.grace_used {
+        items.push(item(
+            "GRACE",
+            "Grace",
+            format!("Weekly grace used: arrived {time_in}, no late deduction (once per week, up to 08:15 AM)"),
+            None,
+            None,
+            Some(0),
+            0.0,
+        ));
+    } else if day.late_hours > 0 {
+        items.push(item(
+            "LATE",
+            "Late",
+            format!("Late arrival at {time_in} ({} hr(s) late)", day.late_hours),
+            None,
+            None,
+            Some(day.late_hours),
+            day.late_hours as f64 * late_rate_php,
+        ));
+    }
+    if day.half_day_deduction_centavos > 0 || day.is_half_day {
+        let hourly_rate_centavos = INTERN_DAILY_RATE_PHP * 100 / 8;
+        let short_hours = day.half_day_deduction_centavos / hourly_rate_centavos;
+        let paid_hours = (8 - day.late_hours - short_hours).max(0);
+        let hours = |count: i64| if count == 1 { "1 hr".to_string() } else { format!("{count} hrs") };
+        let details = if short_hours > 0 {
+            format!(
+                "Incomplete hours: {} paid of 8 hrs ({} short), {time_in} – {time_out}",
+                hours(paid_hours),
+                hours(short_hours)
+            )
+        } else {
+            format!("Half-day: {time_in} – {time_out}")
+        };
+        items.push(item(
+            "UNDERTIME",
+            if day.is_half_day { "Half-day" } else { "Undertime" },
+            details,
+            Some(paid_hours as f64),
+            Some(short_hours as f64),
+            None,
+            day.half_day_deduction_centavos as f64 / 100.0,
+        ));
+    }
+    items
+}
+
 /// Prices one day under the policy version in force on `attendance_date`
 /// (see [`PolicyVersion`]).
 pub fn calculate(
@@ -162,10 +308,7 @@ pub fn calculate(
         .ok_or("Invalid Manila start time")?;
     let late_start = start + chrono::Duration::minutes(1);
     let local_time_in = time_in.time();
-    let in_grace_window = rules
-        .weekly_grace_window_minutes
-        .is_some_and(|m| time_in >= late_start && time_in <= start + chrono::Duration::minutes(m));
-    let grace_used = grace_available && in_grace_window;
+    let grace_used = grace_available && in_grace_window(rules, start, time_in);
     // Half-day rule: an arrival at/after 12:00 renders the afternoon half of
     // the 8-hour day: no clamp and no late hours; the shortfall is half-day
     // undertime.
@@ -368,6 +511,56 @@ mod tests {
         let late = day("2026-11-16", "08:20:00", "17:00:00", true);
         assert_eq!(late.computed_time_in, "2026-11-16T08:20:00+08:00");
         assert_eq!(late.late_hours, 1);
+        // The UI status comes from the same grace decision as the price.
+        let status = |date: &str, time_in: &str, grace_available: bool| {
+            arrival(date, &format!("{date}T{time_in}+08:00"), grace_available).unwrap()
+        };
+        assert_eq!(status("2026-11-16", "08:00:59", true).status, ArrivalStatus::OnTime);
+        assert_eq!(status("2026-11-16", "08:01:00", true).status, ArrivalStatus::GracePeriod);
+        assert_eq!(status("2026-11-16", "08:15:00", true).status, ArrivalStatus::GracePeriod);
+        assert_eq!(
+            status("2026-11-16", "08:15:01", true),
+            Arrival { status: ArrivalStatus::Late, minutes_late: 16 }
+        );
+        assert_eq!(
+            status("2026-11-17", "08:01:00", false),
+            Arrival { status: ArrivalStatus::Late, minutes_late: 1 }
+        );
+        assert_eq!(status("2026-11-10", "08:05:00", true).status, ArrivalStatus::Late);
+        assert_eq!(status("2026-09-08", "08:05:00", true).status, ArrivalStatus::GracePeriod);
+        assert!(arrival("2026-11-16", "not-a-time", true).is_none());
+    }
+
+    #[test]
+    fn explain_day_lists_the_weekly_grace_and_the_stored_amounts() {
+        let day = PricedDay {
+            date: "2026-11-16",
+            actual_time_in: Some("2026-11-16T08:01:00+08:00"),
+            actual_time_out: Some("2026-11-16T15:00:00+08:00"),
+            late_hours: 0,
+            is_half_day: false,
+            half_day_deduction_centavos: 2_000,
+            grace_used: true,
+        };
+        let items = explain_day(&day, 10.0);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["category"], "GRACE");
+        assert_eq!(items[0]["amount"], 0.0);
+        assert_eq!(
+            items[0]["details"],
+            "Weekly grace used: arrived 08:01 AM, no late deduction (once per week, up to 08:15 AM)"
+        );
+        assert_eq!(items[1]["category"], "UNDERTIME");
+        assert_eq!(items[1]["amount"], 20.0);
+        assert_eq!(
+            items[1]["details"],
+            "Incomplete hours: 6 hrs paid of 8 hrs (2 hrs short), 08:01 AM – 03:00 PM"
+        );
+        let late = explain_day(&PricedDay { late_hours: 1, grace_used: false, ..day }, 10.0);
+        assert_eq!((late[0]["category"].as_str(), late[0]["amount"].as_f64()), (Some("LATE"), Some(10.0)));
+        assert_eq!(late[1]["workedHours"], 5.0);
+        let on_time = PricedDay { half_day_deduction_centavos: 0, grace_used: false, ..day };
+        assert!(explain_day(&on_time, 10.0).is_empty());
     }
 
     #[test]

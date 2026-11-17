@@ -194,10 +194,12 @@ function toErrorMessage(cause: unknown, fallback: string): string {
 }
 
 async function evaluateKioskArrival(
-  attendance: { attendanceId: string; attendanceDate: string; timeIn: string },
+  attendance: { attendanceId: string; attendanceDate: string; timeIn: string; arrivalStatus?: ArrivalStatus | null },
   userId: string,
   timezone: string,
 ): Promise<ArrivalStatus> {
+  // The desktop payroll engine already decided it (weekly grace included).
+  if (attendance.arrivalStatus) return attendance.arrivalStatus;
   const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone, attendance.attendanceDate);
   try {
     const weekStart = getManilaWeekStart(attendance.attendanceDate);
@@ -7278,6 +7280,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
   const hdmf = row.hdmf ?? 0;
   const advance = row.salaryAdvance ?? 0;
   const parsedBreakdown = parseCalculationBreakdown(row.calculationBreakdown);
+  const graceDays = parsedBreakdown?.deductions?.filter((item) => item.category === "GRACE").length ?? 0;
   const totalDeductions = payrollTotalDeductions(row);
   const netPay = row.netPay;
   // Every payslip field, including the ones the table hides while they are ₱0.
@@ -7345,6 +7348,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
             {php(row.absenceDeduction)} absent ({row.absentDays} day(s))
             {row.lateDeduction > 0 ? ` + ${php(row.lateDeduction)} late (${row.lateUnits} hr(s) at ${php(INTERN_LATE_DEDUCTION_PER_HOUR_PHP)}/hr)` : ""}
             {row.halfDayDeduction > 0 ? ` + ${php(row.halfDayDeduction)} half-day / undertime (${row.halfDayCount} day(s))` : ""}
+            {graceDays > 0 ? ` + ${php(0)} for ${graceDays} weekly grace arrival(s)` : ""}
             {row.manualAdjustment < 0 ? ` + ${php(-row.manualAdjustment)} manual adjustment (${row.adjustmentReason})` : ""}
             {row.absenceDeduction === 0 && row.lateDeduction === 0 && row.halfDayDeduction === 0 && row.manualAdjustment >= 0 ? "None" : ""}
             {" = "}
@@ -8510,10 +8514,15 @@ function AdminAttendance({
   const arrivalMap = useMemo(
     () => {
       const employeeTypes = new Map(users.map((user) => [user.userId, user.employeeType]));
-      return evaluateAttendanceArrivals(activeRows.map((row) => ({
+      const arrivals = evaluateAttendanceArrivals(activeRows.map((row) => ({
         ...row,
         employeeType: employeeTypes.get(row.userId) ?? "EMPLOYEE",
       })));
+      // The desktop payroll engine's decision wins: it knows the week's grace claim, a one-day list does not.
+      for (const row of activeRows) {
+        if (row.arrivalStatus) arrivals.set(row.attendanceId, { arrivalStatus: row.arrivalStatus, minutesLate: row.minutesLate ?? 0 });
+      }
+      return arrivals;
     },
     [activeRows, users],
   );
@@ -9301,8 +9310,8 @@ function exportAttendanceCsv(
   };
   const getArrivalText = (row: AttendanceListItem) => {
     const info = arrivalMap.get(row.attendanceId);
-    // Grace-period arrivals are left blank, matching the table.
-    if (!info || info.arrivalStatus === "NONE" || info.arrivalStatus === "GRACE_PERIOD") return "";
+    if (!info || info.arrivalStatus === "NONE") return "";
+    if (info.arrivalStatus === "GRACE_PERIOD") return "Grace (weekly)";
     if (info.arrivalStatus === "ON_TIME") return "On time";
     return `Late (${info.minutesLate}m)`;
   };
@@ -9482,13 +9491,15 @@ function AttendanceEditRow({
   };
 
   const renderArrival = () => {
-    // Grace-period arrivals show no label in the table; payroll still treats them as grace-period days.
-    if (
-      !arrivalInfo ||
-      arrivalInfo.arrivalStatus === "NONE" ||
-      arrivalInfo.arrivalStatus === "GRACE_PERIOD"
-    ) {
+    if (!arrivalInfo || arrivalInfo.arrivalStatus === "NONE") {
       return <span className="arrival-badge badge-none">—</span>;
+    }
+    if (arrivalInfo.arrivalStatus === "GRACE_PERIOD") {
+      return (
+        <span className="arrival-badge badge-grace" title="Weekly grace used: arrived by 8:15 AM, no late deduction (once per week)">
+          Grace
+        </span>
+      );
     }
     if (arrivalInfo.arrivalStatus === "ON_TIME") {
       return <span className="arrival-badge badge-ontime">On time</span>;

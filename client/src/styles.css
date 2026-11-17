@@ -1006,6 +1006,12 @@ tr.selected-row td:first-child::before,
   border: 1px solid var(--gold-soft);
 }
 
+.badge-grace {
+  background: rgba(152, 199, 152, 0.12);
+  color: #98c798;
+  border: 1px solid rgba(152, 199, 152, 0.3);
+}
+
 .badge-undertime {
   background: rgba(141, 197, 219, 0.12);
   color: #8dc5db;
@@ -4694,6 +4700,7 @@ a:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px so
 .admin-shell .attendance-row .badge-late { color: var(--gold-bright); }
 .admin-shell .attendance-row .badge-ontime { color: var(--muted); }
 .admin-shell .attendance-row .badge-none { color: var(--quiet); }
+.admin-shell .attendance-row .badge-grace { color: var(--success); }
 /* Delete stays grey until pointed at or focused, then turns coral (it still asks first). */
 .admin-shell .attendance-row-actions .text-button.danger-button { color: var(--muted); }
 .admin-shell .attendance-row-actions .text-button.danger-button:is(:hover, :focus-visible):not(:disabled) { color: var(--danger); background: rgba(239, 170, 146, .1); }
