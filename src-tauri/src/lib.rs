@@ -509,7 +509,11 @@ async fn admin_upsert_user_inner(
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(&user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     // Voice auto-clone: queue a Ma'am Bea name-clip pull for roster members.
     // Fire-and-forget — the worker fills the clip later; Piper covers playback meanwhile.
-    if should_enqueue_voice_job(card_type, employee_type, status) {
+    // A person the bundle already voices (pre-generated before registering) keeps that clip.
+    let bundled = crate::services::voice_pull::BUNDLED_NAME_MANIFEST
+        .get()
+        .is_some_and(|manifest| crate::services::voice_pull::bundled_clip_covers(manifest, &user_id, &full_name));
+    if should_enqueue_voice_job(card_type, employee_type, status) && !bundled {
         crate::services::voice_pull::enqueue_voice_job(&state.db, &user_id, &full_name, &now).await;
     }
     if !is_assist && employee_type.to_uppercase() == "INTERN" && status.to_uppercase() == "ACTIVE" {
@@ -6506,6 +6510,7 @@ pub fn run() {
                     std::path::Path::new("voices/bea/bea-name-manifest.json"),
                 );
                 if let Some(manifest) = name_manifest {
+                    let _ = crate::services::voice_pull::BUNDLED_NAME_MANIFEST.set(manifest.clone());
                     let now = chrono::Utc::now().to_rfc3339();
                     match crate::services::voice_pull::retire_superseded_clips(
                         &sync_state.db,

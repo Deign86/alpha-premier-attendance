@@ -237,6 +237,24 @@ pub async fn retire_superseded_clips(
     Ok(removed)
 }
 
+/// Bundled name manifest path, resolved once at startup.
+pub static BUNDLED_NAME_MANIFEST: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// True when the bundled manifest already has a clip for this person under the
+/// same spoken name. Registration then skips the pull: a worker clip would
+/// outrank the bundled one and lose its hand-tuned pronunciation.
+pub fn bundled_clip_covers(manifest_path: &std::path::Path, person_id: &str, full_name: &str) -> bool {
+    std::fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<BundledNameManifest>(&raw).ok())
+        .and_then(|manifest| {
+            manifest.profiles.get(person_id).map(|profile| {
+                spoken_text_for_voice(&profile.display_name).eq_ignore_ascii_case(&spoken_text_for_voice(full_name))
+            })
+        })
+        .unwrap_or(false)
+}
+
 async fn discover_bea_profile(client: &reqwest::Client, host: &str, pin: &str) -> Result<String, String> {
     let mut request = client.get(format!("{host}/profiles"));
     if !pin.is_empty() {
@@ -767,6 +785,27 @@ mod tests {
         std::fs::write(clip_path(&dir, "APG-1"), [0xFFu8; 128]).unwrap();
         assert_eq!(retire_superseded_clips(&db, &dir, &manifest, now).await.unwrap(), 0);
         assert!(clip_path(&dir, "APG-1").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bundled_clip_covers_matches_spoken_name_only() {
+        let dir = std::env::temp_dir().join(format!("alpha-voice-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("bea-name-manifest.json");
+        std::fs::write(
+            &manifest,
+            r#"{"generatedAt":"2026-11-17T00:00:00Z","profiles":{
+                "APG-125":{"displayName":"Kyla Mae B. Sevilla","audioFile":"/voices/bea/names/APG-125.mp3"}}}"#,
+        )
+        .unwrap();
+
+        assert!(bundled_clip_covers(&manifest, "APG-125", "Kyla Mae B. Sevilla"));
+        // A dropped middle initial or other casing says the same name.
+        assert!(bundled_clip_covers(&manifest, "APG-125", "KYLA MAE SEVILLA"));
+        assert!(!bundled_clip_covers(&manifest, "APG-125", "Kyla Sevilla"));
+        assert!(!bundled_clip_covers(&manifest, "APG-126", "Kyla Mae B. Sevilla"));
+        assert!(!bundled_clip_covers(&dir.join("missing.json"), "APG-125", "Kyla Mae B. Sevilla"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
