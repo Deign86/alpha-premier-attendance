@@ -93,6 +93,8 @@ export const CUSTOM_PRONUNCIATION_OVERRIDES: Record<string, string> = {
   'APG-2026-121': 'John Ma-rey Raphael Rodriguez',
   // Filipino "Bar-to-lo-meh"; the v2 voice otherwise says "Bartholomew".
   'APG-2026-123': 'Lord Bar-to-lo-meh',
+  // Spanish "ll": "Se-vil-yah", not "Se-vil-la".
+  'APG-2026-125': 'Kyla Mae Sevilyah',
 };
 
 export function normalizePronunciation(rawName: string, personId?: string): string {
