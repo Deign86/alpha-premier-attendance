@@ -78,7 +78,12 @@ export function calculateInternPayroll(input: InternPayrollInput): InternPayroll
   const payableIn = graceUsed ? start : (lateHours > 0 ? computedTimeIn : (actualTimeIn < start.plus({ minutes: 1 }) ? start : actualTimeIn));
   const { workedHours, isHalfDay, halfDayDeduction: grossShortfall } = computeShiftCore(payableIn, actualTimeOut, actualTimeIn, hourlyRate);
   // payableIn already removes late hours; exclude those hours from undertime to avoid duplicate charging.
-  const remainingHours = Math.max(0, grossShortfall / hourlyRate - lateHours);
+  // From the weekly-grace resume date, undertime is the shortfall after the charged late hours end
+  // (08:01 is charged to 09:00), so the unused part of a late hour hides no early time-out.
+  const lateEnd = start.plus({ hours: lateHours });
+  const remainingHours = hasWeeklyGrace(input.attendanceDate) && isNoGraceDate(input.attendanceDate)
+    ? Math.max(0, 8 - lateHours - computeShiftCore(DateTime.max(payableIn, lateEnd), DateTime.max(actualTimeOut, lateEnd), actualTimeIn, hourlyRate).workedHours)
+    : Math.max(0, grossShortfall / hourlyRate - lateHours);
   const undertimeHours = Math.max(0, Math.ceil(remainingHours - 1e-9));
   const halfDayDeduction = undertimeHours * hourlyRate;
   const totalDailyDeduction = lateDeduction + halfDayDeduction;

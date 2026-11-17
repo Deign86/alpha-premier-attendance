@@ -17,6 +17,7 @@ anywhere else.
 | Quarter-hour clamp | after 08:15:00 payable clock-in rounds up to next full hour | none, actual clock-in is payable | same as V2 | `PolicyRules::quarter_hour_clamp`; DTR display in `build_dtr_row_with_clamp` (`services/dtr_sync.rs`) |
 | Late-hour rounding | floor of clamped hours, minimum 1 | ceil of actual hours from 08:00, minimum 1 | same as V2 | `PolicyRules::late_rounding` |
 | Clock-in must be on `attendanceDate` (Manila) | not enforced | required | required | `PolicyRules::require_same_manila_date` |
+| Undertime with late hours | 8 h minus worked hours minus charged late hours | same as V1 | shortfall after the charged late hours end (08:01 is charged to 09:00), so an unused part of a late hour hides no early time-out | `PolicyRules::undertime_after_late_window` |
 
 Not date-gated (identical in every version): the intern daily rate, arrival at or
 after 12:00 is half-day undertime and never late, 18:00+ time-out caps to 17:00,

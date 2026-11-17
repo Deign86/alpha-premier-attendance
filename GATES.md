@@ -2322,3 +2322,7 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips negative_adjustment && npm test -w client -- payroll.test.tsx intern-payslip-image.test.ts
   EXPECT: mock of the reported slip (10 std days, 5 worked, 400 absent, 10 late, 90 undertime, -10 adjustment, net 290) gives earnings 800, deductions 510, net 290.
   EVIDENCE: Rust intern_payslips 36 passed; client 622 passed; lint, typecheck, npm test exit 0. Rust lib 396 passed / 3 failed (the same 3 Windows-path tests).
+- [x] From 2026-11-16 (V3) undertime is counted from the end of the charged late hours, so a partly missed late hour cannot hide an early time-out; V1/V2 days are unchanged.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml partly_missed_late_hour && npm test -w server -- intern-payroll.test.ts
+  EXPECT: 08:01 in with the claim used: out 15:00, 15:01 and 15:59 all give 1 late hour + 2 undertime hours on 2026-11-17; the same 15:01 day on 2026-11-10 (V2) still gives 1 + 1.
+  EVIDENCE: Rust and TS engines agree on all 10 cases. JS exit 0 (shared 41, client 622, server 294). Rust lib 397 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/71/36/54/24 passed.

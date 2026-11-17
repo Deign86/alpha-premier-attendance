@@ -658,4 +658,26 @@ describe('intern payroll policy', () => {
     expect(day('2026-11-16', '08:15:01', '17:00:00', true)).toMatchObject({ graceUsed: false, lateHours: 1 });
     expect(day('2026-11-16', '08:20:00', '17:00:00', true)).toMatchObject({ computedTimeIn: '2026-11-16T08:20:00+08:00', lateHours: 1 });
   });
+
+  it('from 2026-11-16 a partly missed late hour does not hide undertime', () => {
+    const day = (attendanceDate: string, timeIn: string, timeOut: string) => {
+      const result = calculateInternPayroll({
+        attendanceDate,
+        actualTimeIn: `${attendanceDate}T${timeIn}+08:00`,
+        actualTimeOut: `${attendanceDate}T${timeOut}+08:00`,
+        graceAvailable: false,
+      });
+      return [result.lateDeduction, result.halfDayDeduction, result.dailyPay];
+    };
+    expect(day('2026-11-10', '08:01:00', '15:01:00')).toEqual([10, 10, 60]);
+    expect(day('2026-11-17', '08:01:00', '15:00:00')).toEqual([10, 20, 50]);
+    expect(day('2026-11-17', '08:01:00', '15:01:00')).toEqual([10, 20, 50]);
+    expect(day('2026-11-17', '08:01:00', '15:59:00')).toEqual([10, 20, 50]);
+    expect(day('2026-11-17', '08:01:00', '16:00:00')).toEqual([10, 10, 60]);
+    expect(day('2026-11-17', '08:01:00', '16:59:00')).toEqual([10, 10, 60]);
+    expect(day('2026-11-17', '08:01:00', '17:00:00')).toEqual([10, 0, 70]);
+    expect(day('2026-11-17', '09:01:00', '15:30:00')).toEqual([20, 20, 40]);
+    expect(day('2026-11-17', '08:01:00', '08:30:00')).toEqual([10, 70, 0]);
+    expect(day('2026-11-17', '11:30:00', '11:45:00')).toEqual([40, 40, 0]);
+  });
 });

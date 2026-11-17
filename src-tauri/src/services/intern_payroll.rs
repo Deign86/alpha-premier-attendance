@@ -32,6 +32,9 @@ pub struct PolicyRules {
     pub late_rounding: LateRounding,
     /// Clock-in must fall on `attendanceDate` in Manila time.
     pub require_same_manila_date: bool,
+    /// Undertime is the shortfall after the charged late hours end, so a late
+    /// hour that was only partly missed cannot hide an early time-out.
+    pub undertime_after_late_window: bool,
 }
 
 /// Dated payroll policy versions. Never edit a released version; add a new one
@@ -43,6 +46,7 @@ pub struct PolicyRules {
 /// | quarter-hour clamp         | yes (next full hour after :15) | no (actual clock-in)        | no (actual clock-in)            |
 /// | late-hour rounding         | floored clamped hours, min 1   | ceil actual hours, min 1    | ceil actual hours, min 1        |
 /// | same-Manila-date clock-in  | not enforced                   | required                    | required                        |
+/// | undertime measured from    | 8 h less charged late hours    | 8 h less charged late hours | end of the charged late hours   |
 ///
 /// Not date-gated (both versions): arrival at/after 12:00 is half-day
 /// undertime, never late.
@@ -70,15 +74,18 @@ impl PolicyVersion {
                 quarter_hour_clamp: true,
                 late_rounding: LateRounding::FlooredClampedHours,
                 require_same_manila_date: false,
+                undertime_after_late_window: false,
             },
             Self::V2NoGrace => PolicyRules {
                 weekly_grace_window_minutes: None,
                 quarter_hour_clamp: false,
                 late_rounding: LateRounding::CeilActualHours,
                 require_same_manila_date: true,
+                undertime_after_late_window: false,
             },
             Self::V3WeeklyGrace => PolicyRules {
                 weekly_grace_window_minutes: Some(15),
+                undertime_after_late_window: true,
                 ..Self::V2NoGrace.rules()
             },
         }
@@ -211,7 +218,19 @@ pub fn calculate(
         && (worked_hours <= 4.0 || time_in.hour() >= super::payroll::HALF_DAY_LATE_ARRIVAL_HOUR);
     let unrendered_hours = (8.0 - worked_hours).max(0.0);
     // payable_in already excludes late hours; only the remaining shortfall is undertime.
-    let remaining = (unrendered_hours - late_hours as f64).max(0.0);
+    let remaining = if rules.undertime_after_late_window {
+        // Work owed and work done after the charged late hours end (08:01 is
+        // charged to 09:00): the unused part of a late hour hides no undertime.
+        let late_end = start + chrono::Duration::hours(late_hours);
+        let worked_after_late = crate::services::lunch_break::paid_work_seconds(
+            payable_in.max(late_end),
+            time_out.max(late_end),
+        ) as f64
+            / 3600.0;
+        ((8 - late_hours) as f64 - worked_after_late).max(0.0)
+    } else {
+        (unrendered_hours - late_hours as f64).max(0.0)
+    };
     let undertime_hours = (remaining - 1e-9).ceil() as i64;
     let deduction = undertime_hours * hourly_rate_centavos;
     let daily_pay = base - late_deduction - deduction;
@@ -272,6 +291,7 @@ mod tests {
                     quarter_hour_clamp: true,
                     late_rounding: LateRounding::FlooredClampedHours,
                     require_same_manila_date: false,
+                    undertime_after_late_window: false,
                 },
             ),
             (
@@ -282,6 +302,7 @@ mod tests {
                     quarter_hour_clamp: false,
                     late_rounding: LateRounding::CeilActualHours,
                     require_same_manila_date: true,
+                    undertime_after_late_window: false,
                 },
             ),
             (
@@ -292,6 +313,7 @@ mod tests {
                     quarter_hour_clamp: false,
                     late_rounding: LateRounding::CeilActualHours,
                     require_same_manila_date: true,
+                    undertime_after_late_window: true,
                 },
             ),
         ];
@@ -346,6 +368,36 @@ mod tests {
         let late = day("2026-11-16", "08:20:00", "17:00:00", true);
         assert_eq!(late.computed_time_in, "2026-11-16T08:20:00+08:00");
         assert_eq!(late.late_hours, 1);
+    }
+
+    #[test]
+    fn from_november_16_a_partly_missed_late_hour_does_not_hide_undertime() {
+        // (date, in, out) -> (late, undertime) centavos, weekly claim already used.
+        let day = |date: &str, time_in: &str, time_out: &str| {
+            let result = calculate(
+                date,
+                &format!("{date}T{time_in}+08:00"),
+                &format!("{date}T{time_out}+08:00"),
+                false,
+            )
+            .unwrap();
+            (result.late_deduction_centavos, result.half_day_deduction_centavos, result.daily_pay_centavos)
+        };
+        // V2 (frozen): the 59 unused minutes of the late hour absorb the early time-out.
+        assert_eq!(day("2026-11-10", "08:01:00", "15:01:00"), (1_000, 1_000, 6_000));
+        assert_eq!(day("2026-11-10", "08:01:00", "15:59:00"), (1_000, 1_000, 6_000));
+        // V3: leaving before 16:00 is two short hours whatever the minute.
+        assert_eq!(day("2026-11-17", "08:01:00", "15:00:00"), (1_000, 2_000, 5_000));
+        assert_eq!(day("2026-11-17", "08:01:00", "15:01:00"), (1_000, 2_000, 5_000));
+        assert_eq!(day("2026-11-17", "08:01:00", "15:59:00"), (1_000, 2_000, 5_000));
+        assert_eq!(day("2026-11-17", "08:01:00", "16:00:00"), (1_000, 1_000, 6_000));
+        assert_eq!(day("2026-11-17", "08:01:00", "16:59:00"), (1_000, 1_000, 6_000));
+        assert_eq!(day("2026-11-17", "08:01:00", "17:00:00"), (1_000, 0, 7_000));
+        // Two late hours (09:01), out 15:30: owed 10:00-17:00, two short hours.
+        assert_eq!(day("2026-11-17", "09:01:00", "15:30:00"), (2_000, 2_000, 4_000));
+        // A day's deductions never exceed the daily rate.
+        assert_eq!(day("2026-11-17", "08:01:00", "08:30:00"), (1_000, 7_000, 0));
+        assert_eq!(day("2026-11-17", "11:30:00", "11:45:00"), (4_000, 4_000, 0));
     }
 
     #[test]
