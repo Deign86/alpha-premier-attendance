@@ -129,6 +129,64 @@ async fn check_voicestudio_impl(
     Ok(crate::services::voice_pull::check_connection_to(&host, &pin).await)
 }
 
+/// What Admin → Settings asks of the ID register connection.
+enum RegisterAsk<'a> {
+    Status,
+    SignIn { email: &'a str, password: &'a str },
+    SignOut,
+    Check,
+}
+
+/// Every register command: administrator only, and each answers with where
+/// the connection now stands. A check that fails is not an error here: the
+/// problem is in the status, in plain words.
+async fn id_register_impl(
+    state: &AppState,
+    token: &str,
+    endpoints: Option<&crate::services::id_register::Endpoints>,
+    ask: RegisterAsk<'_>,
+) -> Result<crate::services::id_register::RegisterStatus, String> {
+    use crate::services::id_register;
+    require_admin(state, token).await?;
+    match ask {
+        RegisterAsk::Status => {}
+        RegisterAsk::SignIn { email, password } => {
+            id_register::sign_in(state, endpoints, email, password).await?;
+        }
+        RegisterAsk::SignOut => id_register::sign_out(&state.db).await,
+        RegisterAsk::Check => {
+            let _ = id_register::run_once(state, endpoints).await;
+        }
+    }
+    Ok(id_register::status(&state.db).await)
+}
+
+#[tauri::command]
+async fn id_register_status(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::Status).await
+}
+
+#[tauri::command]
+async fn id_register_sign_in(
+    state: State<'_, AppState>,
+    token: String,
+    email: String,
+    password: String,
+) -> Result<crate::services::id_register::RegisterStatus, String> {
+    let ask = RegisterAsk::SignIn { email: &email, password: &password };
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), ask).await
+}
+
+#[tauri::command]
+async fn id_register_sign_out(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::SignOut).await
+}
+
+#[tauri::command]
+async fn id_register_check(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::Check).await
+}
+
 #[tauri::command]
 async fn voice_clip_states(
     state: State<'_, AppState>,
@@ -343,9 +401,25 @@ fn normalize_name(name: &str) -> String {
     result
 }
 
+/// Who is saving a user. An administrator's save creates or changes; the ID
+/// register only ever adds a person the kiosk does not have yet.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveOrigin {
+    Administrator,
+    IdRegister,
+}
+
 async fn admin_upsert_user_inner(
     state: &AppState,
     user: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    save_user(state, user, SaveOrigin::Administrator).await
+}
+
+pub(crate) async fn save_user(
+    state: &AppState,
+    user: serde_json::Value,
+    origin: SaveOrigin,
 ) -> Result<serde_json::Value, String> {
     let card_type = user
         .get("cardType")
@@ -480,6 +554,15 @@ async fn admin_upsert_user_inner(
             return Err("USER_HOLDS_BATHROOM_KEY".into());
         }
     }
+    // Checked inside the save's own transaction, so a person an administrator
+    // registers at the same moment keeps the card they were just given.
+    if origin == SaveOrigin::IdRegister {
+        let already: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE user_id = ?")
+            .bind(&user_id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+        if already > 0 {
+            return Ok(serde_json::json!({"success":true,"created":false,"userId":&user_id}));
+        }
+    }
     let result = upsert_user_record(
         &mut *tx,
         &user_id,
@@ -506,7 +589,11 @@ async fn admin_upsert_user_inner(
     // The Users sync row commits with the save (O4).
     enqueue_sync_on(state, &mut tx, "Users", &user_id, "UPSERT", &user).await;
     tx.commit().await.map_err(|e| e.to_string())?;
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_UPSERT', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(&user_id).bind("User profile saved by administrator").bind(format!("admin-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
+    let (audit_event, audit_message, audit_prefix) = match origin {
+        SaveOrigin::Administrator => ("ADMIN_USER_UPSERT", "User profile saved by administrator", "admin"),
+        SaveOrigin::IdRegister => ("ID_REGISTER_PULL", "New intern added from the ID register, waiting for a card", "id-register"),
+    };
+    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(audit_event).bind(&user_id).bind(audit_message).bind(format!("{audit_prefix}-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
     // Voice auto-clone: queue a Ma'am Bea name-clip pull for roster members.
     // Fire-and-forget — the worker fills the clip later; Piper covers playback meanwhile.
     // A person the bundle already voices (pre-generated before registering) keeps that clip.
@@ -6494,6 +6581,8 @@ pub fn run() {
                 }
                 // Initial 5-second grace period on cold boot prevents network contention
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let register = crate::services::id_register::built_in();
+                let mut pass: u32 = 0;
                 loop {
                     let endpoint = sync_state.lan.sheets_sync_endpoint.as_deref();
                     match crate::state::sync_guard_try_acquire(
@@ -6542,6 +6631,19 @@ pub fn run() {
                             }
                         }
                     }
+                    // New interns from the ID register, every fourth pass (two minutes).
+                    // Log-only: the problem is also kept for Admin → Settings.
+                    if pass % 4 == 0 {
+                        match crate::services::id_register::run_once(&sync_state, register.as_ref()).await {
+                            Err(error) => log::warn!("id register pass failed: {error}"),
+                            Ok(summary) => {
+                                if !summary.added.is_empty() {
+                                    log::info!("id register added {:?}, waiting for a card", summary.added);
+                                }
+                            }
+                        }
+                    }
+                    pass = pass.wrapping_add(1);
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
@@ -6678,6 +6780,10 @@ pub fn run() {
             get_voicestudio_pin,
             set_voicestudio_pin,
             check_voicestudio,
+            id_register_status,
+            id_register_sign_in,
+            id_register_sign_out,
+            id_register_check,
             voice_clip_states,
             voice_regenerate,
             voice_worker_status,
@@ -9336,6 +9442,38 @@ mod tests {
         state.admin_session.lock().await.as_mut().unwrap().expires_at = std::time::Instant::now();
         assert!(!super::admin_authorized(&state, &token).await);
         assert!(state.admin_session.lock().await.is_none());
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn id_register_commands_need_admin() {
+        use super::RegisterAsk;
+        let (state, temp, token) = admin_test_state("idreg-admin").await;
+        let now = chrono::Utc::now().to_rfc3339();
+        crate::services::voice_pull::store_setting(&state.db, "id_register_refresh_token", "refresh-1", &now).await.unwrap();
+        crate::services::voice_pull::store_setting(&state.db, "id_register_email", "kiosk@example.test", &now).await.unwrap();
+        let asks = || [
+            RegisterAsk::Status,
+            RegisterAsk::SignIn { email: "kiosk@example.test", password: "anything" },
+            RegisterAsk::Check,
+            RegisterAsk::SignOut,
+        ];
+        for ask in asks() {
+            let refused = super::id_register_impl(&state, "wrong-token", None, ask).await;
+            assert_eq!(refused.unwrap_err(), "ADMIN_AUTH_REQUIRED");
+        }
+        let kept: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'id_register_refresh_token'")
+            .fetch_optional(&state.db).await.unwrap();
+        assert_eq!(kept.as_deref(), Some("refresh-1"), "a refused sign-out leaves the sign-in");
+
+        // With the administrator's session each answers with where the connection stands.
+        let status = super::id_register_impl(&state, &token, None, RegisterAsk::Status).await.unwrap();
+        assert_eq!(status.signed_in_as.as_deref(), Some("kiosk@example.test"));
+        let no_register = super::id_register_impl(&state, &token, None, RegisterAsk::SignIn { email: "kiosk@example.test", password: "anything" }).await;
+        assert!(no_register.unwrap_err().contains("not built into"));
+        let out = super::id_register_impl(&state, &token, None, RegisterAsk::SignOut).await.unwrap();
+        assert_eq!(out.signed_in_as, None);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

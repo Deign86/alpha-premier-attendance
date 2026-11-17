@@ -14,7 +14,7 @@ This is the UI layer for the attendance kiosk, live attendance viewer, administr
 2. RFID arrives via the keyboard-wedge handler or `listenForGlobalRfid`; `App` normalizes/deduplicates and guards the UID, then sends attendance or bathroom scans through `submitScan` / `submitBathroomScan` in `api.ts`.
 3. The facade chooses Tauri commands (`tauri-api.ts`) or browser HTTP (`network.ts`); failed offline attendance posts enter `enqueueOfflineScan`, and `App` retries/removes queued records when connectivity returns.
 4. Typed success/error results update React state; kiosk screens render the outcome and announce via `services/ttsService.ts`. Config/setup/admin, attendance, payroll, database, DTR, and bathroom panel actions similarly pass through the API facade.
-5. `UpdateBanner` checks/installs updates through `services/updateService.ts`; panels such as `VoiceSettingsPanel` and `GeneratedFileActions` delegate settings/audio or OS file actions to the service/API layer.
+5. `UpdateBanner` checks/installs updates through `services/updateService.ts`; panels such as `VoiceSettingsPanel`, `IdRegisterPanel` (System: the kiosk's ID register sign-in) and `GeneratedFileActions` delegate settings/audio or OS file actions to the service/API layer.
 
 ## Integration
 - Consumed by: `client/index.html` via `src/main.tsx`; Tauri desktop webview and Vite browser development.

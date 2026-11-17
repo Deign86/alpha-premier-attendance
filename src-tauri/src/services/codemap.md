@@ -11,7 +11,7 @@
 ## Flow
 - `services::scanner` reads keyboard-wedge/HID input, normalizes UID against `ScannerConfig`, and emits `rfid-scan`; `lib.rs` receives scans, validates identity/status, persists attendance, then publishes live events and sync queue work.
 - Payroll commands call intern/employee and cutoff calculators using attendance, holidays, office-hour, and lunch-break rules, then persist calculated cutoff/payroll results.
-- Background startup loop calls Sheets sync, scheduled DTR reconciliation, and `voice_pull::run_once`; DTR commands also process pending rows and dispatch spreadsheet batch writes with throttling/retry.
+- Background startup loop calls Sheets sync, scheduled DTR reconciliation, `voice_pull::run_once` and, every fourth pass, `id_register::run_once` (new interns from the ID register, added waiting for a card; see `docs/id-register.md`); DTR commands also process pending rows and dispatch spreadsheet batch writes with throttling/retry.
 
 ## Integration
 - `lib.rs` Tauri commands invoke admin, payroll, scanner, DTR, recon, Sheets, and voice service APIs; `AppState` provides SQLite and long-lived worker coordination.

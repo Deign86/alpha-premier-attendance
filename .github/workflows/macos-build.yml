@@ -45,6 +45,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
           ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+          # Baked in via option_env! for new interns from the ID register (services/id_register.rs).
+          ALPHA_PREMIER_FIREBASE_PROJECT_ID: ${{ secrets.ALPHA_PREMIER_FIREBASE_PROJECT_ID }}
+          ALPHA_PREMIER_FIREBASE_API_KEY: ${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}
         shell: bash
         run: |
           set -o pipefail
