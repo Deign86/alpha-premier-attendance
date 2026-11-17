@@ -82,6 +82,18 @@ Exceptions: explain fully when asked to explain. Confirm before destructive acti
 ### Verification Workflow
 Run the narrowest relevant checks first, followed by required repository gates. Review the diff for dead code, unrequested complexity, type assertions without safety comments, and unnecessary dependencies.
 
+#### Verification practices (every change)
+1. **Run the real thing where you can.** Use the `verify-alpha-premier-attendance` skill before committing a behavior change. Its `features/` files are the rubric (`features/payroll-rules.md` for pay). On a machine without the desktop app, run the "Without the desktop app" tests it lists and say the app itself was not run.
+2. **End-to-end first.** Prefer one test that goes through the real path (attendance -> payroll row -> cutoff -> payslip) over several unit tests of the pieces.
+3. **Property and differential tests guard the payroll engine.** `property_*` and `differential_*` in `src-tauri/src/services/intern_payroll.rs` price 20,000 generated days each. A new pay rule adds or updates a property; a new policy version adds a differential against the previous one with its approved differences listed.
+4. **Cheap checks before every push.** `npm run lint:oxlint`, `npm run typecheck`, `npm test`, and the Rust tests for what you touched. The Stop hook in `.claude/settings.json` (`npm run verify:changed`) runs the matching ones on uncommitted files and blocks the stop when they fail.
+5. **No flaky tests.** Never add a skip, sleep or retry to get green. Find the cause; if it cannot be found, delete the test and record why in the pull request.
+6. **Three rounds, then a person.** If a check still fails after three fix attempts, stop and report what was tried and which assumption is in doubt.
+7. **Stamp how it was verified.** Every commit message ends its body with a `Verified:` line naming what ran (for example `Verified: oxlint, typecheck, npm test, cargo payroll suites; app not run`), or `Verified: none` with the reason. Pull requests keep the `### Verified` section.
+8. **Review against `REVIEW.md`.** Read it from `main`, check only the rows its diff triggers match, and tag findings Important, Nit or Pre-existing. A change never edits a check to make itself pass.
+9. **Turn a miss into a rule.** When a bug reaches `main`, add the test that would have caught it and, if a diff could have shown it, a row in `REVIEW.md`.
+10. **Prune.** When adding a rule, gate or test, look for one it replaces and remove it.
+
 ### Agent Response Format
 Keep responses concise unless detail is requested:
 

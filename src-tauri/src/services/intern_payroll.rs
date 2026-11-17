@@ -531,6 +531,122 @@ mod tests {
         assert!(arrival("2026-11-16", "not-a-time", true).is_none());
     }
 
+    /// Deterministic input generator for the property tests (xorshift64*; no new dependency).
+    struct Sampler(u64);
+
+    impl Sampler {
+        fn below(&mut self, bound: u64) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) % bound
+        }
+
+        /// A day between 2026-09-01 and 2026-12-31 (all three policy versions),
+        /// a clock-in from 06:00:00 to 17:29:59 and a clock-out at or after it, up to 20:59:59.
+        fn day(&mut self) -> (String, u64, u64) {
+            let date = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap() + chrono::Duration::days(self.below(122) as i64);
+            let time_in = 6 * 3600 + self.below(11 * 3600 + 1800);
+            let time_out = time_in + self.below(21 * 3600 - time_in);
+            (date.to_string(), time_in, time_out)
+        }
+    }
+
+    fn stamp(date: &str, seconds: u64) -> String {
+        format!("{date}T{:02}:{:02}:{:02}+08:00", seconds / 3600, seconds / 60 % 60, seconds % 60)
+    }
+
+    fn price(date: &str, time_in: u64, time_out: u64, grace_available: bool) -> Option<InternPayrollResult> {
+        calculate(date, &stamp(date, time_in), &stamp(date, time_out), grace_available).ok()
+    }
+
+    /// PROPERTY: for any day, the deductions are whole hours, never exceed the
+    /// daily rate, add up to the pay, and the grace and arrival status agree
+    /// with the price.
+    #[test]
+    fn property_any_day_prices_within_the_daily_rate_and_matches_its_arrival_status() {
+        let mut sampler = Sampler(0x5EED_2026);
+        let mut priced = 0;
+        for _ in 0..20_000 {
+            let (date, time_in, time_out) = sampler.day();
+            let grace_available = sampler.below(2) == 0;
+            let Some(result) = price(&date, time_in, time_out, grace_available) else { continue };
+            priced += 1;
+            let context = format!("{date} {} -> {} grace_available={grace_available}", stamp(&date, time_in), stamp(&date, time_out));
+            let (late, undertime) = (result.late_deduction_centavos, result.half_day_deduction_centavos);
+            assert_eq!(late, result.late_hours * 1_000, "{context}");
+            assert_eq!(undertime % 1_000, 0, "{context}");
+            assert!(late >= 0 && undertime >= 0 && late + undertime <= 8_000, "{context}");
+            assert_eq!(result.daily_pay_centavos, 8_000 - late - undertime, "{context}");
+            if result.grace_used {
+                assert!(grace_available && late == 0, "{context}");
+                assert!((8 * 3600 + 60..=8 * 3600 + 900).contains(&time_in), "{context}");
+                assert!(policy_for_date(&date).rules().weekly_grace_window_minutes.is_some(), "{context}");
+            }
+            let status = arrival(&date, &stamp(&date, time_in), grace_available).unwrap().status;
+            assert_eq!(status == ArrivalStatus::GracePeriod, result.grace_used, "{context}");
+            match status {
+                ArrivalStatus::OnTime | ArrivalStatus::GracePeriod => assert_eq!(late, 0, "{context}"),
+                // An afternoon arrival is late on the clock but priced as half-day undertime.
+                ArrivalStatus::Late => assert!(late > 0 || time_in >= 12 * 3600, "{context}"),
+            }
+        }
+        assert!(priced > 15_000, "only {priced} of 20000 samples priced");
+    }
+
+    /// PROPERTY: staying longer or arriving earlier never lowers the day's pay.
+    #[test]
+    fn property_more_time_at_work_never_pays_less() {
+        let mut sampler = Sampler(0xA77E_4DA4CE);
+        for _ in 0..20_000 {
+            let (date, time_in, time_out) = sampler.day();
+            let grace_available = sampler.below(2) == 0;
+            let Some(base) = price(&date, time_in, time_out, grace_available) else { continue };
+            let context = format!("{date} {} -> {} grace_available={grace_available}", stamp(&date, time_in), stamp(&date, time_out));
+            let later_out = time_out + sampler.below(21 * 3600 - time_out);
+            // KNOWN RULE, frozen in every released version: a time-out from 17:00:00
+            // to 17:59:59 counts as worked, while 18:00:00 or later is capped back to
+            // 17:00. Crossing 18:00 can therefore pay less; that one step is excluded.
+            let crosses_the_cap = (17 * 3600..18 * 3600).contains(&time_out) && later_out >= 18 * 3600;
+            if crosses_the_cap {
+                continue;
+            }
+            if let Some(longer) = price(&date, time_in, later_out, grace_available) {
+                assert!(longer.daily_pay_centavos >= base.daily_pay_centavos, "later out {} / {context}", stamp(&date, later_out));
+            }
+            // The pre-October quarter-hour clamp is a frozen rule that is not monotonic; skip those days.
+            if policy_for_date(&date).rules().quarter_hour_clamp {
+                continue;
+            }
+            let earlier_in = time_in - sampler.below(time_in - 6 * 3600 + 1);
+            if let Some(earlier) = price(&date, earlier_in, time_out, grace_available) {
+                assert!(earlier.daily_pay_centavos >= base.daily_pay_centavos, "earlier in {} / {context}", stamp(&date, earlier_in));
+            }
+        }
+    }
+
+    /// DIFFERENTIAL: with no grace claim, a V3 day prices exactly like the same
+    /// clock times under V2, except for the one approved change: when late
+    /// hours were charged, undertime may be one hour more (never less).
+    #[test]
+    fn differential_v3_matches_v2_except_undertime_after_the_late_window() {
+        let mut sampler = Sampler(0xD1FF_E4E7);
+        let (v2_date, v3_date) = ("2026-11-10", "2026-11-17");
+        let mut changed = 0;
+        for _ in 0..20_000 {
+            let (_, time_in, time_out) = sampler.day();
+            let (Some(v2), Some(v3)) = (price(v2_date, time_in, time_out, false), price(v3_date, time_in, time_out, false)) else {
+                continue;
+            };
+            let context = format!("{} -> {}", stamp(v3_date, time_in), stamp(v3_date, time_out));
+            assert_eq!((v3.late_hours, v3.is_half_day), (v2.late_hours, v2.is_half_day), "{context}");
+            let extra = v3.half_day_deduction_centavos - v2.half_day_deduction_centavos;
+            assert!(extra == 0 || (extra == 1_000 && v3.late_hours > 0), "undertime changed by {extra}: {context}");
+            changed += i64::from(extra != 0);
+        }
+        assert!(changed > 0, "the approved difference never occurred in the sample");
+    }
+
     #[test]
     fn explain_day_lists_the_weekly_grace_and_the_stored_amounts() {
         let day = PricedDay {
