@@ -5,7 +5,6 @@ import { countWorkdays, getManilaWeekStart, INTERN_DAILY_RATE_PHP, INTERN_LATE_D
 import { normalizeRfidUid } from './rfid.js';
 import { manilaDate, manilaTimestamp } from './time.js';
 import type { GoogleSheetsService, SheetAttendance, SheetPayrollCutoff, SheetUser } from './sheets.js';
-import { PayrollService } from './payroll.js';
 import { calculateCutoffPayroll, defaultPayrollProfiles, type CutoffInput } from './cutoff-payroll.js';
 import { resolveAdminAuth } from './config.js';
 import { executePush, planPush, type AttendanceDay, type DtrSyncUser, type SheetsClient } from './intern-dtr-sync.js';
@@ -24,7 +23,6 @@ export class AdminService {
   constructor(
     private readonly sheets: GoogleSheetsService,
     private readonly config: AdminConfig,
-    private readonly payroll = new PayrollService(sheets),
     private readonly dtr: { client: SheetsClient; users: DtrSyncUser[] } | null = null,
   ) {}
 
@@ -204,7 +202,6 @@ export class AdminService {
     try {
       const saved = await this.sheets.updateAttendance(updated, { timeIn: value.expectedTimeIn ?? null, timeOut: value.expectedTimeOut ?? null });
       const user = await this.sheets.findUserById(row.userId);
-      if (saved.status === 'COMPLETED' && saved.timeOut && user) await this.payroll.ensureForCompletedAttendance(saved, user);
       if (saved.status !== 'COMPLETED') await this.sheets.deletePayrollByAttendanceId(saved.attendanceId);
       if (user) await this.pushDtrForIntern(saved, user);
       await this.sheets.writeAudit({ eventType: 'ADMIN_ATTENDANCE_UPDATED', userId: row.userId, message: `Attendance ${attendanceId} corrected by administrator`, requestId: `admin-${crypto.randomUUID()}` }).catch(() => undefined);
@@ -265,9 +262,6 @@ export class AdminService {
 
     try {
       const saved = await this.sheets.createAttendance(newAttendance);
-      if (saved.status === 'COMPLETED' && saved.timeOut) {
-        await this.payroll.ensureForCompletedAttendance(saved, user);
-      }
       await this.pushDtrForIntern(saved, user);
       await this.sheets.writeAudit({
         eventType: 'ADMIN_BACKDATED_ATTENDANCE',

@@ -2336,3 +2336,7 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EXPECT: all payroll fixtures and snapshots unchanged and green.
   EVIDENCE: JS exit 0 (shared 41, client 624, server 294). Rust lib 398 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/72/36/55/24 passed. No fixture or snapshot changed.
+- [x] The legacy TypeScript daily payroll engine is removed (`server/src/intern-payroll.ts`, `server/src/payroll.ts`, their tests and snapshot); the legacy server records attendance without pricing days.
+  CHECK: npm run lint && npm run typecheck && npm test
+  EXPECT: no import of the removed files remains; DTR-row assertions from the removed mixed tests are kept as DTR-only tests.
+  EVIDENCE: JS exit 0 (shared 41, client 624, server 208; the server count dropped by the removed engine's own tests). Rust is unchanged by this step.

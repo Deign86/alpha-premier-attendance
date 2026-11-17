@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DateTime } from 'luxon';
 import { lunchBreakExcludedSeconds, paidWorkHours, paidWorkSeconds } from '../src/lunch-break.js';
-import { calculateInternPayroll } from '../src/intern-payroll.js';
 
 const timezone = 'Asia/Manila';
 function at(hour: number, minute: number, day = 1): DateTime {
@@ -59,23 +58,5 @@ describe('lunch break exclusion (12:00–13:00 Manila)', () => {
   it('clamps inverted or zero intervals at zero paid time', () => {
     expect(paidWorkSeconds(at(17, 0), at(9, 0))).toBe(0);
     expect(paidWorkSeconds(at(9, 0), at(9, 0))).toBe(0);
-  });
-});
-
-describe('intern payroll calculates hours 1:1 from DTR', () => {
-  it('reports 8 payable hours for a 08:00–17:00 shift while keeping PHP 80/day', () => {
-    const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T08:00:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: true });
-    expect(result.workedHours).toBe(8);
-    expect(result.basePay).toBe(80);
-    expect(result.dailyPay).toBe(80);
-  });
-
-  it('clamps a 09:30 late arrival to 10:00 and charges two late hours', () => {
-    const result = calculateInternPayroll({ attendanceDate: '2026-08-01', actualTimeIn: '2026-08-01T09:30:00+08:00', actualTimeOut: '2026-08-01T17:00:00+08:00', graceAvailable: false });
-    expect(result.computedTimeIn).toBe('2026-08-01T10:00:00+08:00');
-    expect(result.lateHours).toBe(2);
-    expect(result.lateDeduction).toBe(20);
-    expect(result.workedHours).toBe(6);
-    expect(result.dailyPay).toBe(60);
   });
 });

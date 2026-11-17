@@ -14,7 +14,7 @@ RFID attendance desktop kiosk (Tauri v2 + React 18 + Rust + Express + Google She
 1. RFID keyboard-wedge UID → `App.tsx` normalize/dedupe → `api.ts` facade → Tauri `invoke` (`tauri-api.ts`) or HTTP (`network.ts`, offline queue in localStorage).
 2. Desktop: `lib.rs` command → `services::scanner` normalize → SQLite attendance row → event bus → Sheets/DTR sync workers, TTS job, LAN SSE push.
 3. Server: `POST /api/attendance/scan` → `AttendanceService.scan` → per-user `mutex` → Sheets row find/create/update → `PayrollService` on completion → audit.
-4. Payroll: per-attendance engines (`payroll.ts` → intern/employee) + cutoff assembly (`admin.ts` + `cutoff-payroll.ts`); intern DTR CLI (`sync-intern-dtr.ts`) plans `planPush` then `executePush` to intern workbook.
+4. Payroll: day pricing lives only in the Rust engine (`src-tauri/src/services/intern_payroll.rs`); the legacy server keeps cutoff assembly (`admin.ts` + `cutoff-payroll.ts`); intern DTR CLI (`sync-intern-dtr.ts`) plans `planPush` then `executePush` to intern workbook.
 5. Exports/voice: `reporting/` loaders → XLSX/PDF writers; `tts/` manager (local engines + VoiceStudio clips) → playback + IPC status.
 
 ## Directory Map (Aggregated)

@@ -21,11 +21,12 @@ anything about a day's pay. Everything else reads its output:
 | Was it a half-day? | `calculate` (`is_half_day`) | cutoff generation counts the stored flag |
 
 `src-tauri/src/lib.rs` only does the database work around it: the weekly
-claim row in `intern_grace` and the cutoff totals. The TypeScript helpers in
-`shared/src/api-contracts.ts` and `server/src/intern-payroll.ts` serve the
-legacy web API, which is not shipped; the desktop UI uses them only when a row
-carries no engine status. When a rule changes, change it in the Rust module and
-nowhere else in the desktop app.
+claim row in `intern_grace` and the cutoff totals. There is no TypeScript
+payroll engine: the legacy Node server (`server/`, not shipped) records
+attendance but does not price days. The arrival helpers in
+`shared/src/api-contracts.ts` only label rows that carry no engine status
+(legacy web API) and the pre-October clamp display. When a rule changes, change
+it in the Rust module and nowhere else.
 
 ## Rule catalog
 

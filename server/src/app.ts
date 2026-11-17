@@ -68,7 +68,7 @@ export function createApp(options: CreateAppOptions): express.Express {
   const attendance = new AttendanceService(options.sheets, options.config);
   const setup = new SetupService(options.sheets, options.config);
   const dtrClient = createInternDtrClient(options);
-  const admin = new AdminService(options.sheets, options.config, undefined, dtrClient ? { client: dtrClient, users: [] } : null);
+  const admin = new AdminService(options.sheets, options.config, dtrClient ? { client: dtrClient, users: [] } : null);
 
   app.disable('x-powered-by');
   app.use(helmet());

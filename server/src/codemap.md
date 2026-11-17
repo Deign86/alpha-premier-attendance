@@ -7,8 +7,8 @@
 - `app.ts` is the HTTP boundary; `attendance.ts`, `setup.ts`, and `admin.ts` own application rules and translate invalid states into domain errors.
 - `sheets.ts` defines `GoogleSheetsService`, row contracts, in-memory indexed storage, and a Google Sheets adapter that validates/reconciles headers and performs row-level writes.
 - RFID identity and Manila time are normalized in `rfid.ts` and `time.ts`; `mutex.ts` serializes attendance by user and intern weekly-grace claims by user/week.
-- LEGACY: the TypeScript payroll engine in this folder (`payroll.ts`, `intern-payroll.ts`, `cutoff-payroll.ts`, `lunch-break.ts`) is retained only for the legacy Node server. The Rust engine in `src-tauri/src/services/` is the single source of truth and owns `shared/payroll-fixtures.json`; do not treat this copy as a parity oracle.
-- Per-attendance payroll (`payroll.ts`) dispatches to intern/employee engines; cutoff payroll is assembled in `admin.ts` and calculated by `cutoff-payroll.ts`.
+- There is no daily payroll engine here: `intern-payroll.ts` and `payroll.ts` were removed. Day pricing (grace, late, undertime) lives only in the Rust module `src-tauri/src/services/intern_payroll.rs`. `cutoff-payroll.ts` (cutoff arithmetic for the legacy admin API) and `lunch-break.ts` (DTR time helpers) remain.
+- Cutoff payroll is assembled in `admin.ts` and calculated by `cutoff-payroll.ts`; completed attendance no longer creates a daily payroll row in this server.
 
 ## Flow
 - Startup: `index.ts` → `loadConfig()` → `createServiceFromEnv()` → `createApp()` → `listen()`; Google mode ensures spreadsheet tabs before binding.

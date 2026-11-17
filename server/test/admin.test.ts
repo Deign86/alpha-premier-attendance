@@ -161,7 +161,6 @@ describe('admin and live attendance API', () => {
     // Re-entering the official 17:00 time-out completes the shift normally.
     await agent.patch('/api/admin/attendance/att-1').send({ attendanceDate: '2026-07-29', timeIn: '2026-07-29T08:00:00+08:00', timeOut: '2026-07-29T17:00:00+08:00', expectedTimeIn: '2026-07-29T08:00:00+08:00', expectedTimeOut: '2026-07-29T18:55:00+08:00' }).expect(200);
     expect((await request(app).get('/api/attendance?date=2026-07-29')).body.attendance[0].status).toBe('COMPLETED');
-    expect(await sheets.findPayrollByAttendanceId('att-1')).not.toBeNull();
   });
 
   it('allows removing time-out and time-in values in attendance corrections', async () => {
@@ -389,7 +388,7 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
     const valuesByTab: Record<string, string[][]> = {
       'ROQUE RAMIL': dtrRowsFor(['2026-09-01', '2026-09-03', '2026-09-10']),
     };
-    const svc = new AdminService(sheets, adminConfig, undefined, {
+    const svc = new AdminService(sheets, adminConfig, {
       client: makeDtrClient(valuesByTab),
       users: [INTERN],
     });
@@ -446,7 +445,7 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
     const valuesByTab: Record<string, string[][]> = {
       'ROQUE RAMIL': dtrRowsFor(['2026-09-01', '2026-09-03']),
     };
-    const svc = new AdminService(sheets, adminConfig, undefined, {
+    const svc = new AdminService(sheets, adminConfig, {
       client: makeDtrClient(valuesByTab),
       users: [INTERN],
     });
@@ -466,7 +465,7 @@ describe('admin backdate/correction DTR wiring (grace-exhausted clamping)', () =
       { userId: 'APGCO-0013', fullName: 'CASTILLO, GRACE ANN', rfidUid: 'AABB', department: null, active: true, employeeType: 'EMPLOYEE', dailyRate: 705 },
     ]);
     const valuesByTab: Record<string, string[][]> = { 'CASTILLO JEAN': dtrRowsFor(['2026-09-03']) };
-    const svc = new AdminService(sheets, adminConfig, undefined, {
+    const svc = new AdminService(sheets, adminConfig, {
       client: makeDtrClient(valuesByTab),
       users: [{ userId: 'APGCO-0013', fullName: 'CASTILLO, GRACE ANN' }],
     });
