@@ -2354,3 +2354,10 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
 - [x] `REVIEW.md` (diff-triggered checklist, read from the base branch), a payroll rubric in the verify skill, and the working rules in `AGENTS.md` exist.
   CHECK: npm run lint && npm run typecheck && npm test && cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1
   EVIDENCE: JS exit 0 (shared 41, client 624, server 208). Rust lib 401 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/75/36/58/24 passed.
+
+## Mock first cutoff under the weekly-grace rules (owner request, 2026-11-17)
+
+- [x] A full Dec 1-15, 2026 cutoff for nine mock interns (grace twice a week, early time-outs, half-days, absences, a week straddling the cutoff, a correction, days priced out of order, second-level boundaries, a zero-pay floor) matches hand-computed pay.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib mock_first_cutoff
+  EXPECT: every intern's late, half-day + undertime, absence and net match; earnings stay 11 x D; Breakdown lines sum to the deductions with no balancing line; at most one grace claim per week; regenerating changes nothing.
+  EVIDENCE: passed on the first run against the hand-computed figures (1 passed). Full Rust on Linux: lib 402 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/75/36/58/24 passed.
