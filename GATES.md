@@ -2340,3 +2340,35 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: npm run lint && npm run typecheck && npm test
   EXPECT: no import of the removed files remains; DTR-row assertions from the removed mixed tests are kept as DTR-only tests.
   EVIDENCE: JS exit 0 (shared 41, client 624, server 208; the server count dropped by the removed engine's own tests). Rust is unchanged by this step.
+
+## New interns arrive from the ID register (owner request, 2026-11-17)
+
+The ID Maker records each issued card in the shared register (Keystone's Firebase project, `keystone/apg/idreg/{number}`, with `kind` = `intern` or `employee`). The kiosk reads that register with its own register-only account and adds each new intern as a user waiting for a card. No migration: sign-in and progress live in the existing `app_settings` table; a waiting user's `rfid_uid` is `PENDING-<user id>`, which no reader can produce (scans are hex only).
+
+- [ ] A new intern in the register becomes an ACTIVE intern user named by their ID number, waiting for a card; employees and cards with no `kind` are left out.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: against a loopback register with one intern, one employee and one card with no kind, a pull adds exactly the intern with `rfid_uid` = `PENDING-<number>`, queues its Users sync row and writes an `ID_REGISTER_PULL` audit line.
+- [ ] A pull never changes a person the kiosk already has, and never brings back a person an administrator deleted.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: a user who already has a real card keeps it after a pull; a pulled user deleted by an administrator stays deleted on the next pull, also after the register grows.
+- [ ] The register is only read in full when it has grown: an unchanged count costs one count request and no list.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: the loopback register records one sign-in refresh and one count per unchanged pass and no list request; a new intern triggers one list.
+- [ ] Sign-in keeps no password: only the refresh token and the account's email are stored; a refused refresh token signs the kiosk out and says so; a register the account may not read says so and keeps the sign-in; an unreachable register changes nothing and is retried.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: after sign-in `app_settings` holds no value equal to the password; a 400 on refresh clears the token and reports "sign in again"; a 403 on the count reports the account may not read the register; a dead port reports unreachable and leaves the token.
+- [ ] The register commands need the administrator session, like the VoiceStudio ones.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register_commands_need_admin
+  EXPECT: status, sign-in, sign-out and check-now with a wrong token return `ADMIN_AUTH_REQUIRED` and change nothing.
+- [ ] A waiting user can be given a card in Admin → Users: the list says "Waiting for a card", and editing opens with the RFID field empty and ready for the tap; saving binds the card to the same user.
+  CHECK: npm test -w client -- App.test.tsx id-register-panel.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: the list shows the badge instead of the placeholder; the editor's RFID field is empty for a waiting user; saving a real UID for the pulled user keeps one row with that UID, and a scan of it records time-in.
+- [ ] Admin → Settings shows the ID register connection: who is signed in, when it last checked, how many are waiting for a card, and any problem in plain words; sign in, sign out, check now.
+  CHECK: npm test -w client -- id-register-panel.test.tsx
+  EXPECT: the panel renders each state (not built in, signed out, signed in, problem) and calls the matching command.
+- [ ] A build with no register project baked in does nothing and says so; the release workflow fails when either secret is missing.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register && grep -n "ALPHA_PREMIER_FIREBASE" .github/workflows/release.yml
+  EXPECT: with no project, a pass makes no request and status says the register is not built into this copy; `release.yml` checks and passes both secrets.
+- [ ] Everything else still passes.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: no existing fixture, snapshot or expectation changes.
