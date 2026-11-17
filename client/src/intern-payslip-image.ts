@@ -58,7 +58,7 @@ const GRID_VALUE_GAP = 24;
 const LEDGER_TOP = GRID_TOP + GRID_ROWS * GRID_ROW_HEIGHT + 32;
 const LEDGER_HEADER_HEIGHT = 40;
 /** Fixed by the HR template: both tables always show nine aligned rows. */
-const LEDGER_ROWS = 9;
+const LEDGER_ROWS = 10;
 const LEDGER_ROW_HEIGHT = 34;
 const LEDGER_TOTAL_HEIGHT = 44;
 const LEDGER_TOTAL_TOP = LEDGER_TOP + LEDGER_HEADER_HEIGHT + LEDGER_ROWS * LEDGER_ROW_HEIGHT;
@@ -261,6 +261,7 @@ function earningsLines(payslip: InternPayslip): LedgerLine[] {
     line("Special Holiday", DASH),
     line("Overtime Pay", DASH),
     payslip.adjustmentCentavos === 0 ? line("", "") : line("Adjustment", formatPayslipAmount(payslip.adjustmentCentavos)),
+    line("", ""),
   ];
 }
 
@@ -276,6 +277,7 @@ function deductionLines(payslip: InternPayslip): LedgerLine[] {
     line("Late", formatPayslipAmount(payslip.lateCentavos)),
     line("Halfday", formatPayslipAmount(payslip.halfdayCentavos)),
     line("Undertime", formatPayslipAmount(payslip.undertimeCentavos)),
+    payslip.deductionAdjustmentCentavos === 0 ? line("", "") : line("Adjustment", formatPayslipAmount(payslip.deductionAdjustmentCentavos)),
   ];
 }
 

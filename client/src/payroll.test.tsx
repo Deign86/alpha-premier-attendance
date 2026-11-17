@@ -449,6 +449,22 @@ describe("PayrollWorkspace", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Finalized 1 of 2 payroll record(s). 1 could not be finalized.");
   });
 
+  it("shows a negative manual adjustment under deductions and keeps total earnings whole", () => {
+    // The payslip case: 10 standard days, 5 worked, PHP 10 late, PHP 90 undertime, -PHP 10 adjustment, net PHP 290.
+    renderWorkspace([internRecord({
+      actualWorkingDays: 5, absentDays: 5, absenceDeduction: 400, lateUnits: 1, lateDeduction: 10,
+      halfDayDeduction: 90, totalDeductions: 500, manualAdjustment: -10, adjustmentReason: "special case",
+      grossCompensation: 790, netPay: 290,
+    })]);
+    fireEvent.click(screen.getByRole("button", { name: "Breakdown" }));
+    const dialog = screen.getByRole("dialog");
+    const field = (label: string) => within(dialog).getByText(label, { selector: "dt" }).nextElementSibling?.textContent;
+    expect(field("Total earnings")).toBe("PHP 800.00");
+    expect(field("Adjustment")).toBe("PHP 10.00");
+    expect(field("Total deductions")).toBe("PHP 510.00");
+    expect(dialog.querySelector(".payroll-breakdown-formula")?.textContent).toContain("Net Pay: PHP 800.00 - PHP 510.00 = PHP 290.00");
+  });
+
   it("shows the intern payroll PDF and payslip actions and no print/export actions", () => {
     renderWorkspace([record()]);
     expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();

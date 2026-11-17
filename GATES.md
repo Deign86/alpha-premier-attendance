@@ -2318,3 +2318,7 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EXPECT: frozen V1/V2 guard, golden fixtures and snapshot suites unchanged and green; new V3 boundary tests green in Rust and TS.
   EVIDENCE: JS exit 0 (shared 41, client 621, server 293). Rust on Linux: lib 396 passed / 3 failed (the same 3 Windows-path tests in config.rs and paths.rs); integration suites 11/18/70/35/53/24 passed. No existing fixture, snapshot or expectation needed a change.
+- [x] A negative balancing amount (e.g. a negative manual adjustment) shows under deductions on the payslip image, the payroll table, the Breakdown and the Edit dialog; Total Earnings is never reduced and net pay is unchanged.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --test intern_payslips negative_adjustment && npm test -w client -- payroll.test.tsx intern-payslip-image.test.ts
+  EXPECT: mock of the reported slip (10 std days, 5 worked, 400 absent, 10 late, 90 undertime, -10 adjustment, net 290) gives earnings 800, deductions 510, net 290.
+  EVIDENCE: Rust intern_payslips 36 passed; client 622 passed; lint, typecheck, npm test exit 0. Rust lib 396 passed / 3 failed (the same 3 Windows-path tests).

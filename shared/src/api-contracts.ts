@@ -695,13 +695,15 @@ export type InternPayslip = {
   basicCentavos: number;
   /** Standard working days x daily rate. */
   grossSalaryCentavos: number;
-  /** Balances Total Earnings - Total Deductions to the stored net pay (manual adjustments, approved extra days). */
+  /** Positive balance to the stored net pay (positive manual adjustments, approved extra days); never negative. */
   adjustmentCentavos: number;
   totalEarningsCentavos: number;
   absentCentavos: number;
   lateCentavos: number;
   halfdayCentavos: number;
   undertimeCentavos: number;
+  /** A negative balance to the stored net pay (e.g. a negative manual adjustment), as a positive deduction. */
+  deductionAdjustmentCentavos: number;
   totalDeductionsCentavos: number;
   netPayCentavos: number;
 };

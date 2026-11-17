@@ -1136,6 +1136,8 @@ pub struct InternPayslip {
     pub late_centavos: i64,
     pub halfday_centavos: i64,
     pub undertime_centavos: i64,
+    /// A negative balancing amount (e.g. a negative manual adjustment), as a positive deduction.
+    pub deduction_adjustment_centavos: i64,
     pub total_deductions_centavos: i64,
     pub net_pay_centavos: i64,
 }
@@ -1143,8 +1145,10 @@ pub struct InternPayslip {
 /// Loads one payslip per intern for the cutoff. Every amount comes from
 /// `load_payroll_sheet_rows` (same ordering and filtering as the Intern
 /// Payroll PDF); only the identity/bank details are read separately.
-/// `adjustment_centavos` balances manual adjustments, approved extra days and
-/// the zero floor so that `total_earnings - total_deductions == net_pay`.
+/// The balance of manual adjustments, approved extra days and the zero floor
+/// goes to `adjustment_centavos` (earnings) when positive and to
+/// `deduction_adjustment_centavos` when negative, so earnings are never
+/// reduced and `total_earnings - total_deductions == net_pay`.
 pub async fn load_intern_payslips(
     db: &sqlx::SqlitePool,
     cutoff_start: &str,
@@ -1202,8 +1206,12 @@ pub async fn load_intern_payslips(
                 + row.undertime_deduction_centavos;
             // `gross_compensation_centavos` on the sheet row is the stored net.
             let net_pay_centavos = row.gross_compensation_centavos;
-            let adjustment_centavos =
+            let balance_centavos =
                 net_pay_centavos - (gross_salary_centavos - total_deductions_centavos);
+            let adjustment_centavos = balance_centavos.max(0);
+            let deduction_adjustment_centavos = (-balance_centavos).max(0);
+            let total_deductions_centavos =
+                total_deductions_centavos + deduction_adjustment_centavos;
             InternPayslip {
                 employee_id: row.employee_id,
                 employee_name: row.employee_name,
@@ -1223,6 +1231,7 @@ pub async fn load_intern_payslips(
                 late_centavos: row.late_deduction_centavos,
                 halfday_centavos: row.half_day_deduction_centavos,
                 undertime_centavos: row.undertime_deduction_centavos,
+                deduction_adjustment_centavos,
                 total_deductions_centavos,
                 net_pay_centavos,
             }

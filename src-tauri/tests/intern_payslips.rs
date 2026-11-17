@@ -199,6 +199,7 @@ async fn reference_payslip_matches_the_hr_template() {
             late_centavos: 0,
             halfday_centavos: 0,
             undertime_centavos: 0,
+            deduction_adjustment_centavos: 0,
             total_deductions_centavos: 8_000,
             net_pay_centavos: 80_000,
         }]
@@ -243,6 +244,33 @@ async fn stored_net_that_differs_is_balanced_by_the_adjustment() {
             slip.net_pay_centavos
         );
     }
+}
+
+#[tokio::test]
+async fn negative_adjustment_is_a_deduction_and_never_lowers_earnings() {
+    let db = migrated_db().await;
+    insert_user(&db, "INT-1", "INTERN", "IT").await;
+    // 10 standard days, 5 worked: PHP 400 absent, PHP 10 late, PHP 90 undertime
+    // and a manual adjustment of -PHP 10. Stored net is PHP 290.
+    let mut row = cutoff("INT-1", "Maria Santos");
+    row.standard_days = 10.0;
+    row.actual_days = 5.0;
+    row.absent_days = 5.0;
+    row.absence = 40_000;
+    row.late = 1_000;
+    row.half_day_deduction = 9_000;
+    row.manual_adjustment = -1_000;
+    row.net = 29_000;
+    insert_cutoff(&db, &row).await;
+
+    let slip = &payslips(&db).await[0];
+    assert_eq!(slip.gross_salary_centavos, 80_000);
+    assert_eq!(slip.adjustment_centavos, 0);
+    assert_eq!(slip.total_earnings_centavos, 80_000);
+    assert_eq!(slip.undertime_centavos, 9_000);
+    assert_eq!(slip.deduction_adjustment_centavos, 1_000);
+    assert_eq!(slip.total_deductions_centavos, 51_000);
+    assert_eq!(slip.net_pay_centavos, 29_000);
 }
 
 #[tokio::test]
@@ -392,6 +420,7 @@ async fn payslips_serialize_with_the_camel_case_contract_keys() {
         "lateCentavos",
         "halfdayCentavos",
         "undertimeCentavos",
+        "deductionAdjustmentCentavos",
         "totalDeductionsCentavos",
         "netPayCentavos",
     ]

@@ -542,7 +542,7 @@ describe('generateInternPayslipImages', () => {
   const payslip = (employeeId: string, employeeName: string): InternPayslip => ({
     employeeId, employeeName, department: 'Marketing', designation: 'Intern', tin: '', bankName: '', accountNumber: '',
     standardWorkingDays: 11, actualWorkingDays: 11, dailyRateCentavos: 50000, basicCentavos: 550000, grossSalaryCentavos: 550000,
-    adjustmentCentavos: 0, totalEarningsCentavos: 550000, absentCentavos: 0, lateCentavos: 0, halfdayCentavos: 0, undertimeCentavos: 0,
+    adjustmentCentavos: 0, totalEarningsCentavos: 550000, absentCentavos: 0, lateCentavos: 0, halfdayCentavos: 0, undertimeCentavos: 0, deductionAdjustmentCentavos: 0,
     totalDeductionsCentavos: 0, netPayCentavos: 550000,
   });
   const saved = { success: true as const, directoryPath: 'C:/data/exports/payslips/October 1-15, 2026', fileCount: 2, fileNames: ['Ada Lovelace.png', 'Grace Hopper.png'], message: 'Saved.' };
