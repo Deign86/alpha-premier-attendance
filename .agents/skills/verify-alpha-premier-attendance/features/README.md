@@ -9,6 +9,7 @@ This directory contains the feature-by-feature verification specifications for A
 | [`rfid-kiosk.md`](rfid-kiosk.md) | Main Kiosk UI | RFID card scanning, manual UID entry fallback, attendance clock in / clock out, visual and voice feedback |
 | [`admin-roster.md`](admin-roster.md) | Admin Workspace | Secure PIN unlock, employee & intern roster CRUD, photo upload, RFID UID assignment |
 | [`card-setup.md`](card-setup.md) | Card Setup Modal | Unknown card fast-enrollment flow, operator PIN protection, direct employee binding |
+| [`payroll-rules.md`](payroll-rules.md) | Payroll Rules | Day pricing rubric: weekly grace, late, undertime, negative adjustments; expected Arrival column, Breakdown lines and payslip totals |
 | [`payroll-exports.md`](payroll-exports.md) | Payroll Workspace | Semi-monthly cutoff calculations, official PDF payslip and register generation, XLSX export, file reveal |
 | [`settings-lan-tts.md`](settings-lan-tts.md) | Settings & Diagnostics | Voice selection (Windows SAPI / Piper ONNX), pitch/rate controls, LAN server toggle & sync |
 | [`bathroom-key-log.md`](bathroom-key-log.md) | Bathroom Key Log | Gender-separated key checkout/return via RFID scan or explicit actions, edit log, TTS announcements (desktop-only evidence) |
