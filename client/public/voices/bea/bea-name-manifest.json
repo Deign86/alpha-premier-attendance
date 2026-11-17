@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-11-05T00:17:41.083325Z",
+  "generatedAt": "2026-11-17T02:12:48.162Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -353,6 +353,26 @@
       "audioFile": "/voices/bea/names/APG-2026-124.mp3",
       "generatedAt": "2026-11-05T00:17:41.083325Z",
       "audioHash": "4d27e19d66f961a02661efa993a50660eb783b2a15d437dab2fca79d38d4ba28"
+    },
+    "APG-2026-125": {
+      "personId": "APG-2026-125",
+      "displayName": "Kyla Mae B. Sevilla",
+      "normalizedSpeechText": "Kyla Mae Sevilla",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-v3",
+      "audioFile": "/voices/bea/names/APG-2026-125.mp3",
+      "generatedAt": "2026-11-17T02:12:19.535Z",
+      "audioHash": "13e809eb267388299f26d2f2dc3ea331b7a567322dcf9497c557828604fac4bf"
+    },
+    "APG-2026-126": {
+      "personId": "APG-2026-126",
+      "displayName": "Rocel Ann N. Ramon",
+      "normalizedSpeechText": "Rocel Ann Ramon",
+      "employeeType": "INTERN",
+      "voiceProfileVersion": "voicestudio-bea-v3",
+      "audioFile": "/voices/bea/names/APG-2026-126.mp3",
+      "generatedAt": "2026-11-17T02:12:48.162Z",
+      "audioHash": "8bfcf3b0af09f0ce0ff9d521a715b1a4c4d45556589e0f0bd2cc08909d0f048d"
     }
   }
 }
