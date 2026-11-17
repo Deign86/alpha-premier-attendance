@@ -465,6 +465,23 @@ describe("PayrollWorkspace", () => {
     expect(dialog.querySelector(".payroll-breakdown-formula")?.textContent).toContain("Net Pay: PHP 800.00 - PHP 510.00 = PHP 290.00");
   });
 
+  it("lists the weekly grace arrival in the Breakdown", () => {
+    renderWorkspace([internRecord({
+      halfDayDeduction: 20, totalDeductions: 20, netPay: 780,
+      calculationBreakdown: JSON.stringify({ deductions: [
+        { date: "2026-08-03", category: "GRACE", label: "Grace", details: "Weekly grace used: arrived 08:01 AM, no late deduction (once per week, up to 08:15 AM)", timeIn: "08:01 AM", timeOut: "03:00 PM", amount: 0 },
+        { date: "2026-08-03", category: "UNDERTIME", label: "Undertime", details: "Incomplete hours: 6 hrs paid of 8 hrs (2 hrs short), 08:01 AM – 03:00 PM", timeIn: "08:01 AM", timeOut: "03:00 PM", amount: 20 },
+      ] }),
+    })]);
+    fireEvent.click(screen.getByRole("button", { name: "Breakdown" }));
+    const dialog = screen.getByRole("dialog");
+    const badge = within(dialog).getByText("Grace");
+    expect(badge).toHaveClass("badge-grace");
+    expect(badge.closest("tr")?.textContent).toContain("Weekly grace used: arrived 08:01 AM");
+    expect(badge.closest("tr")?.textContent).toContain("PHP 0.00");
+    expect(dialog.querySelector(".payroll-breakdown-formula")?.textContent).toContain("for 1 weekly grace arrival(s)");
+  });
+
   it("shows the intern payroll PDF and payslip actions and no print/export actions", () => {
     renderWorkspace([record()]);
     expect(screen.getByRole("button", { name: "Generate Intern Payroll PDF" })).toBeInTheDocument();

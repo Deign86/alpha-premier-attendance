@@ -307,6 +307,10 @@ export type AttendanceSummary = {
   recordedAt?: string | null;
   /** True only when this TIME_IN created the first attendance row for the date. */
   isFirstArrivalToday?: boolean;
+  /** Arrival status decided by the desktop payroll engine (weekly grace included); absent from the legacy web API. */
+  arrivalStatus?: ArrivalStatus | null;
+  /** Whole minutes after 08:00 when `arrivalStatus` is LATE. */
+  minutesLate?: number | null;
 };
 
 export type AttendanceListItem = AttendanceSummary & {
@@ -504,7 +508,8 @@ export type PayrollCalculationProfile = {
   overtimeRate: number;
 };
 
-export type DeductionCategory = 'ABSENCE' | 'LATE' | 'UNDERTIME';
+/** `GRACE` is the weekly-grace line: an arrival the grace covered, always PHP 0. */
+export type DeductionCategory = 'ABSENCE' | 'LATE' | 'UNDERTIME' | 'GRACE';
 
 export type AttendanceDeductionItem = {
   date: string;

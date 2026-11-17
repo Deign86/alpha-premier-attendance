@@ -8,6 +8,25 @@ Single source of truth: `src-tauri/src/services/intern_payroll.rs`
 (`PolicyVersion`, `PolicyRules`, `policy_for_date`). Do not add date checks
 anywhere else.
 
+## One module owns payroll rules
+
+`src-tauri/src/services/intern_payroll.rs` is the only place that decides
+anything about a day's pay. Everything else reads its output:
+
+| Question | Owner | Consumers (no rules of their own) |
+|----------|-------|-----------------------------------|
+| What does a day cost? | `calculate` | `ensure_payroll` stores the result in `payroll` |
+| On time, weekly grace or late? | `arrival` | attendance list rows and kiosk scan responses (`arrivalStatus`, `minutesLate`); the UI shows them as sent |
+| What does the Breakdown say about a day? | `explain_day` | cutoff generation; amounts are the stored engine result, never re-priced |
+| Was it a half-day? | `calculate` (`is_half_day`) | cutoff generation counts the stored flag |
+
+`src-tauri/src/lib.rs` only does the database work around it: the weekly
+claim row in `intern_grace` and the cutoff totals. The TypeScript helpers in
+`shared/src/api-contracts.ts` and `server/src/intern-payroll.ts` serve the
+legacy web API, which is not shipped; the desktop UI uses them only when a row
+carries no engine status. When a rule changes, change it in the Rust module and
+nowhere else in the desktop app.
+
 ## Rule catalog
 
 | Rule | V1_WEEKLY_GRACE | V2_NO_GRACE | V3_WEEKLY_GRACE | Code location |

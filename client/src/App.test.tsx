@@ -1703,6 +1703,68 @@ describe('Admin Attendance Corrections', () => {
     }
   });
 
+  it('shows the payroll engine arrival status: a Grace badge, and Late once the weekly grace is used', async () => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T10:00:00+08:00'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
+      }
+      if (url.includes('/api/admin/session')) {
+        // SAFETY: Fetch mock admin session active
+        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
+      }
+      if (url.includes('/api/admin/users')) {
+        // SAFETY: Fetch users list mock
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            users: [
+              { userId: 'u1', fullName: 'Ada Lovelace', rfidUid: 'RFID-1', employeeType: 'INTERN', status: 'ACTIVE' },
+              { userId: 'u2', fullName: 'Charles Babbage', rfidUid: 'RFID-2', employeeType: 'INTERN', status: 'ACTIVE' },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/admin/attendance')) {
+        // SAFETY: Both arrived at 08:05; the engine says Ada has the weekly grace and Charles already used his.
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            date: '2026-11-17',
+            attendance: [
+              { attendanceId: 'a1', attendanceDate: '2026-11-17', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-11-17T08:05:00+08:00', timeOut: null, status: 'WORKING', arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 },
+              { attendanceId: 'c1', attendanceDate: '2026-11-17', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-11-17T08:05:00+08:00', timeOut: null, status: 'WORKING', arrivalStatus: 'LATE', minutesLate: 5 },
+            ],
+          }),
+        } as Response;
+      }
+      // SAFETY: Fetch fallback
+      return { ok: true, json: async () => ({ success: true, profiles: [], cutoffs: [] }) } as Response;
+    });
+
+    try {
+      window.history.pushState({}, '', '/admin');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
+      // SAFETY: the row of a rendered name cell
+      const rowOf = async (name: string) => (await screen.findByText(name)).closest('tr') as HTMLElement;
+      const grace = within(await rowOf('Ada Lovelace')).getByText('Grace');
+      expect(grace.getAttribute('title')).toBe('Weekly grace used: arrived by 8:15 AM, no late deduction (once per week)');
+      expect(within(await rowOf('Charles Babbage')).getByText(/^Late/)).toHaveTextContent('5m');
+      expect(within(await rowOf('Charles Babbage')).queryByText('Grace')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('uses earlier week history to clamp an admin date-only 08:21 late arrival', async () => {
     vi.restoreAllMocks();
     vi.useFakeTimers({ toFake: ['Date'] });

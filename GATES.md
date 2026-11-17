@@ -2326,3 +2326,13 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml partly_missed_late_hour && npm test -w server -- intern-payroll.test.ts
   EXPECT: 08:01 in with the claim used: out 15:00, 15:01 and 15:59 all give 1 late hour + 2 undertime hours on 2026-11-17; the same 15:01 day on 2026-11-10 (V2) still gives 1 + 1.
   EVIDENCE: Rust and TS engines agree on all 10 cases. JS exit 0 (shared 41, client 622, server 294). Rust lib 397 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/71/36/54/24 passed.
+
+## Weekly grace visible; payroll rules in one module (owner request, 2026-11-17)
+
+- [x] A weekly-grace arrival shows as "Grace" in the attendance list (and CSV) and as its own PHP 0 "Grace" line in the cutoff Breakdown; the kiosk announcement uses the same decision.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib graced_undertime && npm test -w client -- App.test.tsx payroll.test.tsx
+  EXPECT: Nov 16 08:01 lists GRACE_PERIOD and a GRACE breakdown line; Nov 17 08:05 (claim used) lists LATE 5m and a LATE line; an open 08:10 arrival the next week lists GRACE_PERIOD.
+- [x] Arrival status, the Breakdown day lines and the half-day flag come from `services/intern_payroll.rs`; `lib.rs` no longer has its own worked-hours math or half-day SQL rule.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: all payroll fixtures and snapshots unchanged and green.
+  EVIDENCE: JS exit 0 (shared 41, client 624, server 294). Rust lib 398 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/72/36/55/24 passed. No fixture or snapshot changed.
