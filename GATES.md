@@ -2469,7 +2469,11 @@ What was wrong, seen in the live DTR sheet: the hand-made months are Sheets tabl
 - [x] D3: The header and the day rows sit in the middle of their row (owner, 2026-11-18: "the font and centering"). Read from the live sheet: the hand-made months are vertically MIDDLE with a Roboto header; the app's block was BOTTOM.
   CHECK: `cd src-tauri && cargo test --lib month_block`
   EVIDENCE: 4 passed (2026-11-18)
+- [x] D4: A new block is a real Sheets table over the header and the days, not banding (owner, 2026-11-18: "make sure attendance system doesn't change it when adding new months"). Banding looked close but HR's months are tables; the repaired November blocks are tables named `Nov2026_<tab id>`, and the app now names its own the same way.
+  CHECK: `cd src-tauri && cargo test --lib month_block`
+  EVIDENCE: `test_month_block_payload` passed (2026-11-18): one `addTable` over rows 69-99 named `Nov2026_<tab id>`, no `addBanding`. Whole suite: 415 passed, the 3 known Linux-only path tests failed as before.
 - [ ] D2: The blocks already in the sheet are repaired, and a block the released kiosk adds for December looks like the others.
+  EVIDENCE (repair half, 2026-11-18): Sheets API read of all 19 intern tabs: each November block is exactly one table (header to last day) and the only banded range on it is that table's own; Ellaine's tab checked by screenshot. December half waits for 12/1.
   EVIDENCE: the November blocks on 19 tabs were repaired by hand through the Sheets API on 2026-11-18 (number formats, borders, alternating rows, salmon total row, Roboto header, middle alignment, real dates); John Frederick Ruiz's rows 118 to 121 read back correctly. Pending: the first December block the released kiosk adds.
 
 ## The kiosk account's password is not in the app (owner decision, 2026-11-18)

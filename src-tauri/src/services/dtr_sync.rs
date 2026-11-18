@@ -557,6 +557,7 @@ pub fn month_block_look_requests(
     data_start_1based: usize,
     data_end_1based: usize,
     total_row_1based: usize,
+    table_name: &str,
 ) -> Vec<serde_json::Value> {
     let days = |start_column: usize, end_column: usize| {
         serde_json::json!({
@@ -608,19 +609,29 @@ pub fn month_block_look_requests(
                 "fields": "userEnteredFormat.verticalAlignment",
             }
         }),
-        // White, then pale grey, from the first day down. The weekend rule above still wins on its days.
+        // A real Sheets table over the header and the days, as HR's months are: green header,
+        // white and pale grey rows, typed columns. Banding alone looked close but was not a table.
+        // The weekend rule above still wins on its days.
         serde_json::json!({
-            "addBanding": {
-                "bandedRange": {
-                    "range": days(0, 6),
-                    "rowProperties": {
-                        "firstBandColor": { "red": 1.0, "green": 1.0, "blue": 1.0 },
-                        "secondBandColor": { "red": 0.9647059, "green": 0.972549, "blue": 0.9764706 },
-                    }
+            "addTable": {
+                "table": {
+                    "name": table_name,
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": data_start_1based - 2,
+                        "endRowIndex": data_end_1based,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 6,
+                    },
                 }
             }
         }),
     ]
+}
+
+/// A table name unique in the spreadsheet: names are spreadsheet-wide, so the tab id goes in.
+pub fn month_table_name(sheet_id: i64, year: i32, month: u32) -> String {
+    format!("{}{year}_{sheet_id}", &month_name(month)[..3])
 }
 
 /// Build batchUpdate requests to append a standard month block to a DTR tab.
@@ -784,7 +795,13 @@ pub fn build_new_month_block_requests(
         }),
     ];
 
-    requests.extend(month_block_look_requests(sheet_id, data_start_1based, data_end_1based, total_row_1based));
+    requests.extend(month_block_look_requests(
+        sheet_id,
+        data_start_1based,
+        data_end_1based,
+        total_row_1based,
+        &month_table_name(sheet_id, year, month),
+    ));
 
     if let Some(existing_j3) = existing_j3_formula {
         let new_j3 = append_cell_to_sum_formula(existing_j3, &format!("F{total_row_1based}"));
@@ -5943,9 +5960,10 @@ mod tests {
         let middle = &requests[8]["repeatCell"];
         assert_eq!(middle["cell"]["userEnteredFormat"]["verticalAlignment"], "MIDDLE");
         assert_eq!((middle["range"]["startRowIndex"].as_u64(), middle["range"]["endRowIndex"].as_u64()), (Some(68), Some(99)), "the header and the days");
-        let banding = &requests[9]["addBanding"]["bandedRange"];
-        assert_eq!((banding["range"]["startRowIndex"].as_u64(), banding["range"]["endRowIndex"].as_u64()), (Some(69), Some(99)), "the days only");
-        assert_eq!(banding["rowProperties"]["firstBandColor"]["red"], 1.0);
+        let table = &requests[9]["addTable"]["table"];
+        assert_eq!((table["range"]["startRowIndex"].as_u64(), table["range"]["endRowIndex"].as_u64()), (Some(68), Some(99)), "the header and the days, like HR's tables");
+        assert_eq!(table["name"], format!("Nov2026_{sheet_id}"), "unique across the spreadsheet");
+        assert!(requests.iter().all(|r| r.get("addBanding").is_none()), "banding alone is not a table");
 
         // 4. addConditionalFormatRule
         let cf = &requests[3]["addConditionalFormatRule"]["rule"];
