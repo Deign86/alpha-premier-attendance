@@ -594,6 +594,20 @@ pub fn month_block_look_requests(
                 "innerHorizontal": line, "innerVertical": line,
             }
         }),
+        // The header and every day sit in the middle of their row, as in the hand-made months (the default is the bottom).
+        serde_json::json!({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": data_start_1based - 2,
+                    "endRowIndex": data_end_1based,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 6,
+                },
+                "cell": { "userEnteredFormat": { "verticalAlignment": "MIDDLE" } },
+                "fields": "userEnteredFormat.verticalAlignment",
+            }
+        }),
         // White, then pale grey, from the first day down. The weekend rule above still wins on its days.
         serde_json::json!({
             "addBanding": {
@@ -5866,7 +5880,7 @@ mod tests {
         assert_eq!(total_row, 100);
 
         let requests = requests_val.as_array().expect("requests array");
-        assert_eq!(requests.len(), 10, "values, header, total, weekend rule, five for the look, then J3");
+        assert_eq!(requests.len(), 11, "values, header, total, weekend rule, six for the look, then J3");
 
         // 1. updateCells for values
         let update_cells = &requests[0]["updateCells"];
@@ -5926,7 +5940,10 @@ mod tests {
         let borders = &requests[7]["updateBorders"];
         assert_eq!((borders["range"]["startRowIndex"].as_u64(), borders["range"]["endRowIndex"].as_u64()), (Some(69), Some(100)), "the days and the total row");
         assert_eq!(borders["innerHorizontal"]["style"], "SOLID");
-        let banding = &requests[8]["addBanding"]["bandedRange"];
+        let middle = &requests[8]["repeatCell"];
+        assert_eq!(middle["cell"]["userEnteredFormat"]["verticalAlignment"], "MIDDLE");
+        assert_eq!((middle["range"]["startRowIndex"].as_u64(), middle["range"]["endRowIndex"].as_u64()), (Some(68), Some(99)), "the header and the days");
+        let banding = &requests[9]["addBanding"]["bandedRange"];
         assert_eq!((banding["range"]["startRowIndex"].as_u64(), banding["range"]["endRowIndex"].as_u64()), (Some(69), Some(99)), "the days only");
         assert_eq!(banding["rowProperties"]["firstBandColor"]["red"], 1.0);
 
@@ -5940,7 +5957,7 @@ mod tests {
         );
 
         // 5. updateCells for J3 formula
-        let j3_update = &requests[9]["updateCells"];
+        let j3_update = &requests[10]["updateCells"];
         assert_eq!(j3_update["start"]["rowIndex"], 2);
         assert_eq!(j3_update["start"]["columnIndex"], 9);
         assert_eq!(
