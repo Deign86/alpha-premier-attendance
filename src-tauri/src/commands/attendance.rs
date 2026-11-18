@@ -54,7 +54,8 @@ pub(crate) async fn attendance_rows_json(
 ) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(
         "SELECT a.attendance_id, a.attendance_date, a.user_id, a.full_name, a.department, a.time_in, a.time_out, a.status, a.source, a.recorded_by, a.recorded_reason, a.recorded_at, \
-         COALESCE(p.grace_used = 1, NOT EXISTS (SELECT 1 FROM intern_grace g WHERE g.user_id = a.user_id AND g.week_start = ? AND g.attendance_id != a.attendance_id)) AS grace_available \
+         COALESCE(p.grace_used = 1, NOT EXISTS (SELECT 1 FROM intern_grace g WHERE g.user_id = a.user_id AND g.week_start = ? AND g.attendance_id != a.attendance_id)) AS grace_available, \
+         COALESCE((SELECT u.employee_type = 'INTERN' FROM users u WHERE u.user_id = a.user_id), 0) AS is_intern \
          FROM attendance a LEFT JOIN payroll p ON p.attendance_id = a.attendance_id \
          WHERE a.attendance_date = ? ORDER BY a.time_in, a.full_name",
     )
@@ -64,7 +65,7 @@ pub(crate) async fn attendance_rows_json(
     .await
     .map_err(|e| e.to_string())?;
     let attendance = rows.into_iter().map(|row| {
-        let shown = arrival_fields(date, row.get::<Option<String>, _>("time_in").as_deref(), row.get::<bool, _>("grace_available"));
+        let shown = arrival_fields(date, row.get::<Option<String>, _>("time_in").as_deref(), row.get::<bool, _>("grace_available"), row.get::<bool, _>("is_intern"));
         serde_json::json!({
         "arrivalStatus": shown.status,
         "minutesLate": shown.minutes_late,
@@ -966,17 +967,20 @@ pub(crate) struct ArrivalFields {
     pub(crate) minutes_late: Option<i64>,
     /// The arrival took the week's grace claim. `None` for a row without a readable time-in.
     pub(crate) grace_used: Option<bool>,
-    /// The time-in the day is paid from: the scan itself, or the next full hour when the day's policy clamps it.
+    /// The time-in an intern's day is paid from: the scan itself, or the next full hour when the day's policy
+    /// clamps it. `None` for anyone who is not an intern: the clamp is an intern pay rule.
     pub(crate) payable_time_in: Option<String>,
 }
 
-pub(crate) fn arrival_fields(date: &str, time_in: Option<&str>, grace_available: bool) -> ArrivalFields {
+pub(crate) fn arrival_fields(date: &str, time_in: Option<&str>, grace_available: bool, is_intern: bool) -> ArrivalFields {
     let arrival = time_in.and_then(|stamp| crate::services::intern_payroll::arrival(date, stamp, grace_available));
     ArrivalFields {
         status: arrival.map(|a| a.status.as_str()),
         minutes_late: arrival.map(|a| a.minutes_late),
         grace_used: arrival.map(|a| a.status == crate::services::intern_payroll::ArrivalStatus::GracePeriod),
-        payable_time_in: time_in.and_then(|stamp| crate::services::intern_payroll::payable_time_in(date, stamp, grace_available)),
+        payable_time_in: time_in
+            .filter(|_| is_intern)
+            .and_then(|stamp| crate::services::intern_payroll::payable_time_in(date, stamp, grace_available)),
     }
 }
 
@@ -989,20 +993,22 @@ pub(crate) async fn attendance_arrival(
     date: &str,
     time_in: Option<&str>,
 ) -> ArrivalFields {
-    let grace_available: Option<bool> = sqlx::query_scalar(
+    let read: Option<(bool, bool)> = sqlx::query_as(
         "SELECT COALESCE((SELECT grace_used = 1 FROM payroll WHERE attendance_id = ?), \
-         NOT EXISTS (SELECT 1 FROM intern_grace WHERE user_id = ? AND week_start = ? AND attendance_id != ?))",
+         NOT EXISTS (SELECT 1 FROM intern_grace WHERE user_id = ? AND week_start = ? AND attendance_id != ?)), \
+         COALESCE((SELECT employee_type = 'INTERN' FROM users WHERE user_id = ?), 0)",
     )
     .bind(attendance_id)
     .bind(user_id)
     .bind(manila_week_start(date))
     .bind(attendance_id)
+    .bind(user_id)
     .fetch_one(db)
     .await
     .ok();
-    match grace_available {
-        Some(grace_available) => arrival_fields(date, time_in, grace_available),
-        None => arrival_fields(date, None, false),
+    match read {
+        Some((grace_available, is_intern)) => arrival_fields(date, time_in, grace_available, is_intern),
+        None => arrival_fields(date, None, false, false),
     }
 }
 
@@ -1260,6 +1266,7 @@ mod tests {
                 input["attendanceDate"].as_str().unwrap(),
                 input["timeIn"].as_str(),
                 input["graceAvailable"].as_bool().unwrap(),
+                true,
             );
             let answered = serde_json::json!({
                 "arrivalStatus": shown.status,
@@ -1269,6 +1276,55 @@ mod tests {
             });
             assert_eq!(answered, row["expected"], "{}", row["name"]);
         }
+    }
+
+    /// MINOR-1 of the round 2 review: the payable (clamped) time-in is an intern rule. The old client clamped only
+    /// rows whose person the register lists as an intern (21b9891 App.tsx:8322); Rust now withholds the field for
+    /// everyone else, so no screen has to know.
+    #[tokio::test]
+    async fn only_an_interns_row_carries_a_payable_time_in() {
+        let (state, temp, _token) = admin_test_state("payable-intern-only").await;
+        add_intern(&state, "INT-P", "RFID-INT-P").await;
+        upsert_user_record(
+            &state.db, "EMP-P", "RFID-EMP-P", "EMP-P", Some("IT"), "ACTIVE", "EMPLOYEE",
+            Some("MALE"), Some(50000), Some("BEA_STANDARD"), None, "EMPLOYEE", "2026-07-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        // GONE-P has attendance but is no longer in the register.
+        for user in ["INT-P", "EMP-P", "GONE-P"] {
+            sqlx::query(
+                "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, status, source, created_at, updated_at) \
+                 VALUES (?, '2026-07-28', ?, ?, ?, 'IT', '2026-07-28T08:30:00+08:00', 'WORKING', 'RFID', '2026-07-28', '2026-07-28')",
+            )
+            .bind(format!("ATT-{user}"))
+            .bind(user)
+            .bind(format!("RFID-{user}"))
+            .bind(user)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+        let rows = attendance_rows_json(&state.db, "2026-07-28").await.unwrap();
+        let listed = |user: &str| rows.iter().find(|row| row["userId"] == user).unwrap().clone();
+        assert_eq!(listed("INT-P")["payableTimeIn"], "2026-07-28T09:00:00+08:00");
+        for user in ["EMP-P", "GONE-P"] {
+            assert_eq!(listed(user)["payableTimeIn"], serde_json::Value::Null, "{user}");
+            // The arrival badge was Rust's for every row before and still is.
+            assert_eq!(listed(user)["arrivalStatus"], "LATE", "{user}");
+            assert_eq!(listed(user)["minutesLate"], 30, "{user}");
+        }
+        // The scan answer and the backdate answer read one row the same way.
+        let one = |user: &'static str| {
+            let db = state.db.clone();
+            async move { attendance_arrival(&db, user, &format!("ATT-{user}"), "2026-07-28", Some("2026-07-28T08:30:00+08:00")).await }
+        };
+        assert_eq!(one("INT-P").await.payable_time_in.as_deref(), Some("2026-07-28T09:00:00+08:00"));
+        assert_eq!(one("EMP-P").await.payable_time_in, None);
+        assert_eq!(one("EMP-P").await.status, Some("LATE"));
+        assert_eq!(one("GONE-P").await.payable_time_in, None);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[tokio::test]
