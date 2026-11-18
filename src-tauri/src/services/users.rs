@@ -2,7 +2,8 @@
 //! for an administrator's save and for the ID register's.
 
 use crate::state::AppState;
-use crate::commands::{attendance::publish_attendance_change, sync::enqueue_sync_on};
+use crate::services::attendance::{lan_notice, LanNotice};
+use crate::services::sync_queue::enqueue_sync_on;
 use chrono_tz::Asia::Manila;
 use sqlx::Row;
 
@@ -483,7 +484,7 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     tx.commit().await.map_err(|e| e.to_string())?;
     if had_attendance {
         let today = chrono::Utc::now().with_timezone(&Manila).date_naive().to_string();
-        publish_attendance_change(state, "", &today, "USER_DELETED", "refetch");
+        lan_notice(state, state.next_sequence(), "", &today, LanNotice { cause: "USER_DELETED", mutation: "refetch", from_scan: None });
     }
 
     let photo_path = state.data_dir.join("photos").join(format!("{user_id}.webp"));

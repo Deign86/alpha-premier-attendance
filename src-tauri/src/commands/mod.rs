@@ -17,6 +17,9 @@ pub(crate) mod voice;
 pub(crate) mod test_support;
 
 #[cfg(test)]
+mod scan_then_service_tests;
+
+#[cfg(test)]
 mod tests {
     /// Commands anyone at the kiosk may call: they open no admin screen and change no record an administrator owns.
     /// A new command is either added here on purpose or starts with `Admin::check`.

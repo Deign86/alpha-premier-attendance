@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::collections::HashMap;
-use super::attendance::reconcile_attendance_payroll_range;
+use crate::services::attendance::reconcile_attendance_payroll_range;
 use super::session::Admin;
-use super::sync::enqueue_sync_on;
+use crate::services::sync_queue::enqueue_sync_on;
 use tauri::State;
 
 #[tauri::command]
@@ -1481,7 +1481,8 @@ pub(crate) fn valid_cutoff_date(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::commands::test_support::*;
-    use crate::commands::attendance::{attendance_rows_json, ensure_payroll, reconcile_attendance_payroll_range};
+    use crate::commands::attendance::attendance_rows_json;
+    use crate::services::attendance::ensure_payroll;
     use crate::commands::session::setup_unlock_impl;
     use crate::services::users::upsert_user_record;
     

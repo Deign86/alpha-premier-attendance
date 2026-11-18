@@ -2,7 +2,7 @@ use chrono_tz::Asia::Manila;
 use crate::state::AppState;
 use sqlx::Row;
 use std::time::Instant;
-use super::attendance::{attendance_arrival, attendance_changed, ensure_payroll_tx, AttendanceChange, DtrLine, DtrPerson, LanNotice, WindowEvent};
+use crate::services::attendance::{attendance_arrival, attendance_changed, ensure_payroll_tx, AttendanceChange, DtrLine, DtrPerson, LanNotice, WindowEvent};
 use super::users::resolve_user_photo_url;
 use tauri::State;
 

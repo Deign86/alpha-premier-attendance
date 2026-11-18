@@ -1,3 +1,4 @@
+pub(crate) mod attendance;
 pub mod audit;
 pub mod admin_account;
 pub mod cloud_mirror;
@@ -13,6 +14,7 @@ pub mod payroll;
 pub mod scanner;
 pub mod settings;
 pub mod sheets_sync;
+pub(crate) mod sync_queue;
 pub(crate) mod sync_retry;
 pub mod unlock_guard;
 pub mod users;

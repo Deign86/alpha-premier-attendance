@@ -298,11 +298,11 @@ async fn pull(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::services::firebase::fake::{close, intern, kiosk, nowhere, register, serve, Card, PASSWORD};
 
-    async fn card_of(state: &AppState, user_id: &str) -> Option<String> {
+    pub(crate) async fn card_of(state: &AppState, user_id: &str) -> Option<String> {
         sqlx::query_scalar("SELECT rfid_uid FROM users WHERE user_id = ?").bind(user_id).fetch_optional(&state.db).await.unwrap()
     }
 
@@ -483,40 +483,6 @@ mod tests {
         // Tests are built without the secrets, as a copy built by hand would be.
         assert!(firebase::built_in().is_none());
         assert!(!status(&state).await.built_in);
-        close(state, temp, server).await;
-    }
-
-    #[tokio::test]
-    async fn id_register_waiting_user_takes_a_card_and_scans() {
-        let (state, temp) = kiosk("binds").await;
-        let fake = register(vec![intern("APG-2026-126", "Juan Dela Cruz")]);
-        let (endpoints, server) = serve(fake.clone()).await;
-        sign_in(&state, Some(&endpoints), "kiosk@example.test", PASSWORD).await.unwrap();
-
-        // No reader, and no typed scan, can stand in for a card that is not there yet.
-        let placeholder = serde_json::json!({"rfidUid": "PENDING-APG-2026-126", "source": "RFID"});
-        let refused = crate::commands::kiosk::scan_rfid_impl(None, &state, placeholder).await.unwrap();
-        assert_eq!(refused["error"]["code"], "INVALID_SCAN_INPUT");
-
-        // Admin → Users: the same user saved with the card just tapped.
-        users::save_user(
-            &state,
-            serde_json::json!({"userId": "APG-2026-126", "rfidUid": "a1b2c3d4", "fullName": "Juan Dela Cruz", "department": "IT Intern", "status": "ACTIVE", "employeeType": "INTERN"}),
-            users::SaveOrigin::Administrator,
-        )
-        .await
-        .unwrap();
-        // One row: the waiting user is changed, not doubled.
-        let cards: Vec<String> = sqlx::query_scalar("SELECT rfid_uid FROM users").fetch_all(&state.db).await.unwrap();
-        assert_eq!(cards, vec!["A1B2C3D4".to_string()]);
-        assert_eq!(status(&state).await.waiting, 0);
-
-        let tap = crate::commands::kiosk::scan_rfid_impl(None, &state, serde_json::json!({"rfidUid": "A1B2C3D4", "source": "RFID"})).await.unwrap();
-        assert_eq!(tap["success"], true, "{tap}");
-        // The next pass leaves the card alone.
-        fake.lock().unwrap().cards.push(intern("APG-2026-127", "Ana Reyes"));
-        run_once(&state, Some(&endpoints)).await.unwrap();
-        assert_eq!(card_of(&state, "APG-2026-126").await.as_deref(), Some("A1B2C3D4"));
         close(state, temp, server).await;
     }
 
