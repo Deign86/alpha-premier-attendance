@@ -1,4 +1,5 @@
 pub mod admin_pin;
+pub mod cloud_mirror;
 pub mod cutoff_payroll;
 pub mod dtr_recon;
 pub mod dtr_sync;

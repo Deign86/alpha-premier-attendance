@@ -2402,3 +2402,36 @@ The ID Maker records each issued card in the shared register (Keystone's Firebas
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EXPECT: no existing fixture, snapshot or expectation changes.
   EVIDENCE: JS exit 0 (shared 41, client 631, server 208; lint and typecheck exit 0). Rust on Linux, after merging main: lib 410 passed / 3 failed (the same 3 Windows-path tests in config.rs and paths.rs); integration suites 11/18/75/36/58/24 passed. No existing fixture, snapshot or expectation changed. Not shown here: the real Firebase project (tests use a loopback stand-in, by rule) and a real kiosk; Keystone's emulator test for the device rule runs in its own CI (apg-keystone PR 59).
+
+## The kiosk keeps a copy of its records in the shared backend (owner request, 2026-11-18)
+
+"Move everything to the Firebase backend without losing anything." The database on the kiosk stays the original; a one-way copy of each business record goes to Keystone's Firebase project (`keystone/apg/att_<table>/<id>`) with the kiosk's existing sign-in. No migration. See `docs/shared-backend.md`.
+
+- [x] Every covered record is sent once, with each value as the database holds it, then only what changed; a removed record is removed there.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_backup
+  EXPECT: one write per record; numbers stay numbers and empty stays empty; an unchanged pass sends nothing; a changed user sends that user; a deleted user sends a delete.
+  EVIDENCE: `cloud_backup_sends_each_record_once_then_only_what_changed` passed. Run once by hand against a copy of the kiosk's real database (backup of 2026-11-18): 7,120 records, none sent twice, and all 78,065 values compared equal to SQLite's, column by column. That run is not in the repository (it needs the real data).
+- [x] A TIN, a bank account number, a PIN hash or a sign-in token never leaves the computer, now or after a later migration.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_backup
+  EXPECT: none of them appears in anything sent; a covered table with such a column that is not left out fails the test.
+  EVIDENCE: `cloud_backup_never_covers_an_identity_number_or_a_secret` and the content checks in the first test passed. The by-hand run on the real database is what showed `payroll_cutoffs` also has `tin` and `account_number`; both are now left out.
+- [x] A long history goes in bounded requests over several passes, and a part is never called the whole.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_backup
+  EXPECT: 2,150 rows: the first pass stops at 1,200 with no "complete" time; later passes finish; no request exceeds 20 writes (Firestore's limit on rule lookups in one batch); no record twice; a key with a slash is one document.
+  EVIDENCE: `cloud_backup_sends_a_large_history_in_bounded_requests_without_repeats` passed.
+- [x] A refused or unreachable backup marks nothing as sent, says why in plain words, never fails the ID register pass, and recovers.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_backup
+  EXPECT: 403 → "may not write the backup", 0 backed up; 400 names the first record; unreachable leaves 0; allowed again → all sent and the problem cleared.
+  EVIDENCE: `cloud_backup_problems_keep_nothing_marked_sent` passed.
+- [x] Admin → System shows how far the backup has got and any problem.
+  CHECK: npm test -w client -- id-register-panel.test.tsx
+  EXPECT: "Backup: 4,800 of 7,120 records…" with the problem as an alert; "…complete as of…" with none.
+  EVIDENCE: 8 passed.
+- [x] The rules let only the kiosk write the copy and only an owner read it.
+  CHECK: apg-keystone, `npm run test:e2e:cloud` (`e2e/cloud/kiosk-backup.e2e.ts`)
+  EXPECT: a device's batch is accepted and it cannot read it back; staff, strangers and owners cannot write; a batch that reaches outside `att_…` writes nothing.
+  EVIDENCE: see apg-keystone pull request 61 (its CI runs the emulator suite).
+- [x] Everything else still passes.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: no existing fixture, snapshot or expectation changes, apart from `id_register_is_listed_only_when_it_has_grown`, which now also expects the backup request.
+  EVIDENCE: JS exit 0 (shared 41, client 633, server 208; lint and typecheck exit 0). Rust on Linux: lib 415 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/75/36/58/24 passed. Not shown: the real Firebase project and a real kiosk.

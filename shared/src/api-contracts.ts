@@ -935,6 +935,16 @@ export type IdRegisterStatus = {
   problem: string | null;
   /** Users added from the register who have no card yet. */
   waiting: number;
+  /** The kiosk's copy of its records in the shared backend. The database on the kiosk stays the source of truth. */
+  backup: {
+    /** Records on this computer that the backup covers. */
+    records: number;
+    /** How many of them the shared backend has as they are now. */
+    backedUp: number;
+    lastCompleteAt: string | null;
+    /** In plain words, ready to show. */
+    problem: string | null;
+  };
 };
 
 /** What a user's RFID UID starts with while they wait for a card; no reader can produce it. */

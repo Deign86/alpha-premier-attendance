@@ -5,13 +5,15 @@ import type { IdRegisterStatus } from '@rfid-attendance/shared';
 import { IdRegisterPanel } from './id-register-panel';
 import { tauriApi } from './tauri-api';
 
-const signedOut: IdRegisterStatus = { builtIn: true, signedInAs: null, lastCheckedAt: null, problem: null, waiting: 0 };
+const noBackup = { records: 7120, backedUp: 0, lastCompleteAt: null, problem: null };
+const signedOut: IdRegisterStatus = { builtIn: true, signedInAs: null, lastCheckedAt: null, problem: null, waiting: 0, backup: noBackup };
 const signedIn: IdRegisterStatus = {
   builtIn: true,
   signedInAs: 'kiosk@example.test',
   lastCheckedAt: '2026-11-17T06:30:00Z',
   problem: null,
   waiting: 2,
+  backup: { records: 7120, backedUp: 7120, lastCompleteAt: '2026-11-17T06:31:00Z', problem: null },
 };
 
 describe('IdRegisterPanel', () => {
@@ -84,6 +86,23 @@ describe('IdRegisterPanel', () => {
     await waitFor(() => expect(checkSpy).toHaveBeenCalledWith(''));
     expect(await screen.findByRole('alert')).toHaveTextContent(problem);
     expect(screen.queryByText(/waiting for a card/)).not.toBeInTheDocument();
+  });
+
+  it('says how far the backup has got, and why when it cannot go on', async () => {
+    const problem = "This kiosk's account may not write the backup. Ask the owner to publish Keystone's rules for the kiosk backup.";
+    vi.spyOn(tauriApi, 'idRegisterStatus').mockResolvedValue({ ...signedIn, waiting: 0, backup: { ...noBackup, backedUp: 4800, problem } });
+    render(<IdRegisterPanel />);
+
+    expect(await screen.findByText(/Backup: 4,800 of 7,120 records are in the shared backend\. This computer keeps the originals\./)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(problem);
+  });
+
+  it('says when the backup is complete', async () => {
+    vi.spyOn(tauriApi, 'idRegisterStatus').mockResolvedValue({ ...signedIn, waiting: 0 });
+    render(<IdRegisterPanel />);
+
+    expect(await screen.findByText(/Backup: 7,120 of 7,120 records are in the shared backend, complete as of /)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('signs out, and says when the administrator session has ended', async () => {
