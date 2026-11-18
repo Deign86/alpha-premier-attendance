@@ -2435,3 +2435,24 @@ The ID Maker records each issued card in the shared register (Keystone's Firebas
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EXPECT: no existing fixture, snapshot or expectation changes, apart from `id_register_is_listed_only_when_it_has_grown`, which now also expects the backup request.
   EVIDENCE: JS exit 0 (shared 41, client 633, server 208; lint and typecheck exit 0). Rust on Linux: lib 415 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/75/36/58/24 passed. Not shown: the real Firebase project and a real kiosk.
+
+## The kiosk connects to the ID register by itself (owner request, 2026-11-18)
+
+"I find no need for this feature; it should work seamlessly with the ID Maker without needing this." The sign-in form is gone. The kiosk's own account is built into the release from two more repository secrets, as the Sheets service account already is, and the app signs itself in.
+
+- [x] With its account built in, the first pass signs in, pulls and backs up with nothing typed by anyone; a refused token signs it in again by itself; the password is never kept in the database.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EVIDENCE: `id_register_kiosk_signs_itself_in_and_nobody_is_asked` passed.
+- [x] A wrong built-in password is tried once, not every two minutes (which would lock the account); the reason stays on screen; the app starting or "Check now" tries once more; an unreachable register is retried on its own.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EVIDENCE: `id_register_a_refused_account_is_not_tried_again_until_asked` passed.
+- [x] Admin → System → ID register has no form: it shows Connected / Connecting / Not connected, the problem in plain words, who is waiting for a card, the backup, and "Check now". The sign-in and sign-out commands are removed.
+  CHECK: npm test -w client -- id-register-panel.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml --lib id_register_commands_need_admin
+  EVIDENCE: client tests passed; `id_register_commands_need_admin` passed.
+- [x] A release fails without `ALPHA_PREMIER_KIOSK_EMAIL` and `ALPHA_PREMIER_KIOSK_PASSWORD`, and passes them to the Windows and both Mac builds.
+  CHECK: grep -n "ALPHA_PREMIER_KIOSK" .github/workflows/release.yml .github/workflows/macos-build.yml
+  EVIDENCE: the check step and three build steps name both.
+- [x] Everything else still passes.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EVIDENCE: JS exit 0 (shared 41, client 632, server 208). Rust on Linux: lib 417 passed / 3 failed (the same 3 Windows-path tests); integration 11/18/75/36/58/24. Not shown: the real Firebase project and a real kiosk.
+- Known cost, accepted by building it this way: the kiosk account's password is inside the released program. Someone who takes the program apart can read the ID register and write to the kiosk backup, and nothing else in Keystone. See `docs/id-register.md`.
