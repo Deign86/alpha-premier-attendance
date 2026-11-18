@@ -292,7 +292,7 @@ pub async fn create_portable_backup(
     Ok(dest)
 }
 
-async fn snapshot_database_from_pool(db: &SqlitePool, dest: &Path) -> Result<(), String> {
+pub(crate) async fn snapshot_database_from_pool(db: &SqlitePool, dest: &Path) -> Result<(), String> {
     if dest.exists() {
         std::fs::remove_file(dest).ok();
     }

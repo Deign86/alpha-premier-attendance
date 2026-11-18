@@ -5,7 +5,7 @@ import type { IdRegisterStatus } from '@rfid-attendance/shared';
 import { IdRegisterPanel } from './id-register-panel';
 import { tauriApi } from './tauri-api';
 
-const noBackup = { records: 7120, backedUp: 0, lastCompleteAt: null, problem: null };
+const noBackup = { records: 7120, backedUp: 0, lastCompleteAt: null, mainRecordSince: null, problem: null };
 const signedOut: IdRegisterStatus = { builtIn: true, signedInAs: null, lastCheckedAt: null, problem: null, waiting: 0, backup: noBackup };
 const signedIn: IdRegisterStatus = {
   builtIn: true,
@@ -13,7 +13,7 @@ const signedIn: IdRegisterStatus = {
   lastCheckedAt: '2026-11-17T06:30:00Z',
   problem: null,
   waiting: 2,
-  backup: { records: 7120, backedUp: 7120, lastCompleteAt: '2026-11-17T06:31:00Z', problem: null },
+  backup: { records: 7120, backedUp: 7120, lastCompleteAt: '2026-11-17T06:31:00Z', mainRecordSince: null, problem: null },
 };
 
 describe('IdRegisterPanel', () => {
@@ -93,7 +93,7 @@ describe('IdRegisterPanel', () => {
     vi.spyOn(tauriApi, 'idRegisterStatus').mockResolvedValue({ ...signedIn, waiting: 0, backup: { ...noBackup, backedUp: 4800, problem } });
     render(<IdRegisterPanel />);
 
-    expect(await screen.findByText(/Backup: 4,800 of 7,120 records are in the shared backend\. This computer keeps the originals\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Backup: 4,800 of 7,120 records are in the shared backend\. This computer keeps the originals until Firebase has been counted equal\./)).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(problem);
   });
 
@@ -103,6 +103,14 @@ describe('IdRegisterPanel', () => {
 
     expect(await screen.findByText(/Backup: 7,120 of 7,120 records are in the shared backend, complete as of /)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('says since when Firebase is the main record', async () => {
+    vi.spyOn(tauriApi, 'idRegisterStatus').mockResolvedValue({ ...signedIn, waiting: 0, backup: { ...signedIn.backup, mainRecordSince: '2026-11-18T06:31:00Z' } });
+    render(<IdRegisterPanel />);
+
+    expect(await screen.findByText(/Firebase has been the main record since .+; this computer keeps a working copy\./)).toBeInTheDocument();
+    expect(screen.queryByText(/keeps the originals/)).not.toBeInTheDocument();
   });
 
   it('signs out, and says when the administrator session has ended', async () => {

@@ -154,8 +154,10 @@ export function IdRegisterPanel() {
       <p className="reset-hint">
         Backup: {status.backup.backedUp.toLocaleString('en-PH')} of {status.backup.records.toLocaleString('en-PH')}{' '}
         records are in the shared backend
-        {status.backup.lastCompleteAt ? `, complete as of ${formatDateTime(status.backup.lastCompleteAt)}` : ''}. This
-        computer keeps the originals.
+        {status.backup.lastCompleteAt ? `, complete as of ${formatDateTime(status.backup.lastCompleteAt)}` : ''}.{' '}
+        {status.backup.mainRecordSince
+          ? `Firebase has been the main record since ${formatDateTime(status.backup.mainRecordSince)}; this computer keeps a working copy.`
+          : 'This computer keeps the originals until Firebase has been counted equal.'}
       </p>
       <NoticeLine notice={status.backup.problem ? { tone: 'error', text: status.backup.problem } : null} />
       <button className="text-button" type="button" disabled={busy} onClick={() => void run(tauriApi.idRegisterSignOut)}>
