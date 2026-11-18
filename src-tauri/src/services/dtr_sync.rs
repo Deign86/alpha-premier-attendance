@@ -541,6 +541,74 @@ pub fn append_cell_to_sum_formula(existing: &str, new_cell: &str) -> String {
     format!("=SUM({new_cell})")
 }
 
+/// A date as Google Sheets stores it: whole days since 30 December 1899.
+pub fn sheet_date_serial(year: i32, month: u32, day: u32) -> i64 {
+    let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).expect("a fixed, valid date");
+    chrono::NaiveDate::from_ymd_opt(year, month, day).map_or(0, |date| (date - epoch).num_days())
+}
+
+/// The look of a month block's day rows and total row, as the months HR
+/// made by hand have it (they are Sheets tables): a date in column A, clock
+/// times in B to E, a number in F, thin borders round every cell, and day
+/// rows alternating white and pale grey. A block the app adds without these
+/// shows times as typed text and has no grid. Rows are 1-based, inclusive.
+pub fn month_block_look_requests(
+    sheet_id: i64,
+    data_start_1based: usize,
+    data_end_1based: usize,
+    total_row_1based: usize,
+) -> Vec<serde_json::Value> {
+    let days = |start_column: usize, end_column: usize| {
+        serde_json::json!({
+            "sheetId": sheet_id,
+            "startRowIndex": data_start_1based - 1,
+            "endRowIndex": data_end_1based,
+            "startColumnIndex": start_column,
+            "endColumnIndex": end_column,
+        })
+    };
+    let typed = |range: serde_json::Value, number_format: serde_json::Value, font: &str| {
+        serde_json::json!({
+            "repeatCell": {
+                "range": range,
+                "cell": { "userEnteredFormat": { "numberFormat": number_format, "textFormat": { "fontFamily": font } } },
+                "fields": "userEnteredFormat(numberFormat,textFormat.fontFamily)",
+            }
+        })
+    };
+    let line = serde_json::json!({ "style": "SOLID", "width": 1, "color": { "red": 0.0, "green": 0.0, "blue": 0.0 } });
+    vec![
+        typed(days(0, 1), serde_json::json!({ "type": "DATE", "pattern": "M/d/yyyy" }), "Roboto"),
+        typed(days(1, 5), serde_json::json!({ "type": "TIME", "pattern": "h:mm:ss am/pm" }), "Arial"),
+        typed(days(5, 6), serde_json::json!({ "type": "NUMBER" }), "Arial"),
+        serde_json::json!({
+            "updateBorders": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": data_start_1based - 1,
+                    "endRowIndex": total_row_1based,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 6,
+                },
+                "top": line, "bottom": line, "left": line, "right": line,
+                "innerHorizontal": line, "innerVertical": line,
+            }
+        }),
+        // White, then pale grey, from the first day down. The weekend rule above still wins on its days.
+        serde_json::json!({
+            "addBanding": {
+                "bandedRange": {
+                    "range": days(0, 6),
+                    "rowProperties": {
+                        "firstBandColor": { "red": 1.0, "green": 1.0, "blue": 1.0 },
+                        "secondBandColor": { "red": 0.9647059, "green": 0.972549, "blue": 0.9764706 },
+                    }
+                }
+            }
+        }),
+    ]
+}
+
 /// Build batchUpdate requests to append a standard month block to a DTR tab.
 /// Returns `(requests_json, header_row_1based, data_start_1based, total_row_1based)`.
 pub fn build_new_month_block_requests(
@@ -586,7 +654,8 @@ pub fn build_new_month_block_requests(
         let r = header_row_1based + d as usize;
         rows_data.push(serde_json::json!({
             "values": [
-                { "userEnteredValue": { "stringValue": format!("{month}/{d}/{year}") } },
+                // A real date, as in the months HR made by hand; the cell's own format shows it as 11/1/2026.
+                { "userEnteredValue": { "numberValue": sheet_date_serial(year, month, d) } },
                 { "userEnteredValue": { "stringValue": "" } },
                 { "userEnteredValue": { "stringValue": "" } },
                 { "userEnteredValue": { "stringValue": "" } },
@@ -640,30 +709,31 @@ pub fn build_new_month_block_requests(
                         },
                         "textFormat": {
                             "bold": true,
+                            "fontFamily": "Roboto",
                             "foregroundColor": { "red": 1.0, "green": 1.0, "blue": 1.0 },
                         },
                     }
                 },
-                "fields": "userEnteredFormat(backgroundColor,textFormat.bold,textFormat.foregroundColor)",
+                "fields": "userEnteredFormat(backgroundColor,textFormat.bold,textFormat.fontFamily,textFormat.foregroundColor)",
             }
         }),
-        // Format total row: salmon #E06666, bold
+        // Format total row: salmon #E06666 across the row, as the hand-made months have it
         serde_json::json!({
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": total_row_1based - 1,
                     "endRowIndex": total_row_1based,
-                    "startColumnIndex": 4,
+                    "startColumnIndex": 0,
                     "endColumnIndex": 6,
                 },
                 "cell": {
                     "userEnteredFormat": {
                         "backgroundColor": { "red": 0.8784314, "green": 0.4, "blue": 0.4 },
-                        "textFormat": { "bold": true },
+                        "textFormat": { "fontFamily": "Arial" },
                     }
                 },
-                "fields": "userEnteredFormat(backgroundColor,textFormat.bold)",
+                "fields": "userEnteredFormat(backgroundColor,textFormat.fontFamily)",
             }
         }),
         // Weekend conditional format rule
@@ -699,6 +769,8 @@ pub fn build_new_month_block_requests(
             }
         }),
     ];
+
+    requests.extend(month_block_look_requests(sheet_id, data_start_1based, data_end_1based, total_row_1based));
 
     if let Some(existing_j3) = existing_j3_formula {
         let new_j3 = append_cell_to_sum_formula(existing_j3, &format!("F{total_row_1based}"));
@@ -5794,7 +5866,7 @@ mod tests {
         assert_eq!(total_row, 100);
 
         let requests = requests_val.as_array().expect("requests array");
-        assert_eq!(requests.len(), 5);
+        assert_eq!(requests.len(), 10, "values, header, total, weekend rule, five for the look, then J3");
 
         // 1. updateCells for values
         let update_cells = &requests[0]["updateCells"];
@@ -5809,14 +5881,16 @@ mod tests {
         assert_eq!(cell_rows[0]["values"][5]["userEnteredValue"]["stringValue"], "TOTAL HOURS");
 
         // Day 1
-        assert_eq!(cell_rows[1]["values"][0]["userEnteredValue"]["stringValue"], "11/1/2026");
+        // 1 Nov 2026 as a real date (46327 days after 30 Dec 1899), not text.
+        assert_eq!(cell_rows[1]["values"][0]["userEnteredValue"]["numberValue"], 46327);
+        assert_eq!(sheet_date_serial(2026, 10, 1), 46296, "the number HR's own October block holds for 10/1/2026");
         assert_eq!(
             cell_rows[1]["values"][5]["userEnteredValue"]["formulaValue"],
             "=MIN(8,ROUND(((C70-B70)+(E70-D70))*24,0))"
         );
 
         // Day 30
-        assert_eq!(cell_rows[30]["values"][0]["userEnteredValue"]["stringValue"], "11/30/2026");
+        assert_eq!(cell_rows[30]["values"][0]["userEnteredValue"]["numberValue"], 46356);
         assert_eq!(
             cell_rows[30]["values"][5]["userEnteredValue"]["formulaValue"],
             "=MIN(8,ROUND(((C99-B99)+(E99-D99))*24,0))"
@@ -5839,7 +5913,22 @@ mod tests {
         let total_fmt = &requests[2]["repeatCell"];
         assert_eq!(total_fmt["range"]["startRowIndex"], 99);
         assert_eq!(total_fmt["range"]["endRowIndex"], 100);
-        assert_eq!(total_fmt["cell"]["userEnteredFormat"]["textFormat"]["bold"], true);
+        assert_eq!(total_fmt["range"]["startColumnIndex"], 0, "the whole total row is salmon, as in the hand-made months");
+        assert_eq!(total_fmt["cell"]["userEnteredFormat"]["textFormat"]["fontFamily"], "Arial");
+
+        // The look of the day rows: date, times, number; borders; alternating rows.
+        assert_eq!(requests[4]["repeatCell"]["cell"]["userEnteredFormat"]["numberFormat"]["type"], "DATE");
+        assert_eq!(requests[4]["repeatCell"]["range"], serde_json::json!({"sheetId": sheet_id, "startRowIndex": 69, "endRowIndex": 99, "startColumnIndex": 0, "endColumnIndex": 1}));
+        let times = &requests[5]["repeatCell"];
+        assert_eq!(times["cell"]["userEnteredFormat"]["numberFormat"], serde_json::json!({"type": "TIME", "pattern": "h:mm:ss am/pm"}));
+        assert_eq!((times["range"]["startColumnIndex"].as_u64(), times["range"]["endColumnIndex"].as_u64()), (Some(1), Some(5)), "B to E");
+        assert_eq!(requests[6]["repeatCell"]["cell"]["userEnteredFormat"]["numberFormat"]["type"], "NUMBER");
+        let borders = &requests[7]["updateBorders"];
+        assert_eq!((borders["range"]["startRowIndex"].as_u64(), borders["range"]["endRowIndex"].as_u64()), (Some(69), Some(100)), "the days and the total row");
+        assert_eq!(borders["innerHorizontal"]["style"], "SOLID");
+        let banding = &requests[8]["addBanding"]["bandedRange"];
+        assert_eq!((banding["range"]["startRowIndex"].as_u64(), banding["range"]["endRowIndex"].as_u64()), (Some(69), Some(99)), "the days only");
+        assert_eq!(banding["rowProperties"]["firstBandColor"]["red"], 1.0);
 
         // 4. addConditionalFormatRule
         let cf = &requests[3]["addConditionalFormatRule"]["rule"];
@@ -5851,7 +5940,7 @@ mod tests {
         );
 
         // 5. updateCells for J3 formula
-        let j3_update = &requests[4]["updateCells"];
+        let j3_update = &requests[9]["updateCells"];
         assert_eq!(j3_update["start"]["rowIndex"], 2);
         assert_eq!(j3_update["start"]["columnIndex"], 9);
         assert_eq!(
