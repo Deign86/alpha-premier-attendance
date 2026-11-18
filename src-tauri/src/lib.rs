@@ -158,7 +158,7 @@ async fn id_register_impl(
             let _ = id_register::run_once(state, endpoints).await;
         }
     }
-    Ok(id_register::status(&state.db).await)
+    Ok(id_register::status(state).await)
 }
 
 #[tauri::command]

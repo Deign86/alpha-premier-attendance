@@ -43,6 +43,10 @@ pub struct Endpoints {
     pub token: String,
     /// The company's document; `:runAggregationQuery` and `:runQuery` go on the end.
     pub register: String,
+    /// Where a batch of writes is sent (the kiosk's backup, `cloud_mirror.rs`).
+    pub commit: String,
+    /// What a document under the company's document is called in a write.
+    pub names: String,
 }
 
 /// The register baked in at build time (GitHub secrets
@@ -56,6 +60,8 @@ pub fn built_in() -> Option<Endpoints> {
         sign_in: format!("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={key}"),
         token: format!("https://securetoken.googleapis.com/v1/token?key={key}"),
         register: format!("https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents/keystone/apg"),
+        commit: format!("https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents:commit"),
+        names: format!("projects/{project}/databases/(default)/documents/keystone/apg"),
     })
 }
 
@@ -68,6 +74,8 @@ pub struct RegisterStatus {
     pub problem: Option<String>,
     /// Users added from the register who have no card yet.
     pub waiting: i64,
+    /// The kiosk's copy of its records in the shared backend.
+    pub backup: crate::services::cloud_mirror::BackupStatus,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -77,13 +85,14 @@ pub struct PullSummary {
     pub added: Vec<String>,
 }
 
-enum Answer {
+pub(crate) enum Answer {
     Ok(serde_json::Value),
-    Refused(String),
+    /// The HTTP status and the service's own message.
+    Refused(u16, String),
     Unreachable,
 }
 
-async fn ask(request: reqwest::RequestBuilder) -> Answer {
+pub(crate) async fn ask(request: reqwest::RequestBuilder) -> Answer {
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
@@ -103,10 +112,10 @@ async fn ask(request: reqwest::RequestBuilder) -> Answer {
     // Auth answers `{error}`; a Firestore query answers `[{error}]`.
     let error = body.get("error").or_else(|| body.get(0).and_then(|first| first.get("error")));
     let message = error.and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("").to_string();
-    Answer::Refused(message)
+    Answer::Refused(status.as_u16(), message)
 }
 
-fn http() -> Result<reqwest::Client, String> {
+pub(crate) fn http() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
@@ -123,7 +132,8 @@ async fn note_problem(db: &SqlitePool, problem: &str) -> String {
     problem.to_string()
 }
 
-pub async fn status(db: &SqlitePool) -> RegisterStatus {
+pub async fn status(state: &AppState) -> RegisterStatus {
+    let db = &state.db;
     let waiting = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE rfid_uid LIKE ? || '%'")
         .bind(WAITING_PREFIX)
         .fetch_one(db)
@@ -138,6 +148,7 @@ pub async fn status(db: &SqlitePool) -> RegisterStatus {
         last_checked_at: read_setting(db, CHECKED_KEY).await,
         problem: read_setting(db, PROBLEM_KEY).await.filter(|p| !p.is_empty()),
         waiting,
+        backup: crate::services::cloud_mirror::status(state).await,
     }
 }
 
@@ -173,7 +184,7 @@ pub async fn sign_in(
     .await;
     let body = match signed {
         Answer::Ok(body) => body,
-        Answer::Refused(code) => return Err(sign_in_refusal(&code)),
+        Answer::Refused(_, code) => return Err(sign_in_refusal(&code)),
         Answer::Unreachable => return Err(UNREACHABLE.into()),
     };
     let text = |name: &str| body.get(name).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -216,7 +227,7 @@ pub async fn run_once(state: &AppState, endpoints: Option<&Endpoints>) -> Result
     .await;
     let body = match refreshed {
         Answer::Ok(body) => body,
-        Answer::Refused(code) => {
+        Answer::Refused(_, code) => {
             // The account was removed, turned off or its password changed.
             forget(&state.db, TOKEN_KEY).await;
             forget(&state.db, COUNT_KEY).await;
@@ -234,7 +245,12 @@ pub async fn run_once(state: &AppState, endpoints: Option<&Endpoints>) -> Result
     if !rotated.is_empty() && rotated != refresh_token {
         store_setting(&state.db, TOKEN_KEY, &rotated, &chrono::Utc::now().to_rfc3339()).await?;
     }
-    match pull(state, &client, endpoints, &id_token).await {
+    let pulled = pull(state, &client, endpoints, &id_token).await;
+    // The backup has its own problem line; a pull that failed does not stop it, nor the other way round.
+    if let Err(problem) = crate::services::cloud_mirror::push(state, &client, endpoints, &id_token).await {
+        log::warn!("cloud backup pass failed: {problem}");
+    }
+    match pulled {
         Ok(summary) => Ok(summary),
         Err(problem) => Err(note_problem(&state.db, &problem).await),
     }
@@ -388,28 +404,32 @@ async fn pull(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    const PASSWORD: &str = "the-kiosk-password";
+    pub(crate) const PASSWORD: &str = "the-kiosk-password";
 
-    struct Card {
-        number: &'static str,
-        kind: Option<&'static str>,
-        name: &'static str,
-        title: &'static str,
+    pub(crate) struct Card {
+        pub(crate) number: &'static str,
+        pub(crate) kind: Option<&'static str>,
+        pub(crate) name: &'static str,
+        pub(crate) title: &'static str,
     }
 
     /// A stand-in for Firebase Auth and the register on a loopback port. It
     /// answers the way the real services do and notes what it was asked.
     #[derive(Default)]
-    struct Fake {
-        cards: Vec<Card>,
-        refuse_refresh: bool,
-        refuse_register: bool,
-        asked: Vec<&'static str>,
+    pub(crate) struct Fake {
+        pub(crate) cards: Vec<Card>,
+        pub(crate) refuse_refresh: bool,
+        pub(crate) refuse_register: bool,
+        /// The status the backup's writes are refused with, when they are.
+        pub(crate) refuse_backup: Option<u16>,
+        pub(crate) asked: Vec<&'static str>,
+        /// Every write the backup sent, in order, one list per request.
+        pub(crate) written: Vec<Vec<serde_json::Value>>,
     }
 
     impl Fake {
@@ -435,9 +455,20 @@ mod tests {
                 return (200, serde_json::json!({"id_token": "id-1", "refresh_token": "refresh-1"}));
             }
             let counting = path.starts_with("/reg:runAggregationQuery");
-            self.asked.push(if counting { "count" } else { "list" });
+            let backup = path.starts_with("/commit");
+            self.asked.push(if backup { "backup" } else if counting { "count" } else { "list" });
             if !head.to_ascii_lowercase().contains("authorization: bearer id-1") {
                 return (401, serde_json::json!([{"error": {"code": 401, "message": "Missing or invalid authentication."}}]));
+            }
+            if backup {
+                if let Some(code) = self.refuse_backup {
+                    return refused(code, "Missing or insufficient permissions.");
+                }
+                let sent: serde_json::Value = serde_json::from_str(body).unwrap();
+                let writes = sent["writes"].as_array().unwrap().clone();
+                let results: Vec<serde_json::Value> = writes.iter().map(|_| serde_json::json!({"updateTime": "t"})).collect();
+                self.written.push(writes);
+                return (200, serde_json::json!({"writeResults": results, "commitTime": "t"}));
             }
             if self.refuse_register {
                 return (403, serde_json::json!([{"error": {"code": 403, "message": "Missing or insufficient permissions."}}]));
@@ -461,7 +492,7 @@ mod tests {
         }
     }
 
-    async fn serve(fake: Arc<Mutex<Fake>>) -> (Endpoints, tokio::task::JoinHandle<()>) {
+    pub(crate) async fn serve(fake: Arc<Mutex<Fake>>) -> (Endpoints, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -496,18 +527,18 @@ mod tests {
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        (Endpoints { sign_in: format!("{at}/signin?key=k"), token: format!("{at}/token?key=k"), register: format!("{at}/reg") }, server)
+        (Endpoints { sign_in: format!("{at}/signin?key=k"), token: format!("{at}/token?key=k"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }, server)
     }
 
     /// Somewhere nothing answers.
-    async fn nowhere() -> Endpoints {
+    pub(crate) async fn nowhere() -> Endpoints {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        Endpoints { sign_in: format!("{at}/signin"), token: format!("{at}/token"), register: format!("{at}/reg") }
+        Endpoints { sign_in: format!("{at}/signin"), token: format!("{at}/token"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }
     }
 
-    async fn kiosk(tag: &str) -> (AppState, std::path::PathBuf) {
+    pub(crate) async fn kiosk(tag: &str) -> (AppState, std::path::PathBuf) {
         let temp = std::env::temp_dir().join(format!("alpha-idreg-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let state = AppState::new(
@@ -526,17 +557,17 @@ mod tests {
         (state, temp)
     }
 
-    async fn close(state: AppState, temp: std::path::PathBuf, server: tokio::task::JoinHandle<()>) {
+    pub(crate) async fn close(state: AppState, temp: std::path::PathBuf, server: tokio::task::JoinHandle<()>) {
         server.abort();
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }
 
-    fn register(cards: Vec<Card>) -> Arc<Mutex<Fake>> {
+    pub(crate) fn register(cards: Vec<Card>) -> Arc<Mutex<Fake>> {
         Arc::new(Mutex::new(Fake { cards, ..Fake::default() }))
     }
 
-    fn intern(number: &'static str, name: &'static str) -> Card {
+    pub(crate) fn intern(number: &'static str, name: &'static str) -> Card {
         Card { number, kind: Some("intern"), name, title: "IT Intern" }
     }
 
@@ -585,7 +616,7 @@ mod tests {
             .unwrap();
         assert_eq!(audit, vec!["ID_REGISTER_PULL".to_string()], "the audit line says where the user came from");
 
-        let now = status(&state.db).await;
+        let now = status(&state).await;
         assert_eq!(now.signed_in_as.as_deref(), Some("kiosk@example.test"));
         assert_eq!(now.waiting, 1);
         assert_eq!(now.problem, None);
@@ -641,13 +672,14 @@ mod tests {
         // Signing in: the sign-in, a count to prove the account can read, then the first pull.
         assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["signin", "count", "count", "list"]);
 
+        // The first pass after signing in also sends the backup; with nothing changed, the next sends nothing.
         run_once(&state, Some(&endpoints)).await.unwrap();
         run_once(&state, Some(&endpoints)).await.unwrap();
-        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "token", "count"]);
+        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "backup", "token", "count"]);
 
         fake.lock().unwrap().cards.push(intern("APG-2026-127", "Ana Reyes"));
         run_once(&state, Some(&endpoints)).await.unwrap();
-        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "list"]);
+        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "list", "backup"]);
         close(state, temp, server).await;
     }
 
@@ -673,16 +705,16 @@ mod tests {
         // Unreachable: nothing changes, and it is tried again.
         let unreachable = run_once(&state, Some(&nowhere().await)).await;
         assert_eq!(unreachable.unwrap_err(), UNREACHABLE);
-        let now = status(&state.db).await;
+        let now = status(&state).await;
         assert_eq!(now.problem.as_deref(), Some(UNREACHABLE));
         assert_eq!(now.signed_in_as.as_deref(), Some("kiosk@example.test"), "an unreachable register keeps the sign-in");
         run_once(&state, Some(&endpoints)).await.unwrap();
-        assert_eq!(status(&state.db).await.problem, None, "a pass that works clears the problem");
+        assert_eq!(status(&state).await.problem, None, "a pass that works clears the problem");
 
         // The account loses the register: said so, sign-in kept for when it is given back.
         fake.lock().unwrap().refuse_register = true;
         assert_eq!(run_once(&state, Some(&endpoints)).await.unwrap_err(), NOT_ALLOWED);
-        let now = status(&state.db).await;
+        let now = status(&state).await;
         assert_eq!(now.problem.as_deref(), Some(NOT_ALLOWED));
         assert!(now.signed_in_as.is_some());
         fake.lock().unwrap().refuse_register = false;
@@ -691,7 +723,7 @@ mod tests {
         fake.lock().unwrap().refuse_refresh = true;
         let refused = run_once(&state, Some(&endpoints)).await.unwrap_err();
         assert!(refused.contains("TOKEN_EXPIRED") && refused.ends_with("Sign in again."), "{refused}");
-        let now = status(&state.db).await;
+        let now = status(&state).await;
         assert_eq!(now.signed_in_as, None);
         assert_eq!(now.problem.as_deref(), Some(refused.as_str()));
         // Signed out: later passes ask nothing.
@@ -714,7 +746,7 @@ mod tests {
         assert!(fake.lock().unwrap().asked.is_empty());
         // Tests are built without the secrets, as a copy built by hand would be.
         assert!(built_in().is_none());
-        assert!(!status(&state.db).await.built_in);
+        assert!(!status(&state).await.built_in);
         close(state, temp, server).await;
     }
 
@@ -740,7 +772,7 @@ mod tests {
         // One row: the waiting user is changed, not doubled.
         let cards: Vec<String> = sqlx::query_scalar("SELECT rfid_uid FROM users").fetch_all(&state.db).await.unwrap();
         assert_eq!(cards, vec!["A1B2C3D4".to_string()]);
-        assert_eq!(status(&state.db).await.waiting, 0);
+        assert_eq!(status(&state).await.waiting, 0);
 
         let tap = crate::scan_rfid_impl(None, &state, serde_json::json!({"rfidUid": "A1B2C3D4", "source": "RFID"})).await.unwrap();
         assert_eq!(tap["success"], true, "{tap}");

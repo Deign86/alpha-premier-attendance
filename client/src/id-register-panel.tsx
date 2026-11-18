@@ -16,7 +16,8 @@ function problemText<T>(error: T): string {
 
 /**
  * System: the kiosk's connection to the ID register. New interns issued a card by the ID Maker arrive in Users on
- * their own, waiting for a card. The kiosk signs in once with its own register-only account; the password is not kept.
+ * their own, waiting for a card. The kiosk signs in once with its own account; the password is not kept. While signed
+ * in, the kiosk also keeps a copy of its records in the shared backend, and says here how far that has got.
  */
 export function IdRegisterPanel() {
   // The register is read by the desktop app only.
@@ -150,6 +151,13 @@ export function IdRegisterPanel() {
       <NoticeLine notice={status.problem ? { tone: 'error', text: status.problem } : null} />
       {errorLine}
       {waitingLine}
+      <p className="reset-hint">
+        Backup: {status.backup.backedUp.toLocaleString('en-PH')} of {status.backup.records.toLocaleString('en-PH')}{' '}
+        records are in the shared backend
+        {status.backup.lastCompleteAt ? `, complete as of ${formatDateTime(status.backup.lastCompleteAt)}` : ''}. This
+        computer keeps the originals.
+      </p>
+      <NoticeLine notice={status.backup.problem ? { tone: 'error', text: status.backup.problem } : null} />
       <button className="text-button" type="button" disabled={busy} onClick={() => void run(tauriApi.idRegisterSignOut)}>
         Sign out of the ID register
       </button>

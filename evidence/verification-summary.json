@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-17T15:08:51.301Z",
+  "timestamp": "2026-11-18T01:58:01.962Z",
   "doctor": {
     "passed": true,
     "checks": [
@@ -45,6 +45,6 @@
     "total": 7,
     "passed": 7,
     "failed": 0,
-    "durationMs": 132
+    "durationMs": 75
   }
 }
