@@ -66,9 +66,7 @@ pub fn token_failure_is_auth_config(error: &str) -> bool {
 // Retained for sheet-contract readability (owner template labels). DTR rows
 // carry actual stamps only since the DTR/payroll decoupling; nothing
 // substitutes these into B:E anymore.
-#[allow(dead_code)]
 pub const DTR_LUNCH_OUT: &str = "12:00:00 PM";
-#[allow(dead_code)]
 pub const DTR_LUNCH_IN: &str = "1:00:00 PM";
 
 /// Per-device kill switch for intern-DTR pushes, stored in the LOCAL
@@ -1769,7 +1767,7 @@ fn parse_duplicate_sheet_id(body: &serde_json::Value) -> Option<i64> {
 /// new intern never overlaps.
 // Test-only wrapper: production paths resolve through `DtrMatchIndex`
 // (built per run, rebuilt after tab mutations); unit tests pin this name.
-#[allow(dead_code)]
+#[cfg(test)]
 fn tab_name_overlaps_user(tab_titles: &[String], full_name: &str) -> bool {
     DtrMatchIndex::build(tab_titles, &[]).overlaps(full_name)
 }

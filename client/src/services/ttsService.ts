@@ -100,13 +100,6 @@ export async function checkVoiceStudioConnection(baseUrl: string, pin?: string):
   }
 }
 
-export const AVAILABLE_VOICE_MODELS = [
-  { id: 'en_US-amy-medium', label: 'Amy (Professional & Warm Female Voice)' },
-  { id: 'en_US-lessac-medium', label: 'Lessac (Natural US English, Balanced)' },
-  { id: 'en_US-libritts_r-medium', label: 'LibriTTS (Studio Quality Voice)' },
-  { id: 'en_US-hfc_female-medium', label: 'HFC Female (Clear Office Voice)' },
-] as const;
-
 type SerializedTtsSettings = {
   enabled?: boolean;
   engine?: string;

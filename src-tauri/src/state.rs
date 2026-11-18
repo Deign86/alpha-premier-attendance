@@ -253,7 +253,7 @@ pub struct AppState {
     /// denial from a merely nearly-exhausted bucket in health activity.
     pub dtr_throttle_denied_until_ms: Arc<AtomicU64>,
     /// Plan todo 8 (frozen): in-memory half of the shared in-progress guard.
-    /// Fast mutual exclusion across admin_sync_now + admin_sync_intern_dtr +
+    /// Fast mutual exclusion across the background pass + admin_sync_intern_dtr +
     /// per-row sync; the persisted half is the sync_state row
     /// (__sync_guard__/manual_dtr_sync). Fresh false on every boot — a
     /// restart can never inherit a held flag.
@@ -403,7 +403,7 @@ impl AppState {
 }
 
 /// Plan todo 8 (frozen guard API — todos 9-10 build UI on it): the DB half
-/// of the shared in-progress guard. Owner strings: "admin_sync_now",
+/// of the shared in-progress guard. Owner strings: "background_sync",
 /// "admin_sync_intern_dtr:bulk", "admin_sync_intern_dtr:user:<id>".
 fn sync_guard_epoch_secs(started_at: &str) -> Option<u64> {
     chrono::DateTime::parse_from_rfc3339(started_at)

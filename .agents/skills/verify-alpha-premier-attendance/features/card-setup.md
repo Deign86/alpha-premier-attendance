@@ -29,7 +29,7 @@ Preconditions:
 
 - **Trigger Setup Unlock** (see IPC route note above):
   `setup_unlock` with `{ "pin": "<admin PIN>" }` (the shared admin PIN — setup has
-  no separate privilege; `admin_unlock` is an alias. A registered
+  no separate privilege. A registered
   `ADMIN_ASSIST` card UID also unlocks).
   *Observable result*: Returns `{ "success": true, "token": "<token>", "expiresAt": "..." }`.
 

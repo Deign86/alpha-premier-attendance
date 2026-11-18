@@ -27,8 +27,8 @@ Preconditions:
 - Desktop app is running and responsive on Tauri MCP bridge port 9223.
 - Database contains active system configuration with admin PIN configured.
 
-- **Authenticate Session**: Unlock admin panel with PIN (`setup_unlock` or the
-  `admin_unlock` alias; args `{ "pin": "<admin PIN>" }`).
+- **Authenticate Session**: Unlock admin panel with PIN (`setup_unlock`;
+  args `{ "pin": "<admin PIN>" }`).
   *Observable result*: Returns `{ "success": true, "token": "<session_token>",
   "expiresAt": "..." }` (~15 min fixed expiry, non-sliding). Failures are
   `INVALID_ADMIN_PIN` / `ADMIN_AUTH_REQUIRED` / `ADMIN_SESSION_EXPIRED` —

@@ -13,8 +13,6 @@ use tauri::{AppHandle, Emitter};
 
 use crate::config::{ScannerCharacterSet, ScannerConfig};
 
-#[allow(dead_code)]
-pub const SCAN_EVENT: &str = "rfid-scan";
 pub const STATUS_EVENT: &str = "scanner-status";
 
 /// Machine-readable scanner lifecycle state surfaced to the UI.

@@ -2576,3 +2576,6 @@ OWNS: `src-tauri/src/services/{firebase,settings,unlock_guard,users}.rs`, the th
 - [x] U2: Saving and deleting a user live in `services/users.rs`; no service's production code imports them from the crate root.
   CHECK: `cd src-tauri && cargo test --no-fail-fast` and `grep -rn "crate::\(save_user\|upsert_user_record\|delete_user_and_cascade\|SaveOrigin\)" src/services` prints nothing
   EVIDENCE: no output; lib 423 passed, the same 3 failed; integration 18/75/36/58/24/3 (2026-11-18).
+- [x] U3: Commands and code nothing calls are gone (`admin_update_user`, `admin_unlock`, `admin_lock`, `payroll_calculate_cutoff`, `admin_retry_sync_item`, `admin_sync_now`, `open_generated_artifact`, the unheard `attendance-changed` event, `client/src/speech.ts`, unused `network.ts` exports, three unused Sheets wrappers); every command a script calls is kept.
+  CHECK: `cd src-tauri && cargo test --no-fail-fast`; `cd client && npm test && npm run typecheck && npm run lint`
+  EVIDENCE: lib 422 passed (one test went with `should_hide_on_close`), the same 3 failed; integration 18/75/36/58/24/3; client 621 passed in 26 files (the 11 `speech.test.ts` tests went with `speech.ts`), typecheck and lint clean (2026-11-18).

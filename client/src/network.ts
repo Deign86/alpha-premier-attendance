@@ -6,23 +6,9 @@ export type QueuedScan = {
 };
 
 const OFFLINE_QUEUE_KEY = 'alpha_premier_offline_scans';
-let simulatedOffline = false;
-
-/** Controls simulated offline state for development and testing */
-export function setSimulatedOffline(offline: boolean): void {
-  simulatedOffline = offline;
-  if ('window' in globalThis) {
-    window.dispatchEvent(new Event(offline ? 'offline' : 'online'));
-  }
-}
-
-export function isSimulatedOffline(): boolean {
-  return simulatedOffline;
-}
 
 /** Check if the browser or desktop shell currently has network connectivity */
 export function isOnline(): boolean {
-  if (simulatedOffline) return false;
   return 'navigator' in globalThis ? navigator.onLine : true;
 }
 
@@ -64,17 +50,6 @@ export function removeQueuedScan(id: string): void {
   }
 }
 
-/** Clear all queued offline scans */
-export function clearOfflineQueue(): void {
-  try {
-    if ('localStorage' in globalThis) {
-      localStorage.removeItem(OFFLINE_QUEUE_KEY);
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
 /** Resolve browser-facing API and realtime endpoints without assuming localhost. */
 export function resolveApiBaseUrl(currentOrigin: string, configured?: string): string {
   const override = configured?.trim();
@@ -91,14 +66,4 @@ export function apiUrl(path: string): string {
   const base = apiBaseUrl();
   if (!base) return path;
   return new URL(path, `${base}/`).toString();
-}
-
-export function sseUrl(path: string): string {
-  return apiUrl(path);
-}
-
-export function websocketUrl(path: string): string {
-  const url = new URL(apiUrl(path), 'window' in globalThis ? window.location.origin : 'http://localhost');
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  return url.toString();
 }

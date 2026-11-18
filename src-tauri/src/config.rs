@@ -34,8 +34,8 @@ pub struct LanConfig {
     /// Title for a newly created Google Sheets spreadsheet.
     #[serde(default = "default_google_spreadsheet_title")]
     pub google_spreadsheet_title: String,
-    /// `None` = no PIN set yet: admin RFID cards work and "Forgot PIN?" sets one.
-    /// `Some("")` = admin access off. Any other value is a config.toml PIN.
+    /// `None` = normal use: admin RFID cards and Keystone accounts open the admin screens.
+    /// `Some("")` = admin access off. Any other value is IT's way back, typed in the card field.
     #[serde(default)]
     pub admin_pin: Option<String>,
     #[serde(default = "default_admin_session_minutes")]

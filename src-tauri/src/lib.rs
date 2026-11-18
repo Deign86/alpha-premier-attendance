@@ -362,15 +362,6 @@ async fn admin_create_user(
     admin_upsert_user(state, token, user).await
 }
 
-#[tauri::command]
-async fn admin_update_user(
-    state: State<'_, AppState>,
-    token: String,
-    user: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    admin_upsert_user(state, token, user).await
-}
-
 /// BUG-DB-02: translate raw SQLite FK violations into a user-friendly error
 /// instead of leaking the opaque constraint message to the admin panel.
 fn friendly_delete_user_error(error: String) -> String {
@@ -1588,7 +1579,6 @@ async fn admin_create_backdated_attendance_impl(
     });
     if let Some(app_handle) = app {
         let _ = app_handle.emit("attendance-updated", &event_payload);
-        let _ = app_handle.emit("attendance-changed", &event_payload);
     }
     let _ = sqlx::query(
         "INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_ATTENDANCE_CREATED', ?, ?, ?)"
@@ -1766,21 +1756,6 @@ async fn admin_delete_attendance_impl(
     tx.commit().await.map_err(|e| e.to_string())?;
     publish_attendance_change(state, attendance_id, date, "ADMIN_DELETE", "delete");
     Ok(serde_json::json!({"success":true,"attendanceId":attendance_id}))
-}
-
-#[tauri::command]
-fn payroll_calculate_cutoff(input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let parsed = cutoff_input(&input);
-    let result = crate::services::cutoff_payroll::calculate(&parsed)?;
-    let late_units = input
-        .get("lateUnits")
-        .and_then(|value| value.as_f64())
-        .unwrap_or(0.0)
-        .max(0.0);
-    Ok(serde_json::json!({
-        "success": true,
-        "result": transparent_cutoff_breakdown(&parsed, &result, late_units, Vec::new())
-    }))
 }
 
 #[tauri::command]
@@ -3800,14 +3775,6 @@ async fn setup_upsert_user(
 }
 
 #[tauri::command]
-async fn admin_unlock(
-    state: State<'_, AppState>,
-    pin: String,
-) -> Result<serde_json::Value, String> {
-    setup_unlock(state, pin).await
-}
-
-#[tauri::command]
 async fn admin_get_session(
     state: State<'_, AppState>,
     token: String,
@@ -3816,11 +3783,6 @@ async fn admin_get_session(
         return Err("ADMIN_SESSION_EXPIRED".into());
     }
     Ok(serde_json::json!({"success":true}))
-}
-
-#[tauri::command]
-async fn admin_lock(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    setup_lock(state).await
 }
 
 #[derive(serde::Serialize)]
@@ -4338,77 +4300,6 @@ async fn admin_get_sync_status(
 }
 
 #[tauri::command]
-async fn admin_retry_sync_item(
-    state: State<'_, AppState>,
-    token: String,
-    id: i64,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    // Only rows still waiting can be retried: re-arming a SYNCED (or
-    // superseded) row would replay an intent a newer one already replaced.
-    let updated = sqlx::query("UPDATE sync_queue SET status='PENDING', attempts=0, transient_strikes=0, last_error=NULL, last_error_code=NULL, locked_at=NULL, next_attempt_at=?, updated_at=? WHERE id=? AND status IN ('PENDING','RETRY','DEAD')").bind(&now).bind(&now).bind(id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    if updated.rows_affected() != 1 {
-        return Err("SYNC_ITEM_NOT_FOUND".into());
-    }
-    Ok(serde_json::json!({"success":true,"id":id}))
-}
-
-#[tauri::command]
-async fn admin_sync_now(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    token: String,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    // Plan todo 8: shared in-progress guard — the second concurrent manual
-    // caller gets DTR_SYNC_IN_PROGRESS; the flag is released on every exit.
-    if let Err(busy) = crate::state::sync_guard_try_acquire(
-        &state.db,
-        state.sync_in_progress.as_ref(),
-        "admin_sync_now",
-    )
-    .await
-    {
-        return Err(busy);
-    }
-    // T10: drain the queue in batches so "Sync now" cannot report partial
-    // work as complete; the pass cap backstops against a poison-item loop.
-    let mut processed_total: u64 = 0;
-    let mut drain_error: Option<String> = None;
-    for _ in 0..20 {
-        match crate::services::sheets_sync::run_once(&state, state.lan.sheets_sync_endpoint.as_deref())
-            .await
-        {
-            Ok(processed) => {
-                processed_total += processed;
-                if processed == 0 {
-                    break;
-                }
-            }
-            Err(error) => {
-                drain_error = Some(error);
-                break;
-            }
-        }
-    }
-    crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
-    emit_dtr_sync_health(&app, &state).await;
-    if let Some(error) = drain_error {
-        return Err(error);
-    }
-    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING','RETRY')")
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"success":true,"processed":processed_total,"remaining":remaining}))
-}
-
-#[tauri::command]
 async fn dtr_recon_get_latest_report(
     state: State<'_, AppState>,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -4863,48 +4754,6 @@ fn valid_cutoff_date(value: &str) -> bool {
     // P7: shape checks alone accepted Feb-30 and month 99 — parse a real
     // calendar day instead.
     chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
-}
-
-#[tauri::command]
-async fn open_generated_artifact(
-    state: State<'_, AppState>,
-    token: String,
-    artifact_id: String,
-) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
-    let relative: String = sqlx::query_scalar("SELECT managed_relative_path FROM generated_artifacts WHERE artifact_id=? AND state='AVAILABLE'").bind(&artifact_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?.ok_or_else(|| "ARTIFACT_NOT_FOUND".to_string())?;
-    let root =
-        std::fs::canonicalize(&state.data_dir).map_err(|_| "ARTIFACT_PATH_ERROR".to_string())?;
-    let canonical = crate::paths::canonical_within(
-        &root,
-        &root.join(&relative),
-        "ARTIFACT_PATH_ERROR",
-        "ARTIFACT_NOT_FOUND",
-        "ARTIFACT_PATH_ERROR",
-    )?;
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer.exe")
-            .arg("/select,")
-            .arg(&canonical)
-            .spawn()
-            .map_err(|_| "ARTIFACT_OPEN_FAILED".to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("/usr/bin/open")
-            .arg("-R")
-            .arg(&canonical)
-            .spawn()
-            .map_err(|_| "ARTIFACT_OPEN_FAILED".to_string())?;
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let _ = canonical;
-    }
-    Ok(serde_json::json!({"success":true,"artifactId":artifact_id}))
 }
 
 /// `Err(ADMIN_AUTH_REQUIRED)` unless `token` is the live admin session.
@@ -5467,7 +5316,6 @@ async fn scan_rfid_at(
     });
     if let Some(app) = app {
         let _ = app.emit("attendance-updated", &event_payload);
-        let _ = app.emit("attendance-changed", &event_payload);
     }
     let audit_msg = if is_admin_card {
         format!("{} recorded (Assisted by {})", action, recorded_by.as_deref().unwrap_or("Admin"))
@@ -6145,7 +5993,7 @@ pub fn run() {
                 let window_for_events = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        if !lifecycle::should_hide_on_close(true) {
+                        if lifecycle::exit_requested() {
                             return;
                         }
                         api.prevent_close();
@@ -6195,14 +6043,12 @@ pub fn run() {
             admin_list_users,
             admin_upsert_user,
             admin_create_user,
-            admin_update_user,
             admin_delete_user,
             admin_attendance,
             admin_list_attendance,
             admin_update_attendance,
             admin_create_backdated_attendance,
             admin_delete_attendance,
-            payroll_calculate_cutoff,
             payroll_list_profiles,
             payroll_upsert_profile,
             payroll_delete_profile,
@@ -6221,7 +6067,6 @@ pub fn run() {
             open_generated_file,
             reveal_generated_file,
             open_generated_directory,
-            open_generated_artifact,
             db_info,
             db_backup,
             db_restore_request,
@@ -6234,16 +6079,12 @@ pub fn run() {
             admin_account_reset,
             setup_lookup_card,
             setup_upsert_user,
-            admin_unlock,
             admin_get_session,
-            admin_lock,
             admin_get_sync_status,
-            admin_retry_sync_item,
-            admin_sync_now,
             admin_sheets_nuke_resync,
+            admin_sync_intern_dtr,
             dtr_recon_get_latest_report,
             dtr_recon_run_manual,
-            admin_sync_intern_dtr,
             admin_get_intern_dtr_sync,
             admin_set_intern_dtr_sync,
             lan_status,
@@ -6938,7 +6779,7 @@ mod tests {
 
     #[test]
     fn updated_cutoff_breakdown_contains_deductions_and_half_day_centavos() {
-        let breakdown = super::payroll_calculate_cutoff(serde_json::json!({
+        let parsed = super::cutoff_input(&serde_json::json!({
             "employeeId": "EMP-BREAKDOWN",
             "employeeName": "Breakdown Employee",
             "employeeType": "EMPLOYEE",
@@ -6950,9 +6791,9 @@ mod tests {
             "halfDayCount": 1.0,
             "halfDayFraction": 0.5,
             "halfDayDeduction": 250.0,
-        }))
-        .expect("cutoff calculation");
-        let breakdown = &breakdown["result"];
+        }));
+        let result = crate::services::cutoff_payroll::calculate(&parsed).expect("cutoff calculation");
+        let breakdown = &super::transparent_cutoff_breakdown(&parsed, &result, 0.0, Vec::new());
 
         assert!(breakdown["deductions"].is_array());
         assert_eq!(breakdown["halfDayCentavos"], 25_000);

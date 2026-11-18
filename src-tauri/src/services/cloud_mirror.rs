@@ -18,8 +18,8 @@
 //!   been counted equal to this database; a copy of the database as it was
 //!   then is kept beside it.
 //! - TINs and bank account numbers go apart, under `attprivate_<table>/<id>`.
-//! - Left here on purpose: settings (they hold the admin PIN hash and
-//!   sign-in tokens), the Sheets queue and export jobs. Photos are files on
+//! - Left here on purpose: settings (they hold remembered password hashes
+//!   and sign-in tokens), the Sheets queue and export jobs. Photos are files on
 //!   this computer and are never sent.
 
 use crate::services::firebase::{self, ask, Answer, CountRefusal, Endpoints};
@@ -463,7 +463,7 @@ mod tests {
         assert!(written.iter().any(|write| named(write).starts_with("att_attendance/")), "the tap is sent");
         assert!(written.iter().any(|write| named(write).starts_with("att_audit_logs/")));
         let everything = serde_json::to_string(&written).unwrap();
-        for kept_here in ["admin_pin_hash", "refresh-1", "id_register_refresh_token", "app_settings", "sync_queue"] {
+        for kept_here in ["refresh-1", "id_register_refresh_token", "app_settings", "sync_queue"] {
             assert!(!everything.contains(kept_here), "{kept_here} is not part of the backup");
         }
         let after = status(&state).await;

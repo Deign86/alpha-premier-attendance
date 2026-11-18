@@ -294,10 +294,6 @@ pub struct VoicePullSummary {
     pub completed: bool,
 }
 
-pub async fn check_connection(db: &SqlitePool) -> VoiceConnectionStatus {
-    check_connection_to(&get_host(db).await, &get_pin(db).await).await
-}
-
 /// Probe a host/PIN without saving them: "Check" tests what was typed, and
 /// only Save stores it.
 pub async fn check_connection_to(host: &str, pin: &str) -> VoiceConnectionStatus {
