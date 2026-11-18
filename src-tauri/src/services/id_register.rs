@@ -27,11 +27,16 @@ const COUNT_KEY: &str = "id_register_count";
 const SEEN_KEY: &str = "id_register_seen";
 const CHECKED_KEY: &str = "id_register_checked_at";
 const PROBLEM_KEY: &str = "id_register_problem";
+/// Set when the built-in account was refused, so a wrong password is not
+/// tried every two minutes until the account is locked. Cleared when the app
+/// starts and by "Check now".
+const REFUSED_KEY: &str = "id_register_account_refused";
 
 /// What a waiting user's `rfid_uid` starts with.
 pub const WAITING_PREFIX: &str = "PENDING-";
 
 const NOT_BUILT_IN: &str = "The ID register is not built into this copy of the app.";
+const NO_ACCOUNT: &str = "This copy of the app has no kiosk account built in, so it cannot reach the ID register.";
 const UNREACHABLE: &str = "Could not reach the ID register. The kiosk will try again.";
 const UNREADABLE: &str = "The ID register gave an answer the kiosk could not read. The kiosk will try again.";
 const NOT_ALLOWED: &str = "This account may not read the ID register. Ask the owner to add it as a kiosk device.";
@@ -47,11 +52,16 @@ pub struct Endpoints {
     pub commit: String,
     /// What a document under the company's document is called in a write.
     pub names: String,
+    /// The kiosk's own account, email and password, when one is built in.
+    /// The kiosk then signs in by itself and nobody is asked for anything.
+    pub account: Option<(String, String)>,
 }
 
 /// The register baked in at build time (GitHub secrets
-/// `ALPHA_PREMIER_FIREBASE_PROJECT_ID` and `ALPHA_PREMIER_FIREBASE_API_KEY`).
-/// A build without them has no register and asks nothing.
+/// `ALPHA_PREMIER_FIREBASE_PROJECT_ID` and `ALPHA_PREMIER_FIREBASE_API_KEY`),
+/// with the kiosk's account (`ALPHA_PREMIER_KIOSK_EMAIL` and
+/// `ALPHA_PREMIER_KIOSK_PASSWORD`). A build without the first two has no
+/// register and asks nothing; one without the account cannot sign in.
 pub fn built_in() -> Option<Endpoints> {
     let filled = |value: Option<&'static str>| value.map(str::trim).filter(|v| !v.is_empty());
     let project = filled(option_env!("ALPHA_PREMIER_FIREBASE_PROJECT_ID"))?;
@@ -62,6 +72,9 @@ pub fn built_in() -> Option<Endpoints> {
         register: format!("https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents/keystone/apg"),
         commit: format!("https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents:commit"),
         names: format!("projects/{project}/databases/(default)/documents/keystone/apg"),
+        account: filled(option_env!("ALPHA_PREMIER_KIOSK_EMAIL"))
+            .zip(option_env!("ALPHA_PREMIER_KIOSK_PASSWORD").filter(|password| !password.is_empty()))
+            .map(|(email, password)| (email.to_string(), password.to_string())),
     })
 }
 
@@ -166,7 +179,7 @@ fn sign_in_refusal(code: &str) -> String {
 
 /// Sign the kiosk in with its register account, check that the account can
 /// read the register, and pull once. Nothing is kept unless all of it worked.
-pub async fn sign_in(
+pub(crate) async fn sign_in(
     state: &AppState,
     endpoints: Option<&Endpoints>,
     email: &str,
@@ -203,8 +216,15 @@ pub async fn sign_in(
     pull(state, &client, endpoints, &id_token).await
 }
 
+/// Try the built-in account again after it was refused: when the app starts,
+/// and when an administrator presses "Check now".
+pub async fn retry_account(db: &SqlitePool) {
+    forget(db, REFUSED_KEY).await;
+}
+
 /// Forget the sign-in. The numbers already seen are kept, so signing in again
 /// does not bring back anyone an administrator deleted.
+#[cfg(test)]
 pub async fn sign_out(db: &SqlitePool) {
     for key in [TOKEN_KEY, EMAIL_KEY, COUNT_KEY, PROBLEM_KEY] {
         forget(db, key).await;
@@ -217,7 +237,23 @@ pub async fn run_once(state: &AppState, endpoints: Option<&Endpoints>) -> Result
         return Ok(PullSummary::default());
     };
     let Some(refresh_token) = read_setting(&state.db, TOKEN_KEY).await else {
-        return Ok(PullSummary::default());
+        // Not signed in: the kiosk signs itself in with its built-in account.
+        let Some((email, password)) = &endpoints.account else {
+            return Err(note_problem(&state.db, NO_ACCOUNT).await);
+        };
+        if read_setting(&state.db, REFUSED_KEY).await.is_some() {
+            return Ok(PullSummary::default());
+        }
+        return match sign_in(state, Some(endpoints), email, password).await {
+            Ok(summary) => Ok(summary),
+            Err(problem) => {
+                if problem != UNREACHABLE && problem != UNREADABLE {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let _ = store_setting(&state.db, REFUSED_KEY, "1", &now).await;
+                }
+                Err(note_problem(&state.db, &problem).await)
+            }
+        };
     };
     let client = http()?;
     let refreshed = ask(client.post(&endpoints.token).form(&[
@@ -527,7 +563,7 @@ pub(crate) mod tests {
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        (Endpoints { sign_in: format!("{at}/signin?key=k"), token: format!("{at}/token?key=k"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }, server)
+        (Endpoints { sign_in: format!("{at}/signin?key=k"), token: format!("{at}/token?key=k"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into(), account: None }, server)
     }
 
     /// Somewhere nothing answers.
@@ -535,7 +571,7 @@ pub(crate) mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        Endpoints { sign_in: format!("{at}/signin"), token: format!("{at}/token"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }
+        Endpoints { sign_in: format!("{at}/signin"), token: format!("{at}/token"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into(), account: None }
     }
 
     pub(crate) async fn kiosk(tag: &str) -> (AppState, std::path::PathBuf) {
@@ -726,10 +762,72 @@ pub(crate) mod tests {
         let now = status(&state).await;
         assert_eq!(now.signed_in_as, None);
         assert_eq!(now.problem.as_deref(), Some(refused.as_str()));
-        // Signed out: later passes ask nothing.
+        // Signed out, and with no account built in: later passes ask nothing.
         fake.lock().unwrap().asked.clear();
-        assert_eq!(run_once(&state, Some(&endpoints)).await.unwrap(), PullSummary::default());
+        assert_eq!(run_once(&state, Some(&endpoints)).await.unwrap_err(), NO_ACCOUNT);
         assert!(fake.lock().unwrap().asked.is_empty());
+        close(state, temp, server).await;
+    }
+
+    #[tokio::test]
+    async fn id_register_kiosk_signs_itself_in_and_nobody_is_asked() {
+        let (state, temp) = kiosk("itself").await;
+        let fake = register(vec![intern("APG-2026-126", "Juan Dela Cruz")]);
+        let (mut endpoints, server) = serve(fake.clone()).await;
+
+        // A copy with no account built in says so and asks nothing.
+        assert_eq!(run_once(&state, Some(&endpoints)).await.unwrap_err(), NO_ACCOUNT);
+        assert!(fake.lock().unwrap().asked.is_empty());
+
+        // With its account built in, the first pass signs in, pulls and backs up, with nothing typed by anyone.
+        endpoints.account = Some(("kiosk@example.test".into(), PASSWORD.into()));
+        let first = run_once(&state, Some(&endpoints)).await.unwrap();
+        assert_eq!(first.added, vec!["APG-2026-126".to_string()]);
+        let now = status(&state).await;
+        assert_eq!((now.signed_in_as.as_deref(), now.problem), (Some("kiosk@example.test"), None));
+        let kept: Vec<String> = sqlx::query_scalar("SELECT value FROM app_settings").fetch_all(&state.db).await.unwrap();
+        assert!(kept.iter().all(|value| !value.contains(PASSWORD)), "the password is still never kept in the database");
+
+        // Signed out by a refused token, the next pass signs in again by itself.
+        fake.lock().unwrap().refuse_refresh = true;
+        assert!(run_once(&state, Some(&endpoints)).await.is_err());
+        assert_eq!(status(&state).await.signed_in_as, None);
+        fake.lock().unwrap().refuse_refresh = false;
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        assert_eq!(status(&state).await.signed_in_as.as_deref(), Some("kiosk@example.test"));
+        close(state, temp, server).await;
+    }
+
+    #[tokio::test]
+    async fn id_register_a_refused_account_is_not_tried_again_until_asked() {
+        let (state, temp) = kiosk("refused-account").await;
+        let fake = register(vec![]);
+        let (mut endpoints, server) = serve(fake.clone()).await;
+        endpoints.account = Some(("kiosk@example.test".into(), "an-old-password".into()));
+
+        assert_eq!(run_once(&state, Some(&endpoints)).await.unwrap_err(), "The email or password is not right.");
+        assert_eq!(status(&state).await.problem.as_deref(), Some("The email or password is not right."));
+        // Later passes leave the account alone, so a wrong password cannot lock it.
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        assert_eq!(fake.lock().unwrap().asked, vec!["signin"]);
+        assert_eq!(status(&state).await.problem.as_deref(), Some("The email or password is not right."), "the reason stays on screen");
+
+        // "Check now", or the app starting, tries once more.
+        retry_account(&state.db).await;
+        assert!(run_once(&state, Some(&endpoints)).await.is_err());
+        assert_eq!(fake.lock().unwrap().asked, vec!["signin", "signin"]);
+
+        // An unreachable register is not a refusal: it is tried again on its own.
+        let (state2, temp2) = kiosk("unreachable-account").await;
+        let mut dead = nowhere().await;
+        dead.account = Some(("kiosk@example.test".into(), PASSWORD.into()));
+        assert_eq!(run_once(&state2, Some(&dead)).await.unwrap_err(), UNREACHABLE);
+        endpoints.account = Some(("kiosk@example.test".into(), PASSWORD.into()));
+        run_once(&state2, Some(&endpoints)).await.unwrap();
+        assert_eq!(status(&state2).await.signed_in_as.as_deref(), Some("kiosk@example.test"));
+        state2.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp2);
         close(state, temp, server).await;
     }
 

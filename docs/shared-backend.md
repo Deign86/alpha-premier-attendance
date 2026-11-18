@@ -1,6 +1,6 @@
 # The kiosk's backup in the shared backend
 
-While the kiosk is signed in to the ID register (Admin → System → ID register), it also keeps a copy of its records in the shared backend: Keystone's Firebase project, under `keystone/apg/att_<table>/<id>`. Keystone and the other Alpha Premier programs can then read attendance and payroll from one place, and a lost kiosk is not lost records.
+While the kiosk is connected to the ID register (it connects by itself; see [id-register.md](id-register.md)), it also keeps a copy of its records in the shared backend: Keystone's Firebase project, under `keystone/apg/att_<table>/<id>`. Keystone and the other Alpha Premier programs can then read attendance and payroll from one place, and a lost kiosk is not lost records.
 
 **The database on the kiosk is the original.** The copy goes one way. Nothing is ever read back from it, and editing it in Firebase changes nothing here.
 
