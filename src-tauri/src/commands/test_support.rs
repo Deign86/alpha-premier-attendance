@@ -83,3 +83,8 @@ pub(crate) async fn add_intern(state: &AppState, user_id: &str, card: &str) {
     .await
     .unwrap();
 }
+
+/// The proof a command gets from `Admin::check`, for a test that calls the function behind the command.
+pub(crate) async fn admin(state: &AppState, token: &str) -> crate::commands::session::Admin {
+    crate::commands::session::Admin::check(state, token).await.expect("the test's admin session")
+}

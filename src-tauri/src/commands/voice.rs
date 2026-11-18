@@ -59,18 +59,18 @@ pub(crate) async fn check_voicestudio(
     host: Option<String>,
     pin: Option<String>,
 ) -> Result<crate::services::voice_pull::VoiceConnectionStatus, String> {
-    check_voicestudio_impl(&state, &token, host, pin).await
+    let admin = Admin::check(&state, &token).await?;
+    check_voicestudio_impl(&state, &admin, host, pin).await
 }
 
 /// Probes what the admin typed (falling back to the saved settings) without
 /// saving it: "Check" used to overwrite the worker's host and PIN (O8).
 pub(crate) async fn check_voicestudio_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     host: Option<String>,
     pin: Option<String>,
 ) -> Result<crate::services::voice_pull::VoiceConnectionStatus, String> {
-    Admin::check(state, token).await?;
     let host = match host {
         Some(raw) => crate::services::voice_pull::normalize_host(&raw),
         None => crate::services::voice_pull::get_host(&state.db).await,
@@ -132,9 +132,10 @@ mod tests {
         let (state, temp, token) = admin_test_state("voice-check").await;
         let saved_host = crate::services::voice_pull::get_host(&state.db).await;
         let saved_pin = crate::services::voice_pull::get_pin(&state.db).await;
-        let refused = check_voicestudio_impl(&state, "wrong-token", Some("http://127.0.0.1:9".into()), Some("9999".into())).await;
-        assert_eq!(refused.unwrap_err(), "ADMIN_AUTH_REQUIRED");
-        let probe = check_voicestudio_impl(&state, &token, Some("http://127.0.0.1:9".into()), Some("9999".into())).await.unwrap();
+        // A wrong token gets no `Admin`, and the check cannot be called without one.
+        let refused = Admin::check(&state, "wrong-token").await;
+        assert_eq!(refused.err().as_deref(), Some("ADMIN_AUTH_REQUIRED"));
+        let probe = check_voicestudio_impl(&state, &admin(&state, &token).await, Some("http://127.0.0.1:9".into()), Some("9999".into())).await.unwrap();
         assert!(!probe.ok, "nothing listens on port 9");
         assert_eq!(crate::services::voice_pull::get_host(&state.db).await, saved_host, "Check must not save the typed host");
         assert_eq!(crate::services::voice_pull::get_pin(&state.db).await, saved_pin, "Check must not save the typed PIN");

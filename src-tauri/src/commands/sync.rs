@@ -625,15 +625,15 @@ pub(crate) async fn admin_sheets_nuke_resync(
     token: String,
     confirm: bool,
 ) -> Result<serde_json::Value, String> {
-    admin_sheets_nuke_resync_impl(&state, &token, confirm).await
+    let admin = Admin::check(&state, &token).await?;
+    admin_sheets_nuke_resync_impl(&state, &admin, confirm).await
 }
 
 pub(crate) async fn admin_sheets_nuke_resync_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     confirm: bool,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
     if !confirm {
         return Err("RESYNC_CONFIRMATION_REQUIRED".into());
     }
@@ -907,7 +907,7 @@ mod tests {
         crate::state::sync_guard_try_acquire(&state.db, state.sync_in_progress.as_ref(), "background_sync")
             .await
             .unwrap();
-        let err = admin_sheets_nuke_resync_impl(&state, &token, true).await.unwrap_err();
+        let err = admin_sheets_nuke_resync_impl(&state, &admin(&state, &token).await, true).await.unwrap_err();
         assert!(err.starts_with("DTR_SYNC_IN_PROGRESS"), "{err}");
         // The refused wipe left the running pass's guard alone.
         assert!(state.sync_in_progress.load(std::sync::atomic::Ordering::SeqCst));

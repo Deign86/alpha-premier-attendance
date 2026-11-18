@@ -99,16 +99,16 @@ pub(crate) async fn admin_update_attendance(
     attendance_id: String,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    admin_update_attendance_impl(&state, &token, &attendance_id, &payload).await
+    let admin = Admin::check(&state, &token).await?;
+    admin_update_attendance_impl(&state, &admin, &attendance_id, &payload).await
 }
 
 pub(crate) async fn admin_update_attendance_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     attendance_id: &str,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
     let row = sqlx::query(
         "SELECT user_id,attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id=?",
     )
@@ -311,10 +311,9 @@ pub(crate) async fn admin_update_attendance_impl(
 pub(crate) async fn admin_create_backdated_attendance_impl(
     app: Option<&tauri::AppHandle>,
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
     let user_id = payload
         .get("userId")
         .and_then(|v| v.as_str())
@@ -519,7 +518,8 @@ pub(crate) async fn admin_create_backdated_attendance(
     token: String,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    admin_create_backdated_attendance_impl(Some(&app), &state, &token, &payload).await
+    let admin = Admin::check(&state, &token).await?;
+    admin_create_backdated_attendance_impl(Some(&app), &state, &admin, &payload).await
 }
 
 #[tauri::command]
@@ -529,16 +529,16 @@ pub(crate) async fn admin_delete_attendance(
     attendance_id: String,
     date: String,
 ) -> Result<serde_json::Value, String> {
-    admin_delete_attendance_impl(&state, &token, &attendance_id, &date).await
+    let admin = Admin::check(&state, &token).await?;
+    admin_delete_attendance_impl(&state, &admin, &attendance_id, &date).await
 }
 
 pub(crate) async fn admin_delete_attendance_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     attendance_id: &str,
     date: &str,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
     // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
     // NOTE: deletions clear the date's B:E cells on the intern DTR sheet
     // (values only — rows are never removed, so the template grid
@@ -778,17 +778,17 @@ mod tests {
                 .execute(&state.db).await.unwrap();
         }
 
-        let edit = admin_update_attendance_impl(&state, &token, "att-in", &serde_json::json!({"timeOut": "2026-08-05T16:00:00+08:00"})).await;
+        let edit = admin_update_attendance_impl(&state, &admin(&state, &token).await, "att-in", &serde_json::json!({"timeOut": "2026-08-05T16:00:00+08:00"})).await;
         assert_eq!(edit.unwrap_err(), "ATTENDANCE_IN_FINALIZED_CUTOFF");
-        let move_in = admin_update_attendance_impl(&state, &token, "att-out", &serde_json::json!({"attendanceDate": "2026-08-06"})).await;
+        let move_in = admin_update_attendance_impl(&state, &admin(&state, &token).await, "att-out", &serde_json::json!({"attendanceDate": "2026-08-06"})).await;
         assert_eq!(move_in.unwrap_err(), "ATTENDANCE_IN_FINALIZED_CUTOFF", "moving a day into approved pay");
-        let delete = admin_delete_attendance_impl(&state, &token, "att-in", "2026-08-05").await;
+        let delete = admin_delete_attendance_impl(&state, &admin(&state, &token).await, "att-in", "2026-08-05").await;
         assert_eq!(delete.unwrap_err(), "ATTENDANCE_IN_FINALIZED_CUTOFF");
         let frozen = sqlx::query("SELECT time_out, attendance_date FROM attendance WHERE attendance_id='att-in'")
             .fetch_one(&state.db).await.unwrap();
         assert_eq!(frozen.get::<Option<String>, _>("time_out").as_deref(), Some("2026-08-05T17:00:00+08:00"));
         // Days outside approved pay still correct normally.
-        let open = admin_update_attendance_impl(&state, &token, "att-out", &serde_json::json!({"timeOut": "2026-08-20T16:30:00+08:00"})).await.unwrap();
+        let open = admin_update_attendance_impl(&state, &admin(&state, &token).await, "att-out", &serde_json::json!({"timeOut": "2026-08-20T16:30:00+08:00"})).await.unwrap();
         assert_eq!(open["success"], true);
 
         // Deleting the person keeps the approved cutoff and its snapshot.
@@ -858,7 +858,7 @@ mod tests {
             "timeOut": "2026-08-15T17:00:00+08:00",
             "reason": "Missed scan physical log verified"
         });
-        let res = admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap();
+        let res = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &payload).await.unwrap();
         assert_eq!(res["success"], true);
         assert_eq!(res["attendance"]["attendanceDate"], "2026-08-15");
         assert_eq!(res["attendance"]["userId"], "EMP_01");
@@ -866,7 +866,7 @@ mod tests {
         assert_eq!(res["attendance"]["status"], "COMPLETED");
 
         // 2. Reject duplicate date
-        let dup_err = admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap_err();
+        let dup_err = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &payload).await.unwrap_err();
         assert_eq!(dup_err, "ATTENDANCE_ALREADY_EXISTS_FOR_DATE");
 
         // 3. Reject future or today date
@@ -876,7 +876,7 @@ mod tests {
             "timeIn": "2099-01-01T08:00:00+08:00",
             "reason": "Future date"
         });
-        let future_err = admin_create_backdated_attendance_impl(None, &state, &token, &future_payload).await.unwrap_err();
+        let future_err = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &future_payload).await.unwrap_err();
         assert_eq!(future_err, "ADMIN_VALIDATION_ERROR");
 
         // 4. B1: a backdated LATE_TIMEOUT entry (clock-out >= 18:00) must still
@@ -907,7 +907,7 @@ mod tests {
             "timeOut": "2026-08-15T18:05:00+08:00",
             "reason": "Late clock-out verified against physical log"
         });
-        let late_res = admin_create_backdated_attendance_impl(None, &state, &token, &late_payload)
+        let late_res = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &late_payload)
             .await
             .unwrap();
         assert_eq!(
@@ -973,7 +973,7 @@ mod tests {
             serde_json::json!({"timeIn": serde_json::Value::Null}),
             serde_json::json!({"timeIn": serde_json::Value::Null, "timeOut": serde_json::Value::Null}),
         ] {
-            let err = admin_update_attendance_impl(&state, &token, "att-keep", &payload).await.unwrap_err();
+            let err = admin_update_attendance_impl(&state, &admin(&state, &token).await, "att-keep", &payload).await.unwrap_err();
             assert_eq!(err, "ATTENDANCE_TIME_IN_REQUIRED", "{payload}");
         }
         let row = sqlx::query("SELECT time_in, status FROM attendance WHERE attendance_id='att-keep'")
@@ -1034,7 +1034,7 @@ mod tests {
                 .execute(&state.db).await.unwrap();
         }
         // 1. Live repro: timeOut-only payload keeps time_in, stays COMPLETED.
-        let r1 = admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
+        let r1 = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-a", &serde_json::json!({"timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
         assert_eq!(r1["success"], true);
         assert_eq!(r1["timeIn"], "2026-08-11T08:00:00+08:00");
         assert_eq!(r1["timeOut"], "2026-08-11T17:05:00+08:00");
@@ -1044,13 +1044,13 @@ mod tests {
         assert_eq!(row.get::<Option<String>, _>("time_in").as_deref(), Some("2026-08-11T08:00:00+08:00"));
         assert_eq!(row.get::<String, _>("status"), "COMPLETED");
         // 2. timeIn-only on the WORKING row keeps the open time-out.
-        let r2 = admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({"timeIn": "2026-08-12T08:06:00+08:00"})).await.unwrap();
+        let r2 = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-b", &serde_json::json!({"timeIn": "2026-08-12T08:06:00+08:00"})).await.unwrap();
         assert_eq!(r2["status"], "WORKING");
         assert!(r2["timeOut"].is_null());
         // 3. Explicit JSON null clears the field (admins can remove an
         // inaccurate tap-out); status drops back to WORKING and the DTR
         // re-push carries the cleared row.
-        let r3 = admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": serde_json::Value::Null, "timeIn": "2026-08-11T08:01:00+08:00"})).await.unwrap();
+        let r3 = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-a", &serde_json::json!({"timeOut": serde_json::Value::Null, "timeIn": "2026-08-11T08:01:00+08:00"})).await.unwrap();
         assert!(r3["timeOut"].is_null());
         assert_eq!(r3["timeIn"], "2026-08-11T08:01:00+08:00");
         assert_eq!(r3["status"], "WORKING");
@@ -1064,21 +1064,21 @@ mod tests {
         assert!(dtr_payload["timeOut"].is_null());
         assert_eq!(dtr_payload["timeIn"], "2026-08-11T08:01:00+08:00");
         // Restore the completed day for the no-op / conflict steps below.
-        let restore = admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
+        let restore = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-a", &serde_json::json!({"timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
         assert_eq!(restore["status"], "COMPLETED");
         // 4. No-op full payload: revision untouched, no extra queue churn.
         let rev_before: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-a'").fetch_one(&state.db).await.unwrap();
         let q_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE row_id='aid-a'").fetch_one(&state.db).await.unwrap();
-        let r4 = admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"attendanceDate": "2026-08-11", "timeIn": "2026-08-11T08:01:00+08:00", "timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
+        let r4 = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-a", &serde_json::json!({"attendanceDate": "2026-08-11", "timeIn": "2026-08-11T08:01:00+08:00", "timeOut": "2026-08-11T17:05:00+08:00"})).await.unwrap();
         assert_eq!(r4["success"], true);
         let rev_after: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-a'").fetch_one(&state.db).await.unwrap();
         let q_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_queue WHERE row_id='aid-a'").fetch_one(&state.db).await.unwrap();
         assert_eq!(rev_before, rev_after);
         assert_eq!(q_before, q_after);
         // 5. Invalid time still rejected; conflicting expectation still conflicts.
-        let bad = admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeIn": "not-a-time"})).await.unwrap_err();
+        let bad = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-a", &serde_json::json!({"timeIn": "not-a-time"})).await.unwrap_err();
         assert_eq!(bad, "ADMIN_VALIDATION_ERROR");
-        let conflict = admin_update_attendance_impl(&state, &token, "aid-a", &serde_json::json!({"timeIn": "2026-08-11T08:01:00+08:00", "expectedTimeIn": "2026-08-11T00:00:00+08:00"})).await.unwrap_err();
+        let conflict = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-a", &serde_json::json!({"timeIn": "2026-08-11T08:01:00+08:00", "expectedTimeIn": "2026-08-11T00:00:00+08:00"})).await.unwrap_err();
         assert_eq!(conflict, "ATTENDANCE_CONFLICT");
         // Row survived all of the above with real times intact.
         let final_row = sqlx::query("SELECT attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id='aid-a'")
@@ -1089,9 +1089,9 @@ mod tests {
         // stale draft sends timeOut:null with expectedTimeOut:null; that
         // expectation no longer holds, so it must conflict instead of wiping
         // the fresh time-out and deleting the day's payroll.
-        let tapped = admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
+        let tapped = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-b", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
         assert_eq!(tapped["status"], "COMPLETED");
-        let stale = admin_update_attendance_impl(&state, &token, "aid-b", &serde_json::json!({
+        let stale = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-b", &serde_json::json!({
             "attendanceDate": "2026-08-12",
             "timeIn": "2026-08-12T08:07:00+08:00",
             "timeOut": serde_json::Value::Null,
@@ -1151,7 +1151,7 @@ mod tests {
         let rev_before: i64 = sqlx::query_scalar("SELECT revision FROM attendance WHERE attendance_id='aid-rb'").fetch_one(&state.db).await.unwrap();
         sqlx::query("CREATE TRIGGER fail_payroll_insert BEFORE INSERT ON payroll BEGIN SELECT RAISE(ABORT, 'forced payroll failure'); END")
             .execute(&state.db).await.unwrap();
-        let err = admin_update_attendance_impl(&state, &token, "aid-rb", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap_err();
+        let err = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-rb", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap_err();
         assert!(err.contains("forced payroll failure"), "unexpected error: {err}");
         let row = sqlx::query("SELECT time_out,status,revision FROM attendance WHERE attendance_id='aid-rb'")
             .fetch_one(&state.db).await.unwrap();
@@ -1166,7 +1166,7 @@ mod tests {
         assert_eq!(audited, 0);
         // The same edit succeeds once the failure is removed.
         sqlx::query("DROP TRIGGER fail_payroll_insert").execute(&state.db).await.unwrap();
-        let ok = admin_update_attendance_impl(&state, &token, "aid-rb", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
+        let ok = admin_update_attendance_impl(&state, &admin(&state, &token).await, "aid-rb", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
         assert_eq!(ok["status"], "COMPLETED");
         let payroll: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payroll WHERE attendance_id='aid-rb'").fetch_one(&state.db).await.unwrap();
         assert_eq!(payroll, 1);
@@ -1207,7 +1207,7 @@ mod tests {
             .unwrap()
         };
 
-        let created = admin_create_backdated_attendance_impl(None, &state, &token, &serde_json::json!({
+        let created = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &serde_json::json!({
             "userId": "INT_01",
             "attendanceDate": "2026-08-11",
             "timeIn": "2026-08-11T08:00:00+08:00",
@@ -1217,7 +1217,7 @@ mod tests {
         .await
         .unwrap();
         let attendance_id = created["attendance"]["attendanceId"].as_str().unwrap().to_string();
-        admin_update_attendance_impl(&state, &token, &attendance_id, &serde_json::json!({
+        admin_update_attendance_impl(&state, &admin(&state, &token).await, &attendance_id, &serde_json::json!({
             "attendanceDate": "2026-08-11",
             "timeIn": "2026-08-11T07:30:00+08:00",
             "timeOut": "2026-08-11T17:00:00+08:00",
@@ -1233,7 +1233,7 @@ mod tests {
         );
         assert!(before_delete.iter().all(|(_, _, request_id)| request_id.starts_with("admin-")));
 
-        admin_delete_attendance_impl(&state, &token, &attendance_id, "2026-08-11").await.unwrap();
+        admin_delete_attendance_impl(&state, &admin(&state, &token).await, &attendance_id, "2026-08-11").await.unwrap();
         assert_eq!(audit_rows().await.len(), 2, "a delete writes no audit row");
         let _ = std::fs::remove_dir_all(temp);
     }
@@ -1290,7 +1290,7 @@ mod tests {
             "timeOut": "2026-08-11T17:00:00+08:00",
             "reason": "Missed scan physical log verified"
         });
-        let res = admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap();
+        let res = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &payload).await.unwrap();
         let aid = res["attendance"]["attendanceId"].as_str().unwrap().to_string();
         let row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
             .bind(&aid).fetch_optional(&state.db).await.unwrap();
@@ -1308,7 +1308,7 @@ mod tests {
             "timeOut": "2026-08-12T17:00:00+08:00",
             "reason": "Missed scan physical log verified"
         });
-        let emp_res = admin_create_backdated_attendance_impl(None, &state, &token, &emp_payload).await.unwrap();
+        let emp_res = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &emp_payload).await.unwrap();
         let emp_aid = emp_res["attendance"]["attendanceId"].as_str().unwrap().to_string();
         let emp_row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
             .bind(&emp_aid).fetch_optional(&state.db).await.unwrap();
@@ -1323,7 +1323,7 @@ mod tests {
             "expectedTimeIn": "2026-08-11T08:00:00+08:00",
             "expectedTimeOut": "2026-08-11T17:00:00+08:00"
         });
-        let ures = admin_update_attendance_impl(&state, &token, &aid, &upd).await.unwrap();
+        let ures = admin_update_attendance_impl(&state, &admin(&state, &token).await, &aid, &upd).await.unwrap();
         assert_eq!(ures["success"], true);
         let row2: String = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
             .bind(&aid).fetch_one(&state.db).await.unwrap();
@@ -1340,7 +1340,7 @@ mod tests {
         // 4. Delete → an InternDtr DELETE row (same attendance id, separate
         // idempotency key per operation) so the sheet date clears; the ops
         // Attendance DELETE is still enqueued too.
-        admin_delete_attendance_impl(&state, &token, &aid, "2026-08-11").await.unwrap();
+        admin_delete_attendance_impl(&state, &admin(&state, &token).await, &aid, "2026-08-11").await.unwrap();
         let del_row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=? AND operation='DELETE'")
             .bind(&aid).fetch_optional(&state.db).await.unwrap();
         assert!(del_row.is_some(), "delete must enqueue InternDtr DELETE");
@@ -1401,7 +1401,7 @@ mod tests {
             "timeOut": "2026-08-11T17:00:00+08:00",
             "reason": "Missed scan physical log verified"
         });
-        let res = admin_create_backdated_attendance_impl(None, &state, &token, &payload).await.unwrap();
+        let res = admin_create_backdated_attendance_impl(None, &state, &admin(&state, &token).await, &payload).await.unwrap();
         let aid = res["attendance"]["attendanceId"].as_str().unwrap().to_string();
         let row: Option<String> = sqlx::query_scalar("SELECT payload_json FROM sync_queue WHERE table_name='InternDtr' AND row_id=?")
             .bind(&aid).fetch_optional(&state.db).await.unwrap();
@@ -1427,9 +1427,9 @@ mod tests {
             Ok(crate::lan_server::LanAttendanceEvent::AttendanceUpdated { attendance_id, mutation, .. }) => Some((attendance_id, mutation)),
             Err(_) => None,
         };
-        admin_update_attendance_impl(&state, &token, "att-l", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
+        admin_update_attendance_impl(&state, &admin(&state, &token).await, "att-l", &serde_json::json!({"timeOut": "2026-08-12T17:00:00+08:00"})).await.unwrap();
         assert_eq!(next_event(), Some(("att-l".to_string(), "upsert".to_string())));
-        admin_delete_attendance_impl(&state, &token, "att-l", "2026-08-12").await.unwrap();
+        admin_delete_attendance_impl(&state, &admin(&state, &token).await, "att-l", "2026-08-12").await.unwrap();
         assert_eq!(next_event(), Some(("att-l".to_string(), "delete".to_string())));
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
@@ -1447,7 +1447,7 @@ mod tests {
         add_intern(&state, "INT_M", "C0FFEE14").await;
         sqlx::query("INSERT INTO attendance (attendance_id,attendance_date,user_id,rfid_uid,full_name,department,time_in,time_out,status,source,created_at,updated_at) VALUES ('att-m','2026-08-12','INT_M','C0FFEE14','INT_M','IT','2026-08-12T08:00:00+08:00','2026-08-12T17:00:00+08:00','COMPLETED','RFID','2026-08-12T00:00:00Z','2026-08-12T00:00:00Z')")
             .execute(&state.db).await.unwrap();
-        admin_update_attendance_impl(&state, &token, "att-m", &serde_json::json!({
+        admin_update_attendance_impl(&state, &admin(&state, &token).await, "att-m", &serde_json::json!({
             "attendanceDate": "2026-08-13",
             "timeIn": "2026-08-13T08:00:00+08:00",
             "timeOut": "2026-08-13T17:00:00+08:00",

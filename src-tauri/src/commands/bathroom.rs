@@ -281,11 +281,10 @@ pub(crate) async fn bathroom_time_in(
 
 pub(crate) async fn bathroom_update_log_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     log_id: &str,
     request: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
 
     let existing = sqlx::query(
         "SELECT log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at FROM bathroom_log WHERE log_id = ?",
@@ -451,7 +450,8 @@ pub(crate) async fn bathroom_update_log(
     log_id: String,
     request: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    bathroom_update_log_impl(&state, &token, &log_id, &request).await
+    let admin = Admin::check(&state, &token).await?;
+    bathroom_update_log_impl(&state, &admin, &log_id, &request).await
 }
 
 pub(crate) async fn process_bathroom_scan(
@@ -963,7 +963,7 @@ mod tests {
             "timeIn": "2026-09-01T10:15:00+08:00",
             "notes": ""
         });
-        let err = bathroom_update_log_impl(&state, &token, "LOG-1", &bad)
+        let err = bathroom_update_log_impl(&state, &admin(&state, &token).await, "LOG-1", &bad)
             .await
             .unwrap_err();
         assert!(err.contains("must fall on the log date"));
@@ -973,7 +973,7 @@ mod tests {
             "timeIn": "2026-08-31T10:15:00+08:00",
             "notes": ""
         });
-        let updated = bathroom_update_log_impl(&state, &token, "LOG-1", &good)
+        let updated = bathroom_update_log_impl(&state, &admin(&state, &token).await, "LOG-1", &good)
             .await
             .expect("same-date edit");
         assert_eq!(updated["entry"]["status"].as_str(), Some("RETURNED"));
@@ -986,7 +986,7 @@ mod tests {
             "notes": "",
             "expectedUpdatedAt": now_utc
         });
-        let err = bathroom_update_log_impl(&state, &token, "LOG-1", &stale)
+        let err = bathroom_update_log_impl(&state, &admin(&state, &token).await, "LOG-1", &stale)
             .await
             .unwrap_err();
         assert!(err.starts_with("BATHROOM_LOG_CONFLICT"), "{err}");
@@ -1002,7 +1002,7 @@ mod tests {
             "notes": "",
             "expectedUpdatedAt": updated["entry"]["updatedAt"]
         });
-        let reopened = bathroom_update_log_impl(&state, &token, "LOG-1", &reopen)
+        let reopened = bathroom_update_log_impl(&state, &admin(&state, &token).await, "LOG-1", &reopen)
             .await
             .expect("current-row edit");
         assert_eq!(reopened["entry"]["status"].as_str(), Some("OUT"));
@@ -1075,7 +1075,7 @@ mod tests {
 
         let updated = bathroom_update_log_impl(
             &state,
-            &token,
+            &admin(&state, &token).await,
             &log_id,
             &update_req,
         )
@@ -1096,7 +1096,7 @@ mod tests {
         });
         let invalid_res = bathroom_update_log_impl(
             &state,
-            &token,
+            &admin(&state, &token).await,
             &log_id,
             &invalid_req,
         )

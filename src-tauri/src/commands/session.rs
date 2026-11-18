@@ -117,9 +117,11 @@ pub(crate) async fn admin_get_session(
     Ok(serde_json::json!({"success":true}))
 }
 
-/// Proof that the caller holds the live admin session. Every admin-only command gets one from [`Admin::check`]
-/// before it does anything; `commands::tests::every_command_checks_the_admin_session_or_is_listed_as_public`
-/// fails for a command that neither checks nor is on the public list.
+/// Proof that the caller holds the live admin session: only [`Admin::check`] makes one. A function that does an
+/// admin-only command's work takes `&Admin`, so calling it without the check does not compile. A command that
+/// does its work in its own body is not covered by that: for those,
+/// `commands::tests::every_command_checks_the_admin_session_or_is_listed_as_public` still fails for a command
+/// that neither checks nor is on the public list.
 pub(crate) struct Admin(());
 
 impl Admin {

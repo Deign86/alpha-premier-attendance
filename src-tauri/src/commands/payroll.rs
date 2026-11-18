@@ -533,9 +533,10 @@ pub(crate) async fn payroll_generate_cutoff(
     payroll_cutoff_label: String,
     customization: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let admin = Admin::check(&state, &token).await?;
     payroll_generate_cutoff_impl(
         &state,
-        token,
+        &admin,
         cutoff_start,
         cutoff_end,
         payroll_cutoff_label,
@@ -546,13 +547,12 @@ pub(crate) async fn payroll_generate_cutoff(
 
 pub(crate) async fn payroll_generate_cutoff_impl(
     state: &AppState,
-    token: String,
+    _admin: &Admin,
     cutoff_start: String,
     cutoff_end: String,
     payroll_cutoff_label: String,
     customization: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, &token).await?;
     chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d")
         .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
     chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d")
@@ -1074,15 +1074,15 @@ pub(crate) async fn payroll_finalize_cutoff(
     token: String,
     payroll_id: String,
 ) -> Result<serde_json::Value, String> {
-    payroll_finalize_cutoff_impl(&state, &token, &payroll_id).await
+    let admin = Admin::check(&state, &token).await?;
+    payroll_finalize_cutoff_impl(&state, &admin, &payroll_id).await
 }
 
 pub(crate) async fn payroll_finalize_cutoff_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     payroll_id: &str,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
     let now = chrono::Utc::now().to_rfc3339();
     // Status flip + snapshot commit together: never FINALIZED without a snapshot.
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
@@ -1608,7 +1608,7 @@ mod tests {
         // do not add absences to the expected half-day net pay.
         let gen_result = payroll_generate_cutoff_impl(
             &state,
-            token.clone(),
+            &admin(&state, &token).await,
             "2026-08-01".to_string(),
             "2026-08-01".to_string(),
             "August 1, 2026".to_string(),
@@ -1746,7 +1746,7 @@ mod tests {
         }
         payroll_generate_cutoff_impl(
             &state,
-            token,
+            &admin(&state, &token).await,
             "2026-11-16".into(),
             "2026-11-30".into(),
             "November 16-30, 2026".into(),
@@ -2016,15 +2016,16 @@ mod tests {
             .await
             .unwrap();
 
-        let generate = || {
+        let generate = || async {
             payroll_generate_cutoff_impl(
                 &state,
-                token.clone(),
+                &admin(&state, &token).await,
                 "2026-12-01".into(),
                 "2026-12-15".into(),
                 "December 1-15, 2026".into(),
                 serde_json::json!({}),
             )
+            .await
         };
         let cutoff_rows = || async {
             sqlx::query(
@@ -2247,7 +2248,7 @@ mod tests {
             .await
             .unwrap();
 
-        let refused = payroll_finalize_cutoff_impl(&state, &token, "PAY-OVERLAP").await;
+        let refused = payroll_finalize_cutoff_impl(&state, &admin(&state, &token).await, "PAY-OVERLAP").await;
         assert_eq!(refused.unwrap_err(), "PAYROLL_PERIOD_ALREADY_FINALIZED");
         let status: String = sqlx::query_scalar("SELECT status FROM payroll_cutoffs WHERE payroll_id='PAY-OVERLAP'")
             .fetch_one(&state.db)
@@ -2260,7 +2261,7 @@ mod tests {
             .unwrap();
         assert_eq!(snapshots, 0);
 
-        let adjacent = payroll_finalize_cutoff_impl(&state, &token, "PAY-NEXT").await.unwrap();
+        let adjacent = payroll_finalize_cutoff_impl(&state, &admin(&state, &token).await, "PAY-NEXT").await.unwrap();
         assert_eq!(adjacent["status"], "FINALIZED");
 
         state.db.close().await;

@@ -546,7 +546,7 @@ mod tests {
 
         // A correction while off replaces the queued payload, so resuming
         // pushes the current day, not the one frozen at pause time.
-        admin_update_attendance_impl(&state, &token, &aid, &serde_json::json!({"timeOut": "2026-11-05T17:00:00+08:00"})).await.unwrap();
+        admin_update_attendance_impl(&state, &admin(&state, &token).await, &aid, &serde_json::json!({"timeOut": "2026-11-05T17:00:00+08:00"})).await.unwrap();
         let row = queued(aid.clone()).await.unwrap();
         let payload: serde_json::Value = serde_json::from_str(&row.get::<String, _>("payload_json")).unwrap();
         assert_eq!(payload["timeOut"], "2026-11-05T17:00:00+08:00");
@@ -599,7 +599,7 @@ mod tests {
                 assert_eq!(res["success"], true, "{res}");
             }
         }
-        let generate = || payroll_generate_cutoff_impl(&state, token.clone(), "2026-08-01".into(), "2026-08-15".into(), "Aug 1-15, 2026".into(), serde_json::json!({}));
+        let generate = || async { payroll_generate_cutoff_impl(&state, &admin(&state, &token).await, "2026-08-01".into(), "2026-08-15".into(), "Aug 1-15, 2026".into(), serde_json::json!({})).await };
         let drafts = || {
             let db = state.db.clone();
             async move {
