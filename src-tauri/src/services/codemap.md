@@ -6,6 +6,7 @@
 ## Design
 - `mod.rs` exposes focused modules; pure payroll/time calculations are separated from async SQLx, network, and device operations.
 - Service calls receive the shared `AppState` or explicit `SqlitePool`/config inputs; `sync_retry` centralizes retry scheduling, throttles, and sync-guard contracts.
+- `firebase` is the one client for Keystone's Firebase project (endpoints, sign-in, counting, the test fake) under `id_register`, `cloud_mirror` and `admin_account`; `settings` is the one accessor for `app_settings` and lists its keys; `unlock_guard` holds the wrong-tries pause and the secret hash.
 - Scanner owns native listener state/events; Sheets/DTR services coordinate remote updates against SQLite queues/state, while voice jobs persist queue state and generated clips under app data.
 
 ## Flow

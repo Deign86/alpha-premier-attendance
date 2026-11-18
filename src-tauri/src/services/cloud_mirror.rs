@@ -22,8 +22,8 @@
 //!   sign-in tokens), the Sheets queue and export jobs. Photos are files on
 //!   this computer and are never sent.
 
-use crate::services::id_register::{ask, Answer, Endpoints};
-use crate::services::voice_pull::{read_setting, store_setting};
+use crate::services::firebase::{self, ask, Answer, CountRefusal, Endpoints};
+use crate::services::settings::{self, key};
 use crate::state::AppState;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -41,9 +41,6 @@ const TABLES: &[(&str, &str, &[&str])] = &[
     ("audit_logs", "log_id", &[]),
 ];
 
-const AT_KEY: &str = "cloud_backup_at";
-const PROBLEM_KEY: &str = "cloud_backup_problem";
-const MAIN_SINCE_KEY: &str = "cloud_main_record_since";
 /// The database as it was when Firebase became the main record.
 const KEPT_FILE: &str = "attendance-before-firebase.db";
 const DOCUMENTS_A_PAGE: usize = 300;
@@ -213,7 +210,7 @@ fn write_for(change: &Change, names: &str) -> serde_json::Value {
 
 async fn problem(state: &AppState, text: &str) -> String {
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = store_setting(&state.db, PROBLEM_KEY, text, &now).await;
+    let _ = settings::put(&state.db, key::CLOUD_BACKUP_PROBLEM, text, &now).await;
     text.to_string()
 }
 
@@ -255,10 +252,10 @@ pub(crate) async fn push(
     }
     let now = chrono::Utc::now().to_rfc3339();
     if left == 0 {
-        store_setting(&state.db, AT_KEY, &now, &now).await?;
+        settings::put(&state.db, key::CLOUD_BACKUP_AT, &now, &now).await?;
     }
-    let _ = sqlx::query("DELETE FROM app_settings WHERE key = ?").bind(PROBLEM_KEY).execute(&state.db).await;
-    if left == 0 && read_setting(&state.db, MAIN_SINCE_KEY).await.is_none() {
+    let _ = settings::delete(&state.db, key::CLOUD_BACKUP_PROBLEM).await;
+    if left == 0 && settings::get(&state.db, key::CLOUD_MAIN_RECORD_SINCE).await.is_none() {
         make_main_record(state, client, endpoints, id_token, sent).await?;
     }
     Ok(left)
@@ -271,23 +268,9 @@ fn every_set() -> Vec<String> {
         .collect()
 }
 
-async fn count_there(client: &reqwest::Client, endpoints: &Endpoints, id_token: &str, set: &str) -> Result<usize, Answer> {
-    let counted = ask(client
-        .post(format!("{}:runAggregationQuery", endpoints.register))
-        .bearer_auth(id_token)
-        .json(&serde_json::json!({"structuredAggregationQuery": {
-            "structuredQuery": {"from": [{"collectionId": collection(set)}]},
-            "aggregations": [{"alias": "n", "count": {}}],
-        }})))
-    .await;
-    match counted {
-        Answer::Ok(body) => body
-            .get(0)
-            .and_then(|first| first.pointer("/result/aggregateFields/n/integerValue"))
-            .and_then(|n| n.as_str().and_then(|s| s.parse().ok()).or_else(|| n.as_u64().map(|n| n as usize)))
-            .ok_or(Answer::Refused(0, "an answer the kiosk could not read".into())),
-        other => Err(other),
-    }
+async fn count_there(client: &reqwest::Client, endpoints: &Endpoints, id_token: &str, set: &str) -> Result<usize, CountRefusal> {
+    let counted = firebase::count(client, endpoints, id_token, serde_json::json!({"from": [{"collectionId": collection(set)}]})).await?;
+    usize::try_from(counted).map_err(|_| CountRefusal::Unreadable)
 }
 
 /// Called once everything has been sent: Firebase becomes the main record only when each collection there holds
@@ -297,7 +280,7 @@ async fn make_main_record(state: &AppState, client: &reqwest::Client, endpoints:
         let here = sent.get(&set).map_or(0, BTreeMap::len);
         let there = match count_there(client, endpoints, id_token, &set).await {
             Ok(there) => there,
-            Err(Answer::Unreachable) => return Err(problem(state, UNREACHABLE).await),
+            Err(CountRefusal::Unreachable) => return Err(problem(state, UNREACHABLE).await),
             Err(_) => return Err(problem(state, NOT_READABLE).await),
         };
         if there < here {
@@ -314,7 +297,7 @@ async fn make_main_record(state: &AppState, client: &reqwest::Client, endpoints:
         crate::database::snapshot_database_from_pool(&state.db, &kept).await?;
     }
     let now = chrono::Utc::now().to_rfc3339();
-    store_setting(&state.db, MAIN_SINCE_KEY, &now, &now).await
+    settings::put(&state.db, key::CLOUD_MAIN_RECORD_SINCE, &now, &now).await
 }
 
 async fn documents(client: &reqwest::Client, endpoints: &Endpoints, id_token: &str, set: &str) -> Result<Vec<serde_json::Value>, Answer> {
@@ -423,16 +406,16 @@ pub async fn status(state: &AppState) -> BackupStatus {
     BackupStatus {
         records,
         backed_up,
-        last_complete_at: read_setting(&state.db, AT_KEY).await,
-        main_record_since: read_setting(&state.db, MAIN_SINCE_KEY).await,
-        problem: read_setting(&state.db, PROBLEM_KEY).await.filter(|p| !p.is_empty()),
+        last_complete_at: settings::get(&state.db, key::CLOUD_BACKUP_AT).await,
+        main_record_since: settings::get(&state.db, key::CLOUD_MAIN_RECORD_SINCE).await,
+        problem: settings::get(&state.db, key::CLOUD_BACKUP_PROBLEM).await.filter(|p| !p.is_empty()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::id_register::tests::{close, kiosk, nowhere, register, serve, PASSWORD};
+    use crate::services::firebase::fake::{close, kiosk, nowhere, register, serve, PASSWORD};
     use crate::services::id_register::{run_once, sign_in};
 
     async fn add_user(state: &AppState, user_id: &str, card: &str, name: &str) {

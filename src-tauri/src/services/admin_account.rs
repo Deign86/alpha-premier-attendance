@@ -13,14 +13,13 @@
 //! - Anything Firebase or Keystone refuses forgets that memory at once.
 //! - Wrong passwords count toward the same five-tries pause as wrong PINs.
 
-use crate::services::admin_pin::{clear_unlock_failures, hash_secret, record_unlock_failure, unlock_locked, verify_secret};
-use crate::services::id_register::{ask, http, Answer, Endpoints};
-use crate::services::voice_pull::{read_setting, store_setting};
+use crate::services::firebase::{self, ask, http, Answer, Endpoints, SignInRefusal};
+use crate::services::settings::{self, key};
+use crate::services::unlock_guard::{clear_unlock_failures, hash_secret, record_unlock_failure, unlock_locked, verify_secret};
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
 
-const REMEMBERED_KEY: &str = "admin_accounts";
 /// How long a sign-in that worked online still opens with no internet.
 pub const OFFLINE_DAYS: i64 = 7;
 
@@ -74,12 +73,11 @@ struct Remembered {
 }
 
 async fn remembered(db: &SqlitePool) -> BTreeMap<String, Remembered> {
-    read_setting(db, REMEMBERED_KEY).await.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    settings::get_json(db, key::ADMIN_ACCOUNTS).await.ok().flatten().unwrap_or_default()
 }
 
 async fn keep(db: &SqlitePool, all: &BTreeMap<String, Remembered>, now: DateTime<Utc>) -> Result<(), String> {
-    let text = serde_json::to_string(all).map_err(|e| e.to_string())?;
-    store_setting(db, REMEMBERED_KEY, &text, &now.to_rfc3339()).await
+    settings::put_json(db, key::ADMIN_ACCOUNTS, all, &now.to_rfc3339()).await
 }
 
 async fn forget(db: &SqlitePool, email: &str, now: DateTime<Utc>) -> Result<(), String> {
@@ -124,31 +122,22 @@ pub async fn open(db: &SqlitePool, endpoints: Option<&Endpoints>, email: &str, p
         return Err(Refusal::Paused);
     }
     let client = http().map_err(other)?;
-    let signed = ask(client.post(&endpoints.sign_in).json(&serde_json::json!({
-        "email": email, "password": password, "returnSecureToken": true,
-    })))
-    .await;
-    let opened = match signed {
-        Answer::Unreachable => open_offline(db, &email, password, now).await?,
-        Answer::Refused(_, code) => {
-            // Firebase puts detail after the code: "TOO_MANY_ATTEMPTS_TRY_LATER : Access to this account…".
-            return Err(match code.split(' ').next().unwrap_or("") {
-                "TOO_MANY_ATTEMPTS_TRY_LATER" => Refusal::TooManyTries,
-                "USER_DISABLED" => {
-                    forget(db, &email, now).await.map_err(other)?;
-                    Refusal::TurnedOff
-                }
-                _ => {
-                    // A password changed in Keystone must stop the old one here too.
-                    forget(db, &email, now).await.map_err(other)?;
-                    wrong(db, now).await
-                }
-            });
+    let opened = match firebase::sign_in_with_password(&client, endpoints, &email, password).await {
+        Err(SignInRefusal::Unreachable) => open_offline(db, &email, password, now).await?,
+        Err(SignInRefusal::TooManyTries) => return Err(Refusal::TooManyTries),
+        Err(SignInRefusal::TurnedOff) => {
+            forget(db, &email, now).await.map_err(other)?;
+            return Err(Refusal::TurnedOff);
         }
-        Answer::Ok(body) => {
-            let text = |name: &str| body.get(name).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let (uid, id_token) = (text("localId"), text("idToken"));
-            if uid.is_empty() || id_token.is_empty() {
+        Err(SignInRefusal::WrongEmailOrPassword | SignInRefusal::Other(_)) => {
+            // A password changed in Keystone must stop the old one here too.
+            forget(db, &email, now).await.map_err(other)?;
+            return Err(wrong(db, now).await);
+        }
+        Err(SignInRefusal::Unreadable) => return Err(Refusal::Other("The sign-in gave an answer the kiosk could not read.".into())),
+        Ok(signed) => {
+            let (uid, id_token) = (signed.uid, signed.id_token);
+            if uid.is_empty() {
                 return Err(Refusal::Other("The sign-in gave an answer the kiosk could not read.".into()));
             }
             // The person's own member document, read as them: Keystone's rules let a member read members.
@@ -199,14 +188,14 @@ pub async fn send_reset(endpoints: Option<&Endpoints>, email: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::id_register::tests::{close, kiosk, nowhere, register, serve};
+    use crate::services::firebase::fake::{close, kiosk, nowhere, register, serve, Fake};
 
     const CEO: &str = "mark@example.test";
     const ANA: &str = "ana@example.test";
     const LIZA: &str = "liza@example.test";
 
     /// The CEO, Ana (staff the CEO ticked), Liza (staff, not ticked), and Sam, who has a sign-in but is no member.
-    fn keystone() -> std::sync::Arc<std::sync::Mutex<crate::services::id_register::tests::Fake>> {
+    fn keystone() -> std::sync::Arc<std::sync::Mutex<Fake>> {
         let fake = register(vec![]);
         {
             let mut f = fake.lock().unwrap();
@@ -239,7 +228,7 @@ mod tests {
         assert_eq!(open(db, None, ANA, "ana-password", now).await, Err(Refusal::NotAvailable), "a build with no Firebase project");
 
         // The password itself is nowhere in the database: only a slow hash, in settings.
-        let kept = read_setting(db, REMEMBERED_KEY).await.unwrap();
+        let kept = settings::get(db, key::ADMIN_ACCOUNTS).await.unwrap();
         assert!(!kept.contains("ceo-password") && !kept.contains("ana-password"), "{kept}");
         assert!(kept.contains("pbkdf2") || kept.contains('$') || kept.len() > 100);
         assert!(!kept.contains(LIZA), "nothing is remembered for someone who did not get in");

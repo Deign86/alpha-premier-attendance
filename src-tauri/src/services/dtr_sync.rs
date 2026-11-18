@@ -42,6 +42,7 @@ use crate::services::sheets_sync::{
     classify_403_body, parse_retry_after_secs, per_call_budget_actual, per_call_should_retry,
     per_call_sleep_ms,
 };
+use crate::services::settings;
 use crate::services::sync_retry::{DtrThrottleBucket, GOOGLE_TRANSPORT_FAILED, split_dtr_batch};
 use crate::state::AppState;
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike, Weekday};
@@ -71,11 +72,10 @@ pub const DTR_LUNCH_OUT: &str = "12:00:00 PM";
 pub const DTR_LUNCH_IN: &str = "1:00:00 PM";
 
 /// Per-device kill switch for intern-DTR pushes, stored in the LOCAL
-/// SQLite `app_settings` table (key below, `"1"`/`"0"`). Local DB =
+/// SQLite `app_settings` table (`settings::key::DTR_SYNC_ENABLED`, `"1"`/`"0"`). Local DB =
 /// per-device, so switching one PC off never affects the other.
 /// Default ON (historical behavior); env `ALPHA_PREMIER_DTR_SYNC_ENABLED`
 /// (`0`/`false`/`off` → off, `1`/`true`/`on` → on) wins when set.
-pub const DTR_SYNC_ENABLED_KEY: &str = "intern_dtr_sync_enabled";
 pub const ENV_DTR_SYNC_ENABLED: &str = "ALPHA_PREMIER_DTR_SYNC_ENABLED";
 
 /// True when this device may push to the human DTR sheet. Env override
@@ -89,16 +89,8 @@ pub async fn is_dtr_sync_enabled(db: &sqlx::SqlitePool) -> bool {
             _ => {}
         }
     }
-    let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
-    )
-    .execute(db)
-    .await;
-    let value: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
-        .bind(DTR_SYNC_ENABLED_KEY)
-        .fetch_optional(db)
-        .await
-        .unwrap_or(None);
+    let _ = settings::ensure_table(db).await;
+    let value = settings::get(db, settings::key::DTR_SYNC_ENABLED).await;
     !matches!(
         value.as_deref().map(str::trim),
         Some("0") | Some("false") | Some("no") | Some("off")
@@ -108,23 +100,8 @@ pub async fn is_dtr_sync_enabled(db: &sqlx::SqlitePool) -> bool {
 /// Persist the per-device toggle from the Admin UI. Missing table is
 /// created inline so the very first toggle never fails on older DBs.
 pub async fn set_dtr_sync_enabled(db: &sqlx::SqlitePool, enabled: bool) -> Result<(), String> {
-    let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
-    )
-    .execute(db)
-    .await;
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-    )
-    .bind(DTR_SYNC_ENABLED_KEY)
-    .bind(if enabled { "1" } else { "0" })
-    .bind(&now)
-    .execute(db)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    let _ = settings::ensure_table(db).await;
+    settings::put(db, settings::key::DTR_SYNC_ENABLED, if enabled { "1" } else { "0" }, &chrono::Utc::now().to_rfc3339()).await
 }
 
 

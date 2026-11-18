@@ -88,7 +88,7 @@ States: PENDING · RETRY · PROCESSING · SYNCED · DEAD. Counters: `attempts` (
 
 ### M10 Admin session and unlock (card, Keystone account)
 
-Rust: one global session slot `state.rs:237`, unlock `lib.rs:4131`, check `admin_authorized` :5419 (`require_admin` :5411), wrong-tries guard `services/admin_pin.rs` (`unlock_locked`, `record_unlock_failure`; stored in `app_settings`), account sign-in `services/admin_account.rs`. The shared PIN and its reset code were removed on 2026-11-18. Client: setup dialog `client/src/App.tsx:529` / close :567 (attempt counter :351), admin page unlock :3636.
+Rust: one global session slot `state.rs:237`, unlock `lib.rs:4131`, check `admin_authorized` :5419 (`require_admin` :5411), wrong-tries guard `services/unlock_guard.rs` (`unlock_locked`, `record_unlock_failure`; stored in `app_settings`), account sign-in `services/admin_account.rs`. The shared PIN and its reset code were removed on 2026-11-18. Client: setup dialog `client/src/App.tsx:529` / close :567 (attempt counter :351), admin page unlock :3636.
 
 States: locked · unlocking · unlocked(token, expiry) · typing paused (5 wrong tries in a row, by account password or typed text → 5 minutes; survives a restart; admin cards still unlock; any success resets the count). Invariants: closing setup leaves it locked even if an unlock answers afterwards; while paused nothing typed is checked and Firebase is not asked; a stale or empty token is refused but never ends a live session (only expiry does); a wrong try is one SQL statement, so concurrent tries all count; a refusal from Firebase or Keystone forgets the account's remembered sign-in.
 

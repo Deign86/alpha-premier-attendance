@@ -2565,3 +2565,11 @@ Release 5 of the agreed plan, brought forward by the owner before a payroll cuto
   CHECK: `cd src-tauri && cargo test --lib && cargo test --no-fail-fast --tests -- --test-threads=1` and `npm run lint:oxlint && npm run typecheck && npm test`
   EVIDENCE: `cargo test --lib`: 423 passed, the 3 known Linux-only path tests failed as on main; integration 3/18/75/36/58/24; oxlint 0 errors, typecheck clean, shared 41 / client 632 / server 208. Tests removed with the code they tested: three reset-code tests in `lib.rs`, eight in `admin_pin_isolated`, 16 in `pin-reset.test.tsx`. Found on the way and fixed, not skipped: `a_failed_release_write_does_not_wedge_the_sync_guard` failed about one full run in six because the guard's "my own leftover" marker was one value for the whole process and tests on separate databases overwrote each other's; it is now kept per `AppState`. 3 failures in 14 full runs before, 0 in 12 after. The desktop app was not run.
 - [ ] X6: The owner has archived the Apps Script deployment and deleted the `ALPHA_PREMIER_PIN_RESET_URL` secret.
+
+## Untangle, round 1 (structural refactor, 2026-11-18)
+
+OWNS: `src-tauri/src/services/{firebase,settings,unlock_guard,users}.rs`, the three services built on them, `src-tauri/src/lib.rs` (moves and deletions only), `client/src` (deletions only). No behaviour changes; the problem list and the decision log are kept outside the repo by the owner.
+
+- [x] U1: One Firebase client and one `app_settings` accessor sit under the ID register, the backup and the account sign-in; `admin_pin.rs` is `unlock_guard.rs`; the backup no longer imports from the ID register.
+  CHECK: `cd src-tauri && cargo test --no-fail-fast` and `grep -n "id_register\|voice_pull" src/services/cloud_mirror.rs src/services/admin_account.rs | grep "^[^:]*:[0-9]*: *use"` prints only the test module's `id_register::{run_once, sign_in}` line
+  EVIDENCE: lib 423 passed, the 3 known Linux-only path tests failed as on main; integration 18/75/36/58/24, `unlock_guard_isolated` 3 (2026-11-18).

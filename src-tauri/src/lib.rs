@@ -137,15 +137,23 @@ enum RegisterAsk<'a> {
     Check,
 }
 
+/// What the ID register panel shows: the register's connection, and the kiosk's backup beside it.
+#[derive(Debug, serde::Serialize)]
+struct IdRegisterPanel {
+    #[serde(flatten)]
+    register: crate::services::id_register::RegisterStatus,
+    backup: crate::services::cloud_mirror::BackupStatus,
+}
+
 /// Every register command: administrator only, and each answers with where
 /// the connection now stands. A check that fails is not an error here: the
 /// problem is in the status, in plain words.
 async fn id_register_impl(
     state: &AppState,
     token: &str,
-    endpoints: Option<&crate::services::id_register::Endpoints>,
+    endpoints: Option<&crate::services::firebase::Endpoints>,
     ask: RegisterAsk<'_>,
-) -> Result<crate::services::id_register::RegisterStatus, String> {
+) -> Result<IdRegisterPanel, String> {
     use crate::services::id_register;
     require_admin(state, token).await?;
     match ask {
@@ -158,12 +166,15 @@ async fn id_register_impl(
             let _ = id_register::run_once(state, endpoints).await;
         }
     }
-    Ok(id_register::status(state).await)
+    Ok(IdRegisterPanel {
+        register: id_register::status(state).await,
+        backup: crate::services::cloud_mirror::status(state).await,
+    })
 }
 
 #[tauri::command]
-async fn id_register_status(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
-    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::Status).await
+async fn id_register_status(state: State<'_, AppState>, token: String) -> Result<IdRegisterPanel, String> {
+    id_register_impl(&state, &token, crate::services::firebase::built_in().as_ref(), RegisterAsk::Status).await
 }
 
 #[tauri::command]
@@ -172,19 +183,19 @@ async fn id_register_sign_in(
     token: String,
     email: String,
     password: String,
-) -> Result<crate::services::id_register::RegisterStatus, String> {
+) -> Result<IdRegisterPanel, String> {
     let ask = RegisterAsk::SignIn { email: &email, password: &password };
-    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), ask).await
+    id_register_impl(&state, &token, crate::services::firebase::built_in().as_ref(), ask).await
 }
 
 #[tauri::command]
-async fn id_register_sign_out(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
-    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::SignOut).await
+async fn id_register_sign_out(state: State<'_, AppState>, token: String) -> Result<IdRegisterPanel, String> {
+    id_register_impl(&state, &token, crate::services::firebase::built_in().as_ref(), RegisterAsk::SignOut).await
 }
 
 #[tauri::command]
-async fn id_register_check(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
-    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::Check).await
+async fn id_register_check(state: State<'_, AppState>, token: String) -> Result<IdRegisterPanel, String> {
+    id_register_impl(&state, &token, crate::services::firebase::built_in().as_ref(), RegisterAsk::Check).await
 }
 
 #[tauri::command]
@@ -4162,7 +4173,7 @@ async fn setup_unlock_impl(
     let pin_trimmed = pin.trim();
     let now = chrono::Utc::now();
     // While locked out nothing typed is checked, so a guess cannot be confirmed.
-    let pin_locked = crate::services::admin_pin::unlock_locked(&state.db, now).await?;
+    let pin_locked = crate::services::unlock_guard::unlock_locked(&state.db, now).await?;
     // There is no shared PIN any more. What is typed opens the admin screens only when it is an admin card's number
     // or IT's way back: an explicit `admin_pin` in config.toml on this kiosk. A PIN once set by email is ignored.
     let is_pin_match = !pin_locked && configured.is_some_and(|pin| !pin_trimmed.is_empty() && pin == pin_trimmed);
@@ -4180,12 +4191,12 @@ async fn setup_unlock_impl(
         is_admin_card_match = row.is_some();
     }
     if !is_pin_match && !is_admin_card_match {
-        if pin_locked || crate::services::admin_pin::record_unlock_failure(&state.db, now).await? {
+        if pin_locked || crate::services::unlock_guard::record_unlock_failure(&state.db, now).await? {
             return Err("ADMIN_PIN_LOCKED".into());
         }
         return Err("INVALID_ADMIN_PIN".into());
     }
-    crate::services::admin_pin::clear_unlock_failures(&state.db).await?;
+    crate::services::unlock_guard::clear_unlock_failures(&state.db).await?;
     Ok(open_admin_session(state).await)
 }
 
@@ -4204,7 +4215,7 @@ async fn open_admin_session(state: &AppState) -> serde_json::Value {
 /// Opens the admin screens with a person's own Keystone account (`services/admin_account.rs`).
 async fn admin_account_unlock_impl(
     state: &AppState,
-    endpoints: Option<&crate::services::id_register::Endpoints>,
+    endpoints: Option<&crate::services::firebase::Endpoints>,
     email: &str,
     password: &str,
 ) -> Result<serde_json::Value, String> {
@@ -4224,13 +4235,13 @@ async fn admin_account_unlock_impl(
 
 #[tauri::command]
 async fn admin_account_unlock(state: State<'_, AppState>, email: String, password: String) -> Result<serde_json::Value, String> {
-    admin_account_unlock_impl(&state, crate::services::id_register::built_in().as_ref(), &email, &password).await
+    admin_account_unlock_impl(&state, crate::services::firebase::built_in().as_ref(), &email, &password).await
 }
 
 #[tauri::command]
 /// Forgot password: Firebase emails the reset link to the address, if it has an account.
 async fn admin_account_reset(state: State<'_, AppState>, email: String) -> Result<serde_json::Value, String> {
-    crate::services::admin_account::send_reset(crate::services::id_register::built_in().as_ref(), &email)
+    crate::services::admin_account::send_reset(crate::services::firebase::built_in().as_ref(), &email)
         .await
         .map_err(|refusal| refusal.code())?;
     audit_admin_pin_event(&state, "ADMIN_ACCOUNT_RESET_REQUESTED", "A password reset email was asked for from the admin sign-in screen").await;
@@ -6561,7 +6572,7 @@ pub fn run() {
                 }
                 // Initial 5-second grace period on cold boot prevents network contention
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                let register = crate::services::id_register::built_in();
+                let register = crate::services::firebase::built_in();
                 let mut pass: u32 = 0;
                 loop {
                     let endpoint = sync_state.lan.sheets_sync_endpoint.as_deref();
@@ -8142,10 +8153,10 @@ mod tests {
         let (state, temp, _token) = admin_test_state("pin-race").await;
         let now = chrono::Utc::now();
         let wrong: Vec<_> = (0..5)
-            .map(|_| crate::services::admin_pin::record_unlock_failure(&state.db, now))
+            .map(|_| crate::services::unlock_guard::record_unlock_failure(&state.db, now))
             .collect();
         futures_util::future::join_all(wrong).await;
-        assert!(crate::services::admin_pin::unlock_locked(&state.db, now).await.unwrap(), "five wrong PINs lock, however they interleave");
+        assert!(crate::services::unlock_guard::unlock_locked(&state.db, now).await.unwrap(), "five wrong PINs lock, however they interleave");
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -8327,7 +8338,7 @@ mod tests {
 
         // A kiosk that once had a PIN set through the emailed code (v0.2.53 and before) still holds its hash. It is
         // left where it is and opens nothing: that PIN is gone.
-        let emailed = crate::services::admin_pin::hash_secret("482915").unwrap();
+        let emailed = crate::services::unlock_guard::hash_secret("482915").unwrap();
         for (key, value) in [("admin_pin_hash", emailed.as_str()), ("admin_pin_config_fingerprint", "anything")] {
             sqlx::query("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, '2026-10-08T00:00:00Z')").bind(key).bind(value).execute(&state.db).await.unwrap();
         }
@@ -9333,7 +9344,7 @@ mod tests {
     /// the audit log with their name; one that may not, gets neither; and a pause never stops an admin card.
     #[tokio::test]
     async fn admin_account_unlock_opens_a_named_session_and_a_card_still_works_while_paused() {
-        use crate::services::id_register::tests::{close, kiosk, register, serve};
+        use crate::services::firebase::fake::{close, kiosk, register, serve};
         let (state, temp) = kiosk("account-session").await;
         let fake = register(vec![]);
         {
@@ -9375,8 +9386,8 @@ mod tests {
         use super::RegisterAsk;
         let (state, temp, token) = admin_test_state("idreg-admin").await;
         let now = chrono::Utc::now().to_rfc3339();
-        crate::services::voice_pull::store_setting(&state.db, "id_register_refresh_token", "refresh-1", &now).await.unwrap();
-        crate::services::voice_pull::store_setting(&state.db, "id_register_email", "kiosk@example.test", &now).await.unwrap();
+        crate::services::settings::put(&state.db, "id_register_refresh_token", "refresh-1", &now).await.unwrap();
+        crate::services::settings::put(&state.db, "id_register_email", "kiosk@example.test", &now).await.unwrap();
         let asks = || [
             RegisterAsk::Status,
             RegisterAsk::SignIn { email: "kiosk@example.test", password: "anything" },
@@ -9393,11 +9404,11 @@ mod tests {
 
         // With the administrator's session each answers with where the connection stands.
         let status = super::id_register_impl(&state, &token, None, RegisterAsk::Status).await.unwrap();
-        assert_eq!(status.signed_in_as.as_deref(), Some("kiosk@example.test"));
+        assert_eq!(status.register.signed_in_as.as_deref(), Some("kiosk@example.test"));
         let no_register = super::id_register_impl(&state, &token, None, RegisterAsk::SignIn { email: "kiosk@example.test", password: "anything" }).await;
         assert!(no_register.unwrap_err().contains("not built into"));
         let out = super::id_register_impl(&state, &token, None, RegisterAsk::SignOut).await.unwrap();
-        assert_eq!(out.signed_in_as, None);
+        assert_eq!(out.register.signed_in_as, None);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

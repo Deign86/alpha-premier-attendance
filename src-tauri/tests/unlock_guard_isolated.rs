@@ -4,13 +4,17 @@
 #[allow(dead_code)]
 mod services {
     #[allow(dead_code)]
-    pub mod admin_pin {
-        include!("../src/services/admin_pin.rs");
+    pub mod settings {
+        include!("../src/services/settings.rs");
+    }
+    #[allow(dead_code)]
+    pub mod unlock_guard {
+        include!("../src/services/unlock_guard.rs");
     }
 }
 
 use chrono::{Duration, TimeZone, Utc};
-use services::admin_pin::*;
+use services::unlock_guard::*;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
 async fn pool() -> SqlitePool {
