@@ -48,9 +48,6 @@ jobs:
           # Baked in via option_env! for new interns from the ID register (services/id_register.rs).
           ALPHA_PREMIER_FIREBASE_PROJECT_ID: ${{ secrets.ALPHA_PREMIER_FIREBASE_PROJECT_ID }}
           ALPHA_PREMIER_FIREBASE_API_KEY: ${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}
-          # The kiosk's own register account, so it connects by itself.
-          ALPHA_PREMIER_KIOSK_EMAIL: ${{ secrets.ALPHA_PREMIER_KIOSK_EMAIL }}
-          ALPHA_PREMIER_KIOSK_PASSWORD: ${{ secrets.ALPHA_PREMIER_KIOSK_PASSWORD }}
         shell: bash
         run: |
           set -o pipefail

@@ -129,33 +129,62 @@ async fn check_voicestudio_impl(
     Ok(crate::services::voice_pull::check_connection_to(&host, &pin).await)
 }
 
+/// What Admin → Settings asks of the ID register connection.
+enum RegisterAsk<'a> {
+    Status,
+    SignIn { email: &'a str, password: &'a str },
+    SignOut,
+    Check,
+}
+
 /// Every register command: administrator only, and each answers with where
-/// the connection now stands. The kiosk signs itself in, so there is nothing
-/// to type: an administrator can only look, and ask it to check now. A check
-/// that fails is not an error here: the problem is in the status, in plain words.
+/// the connection now stands. A check that fails is not an error here: the
+/// problem is in the status, in plain words.
 async fn id_register_impl(
     state: &AppState,
     token: &str,
     endpoints: Option<&crate::services::id_register::Endpoints>,
-    check_now: bool,
+    ask: RegisterAsk<'_>,
 ) -> Result<crate::services::id_register::RegisterStatus, String> {
     use crate::services::id_register;
     require_admin(state, token).await?;
-    if check_now {
-        id_register::retry_account(&state.db).await;
-        let _ = id_register::run_once(state, endpoints).await;
+    match ask {
+        RegisterAsk::Status => {}
+        RegisterAsk::SignIn { email, password } => {
+            id_register::sign_in(state, endpoints, email, password).await?;
+        }
+        RegisterAsk::SignOut => id_register::sign_out(&state.db).await,
+        RegisterAsk::Check => {
+            let _ = id_register::run_once(state, endpoints).await;
+        }
     }
     Ok(id_register::status(state).await)
 }
 
 #[tauri::command]
 async fn id_register_status(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
-    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), false).await
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::Status).await
+}
+
+#[tauri::command]
+async fn id_register_sign_in(
+    state: State<'_, AppState>,
+    token: String,
+    email: String,
+    password: String,
+) -> Result<crate::services::id_register::RegisterStatus, String> {
+    let ask = RegisterAsk::SignIn { email: &email, password: &password };
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), ask).await
+}
+
+#[tauri::command]
+async fn id_register_sign_out(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::SignOut).await
 }
 
 #[tauri::command]
 async fn id_register_check(state: State<'_, AppState>, token: String) -> Result<crate::services::id_register::RegisterStatus, String> {
-    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), true).await
+    id_register_impl(&state, &token, crate::services::id_register::built_in().as_ref(), RegisterAsk::Check).await
 }
 
 #[tauri::command]
@@ -6553,8 +6582,6 @@ pub fn run() {
                 // Initial 5-second grace period on cold boot prevents network contention
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 let register = crate::services::id_register::built_in();
-                // A built-in account refused last run gets one fresh try now.
-                crate::services::id_register::retry_account(&sync_state.db).await;
                 let mut pass: u32 = 0;
                 loop {
                     let endpoint = sync_state.lan.sheets_sync_endpoint.as_deref();
@@ -6754,6 +6781,8 @@ pub fn run() {
             set_voicestudio_pin,
             check_voicestudio,
             id_register_status,
+            id_register_sign_in,
+            id_register_sign_out,
             id_register_check,
             voice_clip_states,
             voice_regenerate,
@@ -9419,27 +9448,32 @@ mod tests {
 
     #[tokio::test]
     async fn id_register_commands_need_admin() {
+        use super::RegisterAsk;
         let (state, temp, token) = admin_test_state("idreg-admin").await;
         let now = chrono::Utc::now().to_rfc3339();
         crate::services::voice_pull::store_setting(&state.db, "id_register_refresh_token", "refresh-1", &now).await.unwrap();
         crate::services::voice_pull::store_setting(&state.db, "id_register_email", "kiosk@example.test", &now).await.unwrap();
-        crate::services::voice_pull::store_setting(&state.db, "id_register_account_refused", "1", &now).await.unwrap();
-        for check_now in [false, true] {
-            let refused = super::id_register_impl(&state, "wrong-token", None, check_now).await;
+        let asks = || [
+            RegisterAsk::Status,
+            RegisterAsk::SignIn { email: "kiosk@example.test", password: "anything" },
+            RegisterAsk::Check,
+            RegisterAsk::SignOut,
+        ];
+        for ask in asks() {
+            let refused = super::id_register_impl(&state, "wrong-token", None, ask).await;
             assert_eq!(refused.unwrap_err(), "ADMIN_AUTH_REQUIRED");
         }
-        let marker: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'id_register_account_refused'")
+        let kept: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'id_register_refresh_token'")
             .fetch_optional(&state.db).await.unwrap();
-        assert_eq!(marker.as_deref(), Some("1"), "a refused check changes nothing");
+        assert_eq!(kept.as_deref(), Some("refresh-1"), "a refused sign-out leaves the sign-in");
 
         // With the administrator's session each answers with where the connection stands.
-        let status = super::id_register_impl(&state, &token, None, false).await.unwrap();
+        let status = super::id_register_impl(&state, &token, None, RegisterAsk::Status).await.unwrap();
         assert_eq!(status.signed_in_as.as_deref(), Some("kiosk@example.test"));
-        let checked = super::id_register_impl(&state, &token, None, true).await.unwrap();
-        assert_eq!(checked.signed_in_as.as_deref(), Some("kiosk@example.test"));
-        let marker: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'id_register_account_refused'")
-            .fetch_optional(&state.db).await.unwrap();
-        assert_eq!(marker, None, "Check now lets a refused account be tried again");
+        let no_register = super::id_register_impl(&state, &token, None, RegisterAsk::SignIn { email: "kiosk@example.test", password: "anything" }).await;
+        assert!(no_register.unwrap_err().contains("not built into"));
+        let out = super::id_register_impl(&state, &token, None, RegisterAsk::SignOut).await.unwrap();
+        assert_eq!(out.signed_in_as, None);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

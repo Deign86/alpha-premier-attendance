@@ -239,7 +239,7 @@ pub async fn status(state: &AppState) -> BackupStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::id_register::tests::{close, kiosk, nowhere, register, serve, PASSWORD};
+    use crate::services::id_register::tests::{close, intern, kiosk, nowhere, register, serve, PASSWORD};
     use crate::services::id_register::{run_once, sign_in};
 
     async fn add_user(state: &AppState, user_id: &str, card: &str, name: &str) {

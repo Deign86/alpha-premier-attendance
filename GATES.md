@@ -2471,3 +2471,18 @@ What was wrong, seen in the live DTR sheet: the hand-made months are Sheets tabl
   EVIDENCE: 4 passed (2026-11-18)
 - [ ] D2: The blocks already in the sheet are repaired, and a block the released kiosk adds for December looks like the others.
   EVIDENCE: the November blocks on 19 tabs were repaired by hand through the Sheets API on 2026-11-18 (number formats, borders, alternating rows, salmon total row, Roboto header, middle alignment, real dates); John Frederick Ruiz's rows 118 to 121 read back correctly. Pending: the first December block the released kiosk adds.
+
+## The kiosk account's password is not in the app (owner decision, 2026-11-18)
+
+OWNS: `src-tauri/src/services/id_register.rs`, `client/src/id-register-panel.tsx`, `.github/workflows/release.yml`, `.github/workflows/macos-build.yml`
+
+Why: this repository and its release downloads are public. From v0.2.48 the installer carried the kiosk account's email and password (built in from repository secrets), so anybody could take them out and read the ID register or overwrite the kiosk's backup. This undoes that part of "The kiosk connects to the ID register by itself": the kiosk is connected once, by someone typing the account's email and password under Admin → System, and keeps only the renewable sign-in it is given. A kiosk already connected stays connected through the update.
+
+- [x] P1: No build step reads the kiosk account, and the app has no built-in account.
+  CHECK: `grep -rn "KIOSK_EMAIL\|KIOSK_PASSWORD" .github src-tauri/src client/src` prints nothing
+  EVIDENCE: no output (2026-11-18)
+- [x] P2: Signing in once from the panel connects the kiosk; a wrong password keeps nothing; the tests that held before the built-in account hold again.
+  CHECK: `cd src-tauri && cargo test --lib` and `npm test --workspace client`
+  EVIDENCE: `cargo test --lib`: 415 passed, the 3 known Linux-only path tests failed as on main; client: 633 passed (2026-11-18)
+- [ ] P3: The owner has changed the kiosk account's password in Firebase and typed the new one once on the kiosk; the old one from v0.2.48 no longer signs in.
+  EVIDENCE: pending (the owner, after this is released)
