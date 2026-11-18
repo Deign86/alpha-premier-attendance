@@ -1528,6 +1528,36 @@ describe('DatabasePanel', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Selected users' })).not.toBeInTheDocument());
   });
 
+  it('a user from the ID register shows as waiting for a card, and takes the card tapped in the editor', async () => {
+    vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
+    const saveSpy = vi.spyOn(api, 'saveAdminUser').mockResolvedValue({ success: true });
+    const waiting = {
+      userId: 'APG-2026-126', rfidUid: 'PENDING-APG-2026-126', fullName: 'Juan Dela Cruz', department: 'IT Intern',
+      status: 'ACTIVE' as const, employeeType: 'INTERN' as const, gender: null, dailyRate: null,
+    };
+    const user = userEvent.setup();
+    render(<UserEditor users={[waiting, ...threeInterns()]} editing={waiting} setEditing={() => {}} onSaved={() => {}} />);
+
+    const row = screen.getByRole('row', { name: /Juan Dela Cruz/ });
+    expect(within(row).getByText('Waiting for a card')).toBeInTheDocument();
+    expect(screen.queryByText('PENDING-APG-2026-126')).not.toBeInTheDocument();
+    // A user with a card still shows it.
+    expect(within(screen.getByRole('row', { name: /Sam Santos/ })).getByText('S-2-UID')).toBeInTheDocument();
+
+    // The editor opens with the field empty and clean, and will not save without a card.
+    const field = screen.getByLabelText('RFID UID');
+    expect(field).toHaveValue('');
+    expect(field).toBeRequired();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(screen.getByText(/waiting for a card/)).toBeInTheDocument();
+
+    await user.type(field, 'a1b2c3d4');
+    await user.click(screen.getByRole('button', { name: /^Save/ }));
+    await waitFor(() =>
+      expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: 'APG-2026-126', rfidUid: 'A1B2C3D4', fullName: 'Juan Dela Cruz' }), 'APG-2026-126'),
+    );
+  });
+
   it('Users search unticks users it hides, so batch actions only reach rows on screen', async () => {
     vi.spyOn(api, 'loadVoiceClipStates').mockResolvedValue([]);
     const saveSpy = vi.spyOn(api, 'saveAdminUser').mockResolvedValue({ success: true });

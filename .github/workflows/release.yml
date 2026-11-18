@@ -87,6 +87,10 @@ jobs:
         shell: bash
         run: if [ -z "${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}" ]; then echo "::error::Missing ALPHA_PREMIER_PIN_RESET_URL repo secret (Apps Script web app URL, see scripts/pin-reset-mailer/Code.gs). Releases must ship the admin PIN email reset."; exit 1; fi
 
+      - name: Check ID register secrets
+        shell: bash
+        run: if [ -z "${{ secrets.ALPHA_PREMIER_FIREBASE_PROJECT_ID }}" ] || [ -z "${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}" ]; then echo "::error::Missing ALPHA_PREMIER_FIREBASE_PROJECT_ID or ALPHA_PREMIER_FIREBASE_API_KEY repo secret (Keystone's Firebase project, see docs/id-register.md). Releases must ship the ID register connection."; exit 1; fi
+
       # The release stays a draft until publish-release: a published release is
       # what the updater's releases/latest/download/latest.json serves, and it
       # must not go out before every platform is in its latest.json.
@@ -100,6 +104,9 @@ jobs:
           ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
           # Baked in via option_env! for the Forgot-PIN email (services/admin_pin.rs).
           ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+          # Baked in via option_env! for new interns from the ID register (services/id_register.rs).
+          ALPHA_PREMIER_FIREBASE_PROJECT_ID: ${{ secrets.ALPHA_PREMIER_FIREBASE_PROJECT_ID }}
+          ALPHA_PREMIER_FIREBASE_API_KEY: ${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}
           # Fail closed: build.rs panics without an embedded key when this is 1.
           ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
         with:
@@ -173,6 +180,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           ALPHA_PREMIER_EMBED_KEY_JSON: ${{ secrets.ALPHA_PREMIER_EMBED_KEY_JSON }}
           ALPHA_PREMIER_PIN_RESET_URL: ${{ secrets.ALPHA_PREMIER_PIN_RESET_URL }}
+          # Baked in via option_env! for new interns from the ID register (services/id_register.rs).
+          ALPHA_PREMIER_FIREBASE_PROJECT_ID: ${{ secrets.ALPHA_PREMIER_FIREBASE_PROJECT_ID }}
+          ALPHA_PREMIER_FIREBASE_API_KEY: ${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}
           ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
         with:
           releaseId: ${{ needs.build-windows.outputs.release_id }}

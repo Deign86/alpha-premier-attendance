@@ -135,7 +135,7 @@ pub async fn get_host(db: &SqlitePool) -> String {
         .unwrap_or_else(|| DEFAULT_VOICESTUDIO_BASE_URL.to_string())
 }
 
-async fn store_setting(db: &SqlitePool, key: &str, value: &str, now: &str) -> Result<(), String> {
+pub(crate) async fn store_setting(db: &SqlitePool, key: &str, value: &str, now: &str) -> Result<(), String> {
     sqlx::query(
         "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -166,7 +166,7 @@ pub async fn set_pin(db: &SqlitePool, raw: &str, now: &str) -> Result<(), String
     store_setting(db, SETTINGS_PIN_KEY, raw.trim(), now).await
 }
 
-async fn read_setting(db: &SqlitePool, key: &str) -> Option<String> {
+pub(crate) async fn read_setting(db: &SqlitePool, key: &str) -> Option<String> {
     sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
         .bind(key)
         .fetch_optional(db)

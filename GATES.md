@@ -2361,3 +2361,44 @@ Each fix has a regression test that failed on the old code: O3/O4/O5/O7 were run
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib mock_first_cutoff
   EXPECT: every intern's late, half-day + undertime, absence and net match; earnings stay 11 x D; Breakdown lines sum to the deductions with no balancing line; at most one grace claim per week; regenerating changes nothing.
   EVIDENCE: passed on the first run against the hand-computed figures (1 passed). Full Rust on Linux: lib 402 passed / 3 failed (the same 3 Windows-path tests); integration suites 11/18/75/36/58/24 passed.
+
+## New interns arrive from the ID register (owner request, 2026-11-17)
+
+The ID Maker records each issued card in the shared register (Keystone's Firebase project, `keystone/apg/idreg/{number}`, with `kind` = `intern` or `employee`). The kiosk reads that register with its own register-only account and adds each new intern as a user waiting for a card. No migration: sign-in and progress live in the existing `app_settings` table; a waiting user's `rfid_uid` is `PENDING-<user id>`, which no reader can produce (scans are hex only).
+
+- [x] A new intern in the register becomes an ACTIVE intern user named by their ID number, waiting for a card; employees and cards with no `kind` are left out.
+  EVIDENCE: `id_register_adds_new_interns_waiting_for_a_card` passed: one user, `PENDING-APG-2026-126`, ACTIVE INTERN, name and title from the card; one Users UPSERT queued; audit `ID_REGISTER_PULL`.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: against a loopback register with one intern, one employee and one card with no kind, a pull adds exactly the intern with `rfid_uid` = `PENDING-<number>`, queues its Users sync row and writes an `ID_REGISTER_PULL` audit line.
+- [x] A pull never changes a person the kiosk already has, and never brings back a person an administrator deleted.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: a user who already has a real card keeps it after a pull; a pulled user deleted by an administrator stays deleted on the next pull, also after the register grows.
+  EVIDENCE: `id_register_never_changes_a_person_the_kiosk_has_and_never_returns_a_deleted_one` passed, including sign-out and sign-in again. The check for an existing user is inside the save's own transaction.
+- [x] The register is only read in full when it has grown: an unchanged count costs one count request and no list.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: the loopback register records one sign-in refresh and one count per unchanged pass and no list request; a new intern triggers one list.
+  EVIDENCE: `id_register_is_listed_only_when_it_has_grown` passed: `token, count, token, count` for two unchanged passes, then `token, count, list`.
+- [x] Sign-in keeps no password: only the refresh token and the account's email are stored; a refused refresh token signs the kiosk out and says so; a register the account may not read says so and keeps the sign-in; an unreachable register changes nothing and is retried.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: after sign-in `app_settings` holds no value equal to the password; a 400 on refresh clears the token and reports "sign in again"; a 403 on the count reports the account may not read the register; a dead port reports unreachable and leaves the token.
+  EVIDENCE: `id_register_problems_are_told_apart` passed; a wrong password and an account the register refuses keep nothing at all.
+- [x] The register commands need the administrator session, like the VoiceStudio ones.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register_commands_need_admin
+  EXPECT: status, sign-in, sign-out and check-now with a wrong token return `ADMIN_AUTH_REQUIRED` and change nothing.
+  EVIDENCE: `tests::id_register_commands_need_admin` passed.
+- [x] A waiting user can be given a card in Admin → Users: the list says "Waiting for a card", and editing opens with the RFID field empty and ready for the tap; saving binds the card to the same user.
+  CHECK: npm test -w client -- database-panel.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml --lib id_register
+  EXPECT: the list shows the badge instead of the placeholder; the editor's RFID field is empty for a waiting user; saving a real UID for the pulled user keeps one row with that UID, and a scan of it records time-in.
+  EVIDENCE: client `a user from the ID register shows as waiting for a card, and takes the card tapped in the editor` passed; Rust `id_register_waiting_user_takes_a_card_and_scans` passed (the placeholder scan is INVALID_SCAN_INPUT, the real card records time-in).
+- [x] Admin → Settings shows the ID register connection: who is signed in, when it last checked, how many are waiting for a card, and any problem in plain words; sign in, sign out, check now.
+  CHECK: npm test -w client -- id-register-panel.test.tsx
+  EXPECT: the panel renders each state (not built in, signed out, signed in, problem) and calls the matching command.
+  EVIDENCE: `id-register-panel.test.tsx` 6 passed. The panel is on the System tab, under This PC.
+- [x] A build with no register project baked in does nothing and says so; the release workflow fails when either secret is missing.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --lib id_register && grep -n "ALPHA_PREMIER_FIREBASE" .github/workflows/release.yml
+  EXPECT: with no project, a pass makes no request and status says the register is not built into this copy; `release.yml` checks and passes both secrets.
+  EVIDENCE: `id_register_not_built_in_asks_nothing` passed; `release.yml` has the check step and passes both secrets to both builds (and `macos-build.yml`). The two secrets must be set on this repository before the next release.
+- [x] Everything else still passes.
+  CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
+  EXPECT: no existing fixture, snapshot or expectation changes.
+  EVIDENCE: JS exit 0 (shared 41, client 631, server 208; lint and typecheck exit 0). Rust on Linux, after merging main: lib 410 passed / 3 failed (the same 3 Windows-path tests in config.rs and paths.rs); integration suites 11/18/75/36/58/24 passed. No existing fixture, snapshot or expectation changed. Not shown here: the real Firebase project (tests use a loopback stand-in, by rule) and a real kiosk; Keystone's emulator test for the device rule runs in its own CI (apg-keystone PR 59).

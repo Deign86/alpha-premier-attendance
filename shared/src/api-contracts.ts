@@ -925,6 +925,21 @@ export type VoiceWorkerStatus = {
   lastError: string | null;
 };
 
+/** Where the kiosk's connection to the ID register stands (Admin → System). */
+export type IdRegisterStatus = {
+  /** False in a copy built without the register: there is nothing to sign in to. */
+  builtIn: boolean;
+  signedInAs: string | null;
+  lastCheckedAt: string | null;
+  /** In plain words, ready to show. */
+  problem: string | null;
+  /** Users added from the register who have no card yet. */
+  waiting: number;
+};
+
+/** What a user's RFID UID starts with while they wait for a card; no reader can produce it. */
+export const WAITING_FOR_CARD_PREFIX = 'PENDING-';
+
 export type TtsSpeakOptions = {
   engine?: TtsEngine;
   voiceModel?: string;

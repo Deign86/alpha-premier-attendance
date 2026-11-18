@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
+import type { AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, IdRegisterStatus, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
 
 export interface NativeHealthResponse {
   success: boolean;
@@ -139,6 +139,10 @@ export const tauriApi = {
   voiceWorkerStatus: () => invoke<VoiceWorkerStatus>('voice_worker_status'),
   voiceRegenerate: (token: string, personId: string) => invoke<string>('voice_regenerate', { token, personId }),
   voiceNameAudioUrl: (personId: string) => invoke<string | null>('voice_name_audio_url', { personId }),
+  idRegisterStatus: (token: string) => invoke<IdRegisterStatus>('id_register_status', { token }),
+  idRegisterSignIn: (token: string, email: string, password: string) => invoke<IdRegisterStatus>('id_register_sign_in', { token, email, password }),
+  idRegisterSignOut: (token: string) => invoke<IdRegisterStatus>('id_register_sign_out', { token }),
+  idRegisterCheck: (token: string) => invoke<IdRegisterStatus>('id_register_check', { token }),
   autostartStatus: () => invoke<boolean>('autostart_status'),
   autostartSet: (enabled: boolean) => invoke<boolean>('autostart_set', { enabled }),
 };

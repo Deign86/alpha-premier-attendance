@@ -133,6 +133,7 @@ import type { DtrSyncHealth } from "./api";
 import "./styles.css";
 import { BathroomKioskView, ResultPortrait } from "./bathroom-kiosk-view";
 import type { BathroomScanResponse, BathroomStatusResponse, VoiceClipState, VoiceWorkerStatus } from "@rfid-attendance/shared";
+import { WAITING_FOR_CARD_PREFIX } from "@rfid-attendance/shared";
 import {
   listenForGlobalRfid,
   listenForScannerStatus,
@@ -174,6 +175,7 @@ import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
 import { AdminUpdatesCard } from "./admin-updates-card";
+import { IdRegisterPanel } from "./id-register-panel";
 import { createBackupNow, FridayBackupReminder, LastBackupLine, manilaDay, useBackupCreated, useBackupRunning } from "./backup-reminder";
 import { BathroomKeyLogPanel } from "./bathroom-key-log";
 import { formatCutoffRange, formatDate, formatDateTime, formatDuration, formatLateMinutes, formatMonth, formatTime } from "./format";
@@ -3803,7 +3805,10 @@ function AdminPanel() {
       ) : shownTab === "voice" ? (
         <VoiceSettingsPanel />
       ) : shownTab === "system" ? (
-        <SystemPanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} lastScanAt={lastScanAt} />
+        <>
+          <SystemPanel onManualUpdateCheck={() => setManualUpdateCheck(Date.now())} lastScanAt={lastScanAt} />
+          <IdRegisterPanel />
+        </>
       ) : (
         <DatabasePanel />
       ),
@@ -4019,6 +4024,16 @@ type AdminUser = {
   cardType?: CardType;
   label?: string | null;
 };
+
+/** Added from the ID register and not yet given a card: the stored UID is a placeholder no reader can produce. */
+function isWaitingForCard(user: Pick<AdminUser, "rfidUid">): boolean {
+  return user.rfidUid.startsWith(WAITING_FOR_CARD_PREFIX);
+}
+
+/** The form a record opens with: a user waiting for a card opens with the RFID field empty, ready for the tap. */
+function formFor(user: AdminUser): AdminUser {
+  return isWaitingForCard(user) ? { ...user, rfidUid: "" } : user;
+}
 
 /** True when the registration form differs from the record it was opened with (the blank user when adding).
  *  Both sides are compared as save() would send them, so the clean-ups done on blur don't count as changes. */
@@ -4817,7 +4832,7 @@ export function UserEditor({
     payrollProfileId: null,
     photoUrl: null,
   };
-  const [form, setForm] = useState<AdminUser>(editing ?? blankUser);
+  const [form, setForm] = useState<AdminUser>(editing ? formFor(editing) : blankUser);
   // Progress and problems stay on the page; routine successes (saved, deleted) show as toasts.
   const [message, setMessage] = useState<Notice | null>(null);
   const [deletingUserId, setDeletingUserId] = useState("");
@@ -5082,14 +5097,14 @@ export function UserEditor({
   // Messages are cleared by the actions that open or switch the form.
   useEffect(() => {
     formSession.current += 1;
-    setForm(editing ?? blankUser);
+    setForm(editing ? formFor(editing) : blankUser);
     setPhotoBuster(Date.now());
   }, [editing]);
 
   // The registration form opens on demand ("+ Add user" or Edit) in a pop-up, and closes after Save.
   const userFormRef = useRef<HTMLElement>(null);
   const [formOpen, setFormOpen] = useState(Boolean(editing));
-  const formDirty = formOpen && (photoUploading || userFormChanged(form, editing ?? blankUser));
+  const formDirty = formOpen && (photoUploading || userFormChanged(form, editing ? formFor(editing) : blankUser));
   // Not while editing: the ID is locked then, and older IDs are fine as they are.
   const userIdHintId = useId();
   const showUserIdHint = !editing && unusualUserId(form.userId);
@@ -5308,7 +5323,7 @@ export function UserEditor({
         </div>
         {editing && (
           <p className="edit-context" role="status">
-            Active record: <strong>{editing.userId}</strong> · RFID {editing.rfidUid}
+            Active record: <strong>{editing.userId}</strong> · {isWaitingForCard(editing) ? "waiting for a card: tap it in the RFID UID field" : `RFID ${editing.rfidUid}`}
           </p>
         )}
         {messageLine}
@@ -5848,7 +5863,9 @@ export function UserEditor({
                       </>
                     )}
                   </td>
-                  <td className="user-status-cell">{user.rfidUid}</td>
+                  <td className="user-status-cell">
+                    {isWaitingForCard(user) ? <span className="status-pill status-inactive">Waiting for a card</span> : user.rfidUid}
+                  </td>
                   <td className="user-status-cell">
                     <span className={`status-pill status-${user.status.toLowerCase()}`}>{user.status === "ACTIVE" ? "Active" : "Inactive"}</span>
                   </td>
