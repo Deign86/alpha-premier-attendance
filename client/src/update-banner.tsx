@@ -64,7 +64,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toastState, setToastState] = useState<ToastState | null>(null);
 
-  // Install progress state
   const [isInstalling, setIsInstalling] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
@@ -135,7 +134,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
       void runCheck(false);
     }, 4000);
 
-    // Periodic check every 8 hours
     const intervalTimer = setInterval(() => {
       void runCheck(false);
     }, 8 * 60 * 60 * 1000);
@@ -149,7 +147,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
     };
   }, [runCheck]);
 
-  // Listen for tray menu "Check for updates…"
   useEffect(() => detachWhenDone(listenForCheckForUpdates(() => {
     void runCheck(true);
   })), [runCheck]);
@@ -186,7 +183,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
 
   return (
     <>
-      {/* Toast message for manual up-to-date checks */}
       {toastState && (
         <div
           className={`update-toast${toastState.status === 'error' ? ' error' : ''}`}
@@ -200,7 +196,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
         </div>
       )}
 
-      {/* Floating In-App Update Banner */}
       {availability.status === 'available' && !bannerDismissed && !modalOpen && (
         <div className="update-banner" role="alert">
           <div className="update-banner-content">
@@ -236,7 +231,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
         </div>
       )}
 
-      {/* Modal Dialog for Update Details & Installation */}
       {modalOpen && availability.status === 'available' && (
         <div ref={dialogRef} className="setup-backdrop" role="dialog" aria-modal="true" aria-labelledby={titleId}>
           <div className="setup-dialog update-dialog">
@@ -285,7 +279,6 @@ export function UpdateBanner({ manualCheckTrigger, beforeInstall }: UpdateBanner
                 </div>
               )}
 
-              {/* Download / Installation Progress Bar */}
               {isInstalling && (
                 <div className="update-progress-card">
                   <div className="update-progress-label">

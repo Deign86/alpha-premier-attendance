@@ -7,12 +7,10 @@ export type QueuedScan = {
 
 const OFFLINE_QUEUE_KEY = 'alpha_premier_offline_scans';
 
-/** Check if the browser or desktop shell currently has network connectivity */
 export function isOnline(): boolean {
   return 'navigator' in globalThis ? navigator.onLine : true;
 }
 
-/** Register a listener for network connectivity changes */
 export function onNetworkStatusChange(callback: (online: boolean) => void): () => void {
   if (!('window' in globalThis)) return () => {};
 
@@ -28,7 +26,6 @@ export function onNetworkStatusChange(callback: (online: boolean) => void): () =
   };
 }
 
-/** Retrieve pending offline scans */
 export function getOfflineQueue(): QueuedScan[] {
   try {
     const raw = 'localStorage' in globalThis ? localStorage.getItem(OFFLINE_QUEUE_KEY) : null;
@@ -38,7 +35,6 @@ export function getOfflineQueue(): QueuedScan[] {
   }
 }
 
-/** Remove a successfully synced item from the queue */
 export function removeQueuedScan(id: string): void {
   const queue = getOfflineQueue().filter((item) => item.id !== id);
   try {

@@ -300,7 +300,6 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
       <NoticeLine notice={feedback ? { tone: feedbackType, text: feedback } : null} />
 
       <div className="voice-settings-grid">
-        {/* Audio Settings Card: on/off switch, speech rate + volume */}
         <div className="voice-control-card voice-settings-card">
           <h3 className="voice-card-title">Audio Settings</h3>
           <div className="voice-enable-row">
@@ -363,7 +362,6 @@ export function VoiceSettingsPanel({ onSettingsChange }: VoiceSettingsPanelProps
           </div>
         </div>
 
-        {/* VoiceStudio Server Card */}
         <div className="voice-control-card voice-settings-card">
           <div className="voice-control-header">
             <h3 className="voice-card-title">VoiceStudio Server</h3>

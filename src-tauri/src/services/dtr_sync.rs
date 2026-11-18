@@ -486,7 +486,6 @@ pub fn append_cell_to_sum_formula(existing: &str, new_cell: &str) -> String {
         return format!("=SUM({new_cell})");
     }
 
-    // Check if new_cell is already in the formula
     let cell_upper = new_cell.to_uppercase();
     let has_cell = trimmed
         .split(|c: char| !c.is_alphanumeric())
@@ -637,7 +636,6 @@ pub fn build_new_month_block_requests(
     let header_name = format!("DATE-{}", month_name(month));
     let mut rows_data = Vec::with_capacity(days as usize + 2);
 
-    // 1. Header row
     rows_data.push(serde_json::json!({
         "values": [
             { "userEnteredValue": { "stringValue": header_name } },
@@ -649,7 +647,6 @@ pub fn build_new_month_block_requests(
         ]
     }));
 
-    // 2. Daily date rows
     for d in 1..=days {
         let r = header_row_1based + d as usize;
         rows_data.push(serde_json::json!({
@@ -665,7 +662,6 @@ pub fn build_new_month_block_requests(
         }));
     }
 
-    // 3. Monthly total row
     rows_data.push(serde_json::json!({
         "values": [
             { "userEnteredValue": { "stringValue": "" } },
@@ -678,7 +674,6 @@ pub fn build_new_month_block_requests(
     }));
 
     let mut requests = vec![
-        // Write values & formulas
         serde_json::json!({
             "updateCells": {
                 "rows": rows_data,
@@ -736,7 +731,6 @@ pub fn build_new_month_block_requests(
                 "fields": "userEnteredFormat(backgroundColor,textFormat.fontFamily)",
             }
         }),
-        // Weekend conditional format rule
         serde_json::json!({
             "addConditionalFormatRule": {
                 "rule": {

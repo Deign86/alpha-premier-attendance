@@ -310,7 +310,6 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     // stayed, with no Sheets deletes queued. Now it is all or nothing.
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
 
-    // 1. Capture cutoff payroll records to delete & sync
     let cutoff_rows = sqlx::query(
         "SELECT payroll_id, employee_id, employee_name, payroll_cutoff_label, cutoff_start, cutoff_end FROM payroll_cutoffs WHERE employee_id = ? AND status <> 'FINALIZED'"
     )
@@ -319,7 +318,6 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     .await
     .map_err(|e| e.to_string())?;
 
-    // 2. Capture daily attendance payroll IDs to delete & sync
     let daily_payroll_ids: Vec<String> = sqlx::query(
         "SELECT payroll_id FROM payroll WHERE user_id = ?"
     )
@@ -331,7 +329,6 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     .map(|r| r.get::<String, _>("payroll_id"))
     .collect();
 
-    // 3. Capture attendance records to delete & sync
     let attendance_rows: Vec<(String, String)> = sqlx::query(
         "SELECT attendance_id, attendance_date FROM attendance WHERE user_id = ?"
     )
@@ -343,7 +340,6 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     .map(|r| (r.get::<String, _>("attendance_id"), r.get::<String, _>("attendance_date")))
     .collect();
 
-    // 4. Capture intern grace IDs to delete & sync
     let grace_ids: Vec<String> = sqlx::query(
         "SELECT grace_id FROM intern_grace WHERE user_id = ?"
     )
@@ -355,7 +351,6 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     .map(|r| r.get::<String, _>("grace_id"))
     .collect();
 
-    // Execute deletions in database
     sqlx::query(
         "DELETE FROM payroll_snapshots WHERE payroll_id IN (SELECT payroll_id FROM payroll_cutoffs WHERE employee_id = ? AND status <> 'FINALIZED')"
     )
@@ -537,19 +532,16 @@ mod tests {
 
     #[test]
     fn gender_normalization_can_never_violate_the_check_constraint() {
-        // NULL / absent stays unset.
         assert_eq!(normalize_gender(None), None);
         // "Not set" (empty / whitespace) clears the field instead of writing
         // an empty string the `CHECK (gender IN ('MALE','FEMALE'))` rejects.
         assert_eq!(normalize_gender(Some("")), None);
         assert_eq!(normalize_gender(Some("   ")), None);
-        // Casing and padding are normalized to the stored uppercase form.
         assert_eq!(normalize_gender(Some("male")), Some("MALE".to_string()));
         assert_eq!(
             normalize_gender(Some(" Female ")),
             Some("FEMALE".to_string())
         );
-        // Already-canonical values pass through untouched.
         assert_eq!(normalize_gender(Some("MALE")), Some("MALE".to_string()));
     }
 

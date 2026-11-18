@@ -162,7 +162,6 @@ export const getScannerStatus = () => invoke<ScannerStatus>('scanner_status');
  */
 export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause', { paused });
 
-/** Listen for native real-time attendance changes from the Rust/SQLite layer. */
 export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
@@ -195,7 +194,6 @@ export interface DtrSyncHealthEvent {
   emittedAt: string;
 }
 
-/** Listen for real-time intern DTR sync progress events from the Rust backend. */
 export const listenForDtrSyncProgress = (handler: (payload: DtrSyncProgress) => void) =>
   listen<DtrSyncProgress>('dtr-sync-progress', (event) => handler(event.payload));
 
