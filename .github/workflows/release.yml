@@ -27,6 +27,7 @@ jobs:
     outputs:
       tag: ${{ steps.version_step.outputs.tag }}
       version: ${{ steps.version_step.outputs.version }}
+      release_id: ${{ steps.tauri.outputs.releaseId }}
     steps:
       # The version bump is pushed straight to main, which the "main: CI must
       # pass" ruleset blocks for everyone but deploy keys, so check out (and
@@ -90,7 +91,11 @@ jobs:
         shell: bash
         run: if [ -z "${{ secrets.ALPHA_PREMIER_FIREBASE_PROJECT_ID }}" ] || [ -z "${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}" ]; then echo "::error::Missing ALPHA_PREMIER_FIREBASE_PROJECT_ID or ALPHA_PREMIER_FIREBASE_API_KEY repo secret (Keystone's Firebase project, see docs/id-register.md). Releases must ship the ID register connection."; exit 1; fi
 
+      # The release stays a draft until publish-release: a published release is
+      # what the updater's releases/latest/download/latest.json serves, and it
+      # must not go out before every platform is in its latest.json.
       - name: Build Tauri app and attach to release
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -107,11 +112,11 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'Alpha Premier Attendance v__VERSION__'
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
 
-  # Native macOS .app/.dmg (one per arch) attached to the same release. Runs
-  # after Windows so it builds the bumped tag, and tauri-action merges the
+  # Native macOS .app/.dmg (one per arch) attached to the same draft release.
+  # Runs after Windows so it builds the bumped version, and tauri-action merges the
   # darwin entries into the release's latest.json. Per-arch rather than
   # universal-apple-darwin: the universal bundler only lipo-merges the main
   # binary and then fails to copy the extra `migrate_from_sheets` bin.
@@ -128,10 +133,12 @@ jobs:
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
-      - name: Checkout release tag
+      # The draft release has no git tag until it is published; its target is
+      # this run's commit, which the tag used to point at.
+      - name: Checkout release commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.build-windows.outputs.tag }}
+          ref: ${{ github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -155,7 +162,7 @@ jobs:
           npm ci
           npm run build:fast
 
-      # The release tag points at the pre-bump commit, so stamp the bumped
+      # The release commit is the pre-bump commit, so stamp the bumped
       # version; otherwise the Mac bundle and the merged latest.json carry
       # the previous version and break auto-update for every platform.
       - name: Stamp release version
@@ -178,8 +185,43 @@ jobs:
           ALPHA_PREMIER_FIREBASE_API_KEY: ${{ secrets.ALPHA_PREMIER_FIREBASE_API_KEY }}
           ALPHA_PREMIER_REQUIRE_EMBED_KEY: "1"
         with:
+          releaseId: ${{ needs.build-windows.outputs.release_id }}
           tagName: ${{ needs.build-windows.outputs.tag }}
           releaseName: 'Alpha Premier Attendance ${{ needs.build-windows.outputs.tag }}'
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
+
+  # Publishes the draft only when Windows and both Macs are attached and its
+  # latest.json lists every platform. Until then the updater keeps serving the
+  # previous complete release, so no installed copy sees a missing platform
+  # ("None of the fallback platforms ... were found"). If a build fails the
+  # release stays a draft; rerun the failed job and this one publishes it.
+  publish-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check latest.json lists every platform, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.build-windows.outputs.release_id }}
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          set -euo pipefail
+          asset_id=$(gh api "repos/$REPO/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "latest.json") | .id')
+          [ -n "$asset_id" ] || { echo "::error::Release $RELEASE_ID has no latest.json"; exit 1; }
+          gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$asset_id" > latest.json
+          node -e '
+            const m = JSON.parse(require("fs").readFileSync("latest.json", "utf8"));
+            const need = ["windows-x86_64", "darwin-aarch64", "darwin-x86_64"];
+            const missing = need.filter((p) => !m.platforms?.[p]?.url || !m.platforms[p].signature);
+            if (m.version !== process.env.VERSION) { console.log(`::error::latest.json is version ${m.version}, expected ${process.env.VERSION}`); process.exit(1); }
+            if (missing.length) { console.log(`::error::latest.json is missing ${missing.join(", ")}`); process.exit(1); }
+            console.log(`latest.json ${m.version}: ${Object.keys(m.platforms).sort().join(", ")}`);
+          '
+          gh api -X PATCH "repos/$REPO/releases/$RELEASE_ID" -F draft=false -f make_latest=true --jq '"Published " + .tag_name'
+
