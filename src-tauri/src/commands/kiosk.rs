@@ -423,8 +423,7 @@ pub(crate) async fn scan_rfid_at(
     }
     let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, effective_user.get::<Option<String>,_>("photo_url"));
     let shown = attendance_arrival(&state.db, &user_id, &attendance_id, &date, serde_json::json!(&time_in).as_str()).await;
-    Ok(
-        serde_json::json!({
+    let mut answer = serde_json::json!({
             "success": true,
             "requestId": request_id,
             "action": action,
@@ -436,10 +435,6 @@ pub(crate) async fn scan_rfid_at(
                 "timeOut": time_out,
                 "status": attendance_status,
                 "isFirstArrivalToday": if action == "TIME_IN" { Some(is_first_arrival_today) } else { None },
-                "arrivalStatus": shown.status,
-                "minutesLate": shown.minutes_late,
-                "graceUsed": shown.grace_used,
-                "payableTimeIn": shown.payable_time_in,
                 "source": effective_source,
                 "recordedBy": recorded_by,
                 "recordedReason": recorded_reason,
@@ -453,8 +448,9 @@ pub(crate) async fn scan_rfid_at(
                 "gender": effective_user.get::<Option<String>,_>("gender"),
                 "photoUrl": photo_url
             }
-        }),
-    )
+        });
+    shown.insert_into(&mut answer["attendance"]);
+    Ok(answer)
 }
 
 #[tauri::command]

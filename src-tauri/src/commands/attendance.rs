@@ -2,7 +2,7 @@ use chrono_tz::Asia::Manila;
 use crate::state::AppState;
 use sqlx::Row;
 use super::session::Admin;
-use crate::services::attendance::{arrival_fields, attendance_arrival, attendance_changed, day_in_finalized_cutoff, ensure_payroll_tx, manila_week_start, AttendanceChange, DtrLine, DtrPerson, Follow, LanNotice, WindowEvent};
+use crate::services::attendance::{arrival_fields, attendance_arrival, attendance_changed, day_in_finalized_cutoff, ensure_payroll_tx, manila_week_start, AttendanceChange, GRACE_AVAILABLE_SQL, IS_INTERN_SQL, DtrLine, DtrPerson, Follow, LanNotice, WindowEvent};
 use crate::services::sync_queue::PendingSync;
 use tauri::State;
 
@@ -51,13 +51,11 @@ pub(crate) async fn attendance_rows_json(
     db: &sqlx::SqlitePool,
     date: &str,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query(
+    let rows = sqlx::query(&format!(
         "SELECT a.attendance_id, a.attendance_date, a.user_id, a.full_name, a.department, a.time_in, a.time_out, a.status, a.source, a.recorded_by, a.recorded_reason, a.recorded_at, \
-         COALESCE(p.grace_used = 1, NOT EXISTS (SELECT 1 FROM intern_grace g WHERE g.user_id = a.user_id AND g.week_start = ? AND g.attendance_id != a.attendance_id)) AS grace_available, \
-         COALESCE((SELECT u.employee_type = 'INTERN' FROM users u WHERE u.user_id = a.user_id), 0) AS is_intern \
-         FROM attendance a LEFT JOIN payroll p ON p.attendance_id = a.attendance_id \
-         WHERE a.attendance_date = ? ORDER BY a.time_in, a.full_name",
-    )
+         {GRACE_AVAILABLE_SQL} AS grace_available, {IS_INTERN_SQL} AS is_intern \
+         FROM attendance a WHERE a.attendance_date = ? ORDER BY a.time_in, a.full_name"
+    ))
     .bind(manila_week_start(date))
     .bind(date)
     .fetch_all(db)
@@ -65,11 +63,7 @@ pub(crate) async fn attendance_rows_json(
     .map_err(|e| e.to_string())?;
     let attendance = rows.into_iter().map(|row| {
         let shown = arrival_fields(date, row.get::<Option<String>, _>("time_in").as_deref(), row.get::<bool, _>("grace_available"), row.get::<bool, _>("is_intern"));
-        serde_json::json!({
-        "arrivalStatus": shown.status,
-        "minutesLate": shown.minutes_late,
-        "graceUsed": shown.grace_used,
-        "payableTimeIn": shown.payable_time_in,
+        let mut listed = serde_json::json!({
         "attendanceId": row.get::<String,_>("attendance_id"),
         "attendanceDate": row.get::<String,_>("attendance_date"),
         "userId": row.get::<String,_>("user_id"),
@@ -82,7 +76,10 @@ pub(crate) async fn attendance_rows_json(
         "recordedBy": row.get::<Option<String>,_>("recorded_by"),
         "recordedReason": row.get::<Option<String>,_>("recorded_reason"),
         "recordedAt": row.get::<Option<String>,_>("recorded_at"),
-    })}).collect::<Vec<_>>();
+        });
+        shown.insert_into(&mut listed);
+        listed
+    }).collect::<Vec<_>>();
     Ok(attendance)
 }
 
@@ -494,7 +491,7 @@ pub(crate) async fn admin_create_backdated_attendance_impl(
     .map_err(|e| e.to_string())?;
 
     let shown = attendance_arrival(&state.db, user_id, &attendance_id, attendance_date, Some(time_in)).await;
-    Ok(serde_json::json!({
+    let mut answer = serde_json::json!({
         "success": true,
         "attendance": {
             "attendanceId": attendance_id,
@@ -502,10 +499,6 @@ pub(crate) async fn admin_create_backdated_attendance_impl(
             "userId": user_id,
             "fullName": full_name,
             "department": department,
-            "arrivalStatus": shown.status,
-            "minutesLate": shown.minutes_late,
-            "graceUsed": shown.grace_used,
-            "payableTimeIn": shown.payable_time_in,
             "timeIn": time_in,
             "timeOut": time_out,
             "status": status,
@@ -514,7 +507,9 @@ pub(crate) async fn admin_create_backdated_attendance_impl(
             "recordedReason": reason,
             "recordedAt": now_ts,
         }
-    }))
+    });
+    shown.insert_into(&mut answer["attendance"]);
+    Ok(answer)
 }
 
 #[tauri::command]
@@ -674,12 +669,8 @@ mod tests {
                 input["graceAvailable"].as_bool().unwrap(),
                 true,
             );
-            let answered = serde_json::json!({
-                "arrivalStatus": shown.status,
-                "minutesLate": shown.minutes_late,
-                "graceUsed": shown.grace_used,
-                "payableTimeIn": shown.payable_time_in,
-            });
+            let mut answered = serde_json::json!({});
+            shown.insert_into(&mut answered);
             assert_eq!(answered, row["expected"], "{}", row["name"]);
         }
     }
@@ -729,6 +720,18 @@ mod tests {
         assert_eq!(one("EMP-P").await.payable_time_in, None);
         assert_eq!(one("EMP-P").await.status, Some("LATE"));
         assert_eq!(one("GONE-P").await.payable_time_in, None);
+        // One row's grace is read like the list's: free until another row of the person holds the week's claim.
+        let grace_window = |attendance_id: &'static str| {
+            let db = state.db.clone();
+            async move { attendance_arrival(&db, "INT-P", attendance_id, "2026-07-29", Some("2026-07-29T08:10:00+08:00")).await.status }
+        };
+        assert_eq!(grace_window("ATT-NEXT").await, Some("GRACE_PERIOD"));
+        sqlx::query("INSERT INTO intern_grace (grace_id, user_id, week_start, attendance_id, used_at) VALUES ('G-1', 'INT-P', '2026-07-27', 'ATT-INT-P', '2026-07-28')")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(grace_window("ATT-NEXT").await, Some("LATE"));
+        assert_eq!(grace_window("ATT-INT-P").await, Some("GRACE_PERIOD"), "the row that holds the claim keeps it");
         state.db.close().await;
         let _ = std::fs::remove_dir_all(temp);
     }

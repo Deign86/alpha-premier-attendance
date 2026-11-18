@@ -299,6 +299,26 @@ pub(crate) struct ArrivalFields {
     pub(crate) payable_time_in: Option<String>,
 }
 
+impl ArrivalFields {
+    /// Writes the four keys onto an attendance row. The one place they are named: the row list, the scan answer and
+    /// the backdate answer all carry them through here.
+    pub(crate) fn insert_into(&self, row: &mut serde_json::Value) {
+        row["arrivalStatus"] = serde_json::json!(self.status);
+        row["minutesLate"] = serde_json::json!(self.minutes_late);
+        row["graceUsed"] = serde_json::json!(self.grace_used);
+        row["payableTimeIn"] = serde_json::json!(self.payable_time_in);
+    }
+}
+
+/// Whether the arrival on attendance row `a` may take the week's grace: a priced day's stored decision, else whether
+/// no other row of the person holds that week's claim. An SQL expression over `a.attendance_id` and `a.user_id`
+/// with one bind, the Monday of the week (`manila_week_start`).
+pub(crate) const GRACE_AVAILABLE_SQL: &str = "COALESCE((SELECT p.grace_used = 1 FROM payroll p WHERE p.attendance_id = a.attendance_id), \
+     NOT EXISTS (SELECT 1 FROM intern_grace g WHERE g.user_id = a.user_id AND g.week_start = ? AND g.attendance_id != a.attendance_id))";
+
+/// Whether the register lists the person of attendance row `a` as an intern. An SQL expression over `a.user_id`.
+pub(crate) const IS_INTERN_SQL: &str = "COALESCE((SELECT u.employee_type = 'INTERN' FROM users u WHERE u.user_id = a.user_id), 0)";
+
 pub(crate) fn arrival_fields(date: &str, time_in: Option<&str>, grace_available: bool, is_intern: bool) -> ArrivalFields {
     let arrival = time_in.and_then(|stamp| crate::services::intern_payroll::arrival(date, stamp, grace_available));
     ArrivalFields {
@@ -320,13 +340,10 @@ pub(crate) async fn attendance_arrival(
     date: &str,
     time_in: Option<&str>,
 ) -> ArrivalFields {
-    let read: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT COALESCE((SELECT grace_used = 1 FROM payroll WHERE attendance_id = ?), \
-         NOT EXISTS (SELECT 1 FROM intern_grace WHERE user_id = ? AND week_start = ? AND attendance_id != ?)), \
-         COALESCE((SELECT employee_type = 'INTERN' FROM users WHERE user_id = ?), 0)",
-    )
-    .bind(attendance_id)
-    .bind(user_id)
+    // The row is named by its two ids, so the answer does not depend on the row being readable here.
+    let read: Option<(bool, bool)> = sqlx::query_as(&format!(
+        "SELECT {GRACE_AVAILABLE_SQL}, {IS_INTERN_SQL} FROM (SELECT ? AS attendance_id, ? AS user_id) a"
+    ))
     .bind(manila_week_start(date))
     .bind(attendance_id)
     .bind(user_id)
