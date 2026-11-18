@@ -18,7 +18,7 @@
 
 use crate::services::firebase::{ask, http, Answer, CountRefusal, Endpoints, SignInRefusal};
 use crate::services::settings::{self, key};
-use crate::services::{cloud_mirror, firebase};
+use crate::services::{cloud_mirror, firebase, users};
 use crate::state::AppState;
 use sqlx::SqlitePool;
 use std::collections::BTreeSet;
@@ -252,7 +252,7 @@ async fn pull(
         if seen.contains(&intern.number) {
             continue;
         }
-        let saved = crate::save_user(
+        let saved = users::save_user(
             state,
             serde_json::json!({
                 "userId": intern.number,
@@ -265,7 +265,7 @@ async fn pull(
                 "dailyRate": null,
                 "payrollProfileId": null,
             }),
-            crate::SaveOrigin::IdRegister,
+            users::SaveOrigin::IdRegister,
         )
         .await;
         match saved {
@@ -361,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn id_register_never_changes_a_person_the_kiosk_has_and_never_returns_a_deleted_one() {
         let (state, temp) = kiosk("keeps").await;
-        crate::upsert_user_record(
+        users::upsert_user_record(
             &state.db, "APG-2026-126", "ABCD1234", "Juan Dela Cruz", Some("IT"), "ACTIVE", "INTERN",
             None, None, None, None, "EMPLOYEE", "2026-08-01T00:00:00Z",
         )
@@ -378,7 +378,7 @@ mod tests {
             .unwrap();
         assert_eq!(kept, ("ABCD1234".to_string(), "Juan Dela Cruz".to_string()), "a person with a card keeps it, and their name");
 
-        crate::delete_user_and_cascade(&state, "APG-2026-130").await.unwrap();
+        users::delete_user_and_cascade(&state, "APG-2026-130").await.unwrap();
         // An unchanged register is not listed, so nothing can come back.
         assert_eq!(run_once(&state, Some(&endpoints)).await.unwrap(), PullSummary::default());
         // The register grows: it is listed again, and the deleted person is in the list.
@@ -499,9 +499,10 @@ mod tests {
         assert_eq!(refused["error"]["code"], "INVALID_SCAN_INPUT");
 
         // Admin → Users: the same user saved with the card just tapped.
-        crate::admin_upsert_user_inner(
+        users::save_user(
             &state,
             serde_json::json!({"userId": "APG-2026-126", "rfidUid": "a1b2c3d4", "fullName": "Juan Dela Cruz", "department": "IT Intern", "status": "ACTIVE", "employeeType": "INTERN"}),
+            users::SaveOrigin::Administrator,
         )
         .await
         .unwrap();

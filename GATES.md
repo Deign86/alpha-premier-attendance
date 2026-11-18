@@ -2573,3 +2573,6 @@ OWNS: `src-tauri/src/services/{firebase,settings,unlock_guard,users}.rs`, the th
 - [x] U1: One Firebase client and one `app_settings` accessor sit under the ID register, the backup and the account sign-in; `admin_pin.rs` is `unlock_guard.rs`; the backup no longer imports from the ID register.
   CHECK: `cd src-tauri && cargo test --no-fail-fast` and `grep -n "id_register\|voice_pull" src/services/cloud_mirror.rs src/services/admin_account.rs | grep "^[^:]*:[0-9]*: *use"` prints only the test module's `id_register::{run_once, sign_in}` line
   EVIDENCE: lib 423 passed, the 3 known Linux-only path tests failed as on main; integration 18/75/36/58/24, `unlock_guard_isolated` 3 (2026-11-18).
+- [x] U2: Saving and deleting a user live in `services/users.rs`; no service's production code imports them from the crate root.
+  CHECK: `cd src-tauri && cargo test --no-fail-fast` and `grep -rn "crate::\(save_user\|upsert_user_record\|delete_user_and_cascade\|SaveOrigin\)" src/services` prints nothing
+  EVIDENCE: no output; lib 423 passed, the same 3 failed; integration 18/75/36/58/24/3 (2026-11-18).

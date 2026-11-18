@@ -417,9 +417,10 @@ mod tests {
     use super::*;
     use crate::services::firebase::fake::{close, kiosk, nowhere, register, serve, PASSWORD};
     use crate::services::id_register::{run_once, sign_in};
+    use crate::services::users;
 
     async fn add_user(state: &AppState, user_id: &str, card: &str, name: &str) {
-        crate::upsert_user_record(
+        users::upsert_user_record(
             &state.db, user_id, card, name, Some("IT"), "ACTIVE", "INTERN", None, Some(50000), None, None, "EMPLOYEE", "2026-08-01T00:00:00Z",
         )
         .await
@@ -475,9 +476,10 @@ mod tests {
         assert!(fake.lock().unwrap().written.is_empty());
 
         // One record changes: that record is sent again, with the audit line the change wrote.
-        crate::admin_upsert_user_inner(
+        users::save_user(
             &state,
             serde_json::json!({"userId": "APG-2026-101", "rfidUid": "ABCD1234", "fullName": "Juan Santos Dela Cruz", "status": "ACTIVE", "employeeType": "INTERN"}),
+            users::SaveOrigin::Administrator,
         )
         .await
         .unwrap();
@@ -496,7 +498,7 @@ mod tests {
 
         // A record removed here is removed there.
         fake.lock().unwrap().written.clear();
-        crate::delete_user_and_cascade(&state, "APG-2026-101").await.unwrap();
+        users::delete_user_and_cascade(&state, "APG-2026-101").await.unwrap();
         run_once(&state, Some(&endpoints)).await.unwrap();
         let removed = fake.lock().unwrap().written.concat();
         assert!(removed.iter().any(|write| write["delete"].as_str().is_some_and(|name| name.ends_with("/att_users/APG-2026-101"))), "{removed:?}");

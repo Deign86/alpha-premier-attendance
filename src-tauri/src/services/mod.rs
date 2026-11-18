@@ -14,4 +14,5 @@ pub mod settings;
 pub mod sheets_sync;
 pub(crate) mod sync_retry;
 pub mod unlock_guard;
+pub mod users;
 pub mod voice_pull;
