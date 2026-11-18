@@ -40,6 +40,8 @@ const NOT_ALLOWED: &str = "This account may not read the ID register. Ask the ow
 /// tests point it at a loopback server.
 pub struct Endpoints {
     pub sign_in: String,
+    /// Where Firebase is asked to email a password reset link (`admin_account.rs`).
+    pub send_code: String,
     pub token: String,
     /// The company's document; `:runAggregationQuery` and `:runQuery` go on the end.
     pub register: String,
@@ -58,6 +60,7 @@ pub fn built_in() -> Option<Endpoints> {
     let key = filled(option_env!("ALPHA_PREMIER_FIREBASE_API_KEY"))?;
     Some(Endpoints {
         sign_in: format!("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={key}"),
+        send_code: format!("https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={key}"),
         token: format!("https://securetoken.googleapis.com/v1/token?key={key}"),
         register: format!("https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents/keystone/apg"),
         commit: format!("https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents:commit"),
@@ -436,6 +439,12 @@ pub(crate) mod tests {
         pub(crate) refuse_reading_back: Option<u16>,
         /// Refuse a batch that writes under `attprivate_…`, as those same older rules do.
         pub(crate) refuse_apart: bool,
+        /// People with their own sign-in: email → (uid, password, the code Firebase refuses them with, if any).
+        pub(crate) people: std::collections::BTreeMap<&'static str, (&'static str, &'static str, Option<&'static str>)>,
+        /// Keystone's members: uid → (role, name, attendanceAdmin).
+        pub(crate) members: std::collections::BTreeMap<&'static str, (&'static str, &'static str, bool)>,
+        /// The addresses a password reset email was asked for.
+        pub(crate) reset_asked: Vec<String>,
     }
 
     impl Fake {
@@ -448,10 +457,39 @@ pub(crate) mod tests {
             if path.starts_with("/signin") {
                 self.asked.push("signin");
                 let sent: serde_json::Value = serde_json::from_str(body).unwrap();
+                if let Some((uid, password, refused_with)) = sent["email"].as_str().and_then(|email| self.people.get(email)) {
+                    if let Some(code) = refused_with {
+                        return refused(400, code);
+                    }
+                    if sent["password"] != *password {
+                        return refused(400, "INVALID_LOGIN_CREDENTIALS");
+                    }
+                    return (200, serde_json::json!({"idToken": format!("id-of-{uid}"), "refreshToken": "r", "email": sent["email"], "localId": uid}));
+                }
                 if sent["password"] != PASSWORD {
                     return refused(400, "INVALID_LOGIN_CREDENTIALS");
                 }
                 return (200, serde_json::json!({"idToken": "id-1", "refreshToken": "refresh-1", "email": sent["email"]}));
+            }
+            if path.starts_with("/sendcode") {
+                self.asked.push("sendcode");
+                let sent: serde_json::Value = serde_json::from_str(body).unwrap();
+                let email = sent["email"].as_str().unwrap_or("").to_string();
+                assert_eq!(sent["requestType"], "PASSWORD_RESET");
+                let known = self.people.contains_key(email.as_str());
+                self.reset_asked.push(email);
+                return if known { (200, serde_json::json!({"email": sent["email"]})) } else { refused(400, "EMAIL_NOT_FOUND") };
+            }
+            if let Some(uid) = path.strip_prefix("/reg/members/") {
+                self.asked.push("member");
+                // Keystone's rules: a member reads members; anyone else is refused.
+                let asking = self.members.keys().find(|member| head.to_ascii_lowercase().contains(&format!("authorization: bearer id-of-{}", member.to_ascii_lowercase())));
+                return match (asking, self.members.get(uid)) {
+                    (Some(_), Some((role, name, ticked))) => (200, serde_json::json!({"name": "n", "fields": {
+                        "role": {"stringValue": role}, "name": {"stringValue": name}, "attendanceAdmin": {"booleanValue": ticked},
+                    }})),
+                    _ => (403, serde_json::json!({"error": {"code": 403, "message": "Missing or insufficient permissions."}})),
+                };
             }
             if path.starts_with("/token") {
                 self.asked.push("token");
@@ -568,7 +606,7 @@ pub(crate) mod tests {
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        (Endpoints { sign_in: format!("{at}/signin?key=k"), token: format!("{at}/token?key=k"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }, server)
+        (Endpoints { sign_in: format!("{at}/signin?key=k"), send_code: format!("{at}/sendcode?key=k"), token: format!("{at}/token?key=k"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }, server)
     }
 
     /// Somewhere nothing answers.
@@ -576,7 +614,7 @@ pub(crate) mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        Endpoints { sign_in: format!("{at}/signin"), token: format!("{at}/token"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }
+        Endpoints { sign_in: format!("{at}/signin"), send_code: format!("{at}/sendcode"), token: format!("{at}/token"), register: format!("{at}/reg"), commit: format!("{at}/commit"), names: "projects/p/databases/(default)/documents/keystone/apg".into() }
     }
 
     pub(crate) async fn kiosk(tag: &str) -> (AppState, std::path::PathBuf) {

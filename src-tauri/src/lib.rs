@@ -4189,6 +4189,11 @@ async fn setup_unlock_impl(
         return Err("INVALID_ADMIN_PIN".into());
     }
     crate::services::admin_pin::clear_unlock_failures(&state.db).await?;
+    Ok(open_admin_session(state).await)
+}
+
+/// Starts the admin session a card, the PIN or an account has just earned.
+async fn open_admin_session(state: &AppState) -> serde_json::Value {
     let token = uuid::Uuid::new_v4().to_string();
     let expires = std::time::Instant::now()
         + std::time::Duration::from_secs(state.lan.admin_session_minutes * 60);
@@ -4196,9 +4201,43 @@ async fn setup_unlock_impl(
         token: token.clone(),
         expires_at: expires,
     });
-    Ok(
-        serde_json::json!({"success":true,"token":token,"expiresAt":chrono::Utc::now() + chrono::Duration::minutes(state.lan.admin_session_minutes as i64)}),
-    )
+    serde_json::json!({"success":true,"token":token,"expiresAt":chrono::Utc::now() + chrono::Duration::minutes(state.lan.admin_session_minutes as i64)})
+}
+
+/// Opens the admin screens with a person's own Keystone account (`services/admin_account.rs`).
+async fn admin_account_unlock_impl(
+    state: &AppState,
+    endpoints: Option<&crate::services::id_register::Endpoints>,
+    email: &str,
+    password: &str,
+) -> Result<serde_json::Value, String> {
+    // config.toml `admin_pin = ""` stays the off switch for every way in but a card.
+    if state.lan.admin_pin.as_deref() == Some("") {
+        return Err("ADMIN_DISABLED".into());
+    }
+    let opened = crate::services::admin_account::open(&state.db, endpoints, email, password, chrono::Utc::now())
+        .await
+        .map_err(|refusal| refusal.code())?;
+    let how = if opened.offline { " (no internet: the sign-in remembered on this kiosk)" } else { "" };
+    audit_admin_pin_event(state, "ADMIN_ACCOUNT_UNLOCK", &format!("Admin screens opened by {} <{}>{how}", opened.name, opened.email)).await;
+    let mut session = open_admin_session(state).await;
+    session["name"] = serde_json::json!(opened.name);
+    Ok(session)
+}
+
+#[tauri::command]
+async fn admin_account_unlock(state: State<'_, AppState>, email: String, password: String) -> Result<serde_json::Value, String> {
+    admin_account_unlock_impl(&state, crate::services::id_register::built_in().as_ref(), &email, &password).await
+}
+
+#[tauri::command]
+/// Forgot password: Firebase emails the reset link to the address, if it has an account.
+async fn admin_account_reset(state: State<'_, AppState>, email: String) -> Result<serde_json::Value, String> {
+    crate::services::admin_account::send_reset(crate::services::id_register::built_in().as_ref(), &email)
+        .await
+        .map_err(|refusal| refusal.code())?;
+    audit_admin_pin_event(&state, "ADMIN_ACCOUNT_RESET_REQUESTED", "A password reset email was asked for from the admin sign-in screen").await;
+    Ok(serde_json::json!({"success": true}))
 }
 
 #[tauri::command]
@@ -6754,6 +6793,8 @@ pub fn run() {
             setup_lock,
             admin_pin_reset_request,
             admin_pin_reset_confirm,
+            admin_account_unlock,
+            admin_account_reset,
             setup_lookup_card,
             setup_upsert_user,
             admin_unlock,
@@ -9444,6 +9485,47 @@ mod tests {
         assert!(state.admin_session.lock().await.is_none());
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// Through the command's own path: an account that may, gets a session the admin commands accept and a line in
+    /// the audit log with their name; one that may not, gets neither; and a pause never stops an admin card.
+    #[tokio::test]
+    async fn admin_account_unlock_opens_a_named_session_and_a_card_still_works_while_paused() {
+        use crate::services::id_register::tests::{close, kiosk, register, serve};
+        let (state, temp) = kiosk("account-session").await;
+        let fake = register(vec![]);
+        {
+            let mut f = fake.lock().unwrap();
+            f.people.insert("ana@example.test", ("u-ana", "ana-password", None));
+            f.people.insert("liza@example.test", ("u-liza", "liza-password", None));
+            f.members.insert("u-ana", ("staff", "Ana Cruz", true));
+            f.members.insert("u-liza", ("staff", "Liza Bautista", false));
+        }
+        let (endpoints, server) = serve(fake).await;
+
+        let refused = super::admin_account_unlock_impl(&state, Some(&endpoints), "liza@example.test", "liza-password").await;
+        assert_eq!(refused.unwrap_err(), "NOT_ATTENDANCE_ADMIN");
+        assert!(state.admin_session.lock().await.is_none(), "a refusal opens nothing");
+
+        let opened = super::admin_account_unlock_impl(&state, Some(&endpoints), "ana@example.test", "ana-password").await.unwrap();
+        let token = opened["token"].as_str().unwrap().to_string();
+        assert_eq!(opened["name"], "Ana Cruz");
+        assert!(super::admin_authorized(&state, &token).await);
+        assert!(!super::admin_authorized(&state, "another-token").await);
+        let logged: Vec<String> = sqlx::query_scalar("SELECT message FROM audit_logs WHERE event_type = 'ADMIN_ACCOUNT_UNLOCK'").fetch_all(&state.db).await.unwrap();
+        assert_eq!(logged, vec!["Admin screens opened by Ana Cruz <ana@example.test>".to_string()]);
+        let everything: Vec<String> = sqlx::query_scalar("SELECT message FROM audit_logs").fetch_all(&state.db).await.unwrap();
+        assert!(everything.iter().all(|line| !line.contains("ana-password")), "a password is never logged");
+
+        // Five wrong passwords pause accounts and the PIN. An admin card is not a guess and still opens.
+        crate::upsert_user_record(&state.db, "ADMIN-1", "ADM1N001", "Front Desk", Some("HR"), "ACTIVE", "INTERN", None, None, None, None, "ADMIN_ASSIST", "2026-08-01T00:00:00Z").await.unwrap();
+        for _ in 0..5 {
+            let _ = super::admin_account_unlock_impl(&state, Some(&endpoints), "ana@example.test", "a-guess").await;
+        }
+        assert_eq!(super::admin_account_unlock_impl(&state, Some(&endpoints), "ana@example.test", "ana-password").await.unwrap_err(), "ADMIN_PIN_LOCKED");
+        let by_card = super::setup_unlock_impl(&state, "ADM1N001".to_string()).await.unwrap();
+        assert_eq!(by_card["success"], true);
+        close(state, temp, server).await;
     }
 
     #[tokio::test]

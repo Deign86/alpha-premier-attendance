@@ -174,6 +174,7 @@ import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
 import { PinResetPanel } from "./pin-reset";
+import { AccountSignInPanel } from './account-sign-in';
 import { AdminUpdatesCard } from "./admin-updates-card";
 import { IdRegisterPanel } from "./id-register-panel";
 import { createBackupNow, FridayBackupReminder, LastBackupLine, manilaDay, useBackupCreated, useBackupRunning } from "./backup-reminder";
@@ -3588,6 +3589,7 @@ function AdminPanel() {
   const [nukeConfirmOpen, setNukeConfirmOpen] = useState(false);
   const [manualUpdateCheck, setManualUpdateCheck] = useState<number>(0);
   const [resettingPin, setResettingPin] = useState(false);
+  const [withAccount, setWithAccount] = useState(false);
   const [pinNotice, setPinNotice] = useState("");
   // An admin card tap can unlock mid-reset; a later expiry must land on unlock, not reset.
   useEffect(() => {
@@ -3820,6 +3822,22 @@ function AdminPanel() {
         <p className="visually-hidden" role="status">Checking admin session…</p>
       </main>
     );
+  if (!unlocked && withAccount)
+    return (
+      <main className="dashboard-shell admin-login admin-shell">
+        <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
+        <AccountSignInPanel
+          onUnlocked={(expiresAt) => {
+            setWithAccount(false);
+            setUnlocked(true);
+            setSessionExpiresAt(expiresAt);
+            setPin("");
+            setError("");
+          }}
+          onBack={() => setWithAccount(false)}
+        />
+      </main>
+    );
   if (!unlocked && resettingPin)
     return (
       <main className="dashboard-shell admin-login admin-shell">
@@ -3872,6 +3890,18 @@ function AdminPanel() {
             }}
           >
             Forgot PIN?
+          </button>
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => {
+              setPinNotice("");
+              setError("");
+              setPin("");
+              setWithAccount(true);
+            }}
+          >
+            Sign in with your Keystone account
           </button>
         </form>
       </main>
