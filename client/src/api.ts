@@ -482,6 +482,52 @@ export async function confirmAdminPinReset(code: string, newPin: string): Promis
   }
 }
 
+/** What the account sign-in says for each refusal the desktop app gives (src-tauri/src/services/admin_account.rs). */
+const accountMessages = {
+  ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
+  ADMIN_PIN_LOCKED: 'Too many wrong tries. Signing in is paused for 5 minutes; an admin card still works.',
+  ACCOUNT_SIGN_IN_UNAVAILABLE: 'Account sign-in is not set up in this app build. Use an admin card, or contact IT.',
+  INVALID_ACCOUNT: 'The email or password is not right.',
+  ACCOUNT_TURNED_OFF: 'This account has been turned off. Ask the CEO.',
+  NOT_ATTENDANCE_ADMIN: 'This account is not an attendance admin. The CEO sets that in Keystone, under User Accounts.',
+  ACCOUNT_NEEDS_INTERNET: 'There is no internet, and this account has not signed in on this kiosk in the last 7 days. Use an admin card, or try again when the internet is back.',
+  ACCOUNT_TRY_LATER: 'Too many tries. Wait a few minutes and try again.',
+};
+
+type AccountFailure = { success: false; error: { message: string } };
+const DESKTOP_ONLY_ACCOUNT: AccountFailure = { success: false, error: { message: 'Signing in with an account is only available in the desktop app.' } };
+
+function accountError<T>(error: T): AccountFailure {
+  const code = errorString(error);
+  const known = Object.entries(accountMessages).find(([key]) => key === code);
+  return { success: false, error: { message: known ? known[1] : code || 'The sign-in could not be completed.' } };
+}
+
+/** Opens the admin screens with the person's own Keystone account (the CEO, or staff the CEO made an attendance admin). */
+export async function unlockAdminWithAccount(email: string, password: string): Promise<{ success: true; expiresAt: string; name: string } | AccountFailure> {
+  if (!runningInTauri()) return DESKTOP_ONLY_ACCOUNT;
+  try {
+    const response = await tauriApi.adminAccountUnlock(email, password);
+    nativeAdminToken = response.token;
+    nativeAdminExpiresAt = response.expiresAt;
+    return { success: true, expiresAt: response.expiresAt, name: response.name };
+  } catch (error) {
+    return accountError(error);
+  }
+}
+
+/** Forgot password: Firebase emails the reset link, if the address has an account. */
+export async function requestAccountPasswordReset(email: string): Promise<{ success: true } | AccountFailure> {
+  if (!runningInTauri()) return DESKTOP_ONLY_ACCOUNT;
+  try {
+    await tauriApi.adminAccountReset(email);
+    return { success: true };
+  } catch (error) {
+    const failure = accountError(error);
+    return errorString(error) === 'INVALID_ACCOUNT' ? { success: false, error: { message: 'Type your email address first.' } } : failure;
+  }
+}
+
 export async function lockAdmin(): Promise<void> {
   if (runningInTauri()) {
     nativeAdminToken = null;

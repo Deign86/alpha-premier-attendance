@@ -2513,3 +2513,32 @@ Agreed in the grill session: Firebase becomes the real database; SQLite stays on
   CHECK: `cd src-tauri && cargo test --lib` and `npm run lint:oxlint && npm run typecheck && npm test`
   EVIDENCE: `cargo test --lib`: 420 passed, the 3 known Linux-only path tests failed as on main; integration suites 11/18/75/36/58/24 passed; oxlint 0 errors, typecheck clean, shared 41 / client 634 / server 208. Two existing expectations changed, both because the behaviour was decided to change: the backup test no longer says a TIN never leaves the computer (owner: move them to Firebase; it now says where it goes and where it never goes), and `id_register_is_listed_only_when_it_has_grown` now expects the second request (what is kept apart) and the one-time count of 11 collections. The desktop app was not run (no desktop in this session).
 - [ ] F6: Shown on the real project from the real kiosk (after Keystone's rules are published).
+
+## An administrator signs in with their own Keystone account (owner decision, 2026-11-18)
+
+OWNS: `src-tauri/src/services/admin_account.rs`, `client/src/account-sign-in.tsx`, the admin sign-in screen in `client/src/App.tsx`
+
+Agreed in the grill session (release 4): the admin screens open with an admin RFID card, as before, or with the person's own Keystone account when the CEO has made them an attendance admin there (apg-keystone ADR 0030) or they are the CEO. A forgotten password is reset by Firebase's own email. With no internet, an account that signed in here in the last seven days still opens. The shared PIN and its emailed code are not touched here; they go in release 5, on the owner's word.
+
+- [x] K1: The right email and password of the CEO or of a ticked staff member opens an admin session and the audit log names them; a staff member without the tick, a stranger with a sign-in, a wrong password and a turned-off account open nothing.
+  CHECK: `cd src-tauri && cargo test --lib admin_account`
+  EVIDENCE: `admin_account_opens_for_the_ceo_and_ticked_staff_and_for_nobody_else` and, through the command, `admin_account_unlock_opens_a_named_session_and_a_card_still_works_while_paused` passed (2026-11-18): the session token is accepted, the audit line reads "Admin screens opened by Ana Cruz <ana@example.test>", no password is in the log.
+- [x] K2: Offline, an account that signed in here within seven days opens with the same password; a wrong password, an account never seen here, and one last seen eight days ago do not. The password is kept only as a slow hash in settings, which are never sent to Firebase.
+  CHECK: `cd src-tauri && cargo test --lib admin_account`
+  EVIDENCE: `admin_account_opens_offline_for_seven_days_after_a_sign_in_that_worked` passed: day 6 opens, day 8 does not, a clock set back does not, a wrong password does not, an account never seen here does not.
+- [x] K3: Taking the tick away (or the account) stops the next online sign-in and forgets the remembered one, so it does not open offline afterwards either.
+  CHECK: `cd src-tauri && cargo test --lib admin_account`
+  EVIDENCE: `admin_account_taken_away_in_keystone_stops_opening_here_online_and_offline` passed: tick removed, member removed, account turned off, password changed; each forgets the remembered sign-in. Firebase asking to slow down forgets nothing.
+- [x] K4: Five wrong passwords pause account and PIN unlock for five minutes together; admin cards still open.
+  CHECK: `cd src-tauri && cargo test --lib admin_account`
+  EVIDENCE: `admin_account_five_wrong_passwords_pause_it_for_five_minutes` passed (Firebase is not asked while paused; the PIN is paused with it), and the command test shows an admin card opening during the pause.
+- [x] K5: "Forgot password" asks Firebase to email the reset link and says the same thing whether or not the address has an account.
+  CHECK: `cd src-tauri && cargo test --lib admin_account`
+  EVIDENCE: `admin_account_forgot_password_asks_firebase_and_tells_nothing_about_the_address` passed.
+- [x] K6: The admin screen offers the account sign-in beside the card and PIN, shows each refusal in plain words, and never keeps a typed password after a try.
+  CHECK: `npm test -w client -- account-sign-in.test.tsx`
+  EVIDENCE: `account-sign-in.test.tsx`: 13 passed (each refusal's sentence, the password field emptied after every try, the reset, the way in from and back to the card and PIN screen).
+- [x] K7: Everything else still passes; card and PIN unlock are unchanged.
+  CHECK: `cd src-tauri && cargo test --lib` and `npm run lint:oxlint && npm run typecheck && npm test`
+  EVIDENCE: `cargo test --lib`: 426 passed, the 3 known Linux-only path tests failed as on main; integration suites 11/18/75/36/58/24; oxlint 0 errors, typecheck clean, shared 41 / client 647 / server 208. No existing expectation changed. The desktop app was not run.
+- [ ] K8: Shown on the real kiosk with a real Keystone account.
