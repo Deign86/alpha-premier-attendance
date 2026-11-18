@@ -2154,7 +2154,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("alpha-cutoff-overlap-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         let state = AppState::new(
             temp.clone(),

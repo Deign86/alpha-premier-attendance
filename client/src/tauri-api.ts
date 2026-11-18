@@ -92,11 +92,12 @@ export const tauriApi = {
   lanStop: () => invoke<LanStatusResponse>('lan_stop'),
   openViewerUrl: (url: string) => invoke<void>('open_viewer_url', { url }),
   scanRfid: (request: ScanRequest) => invoke<ScanResponse>('scan_rfid', { request }),
-  setupUnlock: (pin: string) => invoke<Unlocked | SetupErrorResponse>('setup_unlock', { pin }),
+  /** The command's argument is still named `pin` on the wire; it carries a card ID or the code IT set. */
+  setupUnlock: (cardOrCode: string) => invoke<Unlocked | SetupErrorResponse>('setup_unlock', { pin: cardOrCode }),
   /** The legacy server ends a setup session by its token; the desktop app has one session and ignores it. */
   setupLock: (_setupToken?: string) => invoke<{ success: true }>('setup_lock'),
   /** The Admin panel's unlock and lock. On the desktop they are the setup commands; the legacy server has its own routes. */
-  adminUnlock: (pin: string): Promise<Unlocked | { success: false; error: { message: string } }> => tauriApi.setupUnlock(pin),
+  adminUnlock: (cardOrCode: string): Promise<Unlocked | { success: false; error: { message: string } }> => tauriApi.setupUnlock(cardOrCode),
   adminLock: (): Promise<{ success: true }> => tauriApi.setupLock(),
   adminAccountUnlock: (email: string, password: string) => invoke<{ success: true; token: string; expiresAt: string; name: string }>('admin_account_unlock', { email, password }),
   adminAccountReset: (email: string) => invoke<{ success: true }>('admin_account_reset', { email }),

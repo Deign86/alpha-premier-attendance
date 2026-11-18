@@ -4,35 +4,35 @@ use tauri::State;
 
 pub(crate) async fn setup_unlock_impl(
     state: &AppState,
-    pin: String,
+    card_or_code: String,
 ) -> Result<serde_json::Value, String> {
-    // config.toml `admin_pin = ""` stays the off switch, even after an email reset.
-    if state.lan.admin_pin.as_deref() == Some("") {
+    // config.toml `admin_pin = ""` stays the off switch.
+    if state.lan.admin_code.as_deref() == Some("") {
         return Err("ADMIN_DISABLED".into());
     }
-    let configured = state.lan.admin_pin.as_deref();
-    let pin_trimmed = pin.trim();
+    let configured = state.lan.admin_code.as_deref();
+    let typed = card_or_code.trim();
     let now = chrono::Utc::now();
     // While locked out nothing typed is checked, so a guess cannot be confirmed.
-    let pin_locked = crate::services::unlock_guard::unlock_locked(&state.db, now).await?;
+    let typing_paused = crate::services::unlock_guard::unlock_locked(&state.db, now).await?;
     // There is no shared PIN any more. What is typed opens the admin screens only when it is an admin card's number
     // or IT's way back: an explicit `admin_pin` in config.toml on this kiosk. A PIN once set by email is ignored.
-    let is_pin_match = !pin_locked && configured.is_some_and(|pin| !pin_trimmed.is_empty() && pin == pin_trimmed);
+    let is_code_match = !typing_paused && configured.is_some_and(|code| !typed.is_empty() && code == typed);
     let mut is_admin_card_match = false;
-    if !is_pin_match {
-        let uid = pin_trimmed.to_ascii_uppercase();
+    if !is_code_match {
+        let uid = typed.to_ascii_uppercase();
         let row = sqlx::query(
             "SELECT user_id FROM users WHERE (rfid_uid = ? OR user_id = ?) AND status = 'ACTIVE' AND card_type = 'ADMIN_ASSIST'",
         )
         .bind(&uid)
-        .bind(pin_trimmed)
+        .bind(typed)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| e.to_string())?;
         is_admin_card_match = row.is_some();
     }
-    if !is_pin_match && !is_admin_card_match {
-        if pin_locked || crate::services::unlock_guard::record_unlock_failure(&state.db, now).await? {
+    if !is_code_match && !is_admin_card_match {
+        if typing_paused || crate::services::unlock_guard::record_unlock_failure(&state.db, now).await? {
             return Err("ADMIN_PIN_LOCKED".into());
         }
         return Err("INVALID_ADMIN_PIN".into());
@@ -41,7 +41,7 @@ pub(crate) async fn setup_unlock_impl(
     Ok(open_admin_session(state).await)
 }
 
-/// Starts the admin session a card, the PIN or an account has just earned.
+/// Starts the admin session a card, IT's code or an account has just earned.
 pub(crate) async fn open_admin_session(state: &AppState) -> serde_json::Value {
     let token = uuid::Uuid::new_v4().to_string();
     let expires = std::time::Instant::now()
@@ -61,14 +61,14 @@ pub(crate) async fn admin_account_unlock_impl(
     password: &str,
 ) -> Result<serde_json::Value, String> {
     // config.toml `admin_pin = ""` stays the off switch for every way in but a card.
-    if state.lan.admin_pin.as_deref() == Some("") {
+    if state.lan.admin_code.as_deref() == Some("") {
         return Err("ADMIN_DISABLED".into());
     }
     let opened = crate::services::admin_account::open(&state.db, endpoints, email, password, chrono::Utc::now())
         .await
         .map_err(|refusal| refusal.code())?;
     let how = if opened.offline { " (no internet: the sign-in remembered on this kiosk)" } else { "" };
-    audit_admin_pin_event(state, "ADMIN_ACCOUNT_UNLOCK", &format!("Admin screens opened by {} <{}>{how}", opened.name, opened.email)).await;
+    audit_session_event(state, "ADMIN_ACCOUNT_UNLOCK", &format!("Admin screens opened by {} <{}>{how}", opened.name, opened.email)).await;
     let mut session = open_admin_session(state).await;
     session["name"] = serde_json::json!(opened.name);
     Ok(session)
@@ -85,13 +85,14 @@ pub(crate) async fn admin_account_reset(state: State<'_, AppState>, email: Strin
     crate::services::admin_account::send_reset(crate::services::firebase::built_in().as_ref(), &email)
         .await
         .map_err(|refusal| refusal.code())?;
-    audit_admin_pin_event(&state, "ADMIN_ACCOUNT_RESET_REQUESTED", "A password reset email was asked for from the admin sign-in screen").await;
+    audit_session_event(&state, "ADMIN_ACCOUNT_RESET_REQUESTED", "A password reset email was asked for from the admin sign-in screen").await;
     Ok(serde_json::json!({"success": true}))
 }
 
 #[tauri::command]
 pub(crate) async fn setup_unlock(
     state: State<'_, AppState>,
+    // The argument's name is what the client and the scripts send; it carries a card ID or IT's code.
     pin: String,
 ) -> Result<serde_json::Value, String> {
     setup_unlock_impl(&state, pin).await
@@ -103,7 +104,7 @@ pub(crate) async fn setup_lock(state: State<'_, AppState>) -> Result<serde_json:
     Ok(serde_json::json!({"success":true}))
 }
 
-pub(crate) async fn audit_admin_pin_event(state: &AppState, event_type: &str, message: &str) {
+pub(crate) async fn audit_session_event(state: &AppState, event_type: &str, message: &str) {
     crate::services::audit::log(&state.db, crate::services::audit::Entry::new(event_type, &chrono::Utc::now().to_rfc3339(), message, &uuid::Uuid::new_v4().to_string())).await;
 }
 
@@ -160,14 +161,14 @@ mod tests {
     use crate::services::users::upsert_user_record;
 
     #[tokio::test]
-    async fn admin_pin_lockout_after_five_wrong_pins_survives_a_restart() {
+    async fn typing_is_paused_after_five_wrong_tries_and_the_pause_survives_a_restart() {
         let temp = std::env::temp_dir().join(format!("alpha-pin-lockout-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let open = || {
             let temp = temp.clone();
             async move {
                 let mut lan = LanConfig::default();
-                lan.admin_pin = Some("2468".to_string());
+                lan.admin_code = Some("2468".to_string());
                 lan.admin_session_minutes = 30;
                 AppState::new(
                     temp.clone(),
@@ -224,13 +225,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_admin_unlock_by_pin_or_admin_rfid() {
+    async fn the_admin_screens_open_with_its_code_or_an_admin_card() {
         let temp = std::env::temp_dir().join(format!("alpha-admin-unlock-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(temp.join("exports")).unwrap();
         let data_dir = temp.clone();
         let exports_dir = temp.join("exports");
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("2468".to_string());
+        lan.admin_code = Some("2468".to_string());
         lan.admin_session_minutes = 15;
         let state = AppState::new(
             data_dir.clone(),
@@ -309,7 +310,7 @@ mod tests {
         std::fs::create_dir_all(temp.join("exports")).unwrap();
         async fn open(temp: &std::path::Path, admin_pin: Option<&str>) -> AppState {
             let mut lan = LanConfig::default();
-            lan.admin_pin = admin_pin.map(str::to_string);
+            lan.admin_code = admin_pin.map(str::to_string);
             AppState::new(
                 temp.to_path_buf(),
                 temp.join("attendance.db"),
@@ -426,7 +427,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_wrong_pins_still_reach_the_lockout() {
+    async fn concurrent_wrong_tries_still_reach_the_pause() {
         // Same race on the D1 wrong-PIN counter.
         let (state, temp, _token) = admin_test_state("pin-race").await;
         let now = chrono::Utc::now();

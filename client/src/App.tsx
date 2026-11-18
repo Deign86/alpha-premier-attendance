@@ -108,7 +108,7 @@ export default function App() {
   const [setupStep, setSetupStep] = useState<SetupStep>("scan");
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupNotice, setSetupNotice] = useState<Notice | null>(null);
-  const [adminPin, setAdminPin] = useState("");
+  const [adminCardOrCode, setAdminCardOrCode] = useState("");
   const [setupUid, setSetupUid] = useState("");
   const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
   const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
@@ -289,7 +289,7 @@ export default function App() {
       setSetupDialogOpen(true);
       setSetupNotice(null);
       if (initialUid) setSetupUid(initialUid);
-      setAdminPin("");
+      setAdminCardOrCode("");
       if (setupToken) {
         setSetupStep("scan");
         window.setTimeout(focusSetupInput, 0);
@@ -298,9 +298,9 @@ export default function App() {
     [focusSetupInput, setupToken],
   );
 
-  const unlockSetupWithPinOrCard = useCallback(
-    async (pinOrUid: string) => {
-      const candidate = pinOrUid.trim();
+  const unlockSetupWithCardOrCode = useCallback(
+    async (cardOrCode: string) => {
+      const candidate = cardOrCode.trim();
       if (!candidate || setupBusy) return;
       setSetupBusy(true);
       setSetupNotice(null);
@@ -316,7 +316,7 @@ export default function App() {
           setSetupNotice({ tone: "error", text: response.error.message });
           return;
         }
-        setAdminPin("");
+        setAdminCardOrCode("");
         setSetupStep("scan");
         setSetupDialogOpen(true);
         window.setTimeout(focusSetupInput, 0);
@@ -331,7 +331,7 @@ export default function App() {
 
   const handleUnlock = async (event: React.FormEvent) => {
     event.preventDefault();
-    await unlockSetupWithPinOrCard(adminPin);
+    await unlockSetupWithCardOrCode(adminCardOrCode);
   };
 
   const closeSetup = async () => {
@@ -344,7 +344,7 @@ export default function App() {
     setSetupUid("");
     setSetupUser(null);
     setSetupNotice(null);
-    setAdminPin("");
+    setAdminCardOrCode("");
     setSetupForm(emptySetupForm);
   };
 
@@ -768,7 +768,7 @@ export default function App() {
   scanHandlerRef.current = (value) => {
     if (adminAssistData) return;
     if (setupDialogOpen && !setupToken) {
-      void unlockSetupWithPinOrCard(value);
+      void unlockSetupWithCardOrCode(value);
     } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
       handleSetupInput(value);
     } else if (!setupDialogOpen || !setupToken) {
@@ -817,7 +817,7 @@ export default function App() {
   const routeWedgeCard = useCallback(
     (normalized: string) => {
       if (setupDialogOpen && !setupToken) {
-        void unlockSetupWithPinOrCard(normalized);
+        void unlockSetupWithCardOrCode(normalized);
       } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
         handleSetupInput(normalized);
       } else if (manualMode && kioskMode === "bathroom") {
@@ -831,7 +831,7 @@ export default function App() {
         }
       }
     },
-    [adminAssistData, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard],
+    [adminAssistData, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithCardOrCode],
   );
   const refuseWedgeRead = useCallback(() => flashScanNotice("Card not recognized — check the reader format."), [flashScanNotice]);
   const switchModeByDigit = useCallback((digit: "1" | "2") => switchKioskModeRef.current(digit === "1" ? "attendance" : "bathroom"), []);
@@ -1438,18 +1438,18 @@ export default function App() {
           step={setupStep}
           busy={setupBusy}
           notice={setupNotice}
-          pin={adminPin}
+          cardOrCode={adminCardOrCode}
           uid={setupUid}
           user={setupUser}
           form={setupForm}
           inputRef={setupInputRef}
-          onPinChange={setAdminPin}
+          onCardOrCodeChange={setAdminCardOrCode}
           onAccountStart={() => {
             setSetupNotice(null);
-            setAdminPin("");
+            setAdminCardOrCode("");
           }}
           onAccountUnlocked={() => {
-            setAdminPin("");
+            setAdminCardOrCode("");
             setSetupNotice(null);
             setSetupStep("scan");
             window.setTimeout(focusSetupInput, 0);

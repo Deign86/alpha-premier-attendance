@@ -1,5 +1,7 @@
 # Hardware Verification Runbook
 
+> **This page is about the legacy Node server in `server/`, not the desktop app.** The server is kept so the client can be developed in a browser; it still has its own PIN settings (`ADMIN_PIN`, `SETUP_ADMIN_PIN`, `ENABLE_CARD_SETUP`), and every PIN step below is the server's. The desktop app that the office runs has no PIN: the admin screens open with an admin RFID card or a person's own Keystone account (user manual, chapter 7).
+
 Use this runbook before enabling real cards and after replacing a reader, kiosk PC, or USB port. It assumes a configured device-specific reader transport (raw HID, serial, or vendor SDK) and a running kiosk client. Keyboard-wedge readers are detection-only and cannot satisfy the background no-leakage requirement.
 
 ## Deployed Reader: 125 kHz EM4100 USB (Keyboard Wedge)

@@ -1,5 +1,7 @@
 # Windows and LAN Deployment
 
+> **This page is about the legacy Node server in `server/`, not the desktop app.** The server is kept so the client can be developed in a browser; it still has its own PIN settings (`ADMIN_PIN`, `SETUP_ADMIN_PIN`, `ENABLE_CARD_SETUP`), and every PIN step below is the server's. The desktop app that the office runs has no PIN: the admin screens open with an admin RFID card or a person's own Keystone account (user manual, chapter 7).
+
 This runbook deploys the RFID kiosk on a Windows workstation. It supports a localhost-only kiosk and a private-LAN mode for approved clients. Do not expose the Express API directly to the public internet.
 
 ## Prerequisites

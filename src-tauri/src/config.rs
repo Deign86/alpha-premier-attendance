@@ -36,8 +36,9 @@ pub struct LanConfig {
     pub google_spreadsheet_title: String,
     /// `None` = normal use: admin RFID cards and Keystone accounts open the admin screens.
     /// `Some("")` = admin access off. Any other value is IT's way back, typed in the card field.
-    #[serde(default)]
-    pub admin_pin: Option<String>,
+    /// The key in config.toml is still `admin_pin`, so existing files load unchanged.
+    #[serde(default, rename = "admin_pin")]
+    pub admin_code: Option<String>,
     #[serde(default = "default_admin_session_minutes")]
     pub admin_session_minutes: u64,
     #[serde(default)]
@@ -73,7 +74,7 @@ impl Default for LanConfig {
             google_drive_folder_name: default_google_drive_folder_name(),
             google_create_folder_if_missing: false,
             google_spreadsheet_title: default_google_spreadsheet_title(),
-            admin_pin: None,
+            admin_code: None,
             admin_session_minutes: 15,
             enabled: false,
             allow_runtime_start: true,
@@ -703,7 +704,7 @@ mod tests {
         let config = LanConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.port, 4173);
-        assert_eq!(config.admin_pin, None);
+        assert_eq!(config.admin_code, None);
     }
 
     #[test]
@@ -1048,6 +1049,7 @@ mod tests {
     }
 
     #[test]
+    /// `mode`, `enter_suffix`, `idle_timeout_ms` and `dedup_ms` are read by nothing, but a config.toml that has them still loads.
     fn scanner_parses_variable_length_profile() {
         #[derive(Deserialize)]
         struct Root {
@@ -1055,12 +1057,13 @@ mod tests {
             scanner: ScannerConfig,
         }
         let root: Root = toml::from_str(
-            "[scanner]\nexpected_length = 0\nenter_suffix = true\nidle_timeout_ms = 200\n",
+            "[scanner]\nmode = \"keyboard\"\nexpected_length = 0\nenter_suffix = true\nidle_timeout_ms = 200\ndedup_ms = 300\n",
         )
         .expect("scanner profile");
         assert_eq!(root.scanner.expected_length, 0);
         assert!(root.scanner.enter_suffix);
         assert_eq!(root.scanner.idle_timeout_ms, 200);
+        assert_eq!(root.scanner.dedup_ms, 300);
     }
 
     #[test]

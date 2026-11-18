@@ -41,12 +41,12 @@ type SetupDialogProps = {
   step: SetupStep;
   busy: boolean;
   notice: Notice | null;
-  pin: string;
+  cardOrCode: string;
   uid: string;
   user: SetupUser | null;
   form: SetupForm;
   inputRef: React.Ref<HTMLInputElement>;
-  onPinChange: (value: string) => void;
+  onCardOrCodeChange: (value: string) => void;
   /** Clears the card field and a stale unlock error when the account sign-in opens. */
   onAccountStart: () => void;
   /** A Keystone account opened setup: the session's token and when it ends. */
@@ -169,8 +169,8 @@ export function SetupDialog(props: SetupDialogProps) {
         </div>
         {!props.token ? (
           <AdminUnlock
-            cardOrCode={props.pin}
-            onCardOrCodeChange={props.onPinChange}
+            cardOrCode={props.cardOrCode}
+            onCardOrCodeChange={props.onCardOrCodeChange}
             busy={props.busy}
             onSubmit={props.onUnlock}
             withAccount={withAccount}

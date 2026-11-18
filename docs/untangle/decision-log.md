@@ -134,6 +134,15 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
     - H52: each screen had its own card field, its own disabled rule, its own "Sign in with your Keystone account" switch and its own `AccountSignInPanel` mount. Both render `AdminUnlock` and pass their own words, error line and button label.
 - **`use-card-reader.ts`: the keyboard-wedge reader as a hook** (R7)
     - X11, X12: the three input ids exempted by name and the lone `1` / `2` mode shortcut were inside the card-buffer logic. The hook reads a card (character set, length, the 250 ms gap, Enter) and knows nothing about the kiosk; the kiosk passes "these keys are not the reader's" (where the three ids now are) and "a lone digit was pressed" (the mode shortcut).
+- **The "pin" vocabulary renamed to "card or code" where it is not a wire name** (R6)
+    - S22: client `unlockSetup(cardOrCode)`, `unlockAdmin(cardOrCode)`, `tauriApi.setupUnlock(cardOrCode)`, state `adminCardOrCode`, `unlockSetupWithCardOrCode`, `unlockWithCardOrCode`, the setup dialog's `cardOrCode` / `onCardOrCodeChange` props. Rust `LanConfig.admin_code` (the key in config.toml is still `admin_pin`, by `serde(rename)`), the locals of `setup_unlock_impl` (`card_or_code`, `typed`, `typing_paused`, `is_code_match`), three test names.
+    - N3 (rest): `audit_admin_pin_event` is `audit_session_event`.
+    - Not renamed, because scripts, the client or stored data send or hold them: the error codes `INVALID_ADMIN_PIN`, `INVALID_SETUP_PIN`, `ADMIN_PIN_LOCKED`; the `pin` argument of `setup_unlock`; the `admin_pin` key of config.toml; the input id `admin-pin`, which the reader hook's caller and the stylesheet know; everything about the VoiceStudio PIN, which is a real PIN.
+- **Docs that described the removed PIN reset** (R6)
+    - S21: the user manual's "Forgot PIN, resetting by email" page is replaced by "Signing in with your Keystone account", written from the sentences the app shows today; twelve other PIN mentions in the manual were corrected; `img/admin-forgot-pin.png` is deleted.
+    - S25: `docs/deployment.md` and `docs/hardware-verification.md` describe the legacy Node server, which does still have PIN settings. Each now says so at the top and points to the manual for the desktop app.
+- **The scanner stub** (R6)
+    - S7 / X29 (part): `scanner::normalize` and `ScanParse` (used only by their own tests) and the three states nothing ever set (`Scanning`, `Offline`, `Error`) are deleted with their `#[allow(dead_code)]`; the module and `lib.rs` no longer describe a native pipeline that emits `rfid-scan`. The `[scanner]` keys nothing reads (`mode`, `enter_suffix`, `idle_timeout_ms`, `dedup_ms`) still parse, and `config::scanner_parses_variable_length_profile` loads a file with all of them.
 
 ## Tests removed in round 2 (each with its reason)
 
@@ -141,6 +150,7 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
 - `App.test.tsx` "degrades to actual-only times on the live table when the week-history fetch fails": there is no week-history fetch any more.
 - `App.test.tsx` "does not let a slow time-in announcement talk over the next person who already scanned": the wait it guarded (loading the week before announcing) is gone, so there is no slow announcement; the guard (`scanSeq`) was removed with it.
 - `shared/api-contracts.test.ts`, the `evaluateAttendanceArrivals & grace period rules` block (8 tests) and "grants one graced arrival per week again from the resume date": tested the three deleted evaluators.
+- `services/scanner.rs`, eight tests of `normalize` (`normalizes_lowercase_and_strips_separators`, `accepts_default_decimal_and_rejects_letters`, `accepts_variable_length_when_expected_length_zero`, `enforces_fixed_expected_length`, `rejects_non_hex_content`, `ignores_separator_only_or_too_short_input`, `rejects_overlong_input`, `accepts_inclusive_uid_length_boundaries`): they tested a function no production code called, deleted with it (S7). The card format the app really applies is tested where it is applied: `use-card-reader` through `App.test.tsx`, and the scan command in `commands/kiosk.rs`.
 
 ## Not done in round 2
 
@@ -148,6 +158,10 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
 - **S23, the four setup codes Rust never sends** (`SETUP_SESSION_EXPIRED`, `INVALID_SETUP_PIN`, `SETUP_DISABLED`, `SETUP_VALIDATION_ERROR`): kept in the setup table; `api.test.ts` asserts one of them and the legacy server does send them.
 - **H8, cutoff period bounds from Rust**: not done. The payroll form computes the period synchronously while the month is picked, and in a browser tab there is no Rust to ask (the legacy server has no such route). Moving it means an asynchronous form (dates empty until an answer arrives) and a second implementation in `server/`: a behaviour change and a new route, not a move. `computeSemiMonthlyCutoff`, `cutoffFields`, `lastEndedCutoff` and the shared `countWorkdays` stay.
 - **H5, H6, H7, H16 (rates, the 18:00 / 17:00 hours, `normalizeName`, the "5 minutes" / "7 days" / "15-minute" numbers in client text)**: unchanged. They are constants the legacy server also reads from `shared/`; sending them from Rust would leave browser mode without them.
+- **S26 to S30, S6 (employee-scope `else` arms, payroll profiles, the one-value settings)**: left, on instruction. They are unreachable only while no `EMPLOYEE` row and no pre-migration employee cutoff exists, and the production database cannot be read from here.
+- **S7, the client half**: the client still subscribes to `rfid-scan` (`listenForGlobalRfid`) although nothing in Rust emits it, and still has labels for the three scanner states Rust no longer has. 30 tests in `App.test.tsx` use that subscription to stand for a card tap; removing it means rewriting them to type keys.
+- **S21, the screenshot `img/admin-unlock.png`**: it still shows the old "Forgot PIN?" link. The caption no longer points at it; a new screenshot needs the desktop app, which cannot run here.
+- **S24 (`ALPHA_PREMIER_ADMIN_PIN` in two scripts, the Apps Script secret)**: untouched; they are outside the code this round owns.
 
 ## Calls made without the owner
 

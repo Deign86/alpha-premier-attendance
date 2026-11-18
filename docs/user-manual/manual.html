@@ -154,7 +154,7 @@
     <ul>
       <li>All times in the system use <b>Philippine time (Asia/Manila)</b>.</li>
       <li>Attendance and payroll data are stored <b>only on the front-desk computer</b>. Make regular backups (Chapter 12).</li>
-      <li>Keep the administrator PIN and admin RFID cards private. Anyone with them can change attendance and payroll.</li>
+      <li>Keep admin RFID cards and your Keystone password private. Anyone with them can change attendance and payroll.</li>
       <li>Do not copy or delete program files while the app is running; use the backup tools.</li>
     </ul>
   </div>
@@ -176,7 +176,7 @@
       <li class="ch"><span class="num">05</span><a href="#ch5">Bathroom key log (kiosk)</a><span class="dots"></span><span class="pg"></span></li>
       <li class="ch"><span class="num">06</span><a href="#ch6">Live attendance and the office viewer</a><span class="dots"></span><span class="pg"></span></li>
       <li class="ch"><span class="num">07</span><a href="#ch7">Administrator access</a><span class="dots"></span><span class="pg"></span></li>
-      <li class="sub"><a href="#ch7-pin">Forgot PIN — resetting by email</a><span class="dots"></span><span class="pg"></span></li>
+      <li class="sub"><a href="#ch7-account">Signing in with your Keystone account</a><span class="dots"></span><span class="pg"></span></li>
       <li class="sub"><a href="#ch7-layout">The admin screen at a glance</a><span class="dots"></span><span class="pg"></span></li>
       <li class="ch"><span class="num">08</span><a href="#ch8">Users and RFID cards</a><span class="dots"></span><span class="pg"></span></li>
       <li class="sub"><a href="#ch8-form">Adding a user from the Users tab</a><span class="dots"></span><span class="pg"></span></li>
@@ -251,7 +251,7 @@
       <tr><th style="width:24%">Role</th><th>What they do</th><th style="width:28%">Needs</th></tr>
       <tr><td><b>Intern</b></td><td>Taps in and out; borrows and returns restroom keys.</td><td>A registered RFID card</td></tr>
       <tr><td><b>Front desk</b></td><td>Keeps the kiosk running; helps with manual entry.</td><td>Access to the kiosk PC</td></tr>
-      <tr><td><b>Administrator</b></td><td>Registers cards, corrects attendance, runs payroll, makes backups.</td><td>Admin PIN or admin RFID card</td></tr>
+      <tr><td><b>Administrator</b></td><td>Registers cards, corrects attendance, runs payroll, makes backups.</td><td>Admin RFID card or Keystone account</td></tr>
       <tr><td><b>Viewer</b> (manager)</td><td>Watches today's attendance from another device.</td><td>The office Wi-Fi and viewer link</td></tr>
     </table>
   </div>
@@ -277,7 +277,7 @@
       <tr><td>Card reader</td><td>125 kHz EM4100 USB reader working in keyboard mode (sends 10 digits + Enter). This is the default reader.</td></tr>
       <tr><td>Cards</td><td>One 125 kHz card per intern; at least one extra card to use as an <b>admin RFID card</b>.</td></tr>
       <tr><td>Speakers</td><td>Optional, for spoken greetings.</td></tr>
-      <tr><td>Network</td><td>Optional. Office Wi-Fi for the live viewer; internet for updates, PIN-reset email and Google Sheets.</td></tr>
+      <tr><td>Network</td><td>Optional. Office Wi-Fi for the live viewer; internet for updates, signing in with a Keystone account and Google Sheets.</td></tr>
       <tr><td>Installation rights</td><td>Windows administrator approval is needed once, when installing.</td></tr>
     </table>
 
@@ -325,8 +325,8 @@
 
     <h2>First-time setup checklist (administrator)</h2>
     <ol class="steps">
-      <li><b>Get admin access.</b> A new installation has no PIN. Open <b>Admin</b>, click <b>Forgot PIN?</b> and set the first PIN with the emailed code (Chapter 7).</li>
-      <li><b>Register an admin RFID card</b> so you can unlock without the PIN (Chapter 8).</li>
+      <li><b>Get admin access.</b> Open <b>Admin</b> and sign in with your Keystone account (Chapter 7). The CEO decides in Keystone who is an attendance admin.</li>
+      <li><b>Register an admin RFID card</b> so you can unlock with a tap (Chapter 8).</li>
       <li><b>Register every intern's card</b>, with photo and gender (Chapter 8).</li>
       <li><b>Test</b>: tap one intern card. You should see the photo and "Time In recorded successfully."</li>
       <li><b>Make the first backup</b> (Chapter 12) and, if wanted, share the live viewer link (Chapter 6).</li>
@@ -385,7 +385,7 @@
       <tr><th class="n">#</th><th style="width:30%">Button</th><th>Use</th></tr>
       <tr><td><span class="pinref">A</span></td><td><b>Manual entry</b></td><td>Type a card number when the reader is not working (Chapter 4). Changes to <b>Use card reader</b> to switch back.</td></tr>
       <tr><td><span class="pinref">B</span></td><td><b>Live attendance</b></td><td>Opens today's attendance list (Chapter 6).</td></tr>
-      <tr><td><span class="pinref">C</span></td><td><b>Admin</b></td><td>Opens the administrator area (Chapter 7). Needs the PIN or an admin card.</td></tr>
+      <tr><td><span class="pinref">C</span></td><td><b>Admin</b></td><td>Opens the administrator area (Chapter 7). Needs an admin card or a Keystone account.</td></tr>
       <tr><td><span class="pinref">D</span></td><td><b>Admin setup</b></td><td>Quick way to register a new card or change the person on a card (Chapter 8).</td></tr>
     </table>
 
@@ -640,19 +640,18 @@
   <div class="page-body">
     <div class="chapno">Chapter 07</div>
     <h1 class="chap">Administrator access</h1>
-    <p class="lede">The admin area is protected. Unlock it with the administrator PIN or a registered admin RFID card.</p>
+    <p class="lede">The admin area is protected. Unlock it with a registered admin RFID card or with your own Keystone account.</p>
     <figure>
       <div class="shot crop" style="--y:220;--h:360"><img src="img/admin-unlock.png" alt="Admin unlock screen">
         <span class="pin" style="left:33.5%;top:60.6%">1</span>
         <span class="pin" style="left:33.5%;top:77.2%">2</span>
-        <span class="pin" style="left:51.6%;top:69%">3</span>
       </div>
-      <figcaption><b>Figure 7-1.</b> Unlock screen. <span class="pinref">1</span> PIN or card · <span class="pinref">2</span> <b>Unlock admin</b> · <span class="pinref">3</span> <b>Forgot PIN?</b></figcaption>
+      <figcaption><b>Figure 7-1.</b> Unlock screen. <span class="pinref">1</span> <b>Admin RFID card</b> · <span class="pinref">2</span> <b>Unlock admin</b>. Under the button is <b>Sign in with your Keystone account</b>.</figcaption>
     </figure>
     <h2>To unlock</h2>
     <ol class="steps">
       <li>On the kiosk, click <b>Admin</b> at the bottom.</li>
-      <li>Either <b>tap your admin RFID card</b> on the reader (it fills the box and unlocks by itself), or type the <b>PIN</b> and click <b>Unlock admin</b>.</li>
+      <li>Either <b>tap your admin RFID card</b> on the reader (it fills the box and unlocks by itself), or click <b>Sign in with your Keystone account</b> (next page).</li>
       <li>The admin screen opens on the <b>Users and RFID</b> tab.</li>
     </ol>
     <h2>Sessions and locking</h2>
@@ -661,50 +660,35 @@
       <li>Click <b>Lock</b> (top-right) when you are done. Always lock before leaving the desk.</li>
       <li>If you go back to the kiosk and return to Admin, you may need to unlock again.</li>
     </ul>
-    <h2>PIN rules</h2>
+    <h2>Wrong tries</h2>
     <ul>
-      <li>6 to 12 digits. Easy patterns such as 111111, 123456 or 654321 are refused.</li>
-      <li>A new installation has <b>no PIN</b>; use an admin card or set one with <b>Forgot PIN?</b></li>
-      <li>The PIN belongs to <b>this computer only</b>; it is not shared with other installations. Changing it does not affect admin cards.</li>
-      <li>A wrong PIN or unknown card shows "The administrator PIN is invalid."</li>
+      <li>There is no shared administrator PIN. A card that is not an admin card shows "That is not a registered admin RFID card."</li>
+      <li>After too many wrong tries you see "Too many wrong tries. Typing is paused for 5 minutes; tapping an admin card still works."</li>
     </ul>
   </div>
   <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
 </section>
 
-<section class="page" id="ch7-pin">
+<section class="page" id="ch7-account">
   <div class="run"><span>Alpha Premier Attendance · User Manual</span><b>7 · Administrator access</b></div>
   <div class="page-body">
-    <h2 style="margin-top:0">Forgot PIN — resetting by email</h2>
-    <div class="split">
-      <figure style="margin-top:0"><div class="shot crop" style="--y:250;--h:300"><img src="img/admin-forgot-pin.png" alt="Forgot PIN panel"></div>
-        <figcaption><b>Figure 7-2.</b> The Forgot PIN panel.</figcaption></figure>
-      <div>
-        <p>A one-time 6-digit code is emailed to the company inbox <b>thealphapremiergroup@gmail.com</b>. The computer needs internet for this.</p>
-        <p class="small">The same <b>Forgot PIN?</b> link is in the kiosk's <b>Admin setup</b> window.</p>
-      </div>
-    </div>
+    <h2 style="margin-top:0">Signing in with your Keystone account</h2>
+    <p>The CEO, and staff the CEO has made an attendance admin in Keystone (under User Accounts), can open the admin area with their own Keystone email and password. The same link is in the kiosk's <b>Admin setup</b> window.</p>
     <ol class="steps">
-      <li>On the unlock screen, click <b>Forgot PIN?</b>, then <b>Email reset code</b>.</li>
-      <li>The screen shows a <b>request ID</b>. Open the company inbox and find the email whose subject has the same request ID.</li>
-      <li>Type the <b>Reset code</b>, then the <b>New PIN</b> twice (<b>Confirm new PIN</b>).</li>
-      <li>Click <b>Set new PIN</b>. You see "Admin PIN updated. Unlock with the new PIN." Unlock with the new PIN.</li>
+      <li>On the unlock screen, click <b>Sign in with your Keystone account</b>.</li>
+      <li>Type your <b>Email</b> and <b>Password</b>, then click <b>Sign in</b>.</li>
+      <li>To go back to the card box, click <b>Back to admin card</b>.</li>
     </ol>
-    <p>Already have a code from earlier? Click <b>I already have a code</b>. Need another? Click <b>Send a new code</b> — earlier codes then stop working.</p>
-    <h3>Reset rules</h3>
-    <ul>
-      <li>A code works for <b>15 minutes</b> and allows <b>5</b> wrong tries.</li>
-      <li>Wait <b>1 minute</b> between requests. After <b>10</b> wrong codes in 24 hours, resets are blocked until the next day.</li>
-      <li>Admin RFID cards keep working throughout — the easiest way back in.</li>
-    </ul>
+    <h3>Forgot password?</h3>
+    <p>Type your email, then click <b>Forgot password?</b>. You see "If that address has a Keystone account, a reset email is on its way. Open it on any device, choose a new password, then sign in here." The computer needs internet for this.</p>
     <table>
       <tr><th style="width:45%">Message</th><th>What to do</th></tr>
-      <tr><td>"That code is incorrect. Check the email and try again."</td><td>Use the code from the email with the matching request ID.</td></tr>
-      <tr><td>"That code expired or was entered wrong too many times."</td><td>Click <b>Send a new code</b>.</td></tr>
-      <tr><td>"A code was requested less than a minute ago…"</td><td>Use the newest email, or wait one minute.</td></tr>
-      <tr><td>"The reset email could not be sent…"</td><td>Check the internet connection; try again.</td></tr>
-      <tr><td>"The new PIN must be 6 to 12 digits and cannot be a repeated or sequential number…"</td><td>Choose a less predictable PIN.</td></tr>
-      <tr><td>"Too many wrong codes today…"</td><td>Use an admin card, wait until tomorrow, or ask IT.</td></tr>
+      <tr><td>"The email or password is not right."</td><td>Check both and try again, or use <b>Forgot password?</b></td></tr>
+      <tr><td>"Type your email address first."</td><td>Fill in <b>Email</b> before clicking <b>Forgot password?</b></td></tr>
+      <tr><td>"This account is not an attendance admin. The CEO sets that in Keystone, under User Accounts."</td><td>Ask the CEO, or use an admin card.</td></tr>
+      <tr><td>"This account has been turned off. Ask the CEO."</td><td>Ask the CEO.</td></tr>
+      <tr><td>"There is no internet, and this account has not signed in on this kiosk in the last 7 days. Use an admin card, or try again when the internet is back."</td><td>Tap an admin card, or wait for the internet.</td></tr>
+      <tr><td>"Too many tries. Wait a few minutes and try again."</td><td>Wait, or tap an admin card.</td></tr>
       <tr><td>"Administrator access is turned off on this kiosk."</td><td>IT has disabled admin access in the settings file. Contact IT.</td></tr>
     </table>
   </div>
@@ -760,7 +744,7 @@
     </div>
     <ol class="steps">
       <li>On the kiosk, click <b>Admin setup</b> (or <b>Setup this card</b> after tapping an unknown card). The <b>Associate RFID card</b> window opens.</li>
-      <li><b>01 Unlock</b> — tap your admin card or type the PIN, then click <b>Unlock setup</b>.</li>
+      <li><b>01 Unlock</b> — tap your admin card, or click <b>Sign in with your Keystone account</b>.</li>
       <li><b>02 Scan card</b> — tap the intern's card on the reader. The window shows <b>New card</b> (blank profile) or <b>Existing card</b> (current details).</li>
       <li><b>03 Save user</b> — under <b>Register card as</b>, keep <b>Intern card</b> and fill in <b>User ID</b>, <b>Full name</b>, <b>Department / role</b>, <b>Status</b>, <b>Gender</b> and an optional <b>ID photo</b>.</li>
       <li>Click <b>Save user</b>. You see "Card enrolled successfully." Click <b>Scan another card</b> for the next person, or <b>Lock setup</b> when finished.</li>
@@ -1130,7 +1114,7 @@
       <li>On the <b>old</b> computer: Admin → Data and backup → <b>Create backup now</b>.</li>
       <li>Copy the <code>attendance-backup-*.apbackup</code> file to a USB drive.</li>
       <li>On the <b>new</b> computer: install the app (Chapter 2), then Admin → Data and backup → <b>Restore from backup file…</b> and pick the file.</li>
-      <li>The app restarts with all users, attendance, payroll and settings. Set a PIN again if needed — PINs are per computer — and test one card.</li>
+      <li>The app restarts with all users, attendance, payroll and settings. Test one card.</li>
     </ol>
     <div class="note warn"><b>Never copy the database by hand while the app is open</b>Always use Create backup / Restore.</div>
 
@@ -1246,7 +1230,7 @@
       <tr><td>Intern tapped out by mistake</td><td>The second tap is always a time-out.</td><td>Admin → Attendance corrections → clear <b>Time out</b> with × → <b>Save</b>.</td></tr>
       <tr><td>Forgot to tap out</td><td>Day stays WORKING.</td><td>Enter the real time-out in Attendance corrections and <b>Save</b>.</td></tr>
       <tr><td>Kiosk says "Gender is not set for this card"</td><td>The profile has no gender.</td><td>Edit the user and set <b>Gender</b>.</td></tr>
-      <tr><td>Can't unlock admin</td><td>Wrong or no PIN.</td><td>Tap an admin card, or use <b>Forgot PIN?</b> (Chapter 7).</td></tr>
+      <tr><td>Can't unlock admin</td><td>The card is not an admin card, or the account is not an attendance admin.</td><td>Tap an admin card, or sign in with your Keystone account (Chapter 7).</td></tr>
       <tr><td>Kicked out of admin</td><td>The 15-minute session ended.</td><td>Unlock again. Save your work before 15 minutes.</td></tr>
       <tr><td>"This record was changed by another update"</td><td>Someone saved the row first.</td><td>The list reloads; check the times and click <b>Save</b> again.</td></tr>
       <tr><td>Payroll is missing an intern</td><td>No completed day in the cutoff.</td><td>Fix that intern's attendance, then generate again.</td></tr>
@@ -1273,7 +1257,7 @@
 
     <h2 id="ch15-faq">Frequently asked questions</h2>
     <h3>Does the kiosk need internet?</h3>
-    <p>No. Taps, admin and payroll all work offline. Internet is only for updates, PIN-reset email, voice clip creation and Google Sheets.</p>
+    <p>No. Taps, admin and payroll all work offline. Internet is only for updates, signing in with a Keystone account, voice clip creation and Google Sheets.</p>
     <h3>What happens if the power goes out?</h3>
     <p>Every tap is saved the moment it is shown on screen. When the PC comes back, the app starts by itself (if automatic start is on).</p>
     <h3>Can two computers record attendance?</h3>
@@ -1312,7 +1296,7 @@
       <tr><td>Setup session expired. Unlock again to continue.</td><td>Unlock the Admin setup window again.</td></tr>
       <tr><td>That User ID or RFID card is already in use by another user.</td><td>Use a different ID, or edit the existing user.</td></tr>
       <tr><td>The User ID may only contain letters, numbers, dashes, underscores, and dots.</td><td>Remove spaces and other symbols.</td></tr>
-      <tr><td>The administrator PIN or admin RFID card is invalid.</td><td>Shown in the kiosk Admin setup window; retype the PIN or tap a registered admin card.</td></tr>
+      <tr><td>That is not a registered admin RFID card.</td><td>Shown on the unlock screens; tap a registered admin card or sign in with your Keystone account.</td></tr>
       <tr><td>The selected file is not a valid Alpha Premier attendance database.</td><td>Choose an <code>.apbackup</code> made by this app.</td></tr>
       <tr><td>This key is currently in use. Please return it before checking out again.</td><td>Return the key first.</td></tr>
       <tr><td>Time-out cannot precede time-in.</td><td>Check AM/PM and the order of times.</td></tr>
@@ -1404,7 +1388,7 @@
         <tr><td><b>Weekly</b></td><td>Data and backup → <b>Create backup now</b> → copy to USB.</td></tr>
         <tr><td><b>New intern</b></td><td>Kiosk → <b>Admin setup</b> → unlock → tap card → fill details incl. gender → <b>Save user</b>.</td></tr>
         <tr><td><b>Intern leaves</b></td><td>Users → <b>Edit</b> → Status <b>Inactive</b> → Save (don't delete).</td></tr>
-        <tr><td><b>Forgot PIN</b></td><td>Tap admin card, or <b>Forgot PIN?</b> → code from company inbox.</td></tr>
+        <tr><td><b>Can't unlock</b></td><td>Tap admin card, or <b>Sign in with your Keystone account</b>.</td></tr>
       </table>
     </div>
     <p class="small">Office hours 8:00 AM–5:00 PM · Lunch 12–1 unpaid · PHP 80/day · Late &amp; undertime PHP 10/hour · Half day PHP 40 · Admin session 15 min.</p>

@@ -1347,7 +1347,7 @@ mod tests {
         let db_path = temp.join("attendance.db");
         let exports_path = temp.join("exports");
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         let state = AppState::new(
             temp.clone(),
@@ -1532,7 +1532,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("alpha-admin-coalesce-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         lan.google_dtr_spreadsheet_id = Some("sheet-test".to_string());
         let state = AppState::new(
@@ -1655,7 +1655,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("alpha-admin-rollback-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         let state = AppState::new(
             temp.clone(),
@@ -1716,7 +1716,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("alpha-admin-tail-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         let state = AppState::new(
             temp.clone(),
@@ -1785,7 +1785,7 @@ mod tests {
         let db_path = temp.join("attendance.db");
         let exports_path = temp.join("exports");
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         lan.google_dtr_spreadsheet_id = Some("sheet-test".to_string());
         let state = AppState::new(
@@ -1905,7 +1905,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("alpha-admin-dtr-off-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
         let mut lan = LanConfig::default();
-        lan.admin_pin = Some("1234".to_string());
+        lan.admin_code = Some("1234".to_string());
         lan.admin_session_minutes = 30;
         let state = AppState::new(
             temp.clone(),

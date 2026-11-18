@@ -217,9 +217,9 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
   }
 }
 
-export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<SetupUnlockResponse | SetupErrorResponse> {
+export async function unlockSetup(cardOrCode: string, signal?: AbortSignal): Promise<SetupUnlockResponse | SetupErrorResponse> {
   try {
-    const response = await withAbort(signal, () => transport().setupUnlock(pin));
+    const response = await withAbort(signal, () => transport().setupUnlock(cardOrCode));
     if (!response.success) return response;
     adminSession.open(response.token, response.expiresAt);
     return { success: true, setupToken: response.token, expiresAt: response.expiresAt };
@@ -327,9 +327,9 @@ export async function openViewerUrl(url: string): Promise<boolean> {
   }
 }
 
-export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | Failure> {
+export async function unlockAdmin(cardOrCode: string): Promise<{ success: true; expiresAt: string } | Failure> {
   try {
-    const response = await transport().adminUnlock(pin);
+    const response = await transport().adminUnlock(cardOrCode);
     if (!response.success) return response;
     adminSession.open(response.token, response.expiresAt);
     return { success: true, expiresAt: response.expiresAt };

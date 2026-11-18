@@ -117,7 +117,7 @@ export function AdminPanel() {
   useScannerPause(unlocked);
   const office = useOfficeIdentity();
   const [sessionExpiresAt, setSessionExpiresAt] = useState("");
-  const [pin, setPin] = useState("");
+  const [cardOrCode, setCardOrCode] = useState("");
   const [error, setError] = useState("");
   const [adminMode, setAdminMode] = useState<"attendance" | "bathroom">("attendance");
   const [tab, setTab] = useState<AdminTab>("attendance");
@@ -180,7 +180,7 @@ export function AdminPanel() {
   // sliding) in the same frame as the click, even when the new page is a big one like Payroll.
   const shownTab = useDeferredValue(tab);
 
-  const unlockWithPinOrRfid = useCallback(
+  const unlockWithCardOrCode = useCallback(
     async (candidate: string) => {
       const trimmed = candidate.trim();
       if (!trimmed || busy) return;
@@ -194,7 +194,7 @@ export function AdminPanel() {
       }
       setUnlocked(true);
       setSessionExpiresAt(response.expiresAt);
-      setPin("");
+      setCardOrCode("");
       setError("");
     },
     [busy],
@@ -202,7 +202,7 @@ export function AdminPanel() {
 
   const unlock = async (event: React.FormEvent) => {
     event.preventDefault();
-    await unlockWithPinOrRfid(pin);
+    await unlockWithCardOrCode(cardOrCode);
   };
 
   useEffect(() => {
@@ -231,9 +231,9 @@ export function AdminPanel() {
   useEffect(() => {
     if (unlocked || !sessionChecked) return;
     return detachWhenDone(listenForGlobalRfid((scannedUid) => {
-      void unlockWithPinOrRfid(scannedUid);
+      void unlockWithCardOrCode(scannedUid);
     }));
-  }, [sessionChecked, unlocked, unlockWithPinOrRfid]);
+  }, [sessionChecked, unlocked, unlockWithCardOrCode]);
 
   const nukeSheets = async () => {
     setNukeConfirmOpen(false);
@@ -368,20 +368,20 @@ export function AdminPanel() {
       <main className="dashboard-shell admin-login admin-shell">
         <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
         <AdminUnlock
-          cardOrCode={pin}
-          onCardOrCodeChange={setPin}
+          cardOrCode={cardOrCode}
+          onCardOrCodeChange={setCardOrCode}
           busy={busy}
           onSubmit={unlock}
           withAccount={withAccount}
           onWithAccountChange={setWithAccount}
           onAccountStart={() => {
             setError("");
-            setPin("");
+            setCardOrCode("");
           }}
           onAccountUnlocked={(expiresAt) => {
             setUnlocked(true);
             setSessionExpiresAt(expiresAt);
-            setPin("");
+            setCardOrCode("");
             setError("");
           }}
           intro={

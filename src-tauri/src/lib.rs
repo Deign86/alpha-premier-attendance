@@ -252,9 +252,7 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             });
-            // Native scanner pipeline: global keyboard-wedge hook (default) or
-            // raw HID reader, normalized into `rfid-scan` events. The webview
-            // never needs a focused input for card taps.
+            // The reader's status for the screens; the webview reads the card keys itself.
             let scanner_handle = state.scanner.clone();
             app.manage(state);
             // Best-effort automatic database backup on clean exit. The backup

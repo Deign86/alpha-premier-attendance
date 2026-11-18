@@ -229,7 +229,7 @@ pub(crate) async fn scan_rfid_at(
     };
     // Each branch writes on its own transaction and hands it back: the sync
     // queue rows below commit with the attendance change (O4).
-    let (attendance_id, action, time_in, time_out, attendance_status, mut tx, pending) = match existing {
+    let (attendance_id, action, time_in, time_out, attendance_status, tx, pending) = match existing {
         None => {
             let id = uuid::Uuid::new_v4().to_string();
             let Ok(mut tx) = state.db.begin().await else {

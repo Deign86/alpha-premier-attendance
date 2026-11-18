@@ -122,18 +122,18 @@ export const httpApi: typeof tauriApi = {
     if (data && Object(data) === data && 'success' in data) return data;
     return { success: false, requestId: `client-${Date.now()}`, error: { code: 'INTERNAL_SERVER_ERROR', message: 'The attendance service returned an invalid response.' } };
   },
-  setupUnlock: async (pin) => {
-    const answer = await setupAsk<SetupUnlockResponse>('/api/setup/unlock', { method: 'POST', body: JSON.stringify({ pin }) });
+  setupUnlock: async (cardOrCode) => {
+    const answer = await setupAsk<SetupUnlockResponse>('/api/setup/unlock', { method: 'POST', body: JSON.stringify({ pin: cardOrCode }) });
     return answer.success ? { success: true, token: answer.setupToken, expiresAt: answer.expiresAt } : answer;
   },
   setupLock: async (setupToken) => {
     await setupAsk<{ success: true }>('/api/setup/lock', { method: 'POST', setupToken });
     return { success: true };
   },
-  adminUnlock: async (pin) => {
+  adminUnlock: async (cardOrCode) => {
     // Never rejects: callers hold a busy flag across this call.
     try {
-      const answer = await ask<{ success: true; expiresAt: string } | { success: false; error: { message: string } }>('/api/admin/unlock', sending('POST', { pin }));
+      const answer = await ask<{ success: true; expiresAt: string } | { success: false; error: { message: string } }>('/api/admin/unlock', sending('POST', { pin: cardOrCode }));
       return answer.success ? { success: true, token: '', expiresAt: answer.expiresAt } : answer;
     } catch {
       return { success: false, error: { message: 'Unable to reach the attendance service. Please try again.' } };
