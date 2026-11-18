@@ -209,6 +209,7 @@ describe('createAdminBackdatedAttendance', () => {
         attendanceDate: '2026-08-20',
         userId: 'u1',
         fullName: 'Alice Cooper',
+        department: null,
         timeIn: '2026-08-20T08:00:00+08:00',
         timeOut: '2026-08-20T17:00:00+08:00',
         status: 'COMPLETED',
@@ -349,11 +350,7 @@ describe('admin session lifecycle', () => {
       token: 'admin-uuid-token-1234',
       expiresAt,
     });
-    vi.spyOn(tauriApi, 'adminGetSession').mockResolvedValueOnce({
-      token: 'admin-uuid-token-1234',
-      expiresAt,
-      role: 'admin',
-    });
+    vi.spyOn(tauriApi, 'adminGetSession').mockResolvedValueOnce({ success: true });
     vi.spyOn(tauriApi, 'setupLock').mockResolvedValueOnce({ success: true });
 
     const unlockResult = await unlockAdmin('test-pin');

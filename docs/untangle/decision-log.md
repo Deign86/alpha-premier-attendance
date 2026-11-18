@@ -79,3 +79,23 @@ Branch `refactor/untangle` (from main at `f77212b`), local commits only. Problem
 
 - `admin_sync_now` and `admin_retry_sync_item` are gone. Nothing in the app, scripts or docs called them, but they were the only manual "drain the Sheets queue" and "re-arm a DEAD queue row" commands. If IT used them through the debug MCP bridge, say so and they come back.
 - The build cache: `src-tauri/target/debug/incremental` (4.9 GB of stale incremental data) was deleted to free disk for the test runs, and later runs used `CARGO_INCREMENTAL=0`. Nothing else in `target` was removed.
+
+---
+
+# Round 2, decision log
+
+Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner not consulted (asleep; instruction: finish without waiting). Problem IDs are from `problems.md`.
+
+## Fixes
+
+- **`http-api.ts`: the legacy server's HTTP calls behind the same interface as the desktop transport; `transport.ts` chooses once** (R5, adapter route)
+    - N9: `api.ts` had 59 `runningInTauri()` branches, each with a native call and a `fetch` or a "desktop only" stub. Every function now has one body over `transport()`. `server/` is untouched.
+    - H14 (second mapping): `loadConfig` mapped the config twice, once per transport.
+    - H53 (part): `runningInTauri` was defined four times; `api.ts` and the three services import the one in `transport.ts`.
+    - S35 (part): the third wrapping layer is thinner; most `api.ts` functions without their own error text are one line.
+    - `api.ts` went from 61 `// SAFETY` casts to 10 (4 more are in `http-api.ts`), and from 1,288 lines to 929: a response type is now stated once, on the transport member.
+- **`error-sentences.ts`: the one place an error code becomes a sentence** (R5)
+    - H17: seven tables (`setupErrorFrom`, `accountMessages`, `userSaveMessages`, `attendanceSaveMessages`, the backdate ternary, `fileActionError`, the ID register panel's `problemText`) plus the payroll PDF, payslip, restore and payroll-profile `if`s are one table, grouped by the screen that shows the sentence.
+    - H18: `ADMIN_AUTH_REQUIRED` still has its four sentences, one per screen, now side by side in that table. Not merged: merging changes what users read.
+    - X14: the reset command's `INVALID_ACCOUNT` re-wording is a table entry (`accountReset`).
+    - N11 (part): `id-register-panel.tsx` goes through `api.ts` (`idRegister`, `idRegisterProblem`).

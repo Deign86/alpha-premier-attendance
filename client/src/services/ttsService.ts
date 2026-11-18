@@ -34,6 +34,7 @@ export {
   setNameManifest,
   stopClonedBeaAudio,
 } from './clonedBeaVoice';
+import { runningInTauri } from '../transport';
 
 const TTS_STORAGE_KEY = 'alpha_premier_tts_settings';
 
@@ -72,8 +73,6 @@ export function normalizeVoiceStudioBaseUrl(raw: string | undefined): string {
 
 export type { VoiceStudioConnection } from '@rfid-attendance/shared';
 
-const runningInTauri = (): boolean =>
-  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 
 /** Probe `GET <base>/profiles` to verify a VoiceStudio host is reachable. */
 export async function checkVoiceStudioConnection(baseUrl: string, pin?: string): Promise<VoiceStudioConnection> {

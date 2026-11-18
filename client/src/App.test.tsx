@@ -2136,12 +2136,7 @@ describe('Admin Attendance Corrections', () => {
       token: 'test-admin-token',
       expiresAt: adminExpiresAt,
     });
-    vi.spyOn(tauriApi.tauriApi, 'adminGetSession').mockResolvedValue({
-      success: true,
-      token: 'test-admin-token',
-      expiresAt: adminExpiresAt,
-      role: 'admin',
-    });
+    vi.spyOn(tauriApi.tauriApi, 'adminGetSession').mockResolvedValue({ success: true });
     vi.spyOn(tauriApi.tauriApi, 'adminUsers').mockResolvedValue({
       success: true,
       users: [

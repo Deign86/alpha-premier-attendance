@@ -1,5 +1,6 @@
 import { check, type CheckOptions, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { runningInTauri } from '../transport';
 
 export const TERMINAL_DISABLE_AUTO_UPDATE_KEY = 'alpha_premier_terminal_disable_auto_update';
 
@@ -102,8 +103,6 @@ export function setAutoUpdateDisabledLocally(disabled: boolean): void {
   }
 }
 
-const runningInTauri = () =>
-  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 
 /**
  * Check for updates from GitHub Releases via the Tauri v2 updater plugin.

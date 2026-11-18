@@ -2585,3 +2585,11 @@ OWNS: `src-tauri/src/services/{firebase,settings,unlock_guard,users}.rs`, the th
 - [x] U5: The three path tests that failed only on Linux test the same behaviour on every OS, with the same assertions and no production change; one test that could not fail is gone.
   CHECK: `cd src-tauri && cargo test --no-fail-fast`; `cd client && npm test && npm run typecheck && npm run lint`
   EVIDENCE: lib 425 passed, 0 failed (the outside paths are built from the temp folder; `D:/…` and `C:/…` are absolute only on Windows); integration 18/75/36/58/24/3; client 620 passed in 25 files (`vite-config.test.ts` asserted that a constant has a string field), typecheck and lint clean (2026-11-18). The desktop app was not run.
+
+## Untangle, round 2 (structural refactor, 2026-11-18)
+
+OWNS: `client/src` (transport, error sentences, the `App.tsx` split), `src-tauri/src/lib.rs` and the `commands/` tree made from it, `docs/untangle/decision-log.md`. Behaviour stays the same except the one display change of step 2, which the decision log names with an example row. Commits are local; nothing is pushed.
+
+- [x] V1 (R5): every `fetch` to the legacy Node server is in `client/src/http-api.ts`, which has the same members as the desktop transport; `transport.ts` picks one of the two; each `api.ts` function has one body; error codes become sentences in `error-sentences.ts` only.
+  CHECK: `grep -c "fetch(" client/src/api.ts` prints 0; `grep -c "runningInTauri()" client/src/api.ts` prints 1 (`photoSource`, which converts a file path and asks no backend); `npm run lint && npm run typecheck && npm test`
+  EVIDENCE: 0 and 1; shared 41, client 620 in 25 files, server 208 passed; lint and typecheck clean (2026-11-18). The desktop app was not run.

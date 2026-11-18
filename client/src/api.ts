@@ -7,6 +7,7 @@ import type {
   BathroomUpdateRequest,
   DatabaseBackupResponse,
   DatabaseInfoResponse,
+  IdRegisterStatus,
   InternPayslipImage,
   InternPayslipSaveResponse,
   LanStatusResponse,
@@ -15,7 +16,6 @@ import type {
   ScanErrorResponse,
   ScanRequest,
   ScanResponse,
-  SetupErrorCode,
   SetupErrorResponse,
   SetupLookupResponse,
   SetupUnlockResponse,
@@ -37,15 +37,28 @@ import type {
 } from '@rfid-attendance/shared';
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
+import { errorCode, knownSentence, sentenceFor, setupErrorFrom } from './error-sentences';
+import { withAbort } from './http-api';
 import { renderInternPayslipPng } from './intern-payslip-image';
-import { tauriApi } from './tauri-api';
+import { runningInTauri, transport } from './transport';
 import type { ManualSyncReport, NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
 
+export { setupErrorFrom } from './error-sentences';
+
+type Failure = { success: false; error: { message: string } };
+const failure = (message: string): Failure => ({ success: false, error: { message } });
+
+let adminToken: string | null = null;
+let adminExpiresAt: string | null = null;
+/** The admin session token for admin-only commands (empty when locked). */
+export function nativeAdminSessionToken(): string {
+  return adminToken ?? '';
+}
+
 export async function loadVoiceClipStates(): Promise<VoiceClipState[]> {
-  if (!runningInTauri()) return [];
   try {
-    const states = await tauriApi.voiceClipStates();
+    const states = await transport().voiceClipStates();
     return Array.isArray(states) ? states : [];
   } catch {
     return [];
@@ -53,21 +66,19 @@ export async function loadVoiceClipStates(): Promise<VoiceClipState[]> {
 }
 
 export async function loadVoiceWorkerStatus(): Promise<VoiceWorkerStatus | null> {
-  if (!runningInTauri()) return null;
   try {
-    return await tauriApi.voiceWorkerStatus();
+    return await transport().voiceWorkerStatus();
   } catch {
     return null;
   }
 }
 
 export async function regenerateVoiceClip(personId: string): Promise<{ ok: boolean; spokenText?: string; error?: string }> {
-  if (!runningInTauri()) return { ok: false, error: 'Voice regeneration needs the desktop app.' };
   try {
-    const spokenText = await tauriApi.voiceRegenerate(nativeAdminToken ?? '', personId);
+    const spokenText = await transport().voiceRegenerate(nativeAdminSessionToken(), personId);
     return { ok: true, spokenText };
   } catch (error) {
-    return { ok: false, error: errorString(error) || 'Voice regeneration failed.' };
+    return { ok: false, error: errorCode(error) || 'Voice regeneration failed.' };
   }
 }
 
@@ -114,7 +125,6 @@ export async function pollVoiceClipReady(personId: string, options: VoiceRegenPo
   }
   return 'timeout';
 }
-import { apiUrl } from './network';
 
 export async function pickRestoreBackupFile(): Promise<string | null> {
   const selected = await openFileDialog({
@@ -127,25 +137,6 @@ export async function pickRestoreBackupFile(): Promise<string | null> {
     return selected as string;
   }
   return null;
-}
-
-const runningInTauri = () => globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
-let nativeAdminToken: string | null = null;
-/** The desktop admin session token for native admin-only commands (empty when locked). */
-export function nativeAdminSessionToken(): string {
-  return nativeAdminToken ?? '';
-}
-let nativeAdminExpiresAt: string | null = null;
-
-function errorString<T>(error: T): string {
-  if (error && Object.prototype.toString.call(error) === '[object String]') {
-    // SAFETY: Verified error is a string
-    return error as string;
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return '';
 }
 
 export function photoSource(photoUrl: string | null | undefined): string | undefined {
@@ -174,39 +165,6 @@ export const DEFAULT_CONFIG: Omit<SafeConfigResponse, 'success'> = {
   scanner: { mode: 'keyboard', paused: false, expectedLength: 10, characterSet: 'decimal' },
 };
 
-/**
- * Tauri command errors arrive as the `Err(String)` value (e.g. "SETUP_AUTH_REQUIRED").
- * Map them to a readable setup error instead of masking every failure as an
- * authentication problem — otherwise a user whose session simply expired sees
- * the misleading "Setup authentication is required" with all fields filled.
- */
-export function setupErrorFrom<T>(error: T, fallback: SetupErrorCode): SetupErrorResponse {
-  const raw = errorString(error);
-  switch (raw) {
-    case 'SETUP_AUTH_REQUIRED':
-      return { success: false, error: { code: 'SETUP_AUTH_REQUIRED', message: 'Your setup session expired or was replaced (e.g. by unlocking the Admin panel). Unlock setup again to continue.' } };
-    case 'SETUP_SESSION_EXPIRED':
-      return { success: false, error: { code: 'SETUP_SESSION_EXPIRED', message: 'Your setup session expired. Unlock setup again to continue.' } };
-    case 'INVALID_SETUP_PIN':
-    case 'INVALID_ADMIN_PIN':
-      return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'That is not a registered admin RFID card.' } };
-    case 'ADMIN_DISABLED':
-    case 'SETUP_DISABLED':
-      return { success: false, error: { code: 'SETUP_DISABLED', message: 'Admin setup is disabled in the configuration.' } };
-    case 'ADMIN_PIN_LOCKED':
-      return { success: false, error: { code: 'ADMIN_PIN_LOCKED', message: accountMessages.ADMIN_PIN_LOCKED } };
-    case 'SETUP_VALIDATION_ERROR':
-      return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'Some form fields are missing or invalid.' } };
-    case 'USER_CONFLICT':
-      return { success: false, error: { code: 'USER_CONFLICT', message: 'That User ID or RFID card is already in use by another user.' } };
-    case 'INVALID_USER_ID':
-      return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'The User ID may only contain letters, numbers, dashes, underscores, and dots.' } };
-    default:
-      // Unknown backend error: surface the real message so the true cause is visible.
-      return { success: false, error: { code: fallback, message: raw || 'The setup request could not be completed.' } };
-  }
-}
-
 /** Merge a partial office payload from the backend with canonical defaults. */
 export function normalizeOffice(office: Partial<OfficeIdentity> | undefined): OfficeIdentity {
   const merged = { ...DEFAULT_OFFICE_IDENTITY, ...office };
@@ -220,23 +178,8 @@ export function normalizeOffice(office: Partial<OfficeIdentity> | undefined): Of
 
 export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigResponse, 'success'>> {
   try {
-    if (runningInTauri()) {
-      const data = await tauriApi.getConfig();
-      return {
-        timezone: data.timezone || DEFAULT_CONFIG.timezone,
-        rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs),
-        resultResetDelayMs: positiveNumber(data.resultResetDelayMs, DEFAULT_CONFIG.resultResetDelayMs),
-        enableCardSetup: data.enableCardSetup ?? DEFAULT_CONFIG.enableCardSetup,
-        enableAdmin: data.enableAdmin ?? DEFAULT_CONFIG.enableAdmin,
-        // SAFETY: Casting data.office to partial OfficeIdentity
-        office: normalizeOffice(data.office as Partial<OfficeIdentity> | undefined),
-        scanner: data.scanner ?? DEFAULT_CONFIG.scanner,
-      };
-    }
-    const response = await fetch(apiUrl('/api/config'), { signal });
-    if (!response.ok) return DEFAULT_CONFIG;
-    // SAFETY: Parsing response as SafeConfigResponse partial
-    const data = (await response.json()) as Partial<SafeConfigResponse>;
+    // SAFETY: Either backend may leave fields out; every one is filled from the defaults below
+    const data = (await withAbort(signal, () => transport().getConfig())) as Partial<SafeConfigResponse>;
     return {
       timezone: data.timezone || DEFAULT_CONFIG.timezone,
       rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs),
@@ -261,20 +204,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
   const timer = setTimeout(() => limit.abort(), SCAN_TIMEOUT_MS);
   signal?.addEventListener('abort', () => limit.abort(), { once: true });
   try {
-    const scanRequest = runningInTauri()
-      ? tauriApi.scanRfid(request)
-      : fetch(apiUrl('/api/attendance/scan'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-      signal: limit.signal,
-    }).then(async (response) => {
-      // SAFETY: Parsing scan response JSON
-      const data = (await response.json()) as ScanResponse;
-      if (data && Object(data) === data && 'success' in data) return data;
-      return networkError('The attendance service returned an invalid response.');
-    });
-    return await scanRequest;
+    return await withAbort(limit.signal, () => transport().scanRfid(request));
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
     // A timeout is an unreachable service too.
@@ -291,79 +221,55 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
 }
 
 export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<SetupUnlockResponse | SetupErrorResponse> {
-  if (runningInTauri()) { try { const response = await tauriApi.setupUnlock(pin); nativeAdminToken = response.token; nativeAdminExpiresAt = response.expiresAt; return { success: true, setupToken: response.token, expiresAt: response.expiresAt }; } catch (error) { return setupErrorFrom(error, 'INVALID_SETUP_PIN'); } }
-  return setupRequest<SetupUnlockResponse | SetupErrorResponse>(apiUrl('/api/setup/unlock'), {
-    method: 'POST',
-    body: JSON.stringify({ pin }),
-    signal,
-  });
+  try {
+    const response = await withAbort(signal, () => transport().setupUnlock(pin));
+    if (!response.success) return response;
+    adminToken = response.token;
+    adminExpiresAt = response.expiresAt;
+    return { success: true, setupToken: response.token, expiresAt: response.expiresAt };
+  } catch (error) {
+    return setupErrorFrom(error, 'INVALID_SETUP_PIN');
+  }
 }
 
 export async function lookupSetupCard(rfidUid: string, setupToken: string, signal?: AbortSignal): Promise<SetupLookupResponse | SetupErrorResponse> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend setup lookup command returns SetupLookupResponse
-      return (await tauriApi.setupLookupCard(setupToken, rfidUid)) as SetupLookupResponse;
-    } catch (error) {
-      return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
-    }
+  try {
+    return await withAbort(signal, () => transport().setupLookupCard(setupToken, rfidUid));
+  } catch (error) {
+    return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
   }
-  return setupRequest<SetupLookupResponse | SetupErrorResponse>(apiUrl(`/api/setup/card?rfidUid=${encodeURIComponent(rfidUid)}`), {
-    method: 'GET',
-    setupToken,
-    signal,
-  });
 }
 
 export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: string, signal?: AbortSignal): Promise<SetupUpsertResponse | SetupErrorResponse> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend setup upsert user returns SetupUpsertResponse
-      return (await tauriApi.setupUpsertUser(setupToken, request)) as SetupUpsertResponse;
-    } catch (error) {
-      return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
-    }
+  try {
+    return await withAbort(signal, () => transport().setupUpsertUser(setupToken, request));
+  } catch (error) {
+    return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
   }
-  return setupRequest<SetupUpsertResponse | SetupErrorResponse>(apiUrl('/api/setup/users'), {
-    method: 'POST',
-    setupToken,
-    body: JSON.stringify(request),
-    signal,
-  });
 }
 
 export async function lockSetup(setupToken: string, signal?: AbortSignal): Promise<void> {
-  if (runningInTauri()) { nativeAdminToken = null; await tauriApi.setupLock(); return; }
-  await setupRequest<{ success: true }>(apiUrl('/api/setup/lock'), { method: 'POST', setupToken, signal });
+  adminToken = null;
+  await withAbort(signal, () => transport().setupLock(setupToken));
 }
 
 export async function uploadSetupPhoto(userId: string, dataUrl: string, setupToken: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
-  if (runningInTauri()) { try { return await tauriApi.uploadPhoto(setupToken, userId, dataUrl); } catch (error) { return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED'); } }
-  return setupRequest<{ success: true; photoUrl: string }>(apiUrl('/api/setup/photo'), { method: 'POST', setupToken, body: JSON.stringify({ userId, dataUrl }) });
-}
-
-export async function uploadAdminPhoto(userId: string, dataUrl: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.uploadPhoto(nativeAdminToken ?? '', userId, dataUrl);
-    } catch (error) {
-      return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
-    }
+  try {
+    return await transport().uploadPhoto(setupToken, userId, dataUrl);
+  } catch (error) {
+    return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
   }
-  return uploadSetupPhoto(userId, dataUrl, nativeAdminToken ?? '');
 }
 
-export async function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend attendance returns AttendanceListResponse
-    return (await tauriApi.getAttendance(date)) as AttendanceListResponse;
-  }
-  const response = await fetch(apiUrl(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`), { signal });
-  // SAFETY: Parsing response as AttendanceListResponse
-  return (await response.json()) as AttendanceListResponse;
+export function uploadAdminPhoto(userId: string, dataUrl: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
+  return uploadSetupPhoto(userId, dataUrl, nativeAdminSessionToken());
 }
 
-/** LAN viewer status used when the desktop bridge is unavailable (web mode). */
+export function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
+  return withAbort(signal, () => transport().getAttendance(date));
+}
+
+/** LAN viewer status used when the viewer cannot be asked. */
 function lanUnavailableStatus(message: string): LanStatusResponse {
   return {
     success: false,
@@ -392,81 +298,63 @@ function lanUnavailableStatus(message: string): LanStatusResponse {
   };
 }
 
-/** Desktop-only: start (or verify) the LAN live attendance viewer. */
-export async function startLanViewer(): Promise<LanStatusResponse> {
-  if (runningInTauri()) { try { return await tauriApi.lanStart(); } catch { return lanUnavailableStatus('Unable to reach the LAN viewer service.'); } }
-  return lanUnavailableStatus('The LAN viewer is available in the desktop application.');
-}
-
-/** Desktop-only: read the current LAN viewer status for the Live Attendance panel. */
-export async function getLanStatus(): Promise<LanStatusResponse> {
-  if (runningInTauri()) { try { return await tauriApi.lanStatus(); } catch { return lanUnavailableStatus('Unable to reach the LAN viewer service.'); } }
-  return lanUnavailableStatus('The LAN viewer is available in the desktop application.');
-}
-
-/** Desktop-only: stop the LAN viewer (attendance recording on this laptop is unaffected). */
-export async function stopLanViewer(): Promise<LanStatusResponse> {
-  if (runningInTauri()) { try { return await tauriApi.lanStop(); } catch { return lanUnavailableStatus('Unable to reach the LAN viewer service.'); } }
-  return lanUnavailableStatus('The LAN viewer is available in the desktop application.');
-}
-
-/** Open the viewer URL in the system default browser (web fallback: new tab). */
-export async function openViewerUrl(url: string): Promise<boolean> {
-  if (runningInTauri()) { try { await tauriApi.openViewerUrl(url); return true; } catch { return false; } }
-  try { window.open(url, '_blank'); return true; } catch { return false; }
-}
-
-export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | { success: false; error: { message: string } }> {
-  if (runningInTauri()) {
-    try {
-      const response = await tauriApi.setupUnlock(pin);
-      nativeAdminToken = response.token;
-      nativeAdminExpiresAt = response.expiresAt;
-      return { success: true, expiresAt: response.expiresAt };
-    } catch (error) {
-      const code = errorString(error);
-      const message = code === 'ADMIN_DISABLED' || code === 'ADMIN_PIN_LOCKED' ? accountMessages[code] : 'That is not a registered admin RFID card.';
-      return { success: false, error: { message } };
-    }
-  }
-  // Never throws: callers hold a busy flag across this call.
+async function lanAsk(ask: () => Promise<LanStatusResponse>): Promise<LanStatusResponse> {
   try {
-    const response = await fetch(apiUrl('/api/admin/unlock'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
-    // SAFETY: Parsing admin unlock response JSON
-    return (await response.json()) as { success: true; expiresAt: string } | { success: false; error: { message: string } };
-  } catch {
-    return { success: false, error: { message: 'Unable to reach the attendance service. Please try again.' } };
+    return await ask();
+  } catch (error) {
+    return lanUnavailableStatus(sentenceFor(null, error, () => 'Unable to reach the LAN viewer service.'));
   }
 }
 
-/** What the account sign-in says for each refusal the desktop app gives (src-tauri/src/services/admin_account.rs). */
-const accountMessages = {
-  ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
-  ADMIN_PIN_LOCKED: 'Too many wrong tries. Typing is paused for 5 minutes; tapping an admin card still works.',
-  ACCOUNT_SIGN_IN_UNAVAILABLE: 'Account sign-in is not set up in this app build. Use an admin card, or contact IT.',
-  INVALID_ACCOUNT: 'The email or password is not right.',
-  ACCOUNT_TURNED_OFF: 'This account has been turned off. Ask the CEO.',
-  NOT_ATTENDANCE_ADMIN: 'This account is not an attendance admin. The CEO sets that in Keystone, under User Accounts.',
-  ACCOUNT_NEEDS_INTERNET: 'There is no internet, and this account has not signed in on this kiosk in the last 7 days. Use an admin card, or try again when the internet is back.',
-  ACCOUNT_TRY_LATER: 'Too many tries. Wait a few minutes and try again.',
-};
+/** Start (or verify) the LAN live attendance viewer. */
+export function startLanViewer(): Promise<LanStatusResponse> {
+  return lanAsk(() => transport().lanStart());
+}
 
-type AccountFailure = { success: false; error: { message: string } };
-const DESKTOP_ONLY_ACCOUNT: AccountFailure = { success: false, error: { message: 'Signing in with an account is only available in the desktop app.' } };
+/** Read the current LAN viewer status for the Live Attendance panel. */
+export function getLanStatus(): Promise<LanStatusResponse> {
+  return lanAsk(() => transport().lanStatus());
+}
+
+/** Stop the LAN viewer (attendance recording on this laptop is unaffected). */
+export function stopLanViewer(): Promise<LanStatusResponse> {
+  return lanAsk(() => transport().lanStop());
+}
+
+/** Open the viewer URL in the system default browser (in a browser tab: a new tab). */
+export async function openViewerUrl(url: string): Promise<boolean> {
+  try {
+    await transport().openViewerUrl(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function unlockAdmin(pin: string): Promise<{ success: true; expiresAt: string } | Failure> {
+  try {
+    const response = await transport().adminUnlock(pin);
+    if (!response.success) return response;
+    adminToken = response.token;
+    adminExpiresAt = response.expiresAt;
+    return { success: true, expiresAt: response.expiresAt };
+  } catch (error) {
+    return failure(sentenceFor('unlock', error, () => 'That is not a registered admin RFID card.'));
+  }
+}
+
+type AccountFailure = Failure;
 
 function accountError<T>(error: T): AccountFailure {
-  const code = errorString(error);
-  const known = Object.entries(accountMessages).find(([key]) => key === code);
-  return { success: false, error: { message: known ? known[1] : code || 'The sign-in could not be completed.' } };
+  return failure(sentenceFor('account', error, (code) => code || 'The sign-in could not be completed.'));
 }
 
 /** Opens the admin screens with the person's own Keystone account (the CEO, or staff the CEO made an attendance admin). */
 export async function unlockAdminWithAccount(email: string, password: string): Promise<{ success: true; expiresAt: string; token: string; name: string } | AccountFailure> {
-  if (!runningInTauri()) return DESKTOP_ONLY_ACCOUNT;
   try {
-    const response = await tauriApi.adminAccountUnlock(email, password);
-    nativeAdminToken = response.token;
-    nativeAdminExpiresAt = response.expiresAt;
+    const response = await transport().adminAccountUnlock(email, password);
+    adminToken = response.token;
+    adminExpiresAt = response.expiresAt;
     return { success: true, expiresAt: response.expiresAt, token: response.token, name: response.name };
   } catch (error) {
     return accountError(error);
@@ -475,321 +363,168 @@ export async function unlockAdminWithAccount(email: string, password: string): P
 
 /** Forgot password: Firebase emails the reset link, if the address has an account. */
 export async function requestAccountPasswordReset(email: string): Promise<{ success: true } | AccountFailure> {
-  if (!runningInTauri()) return DESKTOP_ONLY_ACCOUNT;
   try {
-    await tauriApi.adminAccountReset(email);
+    await transport().adminAccountReset(email);
     return { success: true };
   } catch (error) {
-    const failure = accountError(error);
-    return errorString(error) === 'INVALID_ACCOUNT' ? { success: false, error: { message: 'Type your email address first.' } } : failure;
+    const blank = knownSentence('accountReset', errorCode(error));
+    return blank ? failure(blank.message) : accountError(error);
   }
 }
 
 export async function lockAdmin(): Promise<void> {
-  if (runningInTauri()) {
-    nativeAdminToken = null;
-    nativeAdminExpiresAt = null;
-    await tauriApi.setupLock();
-    return;
-  }
-  await fetch(apiUrl('/api/admin/lock'), { method: 'POST' });
+  adminToken = null;
+  adminExpiresAt = null;
+  await transport().adminLock();
 }
 
 export async function checkAdminSession(): Promise<string | null> {
-  if (runningInTauri()) {
-    if (!nativeAdminToken) return null;
-    try {
-      await tauriApi.adminGetSession(nativeAdminToken);
-      return nativeAdminExpiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    } catch {
-      nativeAdminToken = null;
-      nativeAdminExpiresAt = null;
-      return null;
-    }
-  }
   try {
-    const response = await fetch(apiUrl('/api/admin/session'));
-    if (!response.ok) return null;
-    // SAFETY: Parsing admin session check JSON
-    const data = (await response.json()) as { expiresAt?: string };
-    return data.expiresAt ?? null;
-  } catch { return null; }
-}
-export async function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend admin users returns AdminUsersResponse
-    return (await tauriApi.adminUsers(nativeAdminToken ?? '')) as AdminUsersResponse;
+    const session = await transport().adminGetSession(nativeAdminSessionToken());
+    return session.expiresAt ?? adminExpiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  } catch {
+    adminToken = null;
+    adminExpiresAt = null;
+    return null;
   }
-  // SAFETY: Parsing admin users response JSON
-  return (await fetch(apiUrl('/api/admin/users'), { signal })).json() as Promise<AdminUsersResponse>;
 }
-export async function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend admin attendance returns AdminAttendanceResponse
-    return (await tauriApi.adminAttendance(nativeAdminToken ?? '', date)) as AdminAttendanceResponse;
-  }
-  // SAFETY: Parsing admin attendance response JSON
-  return (await fetch(apiUrl(`/api/admin/attendance?date=${encodeURIComponent(date)}`), { signal })).json() as Promise<AdminAttendanceResponse>;
+export function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> {
+  return withAbort(signal, () => transport().adminUsers(nativeAdminSessionToken()));
 }
-const userSaveMessages = {
-  USER_HAS_OPEN_DAY: 'This person is still timed in today. Time them out (or correct the day) before deactivating.',
-  USER_HOLDS_BATHROOM_KEY: 'This person still has a bathroom key. Return it before deactivating.',
-};
+export function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> {
+  return withAbort(signal, () => transport().adminAttendance(nativeAdminSessionToken(), date));
+}
 
 export async function saveAdminUser<T extends object>(user: T, userId?: string): Promise<{ success: boolean; error?: { message?: string } }> {
-  if (runningInTauri()) {
-    const payload = Object.assign({}, user, userId ? { userId } : undefined);
-    try {
-      // SAFETY: Backend admin upsert user returns success response
-      return (await tauriApi.adminUpsertUser(nativeAdminToken ?? '', payload)) as { success: boolean; error?: { message?: string } };
-    } catch (err) {
-      const raw = errorString(err);
-      const known = Object.entries(userSaveMessages).find(([key]) => key === raw);
-      if (!known) throw err;
-      return { success: false, error: { message: known[1] } };
-    }
+  const payload = Object.assign({}, user, userId ? { userId } : undefined);
+  try {
+    return await transport().adminUpsertUser(nativeAdminSessionToken(), payload, userId);
+  } catch (err) {
+    const known = knownSentence('userSave', errorCode(err));
+    if (!known) throw err;
+    return failure(known.message);
   }
-  const url = userId ? `/api/admin/users/${encodeURIComponent(userId)}` : '/api/admin/users';
-  const response = await fetch(apiUrl(url), { method: userId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user) });
-  // SAFETY: Parsing admin user save response JSON
-  return (await response.json()) as { success: boolean; error?: { message?: string } };
 }
-const attendanceSaveMessages = {
-  ATTENDANCE_CONFLICT: 'This record was changed by another update. The list was reloaded — check the times and save again.',
-  ATTENDANCE_NOT_FOUND: 'This attendance record no longer exists. The list was reloaded.',
-  ADMIN_VALIDATION_ERROR: 'The date or time is not valid. Check the times and try again.',
-  ADMIN_AUTH_REQUIRED: 'Administrator session expired. Unlock admin to continue.',
-  ATTENDANCE_IN_FINALIZED_CUTOFF: 'This day is in a finalized payroll cutoff, so it can\'t be changed.',
-  ATTENDANCE_TIME_IN_REQUIRED: 'A record needs a time-in. To remove the day, delete the record instead.',
-};
 
 export async function saveAdminAttendance<T extends object>(attendanceId: string, payload: T): Promise<{ success: boolean; error?: { code?: string; message?: string } }> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend update attendance returns success response
-      return (await tauriApi.adminUpdateAttendance(nativeAdminToken ?? '', attendanceId, payload)) as { success: boolean; error?: { message?: string } };
-    } catch (err) {
-      const raw = errorString(err);
-      const known = Object.entries(attendanceSaveMessages).find(([key]) => key === raw);
-      return { success: false, error: known ? { code: known[0], message: known[1] } : { message: raw || 'Unable to save attendance.' } };
-    }
+  try {
+    return await transport().adminUpdateAttendance(nativeAdminSessionToken(), attendanceId, payload);
+  } catch (err) {
+    const raw = errorCode(err);
+    return { success: false, error: knownSentence('attendance', raw) ?? { message: raw || 'Unable to save attendance.' } };
   }
-  const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  // SAFETY: Parsing admin attendance save response JSON
-  return (await response.json()) as { success: boolean; error?: { message?: string } };
 }
 export async function createAdminBackdatedAttendance<T extends object>(payload: T): Promise<{ success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } }> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend create backdated attendance returns success and record
-      return (await tauriApi.adminCreateBackdatedAttendance(nativeAdminToken ?? '', payload)) as { success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } };
-    } catch (err: unknown) {
-      const raw = errorString(err);
-      const msg = raw || 'Failed to add backdated attendance';
-      const friendlyMessage =
-        msg === 'ATTENDANCE_ALREADY_EXISTS_FOR_DATE'
-          ? 'An attendance record already exists for this employee on this date. Use attendance correction instead.'
-          : msg === 'BACKDATE_LIMIT_EXCEEDED'
-            ? 'Cannot add backdated attendance: date falls within a finalized payroll cutoff.'
-            : msg === 'ADMIN_VALIDATION_ERROR'
-              ? 'Please check the employee, date, time, and reason fields.'
-              : msg === 'ADMIN_AUTH_REQUIRED'
-                ? 'Administrator authentication required.'
-                : msg === 'INACTIVE_USER'
-                  ? 'Cannot create attendance for an inactive user.'
-                  : msg === 'ADMIN_CARD_REQUIRES_SELECTION' || msg === 'ADMIN_CARD_NOT_ALLOWED'
-                    ? 'Cannot create attendance for an Admin RFID card.'
-                    : msg;
-      return { success: false, error: { code: raw || undefined, message: friendlyMessage } };
-    }
+  try {
+    return await transport().adminCreateBackdatedAttendance(nativeAdminSessionToken(), payload);
+  } catch (err: unknown) {
+    const raw = errorCode(err);
+    const message = knownSentence('backdate', raw)?.message ?? (raw || 'Failed to add backdated attendance');
+    return { success: false, error: { code: raw || undefined, message } };
   }
-  const response = await fetch(apiUrl('/api/admin/attendance/backdate'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  // SAFETY: Parsing admin backdate attendance response JSON
-  return (await response.json()) as { success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } };
 }
-export async function deleteAdminUser(userId: string): Promise<{ success: boolean; error?: { message?: string } }> {
-  if (runningInTauri()) {
-    // SAFETY: Backend delete user returns success response
-    return (await tauriApi.adminDeleteUser(nativeAdminToken ?? '', userId)) as { success: boolean; error?: { message?: string } };
-  }
-  const response = await fetch(apiUrl(`/api/admin/users/${encodeURIComponent(userId)}`), { method: 'DELETE' });
-  // SAFETY: Parsing admin delete user response JSON
-  return (await response.json()) as { success: boolean; error?: { message?: string } };
+export function deleteAdminUser(userId: string): Promise<{ success: boolean; error?: { message?: string } }> {
+  return transport().adminDeleteUser(nativeAdminSessionToken(), userId);
 }
 export async function deleteAdminAttendance(attendanceId: string, date: string): Promise<{ success: boolean; error?: { message?: string } }> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend delete attendance returns success response
-      return (await tauriApi.adminDeleteAttendance(nativeAdminToken ?? '', attendanceId, date)) as { success: boolean; error?: { message?: string } };
-    } catch (err) {
-      const raw = errorString(err);
-      const known = Object.entries(attendanceSaveMessages).find(([key]) => key === raw);
-      return { success: false, error: { message: known ? known[1] : raw || 'Unable to delete record.' } };
-    }
+  try {
+    return await transport().adminDeleteAttendance(nativeAdminSessionToken(), attendanceId, date);
+  } catch (err) {
+    return failure(sentenceFor('attendance', err, (code) => code || 'Unable to delete record.'));
   }
-  const response = await fetch(apiUrl(`/api/admin/attendance/${encodeURIComponent(attendanceId)}?date=${encodeURIComponent(date)}`), { method: 'DELETE' });
-  // SAFETY: Parsing admin delete attendance response JSON
-  return (await response.json()) as { success: boolean; error?: { message?: string } };
 }
-export async function loadPayrollProfiles(): Promise<PayrollProfilesResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend list profiles returns PayrollProfilesResponse
-    return (await tauriApi.payrollProfiles(nativeAdminToken ?? '')) as PayrollProfilesResponse;
-  }
-  // SAFETY: Parsing admin payroll profiles JSON
-  return (await fetch(apiUrl('/api/admin/payroll/profiles'))).json() as Promise<PayrollProfilesResponse>;
+export function loadPayrollProfiles(): Promise<PayrollProfilesResponse> {
+  return transport().payrollProfiles(nativeAdminSessionToken());
 }
-export async function savePayrollProfile(profile: PayrollCalculationProfile): Promise<{ success: boolean }> {
-  if (runningInTauri()) {
-    // SAFETY: Backend save profile returns success response
-    return (await tauriApi.payrollUpsertProfile(nativeAdminToken ?? '', profile)) as { success: boolean };
-  }
-  const response = await fetch(apiUrl(`/api/admin/payroll/profiles/${encodeURIComponent(profile.profileId)}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) });
-  // SAFETY: Parsing admin save profile response JSON
-  return (await response.json()) as { success: boolean };
+export function savePayrollProfile(profile: PayrollCalculationProfile): Promise<{ success: boolean }> {
+  return transport().payrollUpsertProfile(nativeAdminSessionToken(), profile);
 }
 export async function deletePayrollProfile(profileId: string): Promise<{ success: boolean; error?: { message?: string } }> {
   try {
-    if (runningInTauri()) {
-      // SAFETY: Backend delete profile returns a success response.
-      return await tauriApi.payrollDeleteProfile(nativeAdminToken ?? '', profileId);
-    }
-    const response = await fetch(apiUrl(`/api/admin/payroll/profiles/${encodeURIComponent(profileId)}`), { method: 'DELETE' });
-    // SAFETY: Parsing admin delete profile response JSON.
-    return (await response.json()) as { success: boolean; error?: { message?: string } };
+    return await transport().payrollDeleteProfile(nativeAdminSessionToken(), profileId);
   } catch (error) {
-    const message = errorString(error);
-    return { success: false, error: { message: message === 'PAYROLL_PROFILE_ASSIGNED' ? 'Reassign employees before deleting this profile.' : message || 'Unable to delete payroll profile.' } };
+    return failure(sentenceFor('payrollProfile', error, (code) => code || 'Unable to delete payroll profile.'));
   }
 }
-export async function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend list cutoffs returns PayrollCutoffsResponse
-    return (await tauriApi.payrollCutoffs(nativeAdminToken ?? '')) as PayrollCutoffsResponse;
-  }
-  // SAFETY: Parsing admin payroll cutoffs JSON
-  return (await fetch(apiUrl('/api/admin/payroll/cutoffs'))).json() as Promise<PayrollCutoffsResponse>;
+export function loadPayrollCutoffs(): Promise<PayrollCutoffsResponse> {
+  return transport().payrollCutoffs(nativeAdminSessionToken());
 }
 export async function loadPayrollPdfs(): Promise<PayrollPdfListResponse> {
-  if (runningInTauri()) {
-    try { return await tauriApi.listPayrollPdfs(nativeAdminToken ?? ''); }
-    catch { return { success: false, error: { message: 'Unable to load payroll PDFs.' } }; }
+  try {
+    return await transport().listPayrollPdfs(nativeAdminSessionToken());
+  } catch (error) {
+    return failure(sentenceFor(null, error, () => 'Unable to load payroll PDFs.'));
   }
-  return { success: false, error: { message: 'Payroll PDFs are available in the desktop application.' } };
 }
 export async function generatePayrollPdf(request: PayrollPdfGenerateRequest): Promise<PayrollPdfGenerateResponse> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.generatePayrollPdf(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd, request.payrollCutoffLabel ?? '', request.workerType.toUpperCase());
-    } catch (error) {
-      const raw = errorString(error);
-      if (raw.startsWith('NO_PAYROLL_RECORDS')) return { success: false, error: { message: 'No payroll records exist for these cutoff dates. Generate the cutoff payroll first, then create the PDF.' } };
-      if (raw === 'ADMIN_AUTH_REQUIRED') return { success: false, error: { message: attendanceSaveMessages.ADMIN_AUTH_REQUIRED } };
-      return { success: false, error: { message: 'Unable to generate the payroll PDF.' } };
-    }
+  try {
+    return await transport().generatePayrollPdf(nativeAdminSessionToken(), request.cutoffStart, request.cutoffEnd, request.payrollCutoffLabel ?? '', request.workerType.toUpperCase());
+  } catch (error) {
+    return failure(sentenceFor('payrollPdf', error, () => 'Unable to generate the payroll PDF.'));
   }
-  return { success: false, error: { message: 'Payroll PDFs are generated in the desktop application.' } };
 }
 /** Renders one payslip PNG per intern in the WebView, then hands them to the backend to save in one folder. */
 export async function generateInternPayslipImages(request: { cutoffStart: string; cutoffEnd: string; payrollCutoffLabel: string }): Promise<InternPayslipSaveResponse> {
-  if (!runningInTauri()) return { success: false, error: { message: 'Payslips are generated in the desktop application.' } };
   const periodLabel = request.payrollCutoffLabel.trim() || `${request.cutoffStart} to ${request.cutoffEnd}`;
   try {
-    const data = await tauriApi.internPayslips(nativeAdminToken ?? '', request.cutoffStart, request.cutoffEnd);
+    const data = await transport().internPayslips(nativeAdminSessionToken(), request.cutoffStart, request.cutoffEnd);
     if (!data.success) return data;
     const images: InternPayslipImage[] = [];
     for (const payslip of data.payslips) {
       const pngBase64 = await renderInternPayslipPng(payslip, { companyName: data.companyName, companyAddress: data.companyAddress, periodLabel });
       images.push({ employeeId: payslip.employeeId, employeeName: payslip.employeeName, pngBase64 });
     }
-    return await tauriApi.saveInternPayslipImages(nativeAdminToken ?? '', periodLabel, images);
+    return await transport().saveInternPayslipImages(nativeAdminSessionToken(), periodLabel, images);
   } catch (error) {
-    const raw = errorString(error);
-    if (raw.startsWith('NO_PAYROLL_RECORDS')) return { success: false, error: { message: 'No payroll records exist for these cutoff dates. Generate the cutoff payroll first, then create the payslips.' } };
-    if (raw === 'ADMIN_AUTH_REQUIRED') return { success: false, error: { message: attendanceSaveMessages.ADMIN_AUTH_REQUIRED } };
-    return { success: false, error: { message: 'Unable to generate the payslips.' } };
+    return failure(sentenceFor('payslips', error, () => 'Unable to generate the payslips.'));
   }
 }
-export async function loadInternPayrollReport(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string): Promise<InternPayrollReportResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend intern report returns InternPayrollReportResponse
-    return (await tauriApi.internPayrollReport(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel)) as InternPayrollReportResponse;
-  }
-  return { success: true, payroll: [] };
+export function loadInternPayrollReport(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string): Promise<InternPayrollReportResponse> {
+  return transport().internPayrollReport(nativeAdminSessionToken(), cutoffStart, cutoffEnd, payrollCutoffLabel);
 }
-export async function savePayrollCutoff<T extends object>(payroll: T, payrollId?: string): Promise<{ success: boolean; payrollId?: string; netPay?: number }> {
-  if (runningInTauri()) {
-    if (payrollId) {
-      const updatePayload = Object.assign({}, payroll, { payrollId });
-      // SAFETY: Backend update cutoff returns success response
-      return (await tauriApi.payrollUpdateCutoff(nativeAdminToken ?? '', updatePayload)) as { success: boolean; payrollId?: string; netPay?: number };
-    }
-    // SAFETY: Backend create cutoff returns success response
-    return (await tauriApi.payrollCreateCutoff(nativeAdminToken ?? '', payroll)) as { success: boolean; payrollId?: string; netPay?: number };
-  }
-  const response = await fetch(apiUrl(payrollId ? `/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}` : '/api/admin/payroll/cutoffs'), { method: payrollId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payroll) });
-  // SAFETY: Parsing admin save cutoff response JSON
-  return (await response.json()) as { success: boolean; payrollId?: string; netPay?: number };
+export function savePayrollCutoff<T extends object>(payroll: T, payrollId?: string): Promise<{ success: boolean; payrollId?: string; netPay?: number }> {
+  if (payrollId) return transport().payrollUpdateCutoff(nativeAdminSessionToken(), Object.assign({}, payroll, { payrollId }));
+  return transport().payrollCreateCutoff(nativeAdminSessionToken(), payroll);
 }
 export async function generatePayrollCutoff<T extends object>(cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization?: T): Promise<{ success: boolean; generated?: number; warnings?: string[]; error?: { message: string } }> {
   try {
-    if (runningInTauri()) {
-      const payload = customization ?? {};
-      // SAFETY: Backend generate cutoff returns success or error response
-      return (await tauriApi.payrollGenerateCutoff(nativeAdminToken ?? '', cutoffStart, cutoffEnd, payrollCutoffLabel, payload)) as { success: boolean; generated?: number; error?: { message: string } };
-    }
-    return { success: false, error: { message: 'Automatic payroll generation is available in the desktop application.' } };
+    return await transport().payrollGenerateCutoff(nativeAdminSessionToken(), cutoffStart, cutoffEnd, payrollCutoffLabel, customization ?? {});
   } catch (err) {
-    return { success: false, error: { message: err instanceof Error ? err.message : String(err) } };
+    return failure(err instanceof Error ? err.message : String(err));
   }
 }
 export async function finalizePayrollCutoff(payrollId: string): Promise<{ success: boolean; error?: { message?: string } }> {
   try {
-    if (runningInTauri()) {
-      // SAFETY: Backend finalize cutoff returns success response
-      return (await tauriApi.payrollFinalizeCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
-    }
-    const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}/finalize`), { method: 'POST' });
-    // SAFETY: Parsing finalize cutoff response JSON
-    return (await response.json()) as { success: boolean; error?: { message?: string } };
+    return await transport().payrollFinalizeCutoff(nativeAdminSessionToken(), payrollId);
   } catch (err) {
-    return { success: false, error: { message: err instanceof Error ? err.message : String(err) } };
+    return failure(err instanceof Error ? err.message : String(err));
   }
 }
 export async function deletePayrollCutoff(payrollId: string): Promise<{ success: boolean; error?: { message?: string } }> {
   try {
-    if (runningInTauri()) {
-      // SAFETY: Backend delete cutoff returns success response
-      return (await tauriApi.payrollDeleteCutoff(nativeAdminToken ?? '', payrollId)) as { success: boolean; error?: { message?: string } };
-    }
-    const response = await fetch(apiUrl(`/api/admin/payroll/cutoffs/${encodeURIComponent(payrollId)}`), { method: 'DELETE' });
-    // SAFETY: Parsing delete cutoff response JSON
-    return (await response.json()) as { success: boolean; error?: { message?: string } };
+    return await transport().payrollDeleteCutoff(nativeAdminSessionToken(), payrollId);
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
-    return { success: false, error: { message: rawMessage || 'Unable to delete payroll cutoff.' } };
+    return failure(rawMessage || 'Unable to delete payroll cutoff.');
   }
 }
-export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | { success: false; error: { message: string } }> { if (runningInTauri()) { try { return await tauriApi.exportAttendanceXlsx(nativeAdminToken ?? '', date); } catch { return { success: false, error: { message: 'Unable to generate the attendance workbook.' } }; } } return { success: false, error: { message: 'Attendance workbooks are available in the desktop application.' } }; }
+export async function exportAttendanceXlsx(date: string): Promise<AttendanceXlsxExportResponse | Failure> {
+  try {
+    return await transport().exportAttendanceXlsx(nativeAdminSessionToken(), date);
+  } catch (error) {
+    return failure(sentenceFor(null, error, () => 'Unable to generate the attendance workbook.'));
+  }
+}
 
 export type FileActionResult = { ok: boolean; message: string };
 
 function fileActionError<T>(error: T, fallback: string): FileActionResult {
-  const code = errorString(error);
-  if (code === 'FILE_NOT_FOUND') return { ok: false, message: 'The file could not be found. It may have been moved or deleted.' };
-  if (code === 'DIRECTORY_NOT_FOUND') return { ok: false, message: 'The folder could not be found. It may have been moved or deleted.' };
-  if (code === 'ADMIN_AUTH_REQUIRED') return { ok: false, message: 'Administrator session expired. Unlock admin to continue.' };
-  return { ok: false, message: fallback };
+  return { ok: false, message: sentenceFor('file', error, () => fallback) };
 }
 
 async function runFileAction(action: (token: string) => Promise<{ success: boolean; message?: string } | void>): Promise<FileActionResult> {
-  if (!runningInTauri()) return { ok: false, message: 'File actions are available in the desktop application.' };
   try {
-    await action(nativeAdminToken ?? '');
+    await action(nativeAdminSessionToken());
     return { ok: true, message: '' };
   } catch (error) {
     return fileActionError(error, 'The file action could not be completed.');
@@ -798,81 +533,41 @@ async function runFileAction(action: (token: string) => Promise<{ success: boole
 
 /** Open a generated file with the system default application. */
 export function openGeneratedFile(filePath: string): Promise<FileActionResult> {
-  return runFileAction((token) => tauriApi.openGeneratedFile(token, filePath));
+  return runFileAction((token) => transport().openGeneratedFile(token, filePath));
 }
 
 /** Reveal the exact generated file in the OS file explorer. */
 export function revealGeneratedFile(filePath: string): Promise<FileActionResult> {
-  return runFileAction((token) => tauriApi.revealGeneratedFile(token, filePath));
+  return runFileAction((token) => transport().revealGeneratedFile(token, filePath));
 }
 
 /** Open a generated-file directory in the OS file explorer. */
 export function openGeneratedDirectory(directoryPath: string): Promise<FileActionResult> {
-  return runFileAction((token) => tauriApi.openGeneratedDirectory(token, directoryPath));
+  return runFileAction((token) => transport().openGeneratedDirectory(token, directoryPath));
 }
-export async function nukeSheetsResync(confirm: boolean): Promise<{ success: boolean; error?: { message?: string } }> {
-  if (runningInTauri()) {
-    // SAFETY: Backend sheets nuke resync returns success response
-    return (await tauriApi.sheetsNukeResync(nativeAdminToken ?? '', confirm)) as { success: boolean; error?: { message?: string } };
-  }
-  return { success: false, error: { message: 'Google Sheets sync is available in the desktop application.' } };
+export function nukeSheetsResync(confirm: boolean): Promise<{ success: boolean; error?: { message?: string } }> {
+  return transport().sheetsNukeResync(nativeAdminSessionToken(), confirm);
 }
-
 export async function syncInternDtr(userId?: string, startFromUserId?: string): Promise<ManualSyncReport> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.syncInternDtr(nativeAdminToken ?? '', userId, startFromUserId);
-    } catch (error) {
-      return {
-        success: false,
-        internsChecked: 0,
-        tabsCreated: [],
-        rowsSynced: 0,
-        details: [],
-        errors: [errorString(error)],
-        error: { message: errorString(error) },
-      };
-    }
+  try {
+    return await transport().syncInternDtr(nativeAdminSessionToken(), userId, startFromUserId);
+  } catch (error) {
+    return {
+      success: false,
+      internsChecked: 0,
+      tabsCreated: [],
+      rowsSynced: 0,
+      details: [],
+      errors: [errorCode(error)],
+      error: { message: errorCode(error) },
+    };
   }
-  return {
-    success: false,
-    internsChecked: 0,
-    tabsCreated: [],
-    rowsSynced: 0,
-    details: [],
-    errors: ['Google Sheets sync is available in the desktop application.'],
-    error: { message: 'Google Sheets sync is available in the desktop application.' },
-  };
 }
 
 export interface InternDtrSyncToggle {
   success: boolean;
   enabled: boolean;
   error?: { message: string };
-}
-
-/** Per-device DTR kill switch state (local SQLite; OFF here never affects deployment). */
-export async function getInternDtrSync(): Promise<InternDtrSyncToggle> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.getInternDtrSync(nativeAdminToken ?? '');
-    } catch (error) {
-      return { success: false, enabled: true, error: { message: errorString(error) } };
-    }
-  }
-  return { success: false, enabled: true, error: { message: 'DTR sync toggle is available in the desktop application.' } };
-}
-
-/** Persist the per-device toggle. Returns the stored state. */
-export async function setInternDtrSync(enabled: boolean): Promise<InternDtrSyncToggle> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.setInternDtrSync(nativeAdminToken ?? '', enabled);
-    } catch (error) {
-      return { success: false, enabled: true, error: { message: errorString(error) } };
-    }
-  }
-  return { success: false, enabled: true, error: { message: 'DTR sync toggle is available in the desktop application.' } };
 }
 
 export interface DtrSyncTableStatus {
@@ -1040,104 +735,91 @@ function parseDtrSyncHealth(raw: NativeSyncStatusResponse | null): DtrSyncHealth
   };
 }
 
-/** Desktop-only: live DTR/sync-queue health for the Data & backup panel. */
-export async function loadDtrSyncHealth(): Promise<DtrSyncHealthResult> {
-  if (!runningInTauri()) {
-    return { success: false, error: { message: 'Sync status is available in the desktop application.' } };
-  }
+/** Per-device DTR kill switch state (local SQLite; OFF here never affects deployment). */
+export async function getInternDtrSync(): Promise<InternDtrSyncToggle> {
   try {
-    const raw = await tauriApi.syncStatus(nativeAdminToken ?? '');
+    return await transport().getInternDtrSync(nativeAdminSessionToken());
+  } catch (error) {
+    return { success: false, enabled: true, error: { message: errorCode(error) } };
+  }
+}
+
+/** Persist the per-device toggle. Returns the stored state. */
+export async function setInternDtrSync(enabled: boolean): Promise<InternDtrSyncToggle> {
+  try {
+    return await transport().setInternDtrSync(nativeAdminSessionToken(), enabled);
+  } catch (error) {
+    return { success: false, enabled: true, error: { message: errorCode(error) } };
+  }
+}
+
+/** Live DTR/sync-queue health for the Data & backup panel. */
+export async function loadDtrSyncHealth(): Promise<DtrSyncHealthResult> {
+  try {
+    const raw = await transport().syncStatus(nativeAdminSessionToken());
     const health = parseDtrSyncHealth(raw);
-    if (!health) return { success: false, error: { message: 'Unable to read the sync status.' } };
+    if (!health) return failure('Unable to read the sync status.');
     return { success: true, health };
   } catch (error) {
-    const message = errorString(error) || 'Unable to read the sync status.';
-    return { success: false, error: { message } };
+    return failure(errorCode(error) || 'Unable to read the sync status.');
   }
 }
 
-/** Desktop-only: read the live SQLite database status for the Data & backup panel. */
-export async function loadDatabaseInfo(): Promise<DatabaseInfoResponse | { success: false; error: { message: string } }> {
-  if (runningInTauri()) { try { return await tauriApi.dbInfo(); } catch { return { success: false, error: { message: 'Unable to read the database status.' } }; } }
-  return { success: false, error: { message: 'Database tools are available in the desktop application.' } };
-}
-
-/** Desktop-only: create a consistent timestamped backup of the SQLite database. */
-export async function createDatabaseBackup(): Promise<DatabaseBackupResponse | { success: false; error: { message: string } }> {
-  if (runningInTauri()) { try { return await tauriApi.dbBackup(nativeAdminToken ?? ''); } catch { return { success: false, error: { message: 'Unable to create a database backup.' } }; } }
-  return { success: false, error: { message: 'Database backup is available in the desktop application.' } };
-}
-
-/** Desktop-only: schedule a restore from `sourcePath`; the app exits and restores on next launch. */
-export async function requestDatabaseRestore(sourcePath: string): Promise<{ success: true; message: string } | { success: false; error: { message: string } }> {
-  if (runningInTauri()) {
-    try { return await tauriApi.dbRestoreRequest(nativeAdminToken ?? '', sourcePath); }
-    catch (error) {
-      const code = errorString(error);
-      const message = code.startsWith('RESTORE_SOURCE_INVALID') ? 'The selected file is not a valid Alpha Premier attendance database.' : code === 'RESTORE_SOURCE_NOT_FOUND' ? 'The selected file could not be found.' : 'Unable to schedule the restore.';
-      return { success: false, error: { message } };
-    }
+/** Read the live SQLite database status for the Data & backup panel. */
+export async function loadDatabaseInfo(): Promise<DatabaseInfoResponse | Failure> {
+  try {
+    return await transport().dbInfo();
+  } catch (error) {
+    return failure(sentenceFor(null, error, () => 'Unable to read the database status.'));
   }
-  return { success: false, error: { message: 'Restore is available in the desktop application.' } };
 }
 
-/** Desktop-only: dismiss the persisted restore-failure notice after it has been reviewed. */
-export async function dismissRestoreFailure(): Promise<{ success: true; message: string } | { success: false; error: { message: string } }> {
-  if (runningInTauri()) {
-    try { return await tauriApi.dbDismissRestoreFailure(nativeAdminToken ?? ''); }
-    catch { return { success: false, error: { message: 'Unable to dismiss the restore notice.' } }; }
+/** Create a consistent timestamped backup of the SQLite database. */
+export async function createDatabaseBackup(): Promise<DatabaseBackupResponse | Failure> {
+  try {
+    return await transport().dbBackup(nativeAdminSessionToken());
+  } catch (error) {
+    return failure(sentenceFor(null, error, () => 'Unable to create a database backup.'));
   }
-  return { success: false, error: { message: 'Restore is available in the desktop application.' } };
 }
 
-/** Desktop-only: open the backups folder in the OS file explorer. */
+/** Schedule a restore from `sourcePath`; the app exits and restores on next launch. */
+export async function requestDatabaseRestore(sourcePath: string): Promise<{ success: true; message: string } | Failure> {
+  try {
+    return await transport().dbRestoreRequest(nativeAdminSessionToken(), sourcePath);
+  } catch (error) {
+    return failure(sentenceFor('restore', error, () => 'Unable to schedule the restore.'));
+  }
+}
+
+/** Dismiss the persisted restore-failure notice after it has been reviewed. */
+export async function dismissRestoreFailure(): Promise<{ success: true; message: string } | Failure> {
+  try {
+    return await transport().dbDismissRestoreFailure(nativeAdminSessionToken());
+  } catch (error) {
+    return failure(sentenceFor(null, error, () => 'Unable to dismiss the restore notice.'));
+  }
+}
+
+/** Open the backups folder in the OS file explorer. */
 export function openDatabaseBackupsFolder(): Promise<FileActionResult> {
-  return runFileAction((token) => tauriApi.dbOpenBackupsDir(token));
+  return runFileAction((token) => transport().dbOpenBackupsDir(token));
 }
 
-/** Desktop-only: ask where to save (e.g. a USB drive), then copy one saved backup there. Resolves null when the save dialog is cancelled. */
+/** Ask where to save (e.g. a USB drive), then copy one saved backup there. Resolves null when the save dialog is cancelled. */
 export async function saveBackupCopy(sourcePath: string, fileName: string): Promise<FileActionResult | null> {
-  if (!runningInTauri()) return { ok: false, message: 'Download is available in the desktop application.' };
   let destination: string | null;
   try {
-    destination = await saveFileDialog({
-      defaultPath: fileName,
-      filters: [{ name: 'Alpha Premier portable backup', extensions: ['apbackup', 'db'] }],
-    });
-  } catch {
-    return { ok: false, message: 'Unable to open the save dialog.' };
+    destination = await transport().pickBackupDestination(fileName);
+  } catch (error) {
+    return { ok: false, message: sentenceFor(null, error, () => 'Unable to open the save dialog.') };
   }
   if (!destination) return null;
   try {
-    await tauriApi.dbSaveBackupCopy(nativeAdminToken ?? '', sourcePath, destination);
+    await transport().dbSaveBackupCopy(nativeAdminSessionToken(), sourcePath, destination);
     return { ok: true, message: `Backup saved to ${destination}.` };
   } catch (error) {
     return fileActionError(error, 'The backup could not be saved.');
-  }
-}
-
-async function setupRequest<T>(url: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
-  try {
-    const headers: Record<string, string> = {};
-    if (options.body) {
-      headers['Content-Type'] = 'application/json';
-    }
-    if (options.setupToken) {
-      headers['X-Setup-Token'] = options.setupToken;
-    }
-    const init: RequestInit = {
-      method: options.method,
-      headers,
-      signal: options.signal,
-    };
-    if (options.body) {
-      init.body = options.body;
-    }
-    const response = await fetch(url, init);
-    // SAFETY: Parsing setup response as requested type T
-    return (await response.json()) as T;
-  } catch {
-    return { success: false, error: { code: 'GOOGLE_SHEETS_UNAVAILABLE', message: 'Unable to reach setup service. Please try again.' } };
   }
 }
 
@@ -1159,66 +841,42 @@ function networkError(message: string): ScanErrorResponse {
 }
 
 export async function getAutostartStatus(): Promise<boolean> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.autostartStatus();
-    } catch {
-      return false;
-    }
+  try {
+    return await transport().autostartStatus();
+  } catch {
+    return false;
   }
-  return false;
 }
 
 export async function setAutostartStatus(enabled: boolean): Promise<boolean> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.autostartSet(enabled);
-    } catch {
-      return false;
-    }
+  try {
+    return await transport().autostartSet(enabled);
+  } catch {
+    return false;
   }
-  return false;
 }
 
-export async function loadBathroomStatus(date?: string, signal?: AbortSignal): Promise<BathroomStatusResponse> {
-  if (runningInTauri()) {
-    // SAFETY: Backend bathroom status returns BathroomStatusResponse
-    return (await tauriApi.bathroomGetStatus(nativeAdminToken ?? undefined, date)) as BathroomStatusResponse;
-  }
-  const url = date ? `/api/bathroom/status?date=${encodeURIComponent(date)}` : '/api/bathroom/status';
-  const response = await fetch(apiUrl(url), { signal });
-  // SAFETY: Parsing bathroom status response JSON
-  return (await response.json()) as BathroomStatusResponse;
+export function loadBathroomStatus(date?: string, signal?: AbortSignal): Promise<BathroomStatusResponse> {
+  return withAbort(signal, () => transport().bathroomGetStatus(adminToken ?? undefined, date));
 }
 
 export async function submitBathroomScan(
   request: BathroomScanRequest,
   signal?: AbortSignal,
 ): Promise<BathroomScanResponse> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend bathroom scan returns BathroomScanResponse
-      return (await tauriApi.bathroomScanRfid(request.rfidUid)) as BathroomScanResponse;
-    } catch (error) {
-      return {
-        success: false,
-        error: { code: 'INTERNAL_ERROR', message: errorString(error) },
-      };
-    }
+  try {
+    return await withAbort(signal, () => transport().bathroomScanRfid(request.rfidUid, request));
+  } catch (error) {
+    return {
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: errorCode(error) },
+    };
   }
-  const response = await fetch(apiUrl('/api/bathroom/scan'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-    signal,
-  });
-  // SAFETY: Parsing bathroom scan response JSON
-  return (await response.json()) as BathroomScanResponse;
 }
 
 /** Native bathroom errors read "CODE: sentence"; split them so the UI shows only the sentence. */
 function bathroomError<T>(error: T): { code: string; message: string } {
-  const raw = errorString(error);
+  const raw = errorCode(error);
   const match = /^([A-Z_]+):\s*(.+)$/s.exec(raw);
   return match ? { code: match[1], message: match[2] } : { code: 'BATHROOM_ERROR', message: raw };
 }
@@ -1228,61 +886,44 @@ export async function bathroomTimeOut(
   genderKey: 'MALE' | 'FEMALE',
   notes?: string,
 ): Promise<BathroomActionResponse> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend bathroom time out returns BathroomActionResponse
-      return (await tauriApi.bathroomTimeOut(nativeAdminToken ?? '', userId, genderKey, notes)) as BathroomActionResponse;
-    } catch (error) {
-      return { success: false, error: bathroomError(error) };
-    }
+  try {
+    return await transport().bathroomTimeOut(nativeAdminSessionToken(), userId, genderKey, notes);
+  } catch (error) {
+    return { success: false, error: bathroomError(error) };
   }
-  const response = await fetch(apiUrl('/api/admin/bathroom/time-out'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId, genderKey, notes }),
-  });
-  // SAFETY: Parsing bathroom action response JSON
-  return (await response.json()) as BathroomActionResponse;
 }
 
 export async function bathroomTimeIn(
   logId: string,
   notes?: string,
 ): Promise<BathroomActionResponse> {
-  if (runningInTauri()) {
-    try {
-      // SAFETY: Backend bathroom time in returns BathroomActionResponse
-      return (await tauriApi.bathroomTimeIn(nativeAdminToken ?? '', logId, notes)) as BathroomActionResponse;
-    } catch (error) {
-      return { success: false, error: bathroomError(error) };
-    }
+  try {
+    return await transport().bathroomTimeIn(nativeAdminSessionToken(), logId, notes);
+  } catch (error) {
+    return { success: false, error: bathroomError(error) };
   }
-  const response = await fetch(apiUrl('/api/admin/bathroom/time-in'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ logId, notes }),
-  });
-  // SAFETY: Parsing bathroom action response JSON
-  return (await response.json()) as BathroomActionResponse;
 }
 
 export async function updateBathroomLog(
   logId: string,
   request: BathroomUpdateRequest,
 ): Promise<BathroomActionResponse> {
-  if (runningInTauri()) {
-    try {
-      return await tauriApi.bathroomUpdateLog(nativeAdminToken ?? '', logId, request);
-    } catch (error) {
-      return { success: false, error: bathroomError(error) };
-    }
+  try {
+    return await transport().bathroomUpdateLog(nativeAdminSessionToken(), logId, request);
+  } catch (error) {
+    return { success: false, error: bathroomError(error) };
   }
-  const response = await fetch(apiUrl(`/api/admin/bathroom/${encodeURIComponent(logId)}`), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  // SAFETY: Parsing bathroom action response JSON
-  return (await response.json()) as BathroomActionResponse;
 }
 
+/** The ID register panel's four commands; each answers with the register's status. */
+export const idRegister = {
+  status: (): Promise<IdRegisterStatus> => transport().idRegisterStatus(nativeAdminSessionToken()),
+  signIn: (email: string, password: string): Promise<IdRegisterStatus> => transport().idRegisterSignIn(nativeAdminSessionToken(), email, password),
+  signOut: (): Promise<IdRegisterStatus> => transport().idRegisterSignOut(nativeAdminSessionToken()),
+  check: (): Promise<IdRegisterStatus> => transport().idRegisterCheck(nativeAdminSessionToken()),
+};
+
+/** What the kiosk says when a register command itself fails (the register's own problems come in plain words). */
+export function idRegisterProblem<T>(error: T): string {
+  return sentenceFor('idRegister', error, (code) => code || 'The ID register could not be asked.');
+}

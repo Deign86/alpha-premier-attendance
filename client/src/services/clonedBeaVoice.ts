@@ -90,6 +90,7 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
 
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { tauriApi } from '../tauri-api';
+import { runningInTauri } from '../transport';
 
 interface NameProfileEntry {
   personId?: string;
@@ -240,8 +241,6 @@ export function getClonedBeaNameAudioUrl(
   return null;
 }
 
-const runningInTauri = (): boolean =>
-  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 
 export type VoiceSlotState = 'cloned' | 'queued' | 'fallback';
 
