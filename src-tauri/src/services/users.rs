@@ -2,7 +2,7 @@
 //! for an administrator's save and for the ID register's.
 
 use crate::state::AppState;
-use crate::{enqueue_sync_on, publish_attendance_change};
+use crate::commands::{attendance::publish_attendance_change, sync::enqueue_sync_on};
 use chrono_tz::Asia::Manila;
 use sqlx::Row;
 
