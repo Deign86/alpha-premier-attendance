@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use super::session::require_admin;
+use super::session::Admin;
 use tauri::State;
 
 #[tauri::command]
@@ -28,26 +28,26 @@ pub(crate) async fn tts_status(
 
 #[tauri::command]
 pub(crate) async fn get_voicestudio_host(state: State<'_, AppState>, token: String) -> Result<String, String> {
-    require_admin(&state, &token).await?;
+    Admin::check(&state, &token).await?;
     Ok(crate::services::voice_pull::get_host(&state.db).await)
 }
 
 #[tauri::command]
 pub(crate) async fn set_voicestudio_host(state: State<'_, AppState>, token: String, host: String) -> Result<String, String> {
-    require_admin(&state, &token).await?;
+    Admin::check(&state, &token).await?;
     let now = chrono::Utc::now().to_rfc3339();
     crate::services::voice_pull::set_host(&state.db, &host, &now).await
 }
 
 #[tauri::command]
 pub(crate) async fn get_voicestudio_pin(state: State<'_, AppState>, token: String) -> Result<String, String> {
-    require_admin(&state, &token).await?;
+    Admin::check(&state, &token).await?;
     Ok(crate::services::voice_pull::get_pin(&state.db).await)
 }
 
 #[tauri::command]
 pub(crate) async fn set_voicestudio_pin(state: State<'_, AppState>, token: String, pin: String) -> Result<(), String> {
-    require_admin(&state, &token).await?;
+    Admin::check(&state, &token).await?;
     let now = chrono::Utc::now().to_rfc3339();
     crate::services::voice_pull::set_pin(&state.db, &pin, &now).await
 }
@@ -70,7 +70,7 @@ pub(crate) async fn check_voicestudio_impl(
     host: Option<String>,
     pin: Option<String>,
 ) -> Result<crate::services::voice_pull::VoiceConnectionStatus, String> {
-    require_admin(state, token).await?;
+    Admin::check(state, token).await?;
     let host = match host {
         Some(raw) => crate::services::voice_pull::normalize_host(&raw),
         None => crate::services::voice_pull::get_host(&state.db).await,
@@ -91,7 +91,7 @@ pub(crate) async fn voice_clip_states(
 
 #[tauri::command]
 pub(crate) async fn voice_regenerate(state: State<'_, AppState>, token: String, person_id: String) -> Result<String, String> {
-    require_admin(&state, &token).await?;
+    Admin::check(&state, &token).await?;
     crate::services::voice_pull::regenerate(&state.db, &person_id).await
 }
 

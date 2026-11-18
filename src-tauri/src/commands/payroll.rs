@@ -7,7 +7,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::collections::HashMap;
 use super::attendance::reconcile_attendance_payroll_range;
-use super::session::admin_authorized;
+use super::session::Admin;
 use super::sync::enqueue_sync_on;
 use tauri::State;
 
@@ -16,9 +16,7 @@ pub(crate) async fn payroll_list_profiles(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let rows = sqlx::query("SELECT profile_id,label,payroll_frequency,standard_working_days_per_cutoff,incentives_allowance_centavos,special_allowance_centavos,special_holiday_multiplier,regular_holiday_multiplier,half_day_fraction,overtime_rate_centavos FROM payroll_profiles ORDER BY profile_id").fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(
         serde_json::json!({"success":true,"profiles":rows.into_iter().map(|r| serde_json::json!({"profileId":r.get::<String,_>("profile_id"),"label":r.get::<String,_>("label"),"payrollFrequency":r.get::<String,_>("payroll_frequency"),"standardWorkingDaysPerCutoff":r.get::<f64,_>("standard_working_days_per_cutoff"),"incentivesAllowance":r.get::<i64,_>("incentives_allowance_centavos") as f64 / 100.0,"specialAllowance":r.get::<i64,_>("special_allowance_centavos") as f64 / 100.0,"specialHolidayMultiplier":r.get::<f64,_>("special_holiday_multiplier"),"regularHolidayMultiplier":r.get::<f64,_>("regular_holiday_multiplier"),"halfDayFraction":r.get::<f64,_>("half_day_fraction"),"overtimeRate":r.get::<i64,_>("overtime_rate_centavos") as f64 / 100.0})).collect::<Vec<_>>() }),
@@ -31,9 +29,7 @@ pub(crate) async fn payroll_upsert_profile(
     token: String,
     profile: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let id = profile
         .get("profileId")
         .and_then(|v| v.as_str())
@@ -97,9 +93,7 @@ pub(crate) async fn payroll_delete_profile(
     token: String,
     profile_id: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let profile_id = profile_id.trim();
     if profile_id.is_empty() {
         return Err("ADMIN_VALIDATION_ERROR".into());
@@ -132,9 +126,7 @@ pub(crate) async fn payroll_list_cutoffs(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let mut rows = sqlx::query(
         "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, pc.payroll_profile_id, pc.payroll_cutoff_label, \
          pc.cutoff_start, pc.cutoff_end, pc.daily_rate_centavos, pc.standard_working_days, pc.actual_working_days, \
@@ -388,9 +380,7 @@ pub(crate) async fn payroll_intern_report(
     cutoff_end: String,
     payroll_cutoff_label: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d")
         .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
     chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d")
@@ -555,9 +545,7 @@ pub(crate) async fn payroll_generate_cutoff_impl(
     payroll_cutoff_label: String,
     customization: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, &token).await?;
     chrono::NaiveDate::parse_from_str(&cutoff_start, "%Y-%m-%d")
         .map_err(|_| "INVALID_CUTOFF_DATES".to_string())?;
     chrono::NaiveDate::parse_from_str(&cutoff_end, "%Y-%m-%d")
@@ -928,9 +916,7 @@ pub(crate) async fn payroll_create_cutoff(
     token: String,
     input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let mut input = enrich_cutoff_input(&state.db, &input).await?;
     apply_intern_rules(&state.db, &mut input).await?;
     let parsed = cutoff_input(&input);
@@ -1024,9 +1010,7 @@ pub(crate) async fn payroll_update_cutoff(
     token: String,
     input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let id = input
         .get("payrollId")
         .and_then(|v| v.as_str())
@@ -1091,9 +1075,7 @@ pub(crate) async fn payroll_finalize_cutoff_impl(
     token: &str,
     payroll_id: &str,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, token).await?;
     let now = chrono::Utc::now().to_rfc3339();
     // Status flip + snapshot commit together: never FINALIZED without a snapshot.
     let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
@@ -1128,7 +1110,6 @@ pub(crate) async fn payroll_finalize_cutoff_impl(
     )
 }
 
-#[tauri::command]
 pub(crate) async fn delete_cutoff_record(
     state: &AppState,
     payroll_id: String,
@@ -1176,9 +1157,7 @@ pub(crate) async fn payroll_delete_cutoff(
     token: String,
     payroll_id: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     delete_cutoff_record(&state, payroll_id).await
 }
 

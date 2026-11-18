@@ -1,7 +1,7 @@
 use chrono_tz::Asia::Manila;
 use crate::state::AppState;
 use sqlx::Row;
-use super::session::admin_authorized;
+use super::session::Admin;
 use tauri::State;
 
 #[tauri::command]
@@ -99,9 +99,7 @@ pub(crate) async fn bathroom_time_out(
     gender_key: String,
     notes: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let normalized_gender = gender_key.trim().to_uppercase();
     if normalized_gender != "MALE" && normalized_gender != "FEMALE" {
         return Err("INVALID_GENDER_KEY: Gender key must be MALE or FEMALE".into());
@@ -208,9 +206,7 @@ pub(crate) async fn bathroom_time_in(
     log_id: String,
     notes: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
 
     let existing = sqlx::query(
         "SELECT log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, status, notes FROM bathroom_log WHERE log_id = ?",
@@ -289,9 +285,7 @@ pub(crate) async fn bathroom_update_log_impl(
     log_id: &str,
     request: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, token).await?;
 
     let existing = sqlx::query(
         "SELECT log_id, log_date, user_id, full_name, department, gender_key, time_out, time_in, duration_seconds, status, notes, created_at, updated_at FROM bathroom_log WHERE log_id = ?",

@@ -2,7 +2,7 @@ use chrono::Datelike;
 use chrono_tz::Asia::Manila;
 use crate::state::AppState;
 use sqlx::Row;
-use super::session::admin_authorized;
+use super::session::Admin;
 use super::sync::enqueue_sync_on;
 use tauri::Emitter;
 use tauri::State;
@@ -28,9 +28,7 @@ pub(crate) async fn admin_attendance(
     token: String,
     date: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     if !date.as_bytes().iter().enumerate().all(|(i, b)| {
         if [4, 7].contains(&i) {
             *b == b'-'
@@ -132,9 +130,7 @@ pub(crate) async fn admin_update_attendance_impl(
     attendance_id: &str,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, token).await?;
     let row = sqlx::query(
         "SELECT user_id,attendance_date,time_in,time_out,status,revision FROM attendance WHERE attendance_id=?",
     )
@@ -280,41 +276,55 @@ pub(crate) async fn admin_update_attendance_impl(
             }
         }
     }
-    // Queue rows commit with the correction (O4).
-    flush_pending_sync(state, &mut tx, pending).await;
-    enqueue_sync_on(state, &mut tx, "Attendance", attendance_id, "UPSERT", &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status})).await;
-    // Mirror the correction to the intern DTR sheet: the idempotent re-push
+    // The intern DTR sheet mirrors the correction: the idempotent re-push
     // rewrites the same tab row (half-day/working/full tiers + paint), so
     // corrections converge with no duplicates. Lookup failure skips silently;
     // admin ops never fail because of DTR.
-    if let Ok(Some(user_row)) = sqlx::query("SELECT user_id, full_name, employee_type FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(attendance_id).fetch_optional(&mut *tx).await {
-        let owner: String = user_row.get("user_id");
-        let full_name: String = user_row.get("full_name");
-        let employee_type: String = user_row.get("employee_type");
-        enqueue_intern_dtr(state, &mut tx, attendance_id, &owner, &full_name, &employee_type, date, time_in, time_out).await;
-        enqueue_later_weekly_intern_dtr(state, &mut tx, &owner, &full_name, &employee_type, date).await;
-        // The day moved to another date: the UPSERT only writes the new
-        // date, so clear the old date's cells and replan the old week (S6).
-        // Its own row id keeps it from superseding the day's UPSERT.
+    let person = match sqlx::query("SELECT user_id, full_name, employee_type FROM users WHERE user_id=(SELECT user_id FROM attendance WHERE attendance_id=? LIMIT 1)").bind(attendance_id).fetch_optional(&mut *tx).await {
+        Ok(Some(user_row)) => Some(DtrPerson {
+            user_id: user_row.get("user_id"),
+            full_name: user_row.get("full_name"),
+            employee_type: user_row.get("employee_type"),
+        }),
+        _ => None,
+    };
+    // The day moved to another date: the UPSERT only writes the new
+    // date, so clear the old date's cells and replan the old week (S6).
+    // Its own row id keeps it from superseding the day's UPSERT.
+    let mut follow = Vec::new();
+    if let Some(person) = &person {
         if date != current_date
-            && employee_type.to_uppercase() == "INTERN"
+            && person.employee_type.to_uppercase() == "INTERN"
             && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some()
         {
-            enqueue_sync_on(
-                state,
-                &mut tx,
-                crate::services::dtr_sync::DTR_TABLE_NAME,
-                &format!("{attendance_id}@{current_date}"),
-                "DELETE",
-                &serde_json::json!({"userId": owner, "fullName": full_name, "attendanceDate": current_date}),
-            )
-            .await;
-            enqueue_later_weekly_intern_dtr(state, &mut tx, &owner, &full_name, &employee_type, current_date).await;
+            follow.push(Follow::Queue {
+                table: crate::services::dtr_sync::DTR_TABLE_NAME,
+                row_id: format!("{attendance_id}@{current_date}"),
+                operation: "DELETE",
+                payload: serde_json::json!({"userId": person.user_id, "fullName": person.full_name, "attendanceDate": current_date}),
+            });
+            follow.push(Follow::LaterWeek { date: current_date });
         }
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
-    publish_attendance_change(state, attendance_id, date, "ADMIN_CORRECTION", "upsert");
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'ADMIN_ATTENDANCE_UPDATED',?,?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(format!("Attendance {attendance_id} corrected")).bind(format!("admin-{}",uuid::Uuid::new_v4())).execute(&state.db).await;
+    let audit_message = format!("Attendance {attendance_id} corrected");
+    let audit_request = crate::services::audit::admin_request_id();
+    attendance_changed(state, tx, AttendanceChange {
+        attendance_id,
+        date,
+        pending,
+        sheet_operation: "UPSERT",
+        sheet_row: serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status}),
+        dtr: if person.is_some() { DtrLine::Write { time_in, time_out } } else { DtrLine::None },
+        requeue_later_week: person.is_some(),
+        person,
+        follow,
+        tap: None,
+        lan: LanNotice { cause: "ADMIN_CORRECTION", mutation: "upsert", from_scan: None },
+        window_event: None,
+        audit: Some(crate::services::audit::Entry::new("ADMIN_ATTENDANCE_UPDATED", &now, &audit_message, &audit_request)),
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(
         serde_json::json!({"success":true,"attendanceId":attendance_id,"attendanceDate":date,"timeIn":time_in,"timeOut":time_out,"status":status}),
     )
@@ -326,9 +336,7 @@ pub(crate) async fn admin_create_backdated_attendance_impl(
     token: &str,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, token).await?;
     let user_id = payload
         .get("userId")
         .and_then(|v| v.as_str())
@@ -464,53 +472,45 @@ pub(crate) async fn admin_create_backdated_attendance_impl(
             .await?;
         }
     }
-    // Queue rows commit with the entry (O4).
-    flush_pending_sync(state, &mut tx, pending).await;
-    let sync_payload = serde_json::json!({
-        "attendanceId": attendance_id,
-        "attendanceDate": attendance_date,
-        "userId": user_id,
-        "timeIn": time_in,
-        "timeOut": time_out,
-        "status": status,
-        "source": "ADMIN_BACKDATED_ENTRY",
-        "recordedBy": "Admin",
-        "recordedReason": reason,
-        "recordedAt": now_ts,
-    });
-    enqueue_sync_on(state, &mut tx, "Attendance", &attendance_id, "UPSERT", &sync_payload).await;
-    // Mirror the entry to the intern DTR sheet (interns only, when
-    // configured). Same fire-and-forget contract as the scan path.
-    let employee_type: String = user.get("employee_type");
-    enqueue_intern_dtr(state, &mut tx, &attendance_id, user_id, &full_name, &employee_type, attendance_date, Some(time_in), time_out).await;
-    enqueue_later_weekly_intern_dtr(state, &mut tx, user_id, &full_name, &employee_type, attendance_date).await;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    publish_attendance_change(state, &attendance_id, attendance_date, "BACKDATED_ATTENDANCE", "upsert");
-
-    let seq = state.next_sequence();
-    let event_payload = serde_json::json!({
-        "attendanceId": attendance_id.clone(),
-        "attendanceDate": attendance_date,
-        "userId": user_id,
-        "action": "BACKDATED_ATTENDANCE",
-        "timeIn": time_in,
-        "timeOut": time_out,
-        "status": status,
-        "sequence": seq
-    });
-    if let Some(app_handle) = app {
-        let _ = app_handle.emit("attendance-updated", &event_payload);
-    }
-    let _ = sqlx::query(
-        "INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_ATTENDANCE_CREATED', ?, ?, ?)"
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(&now_ts)
-    .bind(user_id)
-    .bind(format!("Backdated attendance created for {}: {}", attendance_date, reason))
-    .bind(format!("admin-{}", uuid::Uuid::new_v4()))
-    .execute(&state.db)
-    .await;
+    let audit_message = format!("Backdated attendance created for {}: {}", attendance_date, reason);
+    let audit_request = crate::services::audit::admin_request_id();
+    attendance_changed(state, tx, AttendanceChange {
+        attendance_id: &attendance_id,
+        date: attendance_date,
+        pending,
+        sheet_operation: "UPSERT",
+        sheet_row: serde_json::json!({
+            "attendanceId": attendance_id,
+            "attendanceDate": attendance_date,
+            "userId": user_id,
+            "timeIn": time_in,
+            "timeOut": time_out,
+            "status": status,
+            "source": "ADMIN_BACKDATED_ENTRY",
+            "recordedBy": "Admin",
+            "recordedReason": reason,
+            "recordedAt": now_ts,
+        }),
+        // Interns only, when configured. Same fire-and-forget contract as the scan path.
+        person: Some(DtrPerson { user_id: user_id.to_string(), full_name: full_name.clone(), employee_type: user.get("employee_type") }),
+        dtr: DtrLine::Write { time_in: Some(time_in), time_out },
+        requeue_later_week: true,
+        follow: Vec::new(),
+        tap: None,
+        lan: LanNotice { cause: "BACKDATED_ATTENDANCE", mutation: "upsert", from_scan: None },
+        window_event: Some(WindowEvent {
+            app,
+            user_id,
+            action: "BACKDATED_ATTENDANCE",
+            time_in: serde_json::json!(time_in),
+            time_out: serde_json::json!(time_out),
+            status: &status,
+            own_sequence: true,
+        }),
+        audit: Some(crate::services::audit::Entry::new("ADMIN_ATTENDANCE_CREATED", &now_ts, &audit_message, &audit_request).user(Some(user_id))),
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let shown = attendance_arrival(&state.db, user_id, &attendance_id, attendance_date, Some(time_in)).await;
     Ok(serde_json::json!({
@@ -562,9 +562,7 @@ pub(crate) async fn admin_delete_attendance_impl(
     attendance_id: &str,
     date: &str,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, token).await?;
     // Capture cascaded rows before the hard delete so their Sheets rows are removed too.
     // NOTE: deletions clear the date's B:E cells on the intern DTR sheet
     // (values only — rows are never removed, so the template grid
@@ -632,55 +630,215 @@ pub(crate) async fn admin_delete_attendance_impl(
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-    // Queue rows commit with the delete (O4).
-    enqueue_sync_on(
-        state,
-        &mut tx,
-        "Attendance",
-        attendance_id,
-        "DELETE",
-        &serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date}),
-    )
-    .await;
+    // The payroll and grace rows of the day go with it.
+    let mut follow: Vec<Follow> = payroll_ids
+        .into_iter()
+        .map(|payroll_id| Follow::Queue {
+            table: "Payroll",
+            payload: serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id}),
+            row_id: payroll_id,
+            operation: "DELETE",
+        })
+        .collect();
+    follow.extend(grace_rows.into_iter().map(|(grace_id, user_id)| Follow::Queue {
+        table: "InternGrace",
+        payload: serde_json::json!({"userId":user_id,"attendanceId":attendance_id,"graceId":grace_id}),
+        row_id: user_id,
+        operation: "DELETE",
+    }));
     // Intern-DTR auto-clear for the deleted day (values emptied, row kept).
     // Missing tab/row downstream is a silent no-op; failures never fail admin.
-    if let Some((dtr_user_id, dtr_full_name, employee_type)) = dtr_owner {
-        enqueue_sync_on(
-            state,
-            &mut tx,
-            crate::services::dtr_sync::DTR_TABLE_NAME,
-            attendance_id,
-            "DELETE",
-            &serde_json::json!({"userId": dtr_user_id, "fullName": dtr_full_name, "attendanceDate": date}),
-        )
-        .await;
-        enqueue_later_weekly_intern_dtr(state, &mut tx, &dtr_user_id, &dtr_full_name, &employee_type, date).await;
-    }
-    for payroll_id in payroll_ids {
-        enqueue_sync_on(
-            state,
-            &mut tx,
-            "Payroll",
-            &payroll_id,
-            "DELETE",
-            &serde_json::json!({"payrollId":payroll_id,"attendanceId":attendance_id}),
-        )
-        .await;
-    }
-    for (grace_id, user_id) in grace_rows {
-        enqueue_sync_on(
-            state,
-            &mut tx,
-            "InternGrace",
-            &user_id,
-            "DELETE",
-            &serde_json::json!({"userId":user_id,"attendanceId":attendance_id,"graceId":grace_id}),
-        )
-        .await;
-    }
-    tx.commit().await.map_err(|e| e.to_string())?;
-    publish_attendance_change(state, attendance_id, date, "ADMIN_DELETE", "delete");
+    let person = dtr_owner.map(|(user_id, full_name, employee_type)| DtrPerson { user_id, full_name, employee_type });
+    attendance_changed(state, tx, AttendanceChange {
+        attendance_id,
+        date,
+        pending: Vec::new(),
+        sheet_operation: "DELETE",
+        sheet_row: serde_json::json!({"attendanceId":attendance_id,"attendanceDate":date}),
+        dtr: if person.is_some() { DtrLine::Clear } else { DtrLine::None },
+        requeue_later_week: person.is_some(),
+        person,
+        follow,
+        tap: None,
+        lan: LanNotice { cause: "ADMIN_DELETE", mutation: "delete", from_scan: None },
+        window_event: None,
+        audit: None,
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({"success":true,"attendanceId":attendance_id}))
+}
+
+/// Whose line on the intern DTR sheet an attendance change touches.
+pub(crate) struct DtrPerson {
+    pub(crate) user_id: String,
+    pub(crate) full_name: String,
+    pub(crate) employee_type: String,
+}
+
+/// What an attendance change does to that person's day on the intern DTR sheet.
+pub(crate) enum DtrLine<'a> {
+    /// Nothing is queued for the DTR sheet.
+    None,
+    /// Write the day (interns only, and only when the sheet is configured).
+    Write { time_in: Option<&'a str>, time_out: Option<&'a str> },
+    /// Empty the day's cells; the row stays on the sheet.
+    Clear,
+}
+
+/// A further queue step of one attendance change, after the row itself and its DTR line.
+pub(crate) enum Follow<'a> {
+    Queue { table: &'a str, row_id: String, operation: &'static str, payload: serde_json::Value },
+    /// Re-queue the person's later days of the Manila week of `date`.
+    LaterWeek { date: &'a str },
+}
+
+/// What LAN viewers are told. A scan sends the row itself under the scan's request id and time;
+/// an administrator's change sends only that the day changed.
+pub(crate) struct LanNotice<'a> {
+    pub(crate) cause: &'a str,
+    pub(crate) mutation: &'static str,
+    pub(crate) from_scan: Option<(String, chrono::DateTime<chrono::Utc>, crate::lan_server::LanAttendanceRow)>,
+}
+
+/// The `attendance-updated` event for the app's own window.
+pub(crate) struct WindowEvent<'a> {
+    pub(crate) app: Option<&'a tauri::AppHandle>,
+    pub(crate) user_id: &'a str,
+    pub(crate) action: &'a str,
+    pub(crate) time_in: serde_json::Value,
+    pub(crate) time_out: serde_json::Value,
+    pub(crate) status: &'a str,
+    /// The backdate has always taken a second sequence number for this event; the scan reuses the LAN notice's.
+    pub(crate) own_sequence: bool,
+}
+
+/// One change to one attendance row, and what its caller has always done about it. The four callers (scan,
+/// correction, backdated entry, delete) differ; every difference is a field here, kept as it was found:
+///
+/// | step                                  | scan | correction | backdate | delete |
+/// |---------------------------------------|------|------------|----------|--------|
+/// | re-queue the later days of the week   | no   | yes        | yes      | yes    |
+/// | `attendance-updated` window event     | yes  | no         | yes      | no     |
+/// | audit row                             | yes  | yes        | yes      | no     |
+/// | LAN notice carries the row            | yes  | no         | no       | no     |
+/// | card debounce marked after the commit | yes  | no         | no       | no     |
+pub(crate) struct AttendanceChange<'a> {
+    pub(crate) attendance_id: &'a str,
+    pub(crate) date: &'a str,
+    /// Payroll rows priced in this transaction (`ensure_payroll_tx`); queued first.
+    pub(crate) pending: Vec<PendingSync>,
+    /// The row for the Attendance sheet. Each caller sends its own set of keys.
+    pub(crate) sheet_operation: &'static str,
+    pub(crate) sheet_row: serde_json::Value,
+    pub(crate) person: Option<DtrPerson>,
+    pub(crate) dtr: DtrLine<'a>,
+    pub(crate) requeue_later_week: bool,
+    pub(crate) follow: Vec<Follow<'a>>,
+    /// Scan only: the card's debounce key, marked once the row is committed.
+    pub(crate) tap: Option<String>,
+    pub(crate) lan: LanNotice<'a>,
+    pub(crate) window_event: Option<WindowEvent<'a>>,
+    pub(crate) audit: Option<crate::services::audit::Entry<'a>>,
+}
+
+/// Everything that follows a change to an attendance row, in one order: queue the Sheets rows in the caller's
+/// transaction, commit, then tell LAN viewers, the app window and the audit log. `Err` means the commit failed and
+/// nothing was announced.
+pub(crate) async fn attendance_changed(
+    state: &AppState,
+    mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    change: AttendanceChange<'_>,
+) -> Result<(), sqlx::Error> {
+    // Queue rows commit with the change (O4).
+    flush_pending_sync(state, &mut tx, change.pending).await;
+    enqueue_sync_on(state, &mut tx, "Attendance", change.attendance_id, change.sheet_operation, &change.sheet_row).await;
+    if let Some(person) = &change.person {
+        match change.dtr {
+            DtrLine::None => {}
+            DtrLine::Write { time_in, time_out } => {
+                enqueue_intern_dtr(state, &mut tx, change.attendance_id, &person.user_id, &person.full_name, &person.employee_type, change.date, time_in, time_out).await;
+            }
+            DtrLine::Clear => {
+                enqueue_sync_on(
+                    state,
+                    &mut tx,
+                    crate::services::dtr_sync::DTR_TABLE_NAME,
+                    change.attendance_id,
+                    "DELETE",
+                    &serde_json::json!({"userId": person.user_id, "fullName": person.full_name, "attendanceDate": change.date}),
+                )
+                .await;
+            }
+        }
+        if change.requeue_later_week {
+            enqueue_later_weekly_intern_dtr(state, &mut tx, &person.user_id, &person.full_name, &person.employee_type, change.date).await;
+        }
+    }
+    for step in change.follow {
+        match step {
+            Follow::Queue { table, row_id, operation, payload } => {
+                enqueue_sync_on(state, &mut tx, table, &row_id, operation, &payload).await;
+            }
+            Follow::LaterWeek { date } => {
+                if let Some(person) = &change.person {
+                    enqueue_later_weekly_intern_dtr(state, &mut tx, &person.user_id, &person.full_name, &person.employee_type, date).await;
+                }
+            }
+        }
+    }
+    tx.commit().await?;
+
+    let sequence = state.next_sequence();
+    if let Some(cooldown_key) = change.tap {
+        let mut debounce = state.scan_debounce.lock().await;
+        let now = std::time::Instant::now();
+        match debounce.get_mut(&cooldown_key) {
+            Some(entry) => entry.slow = Some(now),
+            None => {
+                debounce.insert(cooldown_key, crate::state::ScanDebounce { fast: now, slow: Some(now) });
+            }
+        }
+    }
+    let (request_id, occurred_at, attendance) = match change.lan.from_scan {
+        Some((request_id, occurred_at, row)) => (request_id, occurred_at, Some(row)),
+        None => (crate::services::audit::admin_request_id(), chrono::Utc::now(), None),
+    };
+    let _ = state
+        .bus
+        .sender
+        .send(crate::lan_server::LanAttendanceEvent::AttendanceUpdated {
+            event_id: format!("{}:{}", state.server_instance_id, sequence),
+            server_instance_id: state.server_instance_id.to_string(),
+            sequence,
+            occurred_at,
+            request_id,
+            attendance_date: change.date.to_string(),
+            attendance_id: change.attendance_id.to_string(),
+            cause: change.lan.cause.to_string(),
+            mutation: change.lan.mutation.to_string(),
+            attendance,
+        });
+    if let Some(event) = change.window_event {
+        let event_sequence = if event.own_sequence { state.next_sequence() } else { sequence };
+        let payload = serde_json::json!({
+            "attendanceId": change.attendance_id,
+            "attendanceDate": change.date,
+            "userId": event.user_id,
+            "action": event.action,
+            "timeIn": event.time_in,
+            "timeOut": event.time_out,
+            "status": event.status,
+            "sequence": event_sequence
+        });
+        if let Some(app) = event.app {
+            let _ = app.emit("attendance-updated", &payload);
+        }
+    }
+    if let Some(entry) = change.audit {
+        crate::services::audit::log(&state.db, entry).await;
+    }
+    Ok(())
 }
 
 /// Tell open LAN viewers that an attendance day changed; they refetch.
@@ -1549,6 +1707,70 @@ mod tests {
         assert_eq!(payroll, 1);
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// The differences between the admin tails that `AttendanceChange` keeps: a backdated entry and a correction
+    /// each write their own audit row (the entry names the person, the correction does not); a delete writes none.
+    #[tokio::test]
+    async fn each_admin_change_keeps_its_own_audit_row_and_a_delete_has_none() {
+        let temp = std::env::temp_dir().join(format!("alpha-admin-tail-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let mut lan = LanConfig::default();
+        lan.admin_pin = Some("1234".to_string());
+        lan.admin_session_minutes = 30;
+        let state = AppState::new(
+            temp.clone(),
+            temp.join("attendance.db"),
+            temp.join("exports"),
+            false,
+            lan,
+            OfficeConfig::default(),
+            crate::config::ScannerConfig::default(),
+            crate::config::TtsConfig::default(),
+            crate::config::UpdaterConfig::default(),
+        )
+        .await
+        .unwrap();
+        let token = setup_unlock_impl(&state, "1234".to_string()).await.unwrap()["token"].as_str().unwrap().to_string();
+        upsert_user_record(&state.db, "INT_01", "CARD_INT_01", "Test Intern", Some("QA"), "ACTIVE", "INTERN", Some("MALE"), None, None, None, "EMPLOYEE", "2026-08-01T00:00:00Z").await.unwrap();
+        let audit_rows = || async {
+            sqlx::query_as::<_, (String, Option<String>, String)>(
+                "SELECT event_type, user_id, request_id FROM audit_logs WHERE event_type LIKE 'ADMIN_ATTENDANCE_%' ORDER BY rowid",
+            )
+            .fetch_all(&state.db)
+            .await
+            .unwrap()
+        };
+
+        let created = admin_create_backdated_attendance_impl(None, &state, &token, &serde_json::json!({
+            "userId": "INT_01",
+            "attendanceDate": "2026-08-11",
+            "timeIn": "2026-08-11T08:00:00+08:00",
+            "timeOut": "2026-08-11T17:00:00+08:00",
+            "reason": "Missed scan physical log verified"
+        }))
+        .await
+        .unwrap();
+        let attendance_id = created["attendance"]["attendanceId"].as_str().unwrap().to_string();
+        admin_update_attendance_impl(&state, &token, &attendance_id, &serde_json::json!({
+            "attendanceDate": "2026-08-11",
+            "timeIn": "2026-08-11T07:30:00+08:00",
+            "timeOut": "2026-08-11T17:00:00+08:00",
+            "expectedTimeIn": "2026-08-11T08:00:00+08:00",
+            "expectedTimeOut": "2026-08-11T17:00:00+08:00"
+        }))
+        .await
+        .unwrap();
+        let before_delete = audit_rows().await;
+        assert_eq!(
+            before_delete.iter().map(|(event, user, _)| (event.as_str(), user.as_deref())).collect::<Vec<_>>(),
+            vec![("ADMIN_ATTENDANCE_CREATED", Some("INT_01")), ("ADMIN_ATTENDANCE_UPDATED", None)],
+        );
+        assert!(before_delete.iter().all(|(_, _, request_id)| request_id.starts_with("admin-")));
+
+        admin_delete_attendance_impl(&state, &token, &attendance_id, "2026-08-11").await.unwrap();
+        assert_eq!(audit_rows().await.len(), 2, "a delete writes no audit row");
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[tokio::test]

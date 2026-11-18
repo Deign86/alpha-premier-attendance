@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use super::session::admin_authorized;
+use super::session::Admin;
 use tauri::State;
 
 #[derive(serde::Serialize)]
@@ -408,9 +408,7 @@ pub(crate) async fn admin_get_sync_status(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<SyncHealthResponse, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let pending: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING','RETRY','PROCESSING')",
     )
@@ -529,9 +527,7 @@ pub(crate) async fn dtr_recon_run_manual(
     token: String,
     report_only: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let is_report_only = report_only.unwrap_or(true);
     let run_id = crate::services::dtr_recon::run_reconciliation(&state, is_report_only).await?;
     let report = crate::services::dtr_recon::get_latest_report(&state).await?;
@@ -550,9 +546,7 @@ pub(crate) async fn admin_sync_intern_dtr(
     user_id: Option<String>,
     start_from_user_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     // Plan todo 8: kill-switch still blocks manual entry before the guard
     // is touched, so a disabled device never holds the guard. Per-row sync
     // routes through this same command (user_id Some) — one owner per scope.
@@ -597,9 +591,7 @@ pub(crate) async fn admin_get_intern_dtr_sync(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let enabled = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
     Ok(serde_json::json!({ "success": true, "enabled": enabled }))
 }
@@ -612,20 +604,15 @@ pub(crate) async fn admin_set_intern_dtr_sync(
     token: String,
     enabled: bool,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     crate::services::dtr_sync::set_dtr_sync_enabled(&state.db, enabled).await?;
     // Report the effective state: the env override wins over the stored row.
     let effective = crate::services::dtr_sync::is_dtr_sync_enabled(&state.db).await;
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind("ADMIN")
-        .bind(format!("intern DTR sync {} on this device", if effective { "enabled" } else { "disabled" }))
-        .bind(uuid::Uuid::new_v4().to_string())
-        .execute(&state.db)
-        .await;
+    crate::services::audit::log(
+        &state.db,
+        crate::services::audit::Entry::new("ADMIN", &chrono::Utc::now().to_rfc3339(), &format!("intern DTR sync {} on this device", if effective { "enabled" } else { "disabled" }), &uuid::Uuid::new_v4().to_string()),
+    )
+    .await;
     Ok(serde_json::json!({ "success": true, "enabled": effective }))
 }
 
@@ -646,9 +633,7 @@ pub(crate) async fn admin_sheets_nuke_resync_impl(
     token: &str,
     confirm: bool,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(state, token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(state, token).await?;
     if !confirm {
         return Err("RESYNC_CONFIRMATION_REQUIRED".into());
     }
@@ -663,14 +648,11 @@ pub(crate) async fn admin_sheets_nuke_resync_impl(
     let result = crate::services::sheets_sync::nuke_and_resync(state).await;
     crate::state::sync_guard_release(&state.db, state.sync_in_progress.as_ref()).await;
     let result = result?;
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind("SHEETS_RESYNC")
-        .bind("Google Sheets wiped and re-exported from SQLite by administrator")
-        .bind(format!("admin-{}", uuid::Uuid::new_v4()))
-        .execute(&state.db)
-        .await;
+    crate::services::audit::log(
+        &state.db,
+        crate::services::audit::Entry::new("SHEETS_RESYNC", &chrono::Utc::now().to_rfc3339(), "Google Sheets wiped and re-exported from SQLite by administrator", &crate::services::audit::admin_request_id()),
+    )
+    .await;
     Ok(result)
 }
 

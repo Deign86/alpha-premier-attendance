@@ -2789,14 +2789,12 @@ pub async fn run_once(state: &AppState, endpoint: Option<&str>) -> Result<u64, S
                     } else {
                         format!("Deleted {table_name} row {row_id} from Google Sheets (row already absent)")
                     };
-                    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?,?,?,?,?,?)")
-                        .bind(uuid::Uuid::new_v4().to_string())
-                        .bind(chrono::Utc::now().to_rfc3339())
-                        .bind("SHEETS_DELETE_PROPAGATED")
-                        .bind(payload.as_ref().and_then(|p| p.get("userId")).and_then(|v| v.as_str()))
-                        .bind(&deleted_message)
-                        .bind(format!("sync-{id}"))
-                        .execute(&state.db).await;
+                    crate::services::audit::log(
+                        &state.db,
+                        crate::services::audit::Entry::new("SHEETS_DELETE_PROPAGATED", &chrono::Utc::now().to_rfc3339(), &deleted_message, &format!("sync-{id}"))
+                            .user(payload.as_ref().and_then(|p| p.get("userId")).and_then(|v| v.as_str())),
+                    )
+                    .await;
                 }
                 touched.insert(table_name);
             }

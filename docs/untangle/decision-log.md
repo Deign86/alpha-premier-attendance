@@ -108,6 +108,24 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
     - The two "load the earlier days of the week" effects (Live Attendance and Attendance corrections) are gone: up to six `get_attendance` calls each time the screen opened.
     - Boundary pin: `shared/arrival-fixtures.json`. `lib.rs::arrival_fields_match_the_fixture_the_client_renders` checks Rust produces each `expected` object; `client/src/arrival-fixtures.test.tsx` shows the same objects in the table and checks the time and the chip.
     - Left in `shared/` because `server/` uses them: `isNoGraceDate`, `hasWeeklyGrace`, `getManilaWeekStart`, `countWorkdays`, the two policy dates, `INTERN_DAILY_RATE_PHP`, `INTERN_LATE_DEDUCTION_PER_HOUR_PHP`, `INTERN_PAYROLL_PROFILE_ID`.
+- **`lib.rs` split by area into `src-tauri/src/commands/`** (R2, commit `17d3d7a`, a pure move)
+    - H50 (Rust half): `lib.rs` held every command of nine areas. It is now 399 lines: the module list and `run()`. The commands are in `commands/{kiosk, users, attendance, bathroom, payroll, exports, backup, lan, session, sync, voice, id_register}.rs`. `voice` and `id_register` are two areas the code has beyond the ten named in the plan.
+    - H51: the 3,970-line test module moved with the code, each test to the module whose functions it calls; the fixtures several of them share are `commands/test_support.rs`.
+    - N1 (rest): `services/users.rs` and the service tests import `commands::attendance::publish_attendance_change`, `commands::sync::enqueue_sync_on`, `commands::kiosk::scan_rfid_impl` by name instead of from the crate root.
+    - Each module's `use super::…` lines name what it takes from the others, so the links between areas can be read at the top of each file.
+    - A stray `#[tauri::command]` on `delete_cutoff_record` (never registered, takes `&AppState`) was removed.
+- **One admin guard: `session::Admin::check`** (R2)
+    - H42: 41 commands opened with a hand-written `if !admin_authorized … return Err("ADMIN_AUTH_REQUIRED")`, 8 used `require_admin`, and 3 returned another code. All 49 sites now call `Admin::check` (or `Admin::check_as` with the code they have always returned: `SETUP_AUTH_REQUIRED` twice, `ADMIN_SESSION_EXPIRED` once). `require_admin` is gone.
+    - It cannot be forgotten silently: `commands::tests::every_command_checks_the_admin_session_or_is_listed_as_public` reads the command sources and fails for a command that neither checks nor is on the list of 27 public commands (checked by deleting one guard: the test failed and named the command).
+- **One audit writer: `services/audit.rs`** (R2)
+    - H47: 9 inline `INSERT INTO audit_logs` statements in the commands with four column lists, and 5 more in the services (`users.rs` 2, `dtr_recon.rs` 2, `sheets_sync.rs` 1). All 14 go through `audit::log`; the two left in the source are test seeds (`database.rs`, `cloud_mirror.rs`). The row written is the same: the columns a caller did not fill were NULL before and are NULL now; each caller keeps its own request-id format.
+    - X15 (audit part): the dropped result is in one place, with the reason written beside it.
+    - N3 (part): the account events are still logged by `audit_admin_pin_event`; it is renamed in the vocabulary step.
+- **One "attendance changed" tail: `attendance::attendance_changed`** (R2)
+    - H44: scan, correction, backdated entry and delete each sequenced the same steps by hand. They now fill one `AttendanceChange` and call one function, which queues the Sheets rows in the caller's transaction, commits, then tells LAN viewers, the app window and the audit log.
+    - H46: the "flush `PendingSync` on the same transaction before commit" convention is inside that function.
+    - The scan's inline DTR enqueue and inline LAN event are gone; it uses `enqueue_intern_dtr` and the same notice as the others, with the row attached.
+    - The differences between the four were kept, each as a field of `AttendanceChange` (see "Calls made without the owner", 7). `each_admin_change_keeps_its_own_audit_row_and_a_delete_has_none` pins the audit ones.
 
 ## Tests removed in round 2 (each with its reason)
 
@@ -134,3 +152,15 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
     - Cutoff breakdown, a late line. Before: the chip appeared when the printed time ("8:30 AM", no seconds) was past :15. Now it appears when Rust's payable time differs from the scan, so a scan at 09:15:30 now shows the chip "10:00 AM" (it was charged from 10:00 all along).
 5. **R3, the Live Attendance table still shows the payable chip only when the roster loads** (that is, to an administrator), as before. `get_attendance` now carries the four fields for everyone who can call it; the screen keeps the old gate.
 6. **R3, browser mode shows no arrival badge and no clamp chip.** The legacy server sends none of the four fields and the client no longer computes them. The kiosk greeting in browser mode no longer says on time / grace / late for the same reason. Not a change in the app.
+7. **R2, differences between the four attendance tails: preserved, not decided.** Each is an explicit field of `AttendanceChange` and is listed in the table above that struct:
+    - Scan does not re-queue the later days of the person's week on the DTR sheet (`requeue_later_week: false`); correction, backdate and delete do.
+    - Correction and delete do not emit the `attendance-updated` window event (`window_event: None`); scan and backdate do.
+    - Backdate takes a second sequence number for the window event (`own_sequence: true`), even when there is no window; scan reuses the LAN notice's number.
+    - Delete writes no audit row (`audit: None`). Correction writes one without the person's id; backdate writes one with it; scan writes one with the card and the person.
+    - Only the scan's LAN notice carries the row, the scan's request id and the scan's time; the others say only that the day changed.
+    - Scan queues the DTR line only for sources `RFID` and `ADMIN_ASSISTED_SCAN`; the others have no such test.
+    - Each caller still sends its own set of keys in the Attendance sheet row (H33): 10 from the scan, 5 from a correction, 10 from a backdate, 2 from a delete.
+    - A failed commit in the scan still answers `INTERNAL_SERVER_ERROR` as a success-shaped JSON; the other three still return the database error text.
+8. **R2, one small reordering inside the correction.** The lookup of the person for the DTR line (a `SELECT` on `users` in the same transaction) now runs before the Attendance row is queued instead of after it. It reads nothing the queue insert writes, so the result is the same.
+9. **R2, "one JSON builder per record kind" is not a separate change.** The three shapes of a user object, the four of an attendance row and the five of a bathroom log entry differ in their keys today. Making one builder each without changing any JSON means one typed struct per shape; that is the typed-response step (R1) and is reported there.
+10. **Disk.** During the R2 run the disk went below the limit with `target/debug/incremental` already empty. A command to delete this crate's test binaries left by older versions was refused by the permission system and nothing was deleted; the space came back without any action from this session, and the full suites ran afterwards.

@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use super::session::require_admin;
+use super::session::Admin;
 use tauri::State;
 
 /// What Admin → Settings asks of the ID register connection.
@@ -28,7 +28,7 @@ pub(crate) async fn id_register_impl(
     ask: RegisterAsk<'_>,
 ) -> Result<IdRegisterPanel, String> {
     use crate::services::id_register;
-    require_admin(state, token).await?;
+    Admin::check(state, token).await?;
     match ask {
         RegisterAsk::Status => {}
         RegisterAsk::SignIn { email, password } => {

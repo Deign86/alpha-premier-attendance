@@ -5,7 +5,7 @@ use sqlx::Row;
 use std::path::Path;
 use std::path::PathBuf;
 use super::payroll::valid_cutoff_date;
-use super::session::admin_authorized;
+use super::session::Admin;
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
@@ -59,9 +59,7 @@ pub(crate) async fn open_generated_file(
     token: String,
     file_path: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let path = canonical_exports_path(&state, Path::new(&file_path))?;
     if !path.is_file() {
         return Err("FILE_NOT_FOUND".into());
@@ -82,9 +80,7 @@ pub(crate) async fn reveal_generated_file(
     token: String,
     file_path: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let path = canonical_exports_path(&state, Path::new(&file_path))?;
     if !path.is_file() {
         return Err("FILE_NOT_FOUND".into());
@@ -118,9 +114,7 @@ pub(crate) async fn open_generated_directory(
     token: String,
     directory_path: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let path = canonical_data_path(&state, Path::new(&directory_path))?;
     if !path.is_dir() {
         return Err("DIRECTORY_NOT_FOUND".into());
@@ -140,9 +134,7 @@ pub(crate) async fn export_attendance_xlsx(
     token: String,
     date: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| "INVALID_DATE".to_string())?;
     let rows = crate::reporting::load_attendance_rows(&state.db, &date)
         .await
@@ -172,7 +164,7 @@ pub(crate) async fn export_attendance_xlsx(
         .bind(&artifact_id).bind(&job_id).bind(&job_id).bind("ATTENDANCE_XLSX").bind("XLSX").bind(&file_name).bind(relative_path.to_string_lossy().replace('\\', "/")).bind(&hash).bind(bytes.len() as i64).bind(&completed)
         .execute(&state.db).await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE export_jobs SET status='SUCCEEDED',completed_at=?,progress_current=progress_total WHERE job_id=?").bind(&completed).bind(&job_id).execute(&state.db).await.map_err(|e| e.to_string())?;
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?, 'EXPORT_GENERATED', ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&completed).bind(format!("Attendance XLSX generated for {date}")).bind(format!("export-{job_id}")).execute(&state.db).await;
+    crate::services::audit::log(&state.db, crate::services::audit::Entry::new("EXPORT_GENERATED", &completed, &format!("Attendance XLSX generated for {date}"), &format!("export-{job_id}"))).await;
     let metadata = generated_file_metadata(
         &state,
         &file_name,
@@ -204,9 +196,7 @@ pub(crate) async fn generate_payroll_pdf(
     payroll_cutoff_label: String,
     worker_type: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     if !valid_cutoff_date(&cutoff_start) || !valid_cutoff_date(&cutoff_end) {
         return Err("INVALID_CUTOFF_PERIOD".into());
     }
@@ -316,9 +306,7 @@ pub(crate) async fn list_payroll_pdfs(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let rows = sqlx::query(
         "SELECT payroll_pdf_id,file_name,managed_relative_path,cutoff_start,cutoff_end,payroll_cutoff_label,worker_type,employee_count,total_amount_centavos,sha256,size_bytes,created_at FROM payroll_pdfs ORDER BY created_at DESC",
     )
@@ -358,9 +346,7 @@ pub(crate) async fn payroll_intern_payslips(
     cutoff_start: String,
     cutoff_end: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     if !valid_cutoff_date(&cutoff_start)
         || !valid_cutoff_date(&cutoff_end)
         || cutoff_end < cutoff_start
@@ -393,9 +379,7 @@ pub(crate) async fn save_intern_payslip_images(
     payroll_cutoff_label: String,
     images: Vec<crate::reporting::InternPayslipImage>,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let label = match payroll_cutoff_label.trim() {
         "" => "Payslips",
         trimmed => trimmed,

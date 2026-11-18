@@ -2,10 +2,8 @@ use chrono_tz::Asia::Manila;
 use crate::state::AppState;
 use sqlx::Row;
 use std::time::Instant;
-use super::attendance::{attendance_arrival, ensure_payroll_tx, flush_pending_sync};
-use super::sync::enqueue_sync_on;
+use super::attendance::{attendance_arrival, attendance_changed, ensure_payroll_tx, AttendanceChange, DtrLine, DtrPerson, LanNotice, WindowEvent};
 use super::users::resolve_user_photo_url;
-use tauri::Emitter;
 use tauri::State;
 
 #[tauri::command]
@@ -97,7 +95,11 @@ pub(crate) async fn scan_rfid_at(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Forgot RFID card".to_string());
     let received_at = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,rfid_uid,message,request_id) VALUES (?,?, 'SCAN_RECEIVED', ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&received_at).bind(if uid.is_empty() { None } else { Some(uid.as_str()) }).bind(format!("Scan request received from {source}")).bind(&request_id).execute(&state.db).await;
+    crate::services::audit::log(
+        &state.db,
+        crate::services::audit::Entry::new("SCAN_RECEIVED", &received_at, &format!("Scan request received from {source}"), &request_id).card(if uid.is_empty() { None } else { Some(uid.as_str()) }),
+    )
+    .await;
     let valid_uid = source == "MANUAL_TEST"
         || (uid.len() >= 4 && uid.len() <= 64 && uid.bytes().all(|byte| byte.is_ascii_hexdigit()));
     let valid_source = matches!(source, "RFID" | "MANUAL_TEST" | "ADMIN_ASSISTED_SCAN");
@@ -134,8 +136,11 @@ pub(crate) async fn scan_rfid_at(
                 "photoUrl": photo_url,
             })
         }).collect();
-        let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, 'ADMIN_ASSIST card presented', ?)")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(&received_at).bind(&uid).bind(user.get::<String,_>("user_id")).bind(&request_id).execute(&state.db).await;
+        crate::services::audit::log(
+            &state.db,
+            crate::services::audit::Entry::new("SCAN_SUCCESS", &received_at, "ADMIN_ASSIST card presented", &request_id).card(Some(&uid)).user(Some(&user.get::<String, _>("user_id"))),
+        )
+        .await;
         return Ok(serde_json::json!({
             "success": true,
             "requestId": request_id,
@@ -349,106 +354,73 @@ pub(crate) async fn scan_rfid_at(
             (id, "TIME_OUT", tin, Some(timestamp.clone()), new_status, tx, pending)
         }
     };
-    let payload = serde_json::json!({
-        "attendanceId": attendance_id,
-        "attendanceDate": date,
-        "userId": user_id,
-        "action": action,
-        "timeIn": time_in,
-        "timeOut": time_out,
-        "source": effective_source,
-        "recordedBy": recorded_by,
-        "recordedReason": recorded_reason,
-        "recordedAt": recorded_at,
-    });
-    flush_pending_sync(state, &mut tx, pending).await;
-    enqueue_sync_on(state, &mut tx, "Attendance", &attendance_id, "UPSERT", &payload).await;
-    // Intern-DTR auto-push: same success path covers TIME_IN and TIME_OUT.
-    // Enqueue-only (the 30s sync loop does the network); a DTR failure can
-    // never fail the scan. Skipped for non-interns; queued even while upload
-    // is switched off, which only pauses dispatch (owner decision D5).
-    if effective_user.get::<String, _>("employee_type").to_uppercase() == "INTERN"
-        && crate::config::dtr_spreadsheet_id_resolved(&state.lan).is_some()
-        && (effective_source == "RFID" || effective_source == "ADMIN_ASSISTED_SCAN")
-    {
-        enqueue_sync_on(
-            state,
-            &mut tx,
-            crate::services::dtr_sync::DTR_TABLE_NAME,
-            &attendance_id,
-            "UPSERT",
-            &serde_json::json!({
-                "userId": user_id,
-                "fullName": effective_user.get::<String, _>("full_name"),
-                "attendanceDate": date,
-                "timeIn": time_in,
-                "timeOut": time_out,
-            }),
-        )
-        .await;
-    }
-    if tx.commit().await.is_err() {
-        return Ok(
-            serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
-        );
-    }
-    let seq = state.next_sequence();
-    {
-        let mut debounce = state.scan_debounce.lock().await;
-        let now = Instant::now();
-        match debounce.get_mut(&cooldown_key) {
-            Some(entry) => entry.slow = Some(now),
-            None => {
-                debounce.insert(
-                    cooldown_key,
-                    crate::state::ScanDebounce { fast: now, slow: Some(now) },
-                );
-            }
-        }
-    }
-    let _ = state
-        .bus
-        .sender
-        .send(crate::lan_server::LanAttendanceEvent::AttendanceUpdated {
-            event_id: format!("{}:{}", state.server_instance_id, seq),
-            server_instance_id: state.server_instance_id.to_string(),
-            sequence: seq,
-            occurred_at: now,
-            request_id: request_id.clone(),
-            attendance_date: date.clone(),
-            attendance_id: attendance_id.clone(),
-            cause: action.to_string(),
-            mutation: "upsert".into(),
-            attendance: Some(crate::lan_server::LanAttendanceRow {
-                attendance_id: attendance_id.clone(),
-                attendance_date: date.clone(),
-                user_id: user_id.clone(),
-                full_name: effective_user.get::<String, _>("full_name"),
-                department: effective_user.get::<Option<String>, _>("department"),
-                time_in: time_in.clone(),
-                time_out: time_out.clone(),
-                status: attendance_status.to_string(),
-            }),
-        });
-    let event_payload = serde_json::json!({
-        "attendanceId": attendance_id.clone(),
-        "attendanceDate": date.clone(),
-        "userId": user_id.clone(),
-        "action": action,
-        "timeIn": time_in,
-        "timeOut": time_out,
-        "status": attendance_status,
-        "sequence": seq
-    });
-    if let Some(app) = app {
-        let _ = app.emit("attendance-updated", &event_payload);
-    }
     let audit_msg = if is_admin_card {
         format!("{} recorded (Assisted by {})", action, recorded_by.as_deref().unwrap_or("Admin"))
     } else {
         format!("{} recorded", action)
     };
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&timestamp).bind(&uid).bind(&user_id).bind(audit_msg).bind(&request_id).execute(&state.db).await;
+    let full_name = effective_user.get::<String, _>("full_name");
+    // Intern-DTR auto-push: same success path covers TIME_IN and TIME_OUT.
+    // Enqueue-only (the 30s sync loop does the network); a DTR failure can
+    // never fail the scan. Skipped for non-interns; queued even while upload
+    // is switched off, which only pauses dispatch (owner decision D5).
+    let mirrored = effective_source == "RFID" || effective_source == "ADMIN_ASSISTED_SCAN";
+    let time_in_shown = serde_json::json!(&time_in);
+    let time_out_shown = serde_json::json!(&time_out);
+    let committed = attendance_changed(state, tx, AttendanceChange {
+        attendance_id: &attendance_id,
+        date: &date,
+        pending,
+        sheet_operation: "UPSERT",
+        sheet_row: serde_json::json!({
+            "attendanceId": attendance_id,
+            "attendanceDate": date,
+            "userId": user_id,
+            "action": action,
+            "timeIn": time_in,
+            "timeOut": time_out,
+            "source": effective_source,
+            "recordedBy": recorded_by,
+            "recordedReason": recorded_reason,
+            "recordedAt": recorded_at,
+        }),
+        person: mirrored.then(|| DtrPerson { user_id: user_id.clone(), full_name: full_name.clone(), employee_type: effective_user.get("employee_type") }),
+        dtr: DtrLine::Write { time_in: time_in_shown.as_str(), time_out: time_out_shown.as_str() },
+        // A scan has never re-queued the later days of the week; the three admin paths do.
+        requeue_later_week: false,
+        follow: Vec::new(),
+        tap: Some(cooldown_key),
+        lan: LanNotice {
+            cause: action,
+            mutation: "upsert",
+            from_scan: Some((request_id.clone(), now, crate::lan_server::LanAttendanceRow {
+                attendance_id: attendance_id.clone(),
+                attendance_date: date.clone(),
+                user_id: user_id.clone(),
+                full_name: full_name.clone(),
+                department: effective_user.get::<Option<String>, _>("department"),
+                time_in: time_in.clone(),
+                time_out: time_out.clone(),
+                status: attendance_status.to_string(),
+            })),
+        },
+        window_event: Some(WindowEvent {
+            app,
+            user_id: &user_id,
+            action,
+            time_in: time_in_shown.clone(),
+            time_out: time_out_shown.clone(),
+            status: attendance_status,
+            own_sequence: false,
+        }),
+        audit: Some(crate::services::audit::Entry::new("SCAN_SUCCESS", &timestamp, &audit_msg, &request_id).card(Some(&uid)).user(Some(&user_id))),
+    })
+    .await;
+    if committed.is_err() {
+        return Ok(
+            serde_json::json!({"success":false,"requestId":request_id,"error":{"code":"INTERNAL_SERVER_ERROR","message":"Unable to save attendance."}}),
+        );
+    }
     let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, effective_user.get::<Option<String>,_>("photo_url"));
     let shown = attendance_arrival(&state.db, &user_id, &attendance_id, &date, serde_json::json!(&time_in).as_str()).await;
     Ok(

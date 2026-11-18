@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use std::path::Path;
-use super::session::admin_authorized;
+use super::session::Admin;
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
@@ -77,9 +77,7 @@ pub(crate) async fn db_backup(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let config_dir = crate::paths::resolve(&app)?.config_dir;
     let file_path = crate::database::create_portable_backup(
         &state.db,
@@ -115,9 +113,7 @@ pub(crate) async fn db_restore_request(
     token: String,
     source_path: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let source = std::path::PathBuf::from(source_path.trim());
     if source.as_os_str().is_empty() {
         return Err("RESTORE_SOURCE_REQUIRED".into());
@@ -158,9 +154,7 @@ pub(crate) async fn db_dismiss_restore_failure(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let marker = crate::database::restore_failed_path(&state.data_dir);
     let _ = std::fs::remove_file(&marker);
     Ok(serde_json::json!({"success": true, "message": "Restore failure notice dismissed."}))
@@ -173,9 +167,7 @@ pub(crate) async fn db_open_backups_dir(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let dir = state.backups_dir.clone();
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("cannot create backup folder: {error}"))?;
@@ -197,9 +189,7 @@ pub(crate) async fn db_save_backup_copy(
     source_path: String,
     destination_path: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let source = crate::paths::canonical_within(
         &state.backups_dir,
         Path::new(&source_path),

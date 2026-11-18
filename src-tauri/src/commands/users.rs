@@ -3,7 +3,7 @@ use crate::services::users::delete_user_and_cascade;
 use crate::services::users::save_user;
 use crate::state::AppState;
 use sqlx::Row;
-use super::session::admin_authorized;
+use super::session::Admin;
 use tauri::State;
 
 pub(crate) fn resolve_user_photo_url(
@@ -25,9 +25,7 @@ pub(crate) async fn admin_users(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     let rows = sqlx::query("SELECT user_id, rfid_uid, full_name, department, status, employee_type, gender, daily_rate_centavos, payroll_profile_id, photo_url, card_type FROM users WHERE employee_type = 'INTERN' OR card_type = 'ADMIN_ASSIST' ORDER BY full_name")
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     let users = rows.into_iter().map(|row| {
@@ -71,9 +69,7 @@ pub(crate) async fn admin_upsert_user(
     token: String,
     user: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     admin_upsert_user_inner(state.inner(), user).await
 }
 
@@ -102,9 +98,7 @@ pub(crate) async fn admin_delete_user(
     token: String,
     user_id: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_AUTH_REQUIRED".into());
-    }
+    Admin::check(&state, &token).await?;
     delete_user_and_cascade(state.inner(), &user_id)
         .await
         .map_err(friendly_delete_user_error)?;
@@ -117,9 +111,7 @@ pub(crate) async fn setup_lookup_card(
     token: String,
     rfid_uid: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("SETUP_AUTH_REQUIRED".into());
-    }
+    Admin::check_as(&state, &token, "SETUP_AUTH_REQUIRED").await?;
     let uid = rfid_uid.trim().to_ascii_uppercase();
     let row = sqlx::query("SELECT user_id,rfid_uid,full_name,department,status,employee_type,gender,daily_rate_centavos,payroll_profile_id,photo_url FROM users WHERE rfid_uid=?").bind(&uid).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
     let user_val = row.map(|r| {
@@ -206,9 +198,7 @@ pub(crate) async fn upload_photo(
     user_id: String,
     base64_data: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("SETUP_AUTH_REQUIRED".into());
-    }
+    Admin::check_as(&state, &token, "SETUP_AUTH_REQUIRED").await?;
     upload_photo_inner(state.inner(), &user_id, &base64_data).await
 }
 

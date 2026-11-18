@@ -104,14 +104,7 @@ pub(crate) async fn setup_lock(state: State<'_, AppState>) -> Result<serde_json:
 }
 
 pub(crate) async fn audit_admin_pin_event(state: &AppState, event_type: &str, message: &str) {
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id,timestamp,event_type,message,request_id) VALUES (?,?,?,?,?)")
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(event_type)
-        .bind(message)
-        .bind(uuid::Uuid::new_v4().to_string())
-        .execute(&state.db)
-        .await;
+    crate::services::audit::log(&state.db, crate::services::audit::Entry::new(event_type, &chrono::Utc::now().to_rfc3339(), message, &uuid::Uuid::new_v4().to_string())).await;
 }
 
 #[tauri::command]
@@ -119,21 +112,32 @@ pub(crate) async fn admin_get_session(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    if !admin_authorized(&state, &token).await {
-        return Err("ADMIN_SESSION_EXPIRED".into());
-    }
+    Admin::check_as(&state, &token, "ADMIN_SESSION_EXPIRED").await?;
     Ok(serde_json::json!({"success":true}))
 }
 
-/// `Err(ADMIN_AUTH_REQUIRED)` unless `token` is the live admin session.
-pub(crate) async fn require_admin(state: &AppState, token: &str) -> Result<(), String> {
-    if admin_authorized(state, token).await {
-        Ok(())
-    } else {
-        Err("ADMIN_AUTH_REQUIRED".into())
+/// Proof that the caller holds the live admin session. Every admin-only command gets one from [`Admin::check`]
+/// before it does anything; `commands::tests::every_command_checks_the_admin_session_or_is_listed_as_public`
+/// fails for a command that neither checks nor is on the public list.
+pub(crate) struct Admin(());
+
+impl Admin {
+    /// `Err("ADMIN_AUTH_REQUIRED")` unless `token` is the live admin session.
+    pub(crate) async fn check(state: &AppState, token: &str) -> Result<Admin, String> {
+        Self::check_as(state, token, "ADMIN_AUTH_REQUIRED").await
+    }
+
+    /// The same check for the three commands that have always refused with another code.
+    pub(crate) async fn check_as(state: &AppState, token: &str, refusal: &'static str) -> Result<Admin, String> {
+        if admin_authorized(state, token).await {
+            Ok(Admin(()))
+        } else {
+            Err(refusal.into())
+        }
     }
 }
 
+/// Whether `token` is the live admin session. Commands go through [`Admin::check`].
 pub(crate) async fn admin_authorized(state: &AppState, token: &str) -> bool {
     let mut session = state.admin_session.lock().await;
     let Some(value) = session.as_ref() else {
