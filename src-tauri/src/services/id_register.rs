@@ -430,6 +430,12 @@ pub(crate) mod tests {
         pub(crate) asked: Vec<&'static str>,
         /// Every write the backup sent, in order, one list per request.
         pub(crate) written: Vec<Vec<serde_json::Value>>,
+        /// What those writes left behind: `att_users/APG-2026-101` → its fields.
+        pub(crate) stored: std::collections::BTreeMap<String, serde_json::Value>,
+        /// The status reading the records back is refused with, when it is (the rules before Keystone's ADR 0028).
+        pub(crate) refuse_reading_back: Option<u16>,
+        /// Refuse a batch that writes under `attprivate_…`, as those same older rules do.
+        pub(crate) refuse_apart: bool,
     }
 
     impl Fake {
@@ -456,7 +462,13 @@ pub(crate) mod tests {
             }
             let counting = path.starts_with("/reg:runAggregationQuery");
             let backup = path.starts_with("/commit");
-            self.asked.push(if backup { "backup" } else if counting { "count" } else { "list" });
+            // The kiosk's own records, read back: a page of a collection, or a count of one.
+            let own = path.strip_prefix("/reg/").map(|rest| rest.split('?').next().unwrap_or("").to_string()).or_else(|| {
+                let asked: serde_json::Value = serde_json::from_str(body).ok()?;
+                let of = asked.pointer("/structuredAggregationQuery/structuredQuery/from/0/collectionId")?.as_str()?.to_string();
+                (counting && of != "idreg").then_some(of)
+            });
+            self.asked.push(if backup { "backup" } else if own.is_some() { "own" } else if counting { "count" } else { "list" });
             if !head.to_ascii_lowercase().contains("authorization: bearer id-1") {
                 return (401, serde_json::json!([{"error": {"code": 401, "message": "Missing or invalid authentication."}}]));
             }
@@ -466,9 +478,38 @@ pub(crate) mod tests {
                 }
                 let sent: serde_json::Value = serde_json::from_str(body).unwrap();
                 let writes = sent["writes"].as_array().unwrap().clone();
+                if self.refuse_apart && body.contains("/attprivate_") {
+                    return refused(403, "Missing or insufficient permissions.");
+                }
                 let results: Vec<serde_json::Value> = writes.iter().map(|_| serde_json::json!({"updateTime": "t"})).collect();
+                for write in &writes {
+                    let short = |name: &serde_json::Value| name.as_str().unwrap().rsplit_once("/keystone/apg/").unwrap().1.to_string();
+                    if write.get("delete").is_some() {
+                        self.stored.remove(&short(&write["delete"]));
+                    } else {
+                        self.stored.insert(short(&write["update"]["name"]), write["update"]["fields"].clone());
+                    }
+                }
                 self.written.push(writes);
                 return (200, serde_json::json!({"writeResults": results, "commitTime": "t"}));
+            }
+            if let Some(collection) = own {
+                if let Some(code) = self.refuse_reading_back {
+                    return (code, serde_json::json!([{"error": {"code": code, "message": "Missing or insufficient permissions."}}]));
+                }
+                let held: Vec<&serde_json::Value> = self.stored.iter().filter(|(name, _)| name.split('/').next() == Some(collection.as_str())).map(|(_, fields)| fields).collect();
+                if counting {
+                    return (200, serde_json::json!([{"result": {"aggregateFields": {"n": {"integerValue": held.len().to_string()}}}, "readTime": "t"}]));
+                }
+                let query = path.split_once('?').map_or("", |(_, query)| query);
+                let number = |name: &str| query.split('&').find_map(|pair| pair.strip_prefix(&format!("{name}="))).and_then(|v| v.parse::<usize>().ok());
+                let (from, size) = (number("pageToken").unwrap_or(0), number("pageSize").unwrap_or(20));
+                let page: Vec<serde_json::Value> = held.iter().skip(from).take(size).map(|fields| serde_json::json!({"name": "n", "fields": fields})).collect();
+                let mut answer = serde_json::json!({"documents": page});
+                if from + size < held.len() {
+                    answer["nextPageToken"] = serde_json::json!((from + size).to_string());
+                }
+                return (200, answer);
             }
             if self.refuse_register {
                 return (403, serde_json::json!([{"error": {"code": 403, "message": "Missing or insufficient permissions."}}]));
@@ -672,14 +713,19 @@ pub(crate) mod tests {
         // Signing in: the sign-in, a count to prove the account can read, then the first pull.
         assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["signin", "count", "count", "list"]);
 
-        // The first pass after signing in also sends the backup; with nothing changed, the next sends nothing.
+        // The first pass after signing in also sends the records, then counts each of the 11 collections once to
+        // make Firebase the main record; with nothing changed, the next pass sends and counts nothing.
         run_once(&state, Some(&endpoints)).await.unwrap();
         run_once(&state, Some(&endpoints)).await.unwrap();
-        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "backup", "token", "count"]);
+        // Two requests: the records, then what is kept apart (the intern's account number), on its own.
+        let mut expected = vec!["token", "count", "backup", "backup"];
+        expected.extend(["own"; 11]);
+        expected.extend(["token", "count"]);
+        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), expected);
 
         fake.lock().unwrap().cards.push(intern("APG-2026-127", "Ana Reyes"));
         run_once(&state, Some(&endpoints)).await.unwrap();
-        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "list", "backup"]);
+        assert_eq!(std::mem::take(&mut fake.lock().unwrap().asked), vec!["token", "count", "list", "backup", "backup"]);
         close(state, temp, server).await;
     }
 

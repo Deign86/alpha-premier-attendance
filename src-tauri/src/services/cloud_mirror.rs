@@ -1,21 +1,26 @@
-//! The kiosk's copy of its own records in the shared backend.
+//! The attendance records in the shared backend.
 //!
-//! The SQLite database on this computer stays the source of truth. This
-//! sends a copy of each business record to Keystone's Firebase project
-//! (`keystone/apg/att_<table>/<id>`), so the other Alpha Premier programs can
-//! read attendance and payroll from one place, and a lost kiosk is not lost
-//! records.
+//! Keystone's Firebase project holds the records
+//! (`keystone/apg/att_<table>/<id>`); the SQLite database on this computer
+//! is the kiosk's working copy of them. There is one kiosk and it is the only
+//! writer, so nothing is ever merged.
 //!
-//! - One way only. Nothing is ever read back into the database from here.
-//! - It runs after the ID register pass, with the same kiosk sign-in. A
-//!   failure is a line in Admin → System and a retry; it never blocks a tap.
+//! - Every change is written here first, so a tap never waits on the
+//!   internet, and sent after the next ID register pass with the same kiosk
+//!   sign-in. A failure is a line in Admin → System and a retry.
 //! - A row is sent when its content differs from what was last sent, and
 //!   removed there when it is gone here. What was last sent is remembered by
 //!   hash in `cloud-backup.json` beside the database; deleting that file sends
 //!   everything again, which is harmless.
-//! - Left out on purpose: settings (they hold the admin PIN hash and
-//!   sign-in tokens), the Sheets queue, export jobs, and every TIN and bank
-//!   account number. Photos are files on this computer and are never sent.
+//! - A kiosk with no people and no such file (a new or reinstalled computer)
+//!   fills its database from Firebase before it sends anything.
+//! - Firebase is called the main record only once every collection there has
+//!   been counted equal to this database; a copy of the database as it was
+//!   then is kept beside it.
+//! - TINs and bank account numbers go apart, under `attprivate_<table>/<id>`.
+//! - Left here on purpose: settings (they hold the admin PIN hash and
+//!   sign-in tokens), the Sheets queue and export jobs. Photos are files on
+//!   this computer and are never sent.
 
 use crate::services::id_register::{ask, Answer, Endpoints};
 use crate::services::voice_pull::{read_setting, store_setting};
@@ -23,7 +28,7 @@ use crate::state::AppState;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-/// The records that are copied: table, its key column, and columns left out.
+/// The records that are sent: table, its key column, and the columns that go apart under `attprivate_<table>`.
 const TABLES: &[(&str, &str, &[&str])] = &[
     ("users", "user_id", &["tin", "account_number"]),
     ("attendance", "attendance_id", &[]),
@@ -38,6 +43,10 @@ const TABLES: &[(&str, &str, &[&str])] = &[
 
 const AT_KEY: &str = "cloud_backup_at";
 const PROBLEM_KEY: &str = "cloud_backup_problem";
+const MAIN_SINCE_KEY: &str = "cloud_main_record_since";
+/// The database as it was when Firebase became the main record.
+const KEPT_FILE: &str = "attendance-before-firebase.db";
+const DOCUMENTS_A_PAGE: usize = 300;
 /// Keystone's rules look the kiosk up once for each write, and Firestore
 /// allows a batch 20 such lookups. A larger batch could be refused whole.
 const WRITES_A_REQUEST: usize = 20;
@@ -47,6 +56,7 @@ const REQUESTS_A_PASS: usize = 60;
 
 const NOT_ALLOWED: &str = "This kiosk's account may not write the backup. Ask the owner to publish Keystone's rules for the kiosk backup.";
 const UNREACHABLE: &str = "Could not reach the shared backend. The backup will try again.";
+const NOT_READABLE: &str = "This kiosk's account may not read its records back yet. Ask the owner to publish Keystone's rules for the attendance records.";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +66,8 @@ pub struct BackupStatus {
     /// How many of them the shared backend has as they are now.
     pub backed_up: i64,
     pub last_complete_at: Option<String>,
+    /// Since when Firebase has been counted equal to this database and is the main record.
+    pub main_record_since: Option<String>,
     pub problem: Option<String>,
 }
 
@@ -63,7 +75,8 @@ pub struct BackupStatus {
 type Sent = BTreeMap<String, BTreeMap<String, String>>;
 
 struct Change {
-    table: &'static str,
+    /// `users`, or `private_users` for the columns kept apart; see `collection`. `Sent` is keyed by it.
+    set: String,
     key: String,
     /// The row's hash and fields; none when the row is gone and its copy is to be removed.
     row: Option<(String, serde_json::Value)>,
@@ -141,28 +154,49 @@ async fn changes(state: &AppState, sent: &Sent) -> Result<(Vec<Change>, i64, i64
         .fetch_all(&state.db)
         .await
         .map_err(|e| e.to_string())?;
-        let before = sent.get(table);
-        let mut here = std::collections::BTreeSet::new();
-        for (key, json) in rows {
-            records += 1;
-            let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
-            if before.and_then(|rows| rows.get(&key)) == Some(&hash) {
-                same += 1;
-            } else {
-                let fields: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                pending.push(Change { table, key: key.clone(), row: Some((hash, fields)) });
-            }
-            here.insert(key);
+        let mut sets = vec![(table.to_string(), rows)];
+        if !left_out.is_empty() {
+            let pairs: Vec<String> = left_out.iter().map(|column| format!("'{column}', \"{column}\"")).collect();
+            let filled: Vec<String> = left_out.iter().map(|column| format!("COALESCE(\"{column}\", '') <> ''")).collect();
+            let rows: Vec<(String, String)> = sqlx::query_as(&format!(
+                "SELECT CAST(\"{key_column}\" AS TEXT), json_object('{key_column}', \"{key_column}\", {}) FROM \"{table}\" WHERE {}",
+                pairs.join(", "),
+                filled.join(" OR ")
+            ))
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+            sets.push((format!("private_{table}"), rows));
         }
-        for gone in before.into_iter().flat_map(|rows| rows.keys()).filter(|key| !here.contains(*key)) {
-            pending.push(Change { table, key: gone.clone(), row: None });
+        for (set, rows) in sets {
+            let before = sent.get(&set);
+            let mut here = std::collections::BTreeSet::new();
+            for (key, json) in rows {
+                records += 1;
+                let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+                if before.and_then(|rows| rows.get(&key)) == Some(&hash) {
+                    same += 1;
+                } else {
+                    let fields: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                    pending.push(Change { set: set.clone(), key: key.clone(), row: Some((hash, fields)) });
+                }
+                here.insert(key);
+            }
+            for gone in before.into_iter().flat_map(|rows| rows.keys()).filter(|key| !here.contains(*key)) {
+                pending.push(Change { set: set.clone(), key: gone.clone(), row: None });
+            }
         }
     }
     Ok((pending, records, same))
 }
 
+/// `users` is kept under `att_users`, `private_users` under `attprivate_users`.
+fn collection(set: &str) -> String {
+    if set.starts_with("private_") { format!("att{set}") } else { format!("att_{set}") }
+}
+
 fn write_for(change: &Change, names: &str) -> serde_json::Value {
-    let name = format!("{names}/att_{}/{}", change.table, document_id(&change.key));
+    let name = format!("{names}/{}/{}", collection(&change.set), document_id(&change.key));
     match &change.row {
         None => serde_json::json!({"delete": name}),
         Some((_, fields)) => {
@@ -190,23 +224,27 @@ pub(crate) async fn push(
     endpoints: &Endpoints,
     id_token: &str,
 ) -> Result<usize, String> {
+    rebuild_if_new(state, client, endpoints, id_token).await?;
     let mut sent = load_sent(state);
     let (pending, _, _) = changes(state, &sent).await?;
     let mut left = pending.len();
-    for batch in pending.chunks(WRITES_A_REQUEST).take(REQUESTS_A_PASS) {
+    // What is kept apart goes last and in requests of its own: until Keystone's rules for it are published it is
+    // refused, and that must not hold up a tap's own record.
+    let (apart, open): (Vec<Change>, Vec<Change>) = pending.into_iter().partition(|change| change.set.starts_with("private_"));
+    for batch in open.chunks(WRITES_A_REQUEST).chain(apart.chunks(WRITES_A_REQUEST)).take(REQUESTS_A_PASS) {
         let writes: Vec<serde_json::Value> = batch.iter().map(|change| write_for(change, &endpoints.names)).collect();
         let answer = ask(client.post(&endpoints.commit).bearer_auth(id_token).json(&serde_json::json!({"writes": writes}))).await;
         match answer {
             Answer::Ok(_) => {}
             Answer::Refused(401 | 403, _) => return Err(problem(state, NOT_ALLOWED).await),
             Answer::Refused(code, message) => {
-                let first = batch.first().map(|change| format!("{} {}", change.table, change.key)).unwrap_or_default();
+                let first = batch.first().map(|change| format!("{} {}", change.set, change.key)).unwrap_or_default();
                 return Err(problem(state, &format!("The shared backend refused part of the backup ({code} {message}), starting at {first}.")).await);
             }
             Answer::Unreachable => return Err(problem(state, UNREACHABLE).await),
         }
         for change in batch {
-            let rows = sent.entry(change.table.to_string()).or_default();
+            let rows = sent.entry(change.set.clone()).or_default();
             match &change.row {
                 Some((hash, _)) => rows.insert(change.key.clone(), hash.clone()),
                 None => rows.remove(&change.key),
@@ -220,7 +258,161 @@ pub(crate) async fn push(
         store_setting(&state.db, AT_KEY, &now, &now).await?;
     }
     let _ = sqlx::query("DELETE FROM app_settings WHERE key = ?").bind(PROBLEM_KEY).execute(&state.db).await;
+    if left == 0 && read_setting(&state.db, MAIN_SINCE_KEY).await.is_none() {
+        make_main_record(state, client, endpoints, id_token, sent).await?;
+    }
     Ok(left)
+}
+
+fn every_set() -> Vec<String> {
+    TABLES
+        .iter()
+        .flat_map(|(table, _, apart)| std::iter::once(table.to_string()).chain((!apart.is_empty()).then(|| format!("private_{table}"))))
+        .collect()
+}
+
+async fn count_there(client: &reqwest::Client, endpoints: &Endpoints, id_token: &str, set: &str) -> Result<usize, Answer> {
+    let counted = ask(client
+        .post(format!("{}:runAggregationQuery", endpoints.register))
+        .bearer_auth(id_token)
+        .json(&serde_json::json!({"structuredAggregationQuery": {
+            "structuredQuery": {"from": [{"collectionId": collection(set)}]},
+            "aggregations": [{"alias": "n", "count": {}}],
+        }})))
+    .await;
+    match counted {
+        Answer::Ok(body) => body
+            .get(0)
+            .and_then(|first| first.pointer("/result/aggregateFields/n/integerValue"))
+            .and_then(|n| n.as_str().and_then(|s| s.parse().ok()).or_else(|| n.as_u64().map(|n| n as usize)))
+            .ok_or(Answer::Refused(0, "an answer the kiosk could not read".into())),
+        other => Err(other),
+    }
+}
+
+/// Called once everything has been sent: Firebase becomes the main record only when each collection there holds
+/// as many records as this database. A short collection is sent again; nothing is marked until all are equal.
+async fn make_main_record(state: &AppState, client: &reqwest::Client, endpoints: &Endpoints, id_token: &str, mut sent: Sent) -> Result<(), String> {
+    for set in every_set() {
+        let here = sent.get(&set).map_or(0, BTreeMap::len);
+        let there = match count_there(client, endpoints, id_token, &set).await {
+            Ok(there) => there,
+            Err(Answer::Unreachable) => return Err(problem(state, UNREACHABLE).await),
+            Err(_) => return Err(problem(state, NOT_READABLE).await),
+        };
+        if there < here {
+            sent.remove(&set);
+            save_sent(state, &sent)?;
+            return Err(problem(state, &format!("Firebase holds {there} of this kiosk's {here} {} records. They are being sent again.", collection(&set))).await);
+        }
+        if there > here {
+            return Err(problem(state, &format!("Firebase holds {there} {} records and this kiosk {here}. Nothing was changed; tell IT.", collection(&set))).await);
+        }
+    }
+    let kept = state.data_dir.join(KEPT_FILE);
+    if !kept.exists() {
+        crate::database::snapshot_database_from_pool(&state.db, &kept).await?;
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    store_setting(&state.db, MAIN_SINCE_KEY, &now, &now).await
+}
+
+async fn documents(client: &reqwest::Client, endpoints: &Endpoints, id_token: &str, set: &str) -> Result<Vec<serde_json::Value>, Answer> {
+    let mut found = Vec::new();
+    let mut page = String::new();
+    loop {
+        let mut request = client
+            .get(format!("{}/{}", endpoints.register, collection(set)))
+            .bearer_auth(id_token)
+            .query(&[("pageSize", DOCUMENTS_A_PAGE.to_string())]);
+        if !page.is_empty() {
+            request = request.query(&[("pageToken", page.as_str())]);
+        }
+        let body = match ask(request).await {
+            Answer::Ok(body) => body,
+            other => return Err(other),
+        };
+        found.extend(body.get("documents").and_then(|d| d.as_array()).into_iter().flatten().filter_map(|d| d.get("fields").cloned()));
+        match body.get("nextPageToken").and_then(|t| t.as_str()).filter(|t| !t.is_empty()) {
+            Some(next) => page = next.to_string(),
+            None => return Ok(found),
+        }
+    }
+}
+
+fn bind<'q>(query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>, value: &serde_json::Value) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    let text = |name: &str| value.get(name).and_then(|v| v.as_str()).map(str::to_string);
+    if let Some(whole) = value.get("integerValue") {
+        // Firestore writes whole numbers as strings.
+        return query.bind(whole.as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| whole.as_i64()));
+    }
+    if let Some(number) = value.get("doubleValue") {
+        return query.bind(number.as_f64());
+    }
+    if let Some(flag) = value.get("booleanValue") {
+        return query.bind(flag.as_bool().map(i64::from));
+    }
+    query.bind(text("stringValue"))
+}
+
+/// A kiosk with no people and no record of ever having sent anything is a new or reinstalled computer: its database
+/// is filled from Firebase, whole or not at all. A kiosk that has people is never touched.
+async fn rebuild_if_new(state: &AppState, client: &reqwest::Client, endpoints: &Endpoints, id_token: &str) -> Result<(), String> {
+    if sent_file(state).exists() {
+        return Ok(());
+    }
+    let people: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    if people > 0 {
+        return Ok(());
+    }
+    let mut fetched = Vec::new();
+    for set in every_set() {
+        match documents(client, endpoints, id_token, &set).await {
+            Ok(found) => fetched.push((set, found)),
+            Err(Answer::Unreachable) => return Err(problem(state, UNREACHABLE).await),
+            Err(_) => return Err(problem(state, NOT_READABLE).await),
+        }
+    }
+    if fetched.iter().all(|(_, found)| found.is_empty()) {
+        return Ok(());
+    }
+    let failed = |e: sqlx::Error| format!("this kiosk's database could not be filled from Firebase: {e}");
+    let mut tx = state.db.begin().await.map_err(failed)?;
+    // Rows arrive table by table; what they point to is checked once, at the end.
+    sqlx::query("PRAGMA defer_foreign_keys = ON").execute(&mut *tx).await.map_err(failed)?;
+    for (set, found) in &fetched {
+        let table = set.strip_prefix("private_").unwrap_or(set);
+        let key_column = TABLES.iter().find(|(name, _, _)| *name == table).map_or("", |(_, key, _)| *key);
+        let columns: Vec<String> = sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')")).fetch_all(&mut *tx).await.map_err(failed)?;
+        for fields in found {
+            let given: Vec<&String> = columns.iter().filter(|column| fields.get(column.as_str()).is_some()).collect();
+            let sql = if set.starts_with("private_") {
+                let set_to: Vec<String> = given.iter().map(|column| format!("\"{column}\" = ?")).collect();
+                format!("UPDATE \"{table}\" SET {} WHERE \"{key_column}\" = ?", set_to.join(", "))
+            } else {
+                let names: Vec<String> = given.iter().map(|column| format!("\"{column}\"")).collect();
+                format!("INSERT OR REPLACE INTO \"{table}\" ({}) VALUES ({})", names.join(", "), vec!["?"; given.len()].join(", "))
+            };
+            let mut query = sqlx::query(&sql);
+            for column in &given {
+                query = bind(query, &fields[column.as_str()]);
+            }
+            if set.starts_with("private_") {
+                query = bind(query, &fields[key_column]);
+            }
+            query.execute(&mut *tx).await.map_err(failed)?;
+        }
+    }
+    tx.commit().await.map_err(failed)?;
+    // What is here now is what Firebase has: nothing is to be sent back.
+    let (arrived, _, _) = changes(state, &Sent::new()).await?;
+    let mut sent = Sent::new();
+    for change in arrived {
+        if let Some((hash, _)) = change.row {
+            sent.entry(change.set).or_default().insert(change.key, hash);
+        }
+    }
+    save_sent(state, &sent)
 }
 
 pub async fn status(state: &AppState) -> BackupStatus {
@@ -232,6 +424,7 @@ pub async fn status(state: &AppState) -> BackupStatus {
         records,
         backed_up,
         last_complete_at: read_setting(&state.db, AT_KEY).await,
+        main_record_since: read_setting(&state.db, MAIN_SINCE_KEY).await,
         problem: read_setting(&state.db, PROBLEM_KEY).await.filter(|p| !p.is_empty()),
     }
 }
@@ -239,7 +432,7 @@ pub async fn status(state: &AppState) -> BackupStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::id_register::tests::{close, intern, kiosk, nowhere, register, serve, PASSWORD};
+    use crate::services::id_register::tests::{close, kiosk, nowhere, register, serve, PASSWORD};
     use crate::services::id_register::{run_once, sign_in};
 
     async fn add_user(state: &AppState, user_id: &str, card: &str, name: &str) {
@@ -272,16 +465,21 @@ mod tests {
 
         let written: Vec<serde_json::Value> = fake.lock().unwrap().written.concat();
         assert_eq!(written.len() as i64, before.records, "one write for each covered record");
+        // The TIN goes apart, with the key it belongs to and nothing else.
+        let apart = written.iter().find(|write| named(write) == "attprivate_users/APG-2026-101").expect("the TIN is sent apart");
+        assert_eq!(apart["update"]["fields"], serde_json::json!({"user_id": {"stringValue": "APG-2026-101"}, "tin": {"stringValue": "123-456-789"}, "account_number": {"stringValue": "0000"}}), "0000 is what a person without a bank account has");
+        let open_to_owner_screens: Vec<&serde_json::Value> = written.iter().filter(|write| named(write).starts_with("att_")).collect();
+        assert!(!serde_json::to_string(&open_to_owner_screens).unwrap().contains("123-456-789"), "and never in att_…");
         let user = written.iter().find(|write| named(write) == "att_users/APG-2026-101").expect("the user is sent");
         let fields = &user["update"]["fields"];
         assert_eq!(fields["full_name"], serde_json::json!({"stringValue": "Juan Dela Cruz"}));
         assert_eq!(fields["daily_rate_centavos"], serde_json::json!({"integerValue": "50000"}), "a number stays a number");
         assert_eq!(fields["gender"], serde_json::json!({"nullValue": null}), "an empty value stays empty");
-        assert!(fields.get("tin").is_none() && fields.get("account_number").is_none(), "a TIN or an account number never leaves the computer");
+        assert!(fields.get("tin").is_none() && fields.get("account_number").is_none(), "a TIN or an account number is not in the person's own record");
         assert!(written.iter().any(|write| named(write).starts_with("att_attendance/")), "the tap is sent");
         assert!(written.iter().any(|write| named(write).starts_with("att_audit_logs/")));
         let everything = serde_json::to_string(&written).unwrap();
-        for kept_here in ["admin_pin_hash", "refresh-1", "id_register_refresh_token", "123-456-789", "app_settings", "sync_queue"] {
+        for kept_here in ["admin_pin_hash", "refresh-1", "id_register_refresh_token", "app_settings", "sync_queue"] {
             assert!(!everything.contains(kept_here), "{kept_here} is not part of the backup");
         }
         let after = status(&state).await;
@@ -306,6 +504,13 @@ mod tests {
         assert_eq!(changed.iter().filter(|name| name.starts_with("att_users/")).count(), 1);
         assert!(changed.iter().all(|name| name == "att_users/APG-2026-101" || name.starts_with("att_audit_logs/")), "{changed:?}");
 
+        // A TIN and account number cleared here are removed there.
+        fake.lock().unwrap().written.clear();
+        sqlx::query("UPDATE users SET tin = NULL, account_number = '' WHERE user_id = 'APG-2026-101'").execute(&state.db).await.unwrap();
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        let cleared = fake.lock().unwrap().written.concat();
+        assert!(cleared.iter().any(|write| write["delete"].as_str().is_some_and(|name| name.ends_with("/attprivate_users/APG-2026-101"))), "{cleared:?}");
+
         // A record removed here is removed there.
         fake.lock().unwrap().written.clear();
         crate::delete_user_and_cascade(&state, "APG-2026-101").await.unwrap();
@@ -314,6 +519,132 @@ mod tests {
         assert!(removed.iter().any(|write| write["delete"].as_str().is_some_and(|name| name.ends_with("/att_users/APG-2026-101"))), "{removed:?}");
         let last = status(&state).await;
         assert_eq!(last.backed_up, last.records);
+        close(state, temp, server).await;
+    }
+
+    async fn everything(state: &AppState) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        for &(table, key_column, _) in TABLES {
+            let columns: Vec<String> = sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')")).fetch_all(&state.db).await.unwrap();
+            let pairs: Vec<String> = columns.iter().map(|column| format!("'{column}', \"{column}\"")).collect();
+            let found: Vec<(String, String)> = sqlx::query_as(&format!("SELECT '{table}/' || \"{key_column}\", json_object({}) FROM \"{table}\" ORDER BY 1", pairs.join(", ")))
+                .fetch_all(&state.db)
+                .await
+                .unwrap();
+            rows.extend(found);
+        }
+        rows
+    }
+
+    #[tokio::test]
+    async fn cloud_backup_rebuilds_a_new_kiosk_from_firebase_and_never_fills_one_that_has_people() {
+        let (first, first_temp) = kiosk("rebuild-first").await;
+        for n in 0..(DOCUMENTS_A_PAGE + 5) {
+            add_user(&first, &format!("APG-2026-{:03}", 100 + n), &format!("{:08X}", 0xABCD_0000u32 + n as u32), &format!("Person {n}")).await;
+        }
+        sqlx::query("UPDATE users SET tin = '123-456-789', account_number = '0001-22' WHERE user_id = 'APG-2026-101'").execute(&first.db).await.unwrap();
+        let tap = crate::scan_rfid_impl(None, &first, serde_json::json!({"rfidUid": "ABCD0001", "source": "RFID"})).await.unwrap();
+        assert_eq!(tap["success"], true, "{tap}");
+        let fake = register(vec![]);
+        let (endpoints, server) = serve(fake.clone()).await;
+        sign_in(&first, Some(&endpoints), "kiosk@example.test", PASSWORD).await.unwrap();
+        run_once(&first, Some(&endpoints)).await.unwrap();
+        assert_eq!(status(&first).await.backed_up, status(&first).await.records);
+        let original = everything(&first).await;
+        assert!(original.len() > DOCUMENTS_A_PAGE, "more than one page of people");
+
+        // A new computer, signed in with the kiosk's account: before the rules allow reading back, it says so and stays empty.
+        let (second, second_temp) = kiosk("rebuild-second").await;
+        sign_in(&second, Some(&endpoints), "kiosk@example.test", PASSWORD).await.unwrap();
+        fake.lock().unwrap().refuse_reading_back = Some(403);
+        run_once(&second, Some(&endpoints)).await.unwrap();
+        assert_eq!(status(&second).await.problem.as_deref(), Some(NOT_READABLE));
+        assert!(everything(&second).await.iter().all(|(name, _)| !name.starts_with("users/")));
+
+        // Allowed: it fills itself, every value as the first kiosk has it, and sends nothing back.
+        fake.lock().unwrap().refuse_reading_back = None;
+        fake.lock().unwrap().written.clear();
+        run_once(&second, Some(&endpoints)).await.unwrap();
+        let rebuilt = everything(&second).await;
+        // The second kiosk's own sign-in wrote audit lines of its own; everything the first had is there unchanged.
+        for row in &original {
+            assert!(rebuilt.contains(row), "{} did not arrive as it was", row.0);
+        }
+        let sent_back: Vec<String> = fake.lock().unwrap().written.concat().iter().map(named).collect();
+        assert!(sent_back.iter().all(|name| name.starts_with("att_audit_logs/")), "only its own new audit lines go up: {sent_back:?}");
+        let tap = crate::scan_rfid_impl(None, &second, serde_json::json!({"rfidUid": "ABCD0002", "source": "RFID"})).await.unwrap();
+        assert_eq!(tap["success"], true, "a rebuilt kiosk takes taps: {tap}");
+
+        // A kiosk that has people is never filled, even with no progress file.
+        let (third, third_temp) = kiosk("rebuild-third").await;
+        add_user(&third, "APG-2026-900", "FFFF0000", "Someone Else").await;
+        sign_in(&third, Some(&endpoints), "kiosk@example.test", PASSWORD).await.unwrap();
+        fake.lock().unwrap().asked.clear();
+        run_once(&third, Some(&endpoints)).await.unwrap();
+        let people: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&third.db).await.unwrap();
+        assert_eq!(people, 1);
+        third.db.close().await;
+        second.db.close().await;
+        let _ = std::fs::remove_dir_all(&third_temp);
+        let _ = std::fs::remove_dir_all(&second_temp);
+        close(first, first_temp, server).await;
+    }
+
+    #[tokio::test]
+    async fn cloud_backup_what_is_kept_apart_never_holds_up_the_rest() {
+        let (state, temp) = kiosk("apart-refused").await;
+        add_user(&state, "APG-2026-101", "ABCD1234", "Juan Dela Cruz").await;
+        let fake = register(vec![]);
+        let (endpoints, server) = serve(fake.clone()).await;
+        sign_in(&state, Some(&endpoints), "kiosk@example.test", PASSWORD).await.unwrap();
+        // Keystone's rules as they are before ADR 0028: att_… is written, attprivate_… is not.
+        fake.lock().unwrap().refuse_apart = true;
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        let held = fake.lock().unwrap().stored.keys().cloned().collect::<Vec<_>>();
+        assert!(held.contains(&"att_users/APG-2026-101".to_string()), "{held:?}");
+        assert!(held.iter().all(|name| name.starts_with("att_")), "{held:?}");
+        let now = status(&state).await;
+        assert_eq!(now.problem.as_deref(), Some(NOT_ALLOWED));
+        assert_eq!(now.records - now.backed_up, 1, "only what is kept apart waits");
+        close(state, temp, server).await;
+    }
+
+    #[tokio::test]
+    async fn cloud_backup_cutover_is_marked_only_when_firebase_counts_equal() {
+        let (state, temp) = kiosk("cutover").await;
+        add_user(&state, "APG-2026-101", "ABCD1234", "Juan Dela Cruz").await;
+        add_user(&state, "APG-2026-102", "ABCD1235", "Ana Reyes").await;
+        let fake = register(vec![]);
+        let (endpoints, server) = serve(fake.clone()).await;
+        sign_in(&state, Some(&endpoints), "kiosk@example.test", PASSWORD).await.unwrap();
+
+        // The rules do not let the kiosk count yet: everything is sent, nothing is marked.
+        fake.lock().unwrap().refuse_reading_back = Some(403);
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        let waiting = status(&state).await;
+        assert_eq!((waiting.backed_up, waiting.main_record_since.clone(), waiting.problem.as_deref()), (waiting.records, None, Some(NOT_READABLE)));
+
+        // (Reading back and writing what is kept apart are published together; refused, the rest still went.)
+        // Firebase lost a record the kiosk believes it sent: not marked, and that collection goes again.
+        fake.lock().unwrap().refuse_reading_back = None;
+        fake.lock().unwrap().stored.remove("att_users/APG-2026-102");
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        let short = status(&state).await;
+        assert_eq!(short.main_record_since, None);
+        assert!(short.problem.as_deref().is_some_and(|p| p.contains("1 of this kiosk's 2 att_users")), "{short:?}");
+        assert!(!state.data_dir.join(KEPT_FILE).exists());
+
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        let done = status(&state).await;
+        assert!(done.main_record_since.is_some() && done.problem.is_none(), "{done:?}");
+        assert!(fake.lock().unwrap().stored.contains_key("att_users/APG-2026-102"));
+        // The database as it was at that moment is kept beside it, and opens.
+        crate::database::validate_database_file(&state.data_dir.join(KEPT_FILE)).await.unwrap();
+
+        // Once marked, it is not counted again.
+        fake.lock().unwrap().asked.clear();
+        run_once(&state, Some(&endpoints)).await.unwrap();
+        assert!(!fake.lock().unwrap().asked.contains(&"own"));
         close(state, temp, server).await;
     }
 
@@ -416,6 +747,78 @@ mod tests {
         }
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// Round trip: any value SQLite can hold in a row goes to Firestore's form, through JSON text as it does over
+    /// the wire, and back into SQLite as the same row text of the same type, so a rebuilt kiosk has nothing to send
+    /// back. Whole numbers, text and empty values are exact; a real number is exact to 15 significant digits, which
+    /// is how SQLite itself writes it out. 5,000 generated values.
+    #[tokio::test]
+    async fn property_cloud_backup_values_come_back_as_they_went() {
+        let (state, temp) = kiosk("property-values").await;
+        let mut seed: u64 = 0x5EED_F1BE;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed >> 11
+        };
+        let pieces = ["", "a", "Ñ", "'", "\"", "\\", "/", " ", "\n", "0", "1.0", "007", "null", "true", "é", "日", "😀", "-", "~", "{", "APG-2026-101"];
+        for round in 0..5_000 {
+            let value = match next() % 6 {
+                0 => serde_json::Value::Null,
+                1 => serde_json::json!([i64::MIN, -1, 0, 1, 50000, i64::MAX][(next() % 6) as usize]),
+                2 => serde_json::json!((next() as i64).wrapping_sub(1 << 52)),
+                3 => serde_json::json!([8.0, 0.5, -0.1, 1e300, 1e-300, 7.999999999999999][(next() % 6) as usize]),
+                4 => serde_json::json!((next() % 2_000_000) as f64 / 1000.0 - 1000.0),
+                _ => serde_json::json!((0..next() % 6).map(|_| pieces[(next() % pieces.len() as u64) as usize]).collect::<String>()),
+            };
+            let as_held = |v: &serde_json::Value| match v {
+                serde_json::Value::Null => serde_json::json!({"nullValue": null}),
+                other => firestore_value(other),
+            };
+            // As `changes` reads it: SQLite writes the row as JSON (a real number to 15 significant digits), and that is what is sent.
+            let direct = match &value {
+                serde_json::Value::Null => sqlx::query("SELECT json_object('v', ?)").bind(None::<String>),
+                serde_json::Value::Number(n) if n.is_i64() => sqlx::query("SELECT json_object('v', ?)").bind(n.as_i64()),
+                serde_json::Value::Number(n) => sqlx::query("SELECT json_object('v', ?)").bind(n.as_f64()),
+                other => sqlx::query("SELECT json_object('v', ?)").bind(other.as_str().map(str::to_string)),
+            };
+            let first = |row: sqlx::sqlite::SqliteRow| sqlx::Row::try_get::<String, _>(&row, 0);
+            let here: String = direct.try_map(first).fetch_one(&state.db).await.unwrap();
+            let read: serde_json::Value = serde_json::from_str(&here).unwrap();
+            let over_the_wire: serde_json::Value = serde_json::from_str(&as_held(&read["v"]).to_string()).unwrap();
+            let back: String = bind(sqlx::query("SELECT json_object('v', ?)"), &over_the_wire).try_map(first).fetch_one(&state.db).await.unwrap();
+            assert_eq!(back, here, "round {round}: {value} went as {over_the_wire}");
+            let (sent, kept): (serde_json::Value, serde_json::Value) = (serde_json::from_str(&back).unwrap(), serde_json::from_str(&here).unwrap());
+            assert_eq!(sent["v"].is_f64(), kept["v"].is_f64(), "round {round}: {value} changed type");
+            if !value.is_f64() {
+                assert_eq!(sent["v"], value, "round {round}: only a real number may differ, past its 15th digit");
+            }
+        }
+        // Firestore may answer a whole-valued double without its decimal point; it still comes back a real number.
+        let whole: String = bind(sqlx::query("SELECT typeof(?)"), &serde_json::json!({"doubleValue": 8})).try_map(|row: sqlx::sqlite::SqliteRow| sqlx::Row::try_get(&row, 0)).fetch_one(&state.db).await.unwrap();
+        assert_eq!(whole, "real");
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// No two keys share a document, and no document name can leave its collection. 20,000 generated keys.
+    #[test]
+    fn property_cloud_backup_document_names_never_collide_or_escape() {
+        let mut seed: u64 = 0xD0C_1D;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed >> 11
+        };
+        let pieces = ["a", "B", "7", "/", ".", "_", "~", "2F", " ", "-", ":", "@", "Ñ", "%", "__", ".."];
+        let mut seen = std::collections::BTreeMap::new();
+        for _ in 0..20_000 {
+            let key: String = (0..next() % 5).map(|_| pieces[(next() % pieces.len() as u64) as usize]).collect();
+            let id = document_id(&key);
+            assert!(!id.is_empty() && !id.contains('/') && id != "." && id != ".." && !id.starts_with("__"), "{key:?} -> {id:?}");
+            if let Some(other) = seen.insert(id.clone(), key.clone()) {
+                assert_eq!(other, key, "{other:?} and {key:?} share {id:?}");
+            }
+        }
     }
 
     #[test]

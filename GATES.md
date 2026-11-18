@@ -2490,3 +2490,26 @@ Why: this repository and its release downloads are public. From v0.2.48 the inst
   EVIDENCE: `cargo test --lib`: 415 passed, the 3 known Linux-only path tests failed as on main; client: 633 passed (2026-11-18)
 - [ ] P3: The owner has changed the kiosk account's password in Firebase and typed the new one once on the kiosk; the old one from v0.2.48 no longer signs in.
   EVIDENCE: pending (the owner, after this is released)
+
+## Firebase holds the attendance records; the kiosk keeps a working copy (owner decision, 2026-11-18)
+
+OWNS: `src-tauri/src/services/cloud_mirror.rs`, `client/src/id-register-panel.tsx`, `docs/shared-backend.md`
+
+Agreed in the grill session: Firebase becomes the real database; SQLite stays on the kiosk as an offline copy that can be rebuilt; one kiosk is the only writer; taps keep working with no internet and are sent later; TINs and bank account numbers move to their own locked collection; the old file is kept at the cutover. What "source of truth" means here, with one writer: the kiosk writes locally first and sends; a kiosk with an empty database fills itself from Firebase; nothing is merged. Rules: apg-keystone pull request 62 (ADR 0028).
+
+- [x] F1: A TIN or bank account number goes only to `attprivate_<table>/<id>`, never into `att_…`; clearing it here removes it there.
+  CHECK: `cd src-tauri && cargo test --lib cloud_backup`
+  EVIDENCE: `cloud_backup_sends_each_record_once_then_only_what_changed` and `cloud_backup_what_is_kept_apart_never_holds_up_the_rest` passed (2026-11-18). The second holds under Keystone's rules as they are live today: `att_…` still goes, only what is kept apart waits.
+- [x] F2: A kiosk with an empty database and no backup progress fills itself from Firebase, every covered value equal to the first kiosk's (TINs included), and sends nothing back afterwards. A kiosk that has people is never filled.
+  CHECK: `cd src-tauri && cargo test --lib cloud_backup_rebuilds`
+  EVIDENCE: `cloud_backup_rebuilds_a_new_kiosk_from_firebase_and_never_fills_one_that_has_people` passed (305 people over two pages, a TIN, a tap; refused first, then filled; a tap on the rebuilt kiosk). `property_cloud_backup_values_come_back_as_they_went` (5,000 values) and `property_cloud_backup_document_names_never_collide_or_escape` (20,000 keys) passed. The first property found two things: serde_json read real numbers one step off (fixed with its `float_roundtrip` feature), and SQLite writes a real number out to 15 significant digits, so that is the precision kept (whole numbers and text are exact). Not shown: a rebuild from a copy of the kiosk's real database.
+- [x] F3: The cutover is marked only after the count of every collection in Firebase equals the kiosk's; a short collection is sent again and nothing is marked; at the mark, a copy of the database is kept beside it.
+  CHECK: `cd src-tauri && cargo test --lib cloud_backup_cutover`
+  EVIDENCE: `cloud_backup_cutover_is_marked_only_when_firebase_counts_equal` passed: not marked while counting is refused, not marked and re-sent while one record is missing, marked when equal, the kept copy opens, never counted again.
+- [x] F4: Admin → System says where the records are and since when.
+  CHECK: `npm test -w client -- id-register-panel.test.tsx`
+  EVIDENCE: client 634 passed, with `says since when Firebase is the main record`.
+- [x] F5: Everything else still passes.
+  CHECK: `cd src-tauri && cargo test --lib` and `npm run lint:oxlint && npm run typecheck && npm test`
+  EVIDENCE: `cargo test --lib`: 420 passed, the 3 known Linux-only path tests failed as on main; integration suites 11/18/75/36/58/24 passed; oxlint 0 errors, typecheck clean, shared 41 / client 634 / server 208. Two existing expectations changed, both because the behaviour was decided to change: the backup test no longer says a TIN never leaves the computer (owner: move them to Firebase; it now says where it goes and where it never goes), and `id_register_is_listed_only_when_it_has_grown` now expects the second request (what is kept apart) and the one-time count of 11 collections. The desktop app was not run (no desktop in this session).
+- [ ] F6: Shown on the real project from the real kiosk (after Keystone's rules are published).
