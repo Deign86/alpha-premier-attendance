@@ -2456,3 +2456,15 @@ The ID Maker records each issued card in the shared register (Keystone's Firebas
   CHECK: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -- --test-threads=1 && npm run lint && npm run typecheck && npm test
   EVIDENCE: JS exit 0 (shared 41, client 632, server 208). Rust on Linux: lib 417 passed / 3 failed (the same 3 Windows-path tests); integration 11/18/75/36/58/24. Not shown: the real Firebase project and a real kiosk.
 - Known cost, accepted by building it this way: the kiosk account's password is inside the released program. Someone who takes the program apart can read the ID register and write to the kiosk backup, and nothing else in Keystone. See `docs/id-register.md`.
+
+## A month block the app adds looks like the months HR made (owner report, 2026-11-18)
+
+OWNS: `src-tauri/src/services/dtr_sync.rs` (`build_new_month_block_requests`, `month_block_look_requests`)
+
+What was wrong, seen in the live DTR sheet: the hand-made months are Sheets tables (real dates in column A, clock times `h:mm:ss am/pm` in B to E, a number in F, borders round every cell, rows alternating white and pale grey, the whole total row salmon). The November block the app added had the green header and the salmon on two cells and nothing else: dates and times were text, no borders, no alternating rows.
+
+- [x] D1: A new block's requests carry the whole look and real dates.
+  CHECK: `cd src-tauri && cargo test --lib month_block`
+  EVIDENCE: 4 passed (2026-11-18); `test_month_block_payload` checks the date serials (46327 for 11/1/2026; 46296 for 10/1/2026, the number HR's own October cell holds), the three number formats, the borders over days and total, the banding over the days, and J3 still last. Whole suite: 417 passed, the 3 known Linux-only path tests failed as before.
+- [ ] D2: The blocks already in the sheet are repaired, and a block the released kiosk adds for December looks like the others.
+  EVIDENCE: pending (the live sheet, then the first December tap)
