@@ -437,7 +437,7 @@ mod tests {
         let (state, temp) = kiosk("backup").await;
         add_user(&state, "APG-2026-101", "ABCD1234", "Juan Dela Cruz").await;
         sqlx::query("UPDATE users SET tin = '123-456-789' WHERE user_id = 'APG-2026-101'").execute(&state.db).await.unwrap();
-        let tap = crate::scan_rfid_impl(None, &state, serde_json::json!({"rfidUid": "ABCD1234", "source": "RFID"})).await.unwrap();
+        let tap = crate::commands::kiosk::scan_rfid_impl(None, &state, serde_json::json!({"rfidUid": "ABCD1234", "source": "RFID"})).await.unwrap();
         assert_eq!(tap["success"], true, "{tap}");
         let fake = register(vec![]);
         let (endpoints, server) = serve(fake.clone()).await;
@@ -528,7 +528,7 @@ mod tests {
             add_user(&first, &format!("APG-2026-{:03}", 100 + n), &format!("{:08X}", 0xABCD_0000u32 + n as u32), &format!("Person {n}")).await;
         }
         sqlx::query("UPDATE users SET tin = '123-456-789', account_number = '0001-22' WHERE user_id = 'APG-2026-101'").execute(&first.db).await.unwrap();
-        let tap = crate::scan_rfid_impl(None, &first, serde_json::json!({"rfidUid": "ABCD0001", "source": "RFID"})).await.unwrap();
+        let tap = crate::commands::kiosk::scan_rfid_impl(None, &first, serde_json::json!({"rfidUid": "ABCD0001", "source": "RFID"})).await.unwrap();
         assert_eq!(tap["success"], true, "{tap}");
         let fake = register(vec![]);
         let (endpoints, server) = serve(fake.clone()).await;
@@ -557,7 +557,7 @@ mod tests {
         }
         let sent_back: Vec<String> = fake.lock().unwrap().written.concat().iter().map(named).collect();
         assert!(sent_back.iter().all(|name| name.starts_with("att_audit_logs/")), "only its own new audit lines go up: {sent_back:?}");
-        let tap = crate::scan_rfid_impl(None, &second, serde_json::json!({"rfidUid": "ABCD0002", "source": "RFID"})).await.unwrap();
+        let tap = crate::commands::kiosk::scan_rfid_impl(None, &second, serde_json::json!({"rfidUid": "ABCD0002", "source": "RFID"})).await.unwrap();
         assert_eq!(tap["success"], true, "a rebuilt kiosk takes taps: {tap}");
 
         // A kiosk that has people is never filled, even with no progress file.

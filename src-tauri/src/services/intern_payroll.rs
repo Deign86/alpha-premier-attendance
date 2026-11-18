@@ -187,6 +187,61 @@ pub fn arrival(attendance_date: &str, actual_time_in: &str, grace_available: boo
     })
 }
 
+/// The clock-in a late day is paid from. Under a policy with the quarter-hour
+/// clamp, an arrival after :15:00 rounds up to the next full hour; an arrival
+/// at/after 12:00 (the half-day rule) and every arrival under a policy without
+/// the clamp is paid from the actual clock-in.
+fn clamped_clock_in(
+    rules: PolicyRules,
+    date: NaiveDate,
+    time_in: DateTime<chrono_tz::Tz>,
+    late_start: DateTime<chrono_tz::Tz>,
+) -> Result<DateTime<chrono_tz::Tz>, String> {
+    let local_time_in = time_in.time();
+    let afternoon_half_day = time_in.hour() >= 12;
+    let after_quarter_hour = rules.quarter_hour_clamp
+        && !afternoon_half_day
+        && (local_time_in.minute() > 15
+            || (local_time_in.minute() == 15
+                && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0)));
+    if !(time_in >= late_start && after_quarter_hour) {
+        return Ok(time_in);
+    }
+    let hour_start = date
+        .and_hms_opt(local_time_in.hour(), 0, 0)
+        .ok_or("Invalid Manila late clamp time")?;
+    let next_hour = hour_start
+        .checked_add_signed(chrono::Duration::hours(1))
+        .ok_or("Invalid Manila late clamp time")?;
+    Ok(Manila
+        .from_local_datetime(&next_hour)
+        .single()
+        .ok_or("Invalid Manila late clamp time")?)
+}
+
+/// The time-in a row is shown and paid from, with the same grace decision and
+/// clamp as [`calculate`]: the given stamp itself unless the day's policy
+/// clamps it to the next full hour. `None` for unreadable input.
+pub fn payable_time_in(attendance_date: &str, actual_time_in: &str, grace_available: bool) -> Option<String> {
+    let date = NaiveDate::parse_from_str(attendance_date, "%Y-%m-%d").ok()?;
+    let rules = policy_for_date(attendance_date).rules();
+    let time_in = DateTime::parse_from_rfc3339(actual_time_in)
+        .ok()?
+        .with_timezone(&Manila);
+    let start = Manila
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 8, 0, 0)
+        .single()?;
+    if grace_available && in_grace_window(rules, start, time_in) {
+        return Some(actual_time_in.to_string());
+    }
+    let clamped = clamped_clock_in(rules, date, time_in, start + chrono::Duration::minutes(1)).ok()?;
+    Some(if clamped == time_in {
+        actual_time_in.to_string()
+    } else {
+        clamped.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    })
+}
+
 /// One priced day as stored in the `payroll` table.
 pub struct PricedDay<'a> {
     pub date: &'a str,
@@ -196,6 +251,12 @@ pub struct PricedDay<'a> {
     pub is_half_day: bool,
     pub half_day_deduction_centavos: i64,
     pub grace_used: bool,
+}
+
+fn clock_short(stamp: &str) -> Option<String> {
+    DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|value| value.with_timezone(&Manila).format("%-I:%M %p").to_string())
 }
 
 /// The cutoff Breakdown lines for one priced day: a weekly-grace or late line,
@@ -209,6 +270,11 @@ pub fn explain_day(day: &PricedDay<'_>, late_rate_php: f64) -> Vec<serde_json::V
             .unwrap_or_else(|| "—".to_string())
     };
     let (time_in, time_out) = (clock(day.actual_time_in), clock(day.actual_time_out));
+    // The clamped clock-in a late line is charged from ("9:00 AM"); absent when the day is paid from the actual one.
+    let payable = day.actual_time_in.and_then(|actual| {
+        let shown = payable_time_in(day.date, actual, false)?;
+        (shown != actual).then(|| clock_short(&shown)).flatten()
+    });
     let item = |category: &str, label: &str, details: String, worked: Option<f64>, short: Option<f64>, late: Option<i64>, amount: f64| {
         serde_json::json!({
             "date": day.date,
@@ -216,6 +282,7 @@ pub fn explain_day(day: &PricedDay<'_>, late_rate_php: f64) -> Vec<serde_json::V
             "label": label,
             "details": details,
             "timeIn": time_in,
+            "payableTimeIn": if category == "LATE" { payable.clone() } else { None },
             "timeOut": time_out,
             "workedHours": worked,
             "hoursShort": short,
@@ -307,32 +374,12 @@ pub fn calculate(
         .single()
         .ok_or("Invalid Manila start time")?;
     let late_start = start + chrono::Duration::minutes(1);
-    let local_time_in = time_in.time();
     let grace_used = grace_available && in_grace_window(rules, start, time_in);
     // Half-day rule: an arrival at/after 12:00 renders the afternoon half of
     // the 8-hour day: no clamp and no late hours; the shortfall is half-day
     // undertime.
     let afternoon_half_day = time_in.hour() >= 12;
-    // After :15:00, round the payable clock-in up to the next full hour.
-    let after_quarter_hour = rules.quarter_hour_clamp
-        && !afternoon_half_day
-        && (local_time_in.minute() > 15
-            || (local_time_in.minute() == 15
-                && (local_time_in.second() > 0 || local_time_in.nanosecond() > 0)));
-    let clamped_in = if time_in >= late_start && after_quarter_hour {
-        let hour_start = date
-            .and_hms_opt(local_time_in.hour(), 0, 0)
-            .ok_or("Invalid Manila late clamp time")?;
-        let next_hour = hour_start
-            .checked_add_signed(chrono::Duration::hours(1))
-            .ok_or("Invalid Manila late clamp time")?;
-        Manila
-            .from_local_datetime(&next_hour)
-            .single()
-            .ok_or("Invalid Manila late clamp time")?
-    } else {
-        time_in
-    };
+    let clamped_in = clamped_clock_in(rules, date, time_in, late_start)?;
     let computed_in = if grace_used { time_in } else { clamped_in };
     let payable_in = if grace_used || time_in < late_start {
         start
@@ -592,6 +639,53 @@ mod tests {
             }
         }
         assert!(priced > 15_000, "only {priced} of 20000 samples priced");
+    }
+
+    /// PROPERTY: the payable time-in a screen is given is the clock-in the day was priced from.
+    #[test]
+    fn property_the_payable_time_in_shown_is_the_one_the_day_is_priced_from() {
+        let mut sampler = Sampler(0x9A1D_2026);
+        let mut priced = 0;
+        for _ in 0..20_000 {
+            let (date, time_in, time_out) = sampler.day();
+            let grace_available = sampler.below(2) == 0;
+            let Some(result) = price(&date, time_in, time_out, grace_available) else { continue };
+            priced += 1;
+            let actual = stamp(&date, time_in);
+            let shown = payable_time_in(&date, &actual, grace_available).unwrap();
+            let context = format!("{date} {actual} grace_available={grace_available}");
+            assert_eq!(
+                DateTime::parse_from_rfc3339(&shown).unwrap(),
+                DateTime::parse_from_rfc3339(&result.computed_time_in).unwrap(),
+                "{context}"
+            );
+            // Only the first policy clamps, and a clamped time is a later full hour.
+            if shown != actual {
+                assert_eq!(policy_for_date(&date), PolicyVersion::V1WeeklyGrace, "{context}");
+                assert!(shown.ends_with(":00:00+08:00") && shown > actual, "{context}");
+            }
+        }
+        assert!(priced > 15_000, "only {priced} of 20000 samples priced");
+    }
+
+    #[test]
+    fn payable_time_in_clamps_strictly_after_the_quarter_hour_under_the_first_policy_only() {
+        let payable = |date: &str, clock: &str, grace: bool| payable_time_in(date, &format!("{date}T{clock}+08:00"), grace).unwrap();
+        let actual = |date: &str, clock: &str| format!("{date}T{clock}+08:00");
+        // 09:15:00 exactly is paid from the scan; a millisecond or a nanosecond later is paid from 10:00.
+        assert_eq!(payable("2026-07-30", "09:15:00", false), actual("2026-07-30", "09:15:00"));
+        assert_eq!(payable("2026-07-31", "09:15:00.001", false), "2026-07-31T10:00:00+08:00");
+        assert_eq!(payable("2026-08-03", "09:15:00.000000001", false), "2026-08-03T10:00:00+08:00");
+        assert_eq!(payable("2026-07-29", "10:16:00", false), "2026-07-29T11:00:00+08:00");
+        // The grace window ends at 08:15:00 exactly: a nanosecond later is late and clamps to 09:00 even with a claim free.
+        assert_eq!(payable("2026-07-27", "08:15:00.000000000", true), actual("2026-07-27", "08:15:00.000000000"));
+        assert_eq!(payable("2026-07-27", "08:15:00.000000001", true), "2026-07-27T09:00:00+08:00");
+        // An afternoon arrival is a half day, not a clamped late.
+        assert_eq!(payable("2026-07-28", "13:22:00", false), actual("2026-07-28", "13:22:00"));
+        // Later policies pay from the scan.
+        assert_eq!(payable("2026-10-05", "08:30:00", false), actual("2026-10-05", "08:30:00"));
+        assert_eq!(payable("2026-11-18", "08:30:00", false), actual("2026-11-18", "08:30:00"));
+        assert_eq!(payable_time_in("2026-07-28", "not a time", false), None);
     }
 
     /// PROPERTY: staying longer or arriving earlier never lowers the day's pay.

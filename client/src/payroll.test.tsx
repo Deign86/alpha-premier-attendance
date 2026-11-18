@@ -8,7 +8,7 @@ import type {
 } from "@rfid-attendance/shared";
 
 import * as api from "./api";
-import { PayrollWorkspace } from "./App";
+import { PayrollWorkspace } from "./payroll-workspace";
 import { Toasts } from "./toasts";
 
 function record(overrides: Partial<PayrollCutoffRecord> = {}): PayrollCutoffRecord {

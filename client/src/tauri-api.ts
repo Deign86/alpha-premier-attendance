@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, IdRegisterStatus, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
+import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
+import type { AdminAttendanceResponse, AdminUsersResponse, AttendanceListItem, AttendanceListResponse, InternPayrollReportResponse, PayrollCutoffsResponse, PayrollProfilesResponse, SetupErrorResponse, SetupLookupResponse, SetupUpsertResponse, AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanRequest, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, IdRegisterStatus, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
 
 export interface NativeHealthResponse {
   success: boolean;
@@ -63,7 +64,15 @@ export interface NativeSyncStatusResponse {
   } | null;
 }
 
-/** Native command bridge. The existing HTTP API remains available during cutover. */
+type Outcome = { success: boolean; error?: { message?: string } };
+type CodedOutcome = { success: boolean; error?: { code?: string; message?: string } };
+type CutoffSaved = { success: boolean; payrollId?: string; netPay?: number };
+type Unlocked = { success: true; token: string; expiresAt: string };
+
+/**
+ * The desktop transport: one member per Rust command. `http-api.ts` implements the same members against the legacy
+ * Node server for browser development, and `transport.ts` picks one of the two.
+ */
 export const tauriApi = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
   getHealth: () => invoke<NativeHealthResponse>('get_health'),
@@ -71,9 +80,10 @@ export const tauriApi = {
   listPayrollPdfs: (token: string) => invoke<PayrollPdfListResponse>('list_payroll_pdfs', { token }),
   internPayslips: (token: string, cutoffStart: string, cutoffEnd: string) => invoke<InternPayslipsResponse>('payroll_intern_payslips', { token, cutoffStart, cutoffEnd }),
   saveInternPayslipImages: (token: string, payrollCutoffLabel: string, images: InternPayslipImage[]) => invoke<InternPayslipSaveResponse>('save_intern_payslip_images', { token, payrollCutoffLabel, images }),
-  getAttendance: (date?: string) => invoke('get_attendance', { date }),
+  getAttendance: (date?: string) => invoke<AttendanceListResponse>('get_attendance', { date }),
   bathroomGetStatus: (token?: string, date?: string) => invoke<BathroomStatusResponse>('bathroom_get_status', { token, date }),
-  bathroomScanRfid: (rfidUid: string) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),
+  /** `_request` is what the legacy server is sent (it also wants the source); the desktop command takes the card alone. */
+  bathroomScanRfid: (rfidUid: string, _request?: BathroomScanRequest) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),
   bathroomTimeOut: (token: string, userId: string, genderKey: 'MALE' | 'FEMALE', notes?: string) => invoke<BathroomActionResponse>('bathroom_time_out', { token, userId, genderKey, notes }),
   bathroomTimeIn: (token: string, logId: string, notes?: string) => invoke<BathroomActionResponse>('bathroom_time_in', { token, logId, notes }),
   bathroomUpdateLog: (token: string, logId: string, request: BathroomUpdateRequest) => invoke<BathroomActionResponse>('bathroom_update_log', { token, logId, request }),
@@ -82,33 +92,40 @@ export const tauriApi = {
   lanStop: () => invoke<LanStatusResponse>('lan_stop'),
   openViewerUrl: (url: string) => invoke<void>('open_viewer_url', { url }),
   scanRfid: (request: ScanRequest) => invoke<ScanResponse>('scan_rfid', { request }),
-  setupUnlock: (pin: string) => invoke<{ success: true; token: string; expiresAt: string }>('setup_unlock', { pin }),
-  setupLock: () => invoke<{ success: true }>('setup_lock'),
+  /** The command's argument is still named `pin` on the wire; it carries a card ID or the code IT set. */
+  setupUnlock: (cardOrCode: string) => invoke<Unlocked | SetupErrorResponse>('setup_unlock', { pin: cardOrCode }),
+  /** The legacy server ends a setup session by its token; the desktop app has one session and ignores it. */
+  setupLock: (_setupToken?: string) => invoke<{ success: true }>('setup_lock'),
+  /** The Admin panel's unlock and lock. On the desktop they are the setup commands; the legacy server has its own routes. */
+  adminUnlock: (cardOrCode: string): Promise<Unlocked | { success: false; error: { message: string } }> => tauriApi.setupUnlock(cardOrCode),
+  adminLock: (): Promise<{ success: true }> => tauriApi.setupLock(),
   adminAccountUnlock: (email: string, password: string) => invoke<{ success: true; token: string; expiresAt: string; name: string }>('admin_account_unlock', { email, password }),
   adminAccountReset: (email: string) => invoke<{ success: true }>('admin_account_reset', { email }),
-  setupLookupCard: (token: string, rfidUid: string) => invoke('setup_lookup_card', { token, rfidUid }),
-  setupUpsertUser: <T extends object>(token: string, user: T) => invoke('setup_upsert_user', { token, user }),
-  adminGetSession: (token: string) => invoke('admin_get_session', { token }),
-  adminUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_users', { token }),
+  setupLookupCard: (token: string, rfidUid: string) => invoke<SetupLookupResponse | SetupErrorResponse>('setup_lookup_card', { token, rfidUid }),
+  setupUpsertUser: <T extends object>(token: string, user: T) => invoke<SetupUpsertResponse | SetupErrorResponse>('setup_upsert_user', { token, user }),
+  /** Rejects without asking when there is no token: no token, no session. */
+  adminGetSession: (token: string) => (token ? invoke<{ success: true; expiresAt?: string }>('admin_get_session', { token }) : Promise.reject<{ success: true; expiresAt?: string }>('ADMIN_SESSION_EXPIRED')),
+  adminUsers: (token: string) => invoke<AdminUsersResponse>('admin_users', { token }),
   adminListUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_list_users', { token }),
-  adminUpsertUser: <T extends object>(token: string, user: T) => invoke('admin_upsert_user', { token, user }),
-  adminDeleteUser: (token: string, userId: string) => invoke('admin_delete_user', { token, userId }),
-  adminAttendance: (token: string, date: string) => invoke('admin_attendance', { token, date }),
+  /** `_existingUserId` tells the legacy server an update from a new user; the desktop command reads it from `user`. */
+  adminUpsertUser: <T extends object>(token: string, user: T, _existingUserId?: string) => invoke<Outcome>('admin_upsert_user', { token, user }),
+  adminDeleteUser: (token: string, userId: string) => invoke<Outcome>('admin_delete_user', { token, userId }),
+  adminAttendance: (token: string, date: string) => invoke<AdminAttendanceResponse>('admin_attendance', { token, date }),
   adminListAttendance: (token: string, date: string) => invoke('admin_list_attendance', { token, date }),
-  adminUpdateAttendance: <T extends object>(token: string, attendanceId: string, payload: T) => invoke('admin_update_attendance', { token, attendanceId, payload }),
-  adminCreateBackdatedAttendance: <T extends object>(token: string, payload: T) => invoke('admin_create_backdated_attendance', { token, payload }),
-  adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke('admin_delete_attendance', { token, attendanceId, date }),
-  payrollProfiles: (token: string) => invoke('payroll_list_profiles', { token }),
-  payrollUpsertProfile: <T extends object>(token: string, profile: T) => invoke('payroll_upsert_profile', { token, profile }),
-  payrollDeleteProfile: (token: string, profileId: string) => invoke<{ success: boolean }>('payroll_delete_profile', { token, profileId }),
-  payrollCutoffs: (token: string) => invoke('payroll_list_cutoffs', { token }),
+  adminUpdateAttendance: <T extends object>(token: string, attendanceId: string, payload: T) => invoke<CodedOutcome>('admin_update_attendance', { token, attendanceId, payload }),
+  adminCreateBackdatedAttendance: <T extends object>(token: string, payload: T) => invoke<{ success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } }>('admin_create_backdated_attendance', { token, payload }),
+  adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke<Outcome>('admin_delete_attendance', { token, attendanceId, date }),
+  payrollProfiles: (token: string) => invoke<PayrollProfilesResponse>('payroll_list_profiles', { token }),
+  payrollUpsertProfile: <T extends object>(token: string, profile: T) => invoke<{ success: boolean }>('payroll_upsert_profile', { token, profile }),
+  payrollDeleteProfile: (token: string, profileId: string) => invoke<Outcome>('payroll_delete_profile', { token, profileId }),
+  payrollCutoffs: (token: string) => invoke<PayrollCutoffsResponse>('payroll_list_cutoffs', { token }),
   internPayrollReport: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string) =>
-    invoke('payroll_intern_report', { token, cutoffStart, cutoffEnd, payrollCutoffLabel }),
-  payrollGenerateCutoff: <T extends object>(token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: T) => invoke('payroll_generate_cutoff', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, customization }),
-  payrollCreateCutoff: <T extends object>(token: string, input: T) => invoke('payroll_create_cutoff', { token, input }),
-  payrollUpdateCutoff: <T extends object>(token: string, input: T) => invoke('payroll_update_cutoff', { token, input }),
-  payrollFinalizeCutoff: (token: string, payrollId: string) => invoke('payroll_finalize_cutoff', { token, payrollId }),
-  payrollDeleteCutoff: (token: string, payrollId: string) => invoke('payroll_delete_cutoff', { token, payrollId }),
+    invoke<InternPayrollReportResponse>('payroll_intern_report', { token, cutoffStart, cutoffEnd, payrollCutoffLabel }),
+  payrollGenerateCutoff: <T extends object>(token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, customization: T) => invoke<{ success: boolean; generated?: number; warnings?: string[]; error?: { message: string } }>('payroll_generate_cutoff', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, customization }),
+  payrollCreateCutoff: <T extends object>(token: string, input: T) => invoke<CutoffSaved>('payroll_create_cutoff', { token, input }),
+  payrollUpdateCutoff: <T extends object>(token: string, input: T) => invoke<CutoffSaved>('payroll_update_cutoff', { token, input }),
+  payrollFinalizeCutoff: (token: string, payrollId: string) => invoke<Outcome>('payroll_finalize_cutoff', { token, payrollId }),
+  payrollDeleteCutoff: (token: string, payrollId: string) => invoke<Outcome>('payroll_delete_cutoff', { token, payrollId }),
   exportAttendanceXlsx: (token: string, date: string) => invoke<AttendanceXlsxExportResponse>('export_attendance_xlsx', { token, date }),
   openGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('open_generated_file', { token, filePath }),
   revealGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('reveal_generated_file', { token, filePath }),
@@ -117,8 +134,8 @@ export const tauriApi = {
   syncInternDtr: (token: string, userId?: string, startFromUserId?: string) => invoke<ManualSyncReport>('admin_sync_intern_dtr', { token, userId, startFromUserId }),
   getInternDtrSync: (token: string) => invoke<{ success: true; enabled: boolean }>('admin_get_intern_dtr_sync', { token }),
   setInternDtrSync: (token: string, enabled: boolean) => invoke<{ success: true; enabled: boolean }>('admin_set_intern_dtr_sync', { token, enabled }),
-  sheetsNukeResync: (token: string, confirm: boolean) => invoke('admin_sheets_nuke_resync', { token, confirm }),
-  uploadPhoto: (token: string, userId: string, base64Data: string) => invoke<{ success: true; photoUrl: string }>('upload_photo', { token, userId, base64Data }),
+  sheetsNukeResync: (token: string, confirm: boolean) => invoke<Outcome>('admin_sheets_nuke_resync', { token, confirm }),
+  uploadPhoto: (token: string, userId: string, base64Data: string) => invoke<{ success: true; photoUrl: string } | SetupErrorResponse>('upload_photo', { token, userId, base64Data }),
   dbInfo: () => invoke<DatabaseInfoResponse>('db_info'),
   dbBackup: (token: string) => invoke<DatabaseBackupResponse>('db_backup', { token }),
   dbRestoreRequest: (token: string, sourcePath: string) => invoke<{ success: true; message: string }>('db_restore_request', { token, sourcePath }),
@@ -143,6 +160,8 @@ export const tauriApi = {
   idRegisterCheck: (token: string) => invoke<IdRegisterStatus>('id_register_check', { token }),
   autostartStatus: () => invoke<boolean>('autostart_status'),
   autostartSet: (enabled: boolean) => invoke<boolean>('autostart_set', { enabled }),
+  /** Asks where to save a copy of a backup (e.g. a USB drive); null when the dialog is cancelled. */
+  pickBackupDestination: (fileName: string) => saveFileDialog({ defaultPath: fileName, filters: [{ name: 'Alpha Premier portable backup', extensions: ['apbackup', 'db'] }] }),
 };
 
 export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));

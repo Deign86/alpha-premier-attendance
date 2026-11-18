@@ -495,7 +495,7 @@ mod tests {
 
         // No reader, and no typed scan, can stand in for a card that is not there yet.
         let placeholder = serde_json::json!({"rfidUid": "PENDING-APG-2026-126", "source": "RFID"});
-        let refused = crate::scan_rfid_impl(None, &state, placeholder).await.unwrap();
+        let refused = crate::commands::kiosk::scan_rfid_impl(None, &state, placeholder).await.unwrap();
         assert_eq!(refused["error"]["code"], "INVALID_SCAN_INPUT");
 
         // Admin → Users: the same user saved with the card just tapped.
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(cards, vec!["A1B2C3D4".to_string()]);
         assert_eq!(status(&state).await.waiting, 0);
 
-        let tap = crate::scan_rfid_impl(None, &state, serde_json::json!({"rfidUid": "A1B2C3D4", "source": "RFID"})).await.unwrap();
+        let tap = crate::commands::kiosk::scan_rfid_impl(None, &state, serde_json::json!({"rfidUid": "A1B2C3D4", "source": "RFID"})).await.unwrap();
         assert_eq!(tap["success"], true, "{tap}");
         // The next pass leaves the card alone.
         fake.lock().unwrap().cards.push(intern("APG-2026-127", "Ana Reyes"));

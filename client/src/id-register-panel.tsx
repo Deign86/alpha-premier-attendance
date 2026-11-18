@@ -2,17 +2,9 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { LoaderCircle, RefreshCw } from 'lucide-react';
 import type { IdRegisterStatus } from '@rfid-attendance/shared';
-import { tauriApi } from './tauri-api';
-import { nativeAdminSessionToken } from './api';
+import { idRegister, idRegisterProblem } from './api';
 import { formatDateTime } from './format';
 import { NoticeLine } from './notice';
-
-/** What the kiosk says when a register command itself fails (the register's own problems come in plain words). */
-function problemText<T>(error: T): string {
-  const text = error instanceof Error ? error.message : String(error);
-  if (text.includes('ADMIN_AUTH_REQUIRED')) return 'The administrator session ended. Unlock Admin again.';
-  return text || 'The ID register could not be asked.';
-}
 
 /**
  * System: the kiosk's connection to the ID register. New interns issued a card by the ID Maker arrive in Users on
@@ -28,14 +20,14 @@ export function IdRegisterPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const run = async (ask: (token: string) => Promise<IdRegisterStatus>) => {
+  const run = async (ask: () => Promise<IdRegisterStatus>) => {
     setBusy(true);
     setError('');
     try {
-      setStatus(await ask(nativeAdminSessionToken()));
+      setStatus(await ask());
       return true;
     } catch (failure) {
-      setError(problemText(failure));
+      setError(idRegisterProblem(failure));
       return false;
     } finally {
       setBusy(false);
@@ -45,13 +37,13 @@ export function IdRegisterPanel() {
   useEffect(() => {
     if (!desktop) return;
     let active = true;
-    void tauriApi
-      .idRegisterStatus(nativeAdminSessionToken())
+    void idRegister
+      .status()
       .then((loaded) => {
         if (active) setStatus(loaded);
       })
       .catch((failure) => {
-        if (active) setError(problemText(failure));
+        if (active) setError(idRegisterProblem(failure));
       });
     return () => {
       active = false;
@@ -60,7 +52,7 @@ export function IdRegisterPanel() {
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
-    const signedIn = await run((token) => tauriApi.idRegisterSignIn(token, email.trim(), password));
+    const signedIn = await run(() => idRegister.signIn(email.trim(), password));
     // The password is cleared either way; the email stays for another try.
     setPassword('');
     if (signedIn) setEmail('');
@@ -143,7 +135,7 @@ export function IdRegisterPanel() {
           Signed in as {status.signedInAs}
           {status.lastCheckedAt ? ` · last checked ${formatDateTime(status.lastCheckedAt)}` : ''}
         </span>
-        <button className="admin-button" type="button" disabled={busy} onClick={() => void run(tauriApi.idRegisterCheck)}>
+        <button className="admin-button" type="button" disabled={busy} onClick={() => void run(idRegister.check)}>
           {busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <RefreshCw size={15} aria-hidden="true" />}
           Check now
         </button>
@@ -160,7 +152,7 @@ export function IdRegisterPanel() {
           : 'This computer keeps the originals until Firebase has been counted equal.'}
       </p>
       <NoticeLine notice={status.backup.problem ? { tone: 'error', text: status.backup.problem } : null} />
-      <button className="text-button" type="button" disabled={busy} onClick={() => void run(tauriApi.idRegisterSignOut)}>
+      <button className="text-button" type="button" disabled={busy} onClick={() => void run(idRegister.signOut)}>
         Sign out of the ID register
       </button>
     </section>

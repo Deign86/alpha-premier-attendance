@@ -716,13 +716,7 @@ async fn run_reconciliation_inner(
         all_discrepancies.len(),
         total_interns
     );
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, message, request_id) VALUES (?, ?, 'DTR_RECON_COMPLETED', ?, ?)")
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(&completed_at)
-        .bind(&audit_msg)
-        .bind(&run_id)
-        .execute(&state.db)
-        .await;
+    crate::services::audit::log(&state.db, crate::services::audit::Entry::new("DTR_RECON_COMPLETED", &completed_at, &audit_msg, &run_id)).await;
 
     Ok(run_id)
 }
@@ -744,13 +738,7 @@ async fn record_run_failure(state: &AppState, run_id: &str, error: &str) -> Resu
         return Ok(());
     }
 
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, message, request_id) VALUES (?, ?, 'DTR_RECON_FAILED', ?, ?)")
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(&now)
-        .bind(format!("DTR reconciliation failed: {error}"))
-        .bind(run_id)
-        .execute(&state.db)
-        .await;
+    crate::services::audit::log(&state.db, crate::services::audit::Entry::new("DTR_RECON_FAILED", &now, &format!("DTR reconciliation failed: {error}"), run_id)).await;
 
     Ok(())
 }

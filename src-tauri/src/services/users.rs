@@ -2,7 +2,7 @@
 //! for an administrator's save and for the ID register's.
 
 use crate::state::AppState;
-use crate::{enqueue_sync_on, publish_attendance_change};
+use crate::commands::{attendance::publish_attendance_change, sync::enqueue_sync_on};
 use chrono_tz::Asia::Manila;
 use sqlx::Row;
 
@@ -272,7 +272,7 @@ pub(crate) async fn save_user(
         SaveOrigin::Administrator => ("ADMIN_USER_UPSERT", "User profile saved by administrator", "admin"),
         SaveOrigin::IdRegister => ("ID_REGISTER_PULL", "New intern added from the ID register, waiting for a card", "id-register"),
     };
-    let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&now).bind(audit_event).bind(&user_id).bind(audit_message).bind(format!("{audit_prefix}-{}", uuid::Uuid::new_v4())).execute(&state.db).await;
+    crate::services::audit::log(&state.db, crate::services::audit::Entry::new(audit_event, &now, audit_message, &format!("{audit_prefix}-{}", uuid::Uuid::new_v4())).user(Some(&user_id))).await;
     // Voice auto-clone: queue a Ma'am Bea name-clip pull for roster members.
     // Fire-and-forget — the worker fills the clip later; Piper covers playback meanwhile.
     // A person the bundle already voices (pre-generated before registering) keeps that clip.
@@ -503,15 +503,10 @@ pub(crate) async fn delete_user_and_cascade(state: &AppState, user_id: &str) -> 
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
-        "INSERT INTO audit_logs (log_id, timestamp, event_type, user_id, message, request_id) VALUES (?, ?, 'ADMIN_USER_DELETED', ?, ?, ?)"
+    crate::services::audit::log(
+        &state.db,
+        crate::services::audit::Entry::new("ADMIN_USER_DELETED", &now, &format!("User {user_id} and associated attendance/payroll deleted by administrator"), &crate::services::audit::admin_request_id()).user(Some(user_id)),
     )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(&now)
-    .bind(user_id)
-    .bind(format!("User {user_id} and associated attendance/payroll deleted by administrator"))
-    .bind(format!("admin-{}", uuid::Uuid::new_v4()))
-    .execute(&state.db)
     .await;
 
     Ok(())

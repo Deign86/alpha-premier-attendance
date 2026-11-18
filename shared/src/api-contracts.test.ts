@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, evaluateArrivalFromTimestamp, evaluateArrivalWithBudget, evaluateAttendanceArrivals, hasWeeklyGrace, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
+import { adminErrorCodes, attendanceActions, attendanceStatuses, cardTypes, hasWeeklyGrace, isAfternoonHalfDayArrival, isBeforeFivePm, isLateTimeout, LATE_TIMEOUT_THRESHOLD, normalizeName, scanErrorCodes, scanSources, setupErrorCodes, WORKDAY_END, type ScannerStatus } from './api-contracts.js';
 
 describe('shared API contract literals', () => {
   it('keeps scan sources, card types, and attendance states stable', () => {
@@ -155,103 +155,9 @@ describe('normalizeName', () => {
   });
 });
 
-describe('evaluateAttendanceArrivals & grace period rules', () => {
-  it('identifies arrivals before 08:01 as ON_TIME', () => {
-    const rows = [
-      { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T07:55:00+08:00' },
-      { attendanceId: '2', userId: 'EMP-01', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:00:00+08:00' },
-      { attendanceId: '3', userId: 'EMP-01', attendanceDate: '2026-08-26', timeIn: '2026-08-26T08:00:59+08:00' },
-    ];
-    const results = evaluateAttendanceArrivals(rows);
-    expect(results.get('1')?.arrivalStatus).toBe('ON_TIME');
-    expect(results.get('2')?.arrivalStatus).toBe('ON_TIME');
-    expect(results.get('3')?.arrivalStatus).toBe('ON_TIME');
-  });
-
-  it('allows exactly 1 GRACE_PERIOD per week for arrivals between 08:00 and 08:15', () => {
-    const rows = [
-      // Monday 8:10 -> Uses the 1 weekly grace period
-      { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:10:00+08:00' },
-      // Tuesday 8:08 -> Second arrival in 8:00-8:15 in same week -> LATE!
-      { attendanceId: '2', userId: 'EMP-01', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:08:00+08:00' },
-      // Next Monday 8:12 -> New week -> Uses new weekly grace period
-      { attendanceId: '3', userId: 'EMP-01', attendanceDate: '2026-08-31', timeIn: '2026-08-31T08:12:00+08:00' },
-    ];
-    const results = evaluateAttendanceArrivals(rows);
-    expect(results.get('1')?.arrivalStatus).toBe('GRACE_PERIOD');
-    expect(results.get('2')?.arrivalStatus).toBe('LATE');
-    expect(results.get('2')?.minutesLate).toBe(8);
-    expect(results.get('3')?.arrivalStatus).toBe('GRACE_PERIOD');
-  });
-
-  it('allows only one grace period across three 08:05 arrivals in the same Manila week', () => {
-    const rows = [
-      { attendanceId: '1', userId: 'MARISSA', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:05:00+08:00' },
-      { attendanceId: '2', userId: 'MARISSA', attendanceDate: '2026-08-25', timeIn: '2026-08-25T08:05:00+08:00' },
-      { attendanceId: '3', userId: 'MARISSA', attendanceDate: '2026-08-26', timeIn: '2026-08-26T08:05:00+08:00' },
-    ];
-    const results = evaluateAttendanceArrivals(rows);
-    expect(rows.map(({ attendanceId }) => results.get(attendanceId)?.arrivalStatus)).toEqual([
-      'GRACE_PERIOD', 'LATE', 'LATE',
-    ]);
-    expect(results.get('2')?.minutesLate).toBe(5);
-    expect(results.get('3')?.minutesLate).toBe(5);
-  });
-
-  it('applies the no-grace cutoff to interns', () => {
-    const results = evaluateAttendanceArrivals([
-      { attendanceId: 'intern', userId: 'I1', attendanceDate: '2026-10-01', timeIn: '2026-10-01T08:08:00+08:00', employeeType: 'INTERN' },
-    ]);
-    expect(results.get('intern')).toEqual({ arrivalStatus: 'LATE', minutesLate: 8 });
-  });
-
-  it('returns late minutes when the weekly grace budget is already used', () => {
-    expect(evaluateArrivalWithBudget('2026-08-25T08:05:00+08:00', true)).toEqual({
-      arrivalStatus: 'LATE',
-      minutesLate: 5,
-    });
-  });
-
-  it('preserves nanosecond precision at the exact grace endpoint', () => {
-    expect(evaluateArrivalWithBudget('2026-08-25T08:15:00.000+08:00', false).arrivalStatus).toBe('GRACE_PERIOD');
-    expect(evaluateArrivalWithBudget('2026-08-25T08:15:00.000000001+08:00', false).arrivalStatus).toBe('LATE');
-  });
-
-  it('treats arrivals strictly beyond 08:15 as LATE regardless of grace period availability', () => {
-    const rows = [
-      { attendanceId: '1', userId: 'EMP-01', attendanceDate: '2026-08-24', timeIn: '2026-08-24T08:16:00+08:00' },
-      { attendanceId: '2', userId: 'EMP-02', attendanceDate: '2026-08-24', timeIn: '2026-08-24T09:30:00+08:00' },
-    ];
-    const results = evaluateAttendanceArrivals(rows);
-    expect(results.get('1')?.arrivalStatus).toBe('LATE');
-    expect(results.get('1')?.minutesLate).toBe(16);
-    expect(results.get('2')?.arrivalStatus).toBe('LATE');
-    expect(results.get('2')?.minutesLate).toBe(90);
-  });
-
-  it('evaluates single arrival timestamp correctly with evaluateArrivalFromTimestamp', () => {
-    expect(evaluateArrivalFromTimestamp('2026-08-24T07:59:59+08:00')).toBe('ON_TIME');
-    expect(evaluateArrivalFromTimestamp('2026-08-24T08:00:00+08:00')).toBe('ON_TIME');
-    expect(evaluateArrivalFromTimestamp('2026-08-24T08:00:59+08:00')).toBe('ON_TIME');
-    expect(evaluateArrivalFromTimestamp('2026-08-24T08:01:00+08:00')).toBe('GRACE_PERIOD');
-    expect(evaluateArrivalFromTimestamp('2026-08-24T08:15:00+08:00')).toBe('GRACE_PERIOD');
-    expect(evaluateArrivalFromTimestamp('2026-08-24T08:15:01+08:00')).toBe('LATE');
-    expect(evaluateArrivalFromTimestamp('2026-08-24T09:00:00+08:00')).toBe('LATE');
-    expect(evaluateArrivalFromTimestamp('invalid-date')).toBe('NONE');
-  });
-});
-
 describe('weekly grace resume date', () => {
   it('is off from 2026-10-01 through 2026-11-15 and back on 2026-11-16', () => {
     expect(['2026-09-30', '2026-10-01', '2026-11-15', '2026-11-16', '2027-01-04'].map(hasWeeklyGrace)).toEqual([true, false, false, true, true]);
-  });
-
-  it('grants one graced arrival per week again from the resume date', () => {
-    const at = (date: string) => `${date}T08:01:00+08:00`;
-    expect(evaluateArrivalWithBudget(at('2026-11-13'), false, undefined, '2026-11-13').arrivalStatus).toBe('LATE');
-    expect(evaluateArrivalWithBudget(at('2026-11-16'), false, undefined, '2026-11-16').arrivalStatus).toBe('GRACE_PERIOD');
-    expect(evaluateArrivalWithBudget(at('2026-11-17'), true, undefined, '2026-11-17').arrivalStatus).toBe('LATE');
-    expect(evaluateArrivalFromTimestamp(at('2026-11-16'), undefined, '2026-11-16')).toBe('GRACE_PERIOD');
   });
 });
 

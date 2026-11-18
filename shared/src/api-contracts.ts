@@ -55,30 +55,6 @@ export const WORKDAY_END = OFFICE_HOURS_END;
 
 export type ArrivalStatus = 'ON_TIME' | 'GRACE_PERIOD' | 'LATE' | 'NONE';
 
-export type ArrivalEvaluation = { arrivalStatus: ArrivalStatus; minutesLate: number };
-
-/** Evaluates one arrival with the user's weekly grace-period budget. */
-export function evaluateArrivalWithBudget(
-  timeInIso: string,
-  graceAlreadyUsed: boolean,
-  timezone = ATTENDANCE_TIMEZONE,
-  attendanceDate?: string,
-): ArrivalEvaluation {
-  const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
-  if (seconds === null) return { arrivalStatus: 'NONE', minutesLate: 0 };
-  const startSeconds = 8 * 3600;
-  const lateStartSeconds = startSeconds + 60;
-  const graceEndSeconds = 8 * 3600 + 15 * 60;
-  if (seconds < lateStartSeconds) return { arrivalStatus: 'ON_TIME', minutesLate: 0 };
-  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && !graceAlreadyUsed && (attendanceDate === undefined || hasWeeklyGrace(attendanceDate))) {
-    return { arrivalStatus: 'GRACE_PERIOD', minutesLate: 0 };
-  }
-  return {
-    arrivalStatus: 'LATE',
-    minutesLate: Math.ceil((seconds - startSeconds) / 60),
-  };
-}
-
 /**
  * Returns Monday (YYYY-MM-DD) of the work week for a given Manila date string.
  * Throws on invalid input instead of echoing it back: a bad week key would
@@ -147,78 +123,6 @@ function manilaSecondsSinceMidnight(iso: string, timezone: string): number | nul
   const fraction = /T\d{2}:\d{2}:\d{2}\.(\d+)(?:Z|[+-]\d{2}:\d{2})?$/i.exec(iso)?.[1] ?? '';
   const subMillisecondSeconds = fraction.length > 3 ? Number(`0.${fraction.slice(3)}`) / 1000 : 0;
   return read('hour') * 3600 + read('minute') * 60 + read('second') + read('fractionalSecond') / 1000 + subMillisecondSeconds;
-}
-
-/**
- * Determines arrival evaluation (ON_TIME, GRACE_PERIOD, LATE) across a collection of rows,
- * enforcing that each user receives at most 1 Grace Period (08:01:00 - 08:15:00) per work week.
- */
-export function evaluateAttendanceArrivals(
-  rows: Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn?: string | null }>,
-): Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }> {
-  const result = new Map<string, { arrivalStatus: ArrivalStatus; minutesLate: number }>();
-
-  // Group by userId and weekStart
-  const groups = new Map<string, Array<{ attendanceId: string; userId: string; attendanceDate: string; timeIn: string }>>();
-  for (const row of rows) {
-    if (!row.timeIn) {
-      result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
-      continue;
-    }
-    let weekStart: string;
-    try {
-      weekStart = getManilaWeekStart(row.attendanceDate);
-    } catch {
-      result.set(row.attendanceId, { arrivalStatus: 'NONE', minutesLate: 0 });
-      continue;
-    }
-    const key = `${row.userId}:${weekStart}`;
-    const list = groups.get(key) ?? [];
-    list.push({ attendanceId: row.attendanceId, userId: row.userId, attendanceDate: row.attendanceDate, timeIn: row.timeIn });
-    groups.set(key, list);
-  }
-
-  for (const list of groups.values()) {
-    list.sort((a, b) => {
-      const d = a.attendanceDate.localeCompare(b.attendanceDate);
-      if (d !== 0) return d;
-      return a.timeIn.localeCompare(b.timeIn);
-    });
-
-    let graceUsedThisWeek = false;
-
-    for (const item of list) {
-      const evaluation = evaluateArrivalWithBudget(item.timeIn, graceUsedThisWeek, ATTENDANCE_TIMEZONE, item.attendanceDate);
-      if (evaluation.arrivalStatus === 'GRACE_PERIOD') graceUsedThisWeek = true;
-      result.set(item.attendanceId, evaluation);
-    }
-  }
-
-  return result;
-}
-
-/**
- * Evaluates a single arrival timestamp against office hours policy:
- * - 08:00:00 - 08:00:59.999...: ON_TIME
- * - 08:01:00 - 08:15:00: GRACE_PERIOD
- * - > 08:15:00.000: LATE
- */
-export function evaluateArrivalFromTimestamp(
-  timeInIso: string,
-  timezone = ATTENDANCE_TIMEZONE,
-  attendanceDate?: string,
-): ArrivalStatus {
-  const seconds = manilaSecondsSinceMidnight(timeInIso, timezone);
-  if (seconds === null) return 'NONE';
-  const [startHour, startMinute] = OFFICE_HOURS_START.split(':').map(Number);
-  const [graceHour, graceMinute] = GRACE_PERIOD_END.split(':').map(Number);
-  const startSeconds = startHour * 3600 + startMinute * 60;
-  const lateStartSeconds = startSeconds + 60;
-  const graceEndSeconds = graceHour * 3600 + graceMinute * 60;
-
-  if (seconds < lateStartSeconds) return 'ON_TIME';
-  if (seconds >= lateStartSeconds && seconds <= graceEndSeconds && (attendanceDate === undefined || hasWeeklyGrace(attendanceDate))) return 'GRACE_PERIOD';
-  return 'LATE';
 }
 
 /**
@@ -307,10 +211,14 @@ export type AttendanceSummary = {
   recordedAt?: string | null;
   /** True only when this TIME_IN created the first attendance row for the date. */
   isFirstArrivalToday?: boolean;
-  /** Arrival status decided by the desktop payroll engine (weekly grace included); absent from the legacy web API. */
+  /** Arrival status decided by the desktop payroll engine (weekly grace included); absent from the legacy web API, which sends none of these four fields. */
   arrivalStatus?: ArrivalStatus | null;
   /** Whole minutes after 08:00 when `arrivalStatus` is LATE. */
   minutesLate?: number | null;
+  /** The arrival took the week's grace claim (decided by the desktop payroll engine). */
+  graceUsed?: boolean | null;
+  /** The time-in the day is paid from: `timeIn` itself, or the next full hour when the day's policy clamps it. */
+  payableTimeIn?: string | null;
 };
 
 export type AttendanceListItem = AttendanceSummary & {
@@ -517,6 +425,8 @@ export type AttendanceDeductionItem = {
   label: string;
   details: string;
   timeIn?: string | null;
+  /** On a late line: the clamped clock-in the late hours are charged from ("9:00 AM"); absent when paid from `timeIn`. */
+  payableTimeIn?: string | null;
   timeOut?: string | null;
   workedHours?: number | null;
   hoursShort?: number | null;
