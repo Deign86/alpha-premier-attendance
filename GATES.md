@@ -2466,5 +2466,8 @@ What was wrong, seen in the live DTR sheet: the hand-made months are Sheets tabl
 - [x] D1: A new block's requests carry the whole look and real dates.
   CHECK: `cd src-tauri && cargo test --lib month_block`
   EVIDENCE: 4 passed (2026-11-18); `test_month_block_payload` checks the date serials (46327 for 11/1/2026; 46296 for 10/1/2026, the number HR's own October cell holds), the three number formats, the borders over days and total, the banding over the days, and J3 still last. Whole suite: 417 passed, the 3 known Linux-only path tests failed as before.
+- [x] D3: The header and the day rows sit in the middle of their row (owner, 2026-11-18: "the font and centering"). Read from the live sheet: the hand-made months are vertically MIDDLE with a Roboto header; the app's block was BOTTOM.
+  CHECK: `cd src-tauri && cargo test --lib month_block`
+  EVIDENCE: 4 passed (2026-11-18)
 - [ ] D2: The blocks already in the sheet are repaired, and a block the released kiosk adds for December looks like the others.
-  EVIDENCE: pending (the live sheet, then the first December tap)
+  EVIDENCE: the November blocks on 19 tabs were repaired by hand through the Sheets API on 2026-11-18 (number formats, borders, alternating rows, salmon total row, Roboto header, middle alignment, real dates); John Frederick Ruiz's rows 118 to 121 read back correctly. Pending: the first December block the released kiosk adds.
