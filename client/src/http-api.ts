@@ -17,7 +17,7 @@ import type {
 } from '@rfid-attendance/shared';
 import { SpokenFailure, markUnreachable } from './error-sentences';
 import { apiUrl } from './network';
-import type { tauriApi } from './tauri-api';
+import type { Outcome, Transport } from './transport';
 
 /**
  * The browser transport: the same members as the desktop transport (`tauriApi`), answered by the legacy Node
@@ -27,20 +27,6 @@ import type { tauriApi } from './tauri-api';
  * token, which it wants in a header. A command the server has no route for fails with the sentence the screen shows.
  */
 
-type Outcome = { success: boolean; error?: { message?: string } };
-
-let abortSignal: AbortSignal | undefined;
-
-/** Runs one transport call so that, in the browser, `signal` cancels its request. The desktop transport has nothing to cancel. */
-export function withAbort<T>(signal: AbortSignal | undefined, call: () => Promise<T>): Promise<T> {
-  abortSignal = signal;
-  try {
-    return call();
-  } finally {
-    abortSignal = undefined;
-  }
-}
-
 async function ask<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(apiUrl(path), init);
   // SAFETY: The legacy server answers each route with the shared contract type the caller names
@@ -49,7 +35,7 @@ async function ask<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const sending = <T extends object>(method: 'POST' | 'PATCH' | 'PUT', body: T): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-async function setupAsk<T>(path: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string }): Promise<T | SetupErrorResponse> {
+async function setupAsk<T>(path: string, options: { method: 'GET' | 'POST'; setupToken?: string; body?: string; signal?: AbortSignal }): Promise<T | SetupErrorResponse> {
   try {
     const headers: Record<string, string> = {};
     if (options.body) {
@@ -58,7 +44,7 @@ async function setupAsk<T>(path: string, options: { method: 'GET' | 'POST'; setu
     if (options.setupToken) {
       headers['X-Setup-Token'] = options.setupToken;
     }
-    const init: RequestInit = { method: options.method, headers, signal: abortSignal };
+    const init: RequestInit = { method: options.method, headers, signal: options.signal };
     if (options.body) {
       init.body = options.body;
     }
@@ -79,9 +65,9 @@ const toggleOnly = desktopOnly('DTR sync toggle is available in the desktop appl
 const restoreOnly = desktopOnly('Restore is available in the desktop application.');
 const accountOnly = desktopOnly('Signing in with an account is only available in the desktop app.');
 
-export const httpApi: typeof tauriApi = {
-  getConfig: async () => {
-    const response = await fetch(apiUrl('/api/config'), { signal: abortSignal });
+export const httpApi: Transport = {
+  getConfig: async (signal) => {
+    const response = await fetch(apiUrl('/api/config'), { signal });
     if (!response.ok) throw new Error('CONFIG_UNAVAILABLE');
     // SAFETY: Parsing response as SafeConfigResponse; api.ts fills every missing field from its defaults
     return (await response.json()) as SafeConfigResponse;
@@ -91,10 +77,10 @@ export const httpApi: typeof tauriApi = {
   listPayrollPdfs: desktopOnly('Payroll PDFs are available in the desktop application.'),
   internPayslips: desktopOnly('Payslips are generated in the desktop application.'),
   saveInternPayslipImages: desktopOnly('Payslips are generated in the desktop application.'),
-  getAttendance: (date) => ask<AttendanceListResponse>(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`, { signal: abortSignal }),
-  bathroomGetStatus: (_token, date) => ask<BathroomStatusResponse>(date ? `/api/bathroom/status?date=${encodeURIComponent(date)}` : '/api/bathroom/status', { signal: abortSignal }),
-  bathroomScanRfid: (rfidUid, request) =>
-    ask<BathroomScanResponse>('/api/bathroom/scan', { ...sending('POST', request ?? { rfidUid }), signal: abortSignal }).catch((error) => {
+  getAttendance: (date, signal) => ask<AttendanceListResponse>(`/api/attendance${date ? `?date=${encodeURIComponent(date)}` : ''}`, { signal }),
+  bathroomGetStatus: (_token, date, signal) => ask<BathroomStatusResponse>(date ? `/api/bathroom/status?date=${encodeURIComponent(date)}` : '/api/bathroom/status', { signal }),
+  bathroomScanRfid: (rfidUid, request, signal) =>
+    ask<BathroomScanResponse>('/api/bathroom/scan', { ...sending('POST', request ?? { rfidUid }), signal }).catch((error) => {
       throw markUnreachable(error);
     }),
   bathroomTimeOut: (_token, userId, genderKey, notes) =>
@@ -115,19 +101,19 @@ export const httpApi: typeof tauriApi = {
   openViewerUrl: async (url) => {
     window.open(url, '_blank');
   },
-  scanRfid: async (request) => {
-    const response = await fetch(apiUrl('/api/attendance/scan'), { ...sending('POST', request), signal: abortSignal });
+  scanRfid: async (request, signal) => {
+    const response = await fetch(apiUrl('/api/attendance/scan'), { ...sending('POST', request), signal });
     // SAFETY: Parsing scan response JSON
     const data = (await response.json()) as ScanResponse;
     if (data && Object(data) === data && 'success' in data) return data;
     return { success: false, requestId: `client-${Date.now()}`, error: { code: 'INTERNAL_SERVER_ERROR', message: 'The attendance service returned an invalid response.' } };
   },
-  setupUnlock: async (cardOrCode) => {
-    const answer = await setupAsk<SetupUnlockResponse>('/api/setup/unlock', { method: 'POST', body: JSON.stringify({ pin: cardOrCode }) });
+  setupUnlock: async (cardOrCode, signal) => {
+    const answer = await setupAsk<SetupUnlockResponse>('/api/setup/unlock', { method: 'POST', body: JSON.stringify({ pin: cardOrCode }), signal });
     return answer.success ? { success: true, token: answer.setupToken, expiresAt: answer.expiresAt } : answer;
   },
-  setupLock: async (setupToken) => {
-    await setupAsk<{ success: true }>('/api/setup/lock', { method: 'POST', setupToken });
+  setupLock: async (setupToken, signal) => {
+    await setupAsk<{ success: true }>('/api/setup/lock', { method: 'POST', setupToken, signal });
     return { success: true };
   },
   adminUnlock: async (cardOrCode) => {
@@ -145,8 +131,8 @@ export const httpApi: typeof tauriApi = {
   },
   adminAccountUnlock: accountOnly,
   adminAccountReset: accountOnly,
-  setupLookupCard: (token, rfidUid) => setupAsk<SetupLookupResponse>(`/api/setup/card?rfidUid=${encodeURIComponent(rfidUid)}`, { method: 'GET', setupToken: token }),
-  setupUpsertUser: (token, user) => setupAsk<SetupUpsertResponse>('/api/setup/users', { method: 'POST', setupToken: token, body: JSON.stringify(user) }),
+  setupLookupCard: (token, rfidUid, signal) => setupAsk<SetupLookupResponse>(`/api/setup/card?rfidUid=${encodeURIComponent(rfidUid)}`, { method: 'GET', setupToken: token, signal }),
+  setupUpsertUser: (token, user, signal) => setupAsk<SetupUpsertResponse>('/api/setup/users', { method: 'POST', setupToken: token, body: JSON.stringify(user), signal }),
   adminGetSession: async () => {
     const response = await fetch(apiUrl('/api/admin/session'));
     if (!response.ok) throw new Error('ADMIN_SESSION_EXPIRED');
@@ -155,13 +141,11 @@ export const httpApi: typeof tauriApi = {
     if (!data.expiresAt) throw new Error('ADMIN_SESSION_EXPIRED');
     return { success: true, expiresAt: data.expiresAt };
   },
-  adminUsers: () => ask<AdminUsersResponse>('/api/admin/users', { signal: abortSignal }),
-  adminListUsers: () => ask<{ success: true; users: unknown[] }>('/api/admin/users'),
+  adminUsers: (_token, signal) => ask<AdminUsersResponse>('/api/admin/users', { signal }),
   adminUpsertUser: (_token, user, existingUserId) =>
     ask<Outcome>(existingUserId ? `/api/admin/users/${encodeURIComponent(existingUserId)}` : '/api/admin/users', sending(existingUserId ? 'PATCH' : 'POST', user)),
   adminDeleteUser: (_token, userId) => ask<Outcome>(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
-  adminAttendance: (_token, date) => ask<AdminAttendanceResponse>(`/api/admin/attendance?date=${encodeURIComponent(date)}`, { signal: abortSignal }),
-  adminListAttendance: (_token, date) => ask(`/api/admin/attendance?date=${encodeURIComponent(date)}`),
+  adminAttendance: (_token, date, signal) => ask<AdminAttendanceResponse>(`/api/admin/attendance?date=${encodeURIComponent(date)}`, { signal }),
   adminUpdateAttendance: (_token, attendanceId, payload) =>
     ask<Outcome>(`/api/admin/attendance/${encodeURIComponent(attendanceId)}`, sending('PATCH', payload)).catch((error) => {
       throw markUnreachable(error);

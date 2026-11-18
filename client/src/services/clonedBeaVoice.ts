@@ -89,8 +89,7 @@ export const CLONED_BEA_PHRASE_MANIFEST: Readonly<Record<string, string>> = Obje
 });
 
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { tauriApi } from '../tauri-api';
-import { runningInTauri } from '../transport';
+import { runningInTauri, transport } from '../transport';
 
 interface NameProfileEntry {
   personId?: string;
@@ -270,7 +269,7 @@ export async function getWorkerNameAudioUrl(personId?: string | null): Promise<s
   const clean = personId?.trim() ?? '';
   if (!clean || !runningInTauri()) return null;
   try {
-    const assetUrl = await tauriApi.voiceNameAudioUrl(clean);
+    const assetUrl = await transport().voiceNameAudioUrl(clean);
     if (!assetUrl) return null;
     const prefix = 'asset://localhost/';
     return assetUrl.startsWith(prefix)
@@ -397,7 +396,7 @@ export async function playClonedBeaAudio(
   const phrase = getClonedBeaPhraseForAudioUrl(audioUrl);
   if (phrase && 'window' in globalThis && '__TAURI_INTERNALS__' in window) {
     try {
-      const result = await tauriApi.ttsSpeak(phrase, {
+      const result = await transport().ttsSpeak(phrase, {
         engine: 'cloned-bea',
         volume,
         rate,
@@ -420,7 +419,7 @@ export async function playClonedBeaAudio(
   // Before starting HTML5 Audio playback in desktop Tauri, ensure any active native TTS is stopped
   // so native Rodio/Piper and HTML5 Audio never overlap.
   if (runningInTauri()) {
-    void tauriApi.ttsStop().catch(() => undefined);
+    void transport().ttsStop().catch(() => undefined);
   }
 
   try {

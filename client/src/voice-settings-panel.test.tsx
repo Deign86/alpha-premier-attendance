@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { VoiceSettingsPanel } from './voice-settings-panel';
 import * as ttsService from './services/ttsService';
-import * as tauriApiModule from './tauri-api';
+import { transport } from './transport';
+
+// The panel asks through `api.ts`, which asks `transport()`. These tests run in a browser tab (jsdom), so they stand
+// in for the adapter it is given there; the desktop app answers the same members from Rust.
+const voiceBackend = transport();
 
 describe('VoiceSettingsPanel', () => {
   beforeEach(() => {
@@ -102,7 +106,7 @@ describe('VoiceSettingsPanel', () => {
   });
 
   it('shows live cloning activity from the worker', async () => {
-    vi.spyOn(tauriApiModule.tauriApi, 'voiceWorkerStatus').mockResolvedValue({
+    vi.spyOn(voiceBackend, 'voiceWorkerStatus').mockResolvedValue({
       active: 2,
       retry: 0,
       lastPersonId: 'APG-1',
@@ -110,8 +114,8 @@ describe('VoiceSettingsPanel', () => {
       lastCompletedAt: '2026-09-12T00:00:00Z',
       lastError: null,
     });
-    vi.spyOn(tauriApiModule.tauriApi, 'getVoicestudioHost').mockRejectedValue(new Error('no native'));
-    vi.spyOn(tauriApiModule.tauriApi, 'getVoicestudioPin').mockRejectedValue(new Error('no native'));
+    vi.spyOn(voiceBackend, 'getVoicestudioHost').mockRejectedValue(new Error('no native'));
+    vi.spyOn(voiceBackend, 'getVoicestudioPin').mockRejectedValue(new Error('no native'));
     await act(async () => {
       render(<VoiceSettingsPanel />);
     });
@@ -198,10 +202,10 @@ describe('VoiceSettingsPanel', () => {
   });
 
   it('adopts native VoiceStudio host and PIN on mount without clobbering', async () => {
-    const setHostSpy = vi.spyOn(tauriApiModule.tauriApi, 'setVoicestudioHost').mockResolvedValue('http://192.168.1.19:3901');
-    const setPinSpy = vi.spyOn(tauriApiModule.tauriApi, 'setVoicestudioPin').mockResolvedValue(undefined);
-    vi.spyOn(tauriApiModule.tauriApi, 'getVoicestudioHost').mockResolvedValue('http://192.168.1.19:3901');
-    vi.spyOn(tauriApiModule.tauriApi, 'getVoicestudioPin').mockResolvedValue('771001');
+    const setHostSpy = vi.spyOn(voiceBackend, 'setVoicestudioHost').mockResolvedValue('http://192.168.1.19:3901');
+    const setPinSpy = vi.spyOn(voiceBackend, 'setVoicestudioPin').mockResolvedValue(undefined);
+    vi.spyOn(voiceBackend, 'getVoicestudioHost').mockResolvedValue('http://192.168.1.19:3901');
+    vi.spyOn(voiceBackend, 'getVoicestudioPin').mockResolvedValue('771001');
 
     await act(async () => {
       render(<VoiceSettingsPanel />);

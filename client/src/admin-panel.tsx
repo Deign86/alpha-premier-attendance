@@ -7,6 +7,7 @@ import { checkAdminSession, loadAdminAttendance, loadAdminUsers, loadPayrollCuto
 import { listenForGlobalRfid, detachWhenDone } from "./tauri-api";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { UpdateBanner } from "./update-banner";
+import { useAdminSession } from "./admin-session";
 import { AdminUnlock } from './admin-unlock';
 import { IdRegisterPanel } from "./id-register-panel";
 import { FridayBackupReminder } from "./backup-reminder";
@@ -110,13 +111,15 @@ function newestPunchAt(rows: readonly AttendanceListItem[]): string | null {
 }
 
 export function AdminPanel() {
-  const [unlocked, setUnlocked] = useState(false);
+  // The one admin session (`admin-session.ts`): unlock, lock and the session check write it in `api.ts`; this page only reads it.
+  const session = useAdminSession();
+  const sessionExpiresAt = session.expiresAt ?? "";
+  const unlocked = session.token !== null && sessionExpiresAt !== "";
   // False until the saved session has been checked: the page stays empty meanwhile, so an admin who is still signed
   // in goes straight to the dashboard instead of seeing the unlock card flash first.
   const [sessionChecked, setSessionChecked] = useState(false);
   useScannerPause(unlocked);
   const office = useOfficeIdentity();
-  const [sessionExpiresAt, setSessionExpiresAt] = useState("");
   const [cardOrCode, setCardOrCode] = useState("");
   const [error, setError] = useState("");
   const [adminMode, setAdminMode] = useState<"attendance" | "bathroom">("attendance");
@@ -192,8 +195,6 @@ export function AdminPanel() {
         setError(response.error.message);
         return;
       }
-      setUnlocked(true);
-      setSessionExpiresAt(response.expiresAt);
       setCardOrCode("");
       setError("");
     },
@@ -288,27 +289,18 @@ export function AdminPanel() {
     await Promise.all([refreshUsers(), refreshRowsRef.current(), refreshCutoffs()]);
   }, [refreshUsers, refreshCutoffs]);
   useEffect(() => {
-    void checkAdminSession()
-      .then((expiresAt) => {
-        setSessionExpiresAt(expiresAt ?? "");
-        setUnlocked(Boolean(expiresAt));
-      })
-      .finally(() => setSessionChecked(true));
+    void checkAdminSession().finally(() => setSessionChecked(true));
   }, []);
   useEffect(() => {
     if (!unlocked || !sessionExpiresAt) return;
     const remaining = new Date(sessionExpiresAt).getTime() - Date.now();
     if (remaining <= 0) {
       void lockAdmin();
-      setUnlocked(false);
-      setSessionExpiresAt("");
       setError("Admin session expired. Please unlock again.");
       return;
     }
     const timer = window.setTimeout(() => {
       void lockAdmin();
-      setUnlocked(false);
-      setSessionExpiresAt("");
       setError("Admin session expired. Please unlock again.");
     }, remaining);
     return () => window.clearTimeout(timer);
@@ -378,9 +370,7 @@ export function AdminPanel() {
             setError("");
             setCardOrCode("");
           }}
-          onAccountUnlocked={(expiresAt) => {
-            setUnlocked(true);
-            setSessionExpiresAt(expiresAt);
+          onAccountUnlocked={() => {
             setCardOrCode("");
             setError("");
           }}
@@ -434,8 +424,6 @@ export function AdminPanel() {
               onClick={() =>
                 leaveSection(() => {
                   void lockAdmin();
-                  setUnlocked(false);
-                  setSessionExpiresAt("");
                 })
               }
             >

@@ -40,7 +40,6 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { adminSession } from './admin-session';
 import { errorCode, knownSentence, sentenceFor, setupErrorFrom } from './error-sentences';
-import { withAbort } from './http-api';
 import { renderInternPayslipPng } from './intern-payslip-image';
 import { runningInTauri, transport } from './transport';
 import type { ManualSyncReport, NativeDtrPendingItem, NativeSyncInProgress, NativeSyncStatusResponse, NativeSyncTableStatus } from './tauri-api';
@@ -176,7 +175,7 @@ export function normalizeOffice(office: Partial<OfficeIdentity> | undefined): Of
 export async function loadConfig(signal?: AbortSignal): Promise<Omit<SafeConfigResponse, 'success'>> {
   try {
     // SAFETY: Either backend may leave fields out; every one is filled from the defaults below
-    const data = (await withAbort(signal, () => transport().getConfig())) as Partial<SafeConfigResponse>;
+    const data = (await transport().getConfig(signal)) as Partial<SafeConfigResponse>;
     return {
       timezone: data.timezone || DEFAULT_CONFIG.timezone,
       rfidAutoSubmitDelayMs: positiveNumber(data.rfidAutoSubmitDelayMs, DEFAULT_CONFIG.rfidAutoSubmitDelayMs),
@@ -201,7 +200,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
   const timer = setTimeout(() => limit.abort(), SCAN_TIMEOUT_MS);
   signal?.addEventListener('abort', () => limit.abort(), { once: true });
   try {
-    return await withAbort(limit.signal, () => transport().scanRfid(request));
+    return await transport().scanRfid(request, limit.signal);
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
     // A timeout is an unreachable service too.
@@ -219,7 +218,7 @@ export async function submitScan(request: ScanRequest, signal?: AbortSignal): Pr
 
 export async function unlockSetup(cardOrCode: string, signal?: AbortSignal): Promise<SetupUnlockResponse | SetupErrorResponse> {
   try {
-    const response = await withAbort(signal, () => transport().setupUnlock(cardOrCode));
+    const response = await transport().setupUnlock(cardOrCode, signal);
     if (!response.success) return response;
     adminSession.open(response.token, response.expiresAt);
     return { success: true, setupToken: response.token, expiresAt: response.expiresAt };
@@ -230,7 +229,7 @@ export async function unlockSetup(cardOrCode: string, signal?: AbortSignal): Pro
 
 export async function lookupSetupCard(rfidUid: string, setupToken: string, signal?: AbortSignal): Promise<SetupLookupResponse | SetupErrorResponse> {
   try {
-    return await withAbort(signal, () => transport().setupLookupCard(setupToken, rfidUid));
+    return await transport().setupLookupCard(setupToken, rfidUid, signal);
   } catch (error) {
     return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
   }
@@ -238,7 +237,7 @@ export async function lookupSetupCard(rfidUid: string, setupToken: string, signa
 
 export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: string, signal?: AbortSignal): Promise<SetupUpsertResponse | SetupErrorResponse> {
   try {
-    return await withAbort(signal, () => transport().setupUpsertUser(setupToken, request));
+    return await transport().setupUpsertUser(setupToken, request, signal);
   } catch (error) {
     return setupErrorFrom(error, 'SETUP_AUTH_REQUIRED');
   }
@@ -246,7 +245,7 @@ export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: s
 
 export async function lockSetup(setupToken: string, signal?: AbortSignal): Promise<void> {
   adminSession.dropToken();
-  await withAbort(signal, () => transport().setupLock(setupToken));
+  await transport().setupLock(setupToken, signal);
 }
 
 export async function uploadSetupPhoto(userId: string, dataUrl: string, setupToken: string): Promise<{ success: true; photoUrl: string } | SetupErrorResponse> {
@@ -262,7 +261,7 @@ export function uploadAdminPhoto(userId: string, dataUrl: string): Promise<{ suc
 }
 
 export function loadAttendance(date?: string, signal?: AbortSignal): Promise<AttendanceListResponse> {
-  return withAbort(signal, () => transport().getAttendance(date));
+  return transport().getAttendance(date, signal);
 }
 
 /** LAN viewer status used when the viewer cannot be asked. */
@@ -374,17 +373,20 @@ export async function lockAdmin(): Promise<void> {
 export async function checkAdminSession(): Promise<string | null> {
   try {
     const session = await transport().adminGetSession(nativeAdminSessionToken());
-    return session.expiresAt ?? adminSession.get().expiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const expiresAt = session.expiresAt ?? adminSession.get().expiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    // A session that is still good is open here too, so a page that shows it reads one place.
+    adminSession.open(nativeAdminSessionToken(), expiresAt);
+    return expiresAt;
   } catch {
     adminSession.close();
     return null;
   }
 }
 export function loadAdminUsers(signal?: AbortSignal): Promise<AdminUsersResponse> {
-  return withAbort(signal, () => transport().adminUsers(nativeAdminSessionToken()));
+  return transport().adminUsers(nativeAdminSessionToken(), signal);
 }
 export function loadAdminAttendance(date: string, signal?: AbortSignal): Promise<AdminAttendanceResponse> {
-  return withAbort(signal, () => transport().adminAttendance(nativeAdminSessionToken(), date));
+  return transport().adminAttendance(nativeAdminSessionToken(), date, signal);
 }
 
 export async function saveAdminUser<T extends object>(user: T, userId?: string): Promise<{ success: boolean; error?: { message?: string } }> {
@@ -849,7 +851,7 @@ export async function setAutostartStatus(enabled: boolean): Promise<boolean> {
 }
 
 export function loadBathroomStatus(date?: string, signal?: AbortSignal): Promise<BathroomStatusResponse> {
-  return withAbort(signal, () => transport().bathroomGetStatus(adminSession.get().token ?? undefined, date));
+  return transport().bathroomGetStatus(adminSession.get().token ?? undefined, date, signal);
 }
 
 export async function submitBathroomScan(
@@ -857,7 +859,7 @@ export async function submitBathroomScan(
   signal?: AbortSignal,
 ): Promise<BathroomScanResponse> {
   try {
-    return await withAbort(signal, () => transport().bathroomScanRfid(request.rfidUid, request));
+    return await transport().bathroomScanRfid(request.rfidUid, request, signal);
   } catch (error) {
     return {
       success: false,
@@ -908,6 +910,15 @@ export async function updateBathroomLog(
 }
 
 /** The ID register panel's four commands; each answers with the register's status. */
+/** The VoiceStudio connection the name-clip worker uses, for the voice settings panel. */
+export const voiceStudio = {
+  host: (): Promise<string> => transport().getVoicestudioHost(nativeAdminSessionToken()),
+  saveHost: (host: string): Promise<string> => transport().setVoicestudioHost(nativeAdminSessionToken(), host),
+  pin: (): Promise<string> => transport().getVoicestudioPin(nativeAdminSessionToken()),
+  savePin: (pin: string): Promise<void> => transport().setVoicestudioPin(nativeAdminSessionToken(), pin),
+  workerStatus: (): Promise<VoiceWorkerStatus> => transport().voiceWorkerStatus(),
+};
+
 export const idRegister = {
   status: (): Promise<IdRegisterStatus> => transport().idRegisterStatus(nativeAdminSessionToken()),
   signIn: (email: string, password: string): Promise<IdRegisterStatus> => transport().idRegisterSignIn(nativeAdminSessionToken(), email, password),
