@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DatabasePanel, SystemPanel, UserEditor } from './App';
+import { DatabasePanel, SystemPanel } from './database-panel';
+import { UserEditor } from './user-editor';
 import { Toasts } from './toasts';
 import * as api from './api';
 import * as tauriApi from './tauri-api';

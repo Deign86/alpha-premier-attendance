@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatDeductionDate, keepOrBuildManilaIso } from './App';
+import { keepOrBuildManilaIso } from './admin-attendance';
+import { formatDeductionDate } from './payroll-tables';
 
 describe('keepOrBuildManilaIso', () => {
   it('keeps the exact stamp (seconds included) when the HH:MM was not edited', () => {

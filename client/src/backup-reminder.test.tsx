@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AttendanceListItem, DatabaseBackupInfo, DatabaseInfoResponse } from '@rfid-attendance/shared';
 import { createBackupNow, FridayBackupReminder, fridayBackupDue } from './backup-reminder';
-import { DatabasePanel } from './App';
+import { DatabasePanel } from './database-panel';
 import { Toasts } from './toasts';
 import * as api from './api';
 

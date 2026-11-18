@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import fixtures from '../../shared/arrival-fixtures.json';
-import { AttendanceTable } from './App';
+import { AttendanceTable } from './live-attendance';
 
 /**
  * The client half of the boundary pin. `shared/arrival-fixtures.json` holds attendance rows as the desktop payroll
