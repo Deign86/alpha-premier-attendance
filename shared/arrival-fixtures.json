@@ -1,0 +1,53 @@
+{
+  "about": "Attendance rows as the desktop payroll engine answers them. src-tauri pins that it produces `expected` from `input`; the client pins what it shows for `expected`. A change on either side fails a test.",
+  "rows": [
+    {
+      "name": "on time",
+      "input": { "attendanceDate": "2026-07-27", "timeIn": "2026-07-27T07:58:00+08:00", "graceAvailable": true },
+      "expected": { "arrivalStatus": "ON_TIME", "minutesLate": 0, "graceUsed": false, "payableTimeIn": "2026-07-27T07:58:00+08:00" },
+      "shown": { "timeIn": "7:58 AM", "clamped": false }
+    },
+    {
+      "name": "first policy, weekly grace taken",
+      "input": { "attendanceDate": "2026-07-27", "timeIn": "2026-07-27T08:06:00+08:00", "graceAvailable": true },
+      "expected": { "arrivalStatus": "GRACE_PERIOD", "minutesLate": 0, "graceUsed": true, "payableTimeIn": "2026-07-27T08:06:00+08:00" },
+      "shown": { "timeIn": "8:06 AM", "clamped": false }
+    },
+    {
+      "name": "first policy, late after :15 is paid from the next hour",
+      "input": { "attendanceDate": "2026-07-28", "timeIn": "2026-07-28T08:30:00+08:00", "graceAvailable": false },
+      "expected": { "arrivalStatus": "LATE", "minutesLate": 30, "graceUsed": false, "payableTimeIn": "2026-07-28T09:00:00+08:00" },
+      "shown": { "timeIn": "9:00 AM", "clamped": true }
+    },
+    {
+      "name": "first policy, late by :15 or less is paid from the scan",
+      "input": { "attendanceDate": "2026-07-28", "timeIn": "2026-07-28T09:03:00+08:00", "graceAvailable": false },
+      "expected": { "arrivalStatus": "LATE", "minutesLate": 63, "graceUsed": false, "payableTimeIn": "2026-07-28T09:03:00+08:00" },
+      "shown": { "timeIn": "9:03 AM", "clamped": false }
+    },
+    {
+      "name": "first policy, an afternoon arrival is a half day and is not clamped",
+      "input": { "attendanceDate": "2026-07-28", "timeIn": "2026-07-28T13:22:00+08:00", "graceAvailable": false },
+      "expected": { "arrivalStatus": "LATE", "minutesLate": 322, "graceUsed": false, "payableTimeIn": "2026-07-28T13:22:00+08:00" },
+      "shown": { "timeIn": "1:22 PM", "clamped": false }
+    },
+    {
+      "name": "no-grace policy, late is paid from the scan",
+      "input": { "attendanceDate": "2026-10-05", "timeIn": "2026-10-05T08:30:00+08:00", "graceAvailable": true },
+      "expected": { "arrivalStatus": "LATE", "minutesLate": 30, "graceUsed": false, "payableTimeIn": "2026-10-05T08:30:00+08:00" },
+      "shown": { "timeIn": "8:30 AM", "clamped": false }
+    },
+    {
+      "name": "weekly grace resumed, grace taken",
+      "input": { "attendanceDate": "2026-11-17", "timeIn": "2026-11-17T08:10:00+08:00", "graceAvailable": true },
+      "expected": { "arrivalStatus": "GRACE_PERIOD", "minutesLate": 0, "graceUsed": true, "payableTimeIn": "2026-11-17T08:10:00+08:00" },
+      "shown": { "timeIn": "8:10 AM", "clamped": false }
+    },
+    {
+      "name": "weekly grace resumed, a second late arrival is paid from the scan",
+      "input": { "attendanceDate": "2026-11-18", "timeIn": "2026-11-18T08:30:00+08:00", "graceAvailable": false },
+      "expected": { "arrivalStatus": "LATE", "minutesLate": 30, "graceUsed": false, "payableTimeIn": "2026-11-18T08:30:00+08:00" },
+      "shown": { "timeIn": "8:30 AM", "clamped": false }
+    }
+  ]
+}

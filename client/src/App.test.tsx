@@ -22,6 +22,11 @@ function emitScannerStatus(status: ScannerStatus) {
   scannerStatusHandlers.forEach((h) => h(status));
 }
 
+/** What the desktop payroll engine sends with a row. A test states it; the screen only shows it. */
+function engineSaid<T extends { timeIn: string }>(row: T, arrivalStatus: 'ON_TIME' | 'GRACE_PERIOD' | 'LATE', minutesLate = 0, payableTimeIn: string = row.timeIn) {
+  return { ...row, arrivalStatus, minutesLate, graceUsed: arrivalStatus === 'GRACE_PERIOD', payableTimeIn };
+}
+
 const successResponse = {
   success: true,
   requestId: 'req-1',
@@ -435,51 +440,6 @@ describe('RFID kiosk', () => {
     expect(screen.getByRole('img', { name: 'Ada Lovelace ID' })).toHaveClass('result-photo-full');
   });
 
-  it('does not let a slow time-in announcement talk over the next person who already scanned', async () => {
-    let releaseHistory: () => void = () => {};
-    const historyGate = new Promise<void>((resolve) => {
-      releaseHistory = resolve;
-    });
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const url = String(input);
-      if (url === '/api/config') {
-        // SAFETY: Fetch returns mock Response for config
-        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 4000 }) } as Response;
-      }
-      if (url === '/api/attendance/scan') {
-        // SAFETY: Parse mock scan body
-        const body = JSON.parse(String(init?.body ?? '{}')) as { rfidUid?: string };
-        const payload = body.rfidUid === 'CARD-A'
-          ? successResponse
-          : {
-              ...successResponse,
-              action: 'TIME_OUT',
-              attendance: { ...successResponse.attendance, attendanceId: 'att-2', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
-              user: { ...successResponse.user, userId: 'u-2', fullName: 'Grace Hopper' },
-            };
-        // SAFETY: Fetch returns scan Response mock
-        return { ok: true, json: async () => payload } as Response;
-      }
-      if (url.startsWith('/api/attendance')) {
-        // The week history behind the time-in greeting answers slowly.
-        await historyGate;
-      }
-      // SAFETY: Fallback mock response
-      return { ok: true, json: async () => ({ success: true, attendance: [] }) } as Response;
-    });
-    render(<App />);
-    act(() => emitRfidScan('CARD-A'));
-    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
-    act(() => emitRfidScan('CARD-B'));
-    expect(await screen.findByText('Grace Hopper')).toBeInTheDocument();
-    await act(async () => {
-      releaseHistory();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-    const announced = vi.mocked(ttsService.announceAttendance).mock.calls.map(([call]) => call.employeeName);
-    expect(announced).toEqual(['Grace Hopper']);
-    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
-  });
 
   it('detaches the native card listener even when the kiosk unmounts before it attached', async () => {
     // O11: the listener attached after cleanup and stayed live (StrictMode, quick re-subscribes).
@@ -505,6 +465,7 @@ describe('RFID kiosk', () => {
         ...successResponse.attendance,
         timeIn: '2026-07-28T08:00:00+08:00',
         status: 'WORKING',
+        arrivalStatus: 'ON_TIME',
       },
     });
     render(<App />);
@@ -534,6 +495,7 @@ describe('RFID kiosk', () => {
         ...successResponse.attendance,
         timeIn: '2026-07-28T08:08:00+08:00',
         status: 'WORKING',
+        arrivalStatus: 'GRACE_PERIOD',
       },
     });
     render(<App />);
@@ -554,42 +516,6 @@ describe('RFID kiosk', () => {
     });
   });
 
-  it('marks the second grace-window arrival in the same week as late', async () => {
-    const currentResponse = {
-      ...successResponse,
-      attendance: {
-        ...successResponse.attendance,
-        attendanceDate: '2026-07-28',
-        attendanceId: 'att-tuesday',
-        timeIn: '2026-07-28T08:08:00+08:00',
-      },
-    };
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = String(input);
-      if (url === '/api/config') {
-        // SAFETY: Config response matches the shape consumed by loadConfig.
-        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500 }) } as Response;
-      }
-      if (url === '/api/attendance/scan') {
-        // SAFETY: Scan response matches the typed success fixture.
-        return { ok: true, json: async () => currentResponse } as Response;
-      }
-      const date = new URL(url, window.location.origin).searchParams.get('date');
-      const attendance = date === '2026-07-27'
-        ? [{ attendanceId: 'att-monday', attendanceDate: '2026-07-27', userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' }]
-        : [{ attendanceId: 'att-tuesday', attendanceDate: '2026-07-28', userId: 'u-1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T08:08:00+08:00', timeOut: null, status: 'WORKING' }];
-      // SAFETY: Attendance response matches the list contract for weekly evaluation.
-      return { ok: true, json: async () => ({ success: true, date, attendance, fetchedAt: '2026-07-28T09:00:00+08:00' }) } as Response;
-    });
-    render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
-    await screen.findByText('Ada Lovelace');
-    await waitFor(() => expect(ttsService.announceAttendance).toHaveBeenCalledWith(expect.objectContaining({
-      attendanceType: 'time_in',
-      arrivalStatus: 'LATE',
-      timeInIso: '2026-07-28T08:08:00+08:00',
-    })));
-  });
 
   it('announces a late time-in in TTS announcement', async () => {
     mockFetch({
@@ -600,6 +526,7 @@ describe('RFID kiosk', () => {
         ...successResponse.attendance,
         timeIn: '2026-07-28T08:30:00+08:00',
         status: 'WORKING',
+        arrivalStatus: 'LATE',
       },
     });
     render(<App />);
@@ -1658,8 +1585,8 @@ describe('Admin Attendance Corrections', () => {
             success: true,
             date: '2026-07-28',
             attendance: [
-              { attendanceId: 'c1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
-              { attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+              engineSaid({ attendanceId: 'c1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' }, 'GRACE_PERIOD'),
+              engineSaid({ attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' }, 'LATE', 30, '2026-07-28T09:00:00+08:00'),
               { attendanceId: 'e1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T09:00:00+08:00', timeOut: null, status: 'WORKING' },
               { attendanceId: 'g1', attendanceDate: '2026-07-28', userId: 'u3', fullName: 'Grace Hopper', department: 'Engineering', timeIn: '2026-07-28T07:55:00+08:00', timeOut: null, status: 'WORKING' },
             ],
@@ -1765,73 +1692,6 @@ describe('Admin Attendance Corrections', () => {
     }
   });
 
-  it('uses earlier week history to clamp an admin date-only 08:21 late arrival', async () => {
-    vi.restoreAllMocks();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-30T10:00:00+08:00'));
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = String(input);
-      if (url.includes('/api/config')) {
-        // SAFETY: Fetch mock config
-        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', enableAdmin: true }) } as Response;
-      }
-      if (url.includes('/api/admin/session')) {
-        // SAFETY: Fetch mock admin session active
-        return { ok: true, json: async () => ({ success: true, expiresAt: new Date(Date.now() + 900_000).toISOString() }) } as Response;
-      }
-      if (url.includes('/api/admin/users')) {
-        // SAFETY: Fetch mock intern roster
-        return {
-          ok: true,
-          json: async () => ({
-            success: true,
-            users: [{ userId: 'u-lazaro', fullName: 'Deign Grey O. Lazaro', rfidUid: 'RFID-LAZARO', employeeType: 'INTERN', status: 'ACTIVE' }],
-          }),
-        } as Response;
-      }
-      if (url.includes('/api/attendance?date=')) {
-        // SAFETY: Earlier Monday grace-window scan returned by the week-history probe
-        return {
-          ok: true,
-          json: async () => ({
-            success: true,
-            date: '2026-09-28',
-            fetchedAt: '2026-09-30T10:00:00+08:00',
-            attendance: [{ attendanceId: 'lazaro-grace', attendanceDate: '2026-09-28', userId: 'u-lazaro', fullName: 'Deign Grey O. Lazaro', department: 'Operations', timeIn: '2026-09-28T08:10:00+08:00', timeOut: null, status: 'WORKING' }],
-          }),
-        } as Response;
-      }
-      if (url.includes('/api/admin/attendance')) {
-        // SAFETY: Admin endpoint contains only the selected date's rows
-        return {
-          ok: true,
-          json: async () => ({
-            success: true,
-            date: '2026-09-30',
-            attendance: [{ attendanceId: 'lazaro-late', attendanceDate: '2026-09-30', userId: 'u-lazaro', fullName: 'Deign Grey O. Lazaro', department: 'Operations', timeIn: '2026-09-30T08:21:00+08:00', timeOut: null, status: 'WORKING' }],
-          }),
-        } as Response;
-      }
-      // SAFETY: Fetch fallback
-      return { ok: true, json: async () => ({ success: true, profiles: [], cutoffs: [] }) } as Response;
-    });
-
-    try {
-      window.history.pushState({}, '', '/admin');
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-      render(<App />);
-      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
-
-      const chip = await screen.findByTestId('clamped-time-in');
-      expect(chip).toHaveTextContent('9:00 AM');
-      expect(chip.getAttribute('title')).toBe('Actual scan: 8:21 AM (payable time clamped)');
-      await user.click(chip);
-      expect(screen.getByDisplayValue('08:21')).toHaveFocus();
-    } finally {
-      vi.useRealTimers();
-      window.history.pushState({}, '', '/');
-    }
-  });
 
   it('exports the clamped 09:00 time-in with the actual scan preserved in a sibling audit column', async () => {
     vi.restoreAllMocks();
@@ -1876,8 +1736,8 @@ describe('Admin Attendance Corrections', () => {
             success: true,
             date: '2026-07-28',
             attendance: [
-              { attendanceId: 'c1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
-              { attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+              engineSaid({ attendanceId: 'c1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' }, 'GRACE_PERIOD'),
+              engineSaid({ attendanceId: 'c2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' }, 'LATE', 30, '2026-07-28T09:00:00+08:00'),
               { attendanceId: 'e1', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T07:55:00+08:00', timeOut: null, status: 'WORKING' },
             ],
           }),
@@ -4539,7 +4399,7 @@ describe('Weekly-grace clamp display extension', () => {
     // Intern grace-first late row (Mon) — never clamped.
     { attendanceId: 'i1', attendanceDate: '2026-07-27', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-27T08:06:00+08:00', timeOut: '2026-07-27T17:00:00+08:00', status: 'COMPLETED' },
     // Same intern repeat-late row (Tue) — clamped to 09:00 AM.
-    { attendanceId: 'i2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
+    engineSaid({ attendanceId: 'i2', attendanceDate: '2026-07-28', userId: 'u2', fullName: 'Charles Babbage', department: 'Math', timeIn: '2026-07-28T08:30:00+08:00', timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' }, 'LATE', 30, '2026-07-28T09:00:00+08:00'),
     // Employee with the same late pattern — employees are never clamped.
     { attendanceId: 'e2', attendanceDate: '2026-07-28', userId: 'u1', fullName: 'Ada Lovelace', department: 'Engineering', timeIn: '2026-07-28T09:01:00+08:00', timeOut: null, status: 'WORKING' },
   ];
@@ -4617,22 +4477,6 @@ describe('Weekly-grace clamp display extension', () => {
     }
   });
 
-  it('degrades to actual-only times on the live table when the week-history fetch fails', async () => {
-    window.history.pushState({}, '', '/attendance');
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-07-28T10:00:00+08:00'));
-    try {
-      vi.restoreAllMocks();
-      mockLiveFetch({ todayRows: todayOnlyRows, failHistory: true });
-      render(<App />);
-      // Late rows clamp even when the best-effort history request fails.
-      expect(await screen.findByTestId('clamped-time-in')).toHaveTextContent('9:00 AM');
-      expect(screen.getByText('9:01 AM')).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-      window.history.pushState({}, '', '/');
-    }
-  });
 
   it('falls back to actual times on the live table when no roster is reachable', async () => {
     window.history.pushState({}, '', '/attendance');
@@ -4655,7 +4499,7 @@ describe('Weekly-grace clamp display extension', () => {
       const breakdown = {
         deductions: [
           { date: '2026-08-03', category: 'LATE', label: 'Late', details: 'Late arrival at 8:06 AM (Weekly grace applied — PHP 0.00 deduction)', timeIn: '8:06 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 0, amount: 0 },
-          { date: '2026-08-04', category: 'LATE', label: 'Late', details: 'Late arrival at 8:30 AM (1 hr(s) late)', timeIn: '8:30 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 1, amount: 10 },
+          { date: '2026-08-04', category: 'LATE', label: 'Late', details: 'Late arrival at 8:30 AM (1 hr(s) late)', timeIn: '8:30 AM', payableTimeIn: '9:00 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 1, amount: 10 },
         ],
       };
       const internRecord: PayrollCutoffRecord = {
@@ -4744,50 +4588,6 @@ describe('hourly late clamp', () => {
     status: 'WORKING',
   });
 
-  it('uses a strict hourly :15 boundary for intern attendance and weekly grace', async () => {
-    vi.restoreAllMocks();
-    mockAdminFetch([
-      row('hour-grace-exact', '2026-07-27', '08:15:00.000000000'),
-      row('hour-0916', '2026-07-27', '09:16:00'),
-      row('hour-0903', '2026-07-28', '09:03:00'),
-      row('hour-1016', '2026-07-29', '10:16:00'),
-      row('hour-091500', '2026-07-30', '09:15:00'),
-      row('hour-0915001', '2026-07-31', '09:15:00.001'),
-      { ...row('hour-grace-sub-ms', '2026-07-27', '08:15:00.000000001'), userId: 'u3', fullName: 'Grace Hopper' },
-      { ...row('hour-grace-after-boundary', '2026-07-28', '08:10:00'), userId: 'u3', fullName: 'Grace Hopper' },
-      row('hour-091500000001', '2026-08-03', '09:15:00.000000001'),
-      { ...row('hour-employee', '2026-07-27', '09:16:00'), userId: 'u1', fullName: 'Ada Lovelace' },
-    ]);
-
-    try {
-      window.history.pushState({}, '', '/admin');
-      const user = userEvent.setup();
-      render(<App />);
-      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
-
-      const chips = await screen.findAllByTestId('clamped-time-in');
-      expect(chips).toHaveLength(6);
-      expect(chips.filter((chip) => chip.textContent === '10:00 AM')).toHaveLength(4);
-      expect(chips.filter((chip) => chip.textContent === '11:00 AM')).toHaveLength(1);
-      // Each chip keeps the actual scan in its tooltip; rows that are not clamped show the actual time.
-      const actualScan = (time: string) => `Actual scan: ${time} (payable time clamped)`;
-      const chipsFor = (time: string) => chips.filter((chip) => chip.getAttribute('title') === actualScan(time));
-      expect(chipsFor('9:16 AM')).toHaveLength(2);
-      expect(chipsFor('10:16 AM')).toHaveLength(1);
-      // 09:15:00.001 and the next week's 09:15 plus a nanosecond are both past :15.
-      expect(chipsFor('9:15 AM').map((chip) => chip.textContent)).toEqual(['10:00 AM', '10:00 AM']);
-      expect(screen.getByText('9:03 AM')).toBeInTheDocument();
-      expect(screen.getByText('9:15 AM')).toBeInTheDocument();
-      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
-      // A nanosecond past the 08:15 grace window clamps to 9:00; exactly 08:15 stays the actual grace arrival.
-      const [boundaryGraceChip] = chipsFor('8:15 AM');
-      expect(boundaryGraceChip).toHaveTextContent('9:00 AM');
-      expect(boundaryGraceChip.closest('tr')).toHaveTextContent('Grace Hopper');
-      expect(screen.getByText('8:15 AM').closest('tr')).toHaveTextContent('Charles Babbage');
-    } finally {
-      window.history.pushState({}, '', '/');
-    }
-  });
 
   it('clamps a 09:30 repeat late to 10:00 in the admin table and CSV', async () => {
     vi.restoreAllMocks();
@@ -4805,7 +4605,7 @@ describe('hourly late clamp', () => {
     // past the weekly grace window; it still uses the hourly clamp.
     mockAdminFetch([
       row('v3r1', '2026-07-27', '08:06:00'),
-      row('v3r2', '2026-07-28', '09:30:00'),
+      engineSaid(row('v3r2', '2026-07-28', '09:30:00'), 'LATE', 90, '2026-07-28T10:00:00+08:00'),
     ]);
 
     try {
@@ -4845,67 +4645,7 @@ describe('hourly late clamp', () => {
     }
   });
 
-  it('clamps all non-graced lates while preserving the first grace-window arrival', async () => {
-    vi.restoreAllMocks();
-    // u2: Tue 08:30 follows Monday's graced 08:06 and must chip.
-    // u3: the non-grace Monday late clamps, while Tuesday's first grace-window
-    // arrival remains actual and does not get a chip.
-    mockAdminFetch([
-      row('v3a1', '2026-07-27', '08:06:00'),
-      row('v3a2', '2026-07-28', '08:30:00'),
-      { ...row('v3b1', '2026-07-27', '09:30:00'), userId: 'u3', fullName: 'Grace Hopper' },
-      { ...row('v3b2', '2026-07-28', '08:10:00'), userId: 'u3', fullName: 'Grace Hopper' },
-    ]);
 
-    try {
-      window.history.pushState({}, '', '/admin');
-      const user = userEvent.setup();
-      render(<App />);
-      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
-
-      const chips = await screen.findAllByTestId('clamped-time-in');
-      expect(chips).toHaveLength(2);
-      expect(chips.map((chip) => chip.textContent)).toEqual(expect.arrayContaining(['9:00 AM', '10:00 AM']));
-      // SAFETY: the chip renders inside its attendance row
-      expect((chips[0] as HTMLElement).closest('tr')).toHaveTextContent('Charles Babbage');
-      // u3's first grace-window arrival stays actual.
-      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
-    } finally {
-      window.history.pushState({}, '', '/');
-    }
-  });
-
-  it('resets the clamp and the grace at the Manila Monday week boundary', async () => {
-    vi.restoreAllMocks();
-    // Week 1: 08:06 graced, 08:30 chipped. Week 2 (from Mon 2026-08-03):
-    // 08:10 graces fresh (no chip) and 08:20 is the new week's repeat late.
-    mockAdminFetch([
-      row('v3w1a', '2026-07-27', '08:06:00'),
-      row('v3w1b', '2026-07-28', '08:30:00'),
-      row('v3w2a', '2026-08-03', '08:10:00'),
-      row('v3w2b', '2026-08-04', '08:20:00'),
-    ]);
-
-    try {
-      window.history.pushState({}, '', '/admin');
-      const user = userEvent.setup();
-      render(<App />);
-      await user.click(await screen.findByRole('button', { name: /attendance corrections/i }));
-
-      const chips = await screen.findAllByTestId('clamped-time-in');
-      expect(chips).toHaveLength(2);
-      // The chipped rows are Tuesday 2026-07-28 (08:30) and Tuesday 2026-08-04 (08:20).
-      expect(chips.map((chip) => chip.getAttribute('title'))).toEqual(expect.arrayContaining([
-        'Actual scan: 8:30 AM (payable time clamped)',
-        'Actual scan: 8:20 AM (payable time clamped)',
-      ]));
-      // Each week's graced first late keeps its actual time.
-      expect(screen.getByText('8:06 AM')).toBeInTheDocument();
-      expect(screen.getByText('8:10 AM')).toBeInTheDocument();
-    } finally {
-      window.history.pushState({}, '', '/');
-    }
-  });
 
   it('clamps a past-09:00 late in the live table and payroll details', async () => {
     window.history.pushState({}, '', '/attendance');
@@ -4929,7 +4669,7 @@ describe('hourly late clamp', () => {
         }
         if (url.includes('/api/attendance')) {
           // SAFETY: Fetch mock live snapshot with the 09:30 repeat late
-          return { ok: true, json: async () => ({ success: true, date: '2026-07-28', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: [row('v3l2', '2026-07-28', '09:30:00')] }) } as Response;
+          return { ok: true, json: async () => ({ success: true, date: '2026-07-28', fetchedAt: '2026-07-28T10:00:00+08:00', attendance: [engineSaid(row('v3l2', '2026-07-28', '09:30:00'), 'LATE', 90, '2026-07-28T10:00:00+08:00')] }) } as Response;
         }
         // SAFETY: Fetch fallback
         return { ok: true, json: async () => ({ success: true }) } as Response;
@@ -4947,7 +4687,7 @@ describe('hourly late clamp', () => {
       vi.spyOn(api, 'loadPayrollPdfs').mockResolvedValue({ success: true, payrollPdfs: [] });
       const breakdown = {
         deductions: [
-          { date: '2026-08-04', category: 'LATE', label: 'Late', details: 'Late arrival at 9:30 AM (1 hr(s) late)', timeIn: '9:30 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 1, amount: 10 },
+          { date: '2026-08-04', category: 'LATE', label: 'Late', details: 'Late arrival at 9:30 AM (1 hr(s) late)', timeIn: '9:30 AM', payableTimeIn: '10:00 AM', timeOut: '5:00 PM', workedHours: null, hoursShort: null, lateHours: 1, amount: 10 },
         ],
       };
       const internRecord: PayrollCutoffRecord = {
@@ -5360,6 +5100,12 @@ describe('Attendance corrections: rows open on Edit', () => {
     { attendanceId: `${date}-maria`, attendanceDate: date, userId: 'APG-2026-002', fullName: 'Maria Clara', department: 'Sales', timeIn: `${date}T13:22:00+08:00`, timeOut: null, status: 'WORKING', source: 'RFID' },
     { attendanceId: `${date}-jose`, attendanceDate: date, userId: 'APG-2026-003', fullName: 'Jose Rizal', department: 'Sales', timeIn: `${date}T08:20:00+08:00`, timeOut: `${date}T17:00:00+08:00`, status: 'COMPLETED', source: 'RFID' },
   ];
+  /** The mocked backend's arrival for a row: late by the minutes after 08:00, as the engine would send it for these rows. */
+  const withArrival = (row: MockRow) => {
+    const [hour, minute] = row.timeIn.slice(11, 16).split(':').map(Number);
+    const minutesLate = hour * 60 + minute - 8 * 60;
+    return minutesLate > 0 ? engineSaid(row, 'LATE', minutesLate) : engineSaid(row, 'ON_TIME');
+  };
   type SaveBody = { timeIn?: string | null; timeOut?: string | null; expectedTimeIn?: string | null; expectedTimeOut?: string | null };
 
   /** The mocked server's rows by date (a test may change them to stand for a new scan). */
@@ -5410,7 +5156,7 @@ describe('Attendance corrections: rows open on Edit', () => {
       if (url.includes('/api/admin/attendance')) {
         const date = /date=([^&]+)/.exec(url)?.[1] ?? '2026-07-28';
         if (!stored.has(date)) stored.set(date, day(date, juanIn));
-        const rows = (stored.get(date) ?? []).map((row) => ({ ...row }));
+        const rows = (stored.get(date) ?? []).map((row) => withArrival({ ...row }));
         // SAFETY: Mock attendance list for the requested date
         return { ok: true, json: async () => ({ success: true, date, attendance: rows }) } as Response;
       }
@@ -6243,7 +5989,7 @@ describe('Sort by time in: clamped rows', () => {
             attendance: [
               { attendanceId: 'l-mon', attendanceDate: '2026-07-27', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-27T08:06:00+08:00', timeOut: null, status: 'WORKING' },
               { attendanceId: 'g-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-005', fullName: 'Gabriela Silang', department: 'Finance', timeIn: '2026-07-28T08:45:00+08:00', timeOut: null, status: 'WORKING' },
-              { attendanceId: 'l-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' },
+              engineSaid({ attendanceId: 'l-tue', attendanceDate: '2026-07-28', userId: 'APG-2026-004', fullName: 'Lorenzo Ruiz', department: 'Operations', timeIn: '2026-07-28T08:30:00+08:00', timeOut: null, status: 'WORKING' }, 'LATE', 30, '2026-07-28T09:00:00+08:00'),
             ],
           }),
         } as Response;

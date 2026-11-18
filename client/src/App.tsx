@@ -65,12 +65,8 @@ import {
   INTERN_DAILY_RATE_PHP,
   INTERN_LATE_DEDUCTION_PER_HOUR_PHP,
   ATTENDANCE_TIMEZONE,
-  isNoGraceDate,
   isLateTimeout,
   normalizeName,
-  evaluateArrivalFromTimestamp,
-  evaluateAttendanceArrivals,
-  getManilaWeekStart,
   countWorkdays,
 } from "@rfid-attendance/shared";
 import {
@@ -195,42 +191,9 @@ function toErrorMessage(cause: unknown, fallback: string): string {
   return fallback;
 }
 
-async function evaluateKioskArrival(
-  attendance: { attendanceId: string; attendanceDate: string; timeIn: string; arrivalStatus?: ArrivalStatus | null },
-  userId: string,
-  timezone: string,
-): Promise<ArrivalStatus> {
-  // The desktop payroll engine already decided it (weekly grace included).
-  if (attendance.arrivalStatus) return attendance.arrivalStatus;
-  const fallback = evaluateArrivalFromTimestamp(attendance.timeIn, timezone, attendance.attendanceDate);
-  try {
-    const weekStart = getManilaWeekStart(attendance.attendanceDate);
-    const start = new Date(`${weekStart}T00:00:00Z`);
-    const end = new Date(`${attendance.attendanceDate}T00:00:00Z`);
-    const dates: string[] = [];
-    for (const date = new Date(start); date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
-      dates.push(date.toISOString().slice(0, 10));
-    }
-    const responses = await Promise.all(dates.map((date) => loadAttendance(date)));
-    const history = responses.flatMap((response) =>
-      response.success
-        ? response.attendance
-            .filter((row) => row.userId === userId)
-            .map((row) => ({
-              attendanceId: row.attendanceId,
-              userId: row.userId,
-              attendanceDate: row.attendanceDate,
-              timeIn: row.timeIn,
-            }))
-        : [],
-    );
-    if (!history.some((row) => row.attendanceId === attendance.attendanceId)) {
-      history.push({ ...attendance, userId });
-    }
-    return evaluateAttendanceArrivals(history).get(attendance.attendanceId)?.arrivalStatus ?? fallback;
-  } catch {
-    return fallback;
-  }
+/** The time-in a row is paid from when the payroll engine clamped it (it then differs from the scan); else null. */
+function clampedPayableTimeIn(row: Pick<AttendanceListItem, "timeIn" | "payableTimeIn">): string | null {
+  return row.timeIn && row.payableTimeIn && row.payableTimeIn !== row.timeIn ? row.payableTimeIn : null;
 }
 
 type KioskState = "ready" | "processing" | "success" | "error";
@@ -327,7 +290,6 @@ export default function App() {
   const scanInFlightRef = useRef(false);
   // Bumped by every armed scan: work that resumes after an await checks it
   // so a slow earlier scan never announces over (or re-times) a newer one.
-  const scanSeq = useRef(0);
   // Synchronous assisted-confirm guard: prevents double-post when Confirm is
   // activated twice before busy state propagates, or the auto-close timer
   // fires mid-flight.
@@ -765,7 +727,6 @@ export default function App() {
       }
     }
     scanInFlightRef.current = true;
-    scanSeq.current += 1;
     // A new scan takes over: the last result's reset must not fire mid-request and abort it.
     if (resetTimer.current) clearTimeout(resetTimer.current);
     if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
@@ -825,13 +786,9 @@ export default function App() {
       if (response.success) {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
-        const seq = scanSeq.current;
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
+          ? response.attendance.arrivalStatus ?? undefined
           : undefined;
-        // The next person scanned while the week history loaded: their result
-        // owns the screen, the voice and the reset timer now.
-        if (seq !== scanSeq.current) return;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
           employeeName: response.user.fullName,
@@ -882,7 +839,7 @@ export default function App() {
         if (document.visibilityState === "hidden" || !document.hasFocus()) void notifyScanSuccess(response.user.fullName).catch(() => undefined);
         const isLate = response.attendance.status === "LATE_TIMEOUT" || (response.attendance.timeOut ? isLateTimeout(response.attendance.timeOut) : false);
         const arrival = response.action === "TIME_IN" && response.attendance.timeIn
-          ? await evaluateKioskArrival(response.attendance, response.user.userId, config.timezone)
+          ? response.attendance.arrivalStatus ?? undefined
           : undefined;
         const isFirstTimeInToday = response.action === "TIME_IN" && response.attendance.isFirstArrivalToday === true;
         void announceAttendance({
@@ -2698,8 +2655,6 @@ function LiveAttendance() {
   const [timeOrder, toggleTimeOrder] = useTimeOrder("alpha_premier_sort_live_attendance");
   const searchRef = useRef<HTMLInputElement>(null);
   const [tableUsers, setTableUsers] = useState<AdminUser[]>([]);
-  const [clampHistory, setClampHistory] = useState<AttendanceListItem[]>([]);
-  const clampHistoryWeekRef = useRef("");
   const liveAttendanceSeq = useRef(0);
   const refresh = useCallback(async () => {
     const seq = liveAttendanceSeq.current + 1;
@@ -2761,9 +2716,8 @@ function LiveAttendance() {
   }, [refresh]);
 
   useEffect(() => {
-    // Best-effort roster so the live table can show the display-only
-    // hourly payable clamp for non-graced intern late arrivals. Viewers without
-    // an admin session never resolve this, so actual times simply stay visible.
+    // The payable (clamped) time-in is shown to an administrator only: the roster loads
+    // only with an admin session, and without one the actual times stay visible.
     void loadAdminUsers()
       .then((response) => {
         // SAFETY: Error-shaped 401 bodies cast as AdminUsersResponse can omit users
@@ -2771,45 +2725,6 @@ function LiveAttendance() {
       })
       .catch(() => setTableUsers([]));
   }, []);
-
-  // The live snapshot only covers today, so weekly-grace exhaustion never
-  // shows in the loaded rows alone. Best-effort: fetch the earlier days of
-  // the current Manila week once so the display-only clamp can group by
-  // week. Any failure leaves history empty and the table shows actual times
-  // exactly as before, with no layout change.
-  useEffect(() => {
-    if (attendance.kind === "loading") return;
-    const today = localDate();
-    let weekStart: string;
-    try {
-      weekStart = getManilaWeekStart(today);
-    } catch {
-      return;
-    }
-    if (clampHistoryWeekRef.current === weekStart) return;
-    clampHistoryWeekRef.current = weekStart;
-    const dates: string[] = [];
-    for (
-      const cursor = new Date(`${weekStart}T00:00:00Z`);
-      cursor.toISOString().slice(0, 10) < today;
-      cursor.setUTCDate(cursor.getUTCDate() + 1)
-    ) {
-      dates.push(cursor.toISOString().slice(0, 10));
-    }
-    if (!dates.length) return;
-    void (async () => {
-      try {
-        const responses = await Promise.all(dates.map((day) => loadAttendance(day)));
-        setClampHistory(
-          responses.flatMap((response) =>
-            response.success && Array.isArray(response.attendance) ? response.attendance : [],
-          ),
-        );
-      } catch {
-        setClampHistory([]);
-      }
-    })();
-  }, [attendance]);
 
   const refreshLan = useCallback(async () => {
     setLan(await getLanStatus());
@@ -2951,8 +2866,7 @@ function LiveAttendance() {
         <AttendanceTable
           rows={shownRows}
           timezone="Asia/Manila"
-          users={tableUsers}
-          history={clampHistory}
+          showPayable={tableUsers.some((user) => user.employeeType === "INTERN")}
           order={timeOrder}
           onToggleOrder={toggleTimeOrder}
         />
@@ -3413,26 +3327,22 @@ function StatusWord({ status }: { status: AttendanceStatus }) {
   );
 }
 
-function AttendanceTable({
+export function AttendanceTable({
   rows,
   timezone,
-  users = [],
-  history = [],
+  showPayable = false,
   order,
   onToggleOrder,
 }: {
   rows: AttendanceListItem[];
   timezone: string;
-  users?: AdminUser[];
-  history?: AttendanceListItem[];
+  /** Show the payable time-in the payroll engine clamped, with the actual scan in the tooltip. */
+  showPayable?: boolean;
   /** Time in order on screen (LiveAttendance keeps the viewer's choice). */
   order: TimeOrder;
   onToggleOrder: () => void;
 }) {
-  const clampedTimeInIds = useMemo(
-    () => clampedGraceTimeInIds([...rows, ...history], users),
-    [rows, users, history],
-  );
+  const payable = (row: AttendanceListItem) => (showPayable ? clampedPayableTimeIn(row) : null);
   if (!rows.length)
     return (
       <div className="empty-state">No attendance has been recorded today.</div>
@@ -3451,7 +3361,7 @@ function AttendanceTable({
         </thead>
         <tbody>
           {/* Sorted by the time shown: a clamped time-in sorts as its payable hour. */}
-          {sortByTime(rows, (row) => (clampedTimeInIds.has(row.attendanceId) && row.timeIn ? clampedTimeInIso(row.timeIn) : row.timeIn), order).map((row) => (
+          {sortByTime(rows, (row) => payable(row) ?? row.timeIn, order).map((row) => (
             <tr key={row.attendanceId}>
               <td>
                 <strong>{row.fullName}</strong>
@@ -3459,13 +3369,13 @@ function AttendanceTable({
               </td>
               <td>{row.department || "—"}</td>
               <td>
-                {clampedTimeInIds.has(row.attendanceId) && row.timeIn ? (
+                {payable(row) && row.timeIn ? (
                   <span
                     className="clamped-time-in-chip clamped-time-in-static"
                     data-testid="clamped-time-in"
                     title={`Actual scan: ${formatTime(row.timeIn, timezone)} (payable time clamped)`}
                   >
-                    {clampedTimeLabel(row.timeIn)}
+                    {formatTime(payable(row) ?? row.timeIn)}
                   </span>
                 ) : (
                   row.timeIn ? formatTime(row.timeIn, timezone) : "—"
@@ -7423,12 +7333,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
               </thead>
               <tbody>
                 {parsedBreakdown.deductions.map((item: AttendanceDeductionItem, idx: number) => {
-                  const clampedPayrollTimeIn =
-                    row.employeeType === "INTERN" &&
-                    !isNoGraceDate(item.date) &&
-                    item.category === "LATE" &&
-                    Boolean(item.timeIn && shouldClampHour(item.timeIn)) &&
-                    item.amount > 0;
+                  const clampedPayrollTimeIn = item.payableTimeIn;
                   return (
                   <tr key={`${item.date}-${item.category}-${idx}`}>
                     <td className="payroll-deduction-date">
@@ -7448,7 +7353,7 @@ function PayrollBreakdownDetail({ row }: { row: PayrollCutoffRecord }) {
                               data-testid="clamped-payroll-time-in"
                               title={`Actual scan: ${item.timeIn} (payable time clamped)`}
                             >
-                              {clampedTimeLabel(item.timeIn ?? "")}
+                              {clampedPayrollTimeIn}
                             </span>
                           ) : (
                             item.timeIn ?? "—"
@@ -8200,167 +8105,6 @@ function PayrollPdfButtons({ filePath, onResult }: { filePath: string; onResult:
   );
 }
 
-/**
- * Manila clock seconds since midnight for an ISO time-in, or null when
- * unparseable.
- */
-function manilaClockSeconds(timeInIso: string): number | null {
-  const date = new Date(timeInIso);
-  if (!Number.isFinite(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: ATTENDANCE_TIMEZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const read = (type: string) =>
-    Number(parts.find((p) => p.type === type)?.value ?? 0);
-  return read("hour") * 3600 + read("minute") * 60 + read("second");
-}
-
-/**
- * Clock seconds since midnight for either an ISO time-in or a payroll
- * "8:30 AM" style display label, or null when neither parses. Shared by the
- * hourly clamp display and payroll details.
- */
-function clampWindowClockSeconds(timeInValue: string): number | null {
-  const match = /^(\d{1,2}):(\d{2})\s*([AP]M)$/i.exec(timeInValue.trim());
-  if (match) {
-    const hour = Number(match[1]) % 12;
-    const minute = Number(match[2]);
-    if (hour > 11 || minute > 59) return null;
-    return (
-      hour * 3600 + minute * 60 + (match[3].toUpperCase() === "PM" ? 12 * 3600 : 0)
-    );
-  }
-  return manilaClockSeconds(timeInValue);
-}
-
-/** Round a payable late arrival strictly after :15 to the next Manila hour. */
-function clampedTimeLabel(timeInValue: string): string {
-  const seconds = clampWindowClockSeconds(timeInValue);
-  if (seconds === null) return timeInValue;
-  const hour = Math.floor(seconds / 3600);
-  const withinHour = seconds % 3600;
-  const clampedHour = isStrictlyPastQuarterHour(timeInValue, withinHour)
-    ? (hour + 1) % 24
-    : hour;
-  return `${clampedHour % 12 || 12}:00 ${clampedHour < 12 ? "AM" : "PM"}`;
-}
-
-function hasNonZeroSubMillisecondFraction(timeInValue: string): boolean {
-  const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i.exec(timeInValue)?.[1];
-  return fraction !== undefined && /[1-9]/.test(fraction.slice(3));
-}
-
-function isStrictlyPastQuarterHour(timeInValue: string, withinHour: number): boolean {
-  const date = new Date(timeInValue);
-  const fraction = Number.isFinite(date.getTime()) ? date.getMilliseconds() : 0;
-  return withinHour > 15 * 60 ||
-    (withinHour === 15 * 60 && (fraction > 0 || hasNonZeroSubMillisecondFraction(timeInValue)));
-}
-
-function shouldClampHour(timeInValue: string): boolean {
-  const seconds = clampWindowClockSeconds(timeInValue);
-  if (seconds === null) return false;
-  return isStrictlyPastQuarterHour(timeInValue, seconds % 3600);
-}
-
-function clampedTimeInIso(timeInIso: string): string {
-  const seconds = manilaClockSeconds(timeInIso);
-  const date = new Date(timeInIso);
-  if (seconds === null || !Number.isFinite(date.getTime())) return timeInIso;
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ATTENDANCE_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
-  const dateText = `${part("year")}-${part("month")}-${part("day")}`;
-  const withinHour = seconds % 3600;
-  const nextHour = isStrictlyPastQuarterHour(timeInIso, withinHour)
-    ? Math.floor(seconds / 3600) + 1
-    : Math.floor(seconds / 3600);
-  const payable = new Date(`${dateText}T00:00:00+08:00`);
-  payable.setTime(payable.getTime() + nextHour * 3600_000);
-  const payableParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ATTENDANCE_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(payable);
-  const payablePart = (type: string) => payableParts.find((item) => item.type === type)?.value ?? "";
-  const payableDate = `${payablePart("year")}-${payablePart("month")}-${payablePart("day")}`;
-  return `${payableDate}T${String(nextHour % 24).padStart(2, "0")}:00:00+08:00`;
-}
-
-/**
- * Display-only payable clamp: non-graced late intern rows are clamped. The
- * week's first grace-window arrival stays actual; employees and on-time rows
- * are excluded. Grouping stays
- * per userId + Manila Monday-week; callers may pass a wider set than they
- * render (e.g. earlier days of the week alongside today's rows) and
- * duplicated attendanceIds count once. Backing data (row.timeIn) is never
- * mutated.
- */
-function clampedGraceTimeInIds(
-  rows: AttendanceListItem[],
-  users: AdminUser[],
-): Set<string> {
-  const internIds = new Set(
-    users
-      .filter((user) => user.employeeType === "INTERN")
-      .map((user) => user.userId),
-  );
-  const groups = new Map<string, AttendanceListItem[]>();
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (seen.has(row.attendanceId)) continue;
-    seen.add(row.attendanceId);
-    if (!row.timeIn || !internIds.has(row.userId)) continue;
-    const arrival = evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE, row.attendanceDate);
-    if (arrival !== "LATE" && arrival !== "GRACE_PERIOD") {
-      continue;
-    }
-    let weekStart: string;
-    try {
-      weekStart = getManilaWeekStart(row.attendanceDate);
-    } catch {
-      continue;
-    }
-    const key = `${row.userId}:${weekStart}`;
-    const list = groups.get(key) ?? [];
-    list.push(row);
-    groups.set(key, list);
-  }
-  const clamped = new Set<string>();
-  for (const list of groups.values()) {
-    list.sort((a, b) => {
-      const byDate = a.attendanceDate.localeCompare(b.attendanceDate);
-      return byDate !== 0 ? byDate : a.timeIn.localeCompare(b.timeIn);
-    });
-    let graceUsed = false;
-    for (const row of list) {
-      if (isNoGraceDate(row.attendanceDate)) continue;
-      const inGraceWindow =
-        evaluateArrivalFromTimestamp(row.timeIn, ATTENDANCE_TIMEZONE) ===
-          "GRACE_PERIOD" &&
-        !(
-          manilaClockSeconds(row.timeIn) === 8 * 3600 + 15 * 60 &&
-          isStrictlyPastQuarterHour(row.timeIn, 15 * 60)
-        );
-      if (inGraceWindow && !graceUsed) {
-        graceUsed = true;
-        continue;
-      }
-      if (shouldClampHour(row.timeIn)) clamped.add(row.attendanceId);
-    }
-  }
-  return clamped;
-}
-
 /** No rows: what the attendance page counts, selects and exports until a date's rows have loaded. */
 const NO_ATTENDANCE_ROWS: AttendanceListItem[] = [];
 
@@ -8490,66 +8234,15 @@ function AdminAttendance({
     setTypedDate(null);
   };
 
-  const [clampWeekHistory, setClampWeekHistory] = useState<AttendanceListItem[]>([]);
-  const hasInternRoster = users.some((user) => user.employeeType === "INTERN");
-
-  useEffect(() => {
-    let cancelled = false;
-    setClampWeekHistory([]);
-    if (!hasInternRoster || !date) return () => { cancelled = true; };
-
-    let weekStart: string;
-    try {
-      weekStart = getManilaWeekStart(date);
-    } catch {
-      return () => { cancelled = true; };
-    }
-
-    const dates: string[] = [];
-    for (
-      const cursor = new Date(`${weekStart}T00:00:00Z`);
-      cursor.toISOString().slice(0, 10) < date;
-      cursor.setUTCDate(cursor.getUTCDate() + 1)
-    ) {
-      dates.push(cursor.toISOString().slice(0, 10));
-    }
-    if (!dates.length) return () => { cancelled = true; };
-
-    void Promise.all(dates.map((day) => loadAttendance(day)))
-      .then((responses) => {
-        if (cancelled) return;
-        setClampWeekHistory(
-          responses.flatMap((response) =>
-            response.success && Array.isArray(response.attendance) ? response.attendance : [],
-          ),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setClampWeekHistory([]);
-      });
-
-    return () => { cancelled = true; };
-  }, [date, hasInternRoster]);
-
+  // Arrival status, grace and the payable time-in all come from the payroll engine, row by row.
   const arrivalMap = useMemo(
-    () => {
-      const employeeTypes = new Map(users.map((user) => [user.userId, user.employeeType]));
-      const arrivals = evaluateAttendanceArrivals(activeRows.map((row) => ({
-        ...row,
-        employeeType: employeeTypes.get(row.userId) ?? "EMPLOYEE",
-      })));
-      // The desktop payroll engine's decision wins: it knows the week's grace claim, a one-day list does not.
-      for (const row of activeRows) {
-        if (row.arrivalStatus) arrivals.set(row.attendanceId, { arrivalStatus: row.arrivalStatus, minutesLate: row.minutesLate ?? 0 });
-      }
-      return arrivals;
-    },
-    [activeRows, users],
+    () => new Map(activeRows.map((row) => [row.attendanceId, { arrivalStatus: row.arrivalStatus ?? "NONE", minutesLate: row.minutesLate ?? 0 }])),
+    [activeRows],
   );
 
   const clampedTimeInIds = useMemo(
-    () => clampedGraceTimeInIds([...activeRows, ...clampWeekHistory], users),
-    [activeRows, clampWeekHistory, users],
+    () => new Set(activeRows.filter((row) => clampedPayableTimeIn(row)).map((row) => row.attendanceId)),
+    [activeRows],
   );
 
   const isLate = (row: AttendanceListItem) => arrivalMap.get(row.attendanceId)?.arrivalStatus === "LATE";
@@ -8583,7 +8276,7 @@ function AdminAttendance({
   const [timeOrder, toggleTimeOrder] = useTimeOrder("alpha_premier_sort_attendance_corrections");
   const shownRows = sortByTime(
     filteredRows,
-    (row) => (clampedTimeInIds.has(row.attendanceId) && row.timeIn ? clampedTimeInIso(row.timeIn) : row.timeIn),
+    (row) => clampedPayableTimeIn(row) ?? row.timeIn,
     timeOrder,
   );
   // Unsaved rows that the filters hide get a note by the count, with a way to show them again.
@@ -9339,9 +9032,7 @@ function exportAttendanceCsv(
   // Time in column (same ISO shape as every other row); the real scan keeps
   // its own audit column because a CSV cell cannot carry the table tooltip.
   const payableTimeIn = (row: AttendanceListItem) =>
-    clampedTimeInIds.has(row.attendanceId) && row.timeIn
-      ? clampedTimeInIso(row.timeIn)
-      : row.timeIn;
+    (clampedTimeInIds.has(row.attendanceId) ? clampedPayableTimeIn(row) : null) ?? row.timeIn;
   const content = [
     headers,
     ...rows.map((row) => [
@@ -9618,10 +9309,10 @@ function AttendanceEditRow({
               className="clamped-time-in-chip clamped-time-in-static"
               data-testid="clamped-time-in"
               title={`Actual scan: ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)} (payable time clamped)`}
-              aria-label={`Shown as ${clampedTimeLabel(row.timeIn)} for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
+              aria-label={`Shown as ${formatTime(clampedPayableTimeIn(row) ?? row.timeIn)} for ${row.fullName}; actual scan ${formatTime(row.timeIn, ATTENDANCE_TIMEZONE)}. Click to edit.`}
               onClick={openEditor}
             >
-              {clampedTimeLabel(row.timeIn)}
+              {formatTime(clampedPayableTimeIn(row) ?? row.timeIn)}
             </button>
           ) : row.timeIn ? (
             formatTime(row.timeIn)

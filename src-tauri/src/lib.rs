@@ -263,23 +263,8 @@ async fn get_attendance(
             .date_naive()
             .to_string()
     });
-    let rows = sqlx::query("SELECT attendance_id,attendance_date,user_id,full_name,department,time_in,time_out,status,source,recorded_by,recorded_reason,recorded_at FROM attendance WHERE attendance_date=? ORDER BY time_in,full_name").bind(&selected).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(
-        serde_json::json!({"success":true,"date":selected,"attendance":rows.into_iter().map(|r| serde_json::json!({
-            "attendanceId": r.get::<String,_>("attendance_id"),
-            "attendanceDate": r.get::<String,_>("attendance_date"),
-            "userId": r.get::<String,_>("user_id"),
-            "fullName": r.get::<String,_>("full_name"),
-            "department": r.get::<Option<String>,_>("department"),
-            "timeIn": r.get::<Option<String>,_>("time_in"),
-            "timeOut": r.get::<Option<String>,_>("time_out"),
-            "status": r.get::<String,_>("status"),
-            "source": r.get::<Option<String>,_>("source"),
-            "recordedBy": r.get::<Option<String>,_>("recorded_by"),
-            "recordedReason": r.get::<Option<String>,_>("recorded_reason"),
-            "recordedAt": r.get::<Option<String>,_>("recorded_at"),
-        })).collect::<Vec<_>>(),"fetchedAt":chrono::Utc::now()}),
-    )
+    let attendance = attendance_rows_json(&state.db, &selected).await?;
+    Ok(serde_json::json!({"success":true,"date":selected,"attendance":attendance,"fetchedAt":chrono::Utc::now()}))
 }
 
 fn resolve_user_photo_url(
@@ -431,12 +416,12 @@ async fn attendance_rows_json(
     .await
     .map_err(|e| e.to_string())?;
     let attendance = rows.into_iter().map(|row| {
-        let arrival = row.get::<Option<String>, _>("time_in").and_then(|time_in| {
-            crate::services::intern_payroll::arrival(date, &time_in, row.get::<bool, _>("grace_available"))
-        });
+        let shown = arrival_fields(date, row.get::<Option<String>, _>("time_in").as_deref(), row.get::<bool, _>("grace_available"));
         serde_json::json!({
-        "arrivalStatus": arrival.map(|a| a.status.as_str()),
-        "minutesLate": arrival.map(|a| a.minutes_late),
+        "arrivalStatus": shown.status,
+        "minutesLate": shown.minutes_late,
+        "graceUsed": shown.grace_used,
+        "payableTimeIn": shown.payable_time_in,
         "attendanceId": row.get::<String,_>("attendance_id"),
         "attendanceDate": row.get::<String,_>("attendance_date"),
         "userId": row.get::<String,_>("user_id"),
@@ -1591,7 +1576,7 @@ async fn admin_create_backdated_attendance_impl(
     .execute(&state.db)
     .await;
 
-
+    let shown = attendance_arrival(&state.db, user_id, &attendance_id, attendance_date, Some(time_in)).await;
     Ok(serde_json::json!({
         "success": true,
         "attendance": {
@@ -1600,6 +1585,10 @@ async fn admin_create_backdated_attendance_impl(
             "userId": user_id,
             "fullName": full_name,
             "department": department,
+            "arrivalStatus": shown.status,
+            "minutesLate": shown.minutes_late,
+            "graceUsed": shown.grace_used,
+            "payableTimeIn": shown.payable_time_in,
             "timeIn": time_in,
             "timeOut": time_out,
             "status": status,
@@ -5324,10 +5313,7 @@ async fn scan_rfid_at(
     };
     let _ = sqlx::query("INSERT INTO audit_logs (log_id, timestamp, event_type, rfid_uid, user_id, message, request_id) VALUES (?, ?, 'SCAN_SUCCESS', ?, ?, ?, ?)").bind(uuid::Uuid::new_v4().to_string()).bind(&timestamp).bind(&uid).bind(&user_id).bind(audit_msg).bind(&request_id).execute(&state.db).await;
     let photo_url = resolve_user_photo_url(&state.data_dir, &user_id, effective_user.get::<Option<String>,_>("photo_url"));
-    let arrival = match serde_json::json!(&time_in).as_str() {
-        Some(time_in) => attendance_arrival(&state.db, &user_id, &attendance_id, &date, time_in).await,
-        None => None,
-    };
+    let shown = attendance_arrival(&state.db, &user_id, &attendance_id, &date, serde_json::json!(&time_in).as_str()).await;
     Ok(
         serde_json::json!({
             "success": true,
@@ -5341,8 +5327,10 @@ async fn scan_rfid_at(
                 "timeOut": time_out,
                 "status": attendance_status,
                 "isFirstArrivalToday": if action == "TIME_IN" { Some(is_first_arrival_today) } else { None },
-                "arrivalStatus": arrival.map(|a| a.status.as_str()),
-                "minutesLate": arrival.map(|a| a.minutes_late),
+                "arrivalStatus": shown.status,
+                "minutesLate": shown.minutes_late,
+                "graceUsed": shown.grace_used,
+                "payableTimeIn": shown.payable_time_in,
                 "source": effective_source,
                 "recordedBy": recorded_by,
                 "recordedReason": recorded_reason,
@@ -5383,16 +5371,36 @@ fn manila_week_start(date: &str) -> String {
         .unwrap_or_else(|_| date.to_string())
 }
 
-/// Arrival status of one attendance row, as the payroll engine decides it
+/// What every attendance row says about its arrival. The payroll engine decides all four; the screens only show them.
+struct ArrivalFields {
+    status: Option<&'static str>,
+    minutes_late: Option<i64>,
+    /// The arrival took the week's grace claim. `None` for a row without a readable time-in.
+    grace_used: Option<bool>,
+    /// The time-in the day is paid from: the scan itself, or the next full hour when the day's policy clamps it.
+    payable_time_in: Option<String>,
+}
+
+fn arrival_fields(date: &str, time_in: Option<&str>, grace_available: bool) -> ArrivalFields {
+    let arrival = time_in.and_then(|stamp| crate::services::intern_payroll::arrival(date, stamp, grace_available));
+    ArrivalFields {
+        status: arrival.map(|a| a.status.as_str()),
+        minutes_late: arrival.map(|a| a.minutes_late),
+        grace_used: arrival.map(|a| a.status == crate::services::intern_payroll::ArrivalStatus::GracePeriod),
+        payable_time_in: time_in.and_then(|stamp| crate::services::intern_payroll::payable_time_in(date, stamp, grace_available)),
+    }
+}
+
+/// Arrival fields of one attendance row, as the payroll engine decides them
 /// (same rule as `attendance_rows_json`).
 async fn attendance_arrival(
     db: &sqlx::SqlitePool,
     user_id: &str,
     attendance_id: &str,
     date: &str,
-    time_in: &str,
-) -> Option<crate::services::intern_payroll::Arrival> {
-    let grace_available: bool = sqlx::query_scalar(
+    time_in: Option<&str>,
+) -> ArrivalFields {
+    let grace_available: Option<bool> = sqlx::query_scalar(
         "SELECT COALESCE((SELECT grace_used = 1 FROM payroll WHERE attendance_id = ?), \
          NOT EXISTS (SELECT 1 FROM intern_grace WHERE user_id = ? AND week_start = ? AND attendance_id != ?))",
     )
@@ -5402,8 +5410,11 @@ async fn attendance_arrival(
     .bind(attendance_id)
     .fetch_one(db)
     .await
-    .ok()?;
-    crate::services::intern_payroll::arrival(date, time_in, grace_available)
+    .ok();
+    match grace_available {
+        Some(grace_available) => arrival_fields(date, time_in, grace_available),
+        None => arrival_fields(date, None, false),
+    }
 }
 
 /// Atomic wrapper: grace claim + payroll upsert commit together or not at all.
@@ -6128,6 +6139,30 @@ mod tests {
     use crate::config::{LanConfig, OfficeConfig};
     use crate::state::AppState;
     use sqlx::{sqlite::SqlitePoolOptions, Row};
+
+    /// The boundary pin: `shared/arrival-fixtures.json` holds rows as this crate answers them, and the client has a
+    /// test that shows the same `expected` objects. A change to a field name or to the rule fails here or there.
+    #[test]
+    fn arrival_fields_match_the_fixture_the_client_renders() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../shared/arrival-fixtures.json")).unwrap();
+        let rows = fixture["rows"].as_array().unwrap();
+        assert!(rows.len() >= 8);
+        for row in rows {
+            let input = &row["input"];
+            let shown = super::arrival_fields(
+                input["attendanceDate"].as_str().unwrap(),
+                input["timeIn"].as_str(),
+                input["graceAvailable"].as_bool().unwrap(),
+            );
+            let answered = serde_json::json!({
+                "arrivalStatus": shown.status,
+                "minutesLate": shown.minutes_late,
+                "graceUsed": shown.grace_used,
+                "payableTimeIn": shown.payable_time_in,
+            });
+            assert_eq!(answered, row["expected"], "{}", row["name"]);
+        }
+    }
 
     #[test]
     fn cutoff_dates_require_real_calendar_days() {
