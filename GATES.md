@@ -2582,3 +2582,6 @@ OWNS: `src-tauri/src/services/{firebase,settings,unlock_guard,users}.rs`, the th
 - [x] U4: Comments that only restate the code beside them are gone from the services touched above and from client files under 600 lines; comments about hardware, Google/Firebase, office rules and Windows, and every `SAFETY:` comment, are kept.
   CHECK: `cd src-tauri && cargo test --no-fail-fast`; `cd client && npm test && npm run typecheck && npm run lint`
   EVIDENCE: 31 comment lines removed in 7 files, no code line changed; lib 422 passed, the same 3 failed; integration 18/75/36/58/24/3; client 621 passed, typecheck and lint clean (2026-11-18).
+- [x] U5: The three path tests that failed only on Linux test the same behaviour on every OS, with the same assertions and no production change; one test that could not fail is gone.
+  CHECK: `cd src-tauri && cargo test --no-fail-fast`; `cd client && npm test && npm run typecheck && npm run lint`
+  EVIDENCE: lib 425 passed, 0 failed (the outside paths are built from the temp folder; `D:/…` and `C:/…` are absolute only on Windows); integration 18/75/36/58/24/3; client 620 passed in 25 files (`vite-config.test.ts` asserted that a constant has a string field), typecheck and lint clean (2026-11-18). The desktop app was not run.

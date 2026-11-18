@@ -824,10 +824,17 @@ mod tests {
             lan.google_service_account_json_path.as_deref(),
             Some(inside.to_string_lossy().as_ref())
         );
-        // Absolute path outside the config dir is rejected.
+        // Absolute path outside the config dir is rejected. Built from the temp
+        // folder so it is absolute on every OS (`C:/elsewhere` is only on Windows).
+        let outside = std::env::temp_dir()
+            .join(format!("alpha-config-elsewhere-{}", uuid::Uuid::new_v4()))
+            .join("key.json");
         std::fs::write(
             temp.join("config.toml"),
-            "[lan]\ngoogle_service_account_json_path = \"C:/elsewhere/key.json\"\n",
+            format!(
+                "[lan]\ngoogle_service_account_json_path = {:?}\n",
+                outside.to_string_lossy().into_owned()
+            ),
         )
         .unwrap();
         assert!(load_config(&temp).is_err());
