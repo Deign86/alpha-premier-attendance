@@ -35,7 +35,7 @@ describe('AccountSignInPanel', () => {
     await typeAndSignIn(user, 'ana@alphapremiergroup.com', 'ana-password');
 
     expect(unlock).toHaveBeenCalledWith('ana@alphapremiergroup.com', 'ana-password');
-    expect(onUnlocked).toHaveBeenCalledWith('2026-11-18T09:00:00Z');
+    expect(onUnlocked).toHaveBeenCalledWith('2026-11-18T09:00:00Z', 't-1');
   });
 
   it.each([
@@ -43,7 +43,7 @@ describe('AccountSignInPanel', () => {
     ['NOT_ATTENDANCE_ADMIN', 'This account is not an attendance admin. The CEO sets that in Keystone, under User Accounts.'],
     ['ACCOUNT_TURNED_OFF', 'This account has been turned off. Ask the CEO.'],
     ['ACCOUNT_NEEDS_INTERNET', 'There is no internet, and this account has not signed in on this kiosk in the last 7 days. Use an admin card, or try again when the internet is back.'],
-    ['ADMIN_PIN_LOCKED', 'Too many wrong tries. Signing in is paused for 5 minutes; an admin card still works.'],
+    ['ADMIN_PIN_LOCKED', 'Too many wrong tries. Typing is paused for 5 minutes; tapping an admin card still works.'],
     ['ACCOUNT_TRY_LATER', 'Too many tries. Wait a few minutes and try again.'],
     ['ACCOUNT_SIGN_IN_UNAVAILABLE', 'Account sign-in is not set up in this app build. Use an admin card, or contact IT.'],
     ['ADMIN_DISABLED', 'Administrator access is turned off on this kiosk.'],
@@ -100,13 +100,13 @@ describe('AccountSignInPanel', () => {
     await typeAndSignIn(user, 'ana@alphapremiergroup.com', 'ana-password');
     expect(await screen.findByRole('alert')).toHaveTextContent('Signing in with an account is only available in the desktop app.');
 
-    await user.click(screen.getByRole('button', { name: 'Back to admin card or PIN' }));
+    await user.click(screen.getByRole('button', { name: 'Back to admin card' }));
     expect(onBack).toHaveBeenCalled();
   });
 });
 
 describe('the admin sign-in screen', () => {
-  it('offers the account beside the card and PIN, clears a typed PIN on the way, and comes back', async () => {
+  it('offers the account beside the admin card, clears what was typed on the way, and comes back', async () => {
     window.history.pushState({}, '', '/admin');
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       if (String(input).includes('/api/config')) {
@@ -119,16 +119,42 @@ describe('the admin sign-in screen', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.type(await screen.findByPlaceholderText(/enter pin or scan admin card/i), '999');
+    await user.type(await screen.findByPlaceholderText(/scan admin card/i), '999');
     await user.click(screen.getByRole('button', { name: 'Sign in with your Keystone account' }));
 
     expect(screen.getByRole('form', { name: 'Sign in with your Keystone account' })).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/enter pin or scan admin card/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/scan admin card/i)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Back to admin card or PIN' }));
-    // The card and PIN are as they were, with nothing left typed.
+    await user.click(screen.getByRole('button', { name: 'Back to admin card' }));
+    // The card field is as it was, with nothing left typed.
     expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/enter pin or scan admin card/i)).toHaveValue('');
-    expect(screen.getByRole('button', { name: /forgot pin/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/scan admin card/i)).toHaveValue('');
+    // The PIN and its emailed code are gone: nothing offers them.
+    expect(screen.queryByRole('button', { name: /forgot pin/i })).not.toBeInTheDocument();
+  });
+
+  it('the kiosk card-setup pop-up opens with a Keystone account, straight to scanning the employee card', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).includes('/api/config')) {
+        // SAFETY: Fetch mock config
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', rfidAutoSubmitDelayMs: 30, resultResetDelayMs: 500, enableAdmin: true, enableCardSetup: true }) } as Response;
+      }
+      // SAFETY: Fetch mock: nothing else answers
+      return { ok: false, json: async () => ({ success: false, error: { message: 'Locked' } }) } as Response;
+    });
+    const unlock = vi.spyOn(tauriApi.tauriApi, 'adminAccountUnlock').mockResolvedValue({ success: true, token: 't-setup', expiresAt: '2099-01-01T00:00:00Z', name: 'Ana Cruz' });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole('button', { name: /admin setup/i }));
+    expect(screen.queryByRole('button', { name: /forgot pin/i })).not.toBeInTheDocument();
+    // Kiosk config loads over fetch above; the sign-in itself runs through native commands.
+    enableTauri();
+    await user.click(screen.getByRole('button', { name: 'Sign in with your Keystone account' }));
+    await typeAndSignIn(user, 'ana@alphapremiergroup.com', 'ana-password');
+
+    expect(unlock).toHaveBeenCalledWith('ana@alphapremiergroup.com', 'ana-password');
+    expect(await screen.findByText(/Scan the employee card now/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
   });
 });

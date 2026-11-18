@@ -173,7 +173,6 @@ import {
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { pickRestoreBackupFile } from "./api";
 import { UpdateBanner } from "./update-banner";
-import { PinResetPanel } from "./pin-reset";
 import { AccountSignInPanel } from './account-sign-in';
 import { AdminUpdatesCard } from "./admin-updates-card";
 import { IdRegisterPanel } from "./id-register-panel";
@@ -1762,9 +1761,17 @@ export default function App() {
           form={setupForm}
           inputRef={setupInputRef}
           onPinChange={setAdminPin}
-          onPinResetStart={() => {
+          onAccountStart={() => {
             setSetupNotice(null);
             setAdminPin("");
+          }}
+          onAccountUnlocked={(token, expiresAt) => {
+            setSetupToken(token);
+            setSetupExpiresAt(expiresAt);
+            setAdminPin("");
+            setSetupNotice(null);
+            setSetupStep("scan");
+            window.setTimeout(focusSetupInput, 0);
           }}
           onUnlock={handleUnlock}
           onUidChange={handleSetupInput}
@@ -1843,8 +1850,10 @@ type SetupDialogProps = {
   form: SetupForm;
   inputRef: React.Ref<HTMLInputElement>;
   onPinChange: (value: string) => void;
-  /** Clears the PIN field and stale unlock error when Forgot PIN opens. */
-  onPinResetStart: () => void;
+  /** Clears the card field and a stale unlock error when the account sign-in opens. */
+  onAccountStart: () => void;
+  /** A Keystone account opened setup: the session's token and when it ends. */
+  onAccountUnlocked: (token: string, expiresAt: string) => void;
   onUnlock: (event: React.FormEvent) => void;
   onUidChange: (value: string) => void;
   onScanAnother: () => void;
@@ -1932,11 +1941,10 @@ function SetupDialog(props: SetupDialogProps) {
   useEffect(() => {
     if (props.token && props.step === "edit") saveFormRef.current?.querySelector<HTMLInputElement>(".setup-fields input")?.focus({ preventScroll: true });
   }, [props.token, props.step, props.uid]);
-  const [resettingPin, setResettingPin] = useState(false);
-  const [pinNotice, setPinNotice] = useState("");
-  // An admin card tap can unlock mid-reset; a later expiry must land on unlock, not reset.
+  const [withAccount, setWithAccount] = useState(false);
+  // An admin card tap can unlock while the account sign-in is open; a later expiry must land on the card, not on it.
   useEffect(() => {
-    if (props.token) setResettingPin(false);
+    if (props.token) setWithAccount(false);
   }, [props.token]);
   const dialogRef = useRef<HTMLElement>(null);
   useDialogKeys(dialogRef, props.onClose, { busy: props.busy });
@@ -1971,7 +1979,7 @@ function SetupDialog(props: SetupDialogProps) {
       <section
         ref={dialogRef}
         className="setup-dialog card-setup-dialog"
-        data-step={!props.token ? (resettingPin ? "reset" : "unlock") : props.step === "scan" ? "scan" : "save"}
+        data-step={!props.token ? (withAccount ? "account" : "unlock") : props.step === "scan" ? "scan" : "save"}
         role="dialog"
         aria-modal="true"
         aria-labelledby="setup-heading"
@@ -1995,30 +2003,28 @@ function SetupDialog(props: SetupDialogProps) {
             <X size={19} />
           </button>
         </div>
-        {!props.token && resettingPin ? (
-          <PinResetPanel
-            onDone={(notice) => {
-              setResettingPin(false);
-              setPinNotice(notice ?? "");
+        {!props.token && withAccount ? (
+          <AccountSignInPanel
+            onUnlocked={(expiresAt, token) => {
+              setWithAccount(false);
+              props.onAccountUnlocked(token, expiresAt);
             }}
+            onBack={() => setWithAccount(false)}
           />
         ) : !props.token ? (
           <form className="setup-form" onSubmit={props.onUnlock}>
             <SetupSteps current={1} />
             <p className="setup-copy">
-              Tap an admin RFID card on the reader, or type the administrator PIN, to link a card to an employee.
+              Tap an admin RFID card on the reader, or sign in with your Keystone account, to link a card to an employee.
             </p>
-            <label htmlFor="admin-pin">Administrator PIN or Admin RFID card</label>
+            <label htmlFor="admin-pin">Admin RFID card</label>
             <input
               id="admin-pin"
               type="password"
-              placeholder="Enter PIN or scan admin card…"
+              placeholder="Scan admin card…"
               autoComplete="off"
               value={props.pin}
-              onChange={(event) => {
-                setPinNotice("");
-                props.onPinChange(event.target.value);
-              }}
+              onChange={(event) => props.onPinChange(event.target.value)}
               autoFocus
               data-autofocus
             />
@@ -2035,17 +2041,15 @@ function SetupDialog(props: SetupDialogProps) {
               )}{" "}
               Unlock setup
             </button>
-            <NoticeLine notice={pinNotice ? { tone: "success", text: pinNotice } : null} />
             <button
               className="text-button"
               type="button"
               onClick={() => {
-                setPinNotice("");
-                props.onPinResetStart();
-                setResettingPin(true);
+                props.onAccountStart();
+                setWithAccount(true);
               }}
             >
-              Forgot PIN?
+              Sign in with your Keystone account
             </button>
           </form>
         ) : props.step === "scan" ? (
@@ -3588,12 +3592,10 @@ function AdminPanel() {
   const [nuking, setNuking] = useState(false);
   const [nukeConfirmOpen, setNukeConfirmOpen] = useState(false);
   const [manualUpdateCheck, setManualUpdateCheck] = useState<number>(0);
-  const [resettingPin, setResettingPin] = useState(false);
   const [withAccount, setWithAccount] = useState(false);
-  const [pinNotice, setPinNotice] = useState("");
-  // An admin card tap can unlock mid-reset; a later expiry must land on unlock, not reset.
+  // An admin card tap can unlock while the account sign-in is open; a later expiry must land on the card, not on it.
   useEffect(() => {
-    if (unlocked) setResettingPin(false);
+    if (unlocked) setWithAccount(false);
   }, [unlocked]);
   // Unsaved typing in User registration or in Attendance corrections: anything that would close that tab asks first.
   const [usersDirty, setUsersDirty] = useState(false);
@@ -3838,18 +3840,6 @@ function AdminPanel() {
         />
       </main>
     );
-  if (!unlocked && resettingPin)
-    return (
-      <main className="dashboard-shell admin-login admin-shell">
-        <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
-        <PinResetPanel
-          onDone={(notice) => {
-            setResettingPin(false);
-            setPinNotice(notice ?? "");
-          }}
-        />
-      </main>
-    );
   if (!unlocked)
     return (
       <main className="dashboard-shell admin-login admin-shell">
@@ -3859,43 +3849,26 @@ function AdminPanel() {
           <p className="section-kicker">Administrator access</p>
           <h1>Manage attendance</h1>
           <p className="setup-copy" style={{ marginBottom: "1rem" }}>
-            Scan registered admin RFID card or enter administrator PIN.
+            Scan a registered admin RFID card, or sign in with your Keystone account.
           </p>
           <label>
-            Administrator PIN or Admin RFID card
+            Admin RFID card
             <input
               autoFocus
               type="password"
-              placeholder="Enter PIN or scan admin card…"
+              placeholder="Scan admin card…"
               value={pin}
-              onChange={(event) => {
-                setPinNotice("");
-                setPin(event.target.value);
-              }}
+              onChange={(event) => setPin(event.target.value)}
             />
           </label>
           {error && <p className="dashboard-alert">{error}</p>}
           <button className="submit-button" disabled={busy || !pin.trim()}>
             Unlock admin
           </button>
-          <NoticeLine notice={pinNotice ? { tone: "success", text: pinNotice } : null} />
           <button
             className="text-button"
             type="button"
             onClick={() => {
-              setPinNotice("");
-              setError("");
-              setPin("");
-              setResettingPin(true);
-            }}
-          >
-            Forgot PIN?
-          </button>
-          <button
-            className="text-button"
-            type="button"
-            onClick={() => {
-              setPinNotice("");
               setError("");
               setPin("");
               setWithAccount(true);

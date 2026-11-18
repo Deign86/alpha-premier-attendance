@@ -451,11 +451,19 @@ async fn sync_guard_write_row(db: &SqlitePool, owner: &str, started_at: &str) {
     .await;
 }
 
-/// `started_at` of the guard row this process last wrote. A row still
-/// carrying it while the in-memory flag is free is our own leftover from a
-/// release whose write failed, not another process's sync: claim it instead
-/// of refusing every sync for 5 minutes (S1).
-static OWN_GUARD_STARTED_AT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// `started_at` of the guard row last written through each in-memory flag
+/// (one per `AppState`, keyed by the flag's address). A row still carrying it
+/// while that flag is free is our own leftover from a release whose write
+/// failed, not another process's sync: claim it instead of refusing every
+/// sync for 5 minutes (S1). It was one value for the whole process, which is
+/// right for the app (one `AppState`) but let tests running side by side on
+/// their own databases overwrite each other's, so the S1 test failed about
+/// one run in six.
+static OWN_GUARD_STARTED_AT: std::sync::Mutex<std::collections::BTreeMap<usize, String>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn guard_key(flag: &AtomicBool) -> usize {
+    std::ptr::from_ref(flag) as usize
+}
 
 /// Acquire the shared guard. In-memory AtomicBool first (fast path); then
 /// the persisted row with 5-min stale release. The second caller gets
@@ -486,7 +494,7 @@ pub async fn sync_guard_try_acquire(
     let own_leftover = stored_started.is_some()
         && OWN_GUARD_STARTED_AT
             .lock()
-            .is_ok_and(|own| own.as_deref() == stored_started.as_deref());
+            .is_ok_and(|own| own.get(&guard_key(flag)).map(String::as_str) == stored_started.as_deref());
     if !own_leftover && !sync_guard_row_releasable(stored_owner.as_deref(), stored_secs, now_secs) {
         flag.store(false, Ordering::SeqCst);
         return Err(sync_guard_busy_error(
@@ -497,7 +505,7 @@ pub async fn sync_guard_try_acquire(
     let started_at = chrono::Utc::now().to_rfc3339();
     sync_guard_write_row(db, owner, &started_at).await;
     if let Ok(mut own) = OWN_GUARD_STARTED_AT.lock() {
-        *own = Some(started_at);
+        own.insert(guard_key(flag), started_at);
     }
     Ok(())
 }

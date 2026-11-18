@@ -4161,14 +4161,11 @@ async fn setup_unlock_impl(
     let configured = state.lan.admin_pin.as_deref();
     let pin_trimmed = pin.trim();
     let now = chrono::Utc::now();
-    // While locked out a PIN is never checked, so a guess cannot be confirmed.
+    // While locked out nothing typed is checked, so a guess cannot be confirmed.
     let pin_locked = crate::services::admin_pin::unlock_locked(&state.db, now).await?;
-    // No PIN anywhere (not set in config, not reset yet) means only admin cards unlock.
-    let is_pin_match = !pin_locked
-        && match crate::services::admin_pin::effective_pin_hash(&state.db, configured).await? {
-            Some(hash) => crate::services::admin_pin::verify_secret(&hash, pin_trimmed),
-            None => configured.is_some_and(|pin| pin == pin_trimmed),
-        };
+    // There is no shared PIN any more. What is typed opens the admin screens only when it is an admin card's number
+    // or IT's way back: an explicit `admin_pin` in config.toml on this kiosk. A PIN once set by email is ignored.
+    let is_pin_match = !pin_locked && configured.is_some_and(|pin| !pin_trimmed.is_empty() && pin == pin_trimmed);
     let mut is_admin_card_match = false;
     if !is_pin_match {
         let uid = pin_trimmed.to_ascii_uppercase();
@@ -4263,62 +4260,6 @@ async fn audit_admin_pin_event(state: &AppState, event_type: &str, message: &str
         .bind(uuid::Uuid::new_v4().to_string())
         .execute(&state.db)
         .await;
-}
-
-#[tauri::command]
-/// Forgot-PIN step 1: email a one-time code to the fixed company inbox.
-async fn admin_pin_reset_request(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    use crate::services::admin_pin;
-    if state.lan.admin_pin.as_deref() == Some("") {
-        return Err("ADMIN_DISABLED".into());
-    }
-    let url = admin_pin::reset_mail_url().ok_or_else(|| "RESET_EMAIL_NOT_CONFIGURED".to_string())?;
-    let now = chrono::Utc::now();
-    let reset = admin_pin::begin_reset(&state.db, now).await?;
-    // A failed send keeps the previous code valid; only a sent code replaces it.
-    if let Err(error) = admin_pin::send_reset_email(url, &reset, now).await {
-        log::warn!("admin PIN reset email failed: {error}");
-        return Err(error);
-    }
-    admin_pin::commit_reset(&state.db, &reset, now).await?;
-    audit_admin_pin_event(
-        &state,
-        "ADMIN_PIN_RESET_REQUESTED",
-        &format!("Admin PIN reset code emailed (request {})", reset.request_id),
-    )
-    .await;
-    Ok(serde_json::json!({
-        "success": true,
-        "recipient": admin_pin::RESET_RECIPIENT,
-        "requestId": reset.request_id,
-        "expiresAt": now + chrono::Duration::minutes(admin_pin::CODE_TTL_MINUTES),
-    }))
-}
-
-#[tauri::command]
-/// Forgot-PIN step 2: verify the emailed code, store the new PIN hash, and end
-/// any open admin session. Admin RFID cards keep working unchanged.
-async fn admin_pin_reset_confirm(
-    state: State<'_, AppState>,
-    code: String,
-    new_pin: String,
-) -> Result<serde_json::Value, String> {
-    admin_pin_reset_confirm_impl(&state, &code, &new_pin).await
-}
-
-async fn admin_pin_reset_confirm_impl(
-    state: &AppState,
-    code: &str,
-    new_pin: &str,
-) -> Result<serde_json::Value, String> {
-    if state.lan.admin_pin.as_deref() == Some("") {
-        return Err("ADMIN_DISABLED".into());
-    }
-    let configured = state.lan.admin_pin.as_deref();
-    crate::services::admin_pin::complete_reset(&state.db, code, new_pin, configured, chrono::Utc::now()).await?;
-    *state.admin_session.lock().await = None;
-    audit_admin_pin_event(state, "ADMIN_PIN_RESET", "Admin PIN changed via email reset code").await;
-    Ok(serde_json::json!({"success": true}))
 }
 
 #[tauri::command]
@@ -6791,8 +6732,6 @@ pub fn run() {
             db_save_backup_copy,
             setup_unlock,
             setup_lock,
-            admin_pin_reset_request,
-            admin_pin_reset_confirm,
             admin_account_unlock,
             admin_account_reset,
             setup_lookup_card,
@@ -8198,66 +8137,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_wrong_reset_codes_still_spend_the_attempt_budget() {
-        // S3: complete_reset read the attempt count, checked the code, then
-        // wrote the count back, so concurrent wrong codes each wrote the same
-        // number and the 5-attempt limit could be outrun.
-        let (state, temp, _token) = admin_test_state("reset-race").await;
-        let now = chrono::Utc::now();
-        let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
-        crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
-        let wrong: Vec<_> = (0..10)
-            .map(|_| crate::services::admin_pin::complete_reset(&state.db, "000000", "13572468", None, now))
-            .collect();
-        for result in futures_util::future::join_all(wrong).await {
-            assert!(result.is_err());
-        }
-        let right = crate::services::admin_pin::complete_reset(&state.db, &reset.code, "13572468", None, now).await;
-        assert_eq!(right.unwrap_err(), "RESET_CODE_EXPIRED", "ten wrong codes spend the 5-attempt budget");
-        state.db.close().await;
-        let _ = std::fs::remove_dir_all(&temp);
-    }
-
-    #[tokio::test]
-    async fn reset_guard_counts_concurrent_wrong_codes_toward_the_daily_cap() {
-        // O12: the daily failure count was read-then-write, so wrong codes
-        // sent at once overwrote each other's count.
-        let (state, temp, _token) = admin_test_state("reset-daily-cap").await;
-        let mut now = chrono::Utc::now();
-        for _ in 0..2 {
-            let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
-            crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
-            let wrong: Vec<_> = (0..5)
-                .map(|_| crate::services::admin_pin::complete_reset(&state.db, "000000", "13572468", None, now))
-                .collect();
-            futures_util::future::join_all(wrong).await;
-            now += chrono::Duration::seconds(61);
-        }
-        let blocked = crate::services::admin_pin::begin_reset(&state.db, now).await;
-        assert_eq!(blocked.err().as_deref(), Some("RESET_LOCKED"), "ten wrong codes in a day lock new resets");
-        state.db.close().await;
-        let _ = std::fs::remove_dir_all(&temp);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn reset_guard_gives_one_code_to_simultaneous_requests() {
-        // O12 (same family): two requests at once both passed the resend
-        // cooldown, so two codes were emailed (32 of 40 tries on the old
-        // code with real threads).
-        for _ in 0..10 {
-            let (state, temp, _token) = admin_test_state("reset-cooldown").await;
-            let now = chrono::Utc::now();
-            let (a, b) = (state.db.clone(), state.db.clone());
-            let first = tokio::spawn(async move { crate::services::admin_pin::begin_reset(&a, now).await.err() });
-            let second = tokio::spawn(async move { crate::services::admin_pin::begin_reset(&b, now).await.err() });
-            let refused: Vec<String> = [first.await.unwrap(), second.await.unwrap()].into_iter().flatten().collect();
-            assert_eq!(refused, vec!["RESET_RATE_LIMITED".to_string()], "exactly one request gets a code");
-            state.db.close().await;
-            let _ = std::fs::remove_dir_all(&temp);
-        }
-    }
-
-    #[tokio::test]
     async fn concurrent_wrong_pins_still_reach_the_lockout() {
         // Same race on the D1 wrong-PIN counter.
         let (state, temp, _token) = admin_test_state("pin-race").await;
@@ -8416,7 +8295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_admin_unlock_after_email_pin_reset_keeps_admin_cards() {
+    async fn a_pin_once_set_by_email_opens_nothing_and_cards_and_the_config_way_back_still_do() {
         let temp = std::env::temp_dir().join(format!("alpha-admin-pin-reset-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(temp.join("exports")).unwrap();
         async fn open(temp: &std::path::Path, admin_pin: Option<&str>) -> AppState {
@@ -8446,73 +8325,36 @@ mod tests {
             .unwrap();
         }
 
-        // Before any reset the config PIN still works (no lockout on upgrade).
-        super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap();
+        // A kiosk that once had a PIN set through the emailed code (v0.2.53 and before) still holds its hash. It is
+        // left where it is and opens nothing: that PIN is gone.
+        let emailed = crate::services::admin_pin::hash_secret("482915").unwrap();
+        for (key, value) in [("admin_pin_hash", emailed.as_str()), ("admin_pin_config_fingerprint", "anything")] {
+            sqlx::query("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, '2026-10-08T00:00:00Z')").bind(key).bind(value).execute(&state.db).await.unwrap();
+        }
+        assert_eq!(super::setup_unlock_impl(&state, "482915".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        let kept: Option<String> = sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'admin_pin_hash'").fetch_optional(&state.db).await.unwrap();
+        assert_eq!(kept.as_deref(), Some(emailed.as_str()), "nothing on the kiosk is deleted by the update");
+
+        // IT's way back, an explicit admin_pin in config.toml, and admin cards still open.
+        assert!(super::setup_unlock_impl(&state, " 2468 ".to_string()).await.is_ok());
         assert!(state.admin_session.lock().await.is_some());
-
-        let now = chrono::Utc::now();
-        let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
-        crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
-        assert_eq!(
-            super::admin_pin_reset_confirm_impl(&state, "not-the-code", "482915").await.unwrap_err(),
-            "RESET_CODE_INVALID"
-        );
-        super::admin_pin_reset_confirm_impl(&state, &reset.code, "482915").await.unwrap();
-        assert!(state.admin_session.lock().await.is_none(), "reset ends the open admin session");
-
-        assert_eq!(super::setup_unlock_impl(&state, "2468".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
-        assert_eq!(super::setup_unlock_impl(&state, "135246".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
-        assert!(super::setup_unlock_impl(&state, " 482915 ".to_string()).await.is_ok());
         assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok(), "admin card still unlocks");
         assert!(super::setup_unlock_impl(&state, "ADMIN_CARD_ADDE23".to_string()).await.is_ok());
-        assert_eq!(super::setup_unlock_impl(&state, "EEFF00".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        assert_eq!(super::setup_unlock_impl(&state, "EEFF00".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN", "an employee's card is not an admin card");
         state.db.close().await;
 
-        // config.toml admin_pin = "" stays the off switch after a reset.
+        // admin_pin = "" in config.toml still turns admin off, for cards and accounts alike.
         let state = open(&temp, Some("")).await;
-        assert_eq!(super::setup_unlock_impl(&state, "482915".to_string()).await.unwrap_err(), "ADMIN_DISABLED");
         assert_eq!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.unwrap_err(), "ADMIN_DISABLED");
-        assert_eq!(super::admin_pin_reset_confirm_impl(&state, "000000", "597531").await.unwrap_err(), "ADMIN_DISABLED");
+        assert_eq!(super::admin_account_unlock_impl(&state, None, "ana@example.test", "x").await.unwrap_err(), "ADMIN_DISABLED");
         state.db.close().await;
 
-        // Same config PIN again: the emailed PIN still applies.
-        let state = open(&temp, Some("2468")).await;
-        assert!(super::setup_unlock_impl(&state, "482915".to_string()).await.is_ok());
-        state.db.close().await;
-
-        // No admin_pin in config.toml (the usual kiosk): the emailed PIN keeps working.
+        // With no admin_pin in config.toml (as the kiosk ships) nothing typed opens: only a card, or an account.
         let state = open(&temp, None).await;
-        assert!(super::setup_unlock_impl(&state, "482915".to_string()).await.is_ok());
-        assert_eq!(super::setup_unlock_impl(&state, "135246".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
-        state.db.close().await;
-
-        // A fresh install with no PIN anywhere: no PIN unlocks, cards do, and a reset sets one.
-        let fresh = std::env::temp_dir().join(format!("alpha-admin-pin-fresh-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(fresh.join("exports")).unwrap();
-        let state = open(&fresh, None).await;
-        super::upsert_user_record(
-            &state.db, "ADMIN_CARD_ADDE23", "ADDE23", "Front Desk Admin", Some("Admin"), "ACTIVE", "INTERN",
-            None, None, None, None, "ADMIN_ASSIST", "2026-10-08T00:00:00Z",
-        )
-        .await
-        .unwrap();
-        for attempt in ["135246", "", "0000"] {
-            assert_eq!(super::setup_unlock_impl(&state, attempt.to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
+        for attempt in ["482915", "2468", ""] {
+            assert_eq!(super::setup_unlock_impl(&state, attempt.to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN", "{attempt:?}");
         }
-        assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok(), "card unlocks with no PIN set");
-        let now = chrono::Utc::now();
-        let reset = crate::services::admin_pin::begin_reset(&state.db, now).await.unwrap();
-        crate::services::admin_pin::commit_reset(&state.db, &reset, now).await.unwrap();
-        super::admin_pin_reset_confirm_impl(&state, &reset.code, "246810").await.unwrap();
-        assert!(super::setup_unlock_impl(&state, "246810".to_string()).await.is_ok());
-        state.db.close().await;
-        let _ = std::fs::remove_dir_all(&fresh);
-
-        // IT changes admin_pin in config.toml: that PIN takes over, cards keep working.
-        let state = open(&temp, Some("135790")).await;
-        assert!(super::setup_unlock_impl(&state, "135790".to_string()).await.is_ok());
-        assert_eq!(super::setup_unlock_impl(&state, "482915".to_string()).await.unwrap_err(), "INVALID_ADMIN_PIN");
-        assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok());
+        assert!(super::setup_unlock_impl(&state, "ADDE23".to_string()).await.is_ok(), "card unlocks with no PIN anywhere");
         state.db.close().await;
         let _ = std::fs::remove_dir_all(&temp);
     }

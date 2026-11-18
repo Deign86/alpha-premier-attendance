@@ -1070,7 +1070,7 @@ describe('RFID kiosk', () => {
     pauseSpy.mockClear();
 
     // Unlocked scan step: scanner live for the card being enrolled.
-    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     await screen.findByLabelText(/setup card id/i);
     await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(false));
@@ -1100,7 +1100,7 @@ describe('RFID kiosk', () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole('button', { name: /admin setup/i }));
-    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     // The admin walks away: closes the dialog before the unlock answers.
     await user.click(screen.getByRole('button', { name: /close card setup/i }));
@@ -1185,7 +1185,7 @@ describe('RFID kiosk', () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole('button', { name: /admin setup/i }));
-    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     const setupInput = await screen.findByLabelText(/setup card id/i);
     await user.type(setupInput, 'ABCD1234');
@@ -1232,7 +1232,7 @@ describe('RFID kiosk', () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole('button', { name: /admin setup/i }));
-    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     await user.type(await screen.findByLabelText(/setup card id/i), 'DEMO0002{enter}');
     expect(await screen.findByLabelText(/^user id/i)).toHaveValue('APG-DEMO-002');
@@ -1290,7 +1290,7 @@ describe('RFID kiosk', () => {
       const user = userEvent.setup();
       render(<App />);
       await user.click(await screen.findByRole('button', { name: /admin setup/i }));
-      await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+      await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
       await user.click(screen.getByRole('button', { name: /unlock setup/i }));
       const setupInput = await screen.findByLabelText(/setup card id/i);
       await user.type(setupInput, 'ABCD1234');
@@ -2530,7 +2530,7 @@ describe('Admin Attendance Corrections', () => {
     expect(await screen.findByRole('dialog', { name: /associate rfid card/i })).toBeInTheDocument();
 
     // Enter PIN
-    await user.type(screen.getByLabelText(/administrator pin/i), '1234');
+    await user.type(screen.getByLabelText(/admin rfid card/i), '1234');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
 
     // Scan card
@@ -3324,7 +3324,7 @@ describe('Admin Attendance Corrections', () => {
 
     // Modal is at step 01 Unlock
     expect(screen.getByText(/01 unlock/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/enter pin or scan admin card/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/scan admin card/i)).toBeInTheDocument();
 
     // Tap registered Admin RFID card
     await act(async () => {
@@ -3380,7 +3380,7 @@ describe('Admin Attendance Corrections', () => {
 
     // Login screen is visible
     expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/enter pin or scan admin card/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/scan admin card/i)).toBeInTheDocument();
 
     // Tap registered Admin RFID card
     await act(async () => {
@@ -6305,7 +6305,7 @@ describe('Admin page: the saved session is checked before the unlock card', () =
       expect(container.querySelector('main.admin-shell')).toHaveAttribute('aria-busy', 'true');
       expect(screen.getByText('Checking admin session…')).toHaveClass('visually-hidden');
       expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
-      expect(screen.queryByLabelText(/administrator pin/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/admin rfid card/i)).not.toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: 'Manage attendance' })).not.toBeInTheDocument();
 
       await act(async () => { answer(new Date(Date.now() + 900_000).toISOString()); });
@@ -6331,7 +6331,7 @@ describe('Admin page: the saved session is checked before the unlock card', () =
 
       await act(async () => { answer(null); });
       expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
-      expect(screen.getByLabelText(/administrator pin/i)).toHaveFocus();
+      expect(screen.getByLabelText(/admin rfid card/i)).toHaveFocus();
       await waitFor(() => expect(rfidHandlers).toHaveLength(1));
     } finally {
       window.history.pushState({}, '', '/');
