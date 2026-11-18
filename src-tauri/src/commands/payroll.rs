@@ -121,32 +121,33 @@ pub(crate) async fn payroll_delete_profile(
     Ok(serde_json::json!({"success":true}))
 }
 
+/// The cutoff list as `payroll_cutoff_json` reads it.
+const CUTOFF_LIST_SQL: &str = "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, pc.payroll_profile_id, pc.payroll_cutoff_label, \
+     pc.cutoff_start, pc.cutoff_end, pc.daily_rate_centavos, pc.standard_working_days, pc.actual_working_days, \
+     pc.basic_pay_centavos, pc.special_holiday_days, pc.special_holiday_multiplier, pc.special_holiday_pay_centavos, \
+     pc.regular_holiday_days, pc.regular_holiday_multiplier, pc.regular_holiday_pay_centavos, \
+     pc.incentives_allowance_centavos, pc.special_allowance_centavos, pc.total_compensation_centavos, \
+     pc.total_allowance_centavos, pc.late_units, pc.late_deduction_centavos, pc.half_day_count, \
+     pc.half_day_deduction_centavos, pc.absent_days, pc.absence_deduction_centavos, pc.overtime_hours, \
+     pc.overtime_rate_centavos, pc.overtime_pay_centavos, pc.manual_adjustment_centavos, pc.adjustment_reason, \
+     pc.gross_compensation_centavos, pc.net_pay_centavos, pc.signature_placeholder, pc.calculation_breakdown, \
+     pc.approved_working_day_overage, pc.status, pc.finalized_at, pc.revision, \
+     pc.hra_centavos, pc.sss_centavos, pc.phic_centavos, pc.hdmf_centavos, pc.salary_advance_centavos, \
+     COALESCE(NULLIF(pc.tin, ''), u.tin, '') AS tin, \
+     COALESCE(NULLIF(pc.bank_name, ''), u.bank_name, 'CASH') AS bank_name, \
+     COALESCE(NULLIF(pc.account_number, ''), u.account_number, '0000') AS account_number, \
+     COALESCE(NULLIF(pc.department, ''), u.department, '') AS department, \
+     COALESCE(NULLIF(pc.designation, ''), u.designation, u.employee_type, 'EMPLOYEE') AS designation \
+     FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
+     ORDER BY pc.cutoff_start DESC, pc.employee_name";
+
 #[tauri::command]
 pub(crate) async fn payroll_list_cutoffs(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<serde_json::Value, String> {
     Admin::check(&state, &token).await?;
-    let mut rows = sqlx::query(
-        "SELECT pc.payroll_id, pc.employee_id, pc.employee_name, pc.payroll_profile_id, pc.payroll_cutoff_label, \
-         pc.cutoff_start, pc.cutoff_end, pc.daily_rate_centavos, pc.standard_working_days, pc.actual_working_days, \
-         pc.basic_pay_centavos, pc.special_holiday_days, pc.special_holiday_multiplier, pc.special_holiday_pay_centavos, \
-         pc.regular_holiday_days, pc.regular_holiday_multiplier, pc.regular_holiday_pay_centavos, \
-         pc.incentives_allowance_centavos, pc.special_allowance_centavos, pc.total_compensation_centavos, \
-         pc.total_allowance_centavos, pc.late_units, pc.late_deduction_centavos, pc.half_day_count, \
-         pc.half_day_deduction_centavos, pc.absent_days, pc.absence_deduction_centavos, pc.overtime_hours, \
-         pc.overtime_rate_centavos, pc.overtime_pay_centavos, pc.manual_adjustment_centavos, pc.adjustment_reason, \
-         pc.gross_compensation_centavos, pc.net_pay_centavos, pc.signature_placeholder, pc.calculation_breakdown, \
-         pc.approved_working_day_overage, pc.status, pc.finalized_at, pc.revision, \
-         pc.hra_centavos, pc.sss_centavos, pc.phic_centavos, pc.hdmf_centavos, pc.salary_advance_centavos, \
-         COALESCE(NULLIF(pc.tin, ''), u.tin, '') AS tin, \
-         COALESCE(NULLIF(pc.bank_name, ''), u.bank_name, 'CASH') AS bank_name, \
-         COALESCE(NULLIF(pc.account_number, ''), u.account_number, '0000') AS account_number, \
-         COALESCE(NULLIF(pc.department, ''), u.department, '') AS department, \
-         COALESCE(NULLIF(pc.designation, ''), u.designation, u.employee_type, 'EMPLOYEE') AS designation \
-         FROM payroll_cutoffs pc LEFT JOIN users u ON u.user_id = pc.employee_id \
-         ORDER BY pc.cutoff_start DESC, pc.employee_name",
-    )
+    let mut rows = sqlx::query(CUTOFF_LIST_SQL)
     .fetch_all(&state.db)
     .await
     .map_err(|e| e.to_string())?;
@@ -355,9 +356,15 @@ pub(crate) fn payroll_cutoff_json(row: &SqliteRow, employee_type: Option<&str>) 
         "netPay",
         serde_json::json!(row.get::<i64, _>("net_pay_centavos") as f64 / 100.0),
     );
+    // The clamped time-in is an intern rule; an employee's breakdown is given as stored.
+    let stored_breakdown = row.get::<String, _>("calculation_breakdown");
     insert(
         "calculationBreakdown",
-        serde_json::json!(row.get::<String, _>("calculation_breakdown")),
+        serde_json::json!(if employee_type == Some("EMPLOYEE") {
+            stored_breakdown
+        } else {
+            crate::services::intern_payroll::breakdown_with_payable_time_in(&stored_breakdown)
+        }),
     );
     insert(
         "approvedWorkingDayOverage",
@@ -1478,6 +1485,60 @@ mod tests {
     use crate::commands::session::setup_unlock_impl;
     use crate::services::users::upsert_user_record;
     
+
+    /// MAJOR-1 of the round 2 review: a cutoff stored before v0.2.56 has late
+    /// lines without `payableTimeIn`. Reading it fills the key with the hour
+    /// the day was paid from; the expected values are what the old client
+    /// derived from the same stored line (21b9891 App.tsx:7426-7431).
+    #[tokio::test]
+    async fn a_cutoff_stored_before_the_payable_key_is_read_with_the_clamped_time_in() {
+        let (state, temp, _token) = admin_test_state("stored-cutoff").await;
+        let stored = include_str!("fixtures/stored_cutoff_breakdown_2026_08.json");
+        insert_cutoff_row(&state.db, "PAY-OLD", "FINALIZED").await;
+        sqlx::query("UPDATE payroll_cutoffs SET calculation_breakdown=? WHERE payroll_id='PAY-OLD'")
+            .bind(stored)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let row = sqlx::query(CUTOFF_LIST_SQL).fetch_one(&state.db).await.unwrap();
+        let chips = |employee_type: Option<&str>| -> Vec<Option<String>> {
+            let json = payroll_cutoff_json(&row, employee_type);
+            let breakdown: serde_json::Value =
+                serde_json::from_str(json["calculationBreakdown"].as_str().unwrap()).unwrap();
+            breakdown["deductions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| line["payableTimeIn"].as_str().map(str::to_string))
+                .collect()
+        };
+        let chip = |label: &str| Some(label.to_string());
+        assert_eq!(
+            chips(Some("INTERN")),
+            vec![
+                chip("10:00 AM"), // 2026-08-04 late 09:20
+                None,             // 2026-08-05 weekly grace 08:10
+                chip("9:00 AM"),  // 2026-08-06 late 08:16
+                None,             // 2026-08-07 late 08:10, grace already used: paid from the scan
+                None,             // 2026-08-10 late 09:15: not past the quarter hour
+                None,             // 2026-08-11 undertime line of a late day
+                chip("11:00 AM"), // 2026-08-11 its late line, 10:45
+                None,             // 2026-08-12 late line with no amount
+            ]
+        );
+        // A person the register does not list is shown as an intern, as before.
+        assert_eq!(chips(None), chips(Some("INTERN")));
+        // The old client showed the chip on intern rows only.
+        assert!(chips(Some("EMPLOYEE")).iter().all(Option::is_none));
+        // The stored column is not rewritten.
+        let kept: String = sqlx::query_scalar("SELECT calculation_breakdown FROM payroll_cutoffs WHERE payroll_id='PAY-OLD'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(kept, stored);
+        state.db.close().await;
+        let _ = std::fs::remove_dir_all(temp);
+    }
 
     #[tokio::test]
     async fn reconciles_attendance_and_recomputes_cutoff_without_migrations() {
