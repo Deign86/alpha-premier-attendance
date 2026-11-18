@@ -127,7 +127,7 @@ import {
   pollVoiceClipReady,
   regenerateVoiceClip,
 } from "./api";
-import { sseUrl, onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
+import { apiUrl, onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
 import type { FileActionResult } from "./api";
 import type { DtrSyncHealth } from "./api";
 import "./styles.css";
@@ -2731,7 +2731,7 @@ function LiveAttendance() {
     // 2. Connect to LAN SSE stream for remote browser viewer
     let sse: EventSource | null = null;
     try {
-      sse = new EventSource(sseUrl("/api/events/attendance"));
+      sse = new EventSource(apiUrl("/api/events/attendance"));
       sse.addEventListener("attendance-updated", () => {
         void refresh();
       });

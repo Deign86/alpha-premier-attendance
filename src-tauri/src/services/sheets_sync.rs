@@ -34,8 +34,6 @@ struct JwtClaims<'a> {
 
 /// Reserved for schema-version negotiation with the Google Sheets endpoint;
 /// kept so the version intent is documented in one place.
-#[allow(dead_code)]
-pub const SHEETS_SCHEMA_VERSION: i64 = 2;
 const SHEETS_SCHEMA_MISMATCH_ERROR: &str = "Google Sheets schema mismatch";
 const SHEETS_ROW_ID_MISSING_ERROR: &str = "Google Sheets row identity is missing";
 const SHEETS_ROW_ID_AMBIGUOUS_ERROR: &str = "Google Sheets row identity is ambiguous";
@@ -1676,23 +1674,6 @@ async fn sheet_id_for_tab(
         .ok_or_else(|| SHEETS_REQUEST_FAILED_ERROR.to_string())
 }
 
-#[allow(dead_code)]
-async fn google_append_row(
-    path: &str,
-    spreadsheet_id: &str,
-    table_name: &str,
-    row_id: &str,
-    payload: &serde_json::Value,
-) -> Result<(), String> {
-    if row_id.trim().is_empty() {
-        return Err(SHEETS_ROW_ID_MISSING_ERROR.to_string());
-    }
-
-    let token = google_access_token(path).await?;
-    let client = sheets_client();
-    google_append_row_with_token(&client, &token, spreadsheet_id, table_name, row_id, payload).await
-}
-
 async fn google_append_row_with_token(
     client: &reqwest::Client,
     token: &str,
@@ -1816,23 +1797,6 @@ async fn google_append_row_with_token(
 /// Deletes the row identified by `row_id` (matched by cell value in the key
 /// column, never by position). Returns `true` when a row was actually removed
 /// and `false` when the row was already absent (no-op success).
-#[allow(dead_code)]
-async fn google_delete_row(
-    path: &str,
-    spreadsheet_id: &str,
-    table_name: &str,
-    row_id: &str,
-    payload: &serde_json::Value,
-) -> Result<bool, String> {
-    if row_id.trim().is_empty() {
-        return Err(SHEETS_ROW_ID_MISSING_ERROR.to_string());
-    }
-
-    let token = google_access_token(path).await?;
-    let client = sheets_client();
-    google_delete_row_with_token(&client, &token, spreadsheet_id, table_name, row_id, payload).await
-}
-
 async fn google_delete_row_with_token(
     client: &reqwest::Client,
     token: &str,
@@ -1845,7 +1809,7 @@ async fn google_delete_row_with_token(
         return Err(SHEETS_ROW_ID_MISSING_ERROR.to_string());
     }
 
-    // Bounded reads (see `google_append_row`): header row plus the key
+    // Bounded reads (see `google_append_row_with_token`): header row plus the key
     // column only. Full rows are fetched solely to disambiguate duplicate
     // key matches, and then only across the matched span.
     let header_doc: serde_json::Value = google_stage_json(
@@ -1984,21 +1948,6 @@ async fn google_delete_row_with_token(
     Ok(true)
 }
 
-/// Applies and maintains the formatting standard on a tab:
-/// frozen bold header on brand `#1a4e3f`, alternating white / `#f2f2f2` data
-/// bands, `0.00` money cells, plain-text date/time cells, auto-sized columns
-/// and trailing blank rows removed.
-#[allow(dead_code)]
-async fn google_format_sheet(
-    path: &str,
-    spreadsheet_id: &str,
-    table_name: &str,
-) -> Result<(), String> {
-    let token = google_access_token(path).await?;
-    let client = sheets_client();
-    google_format_sheet_with_token(&client, &token, spreadsheet_id, table_name).await
-}
-
 /// Build the alternating-row banding request for one ops tab (pure:
 /// no I/O, so the Sheets API field contract is unit-testable).
 /// NOTE: `BandedRange` has NO header-position field — a stale
@@ -2029,6 +1978,10 @@ fn banding_request(
     })
 }
 
+/// Applies and maintains the formatting standard on a tab:
+/// frozen bold header on brand `#1a4e3f`, alternating white / `#f2f2f2` data
+/// bands, `0.00` money cells, plain-text date/time cells, auto-sized columns
+/// and trailing blank rows removed.
 async fn google_format_sheet_with_token(
     client: &reqwest::Client,
     token: &str,
@@ -2931,7 +2884,6 @@ mod tests {
     fn managed_tabs_have_stable_versioned_headers() {
         assert_eq!(sheet_headers("Attendance")[0], "attendanceId");
         assert_eq!(sheet_headers("PayrollCutoffs")[14], "status");
-        assert_eq!(SHEETS_SCHEMA_VERSION, 2);
     }
 
     #[test]

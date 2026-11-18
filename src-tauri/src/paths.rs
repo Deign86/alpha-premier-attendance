@@ -174,22 +174,30 @@ mod tests {
         assert_eq!(resolved, PathBuf::from("C:/data/attendance.db"));
     }
 
+    /// A folder outside the config and data folders, absolute on every OS
+    /// (`D:/Attendance` is absolute only on Windows). It is never created.
+    fn elsewhere() -> PathBuf {
+        std::env::temp_dir().join(format!("alpha-db-elsewhere-{}", uuid::Uuid::new_v4()))
+    }
+
     #[test]
     fn db_path_override_treats_a_dot_extension_as_a_file() {
+        let file = elsewhere().join("attendance.db");
         let database = DatabaseConfig {
-            path: Some("D:/Attendance/attendance.db".into()),
+            path: Some(file.to_string_lossy().into_owned()),
         };
         let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
-        assert_eq!(resolved, PathBuf::from("D:/Attendance/attendance.db"));
+        assert_eq!(resolved, file);
     }
 
     #[test]
     fn db_path_override_treats_a_directory_by_appending_attendance_db() {
+        let folder = elsewhere();
         let database = DatabaseConfig {
-            path: Some("D:/Attendance".into()),
+            path: Some(folder.to_string_lossy().into_owned()),
         };
         let resolved = resolve_db_path(Path::new("C:/cfg"), Path::new("C:/data"), &database);
-        assert_eq!(resolved, PathBuf::from("D:/Attendance/attendance.db"));
+        assert_eq!(resolved, folder.join("attendance.db"));
     }
 
     #[test]

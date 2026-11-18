@@ -10,13 +10,11 @@
 //! log-only: a missing clip falls back to live Piper speech (Tier 2), so the
 //! kiosk scan path can never break because of voice generation.
 
+use crate::services::settings::{self, key};
 use sqlx::{Row, SqlitePool};
 use std::path::PathBuf;
 
 pub const DEFAULT_VOICESTUDIO_BASE_URL: &str = "http://127.0.0.1:3900";
-const SETTINGS_HOST_KEY: &str = "voicestudio_base_url";
-const SETTINGS_PIN_KEY: &str = "voicestudio_pin";
-const SETTINGS_BUNDLE_KEY: &str = "bea_name_bundle_generated_at";
 const PIN_HEADER: &str = "X-OmniVoice-Pin";
 const VOICE_MODEL: &str = "tts-1";
 const MAX_BACKOFF_SECS: i64 = 6 * 3600;
@@ -129,49 +127,27 @@ pub async fn enqueue_voice_job(db: &SqlitePool, person_id: &str, full_name: &str
 
 /// Read the configured VoiceStudio host (UI-persisted), else the default.
 pub async fn get_host(db: &SqlitePool) -> String {
-    read_setting(db, SETTINGS_HOST_KEY)
+    settings::get(db, key::VOICESTUDIO_HOST)
         .await
         .map(|v| normalize_host(&v))
         .unwrap_or_else(|| DEFAULT_VOICESTUDIO_BASE_URL.to_string())
 }
 
-pub(crate) async fn store_setting(db: &SqlitePool, key: &str, value: &str, now: &str) -> Result<(), String> {
-    sqlx::query(
-        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-    )
-    .bind(key)
-    .bind(value)
-    .bind(now)
-    .execute(db)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Persist the UI-provided host; returns the normalized value.
 pub async fn set_host(db: &SqlitePool, raw: &str, now: &str) -> Result<String, String> {
     let host = normalize_host(raw);
-    store_setting(db, SETTINGS_HOST_KEY, &host, now).await?;
+    settings::put(db, key::VOICESTUDIO_HOST, &host, now).await?;
     Ok(host)
 }
 
 /// Read the configured share PIN (empty when the host needs none).
 pub async fn get_pin(db: &SqlitePool) -> String {
-    read_setting(db, SETTINGS_PIN_KEY).await.unwrap_or_default()
+    settings::get(db, key::VOICESTUDIO_PIN).await.unwrap_or_default()
 }
 
 /// Persist the UI-provided share PIN (trimmed; empty clears it).
 pub async fn set_pin(db: &SqlitePool, raw: &str, now: &str) -> Result<(), String> {
-    store_setting(db, SETTINGS_PIN_KEY, raw.trim(), now).await
-}
-
-pub(crate) async fn read_setting(db: &SqlitePool, key: &str) -> Option<String> {
-    sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
-        .bind(key)
-        .fetch_optional(db)
-        .await
-        .unwrap_or(None)
+    settings::put(db, key::VOICESTUDIO_PIN, raw.trim(), now).await
 }
 
 /// Absolute path of a worker-generated clip, when present on disk.
@@ -209,7 +185,7 @@ pub async fn retire_superseded_clips(
     let raw = std::fs::read_to_string(manifest_path).map_err(|e| format!("read name manifest failed: {e}"))?;
     let manifest: BundledNameManifest =
         serde_json::from_str(&raw).map_err(|e| format!("parse name manifest failed: {e}"))?;
-    if read_setting(db, SETTINGS_BUNDLE_KEY).await.as_deref() == Some(manifest.generated_at.as_str()) {
+    if settings::get(db, key::BEA_NAME_BUNDLE).await.as_deref() == Some(manifest.generated_at.as_str()) {
         return Ok(0);
     }
     let mut removed = 0;
@@ -233,7 +209,7 @@ pub async fn retire_superseded_clips(
             .await
             .map_err(|e| e.to_string())?;
     }
-    store_setting(db, SETTINGS_BUNDLE_KEY, &manifest.generated_at, now).await?;
+    settings::put(db, key::BEA_NAME_BUNDLE, &manifest.generated_at, now).await?;
     Ok(removed)
 }
 
@@ -316,10 +292,6 @@ pub struct VoiceWorkerStatus {
 pub struct VoicePullSummary {
     pub attempted_person_id: Option<String>,
     pub completed: bool,
-}
-
-pub async fn check_connection(db: &SqlitePool) -> VoiceConnectionStatus {
-    check_connection_to(&get_host(db).await, &get_pin(db).await).await
 }
 
 /// Probe a host/PIN without saving them: "Check" tests what was typed, and

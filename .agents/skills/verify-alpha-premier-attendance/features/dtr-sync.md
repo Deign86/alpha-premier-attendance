@@ -7,7 +7,7 @@ Slow-but-sure attendance export to the `INTERN DTR 2026` Google Sheet: queue-bac
 - `DTR-RETRY`: 429/5xx/timeout-after-connect/403-rateLimit rows RETRY forever (no attempts increment, capped backoff+jitter, Retry-After ≤ 15 s); corrupt/dailyLimit 4xx go DEAD with distinct codes after 5 strikes.
 - `DTR-SKIP`: no-tab/no-month/no-date-row/empty-values → SYNCED-with-skip + `dtr_pending` note (never DEAD/RETRY), re-driven by the 30 s tick rescan and tab-create.
 - `DTR-BATCH`: values-only `batchUpdate` coalescing (≤ 50 ranges or 2 MB per call, single spreadsheet; per-range isolation on 400) + DTR-only throttle (~50 writes/min token bucket, concurrency 1; ops path bypasses).
-- `DTR-GUARD`: one in-progress guard (`admin_sync_now` + `admin_sync_intern_dtr` + per-row); second caller gets `DTR_SYNC_IN_PROGRESS` with owner/startedAt; Data/Users/per-row buttons disable with a shared progress bar.
+- `DTR-GUARD`: one in-progress guard (the background pass + `admin_sync_intern_dtr` + per-row); second caller gets `DTR_SYNC_IN_PROGRESS` with owner/startedAt; Data/Users/per-row buttons disable with a shared progress bar.
 - `DTR-RESUME`: 5-min PROCESSING lease recovery + idempotent same-range replay (kill-mid-batch resumes with zero dupes).
 - `DTR-HEALTH`: `admin_get_sync_status` carries `throttledUntil`, `lastThrottleReason`, `inProgress{owner,startedAt}`, `leaseRecovered`, `oldestRetryableAgeSec`, `pendingAgeAlert`.
 

@@ -113,9 +113,7 @@ export const tauriApi = {
   openGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('open_generated_file', { token, filePath }),
   revealGeneratedFile: (token: string, filePath: string) => invoke<{ success: true; message: string }>('reveal_generated_file', { token, filePath }),
   openGeneratedDirectory: (token: string, directoryPath: string) => invoke<{ success: true; message: string }>('open_generated_directory', { token, directoryPath }),
-  openGeneratedArtifact: (token: string, artifactId: string) => invoke<{ success: true; artifactId: string }>('open_generated_artifact', { token, artifactId }),
   syncStatus: (token: string) => invoke<NativeSyncStatusResponse>('admin_get_sync_status', { token }),
-  syncNow: (token: string) => invoke('admin_sync_now', { token }),
   syncInternDtr: (token: string, userId?: string, startFromUserId?: string) => invoke<ManualSyncReport>('admin_sync_intern_dtr', { token, userId, startFromUserId }),
   getInternDtrSync: (token: string) => invoke<{ success: true; enabled: boolean }>('admin_get_intern_dtr_sync', { token }),
   setInternDtrSync: (token: string, enabled: boolean) => invoke<{ success: true; enabled: boolean }>('admin_set_intern_dtr_sync', { token, enabled }),
@@ -164,7 +162,6 @@ export const getScannerStatus = () => invoke<ScannerStatus>('scanner_status');
  */
 export const setScannerPaused = (paused: boolean) => invoke<void>('scanner_pause', { paused });
 
-/** Listen for native real-time attendance changes from the Rust/SQLite layer. */
 export const listenForAttendanceUpdates = (handler: (payload: { attendanceId: string; attendanceDate: string; action: string }) => void) =>
   listen<{ attendanceId: string; attendanceDate: string; action: string }>('attendance-updated', (event) => handler(event.payload));
 
@@ -197,7 +194,6 @@ export interface DtrSyncHealthEvent {
   emittedAt: string;
 }
 
-/** Listen for real-time intern DTR sync progress events from the Rust backend. */
 export const listenForDtrSyncProgress = (handler: (payload: DtrSyncProgress) => void) =>
   listen<DtrSyncProgress>('dtr-sync-progress', (event) => handler(event.payload));
 

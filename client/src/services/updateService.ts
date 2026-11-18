@@ -157,7 +157,6 @@ export async function checkForUpdates(
       return { state: 'up-to-date' };
     }
 
-    // Network / connectivity / timeout issues
     if (isUpdateNetworkMessage(normalized)) {
       return { state: 'error', message: 'Unable to connect to the update server. Please check your internet connection.' };
     }
@@ -244,7 +243,6 @@ export async function downloadAndInstallUpdate(
       });
     }
 
-    // Relaunch the desktop app into the updated version
     await client.relaunch();
     return { ok: true };
   } catch (err) {

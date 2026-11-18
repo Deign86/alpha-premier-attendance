@@ -24,37 +24,6 @@ pub fn is_rate_limited_error(error: &str) -> bool {
     error.contains(GOOGLE_RATE_LIMITED) || error.contains("429")
 }
 
-/// Domain classifier for Google API failures: transient-forever versus finite.
-///
-/// Transient-forever (queue row stays RETRY, attempts NOT incremented, capped backoff):
-/// 429, any 5xx, timeout-after-connect (request reached Google, reply stalled —
-/// replaying an idempotent cell write is safe), and 403 carrying a
-/// rateLimitExceeded|userRateLimitExceeded reason.
-/// Finite 5-strike-to-DEAD: corrupt/validation 4xx (400 invalid payload, missing
-/// userId, 403 forbidden/permissions, 404, ...).
-/// `status` 0 means no HTTP status was observed (transport-level failure); only
-/// the explicit `timeout-after-connect` io marker is transient, a bare timeout
-/// stays finite so genuinely unreachable backends still age out.
-// Staged API (repo precedent: SHEETS_SCHEMA_VERSION): the first non-test
-// caller lands in todo 5, which plumbs 403 reason bodies into (status, reason).
-#[allow(dead_code)]
-pub fn is_transient_google_error(status: u16, reason: &str, io_kind: &str) -> bool {
-    if status == 429 {
-        return true;
-    }
-    if (500..=599).contains(&status) {
-        return true;
-    }
-    if status == 403
-        && (reason.contains("rateLimitExceeded")
-            || reason.contains("userRateLimitExceeded")
-            || reason.contains("quotaExceeded"))
-    {
-        return true;
-    }
-    io_kind == "timeout-after-connect"
-}
-
 /// Maps a Google 403 response body to its queue error string via the
 /// errors[].reason fragment both Sheets and DTR mappers share. Rate/quota
 /// reasons collapse to GOOGLE_RATE_LIMITED (transient-forever downstream);
@@ -218,7 +187,7 @@ pub fn split_dtr_batch(entry_bytes: &[usize]) -> Vec<(usize, usize)> {
 /// Shared in-progress guard (plan todo 8 — frozen primitive): ONE in-memory
 /// AtomicBool owner (fast mutual exclusion, lives on AppState) + ONE
 /// persisted `sync_state` row owner/startedAt (health + crash detection).
-/// Covers admin_sync_now + admin_sync_intern_dtr + per-row sync (the latter
+/// Covers the background pass + admin_sync_intern_dtr + per-row sync (the latter
 /// routes through admin_sync_intern_dtr with a user id); the second
 /// concurrent caller gets DTR_SYNC_IN_PROGRESS. Clean restart always clears
 /// in-memory and marks the persisted row completed; a crash-held row
@@ -505,7 +474,7 @@ mod tests {
         DTR_THROTTLE_CALLS_PER_MIN, DTR_THROTTLE_WINDOW_MS, DTR_THROTTLE_WRITES_PER_MIN,
         DtrThrottleBucket, GENERIC_BACKOFF_CAP_SECS, SYNC_GUARD_COMPLETED,
         SYNC_GUARD_STALE_SECS, TRANSIENT_BACKOFF_BASE_SECS,
-        TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff, is_transient_google_error,
+        TRANSIENT_BACKOFF_CAP_SECS, calculate_retry_backoff,
         is_transient_sync_error,
         processing_lease_stale_secs, split_dtr_batch, sync_guard_busy_error,
         sync_guard_row_releasable, trim_to_throttle_window, next_failure_step, GENERIC_DEAD_STRIKES,
@@ -740,22 +709,6 @@ mod tests {
 
     #[test]
     fn transient_classifier() {
-        // RETRY-forever inputs: 429 / 5xx / timeout-after-connect / 403-rateLimit.
-        assert!(is_transient_google_error(429, "Too Many Requests", ""));
-        assert!(is_transient_google_error(500, "Internal Error", ""));
-        assert!(is_transient_google_error(503, "Service Unavailable", ""));
-        assert!(is_transient_google_error(599, "Network Connect Timeout", ""));
-        assert!(is_transient_google_error(0, "timeout", "timeout-after-connect"));
-        assert!(is_transient_google_error(403, "rateLimitExceeded", ""));
-        assert!(is_transient_google_error(403, "userRateLimitExceeded", ""));
-
-        // Finite inputs: corrupt/validation 4xx stay on the 5-strike DEAD path.
-        assert!(!is_transient_google_error(400, "invalid payload", ""));
-        assert!(!is_transient_google_error(400, "corrupt", ""));
-        assert!(!is_transient_google_error(403, "forbidden", ""));
-        assert!(!is_transient_google_error(404, "not found", ""));
-        assert!(!is_transient_google_error(0, "network timeout", ""));
-
         // Queue mapping: transient rows NEVER reach DEAD, however high attempts climb.
         for attempts in [0_i64, 4, 5, 10, 100] {
             for error in [

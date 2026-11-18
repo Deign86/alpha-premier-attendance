@@ -3,8 +3,8 @@ use chrono_tz::{Asia::Manila, Tz};
 
 /// Fixed unpaid lunch break (12:00–13:00 Manila).
 ///
-/// This window IS subtracted from paid hours. Both payroll engines
-/// (`intern_payroll::calculate`, `employee_payroll::calculate`) derive their
+/// This window IS subtracted from paid hours. The payroll engine
+/// (`intern_payroll::calculate`) derives its
 /// paid seconds from `paid_work_seconds` — elapsed time minus this window — and
 /// the attendance-report "TOTAL HOURS" column (`reporting::elapsed_hours`) uses
 /// the same lunch-net basis, so reports and payroll agree on every

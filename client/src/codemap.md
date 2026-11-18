@@ -7,7 +7,7 @@ This is the UI layer for the attendance kiosk, live attendance viewer, administr
 - `api.ts` is the typed application service facade: it dispatches operations to `tauriApi` in Tauri or HTTP through `network.ts` in browser mode, with desktop-only fallbacks and response normalization.
 - `tauri-api.ts` maps typed frontend methods to Tauri `invoke` commands and event listeners; `network.ts` resolves API/realtime URLs and persists offline attendance scans in localStorage.
 - UI modules separate bathroom view/log (`BathroomKioskView`, `BathroomKeyLogPanel`), voice settings, update surfaces, and generated-file actions; `dtr-sync-guard.ts` exposes a shared external-store flag through `useDtrSyncActive`.
-- `mcp-bridge-helper.ts` exposes DOM reference/text/XPath lookup and inline script injection for webview automation; `speech.ts` is deprecated legacy Web Speech API compatibility code, not the authoritative announcement path.
+- `mcp-bridge-helper.ts` exposes DOM reference/text/XPath lookup and inline script injection for webview automation.
 
 ## Flow
 1. `index.html` loads `main.tsx`; React mounts `App`, which renders the kiosk by default or `LiveAttendance` at `/attendance` and `AdminPanel` at `/admin`.
@@ -20,4 +20,4 @@ This is the UI layer for the attendance kiosk, live attendance viewer, administr
 - Consumed by: `client/index.html` via `src/main.tsx`; Tauri desktop webview and Vite browser development.
 - Depends on: `@rfid-attendance/shared` domain contracts, React, Lucide, Tauri v2 APIs/plugins, and `services/` modules.
 - Main UI call sites: `App` → `submitScan`, `submitBathroomScan`, `loadAttendance`, `unlockSetup`, `loadBathroomStatus`; `VoiceSettingsPanel` → `ttsService`; `UpdateBanner` → `updateService` and `listenForCheckForUpdates`.
-- Transport boundary: `api.ts` → `tauriApi` (`invoke`/events) or `apiUrl`/`fetch`; `network.ts` also supplies `sseUrl` and `websocketUrl` to realtime consumers.
+- Transport boundary: `api.ts` → `tauriApi` (`invoke`/events) or `apiUrl`/`fetch`; `apiUrl` in `network.ts` also serves the realtime (SSE) consumer.
