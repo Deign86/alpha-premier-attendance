@@ -7,7 +7,7 @@ import { checkAdminSession, loadAdminAttendance, loadAdminUsers, loadPayrollCuto
 import { listenForGlobalRfid, detachWhenDone } from "./tauri-api";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { UpdateBanner } from "./update-banner";
-import { AccountSignInPanel } from './account-sign-in';
+import { AdminUnlock } from './admin-unlock';
 import { IdRegisterPanel } from "./id-register-panel";
 import { FridayBackupReminder } from "./backup-reminder";
 import { BathroomKeyLogPanel } from "./bathroom-key-log";
@@ -363,59 +363,41 @@ export function AdminPanel() {
         <p className="visually-hidden" role="status">Checking admin session…</p>
       </main>
     );
-  if (!unlocked && withAccount)
+  if (!unlocked)
     return (
       <main className="dashboard-shell admin-login admin-shell">
         <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
-        <AccountSignInPanel
-          onUnlocked={(expiresAt) => {
-            setWithAccount(false);
+        <AdminUnlock
+          cardOrCode={pin}
+          onCardOrCodeChange={setPin}
+          busy={busy}
+          onSubmit={unlock}
+          withAccount={withAccount}
+          onWithAccountChange={setWithAccount}
+          onAccountStart={() => {
+            setError("");
+            setPin("");
+          }}
+          onAccountUnlocked={(expiresAt) => {
             setUnlocked(true);
             setSessionExpiresAt(expiresAt);
             setPin("");
             setError("");
           }}
-          onBack={() => setWithAccount(false)}
+          intro={
+            <>
+              <DashboardBrand />
+              <p className="section-kicker">Administrator access</p>
+              <h1>Manage attendance</h1>
+              <p className="setup-copy" style={{ marginBottom: "1rem" }}>
+                Scan a registered admin RFID card, or sign in with your Keystone account.
+              </p>
+            </>
+          }
+          error={error && <p className="dashboard-alert">{error}</p>}
+          submitClassName="submit-button"
+          submitLabel="Unlock admin"
         />
-      </main>
-    );
-  if (!unlocked)
-    return (
-      <main className="dashboard-shell admin-login admin-shell">
-        <a href="/"><Nfc size={16} aria-hidden="true" /> Scanner</a>
-        <form onSubmit={unlock}>
-          <DashboardBrand />
-          <p className="section-kicker">Administrator access</p>
-          <h1>Manage attendance</h1>
-          <p className="setup-copy" style={{ marginBottom: "1rem" }}>
-            Scan a registered admin RFID card, or sign in with your Keystone account.
-          </p>
-          <label>
-            Admin RFID card
-            <input
-              autoFocus
-              type="password"
-              placeholder="Scan admin card…"
-              value={pin}
-              onChange={(event) => setPin(event.target.value)}
-            />
-          </label>
-          {error && <p className="dashboard-alert">{error}</p>}
-          <button className="submit-button" disabled={busy || !pin.trim()}>
-            Unlock admin
-          </button>
-          <button
-            className="text-button"
-            type="button"
-            onClick={() => {
-              setError("");
-              setPin("");
-              setWithAccount(true);
-            }}
-          >
-            Sign in with your Keystone account
-          </button>
-        </form>
       </main>
     );
   return (

@@ -3,7 +3,7 @@ import { Check, CreditCard, ImagePlus, LoaderCircle, LockKeyhole, ShieldCheck, U
 import type { CardType, SetupUser, UserGender } from "@rfid-attendance/shared";
 import { normalizeName } from "@rfid-attendance/shared";
 import { photoSource } from "./api";
-import { AccountSignInPanel } from './account-sign-in';
+import { AdminUnlock } from './admin-unlock';
 import { useDialogKeys } from "./use-dialog-keys";
 import { NoticeLine } from "./notice";
 import type { Notice } from "./notice";
@@ -50,7 +50,7 @@ type SetupDialogProps = {
   /** Clears the card field and a stale unlock error when the account sign-in opens. */
   onAccountStart: () => void;
   /** A Keystone account opened setup: the session's token and when it ends. */
-  onAccountUnlocked: (token: string, expiresAt: string) => void;
+  onAccountUnlocked: () => void;
   onUnlock: (event: React.FormEvent) => void;
   onUidChange: (value: string) => void;
   onScanAnother: () => void;
@@ -167,55 +167,40 @@ export function SetupDialog(props: SetupDialogProps) {
             <X size={19} />
           </button>
         </div>
-        {!props.token && withAccount ? (
-          <AccountSignInPanel
-            onUnlocked={(expiresAt, token) => {
-              setWithAccount(false);
-              props.onAccountUnlocked(token, expiresAt);
-            }}
-            onBack={() => setWithAccount(false)}
+        {!props.token ? (
+          <AdminUnlock
+            cardOrCode={props.pin}
+            onCardOrCodeChange={props.onPinChange}
+            busy={props.busy}
+            onSubmit={props.onUnlock}
+            withAccount={withAccount}
+            onWithAccountChange={setWithAccount}
+            onAccountStart={props.onAccountStart}
+            onAccountUnlocked={props.onAccountUnlocked}
+            formClassName="setup-form"
+            intro={
+              <>
+                <SetupSteps current={1} />
+                <p className="setup-copy">
+                  Tap an admin RFID card on the reader, or sign in with your Keystone account, to link a card to an employee.
+                </p>
+              </>
+            }
+            error={<NoticeLine notice={props.notice} />}
+            submitClassName="submit-button setup-submit"
+            submitLabel={
+              <>
+                {props.busy ? (
+                  <LoaderCircle className="spin" size={17} />
+                ) : (
+                  <LockKeyhole size={17} />
+                )}{" "}
+                Unlock setup
+              </>
+            }
+            fieldId="admin-pin"
+            fieldProps={{ autoComplete: "off", "data-autofocus": true }}
           />
-        ) : !props.token ? (
-          <form className="setup-form" onSubmit={props.onUnlock}>
-            <SetupSteps current={1} />
-            <p className="setup-copy">
-              Tap an admin RFID card on the reader, or sign in with your Keystone account, to link a card to an employee.
-            </p>
-            <label htmlFor="admin-pin">Admin RFID card</label>
-            <input
-              id="admin-pin"
-              type="password"
-              placeholder="Scan admin card…"
-              autoComplete="off"
-              value={props.pin}
-              onChange={(event) => props.onPinChange(event.target.value)}
-              autoFocus
-              data-autofocus
-            />
-            <NoticeLine notice={props.notice} />
-            <button
-              className="submit-button setup-submit"
-              type="submit"
-              disabled={props.busy || !props.pin.trim()}
-            >
-              {props.busy ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : (
-                <LockKeyhole size={17} />
-              )}{" "}
-              Unlock setup
-            </button>
-            <button
-              className="text-button"
-              type="button"
-              onClick={() => {
-                props.onAccountStart();
-                setWithAccount(true);
-              }}
-            >
-              Sign in with your Keystone account
-            </button>
-          </form>
         ) : props.step === "scan" ? (
           <div className="setup-form">
             <SetupSteps current={2} />

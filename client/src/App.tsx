@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, ArrowRight, CircleAlert, CreditCard, Keyboard, KeyRound, LayoutDashboard, LoaderCircle, LockKeyhole, LogIn, LogOut, Nfc, ShieldCheck, Users, WifiOff, X } from "lucide-react";
 import type { ScanErrorResponse, ScanSuccessResponse, ScanAdminAssistResponse, SetupUser } from "@rfid-attendance/shared";
 import { resolveOfficeDisplay, isLateTimeout, normalizeName } from "@rfid-attendance/shared";
+import { useCardReader } from "./use-card-reader";
+import { adminSession, useAdminSession } from "./admin-session";
 import { DEFAULT_CONFIG, loadAttendance, loadConfig, lockSetup, lookupSetupCard, submitScan, unlockSetup, uploadSetupPhoto, upsertSetupUser, loadBathroomStatus, submitBathroomScan } from "./api";
 import { onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
 import "./styles.css";
@@ -98,8 +100,10 @@ export default function App() {
   // fires mid-flight.
   const assistConfirmRef = useRef(false);
 
-  const [setupToken, setSetupToken] = useState("");
-  const [setupExpiresAt, setSetupExpiresAt] = useState("");
+  // The setup dialog is unlocked while the admin session has a token: the one session, not a copy of it.
+  const session = useAdminSession();
+  const setupToken = session.token ?? "";
+  const setupExpiresAt = session.expiresAt ?? "";
   const [setupDialogOpen, setSetupDialogOpen] = useState(false);
   const [setupStep, setSetupStep] = useState<SetupStep>("scan");
   const [setupBusy, setSetupBusy] = useState(false);
@@ -211,8 +215,7 @@ export default function App() {
         clearInterval(setupSessionTimer.current);
         setupSessionTimer.current = null;
       }
-      setSetupToken("");
-      setSetupExpiresAt("");
+      adminSession.close();
       setSetupStep("scan");
       setSetupNotice({ tone: "error", text: "Setup session expired. Unlock again to continue." });
     };
@@ -313,8 +316,6 @@ export default function App() {
           setSetupNotice({ tone: "error", text: response.error.message });
           return;
         }
-        setSetupToken(response.setupToken);
-        setSetupExpiresAt(response.expiresAt);
         setAdminPin("");
         setSetupStep("scan");
         setSetupDialogOpen(true);
@@ -337,8 +338,7 @@ export default function App() {
     setupAttempt.current += 1;
     if (setupToken) void lockSetup(setupToken);
     if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
-    setSetupToken("");
-    setSetupExpiresAt("");
+    adminSession.close();
     setSetupDialogOpen(false);
     setSetupStep("scan");
     setSetupUid("");
@@ -355,8 +355,7 @@ export default function App() {
       clearInterval(setupSessionTimer.current);
       setupSessionTimer.current = null;
     }
-    setSetupToken("");
-    setSetupExpiresAt("");
+    adminSession.close();
     setSetupStep("scan");
     setSetupNotice({ tone: "error", text: "Setup session expired. Unlock again to continue." });
     return true;
@@ -785,46 +784,38 @@ export default function App() {
   // the tabs without re-registering the listener.
   const switchKioskModeRef = useRef<(mode: "attendance" | "bathroom") => void>(() => {});
 
-  // Keyboard-mode RFID reader scan handling.
-  // The reader acts as a keyboard wedge emitting a rapid sequence of keypresses
-  // terminated with Enter. Scans are captured only while the kiosk window is focused.
-  useEffect(() => {
-    let buffer = "";
-    let lastKeyAt = 0;
-    let modeSwitchTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const resetBuffer = () => {
-      buffer = "";
-      lastKeyAt = 0;
-      if (modeSwitchTimer) {
-        clearTimeout(modeSwitchTimer);
-        modeSwitchTimer = null;
-      }
-    };
-
-    const flush = () => {
-      const candidate = buffer;
-      resetBuffer();
-      if (!candidate) return;
-      const rawExpectedLength = Number(config.scanner?.expectedLength ?? 10);
-      const expectedLength = Number.isFinite(rawExpectedLength) && rawExpectedLength >= 0 ? rawExpectedLength : 10;
-      const characterSet = config.scanner?.characterSet ?? "decimal";
-      const allowedRegex = characterSet === "hex" ? /^[0-9a-fA-F]+$/ : /^[0-9]+$/;
-
-      if (!allowedRegex.test(candidate)) {
-        flashScanNotice("Card not recognized — check the reader format.");
-        return;
-      }
-      if (candidate.length < 4 || candidate.length > 64) {
-        flashScanNotice("Card not recognized — check the reader format.");
-        return;
-      }
-      if (expectedLength > 0 && candidate.length !== expectedLength) {
-        flashScanNotice("Card not recognized — check the reader format.");
-        return;
-      }
-
-      const normalized = candidate.toUpperCase();
+  // The keyboard-wedge reader. The kiosk says which keys are not the reader's and where a card goes; reading the
+  // card is `useCardReader`'s. The reader restarts (dropping a read in progress) whenever one of these changes.
+  const closeTypeCardIdOnEscape = useCallback(
+    (event: KeyboardEvent) => {
+      // Bathroom mode's Type card ID box closes on Escape wherever the focus is.
+      if (event.key === "Escape" && kioskMode === "bathroom" && manualMode) cancelManualEntry();
+    },
+    [cancelManualEntry, kioskMode, manualMode],
+  );
+  const keyIsNotTheReaders = useCallback(
+    (target: HTMLElement | null) => {
+      const isTextEntry = Boolean(
+        target &&
+          (target.matches("textarea, select, [contenteditable='true']") ||
+            (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid" && target.id !== "admin-pin")),
+      );
+      // While any modal dialog is open (e.g. Associate RFID unlock input
+      // #admin-pin), keys must go only to the dialog. Without this, typing
+      // "2" in the PIN box arms the kiosk mode-switch timer and flips
+      // the background kiosk to Bathroom mode. Scans still work: wedge digits
+      // land in the focused input's React state and native scanner events
+      // bypass this keyboard-wedge path entirely.
+      const isInDialog = Boolean(target?.closest('[role="dialog"]') || setupDialogOpen);
+      // Manual entry gets its keys. Bathroom mode's Type card ID box only while the focus is inside it: elsewhere a
+      // card tap still fills the buffer, so the read can say why it wasn't taken.
+      const typingCardId = manualMode && (kioskMode !== "bathroom" || Boolean(target?.closest(".bathroom-manual-box")));
+      return Boolean(isInDialog || isTextEntry || typingCardId || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)));
+    },
+    [adminAssistData, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken],
+  );
+  const routeWedgeCard = useCallback(
+    (normalized: string) => {
       if (setupDialogOpen && !setupToken) {
         void unlockSetupWithPinOrCard(normalized);
       } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
@@ -839,92 +830,24 @@ export default function App() {
           void submit(normalized, "RFID");
         }
       }
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      // Bathroom mode's Type card ID box closes on Escape wherever the focus is.
-      if (event.key === "Escape" && kioskMode === "bathroom" && manualMode) cancelManualEntry();
-      if (!document.hasFocus()) {
-        resetBuffer();
-        return;
-      }
-      if (event.key === "Escape") {
-        resetBuffer();
-        return;
-      }
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      const isTextEntry = Boolean(
-        target &&
-          (target.matches("textarea, select, [contenteditable='true']") ||
-            (target.matches("input") && target.id !== "scanner-uid" && target.id !== "setup-card-uid" && target.id !== "admin-pin")),
-      );
-      // While any modal dialog is open (e.g. Associate RFID unlock input
-      // #admin-pin), keys must go only to the dialog. Without this, typing
-      // "2" in the PIN box arms the kiosk mode-switch timer below and flips
-      // the background kiosk to Bathroom mode. Scans still work: wedge digits
-      // land in the focused input's React state and native scanner events
-      // bypass this keyboard-wedge path entirely.
-      const isInDialog = Boolean(target?.closest('[role="dialog"]') || setupDialogOpen);
-      // Manual entry gets its keys. Bathroom mode's Type card ID box only while the focus is inside it: elsewhere a
-      // card tap still fills the buffer, so flush() can say why it wasn't read.
-      const typingCardId = manualMode && (kioskMode !== "bathroom" || Boolean(target?.closest(".bathroom-manual-box")));
-      if (isInDialog || isTextEntry || typingCardId || adminAssistData || (setupDialogOpen && setupToken && !shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep))) {
-        resetBuffer();
-        return;
-      }
-
-      if (modeSwitchTimer) {
-        clearTimeout(modeSwitchTimer);
-        modeSwitchTimer = null;
-      }
-
-      const now = Date.now();
-      const interKeyTimeout = 250;
-      if (lastKeyAt > 0 && now - lastKeyAt > interKeyTimeout) {
-        resetBuffer();
-      }
-      lastKeyAt = now;
-
-      if (event.key === "Enter") {
-        // The Enter that ends a card tap is the reader's, not the focused button's (with Type card ID open, a lone
-        // Enter still presses the button it is on).
-        if (buffer || !manualMode) event.preventDefault();
-        flush();
-        return;
-      }
-
-      const characterSet = config.scanner?.characterSet ?? "decimal";
-      const allowedCharRegex = characterSet === "hex" ? /^[0-9a-fA-F]$/ : /^[0-9]$/;
-      if (allowedCharRegex.test(event.key)) {
-        buffer += event.key;
-        if (!manualMode && (buffer === "1" || buffer === "2")) {
-          const modeKey = buffer;
-          modeSwitchTimer = setTimeout(() => {
-            if (buffer === modeKey) {
-              switchKioskModeRef.current(modeKey === "1" ? "attendance" : "bathroom");
-              resetBuffer();
-            }
-          }, 200);
-        }
-      } else {
-        // Any character outside the configured character set invalidates the buffer immediately.
-        resetBuffer();
-      }
-    };
-
-    const onBlur = () => {
-      resetBuffer();
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("blur", onBlur);
-      if (noticeTimer.current) clearTimeout(noticeTimer.current);
-      resetBuffer();
-    };
-  }, [adminAssistData, cancelManualEntry, config, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard]);
+    },
+    [adminAssistData, flashScanNotice, handleSetupInput, kioskMode, manualMode, setupDialogOpen, setupStep, setupToken, submit, submitBathroom, unlockSetupWithPinOrCard],
+  );
+  const refuseWedgeRead = useCallback(() => flashScanNotice("Card not recognized — check the reader format."), [flashScanNotice]);
+  const switchModeByDigit = useCallback((digit: "1" | "2") => switchKioskModeRef.current(digit === "1" ? "attendance" : "bathroom"), []);
+  const clearScanNoticeTimer = useCallback(() => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+  }, []);
+  useCardReader({
+    scanner: config.scanner,
+    beforeKey: closeTypeCardIdOnEscape,
+    keyIsNotTheReaders,
+    onCard: routeWedgeCard,
+    onRefused: refuseWedgeRead,
+    manualEntryOpen: manualMode,
+    onLoneDigit: switchModeByDigit,
+    onStop: clearScanNoticeTimer,
+  });
 
   // Native scanner events: card taps arrive here from the Rust layer without
   // any focused webview input. The listener also feeds the card-setup dialog
@@ -1525,9 +1448,7 @@ export default function App() {
             setSetupNotice(null);
             setAdminPin("");
           }}
-          onAccountUnlocked={(token, expiresAt) => {
-            setSetupToken(token);
-            setSetupExpiresAt(expiresAt);
+          onAccountUnlocked={() => {
             setAdminPin("");
             setSetupNotice(null);
             setSetupStep("scan");

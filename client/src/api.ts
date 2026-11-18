@@ -38,6 +38,7 @@ import type {
 import { DEFAULT_OFFICE_IDENTITY, resolveOfficeDisplay } from '@rfid-attendance/shared';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
+import { adminSession } from './admin-session';
 import { errorCode, knownSentence, sentenceFor, setupErrorFrom } from './error-sentences';
 import { withAbort } from './http-api';
 import { renderInternPayslipPng } from './intern-payslip-image';
@@ -49,12 +50,8 @@ export { setupErrorFrom } from './error-sentences';
 type Failure = { success: false; error: { message: string } };
 const failure = (message: string): Failure => ({ success: false, error: { message } });
 
-let adminToken: string | null = null;
-let adminExpiresAt: string | null = null;
 /** The admin session token for admin-only commands (empty when locked). */
-export function nativeAdminSessionToken(): string {
-  return adminToken ?? '';
-}
+export const nativeAdminSessionToken = adminSession.token;
 
 export async function loadVoiceClipStates(): Promise<VoiceClipState[]> {
   try {
@@ -224,8 +221,7 @@ export async function unlockSetup(pin: string, signal?: AbortSignal): Promise<Se
   try {
     const response = await withAbort(signal, () => transport().setupUnlock(pin));
     if (!response.success) return response;
-    adminToken = response.token;
-    adminExpiresAt = response.expiresAt;
+    adminSession.open(response.token, response.expiresAt);
     return { success: true, setupToken: response.token, expiresAt: response.expiresAt };
   } catch (error) {
     return setupErrorFrom(error, 'INVALID_SETUP_PIN');
@@ -249,7 +245,7 @@ export async function upsertSetupUser(request: SetupUpsertRequest, setupToken: s
 }
 
 export async function lockSetup(setupToken: string, signal?: AbortSignal): Promise<void> {
-  adminToken = null;
+  adminSession.dropToken();
   await withAbort(signal, () => transport().setupLock(setupToken));
 }
 
@@ -335,8 +331,7 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
   try {
     const response = await transport().adminUnlock(pin);
     if (!response.success) return response;
-    adminToken = response.token;
-    adminExpiresAt = response.expiresAt;
+    adminSession.open(response.token, response.expiresAt);
     return { success: true, expiresAt: response.expiresAt };
   } catch (error) {
     return failure(sentenceFor('unlock', error, () => 'That is not a registered admin RFID card.'));
@@ -353,8 +348,7 @@ function accountError<T>(error: T): AccountFailure {
 export async function unlockAdminWithAccount(email: string, password: string): Promise<{ success: true; expiresAt: string; token: string; name: string } | AccountFailure> {
   try {
     const response = await transport().adminAccountUnlock(email, password);
-    adminToken = response.token;
-    adminExpiresAt = response.expiresAt;
+    adminSession.open(response.token, response.expiresAt);
     return { success: true, expiresAt: response.expiresAt, token: response.token, name: response.name };
   } catch (error) {
     return accountError(error);
@@ -373,18 +367,16 @@ export async function requestAccountPasswordReset(email: string): Promise<{ succ
 }
 
 export async function lockAdmin(): Promise<void> {
-  adminToken = null;
-  adminExpiresAt = null;
+  adminSession.close();
   await transport().adminLock();
 }
 
 export async function checkAdminSession(): Promise<string | null> {
   try {
     const session = await transport().adminGetSession(nativeAdminSessionToken());
-    return session.expiresAt ?? adminExpiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    return session.expiresAt ?? adminSession.get().expiresAt ?? new Date(Date.now() + 15 * 60 * 1000).toISOString();
   } catch {
-    adminToken = null;
-    adminExpiresAt = null;
+    adminSession.close();
     return null;
   }
 }
@@ -857,7 +849,7 @@ export async function setAutostartStatus(enabled: boolean): Promise<boolean> {
 }
 
 export function loadBathroomStatus(date?: string, signal?: AbortSignal): Promise<BathroomStatusResponse> {
-  return withAbort(signal, () => transport().bathroomGetStatus(adminToken ?? undefined, date));
+  return withAbort(signal, () => transport().bathroomGetStatus(adminSession.get().token ?? undefined, date));
 }
 
 export async function submitBathroomScan(
