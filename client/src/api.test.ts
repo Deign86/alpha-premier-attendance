@@ -458,12 +458,12 @@ describe('readable native errors (manual audit)', () => {
   it('shows a sentence, not INVALID_ADMIN_PIN, when the kiosk Admin setup unlock fails', async () => {
     desktop();
     vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('INVALID_ADMIN_PIN');
-    await expect(unlockSetup('000000')).resolves.toMatchObject({ success: false, error: { message: 'The administrator PIN or admin RFID card is invalid.' } });
+    await expect(unlockSetup('000000')).resolves.toMatchObject({ success: false, error: { message: 'That is not a registered admin RFID card.' } });
   });
 
-  it('says PIN unlock is paused after too many wrong PINs, on both unlock screens', async () => {
+  it('says typing is paused after too many wrong tries, on both unlock screens', async () => {
     desktop();
-    const locked = /too many wrong PINs.*5 minutes.*admin card/i;
+    const locked = /too many wrong tries.*5 minutes.*admin card/i;
     vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_PIN_LOCKED');
     await expect(unlockSetup('2468')).resolves.toMatchObject({ success: false, error: { message: expect.stringMatching(locked) } });
     vi.spyOn(tauriApi, 'setupUnlock').mockRejectedValueOnce('ADMIN_PIN_LOCKED');

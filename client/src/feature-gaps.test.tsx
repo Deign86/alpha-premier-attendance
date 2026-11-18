@@ -101,7 +101,7 @@ describe('kiosk feature gaps', () => {
       render(<SessionTestApp />);
       expect(await screen.findByText('Admin session expired. Please unlock again.')).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'Manage attendance' })).toBeInTheDocument();
-      expect(screen.getByLabelText(/administrator pin/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/admin rfid card/i)).toBeInTheDocument();
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -133,7 +133,7 @@ describe('kiosk feature gaps', () => {
 
     render(<App />);
     await user.click(await screen.findByRole('button', { name: /admin setup/i }));
-    await user.type(screen.getByLabelText(/administrator pin/i), '2468');
+    await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
     await screen.findByLabelText(/setup card id/i);
     act(() => handlers.forEach((handler) => handler('ABCD1234')));

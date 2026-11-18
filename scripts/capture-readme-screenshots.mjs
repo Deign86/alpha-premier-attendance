@@ -168,12 +168,9 @@ async function run() {
     await goto(`${WEB}/attendance`, `document.body.innerText.includes(${JSON.stringify(DEMO[0].fullName)})`, 'live attendance rows');
     await shot('live-attendance.png');
 
-    // admin locked + forgot PIN
-    await goto(`${WEB}/admin`, byText('button', 'Forgot PIN?'), 'admin unlock');
+    // admin locked
+    await goto(`${WEB}/admin`, byText('button', 'Sign in with your Keystone account'), 'admin unlock');
     await shot('admin-unlock.png');
-    await clickText('button', 'Forgot PIN?');
-    await waitFor(`document.body.innerText.includes('Email reset code')`, 'forgot PIN panel');
-    await shot('admin-forgot-pin.png');
 
     // admin unlocked (fresh load so the PIN panel state resets)
     await goto(`${WEB}/admin`, `document.querySelector('input[type="password"]')`, 'admin unlock form');

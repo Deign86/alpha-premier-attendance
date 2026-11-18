@@ -60,7 +60,7 @@ Paper logbooks and generic HR tools assume someone is watching the door. This ap
 - **One payroll authority** — every desktop payroll result comes from the Rust engine with dated policy versions, so a rule change never reprices past days.
 - **Boss-friendly live view** — read-only browser dashboard over the office Wi-Fi, no install.
 - **Audit-ready payroll** — semi-monthly cutoffs that freeze on finalize, one consolidated intern PDF per cutoff.
-- **Recoverable admin access** — admin PIN or RFID card, with a free "Forgot PIN?" email reset.
+- **Admin access by person** — an admin RFID card, or the person's own Keystone account (the CEO decides who); a forgotten password is reset by email.
 
 ## Download
 
@@ -122,20 +122,17 @@ Before 2026-10-01 a weekly grace applied (first arrival up to 08:15 each Manila 
 
 Attendance edits and backdated entries (for forgotten time-ins or time-outs) are saved together with their payroll: either both are written or neither is, and a time that cannot be priced is reported instead of saved. Times you do not touch keep their exact stamp.
 
-#### Admin PIN and Forgot PIN
+#### Opening the admin screens
 
-- A fresh install has **no PIN**: admin RFID cards unlock, and **Forgot PIN?** sets the first PIN.
-- **Forgot PIN?** (on the card-setup dialog and the `/admin` login) emails a one-time 6-digit code to the company inbox. The code lasts 15 minutes, allows 5 tries, and each request shows a request ID that matches the email subject. Enter the code and a new 6–12 digit PIN.
-- The PIN is stored only as a PBKDF2 hash in the local database, **per PC** — it is not synced between installs. Admin RFID cards are unaffected by PIN changes.
-- `admin_pin = ""` in `config.toml` turns admin access off; an explicit `admin_pin = "…"` there overrides an emailed PIN (the way back if the inbox is lost).
-- The email is sent by a free Google Apps Script web app (`scripts/pin-reset-mailer/`, deployed with `clasp`) whose recipient is fixed in the script; its URL is baked in at build time from the `ALPHA_PREMIER_PIN_RESET_URL` secret.
-
-<p align="center">
-  <img src="docs/screenshots/admin-unlock.png" width="800" alt="Administrator unlock screen with Forgot PIN link" />
-</p>
+- **Admin RFID card:** tap a card marked Admin Assist. Works with no internet.
+- **Keystone account:** *Sign in with your Keystone account*, with your own email and password. The CEO, and staff the CEO made an **attendance admin** in Keystone (User Accounts), get in; the audit log names who. **Forgot password?** sends Firebase's reset email. An account that signed in on this kiosk in the last 7 days still opens with no internet.
+- **There is no shared PIN.** It and its emailed reset code were removed in November 2026.
+- **IT's way back:** an explicit `admin_pin = "…"` in `config.toml` on the kiosk opens the admin screens when typed in the card field. Leave it unset in normal use. `admin_pin = ""` turns admin access off.
+- Five wrong tries pause typing for five minutes; tapping an admin card still works.
+- More: [docs/admin-sign-in.md](docs/admin-sign-in.md).
 
 <p align="center">
-  <img src="docs/screenshots/admin-forgot-pin.png" width="800" alt="Forgot PIN panel that emails a reset code" />
+  <img src="docs/screenshots/admin-unlock.png" width="800" alt="Administrator unlock screen" />
 </p>
 
 <p align="center">
@@ -321,7 +318,7 @@ shared/       Shared TypeScript API and LAN contracts
 src-tauri/    Tauri v2 app, Rust commands, services, SQLite, LAN server
 docs/         Deployment, hardware, payroll, migration guides
 docs/screenshots/  README screenshots captured from the running app
-scripts/      Dev, migration, voice, screenshot helpers, and the PIN-reset mailer (scripts/pin-reset-mailer/)
+scripts/      Dev, migration, voice and screenshot helpers
 evidence/     Automated verification output + native screenshots
 ```
 
@@ -333,7 +330,6 @@ Set these GitHub Actions secrets before releasing (the Release workflow fails if
 | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Sign installer and updater artifacts |
 | `ALPHA_PREMIER_EMBED_KEY_JSON` | Service-account key baked in for the intern-DTR Sheets export |
-| `ALPHA_PREMIER_PIN_RESET_URL` | Apps Script URL that emails Forgot-PIN codes |
 
 ## Contributing
 

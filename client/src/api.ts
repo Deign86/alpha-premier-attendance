@@ -189,12 +189,12 @@ export function setupErrorFrom<T>(error: T, fallback: SetupErrorCode): SetupErro
       return { success: false, error: { code: 'SETUP_SESSION_EXPIRED', message: 'Your setup session expired. Unlock setup again to continue.' } };
     case 'INVALID_SETUP_PIN':
     case 'INVALID_ADMIN_PIN':
-      return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'The administrator PIN or admin RFID card is invalid.' } };
+      return { success: false, error: { code: 'INVALID_SETUP_PIN', message: 'That is not a registered admin RFID card.' } };
     case 'ADMIN_DISABLED':
     case 'SETUP_DISABLED':
       return { success: false, error: { code: 'SETUP_DISABLED', message: 'Admin setup is disabled in the configuration.' } };
     case 'ADMIN_PIN_LOCKED':
-      return { success: false, error: { code: 'ADMIN_PIN_LOCKED', message: pinResetMessages.ADMIN_PIN_LOCKED } };
+      return { success: false, error: { code: 'ADMIN_PIN_LOCKED', message: accountMessages.ADMIN_PIN_LOCKED } };
     case 'SETUP_VALIDATION_ERROR':
       return { success: false, error: { code: 'SETUP_VALIDATION_ERROR', message: 'Some form fields are missing or invalid.' } };
     case 'USER_CONFLICT':
@@ -425,7 +425,7 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
       return { success: true, expiresAt: response.expiresAt };
     } catch (error) {
       const code = errorString(error);
-      const message = code === 'ADMIN_DISABLED' || code === 'ADMIN_PIN_LOCKED' ? pinResetMessages[code] : 'The administrator PIN is invalid.';
+      const message = code === 'ADMIN_DISABLED' || code === 'ADMIN_PIN_LOCKED' ? accountMessages[code] : 'That is not a registered admin RFID card.';
       return { success: false, error: { message } };
     }
   }
@@ -439,53 +439,10 @@ export async function unlockAdmin(pin: string): Promise<{ success: true; expires
   }
 }
 
-const pinResetMessages = {
-  ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
-  ADMIN_PIN_LOCKED: 'Too many wrong PINs. PIN unlock is paused for 5 minutes; an admin card still works.',
-  RESET_EMAIL_NOT_CONFIGURED: 'Email reset is not set up in this app build. Contact IT.',
-  RESET_EMAIL_FAILED: 'The reset email could not be sent. Check the internet connection and try again.',
-  RESET_RATE_LIMITED: 'A code was requested less than a minute ago. Use the newest reset email, or wait a minute and request another.',
-  RESET_EMAIL_RATE_LIMITED: 'Too many reset emails were sent this hour. Try again later, or use an admin RFID card.',
-  RESET_LOCKED: 'Too many wrong codes today. Try again tomorrow, use an admin RFID card, or ask IT to change admin_pin in config.toml.',
-  RESET_CODE_INVALID: 'That code is incorrect. Check the email and try again.',
-  RESET_CODE_EXPIRED: 'That code expired or was entered wrong too many times. Request a new code.',
-  INVALID_NEW_PIN: 'The new PIN must be 6 to 12 digits and cannot be a repeated or sequential number like 111111 or 123456.',
-} as const;
-
-type PinResetFailure = { success: false; error: { message: string } };
-
-function pinResetError<T>(error: T): PinResetFailure {
-  const code = errorString(error);
-  const known = Object.entries(pinResetMessages).find(([key]) => key === code);
-  return { success: false, error: { message: known ? known[1] : 'The PIN reset failed. Please try again.' } };
-}
-
-/** Forgot-PIN step 1: the desktop app emails a one-time code to the company inbox. */
-export async function requestAdminPinReset(): Promise<{ success: true; recipient: string; requestId: string; expiresAt: string } | PinResetFailure> {
-  if (!runningInTauri()) return { success: false, error: { message: 'PIN reset is only available in the desktop app.' } };
-  try {
-    const response = await tauriApi.adminPinResetRequest();
-    return { success: true, recipient: response.recipient, requestId: response.requestId, expiresAt: response.expiresAt };
-  } catch (error) {
-    return pinResetError(error);
-  }
-}
-
-/** Forgot-PIN step 2: verify the emailed code and set the new PIN. */
-export async function confirmAdminPinReset(code: string, newPin: string): Promise<{ success: true } | PinResetFailure> {
-  if (!runningInTauri()) return { success: false, error: { message: 'PIN reset is only available in the desktop app.' } };
-  try {
-    await tauriApi.adminPinResetConfirm(code.trim(), newPin);
-    return { success: true };
-  } catch (error) {
-    return pinResetError(error);
-  }
-}
-
 /** What the account sign-in says for each refusal the desktop app gives (src-tauri/src/services/admin_account.rs). */
 const accountMessages = {
   ADMIN_DISABLED: 'Administrator access is turned off on this kiosk.',
-  ADMIN_PIN_LOCKED: 'Too many wrong tries. Signing in is paused for 5 minutes; an admin card still works.',
+  ADMIN_PIN_LOCKED: 'Too many wrong tries. Typing is paused for 5 minutes; tapping an admin card still works.',
   ACCOUNT_SIGN_IN_UNAVAILABLE: 'Account sign-in is not set up in this app build. Use an admin card, or contact IT.',
   INVALID_ACCOUNT: 'The email or password is not right.',
   ACCOUNT_TURNED_OFF: 'This account has been turned off. Ask the CEO.',
@@ -504,13 +461,13 @@ function accountError<T>(error: T): AccountFailure {
 }
 
 /** Opens the admin screens with the person's own Keystone account (the CEO, or staff the CEO made an attendance admin). */
-export async function unlockAdminWithAccount(email: string, password: string): Promise<{ success: true; expiresAt: string; name: string } | AccountFailure> {
+export async function unlockAdminWithAccount(email: string, password: string): Promise<{ success: true; expiresAt: string; token: string; name: string } | AccountFailure> {
   if (!runningInTauri()) return DESKTOP_ONLY_ACCOUNT;
   try {
     const response = await tauriApi.adminAccountUnlock(email, password);
     nativeAdminToken = response.token;
     nativeAdminExpiresAt = response.expiresAt;
-    return { success: true, expiresAt: response.expiresAt, name: response.name };
+    return { success: true, expiresAt: response.expiresAt, token: response.token, name: response.name };
   } catch (error) {
     return accountError(error);
   }

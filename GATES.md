@@ -2542,3 +2542,26 @@ Agreed in the grill session (release 4): the admin screens open with an admin RF
   CHECK: `cd src-tauri && cargo test --lib` and `npm run lint:oxlint && npm run typecheck && npm test`
   EVIDENCE: `cargo test --lib`: 426 passed, the 3 known Linux-only path tests failed as on main; integration suites 11/18/75/36/58/24; oxlint 0 errors, typecheck clean, shared 41 / client 647 / server 208. No existing expectation changed. The desktop app was not run.
 - [ ] K8: Shown on the real kiosk with a real Keystone account.
+
+## The shared PIN is gone (owner instruction, 2026-11-18: "go do release 5")
+
+OWNS: `src-tauri/src/services/admin_pin.rs`, `setup_unlock_impl` in `src-tauri/src/lib.rs`, `client/src/App.tsx` (both unlock screens), `.github/workflows/release.yml`, `.github/workflows/macos-build.yml`
+
+Release 5 of the agreed plan, brought forward by the owner before a payroll cutoff had run on Firebase. Removed: the PIN set through an emailed code, the code flow itself, its two commands, its screen, the Apps Script source and the build secret it needed. Supersedes "Admin PIN email reset (2026-10-08)" (R1 to R3) and the reset-code parts of O12 above; their tests went with the code. Kept: admin cards; Keystone accounts; the five-wrong-tries pause; `admin_pin = ""` as the off switch; and an explicit `admin_pin` in config.toml as IT's way back, so a kiosk with no card to hand and no internet is not locked for good. Nothing on a kiosk is deleted: a stored PIN hash stays in settings, unread. Not part of this: the "old backup path" (release 3 turned it into the record path, so there is nothing separate left to remove) and the copy of the database kept at the cutover.
+
+- [x] X1: A PIN once set by email opens nothing and its stored hash is untouched; an admin card, an account and config.toml's explicit `admin_pin` still open; `admin_pin = ""` still turns admin off for cards and accounts; with no `admin_pin` nothing typed opens.
+  CHECK: `cd src-tauri && cargo test --lib a_pin_once_set_by_email`
+  EVIDENCE: `a_pin_once_set_by_email_opens_nothing_and_cards_and_the_config_way_back_still_do` passed (2026-11-18).
+- [x] X2: The wrong-tries pause and the password hash still hold on a bare database.
+  CHECK: `cd src-tauri && cargo test --test admin_pin_isolated`
+  EVIDENCE: `admin_pin_isolated`: 3 passed (was 11; the other 8 tested the emailed code and went with it).
+- [x] X3: No reset command, screen, script or build secret is left.
+  CHECK: `grep -rn "admin_pin_reset\|PinResetPanel\|PIN_RESET_URL\|pin-reset-mailer" src-tauri/src client/src .github scripts` prints nothing
+  EVIDENCE: no output (2026-11-18).
+- [x] X4: Both unlock screens offer the admin card and the Keystone account and nothing about a PIN; the kiosk's card-setup pop-up opens with an account too.
+  CHECK: `npm test -w client`
+  EVIDENCE: client 632 passed. `account-sign-in.test.tsx` 14 passed, with the card-setup pop-up opening by account and neither screen offering Forgot PIN. Selector changes only in older tests: the field is now labelled "Admin RFID card" (was "Administrator PIN or Admin RFID card") and two unlock messages were reworded.
+- [x] X5: Everything else still passes.
+  CHECK: `cd src-tauri && cargo test --lib && cargo test --no-fail-fast --tests -- --test-threads=1` and `npm run lint:oxlint && npm run typecheck && npm test`
+  EVIDENCE: `cargo test --lib`: 423 passed, the 3 known Linux-only path tests failed as on main; integration 3/18/75/36/58/24; oxlint 0 errors, typecheck clean, shared 41 / client 632 / server 208. Tests removed with the code they tested: three reset-code tests in `lib.rs`, eight in `admin_pin_isolated`, 16 in `pin-reset.test.tsx`. Found on the way and fixed, not skipped: `a_failed_release_write_does_not_wedge_the_sync_guard` failed about one full run in six because the guard's "my own leftover" marker was one value for the whole process and tests on separate databases overwrote each other's; it is now kept per `AppState`. 3 failures in 14 full runs before, 0 in 12 after. The desktop app was not run.
+- [ ] X6: The owner has archived the Apps Script deployment and deleted the `ALPHA_PREMIER_PIN_RESET_URL` secret.

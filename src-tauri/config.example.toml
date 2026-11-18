@@ -27,8 +27,9 @@ viewer_password_hash = ""
 viewer_session_minutes = 480
 sse_keep_alive_seconds = 15
 
-# Optional local admin PIN. Leave unset and use "Forgot PIN?" on the kiosk to set one
-# (6 to 12 digits, emailed reset code). Setting admin_pin = "" turns admin access off.
+# There is no shared admin PIN: the admin screens open with an admin RFID card or a person's own Keystone account
+# (docs/admin-sign-in.md). admin_pin here is IT's way back only: set it to open the admin screens by typing it in
+# the card field, and remove it again afterwards. Setting admin_pin = "" turns admin access off.
 # admin_pin = "choose-6-to-12-digits"
 admin_session_minutes = 15
 

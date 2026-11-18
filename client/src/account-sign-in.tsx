@@ -8,9 +8,9 @@ export const RESET_SENT =
   'If that address has a Keystone account, a reset email is on its way. Open it on any device, choose a new password, then sign in here.';
 
 interface AccountSignInPanelProps {
-  /** The admin screens are open until `expiresAt`. */
-  onUnlocked: (expiresAt: string) => void;
-  /** Back to the admin card and PIN. */
+  /** The admin screens are open until `expiresAt`; `token` is the session's, for the card-setup pop-up. */
+  onUnlocked: (expiresAt: string, token: string) => void;
+  /** Back to the admin card. */
   onBack: () => void;
 }
 
@@ -35,7 +35,7 @@ export function AccountSignInPanel({ onUnlocked, onBack }: AccountSignInPanelPro
       setError(response.error.message);
       return;
     }
-    onUnlocked(response.expiresAt);
+    onUnlocked(response.expiresAt, response.token);
   };
 
   const forgot = async () => {
@@ -74,7 +74,7 @@ export function AccountSignInPanel({ onUnlocked, onBack }: AccountSignInPanelPro
         Forgot password?
       </button>
       <button className="text-button" type="button" onClick={onBack} disabled={busy}>
-        Back to admin card or PIN
+        Back to admin card
       </button>
     </form>
   );

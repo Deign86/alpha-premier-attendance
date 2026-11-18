@@ -86,11 +86,11 @@ States: PENDING · RETRY · PROCESSING · SYNCED · DEAD. Counters: `attempts` (
 
 `src-tauri/src/database.rs`: `process_restore_request` :485 (the `ALPHA_PREMIER_RESTORE_FROM` variable is removed once read, :498), `restore_portable_backup` :625, `prune_backups` :375. Failed means the live database is untouched; pruning keeps the newest 10 regular backups and the newest 10 pre-restore snapshots separately; a relaunch never repeats an environment-requested restore.
 
-### M10 Admin session, setup unlock and PIN reset
+### M10 Admin session and unlock (card, Keystone account)
 
-Rust: one global session slot `state.rs:237`, unlock `lib.rs:4131`, check `admin_authorized` :5419 (`require_admin` :5411), wrong-PIN guard `services/admin_pin.rs` :73/:81 (stored in `app_settings`), reset code `complete_reset` :296. Client: setup dialog `client/src/App.tsx:529` / close :567 (attempt counter :351), admin page unlock :3636.
+Rust: one global session slot `state.rs:237`, unlock `lib.rs:4131`, check `admin_authorized` :5419 (`require_admin` :5411), wrong-tries guard `services/admin_pin.rs` (`unlock_locked`, `record_unlock_failure`; stored in `app_settings`), account sign-in `services/admin_account.rs`. The shared PIN and its reset code were removed on 2026-11-18. Client: setup dialog `client/src/App.tsx:529` / close :567 (attempt counter :351), admin page unlock :3636.
 
-States: locked · unlocking · unlocked(token, expiry) · PIN locked out (5 wrong PINs in a row → 5 minutes; survives a restart; admin cards still unlock; any success resets the count). Invariants: closing setup leaves it locked even if an unlock answers afterwards; while locked out a PIN is never checked; a stale or empty token is refused but never ends a live session (only expiry does); wrong-PIN attempts, reset-code attempts, the daily reset-failure cap and the resend cooldown are each one SQL statement, so concurrent requests all count.
+States: locked · unlocking · unlocked(token, expiry) · typing paused (5 wrong tries in a row, by account password or typed text → 5 minutes; survives a restart; admin cards still unlock; any success resets the count). Invariants: closing setup leaves it locked even if an unlock answers afterwards; while paused nothing typed is checked and Firebase is not asked; a stale or empty token is refused but never ends a live session (only expiry does); a wrong try is one SQL statement, so concurrent tries all count; a refusal from Firebase or Keystone forgets the account's remembered sign-in.
 
 ### M11 Kiosk scan pipeline (client)
 
