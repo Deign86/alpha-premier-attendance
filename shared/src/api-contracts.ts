@@ -38,9 +38,11 @@ export function isNoGraceDate(attendanceDate: string): boolean {
 }
 /** First day the once-a-week 15-minute grace applies again (must equal the Rust constant). */
 export const WEEKLY_GRACE_RESUME_DATE = '2026-11-16';
-/** Whether an intern can claim the weekly grace on this date (off from 2026-10-01 until it resumed). */
+/** First day the weekly grace is withdrawn again (must equal the Rust constant). */
+export const WEEKLY_GRACE_END_DATE = '2026-11-20';
+/** Whether an intern can claim the weekly grace on this date (before 2026-10-01, and 2026-11-16 to 2026-11-19). */
 export function hasWeeklyGrace(attendanceDate: string): boolean {
-  return !isNoGraceDate(attendanceDate) || attendanceDate >= WEEKLY_GRACE_RESUME_DATE;
+  return !isNoGraceDate(attendanceDate) || (attendanceDate >= WEEKLY_GRACE_RESUME_DATE && attendanceDate < WEEKLY_GRACE_END_DATE);
 }
 /** Official start of the workday. Arrivals at or before 08:00 are on time. */
 export const OFFICE_HOURS_START = '08:00';

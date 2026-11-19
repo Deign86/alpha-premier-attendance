@@ -1293,7 +1293,7 @@ function assertInternGraceClaimAllowed(grace: SheetInternGraceClaim): void {
   if (!parsedAttendanceDate.isValid || parsedAttendanceDate.toISODate() !== grace.attendanceDate) {
     throw new Error('Intern grace claim requires a valid attendance date');
   }
-  if (!hasWeeklyGrace(grace.attendanceDate)) throw new Error('Intern grace discontinued since 2026-10-01');
+  if (!hasWeeklyGrace(grace.attendanceDate)) throw new Error('Intern grace is not available on this date');
 }
 
 function graceRecord(grace: SheetInternGraceClaim): SheetInternGrace {

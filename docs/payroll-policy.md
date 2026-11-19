@@ -30,20 +30,20 @@ it in the Rust module and nowhere else.
 
 ## Rule catalog
 
-| Rule | V1_WEEKLY_GRACE | V2_NO_GRACE | V3_WEEKLY_GRACE | Code location |
-|------|-----------------|-------------|-----------------|---------------|
-| Effective dates | before 2026-10-01 | 2026-10-01 to 2026-11-15 | 2026-11-16 onward | `NO_GRACE_CUTOFF_DATE`, `WEEKLY_GRACE_RESUME_DATE`, `policy_for_date` |
-| Weekly grace window | 15 min after 08:00, one claim per week (`intern_grace`) | none | same as V1 | `PolicyRules::weekly_grace_window_minutes`; claim bookkeeping in `ensure_payroll` (`src-tauri/src/lib.rs`) |
-| Quarter-hour clamp | after 08:15:00 payable clock-in rounds up to next full hour | none, actual clock-in is payable | same as V2 | `PolicyRules::quarter_hour_clamp`; DTR display in `build_dtr_row_with_clamp` (`services/dtr_sync.rs`) |
-| Late-hour rounding | floor of clamped hours, minimum 1 | ceil of actual hours from 08:00, minimum 1 | same as V2 | `PolicyRules::late_rounding` |
-| Clock-in must be on `attendanceDate` (Manila) | not enforced | required | required | `PolicyRules::require_same_manila_date` |
-| Undertime with late hours | 8 h minus worked hours minus charged late hours | same as V1 | shortfall after the charged late hours end (08:01 is charged to 09:00), so an unused part of a late hour hides no early time-out | `PolicyRules::undertime_after_late_window` |
+| Rule | V1_WEEKLY_GRACE | V2_NO_GRACE | V3_WEEKLY_GRACE | V4_NO_GRACE | Code location |
+|------|-----------------|-------------|-----------------|-------------|---------------|
+| Effective dates | before 2026-10-01 | 2026-10-01 to 2026-11-15 | 2026-11-16 to 2026-11-19 | 2026-11-20 onward | `NO_GRACE_CUTOFF_DATE`, `WEEKLY_GRACE_RESUME_DATE`, `WEEKLY_GRACE_END_DATE`, `policy_for_date` |
+| Weekly grace window | 15 min after 08:00, one claim per week (`intern_grace`) | none | same as V1 | none (HR withdrew it again) | `PolicyRules::weekly_grace_window_minutes`; claim bookkeeping in `ensure_payroll` (`src-tauri/src/lib.rs`) |
+| Quarter-hour clamp | after 08:15:00 payable clock-in rounds up to next full hour | none, actual clock-in is payable | same as V2 | same as V2 | `PolicyRules::quarter_hour_clamp`; DTR display in `build_dtr_row_with_clamp` (`services/dtr_sync.rs`) |
+| Late-hour rounding | floor of clamped hours, minimum 1 | ceil of actual hours from 08:00, minimum 1 | same as V2 | same as V2 | `PolicyRules::late_rounding` |
+| Clock-in must be on `attendanceDate` (Manila) | not enforced | required | required | required | `PolicyRules::require_same_manila_date` |
+| Undertime with late hours | 8 h minus worked hours minus charged late hours | same as V1 | shortfall after the charged late hours end (08:01 is charged to 09:00), so an unused part of a late hour hides no early time-out | same as V3 | `PolicyRules::undertime_after_late_window` |
 
 Not date-gated (identical in every version): the intern daily rate, arrival at or
 after 12:00 is half-day undertime and never late, 18:00+ time-out caps to 17:00,
 lunch break exclusion, undertime ceil per hour.
 
-The shared TS constants `NO_GRACE_CUTOFF_DATE` and `WEEKLY_GRACE_RESUME_DATE` in
+The shared TS constants `NO_GRACE_CUTOFF_DATE`, `WEEKLY_GRACE_RESUME_DATE` and `WEEKLY_GRACE_END_DATE` in
 `shared/src/api-contracts.ts` must stay equal to the Rust constants while the
 client still reads them.
 

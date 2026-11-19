@@ -1752,7 +1752,7 @@ mod tests {
                 ("2026-11-17", "LATE", 10.0),
             ]
         );
-        // An open (not yet priced) 08:10 arrival the next week can still take that week's claim.
+        // From 2026-11-20 there is no grace: an open 08:10 arrival on Dec 1 is late with that week's claim unused.
         sqlx::query(
             "INSERT INTO attendance (attendance_id, attendance_date, user_id, rfid_uid, full_name, department, time_in, status, source, created_at, updated_at) \
              VALUES ('ATT-UT-OPEN', '2026-12-01', 'INT_UT', 'RFID-UT', 'Under Time', 'IT', '2026-12-01T08:10:00+08:00', 'WORKING', 'KIOSK', '2026-12-01', '2026-12-01')",
@@ -1771,7 +1771,7 @@ mod tests {
                 ("GRACE_PERIOD".to_string(), 0),
                 ("LATE".to_string(), 5),
                 ("ON_TIME".to_string(), 0),
-                ("GRACE_PERIOD".to_string(), 0),
+                ("LATE".to_string(), 10),
             ]
         );
 
@@ -1789,7 +1789,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
     }
 
-    /// MOCK FIRST CUTOFF (Dec 1-15, 2026; 11 weekdays; weekly-grace rules).
+    /// MOCK FIRST CUTOFF (Dec 1-15, 2026; 11 weekdays; V4_NO_GRACE rules).
     /// Eight interns with different time-in/time-out patterns; every expected
     /// figure below is worked out by hand from docs/payroll-policy.md, in pesos
     /// x 100. Weeks: Nov 30-Dec 6, Dec 7-13, Dec 14-20.
@@ -1825,13 +1825,12 @@ mod tests {
             absent: &'static [u32],
             /// Expected cutoff centavos: late, half-day + undertime, absence, net.
             expected: (i64, i64, i64, i64),
-            grace_claims: i64,
         }
         let interns = [
             // A: perfect attendance.
-            Intern { id: "A", days: &[], absent: &[], expected: (0, 0, 0, 88_000), grace_claims: 0 },
-            // B: in the grace window twice a week; the first is free, the second is one late hour.
-            //    Dec 14 08:01 is graced, Dec 15 08:00:59 is on time.
+            Intern { id: "A", days: &[], absent: &[], expected: (0, 0, 0, 88_000) },
+            // B: five arrivals from 08:01 to 08:15:01 are one late hour each (no weekly grace);
+            //    Dec 15 08:00:59 is on time.
             Intern {
                 id: "B",
                 days: &[
@@ -1840,11 +1839,10 @@ mod tests {
                     (14, "08:01:00", "17:00:00"), (15, "08:00:59", "17:00:00"),
                 ],
                 absent: &[],
-                expected: (2_000, 0, 0, 86_000),
-                grace_claims: 3,
+                expected: (5_000, 0, 0, 83_000),
             },
             // C: early time-outs. Dec 1 out 15:00 = 2h; Dec 2 out 16:59 = 1h; Dec 3 08:01-15:30
-            //    graced = 2h; Dec 4 08:05-15:30 grace used = 1 late hour + 2h. Staying to 17:30,
+            //    and Dec 4 08:05-15:30 = 1 late hour + 2h each (owed 09:00-17:00). Staying to 17:30,
             //    18:30 (capped) or arriving 07:30 changes nothing.
             Intern {
                 id: "C",
@@ -1854,8 +1852,7 @@ mod tests {
                     (7, "08:00:00", "17:30:00"), (8, "08:00:00", "18:30:00"), (9, "07:30:00", "17:00:00"),
                 ],
                 absent: &[],
-                expected: (1_000, 7_000, 0, 80_000),
-                grace_claims: 1,
+                expected: (2_000, 7_000, 0, 79_000),
             },
             // D: half-days and absences. Dec 1 morning half (40); Dec 2 13:00 afternoon half (40);
             //    Dec 7 12:00 sharp (40); Dec 8 09:01 = 2 late hours; Dec 9 11:59 = 4 late hours;
@@ -1869,36 +1866,32 @@ mod tests {
                 ],
                 absent: &[3, 4],
                 expected: (7_000, 16_000, 16_000, 49_000),
-                grace_claims: 0,
             },
-            // E: the week's grace was already used on Mon Nov 30 (previous cutoff), so
-            //    Tue Dec 1 08:05 is late; Dec 7 08:14 is a new week and is graced.
+            // E: Mon Nov 30 08:05 (previous cutoff) claims nothing, so Tue Dec 1 08:05 and
+            //    Dec 7 08:14 are one late hour each.
             Intern {
                 id: "E",
                 days: &[(1, "08:05:00", "17:00:00"), (7, "08:14:00", "17:00:00")],
                 absent: &[],
-                expected: (1_000, 0, 0, 87_000),
-                grace_claims: 2,
+                expected: (2_000, 0, 0, 86_000),
             },
-            // F: Dec 7 08:05 graced, Dec 9 08:07 late. (Corrected further down.)
+            // F: Dec 7 08:05 and Dec 9 08:07 late. (Corrected further down.)
             Intern {
                 id: "F",
                 days: &[(7, "08:05:00", "17:00:00"), (9, "08:07:00", "17:00:00")],
                 absent: &[],
-                expected: (1_000, 0, 0, 87_000),
-                grace_claims: 1,
+                expected: (2_000, 0, 0, 86_000),
             },
             // G: two near-empty days and nine absences: nothing left, never negative.
-            //    Dec 1 16:30-16:45 = 8 short hours; Dec 2 08:01-08:30 graced = 8 short hours.
+            //    Dec 1 16:30-16:45 = 8 short hours; Dec 2 08:01-08:30 = 1 late hour + 7 short hours.
             Intern {
                 id: "G",
                 days: &[(1, "16:30:00", "16:45:00"), (2, "08:01:00", "08:30:00")],
                 absent: &[3, 4, 7, 8, 9, 10, 11, 14, 15],
-                expected: (0, 16_000, 72_000, 0),
-                grace_claims: 1,
+                expected: (1_000, 15_000, 72_000, 0),
             },
-            // H: second-level boundaries. Dec 1 08:00:59 on time; Dec 2 08:01:00 graced;
-            //    Dec 3 08:14:59-16:00 grace used = 1 late hour + 1h; Dec 4 08:59:59 = 1 late hour;
+            // H: second-level boundaries. Dec 1 08:00:59 on time; Dec 2 08:01:00 = 1 late hour;
+            //    Dec 3 08:14:59-16:00 = 1 late hour + 1h; Dec 4 08:59:59 = 1 late hour;
             //    Dec 7 09:00:00 = 1 late hour; Dec 8 09:00:01 = 2 late hours.
             Intern {
                 id: "H",
@@ -1908,8 +1901,7 @@ mod tests {
                     (7, "09:00:00", "17:00:00"), (8, "09:00:01", "17:00:00"),
                 ],
                 absent: &[],
-                expected: (5_000, 1_000, 0, 82_000),
-                grace_claims: 1,
+                expected: (6_000, 1_000, 0, 81_000),
             },
         ];
 
@@ -2002,21 +1994,13 @@ mod tests {
             assert_eq!((slip.total_earnings_centavos, slip.adjustment_centavos, slip.deduction_adjustment_centavos), (88_000, 0, 0), "{user_id} payslip earnings");
             assert_eq!(slip.late_centavos + slip.halfday_centavos + slip.undertime_centavos + slip.absent_centavos, slip.total_deductions_centavos, "{user_id} payslip deductions");
             assert_eq!((slip.total_deductions_centavos, slip.net_pay_centavos), ((late + short + absence).min(88_000), net), "{user_id} payslip totals");
-            // One grace claim per week at most, and as many as expected.
+            // No grace claim and no Grace line under V4.
             let claims: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM intern_grace WHERE user_id = ?").bind(&user_id).fetch_one(&state.db).await.unwrap();
-            assert_eq!(claims, intern.grace_claims, "{user_id} grace claims");
-            let in_cutoff = if intern.id == "E" { intern.grace_claims - 1 } else { intern.grace_claims };
-            assert_eq!(grace_lines, in_cutoff, "{user_id} grace lines in the Breakdown");
-            let most_per_week: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(n), 0) FROM (SELECT COUNT(*) AS n FROM intern_grace WHERE user_id = ? GROUP BY week_start)")
-                .bind(&user_id)
-                .fetch_one(&state.db)
-                .await
-                .unwrap();
-            assert!(most_per_week <= 1, "{user_id} claimed grace twice in one week");
+            assert_eq!((claims, grace_lines), (0, 0), "{user_id} grace claims and Grace lines");
             // Every day's pay is within 0..=80 and equals 80 less its deductions.
             let bad_days: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM payroll WHERE user_id = ? AND (daily_pay_centavos < 0 OR daily_pay_centavos > 8000 \
-                 OR daily_pay_centavos != 8000 - late_deduction_centavos - half_day_deduction_centavos OR policy_version != 'V3_WEEKLY_GRACE')",
+                 OR daily_pay_centavos != 8000 - late_deduction_centavos - half_day_deduction_centavos OR policy_version != 'V4_NO_GRACE')",
             )
             .bind(&user_id)
             .fetch_one(&state.db)
@@ -2034,7 +2018,7 @@ mod tests {
         }
         assert_eq!(
             statuses,
-            [("ON_TIME", 0), ("GRACE_PERIOD", 0), ("LATE", 15), ("LATE", 60), ("LATE", 60), ("LATE", 61)]
+            [("ON_TIME", 0), ("LATE", 1), ("LATE", 15), ("LATE", 60), ("LATE", 60), ("LATE", 61)]
                 .map(|(status, minutes)| (status.to_string(), minutes))
         );
 
@@ -2046,22 +2030,22 @@ mod tests {
         let claims_after: Vec<(String, String)> = sqlx::query_as("SELECT user_id, attendance_id FROM intern_grace ORDER BY 1, 2").fetch_all(&state.db).await.unwrap();
         assert_eq!(claims_after, claims_before, "regenerating moved a grace claim");
 
-        // Correction: F's graced Dec 7 arrival is fixed to 08:00. The claim is released and
-        // the Dec 9 08:07 arrival of the same week takes it; nobody else's pay moves.
+        // Correction: F's Dec 7 arrival is fixed to 08:00. Dec 9 08:07 stays late (no claim
+        // to pass on); nobody else's pay moves.
         sqlx::query("UPDATE attendance SET time_in = '2026-12-07T08:00:00+08:00' WHERE attendance_id = 'ATT-F-7'").execute(&state.db).await.unwrap();
         sqlx::query("DELETE FROM payroll_cutoffs").execute(&state.db).await.unwrap();
         generate().await.unwrap();
         let corrected = figures(&cutoff_rows().await);
         for ((user_id, got), (_, before)) in corrected.iter().zip(&expected) {
-            let want = if user_id == "INT_F" { (0, 0, 0, 88_000) } else { *before };
+            let want = if user_id == "INT_F" { (1_000, 0, 0, 87_000) } else { *before };
             assert_eq!(*got, want, "{user_id} after F's correction");
         }
-        let f_claim: Vec<String> = sqlx::query_scalar("SELECT attendance_id FROM intern_grace WHERE user_id = 'INT_F'").fetch_all(&state.db).await.unwrap();
-        assert_eq!(f_claim, ["ATT-F-9"]);
+        let f_claims: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM intern_grace WHERE user_id = 'INT_F'").fetch_one(&state.db).await.unwrap();
+        assert_eq!(f_claims, 0);
 
         // Out of order: intern I forgot to time out on Mon Dec 7 (08:05), so Tue Dec 8 (08:06)
-        // was priced first and took the week's grace. The admin then completes Monday.
-        // Exactly one of the two days is graced and one is a late hour, and it stays that way.
+        // was priced first. The admin then completes Monday. Both days are one late hour
+        // whichever is priced first, and stay that way.
         upsert_user_record(
             &state.db, "INT_I", "RFID-I", "Mock I", Some("IT"), "ACTIVE", "INTERN", Some("MALE"), Some(0),
             Some("INTERN_STANDARD"), None, "EMPLOYEE", "2026-08-01T00:00:00Z",
@@ -2098,10 +2082,10 @@ mod tests {
             .fetch_all(&state.db)
             .await
             .unwrap();
-            assert_eq!(days, [("ATT-I-7".to_string(), 0, 1_000), ("ATT-I-8".to_string(), 1, 0)], "round {round}");
-            // 2 days worked, 9 absent: 880 - 720 absent - 10 late.
+            assert_eq!(days, [("ATT-I-7".to_string(), 0, 1_000), ("ATT-I-8".to_string(), 0, 1_000)], "round {round}");
+            // 2 days worked, 9 absent: 880 - 720 absent - 20 late.
             let net: i64 = sqlx::query_scalar("SELECT net_pay_centavos FROM payroll_cutoffs WHERE employee_id = 'INT_I'").fetch_one(&state.db).await.unwrap();
-            assert_eq!(net, 15_000, "round {round}");
+            assert_eq!(net, 14_000, "round {round}");
         }
 
         state.db.close().await;
