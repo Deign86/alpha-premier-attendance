@@ -107,7 +107,7 @@ Rules are versioned by date (see [docs/payroll-policy.md](docs/payroll-policy.md
 | Office hours | 08:00–17:00, `Asia/Manila` |
 | On time | Arrival up to 08:00:59 is on time; earlier arrival earns nothing extra |
 | Late | From 08:01:00 every started hour late costs the hourly late deduction, measured from 08:00 to the actual tap (08:08 → 1 hour, 09:30 → 2 hours) |
-| Weekly grace (from 2026-11-16) | Once per Manila Monday–Sunday week, the first arrival from 08:01:00 to 08:15:00 is free: no late hour, payable from 08:00. Later ones that week are late |
+| Weekly grace (2026-11-16 to 2026-11-19 only) | Once per Manila Monday–Sunday week, the first arrival from 08:01:00 to 08:15:00 was free: no late hour, payable from 08:00. Withdrawn again from 2026-11-20: every arrival from 08:01:00 is late |
 | Undertime | Each short hour of the 8-hour day costs one hour of pay (the daily rate ÷ 8), never counting hours already charged as late. From 2026-11-16 it is counted from the end of the charged late hours, so 08:01 in and 15:30 out is 1 late hour + 2 undertime hours (before that date the late hour's unused minutes could hide one) |
 | Afternoon arrival | Arriving at or after 12:00 books a half-day shortfall as undertime, not late hours |
 | Late time-out | A time-out at or after 18:00 is saved as `LATE_TIMEOUT` and flagged for correction; payroll prices the day with the time-out capped at 17:00 |

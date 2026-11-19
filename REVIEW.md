@@ -26,7 +26,7 @@ Check only the rows whose trigger appears in the diff.
 | `src-tauri/src/services/intern_payroll.rs` | The property tests (`property_*`, `differential_*`) still pass unchanged. If one was edited, the pull request names the rule that changed and why the old property no longer holds. |
 | Late, grace, undertime or half-day rules anywhere else (`lib.rs`, `reporting/`, `client/`, `shared/`) | Important: day pricing, arrival status and Breakdown day lines belong only in `services/intern_payroll.rs`. Other code reads the stored result. |
 | `shared/payroll-fixtures.json` | Values came from running the Rust engine, not by hand; `shared/src/payroll-fixtures.pin.test.ts` is updated in the same change. |
-| `WEEKLY_GRACE_RESUME_DATE` or `NO_GRACE_CUTOFF_DATE` | The Rust constant and the TypeScript constant in `shared/src/api-contracts.ts` are equal. |
+| `WEEKLY_GRACE_RESUME_DATE`, `WEEKLY_GRACE_END_DATE` or `NO_GRACE_CUTOFF_DATE` | The Rust constant and the TypeScript constant in `shared/src/api-contracts.ts` are equal. |
 | Payslip or payroll totals (`reporting/mod.rs`, `intern-payslip-image.ts`, payroll parts of `App.tsx`) | Total earnings minus total deductions equals net pay, and nothing that lowers pay is shown on the earnings side. |
 | `payroll_cutoffs` writes or finalize (`lib.rs`) | A finalized cutoff and the days inside it are never re-priced or rewritten. |
 | `src-tauri/db/migrations/` | New numbered file only; no edit to a released migration; old rows still load. |

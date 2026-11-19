@@ -2605,3 +2605,21 @@ OWNS: `client/src` (transport, error sentences, the `App.tsx` split), `src-tauri
 - [x] V5 (R6 remainder): code identifiers say "card or code" where they are not wire names; the manual no longer describes the PIN reset; the unreferenced scanner code is gone and old config.toml files still load.
   CHECK: `grep -rn "adminPin\|unlockSetupWithPinOrCard\|unlockWithPinOrRfid\|audit_admin_pin_event\|lan\.admin_pin" client/src src-tauri/src` prints nothing; `grep -c "Forgot PIN" docs/user-manual/manual.html` prints 0; `cd src-tauri && CARGO_INCREMENTAL=0 cargo test --no-fail-fast`; `npm run lint && npm run typecheck && npm test`
   EVIDENCE: no output; 0; cargo lib 423 passed 0 failed (431 less the eight `normalize` tests), other targets 18/77/36/60/24/3; shared 32, client 622, server 208; lint and typecheck clean (2026-11-19). Wire names kept: the three `*_PIN*` error codes, the `pin` argument of `setup_unlock`, the `admin_pin` config key. The desktop app was not run.
+
+## Weekly grace off again from 2026-11-20 (policy V4_NO_GRACE, 2026-11-19)
+
+OWNS: `src-tauri/src/services/intern_payroll.rs` (new version, tests), `shared/src/api-contracts.ts` (`hasWeeklyGrace`), the legacy server's grace-claim message, docs that state the grace dates. HR asked for the weekly grace to stop going forward; days through 2026-11-19 keep the policy they were priced under.
+
+- [x] G1: A day on or after 2026-11-20 prices under `V4_NO_GRACE` (V3 rules with no grace window): an 08:01 arrival with a free claim is late, no `intern_grace` row is written, and the Arrival status is never `GRACE_PERIOD`. V1, V2, V3 rules and dates are unchanged.
+  CHECK: `cd src-tauri && cargo test --lib intern_payroll` and `cargo test --lib grace_stops`
+  EXPECT: all pass; `released_policy_versions_are_frozen` lists four versions with V1-V3 rows unedited.
+  EVIDENCE: `weekly_grace_stops_on_november_20_and_earlier_days_keep_it`, `policy_for_date_pins_boundary_dates`, `released_policy_versions_are_frozen` ok; `mock_first_cutoff_with_varied_days_matches_hand_computed_pay` re-priced by hand under V4 (no claims, no Grace lines) ok (2026-11-19).
+- [x] G2: The differential prices 20,000 days on a V4 date and the same days on a V3 date with no claim and finds them equal.
+  CHECK: `cd src-tauri && cargo test --lib differential_v4`
+  EVIDENCE: `differential_v4_matches_v3_without_a_grace_claim` ok (2026-11-19).
+- [x] G3: The TypeScript `hasWeeklyGrace` agrees with Rust on both boundaries (2026-11-19 on, 2026-11-20 off).
+  CHECK: `npm test` (shared `hasWeeklyGrace` case)
+  EVIDENCE: shared 32 passed (2026-11-19).
+- [x] G4: Repo gates pass.
+  CHECK: `npm run lint:oxlint && npm run typecheck && npm test`; `cd src-tauri && cargo test --no-fail-fast`
+  EVIDENCE: oxlint exit 0 (2 warnings in untouched files), typecheck clean; shared 32, client 622, server 208; cargo lib 425 passed 0 failed, other targets 18/79/36/62/24/3 (2026-11-19). The desktop app was not run.

@@ -93,6 +93,8 @@ export const CUSTOM_PRONUNCIATION_OVERRIDES: Record<string, string> = {
   'APG-2026-121': 'John Ma-rey Raphael Rodriguez',
   // Filipino "Bar-to-lo-meh"; the v2 voice otherwise says "Bartholomew".
   'APG-2026-123': 'Lord Bar-to-lo-meh',
+  // Chinese "Lu Ang", not "Lwang" (as in "loose").
+  'APG-2026-124': 'Prince Lorenz Lu Ang',
   // Spanish "ll": "Se-vil-yah", not "Se-vil-la".
   'APG-2026-125': 'Kyla Mae Sevilyah',
 };

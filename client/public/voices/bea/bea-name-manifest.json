@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "voice": "bea",
   "engine": "voicestudio-bea-cloned",
-  "generatedAt": "2026-11-17T02:47:24.291Z",
+  "generatedAt": "2026-11-19T01:05:18.493Z",
   "profiles": {
     "APG-2026-019": {
       "personId": "APG-2026-019",
@@ -347,12 +347,12 @@
     "APG-2026-124": {
       "personId": "APG-2026-124",
       "displayName": "Prince Lorenz P. Luang",
-      "normalizedSpeechText": "Prince Lorenz Luang",
+      "normalizedSpeechText": "Prince Lorenz Lu Ang",
       "employeeType": "INTERN",
       "voiceProfileVersion": "voicestudio-bea-v3",
       "audioFile": "/voices/bea/names/APG-2026-124.mp3",
-      "generatedAt": "2026-11-05T00:17:41.083325Z",
-      "audioHash": "4d27e19d66f961a02661efa993a50660eb783b2a15d437dab2fca79d38d4ba28"
+      "generatedAt": "2026-11-19T01:05:18.493Z",
+      "audioHash": "55bf540e060941662782f9391e4778969b3bfe507d09fd14bb27ef0614ef1cec"
     },
     "APG-2026-125": {
       "personId": "APG-2026-125",

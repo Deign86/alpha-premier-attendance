@@ -156,8 +156,8 @@ describe('normalizeName', () => {
 });
 
 describe('weekly grace resume date', () => {
-  it('is off from 2026-10-01 through 2026-11-15 and back on 2026-11-16', () => {
-    expect(['2026-09-30', '2026-10-01', '2026-11-15', '2026-11-16', '2027-01-04'].map(hasWeeklyGrace)).toEqual([true, false, false, true, true]);
+  it('is off from 2026-10-01 through 2026-11-15, on 2026-11-16 through 2026-11-19, and off again from 2026-11-20', () => {
+    expect(['2026-09-30', '2026-10-01', '2026-11-15', '2026-11-16', '2026-11-19', '2026-11-20', '2027-01-04'].map(hasWeeklyGrace)).toEqual([true, false, false, true, true, false, false]);
   });
 });
 
