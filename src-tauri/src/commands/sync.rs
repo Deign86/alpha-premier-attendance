@@ -625,15 +625,15 @@ pub(crate) async fn admin_sheets_nuke_resync(
     token: String,
     confirm: bool,
 ) -> Result<serde_json::Value, String> {
-    admin_sheets_nuke_resync_impl(&state, &token, confirm).await
+    let admin = Admin::check(&state, &token).await?;
+    admin_sheets_nuke_resync_impl(&state, &admin, confirm).await
 }
 
 pub(crate) async fn admin_sheets_nuke_resync_impl(
     state: &AppState,
-    token: &str,
+    _admin: &Admin,
     confirm: bool,
 ) -> Result<serde_json::Value, String> {
-    Admin::check(state, token).await?;
     if !confirm {
         return Err("RESYNC_CONFIRMATION_REQUIRED".into());
     }
@@ -656,55 +656,11 @@ pub(crate) async fn admin_sheets_nuke_resync_impl(
     Ok(result)
 }
 
-/// Idempotency key of a queued sync row. InternGrace DELETE rows key on the
-/// person (the sheet's key column), so the grace id keeps two of them
-/// apart: with one shared key the second delete overwrote the first (O3).
-pub(crate) fn sync_idempotency_key(
-    table_name: &str,
-    row_id: &str,
-    operation: &str,
-    payload: &serde_json::Value,
-) -> String {
-    match payload.get("graceId").and_then(|v| v.as_str()) {
-        Some(grace_id) if table_name == "InternGrace" && operation == "DELETE" => {
-            format!("{table_name}:{row_id}:{operation}:{grace_id}")
-        }
-        _ => format!("{table_name}:{row_id}:{operation}"),
-    }
-}
-
-/// Queue a Sheets sync row on the caller's connection: inside its
-/// transaction the row commits with the change it mirrors (O4). A failed
-/// queue write still never fails the caller.
-pub(crate) async fn enqueue_sync_on(
-    state: &AppState,
-    conn: &mut sqlx::SqliteConnection,
-    table_name: &str,
-    row_id: &str,
-    operation: &str,
-    payload: &serde_json::Value,
-) {
-    let now = chrono::Utc::now().to_rfc3339();
-    let idempotency_key = sync_idempotency_key(table_name, row_id, operation, payload);
-    let persisted = crate::services::sheets_sync::requeue_sync_row_on(
-        conn,
-        table_name,
-        row_id,
-        operation,
-        &payload.to_string(),
-        &now,
-        &idempotency_key,
-    )
-    .await;
-    if !persisted && table_name == crate::services::dtr_sync::DTR_TABLE_NAME {
-        state.mark_dtr_persistence_failure().await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::test_support::*;
+    use crate::services::sync_queue::enqueue_sync_on;
     
 
     #[tokio::test]
@@ -951,7 +907,7 @@ mod tests {
         crate::state::sync_guard_try_acquire(&state.db, state.sync_in_progress.as_ref(), "background_sync")
             .await
             .unwrap();
-        let err = admin_sheets_nuke_resync_impl(&state, &token, true).await.unwrap_err();
+        let err = admin_sheets_nuke_resync_impl(&state, &admin(&state, &token).await, true).await.unwrap_err();
         assert!(err.starts_with("DTR_SYNC_IN_PROGRESS"), "{err}");
         // The refused wipe left the running pass's guard alone.
         assert!(state.sync_in_progress.load(std::sync::atomic::Ordering::SeqCst));

@@ -23,7 +23,11 @@ import {
   stopSpeech,
   testVoice,
 } from './ttsService';
-import { tauriApi } from '../tauri-api';
+import { transport } from '../transport';
+
+// The service asks `transport()` for the voice commands. These tests run in a browser tab (jsdom), so they stand in
+// for the adapter it is given there; the desktop app answers the same members from Rust.
+const voiceBackend = transport();
 
 describe('ttsService', () => {
   beforeEach(() => {
@@ -457,7 +461,7 @@ describe('ttsService', () => {
   describe('announceAttendance', () => {
     it('triggers speech when TTS is enabled with Piper', async () => {
       const spy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await announceAttendance({
@@ -490,7 +494,7 @@ describe('ttsService', () => {
         callOrder.push(`cloned:${url}`);
         return true;
       });
-      const ttsSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockImplementation(async (text, opts) => {
+      const ttsSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockImplementation(async (text, opts) => {
         callOrder.push(`piper:${text}:${opts?.engine ?? 'default'}`);
         return { success: true, engineUsed: 'piper' };
       });
@@ -524,7 +528,7 @@ describe('ttsService', () => {
 
     it('plays pure static cloned file directly when no employee name is present', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const ttsSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const ttsSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceAttendance({
         attendanceType: 'time_in',
@@ -548,7 +552,7 @@ describe('ttsService', () => {
     });
 
     it('does not speak when TTS is disabled', async () => {
-      const spy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const spy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceAttendance({
         employeeName: 'Ada Lovelace',
@@ -567,7 +571,7 @@ describe('ttsService', () => {
     });
 
     it('catches and isolates backend errors so caller never throws', async () => {
-      vi.spyOn(tauriApi, 'ttsSpeak').mockRejectedValue(
+      vi.spyOn(voiceBackend, 'ttsSpeak').mockRejectedValue(
         new Error('Backend audio device failure'),
       );
 
@@ -594,7 +598,7 @@ describe('ttsService', () => {
   describe('announceBathroom', () => {
     it('plays single pre-rendered cloned file directly for anonymous bathroom checkout when cloned-bea is active', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceBathroom({
         action: 'CHECKOUT',
@@ -620,7 +624,7 @@ describe('ttsService', () => {
 
     it('plays 100% Ma\'am Bea voice for checkout of employee with cloned profile without triggering Piper or double suffix', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceBathroom({
         action: 'CHECKOUT',
@@ -649,7 +653,7 @@ describe('ttsService', () => {
 
     it('plays 100% Ma\'am Bea voice for return of employee with cloned profile', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceBathroom({
         action: 'RETURN',
@@ -679,7 +683,7 @@ describe('ttsService', () => {
 
     it('plays hybrid splicing (cloned prefix -> live Piper name) for checkout of employee without cloned profile without duplicate suffix', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await announceBathroom({
         action: 'CHECKOUT',
@@ -706,7 +710,7 @@ describe('ttsService', () => {
 
     it('triggers speech with bathroom phrase when enabled with Piper', async () => {
       const spy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await announceBathroom({
@@ -730,7 +734,7 @@ describe('ttsService', () => {
     });
 
     it('does not speak when TTS is disabled', async () => {
-      const spy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const spy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceBathroom({
         action: 'RETURN',
@@ -762,7 +766,7 @@ describe('ttsService', () => {
   describe('announceScanError', () => {
     it('plays single pre-rendered cloned file directly for scan errors when cloned-bea is active', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceScanError({
         errorCode: 'UNKNOWN_RFID_CARD',
@@ -787,7 +791,7 @@ describe('ttsService', () => {
 
     it('speaks scan error phrase when enabled with Piper', async () => {
       const spy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'system' });
 
       const result = await announceScanError({
@@ -815,7 +819,7 @@ describe('ttsService', () => {
         'EMP-01': { personId: 'EMP-01', displayName: 'John Doe', audioFile: '/voices/bea/names/EMP-01.mp3' },
       });
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceScanError({
         errorCode: 'BATHROOM_KEY_IN_USE',
@@ -844,7 +848,7 @@ describe('ttsService', () => {
     it('falls back to Piper only for the holder name when no cloned clip exists', async () => {
       setNameManifest(null);
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await announceScanError({
         errorCode: 'BATHROOM_KEY_IN_USE',
@@ -873,7 +877,7 @@ describe('ttsService', () => {
   describe('testVoice and stopSpeech', () => {
     it('speaks verification phrase in testVoice', async () => {
       const spy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'system' });
 
       const result = await testVoice();
@@ -885,13 +889,13 @@ describe('ttsService', () => {
     });
 
     it('calls ttsStop in stopSpeech', async () => {
-      const spy = vi.spyOn(tauriApi, 'ttsStop').mockResolvedValue();
+      const spy = vi.spyOn(voiceBackend, 'ttsStop').mockResolvedValue();
       await stopSpeech();
       expect(spy).toHaveBeenCalled();
     });
 
     it('queries live status in getTtsStatus', async () => {
-      vi.spyOn(tauriApi, 'ttsStatus').mockResolvedValue({
+      vi.spyOn(voiceBackend, 'ttsStatus').mockResolvedValue({
         enabled: true,
         engine: 'auto',
         piperAvailable: true,
@@ -927,7 +931,7 @@ describe('ttsService', () => {
 
     it('plays pre-rendered attendance audio directly when cloned-bea is selected', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceAttendance({
         attendanceType: 'time_in',
@@ -964,7 +968,7 @@ describe('ttsService', () => {
 
     it('plays pre-rendered bathroom audio directly when cloned-bea is selected', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceBathroom({
         action: 'CHECKOUT',
@@ -993,7 +997,7 @@ describe('ttsService', () => {
 
     it('plays pre-rendered admin assist audio directly when cloned-bea is selected', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceAdminAssist({
         enabled: true,
@@ -1017,7 +1021,7 @@ describe('ttsService', () => {
 
     it('plays pre-rendered scan error audio directly when cloned-bea is selected', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceScanError({
         errorCode: 'UNKNOWN_RFID_CARD',
@@ -1044,7 +1048,7 @@ describe('ttsService', () => {
 
     it('plays pre-rendered test voice audio directly when cloned-bea is selected', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const backendSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const backendSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await testVoice({
         enabled: true,
@@ -1069,7 +1073,7 @@ describe('ttsService', () => {
     it('falls back gracefully to backend Piper/SAPI when phrase contains dynamic text', async () => {
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio');
       const backendSpy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await speakText('Custom non-cached employee announcement for Ada Lovelace.', {
@@ -1093,7 +1097,7 @@ describe('ttsService', () => {
     it('falls back gracefully to backend Piper/SAPI when audio playback fails', async () => {
       vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(false);
       const backendSpy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'system' });
 
       const result = await speakText('Your time in has been recorded.', {
@@ -1117,7 +1121,7 @@ describe('ttsService', () => {
         new Error('MediaDecodeError'),
       );
       const backendSpy = vi
-        .spyOn(tauriApi, 'ttsSpeak')
+        .spyOn(voiceBackend, 'ttsSpeak')
         .mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await speakText('Your time in has been recorded.', {
@@ -1141,7 +1145,7 @@ describe('ttsService', () => {
         usr_intern_123: { audioFile: '/voices/bea/names/usr_intern_123.mp3' },
       });
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak');
+      const piperSpy = vi.spyOn(voiceBackend, 'ttsSpeak');
 
       const result = await announceAttendance({
         attendanceType: 'time_in',
@@ -1170,7 +1174,7 @@ describe('ttsService', () => {
     it('plays cloned prefix -> live Piper name -> cloned suffix for future registrations without cached name', async () => {
       setNameManifest(null);
       const playSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
-      const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+      const piperSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await announceAttendance({
         attendanceType: 'time_in',
@@ -1204,7 +1208,7 @@ describe('ttsService', () => {
         .mockResolvedValueOnce(true)
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true);
-      const piperSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+      const piperSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       const result = await announceAttendance({
         attendanceType: 'time_in',
@@ -1242,7 +1246,7 @@ describe('ttsService', () => {
           return url !== dummyUrl;
         });
 
-      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({
+      const ttsSpeakSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockResolvedValue({
         success: true,
         engineUsed: 'piper',
       });
@@ -1277,7 +1281,7 @@ describe('ttsService', () => {
 
     it('handles backend failure on fallback without throwing', async () => {
       vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(false);
-      vi.spyOn(tauriApi, 'ttsSpeak').mockRejectedValue(new Error('Audio device offline'));
+      vi.spyOn(voiceBackend, 'ttsSpeak').mockRejectedValue(new Error('Audio device offline'));
 
       const result = await speakText('Your time in has been recorded.', {
         engine: 'cloned-bea',
@@ -1294,7 +1298,7 @@ describe('ttsService', () => {
 
     it('stops active cloned voice playback when stopSpeech is called', async () => {
       const stopClonedSpy = vi.spyOn(clonedBeaVoice, 'stopClonedBeaAudio');
-      const stopBackendSpy = vi.spyOn(tauriApi, 'ttsStop').mockResolvedValue();
+      const stopBackendSpy = vi.spyOn(voiceBackend, 'ttsStop').mockResolvedValue();
 
       await stopSpeech();
 
@@ -1386,7 +1390,7 @@ describe('ttsService', () => {
     it('cancels spliced attendance announcement when stopSpeech is called mid-playback', async () => {
       vi.spyOn(clonedBeaVoice, 'getClonedBeaAudioUrl').mockImplementation((phrase) => `/voices/${phrase}.mp3`);
       vi.spyOn(clonedBeaVoice, 'getClonedBeaNameAudioUrl').mockReturnValue('/voices/names/Ada.mp3');
-      vi.spyOn(tauriApi, 'ttsStop').mockResolvedValue();
+      vi.spyOn(voiceBackend, 'ttsStop').mockResolvedValue();
 
       let resolvePrefixPlay: (val: boolean) => void = () => {};
       const prefixPromise = new Promise<boolean>((resolve) => {
@@ -1421,7 +1425,7 @@ describe('ttsService', () => {
       vi.spyOn(clonedBeaVoice, 'getClonedBeaNameAudioUrl').mockImplementation((id) =>
         id === 'EMP-CLONED' ? '/voices/names/Ada.mp3' : null,
       );
-      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
+      const ttsSpeakSpy = vi.spyOn(voiceBackend, 'ttsSpeak').mockResolvedValue({ success: true, engineUsed: 'piper' });
 
       let resolveAdaName: (val: boolean) => void = () => {};
       const adaNamePromise = new Promise<boolean>((resolve) => {
@@ -1492,7 +1496,7 @@ describe('ttsService', () => {
 
       const playAudioSpy = vi.spyOn(clonedBeaVoice, 'playClonedBeaAudio').mockResolvedValue(true);
 
-      const ttsSpeakSpy = vi.spyOn(tauriApi, 'ttsSpeak')
+      const ttsSpeakSpy = vi.spyOn(voiceBackend, 'ttsSpeak')
         .mockImplementationOnce(() => {
           resolvePerson2CanStart();
           return person1PiperPromise;

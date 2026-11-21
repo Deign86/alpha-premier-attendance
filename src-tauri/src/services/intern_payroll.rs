@@ -269,6 +269,42 @@ fn clock_short(stamp: &str) -> Option<String> {
         .map(|value| value.with_timezone(&Manila).format("%-I:%M %p").to_string())
 }
 
+/// A stored cutoff breakdown as a screen is given it. A late line written
+/// before `payableTimeIn` existed (cutoffs generated before v0.2.56) gets the
+/// key here, from its own date and the clock-in it stored, by the rule
+/// [`calculate`] priced the day with. The stored text is not changed; a
+/// breakdown with nothing to fill is returned as it is.
+pub fn breakdown_with_payable_time_in(stored: &str) -> String {
+    let Ok(mut breakdown) = serde_json::from_str::<serde_json::Value>(stored) else {
+        return stored.to_string();
+    };
+    let mut filled = false;
+    let lines = breakdown.get_mut("deductions").and_then(|value| value.as_array_mut());
+    for line in lines.into_iter().flatten() {
+        let Some(line) = line.as_object_mut() else { continue };
+        let charged_late = line.get("category").and_then(|v| v.as_str()) == Some("LATE")
+            && line.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0;
+        if !charged_late || line.contains_key("payableTimeIn") {
+            continue;
+        }
+        let payable = (|| {
+            let date = line.get("date")?.as_str()?;
+            let clock = chrono::NaiveTime::parse_from_str(line.get("timeIn")?.as_str()?, "%I:%M %p").ok()?;
+            let actual = Manila
+                .from_local_datetime(&NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?.and_time(clock))
+                .single()?
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let shown = payable_time_in(date, &actual, false)?;
+            (shown != actual).then(|| clock_short(&shown)).flatten()
+        })();
+        if let Some(payable) = payable {
+            line.insert("payableTimeIn".into(), payable.into());
+            filled = true;
+        }
+    }
+    if filled { breakdown.to_string() } else { stored.to_string() }
+}
+
 /// The cutoff Breakdown lines for one priced day: a weekly-grace or late line,
 /// then an undertime / half-day line. Amounts come from the stored engine
 /// result; nothing is re-priced here.
@@ -458,6 +494,30 @@ pub fn calculate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stored_late_line_is_filled_only_where_the_days_policy_clamps() {
+        let stored = |date: &str, time_in: &str| {
+            serde_json::json!({"deductions":[{"date":date,"category":"LATE","timeIn":time_in,"amount":10.0}]}).to_string()
+        };
+        let payable = |date: &str, time_in: &str| {
+            let read: serde_json::Value =
+                serde_json::from_str(&breakdown_with_payable_time_in(&stored(date, time_in))).unwrap();
+            read["deductions"][0]["payableTimeIn"].as_str().map(str::to_string)
+        };
+        assert_eq!(payable("2026-09-30", "9:20 AM"), Some("10:00 AM".to_string()));
+        // From 2026-10-01 no policy clamps, and the old client showed no chip either.
+        assert_eq!(payable("2026-10-01", "09:20 AM"), None);
+        assert_eq!(payable("2026-11-17", "09:20 AM"), None);
+        assert_eq!(payable("2026-09-30", "—"), None);
+        // Nothing to fill: the stored text comes back byte for byte.
+        let untouched = stored("2026-10-01", "09:20 AM");
+        assert_eq!(breakdown_with_payable_time_in(&untouched), untouched);
+        assert_eq!(breakdown_with_payable_time_in("attendance report"), "attendance report");
+        // A line that already has the key, even as null, is left to the engine that wrote it.
+        let written = r#"{"deductions":[{"date":"2026-09-30","category":"LATE","timeIn":"09:20 AM","payableTimeIn":null,"amount":10.0}]}"#;
+        assert_eq!(breakdown_with_payable_time_in(written), written);
+    }
 
     #[test]
     fn policy_for_date_pins_boundary_dates() {

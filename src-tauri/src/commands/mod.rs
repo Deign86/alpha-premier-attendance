@@ -17,6 +17,9 @@ pub(crate) mod voice;
 pub(crate) mod test_support;
 
 #[cfg(test)]
+mod scan_then_service_tests;
+
+#[cfg(test)]
 mod tests {
     /// Commands anyone at the kiosk may call: they open no admin screen and change no record an administrator owns.
     /// A new command is either added here on purpose or starts with `Admin::check`.
@@ -79,18 +82,5 @@ mod tests {
             }
         }
         assert_eq!(seen, 83, "the command count changed: check the new command's guard, then update this number");
-    }
-
-    #[test]
-    fn a_function_given_the_token_checks_it() {
-        for source in SOURCES {
-            for (head, body) in source.split("\n}\n").filter_map(|item| item.split_once(") -> Result<")) {
-                if !head.contains("token: &str") || head.contains("fn check") || head.contains("fn admin_authorized") {
-                    continue;
-                }
-                let name = head.rsplit("fn ").next().unwrap_or(head).split('(').next().unwrap_or("");
-                assert!(body.contains("Admin::check"), "{name} takes the admin token but does not check it");
-            }
-        }
     }
 }

@@ -13,11 +13,12 @@ import { resetDtrSyncGuardForTests, setDtrSyncHealthSnapshot } from './dtr-sync-
 import { formatTime } from './format';
 import type { BathroomActiveHolder, BathroomScanResponse, BathroomScanSuccessResponse, PayrollCutoffRecord, ScannerStatus } from '@rfid-attendance/shared';
 
-let rfidHandlers: Array<(uid: string) => void> = [];
 let scannerStatusHandlers: Array<(status: ScannerStatus) => void> = [];
 
-function emitRfidScan(uid: string) {
-  rfidHandlers.forEach((h) => h(uid));
+/** A card tap as the keyboard-wedge reader sends it: the card's characters as key presses, then Enter, to whatever has the focus. */
+function tapCard(uid: string) {
+  const target = document.activeElement ?? document.body;
+  for (const key of [...uid, 'Enter']) fireEvent.keyDown(target, { key });
 }
 
 function emitScannerStatus(status: ScannerStatus) {
@@ -63,15 +64,10 @@ function mockFetch<T extends { success: boolean }>(response?: T) {
 beforeEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  rfidHandlers = [];
   scannerStatusHandlers = [];
+  // The reader only reads while the kiosk window has the focus, as it has when a card is tapped.
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
 
-  vi.spyOn(tauriApi, 'listenForGlobalRfid').mockImplementation((handler) => {
-    rfidHandlers.push(handler);
-    return Promise.resolve(() => {
-      rfidHandlers = rfidHandlers.filter((h) => h !== handler);
-    });
-  });
   vi.spyOn(tauriApi, 'listenForScannerStatus').mockImplementation((handler) => {
     scannerStatusHandlers.push(handler);
     return Promise.resolve(() => {
@@ -429,13 +425,13 @@ describe('RFID kiosk', () => {
 
   it('submits a native scan event and shows the employee photo', async () => {
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/attendance/scan',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ rfidUid: '04A1B2C3', source: 'RFID' }),
+        body: JSON.stringify({ rfidUid: '0004112233', source: 'RFID' }),
       }),
     ));
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
@@ -443,12 +439,12 @@ describe('RFID kiosk', () => {
   });
 
 
-  it('detaches the native card listener even when the kiosk unmounts before it attached', async () => {
+  it('detaches a native listener even when the kiosk unmounts before it attached', async () => {
     // O11: the listener attached after cleanup and stayed live (StrictMode, quick re-subscribes).
     mockFetch();
     let attach: (fn: () => void) => void = () => {};
     const unlisten = vi.fn();
-    vi.spyOn(tauriApi, 'listenForGlobalRfid').mockImplementation(() => new Promise<() => void>((resolve) => { attach = resolve; }));
+    vi.spyOn(tauriApi, 'listenForScannerStatus').mockImplementation(() => new Promise<() => void>((resolve) => { attach = resolve; }));
     const { unmount } = render(<App />);
     unmount();
     await act(async () => {
@@ -471,7 +467,7 @@ describe('RFID kiosk', () => {
       },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
@@ -501,7 +497,7 @@ describe('RFID kiosk', () => {
       },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
@@ -532,7 +528,7 @@ describe('RFID kiosk', () => {
       },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
@@ -557,7 +553,7 @@ describe('RFID kiosk', () => {
       attendance: { ...successResponse.attendance, timeOut: '2026-07-28T17:00:00+08:00', status: 'COMPLETED' },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
@@ -582,7 +578,7 @@ describe('RFID kiosk', () => {
       attendance: { ...successResponse.attendance, timeOut: '2026-07-28T18:05:00+08:00', status: 'LATE_TIMEOUT' },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     await screen.findByText('Ada Lovelace');
     expect(ttsService.announceAttendance).toHaveBeenCalledWith({
       employeeName: 'Ada Lovelace',
@@ -605,13 +601,13 @@ describe('RFID kiosk', () => {
       requestId: 'req-admin',
       action: 'ADMIN_ASSIST',
       message: 'Admin assist card accepted. Select an employee to record attendance.',
-      adminCard: { rfidUid: 'ADMIN-01', label: 'Front Desk Admin' },
+      adminCard: { rfidUid: '0009000001', label: 'Front Desk Admin' },
       activeEmployees: [
         { userId: 'EMP-001', fullName: 'Ada Lovelace', department: 'Engineering', photoUrl: null },
       ],
     });
     render(<App />);
-    act(() => emitRfidScan('ADMIN-01'));
+    act(() => tapCard('0009000001'));
     expect(await screen.findByText(/assisted attendance/i)).toBeInTheDocument();
     expect(ttsService.announceAdminAssist).toHaveBeenCalled();
   });
@@ -623,7 +619,7 @@ describe('RFID kiosk', () => {
       error: { code: 'UNKNOWN_RFID_CARD', message: 'This RFID card is not registered.' },
     });
     render(<App />);
-    act(() => emitRfidScan('UNREGISTERED'));
+    act(() => tapCard('0009999999'));
     expect(await screen.findByText('Card not registered')).toBeInTheDocument();
     expect(ttsService.announceScanError).toHaveBeenCalledWith({
       errorCode: 'UNKNOWN_RFID_CARD',
@@ -631,25 +627,11 @@ describe('RFID kiosk', () => {
     });
   });
 
-  it('shows the four native scanner states truthfully', async () => {
+  it('shows the reader as Ready once the desktop layer reports it', async () => {
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    const status = (state: 'connected' | 'scanning' | 'offline' | 'error', message: string): ScannerStatus => ({
-      state,
-      message,
-      detail: null,
-      mode: 'keyboard',
-      paused: false,
-    });
-
-    act(() => emitScannerStatus(status('connected', 'Waiting for card')));
+    act(() => emitScannerStatus({ state: 'connected', message: 'Waiting for card', detail: null, mode: 'keyboard', paused: false }));
     expect(screen.getByText(/^Ready$/)).toBeInTheDocument();
-    act(() => emitScannerStatus(status('scanning', 'Scan received')));
-    expect(screen.getByText(/^Scanning$/)).toBeInTheDocument();
-    act(() => emitScannerStatus(status('offline', 'Scanner unavailable')));
-    expect(screen.getByText(/^Offline$/)).toBeInTheDocument();
-    act(() => emitScannerStatus(status('error', 'Invalid scan format')));
-    expect(screen.getByText(/^Error$/)).toBeInTheDocument();
   });
 
   it('header pill follows the scan: Reading…, then Done or Error, then back to Ready', async () => {
@@ -671,7 +653,7 @@ describe('RFID kiosk', () => {
     const scannerPill = () => document.querySelector('.scanner-pill');
     await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'));
 
-    act(() => emitRfidScan('0000000001'));
+    act(() => tapCard('0000000001'));
     await waitFor(() => expect(scannerPill()).toHaveTextContent('Reading…'));
     await act(async () => {
       // SAFETY: Resolve scan promise with mock Response
@@ -681,7 +663,7 @@ describe('RFID kiosk', () => {
     expect(scannerPill()).toHaveClass('is-connected');
     await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'), { timeout: 4_000 });
 
-    act(() => emitRfidScan('0000000002'));
+    act(() => tapCard('0000000002'));
     await waitFor(() => expect(scannerPill()).toHaveTextContent('Reading…'));
     await act(async () => {
       // SAFETY: Resolve scan promise with mock error Response
@@ -709,7 +691,7 @@ describe('RFID kiosk', () => {
     render(<App />);
     const scannerPill = () => document.querySelector('.scanner-pill');
     await waitFor(() => expect(scannerPill()).toHaveTextContent('Ready'));
-    act(() => emitRfidScan('0000000003'));
+    act(() => tapCard('0000000003'));
     expect(await screen.findByText(/already scanned/i)).toBeInTheDocument();
     expect(scannerPill()).toHaveTextContent('Done');
     expect(scannerPill()).not.toHaveClass('is-error');
@@ -731,11 +713,11 @@ describe('RFID kiosk', () => {
       return new Promise<Response>((resolve) => { resolveScan = resolve; });
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(await screen.findByText(/reading card/i)).toBeInTheDocument();
 
     // A second card during processing is dropped until the first completes.
-    act(() => emitRfidScan('DEADBEEF'));
+    act(() => tapCard('0003735928'));
     expect(scanCalls).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -808,7 +790,7 @@ describe('RFID kiosk', () => {
     render(<App />);
     // Let the config load so the (mocked) short reset delay is in effect.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-    act(() => emitRfidScan('DEADBEEF'));
+    act(() => tapCard('0003735928'));
     expect(await screen.findByText('Card not registered')).toBeInTheDocument();
     expect(screen.getByText('Please ask an admin to set up this card.')).toBeInTheDocument();
     expect(screen.queryByText('UNKNOWN RFID CARD')).not.toBeInTheDocument();
@@ -823,7 +805,7 @@ describe('RFID kiosk', () => {
       error: { code: 'INACTIVE_USER', message: 'This user is inactive.' },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(await screen.findByText('Card inactive')).toBeInTheDocument();
     expect(screen.getByText('Please see an admin to turn this card back on.')).toBeInTheDocument();
     expect(screen.queryByText('INACTIVE USER')).not.toBeInTheDocument();
@@ -836,7 +818,7 @@ describe('RFID kiosk', () => {
       error: { code: 'RATE_LIMITED', message: 'Too many scans. Please wait a moment.' },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(await screen.findByText('Too many scans. Please wait a moment.')).toBeInTheDocument();
     expect(screen.queryByText('RATE LIMITED')).not.toBeInTheDocument();
   });
@@ -873,7 +855,7 @@ describe('RFID kiosk', () => {
   it('shows what was recorded in an action band instead of the stock confirmation', async () => {
     mockFetch({ ...successResponse, message: 'Time In recorded successfully.' });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     const result = await screen.findByTestId('kiosk-result-success');
     expect(within(result).getByText('Time in')).toBeInTheDocument();
     expect(within(result).getByText(/9:00/)).toBeInTheDocument();
@@ -883,14 +865,14 @@ describe('RFID kiosk', () => {
   it('keeps a server message that says more than the stock confirmation', async () => {
     mockFetch({ ...successResponse, message: 'Lunch break started. Tap again when you are back.' });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(await screen.findByText('Lunch break started. Tap again when you are back.')).toBeInTheDocument();
   });
 
   it('shows initials when the intern has no ID photo', async () => {
     mockFetch({ ...successResponse, user: { ...successResponse.user, photoUrl: null } });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(await screen.findByLabelText('ID photo unavailable')).toHaveTextContent('AL');
   });
 
@@ -901,7 +883,7 @@ describe('RFID kiosk', () => {
       error: { code: 'DUPLICATE_SCAN', message: 'This card was scanned too recently.' },
     });
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(await screen.findByText('Already scanned')).toBeInTheDocument();
     expect(screen.queryByText('DUPLICATE SCAN')).not.toBeInTheDocument();
   });
@@ -917,7 +899,7 @@ describe('RFID kiosk', () => {
       return answer ? answer(input, init) : Promise.reject(new Error('no mock'));
     });
     render(<App />);
-    act(() => emitRfidScan('OFFLINE01'));
+    act(() => tapCard('0008000001'));
     expect(within(await screen.findByTestId('kiosk-result-unreachable')).getByText("Can't reach the system")).toBeInTheDocument();
     expect(localStorage.getItem('alpha_premier_offline_scans')).toBeNull();
   });
@@ -926,7 +908,7 @@ describe('RFID kiosk', () => {
     mockFetch();
     vi.spyOn(api, 'submitScan').mockRejectedValue(new Error('network down'));
     render(<App />);
-    act(() => emitRfidScan('04A1B2C3'));
+    act(() => tapCard('0004112233'));
     expect(within(await screen.findByTestId('kiosk-result-unreachable')).getByText("Can't reach the system")).toBeInTheDocument();
   });
 
@@ -1302,24 +1284,19 @@ describe('ScannerDiagnostics', () => {
     expect(screen.getByText('The card reader is checked only in the desktop app on the attendance PC.')).toBeInTheDocument();
   });
 
-  it('follows the desktop reader: checking, missing, failing and ready', async () => {
+  it('follows the desktop reader: checking, then ready', async () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true });
     try {
       render(<ScannerDiagnostics />);
       expect(screen.getByRole('button', { name: 'Checking…' })).toHaveClass('is-checking');
       await waitFor(() => expect(scannerStatusHandlers.length).toBeGreaterThan(0));
-      const status = (state: ScannerStatus['state']): ScannerStatus => ({ state, message: 'Reader update', detail: null, mode: 'keyboard', paused: false });
-      act(() => emitScannerStatus(status('offline')));
-      const missing = screen.getByRole('button', { name: 'Reader missing' });
-      expect(missing).toHaveClass('is-missing');
-      // The tone stays on the button while its details are open (styles.css keeps those words coral then too).
-      fireEvent.click(missing);
-      expect(missing).toHaveAttribute('aria-expanded', 'true');
-      expect(missing).toHaveClass('reader-status-button', 'is-missing');
-      act(() => emitScannerStatus(status('error')));
-      expect(screen.getByRole('button', { name: 'Reader error' })).toHaveClass('is-error');
-      act(() => emitScannerStatus(status('connected')));
-      expect(screen.getByRole('button', { name: 'Reader ready' })).toHaveClass('is-ready');
+      act(() => emitScannerStatus({ state: 'connected', message: 'Reader update', detail: null, mode: 'keyboard', paused: false }));
+      const ready = screen.getByRole('button', { name: 'Reader ready' });
+      expect(ready).toHaveClass('is-ready');
+      // The tone stays on the button while its details are open.
+      fireEvent.click(ready);
+      expect(ready).toHaveAttribute('aria-expanded', 'true');
+      expect(ready).toHaveClass('reader-status-button', 'is-ready');
     } finally {
       Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
     }
@@ -1367,11 +1344,13 @@ describe('ScannerDiagnostics', () => {
 
 describe('hidden-window scan notification', () => {
   it('notifies only when the window is hidden/unfocused and the scan succeeds', async () => {
-    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     const notifySpy = vi.spyOn(tauriApi, 'notifyScanSuccess').mockResolvedValue();
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    act(() => emitRfidScan('0123456789'));
+    // The reader types only into a focused window; the window loses the focus before the answer arrives.
+    act(() => tapCard('0123456789'));
+    hasFocus.mockReturnValue(false);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/attendance/scan',
       expect.objectContaining({ body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }) }),
@@ -1385,7 +1364,7 @@ describe('hidden-window scan notification', () => {
     const notifySpy = vi.spyOn(tauriApi, 'notifyScanSuccess').mockResolvedValue();
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    act(() => emitRfidScan('0123456789'));
+    act(() => tapCard('0123456789'));
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/attendance/scan',
       expect.objectContaining({ body: JSON.stringify({ rfidUid: '0123456789', source: 'RFID' }) }),
@@ -2480,7 +2459,7 @@ describe('Admin Attendance Corrections', () => {
             success: true,
             action: 'ADMIN_ASSIST',
             adminCard: {
-              rfidUid: 'ADMIN_CARD_UID',
+              rfidUid: '0009000002',
               label: 'Duty Manager',
             },
             activeEmployees: [
@@ -2507,7 +2486,7 @@ describe('Admin Attendance Corrections', () => {
 
     // Emit Admin RFID scan
     act(() => {
-      emitRfidScan('ADMIN_CARD_UID');
+      tapCard('0009000002');
     });
 
     // Assisted Attendance modal should appear
@@ -2536,7 +2515,7 @@ describe('Admin Attendance Corrections', () => {
     });
 
     expect(capturedScanBody).toMatchObject({
-      rfidUid: 'ADMIN_CARD_UID',
+      rfidUid: '0009000002',
       source: 'ADMIN_ASSISTED_SCAN',
       targetUserId: 'EMP-01',
       reason: 'Forgot RFID card',
@@ -2604,14 +2583,14 @@ describe('Admin Attendance Corrections', () => {
         json: async () => ({
           success: true,
           action: 'ADMIN_ASSIST',
-          adminCard: { rfidUid: 'ADMIN_CARD_UID', label: 'Duty Manager' },
+          adminCard: { rfidUid: '0009000002', label: 'Duty Manager' },
           activeEmployees: [{ userId: 'EMP-01', fullName: 'Bob Smith', department: 'Operations' }],
         }),
       } as Response;
     });
     render(<App />);
     act(() => {
-      emitRfidScan('ADMIN_CARD_UID');
+      tapCard('0009000002');
     });
     expect(await screen.findByText(/Auto-cancels in 25s/i)).toBeInTheDocument();
     await act(async () => {
@@ -2638,7 +2617,7 @@ describe('Admin Attendance Corrections', () => {
           json: async () => ({
             success: true,
             action: 'ADMIN_ASSIST',
-            adminCard: { rfidUid: 'ADMIN_CARD_UID', label: 'Duty Manager' },
+            adminCard: { rfidUid: '0009000002', label: 'Duty Manager' },
             activeEmployees: [{ userId: 'EMP-01', fullName: 'Bob Smith', department: 'Operations' }],
           }),
         } as Response;
@@ -2649,7 +2628,7 @@ describe('Admin Attendance Corrections', () => {
     const user = userEvent.setup();
     render(<App />);
     act(() => {
-      emitRfidScan('ADMIN_CARD_UID');
+      tapCard('0009000002');
     });
     expect(await screen.findByRole('dialog', { name: /assisted attendance/i })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /bob smith/i }));
@@ -3183,10 +3162,9 @@ describe('Admin Attendance Corrections', () => {
     expect(screen.getByText(/01 unlock/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/scan admin card/i)).toBeInTheDocument();
 
-    // Tap registered Admin RFID card
-    await act(async () => {
-      for (const h of rfidHandlers) h('ADDE23');
-    });
+    // Tap registered Admin RFID card: the reader types it into the focused card field and presses Enter
+    expect(screen.getByPlaceholderText(/scan admin card/i)).toHaveFocus();
+    await user.keyboard('ADDE23{Enter}');
 
     // Automatically transitions to Step 02 Scan card
     await screen.findByLabelText(/setup card id/i);
@@ -3239,10 +3217,9 @@ describe('Admin Attendance Corrections', () => {
     expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/scan admin card/i)).toBeInTheDocument();
 
-    // Tap registered Admin RFID card
-    await act(async () => {
-      for (const h of rfidHandlers) h('ADDE23');
-    });
+    // Tap registered Admin RFID card: the reader types it into the focused card field and presses Enter
+    expect(screen.getByPlaceholderText(/scan admin card/i)).toHaveFocus();
+    await userEvent.setup().keyboard('ADDE23{Enter}');
 
     // Unlocks Admin panel directly, opening on Attendance corrections
     expect(capturedAdminUnlockBody).toEqual({ pin: 'ADDE23' });
@@ -3475,11 +3452,11 @@ describe('Admin Attendance Corrections', () => {
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
     await user.click(screen.getByRole('button', { name: /type card id/i }));
     // Enter records, like the Record button.
-    await user.type(screen.getByLabelText(/manual card id/i), 'FEMALE-CARD-01{Enter}');
+    await user.type(screen.getByLabelText(/manual card id/i), '0006000001{Enter}');
     expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Female key taken\s*Jane Smith.*Taken\s*10:00 AM/);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/bathroom/scan',
-      expect.objectContaining({ body: JSON.stringify({ rfidUid: 'FEMALE-CARD-01', source: 'MANUAL_TEST' }) }),
+      expect.objectContaining({ body: JSON.stringify({ rfidUid: '0006000001', source: 'MANUAL_TEST' }) }),
     );
     await waitFor(() => expect(screen.getByRole('button', { name: /type card id/i })).toBeEnabled(), { timeout: 1_500 });
     await user.click(screen.getByRole('button', { name: /type card id/i }));
@@ -3539,7 +3516,7 @@ describe('Admin Attendance Corrections', () => {
     expect(await screen.findByTestId('bathroom-kiosk-view')).toBeInTheDocument();
 
     // 1. Scan for checkout
-    act(() => emitRfidScan('MALE-CARD-01'));
+    act(() => tapCard('0005000001'));
     expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent(/Male key taken\s*John Doe.*Taken\s*10:00 AM/);
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'CHECKOUT',
@@ -3567,7 +3544,7 @@ describe('Admin Attendance Corrections', () => {
       timestamp: '2026-08-28T10:00:00+08:00',
     };
     // Tapped while John's ID card still shows: it is recorded and replaces the card.
-    act(() => emitRfidScan('FEMALE-CARD-01'));
+    act(() => tapCard('0006000001'));
     await waitFor(() => expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Female key returned\s*Jane Smith.*Taken\s*9:50 AM\s*Returned\s*10:00 AM/));
     expect(ttsService.announceBathroom).toHaveBeenCalledWith({
       action: 'RETURN',
@@ -3593,7 +3570,7 @@ describe('Admin Attendance Corrections', () => {
         timeOut: '2026-08-28T10:00:00+08:00',
       },
     };
-    act(() => emitRfidScan('MALE-CARD-02'));
+    act(() => tapCard('0005000002'));
     expect(await screen.findByText(/currently in use by/i)).toBeInTheDocument();
     expect(ttsService.announceScanError).toHaveBeenCalledWith({
       errorCode: 'BATHROOM_KEY_IN_USE',
@@ -3828,7 +3805,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
       expect(within(screen.getByTestId('bathroom-kiosk-card-male')).getByText('Key is Available')).toBeInTheDocument();
 
       day.maleActive = paolo;
-      act(() => emitRfidScan('MALE-CARD-07'));
+      act(() => tapCard('0005000007'));
       await settle();
       const card = screen.getByTestId('kiosk-result-success');
       expect(card).toHaveAttribute('role', 'status');
@@ -3874,7 +3851,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
       expect(screen.getByTestId('bathroom-kiosk-holder-male')).toHaveTextContent('Paolo Aquino');
 
       day.maleActive = null;
-      act(() => emitRfidScan('MALE-CARD-07'));
+      act(() => tapCard('0005000007'));
       await settle();
       const card = screen.getByTestId('kiosk-result-success');
       expect(within(card).getByText(/Male key returned/)).toBeInTheDocument();
@@ -3907,7 +3884,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
       expect(female.querySelector('.bathroom-kiosk-glow, .is-leaving')).toBeNull();
 
       day.maleActive = paolo;
-      act(() => emitRfidScan('MALE-CARD-07'));
+      act(() => tapCard('0005000007'));
       await settle();
       // The free box fades out (hidden from screen readers) under the new in-use box; the edge glows.
       const leaving = male.querySelector('.available-prompt-box.is-leaving');
@@ -3930,7 +3907,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
-    act(() => emitRfidScan('MALE-CARD-07'));
+    act(() => tapCard('0005000007'));
     expect(await screen.findByTestId('kiosk-result-success')).toHaveTextContent('Paolo Aquino');
     await user.click(screen.getByTestId('kiosk-mode-attendance'));
     expect(screen.queryByTestId('kiosk-result-success')).not.toBeInTheDocument();
@@ -3949,7 +3926,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     await user.click(screen.getByTestId('kiosk-mode-bathroom'));
-    act(() => emitRfidScan('UNKNOWN-CARD-01'));
+    act(() => tapCard('0007000001'));
     expect(await screen.findByText('Card not registered')).toBeInTheDocument();
     // The 1 key switches the same way as the tab.
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -3971,13 +3948,13 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
       fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
       await settle();
 
-      act(() => emitRfidScan('MALE-CARD-07'));
+      act(() => tapCard('0005000007'));
       await act(async () => { await vi.advanceTimersByTimeAsync(250); });
       expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Male key takenPaolo Aquino/);
 
       // Paolo's answer came at 200ms; Bea taps 3.9s after it, while his ID card still shows.
       await act(async () => { await vi.advanceTimersByTimeAsync(3_850); });
-      act(() => emitRfidScan('FEMALE-CARD-06'));
+      act(() => tapCard('0006000006'));
       // Bea's request is still out when Paolo's card would have been reset (4s).
       await act(async () => { await vi.advanceTimersByTimeAsync(300); });
       expect(screen.getByTestId('kiosk-result-success')).toHaveTextContent(/Female key takenBea Castillo/);
@@ -4021,7 +3998,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
       render(<App />);
       fireEvent.click(screen.getByTestId('kiosk-mode-bathroom'));
       await settle();
-      act(() => emitRfidScan('MALE-CARD-07'));
+      act(() => tapCard('0005000007'));
       await act(async () => { await vi.advanceTimersByTimeAsync(100); });
       expect(screen.getByRole('heading', { name: 'Reading card…' })).toBeInTheDocument();
 
@@ -4055,7 +4032,7 @@ describe('Kiosk Bathroom Key Log: the ID card after a tap, key cards and Type ca
       });
       render(<App />);
       await settle();
-      act(() => emitRfidScan('DEADBEEF'));
+      act(() => tapCard('0003735928'));
       await act(async () => { await vi.advanceTimersByTimeAsync(100); });
       expect(screen.getByRole('heading', { name: 'Reading card…' })).toBeInTheDocument();
 
@@ -6063,19 +6040,18 @@ describe('Admin page: the saved session is checked before the unlock card', () =
     }
   });
 
-  it('shows the unlock card only after the check finds no session, and listens for an admin card only then', async () => {
+  it('shows the unlock card, ready for an admin card, only after the check finds no session', async () => {
     window.history.pushState({}, '', '/admin');
     try {
       const answer = mockHeldSession();
       render(<App />);
       await settle();
       expect(screen.queryByRole('button', { name: /unlock admin/i })).not.toBeInTheDocument();
-      expect(rfidHandlers).toHaveLength(0);
+      expect(screen.queryByLabelText(/admin rfid card/i)).not.toBeInTheDocument();
 
       await act(async () => { answer(null); });
       expect(await screen.findByRole('button', { name: /unlock admin/i })).toBeInTheDocument();
       expect(screen.getByLabelText(/admin rfid card/i)).toHaveFocus();
-      await waitFor(() => expect(rfidHandlers).toHaveLength(1));
     } finally {
       window.history.pushState({}, '', '/');
     }

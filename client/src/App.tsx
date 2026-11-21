@@ -1,29 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, ArrowRight, CircleAlert, CreditCard, Keyboard, KeyRound, LayoutDashboard, LoaderCircle, LockKeyhole, LogIn, LogOut, Nfc, ShieldCheck, Users, WifiOff, X } from "lucide-react";
-import type { ScanErrorResponse, ScanSuccessResponse, ScanAdminAssistResponse, SetupUser } from "@rfid-attendance/shared";
-import { resolveOfficeDisplay, isLateTimeout, normalizeName } from "@rfid-attendance/shared";
+import type { ScanErrorResponse, ScanSuccessResponse, ScanAdminAssistResponse } from "@rfid-attendance/shared";
+import { resolveOfficeDisplay, isLateTimeout } from "@rfid-attendance/shared";
 import { useCardReader } from "./use-card-reader";
-import { adminSession, useAdminSession } from "./admin-session";
-import { DEFAULT_CONFIG, loadAttendance, loadConfig, lockSetup, lookupSetupCard, submitScan, unlockSetup, uploadSetupPhoto, upsertSetupUser, loadBathroomStatus, submitBathroomScan } from "./api";
+import { DEFAULT_CONFIG, loadAttendance, loadConfig, submitScan, loadBathroomStatus, submitBathroomScan } from "./api";
 import { onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } from "./network";
 import "./styles.css";
 import { BathroomKioskView, ResultPortrait } from "./bathroom-kiosk-view";
 import type { BathroomScanResponse, BathroomStatusResponse } from "@rfid-attendance/shared";
-import { listenForGlobalRfid, listenForScannerStatus, listenForDtrSyncHealth, getScannerStatus, setScannerPaused, notifyScanSuccess, detachWhenDone } from "./tauri-api";
+import { listenForScannerStatus, listenForDtrSyncHealth, getScannerStatus, setScannerPaused, notifyScanSuccess, detachWhenDone } from "./tauri-api";
 import { dtrSyncHealthCopy, dtrSyncNoticeKind, setDtrSyncHealthSnapshot, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
 import type { DtrSyncHealthSnapshot, DtrSyncNoticeKind } from "./dtr-sync-guard";
 import { announceAdminAssist, announceAttendance, announceBathroom, announceScanError, loadNameManifest } from "./services/ttsService";
 import { UpdateBanner } from "./update-banner";
 import { formatDate, formatTime } from "./format";
-import type { Notice } from "./notice";
 import logoPhoenix from "./assets/branding/logo-phoenix.png";
 import { AdminPanel } from "./admin-panel";
-import { preparePhotoDataUrl } from "./app-shared";
 import { AssistedAttendanceModal } from "./assisted-attendance-modal";
 import { LiveAttendance } from "./live-attendance";
 import type { ScannerStatus } from "./scanner-status";
-import { SetupDialog, emptySetupForm } from "./setup-dialog";
-import type { SetupForm, SetupStep } from "./setup-dialog";
+import { SetupDialog } from "./setup-dialog";
+import type { SetupStep } from "./setup-dialog";
+import { useCardSetup } from "./use-card-setup";
 
 type KioskState = "ready" | "processing" | "success" | "error";
 
@@ -100,29 +98,21 @@ export default function App() {
   // fires mid-flight.
   const assistConfirmRef = useRef(false);
 
-  // The setup dialog is unlocked while the admin session has a token: the one session, not a copy of it.
-  const session = useAdminSession();
-  const setupToken = session.token ?? "";
-  const setupExpiresAt = session.expiresAt ?? "";
-  const [setupDialogOpen, setSetupDialogOpen] = useState(false);
-  const [setupStep, setSetupStep] = useState<SetupStep>("scan");
-  const [setupBusy, setSetupBusy] = useState(false);
-  const [setupNotice, setSetupNotice] = useState<Notice | null>(null);
-  const [adminCardOrCode, setAdminCardOrCode] = useState("");
-  const [setupUid, setSetupUid] = useState("");
-  const [setupUser, setSetupUser] = useState<SetupUser | null>(null);
-  const [setupForm, setSetupForm] = useState<SetupForm>(emptySetupForm);
+  const {
+    open: setupDialogOpen,
+    token: setupToken,
+    step: setupStep,
+    openSetup,
+    unlockWithCardOrCode: unlockSetupWithCardOrCode,
+    handleInput: handleSetupInput,
+    dialog: setupDialog,
+  } = useCardSetup(config.rfidAutoSubmitDelayMs);
   const [adminAssistData, setAdminAssistData] = useState<ScanAdminAssistResponse | null>(null);
   // Stable on purpose: the clock re-renders App every second, and a new onClose
   // each time restarted the modal's 1 s auto-cancel countdown before it fired (S4).
   const closeAssist = useCallback(() => setAdminAssistData(null), []);
   const [assistedBusy, setAssistedBusy] = useState(false);
   const [assistedError, setAssistedError] = useState("");
-  const setupInputRef = useRef<HTMLInputElement>(null);
-  const setupIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Bumped on close: an unlock that answers after the dialog was closed is stale.
-  const setupAttempt = useRef(0);
-  const setupSessionTimer = useRef<number | null>(null);
 
   // Kiosk mode: 1 = Attendance, 2 = Bathroom Key Log
   const [kioskMode, setKioskMode] = useState<"attendance" | "bathroom">("attendance");
@@ -188,46 +178,14 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const focusSetupInput = useCallback(() => {
-    window.requestAnimationFrame(() => setupInputRef.current?.focus());
-  }, []);
-
   useEffect(
     () => () => {
       if (resetTimer.current) clearTimeout(resetTimer.current);
       if (bathroomResetTimer.current) clearTimeout(bathroomResetTimer.current);
       requestController.current?.abort();
-      if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
-      if (setupSessionTimer.current) {
-        clearInterval(setupSessionTimer.current);
-        setupSessionTimer.current = null;
-      }
     },
     [],
   );
-
-  useEffect(() => {
-    if (!setupToken || !setupExpiresAt) return;
-    const deadline = new Date(setupExpiresAt).getTime();
-    const checkSession = () => {
-      if (Date.now() < deadline) return;
-      if (setupSessionTimer.current) {
-        clearInterval(setupSessionTimer.current);
-        setupSessionTimer.current = null;
-      }
-      adminSession.close();
-      setSetupStep("scan");
-      setSetupNotice({ tone: "error", text: "Setup session expired. Unlock again to continue." });
-    };
-    checkSession();
-    setupSessionTimer.current = window.setInterval(checkSession, 1_000);
-    return () => {
-      if (setupSessionTimer.current) {
-        clearInterval(setupSessionTimer.current);
-        setupSessionTimer.current = null;
-      }
-    };
-  }, [setupToken, setupExpiresAt]);
 
   // Attendance is no longer saved offline (owner decision D6); this only
   // drains scans an older version saved, when the network comes back and at
@@ -283,226 +241,6 @@ export default function App() {
     const timer = window.setTimeout(closeManualEntry, 60_000);
     return () => window.clearTimeout(timer);
   }, [kioskMode, manualMode, manualUid, closeManualEntry]);
-
-  const openSetup = useCallback(
-    (initialUid = "") => {
-      setSetupDialogOpen(true);
-      setSetupNotice(null);
-      if (initialUid) setSetupUid(initialUid);
-      setAdminCardOrCode("");
-      if (setupToken) {
-        setSetupStep("scan");
-        window.setTimeout(focusSetupInput, 0);
-      }
-    },
-    [focusSetupInput, setupToken],
-  );
-
-  const unlockSetupWithCardOrCode = useCallback(
-    async (cardOrCode: string) => {
-      const candidate = cardOrCode.trim();
-      if (!candidate || setupBusy) return;
-      setSetupBusy(true);
-      setSetupNotice(null);
-      const attempt = setupAttempt.current;
-      try {
-        const response = await unlockSetup(candidate);
-        if (attempt !== setupAttempt.current) {
-          // Closed while unlocking: never reopen an unattended, unlocked setup.
-          if (response.success) void lockSetup(response.setupToken);
-          return;
-        }
-        if (!response.success) {
-          setSetupNotice({ tone: "error", text: response.error.message });
-          return;
-        }
-        setAdminCardOrCode("");
-        setSetupStep("scan");
-        setSetupDialogOpen(true);
-        window.setTimeout(focusSetupInput, 0);
-      } catch (error) {
-        setSetupNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to unlock setup. Please try again." });
-      } finally {
-        setSetupBusy(false);
-      }
-    },
-    [focusSetupInput, setupBusy],
-  );
-
-  const handleUnlock = async (event: React.FormEvent) => {
-    event.preventDefault();
-    await unlockSetupWithCardOrCode(adminCardOrCode);
-  };
-
-  const closeSetup = async () => {
-    setupAttempt.current += 1;
-    if (setupToken) void lockSetup(setupToken);
-    if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
-    adminSession.close();
-    setSetupDialogOpen(false);
-    setSetupStep("scan");
-    setSetupUid("");
-    setSetupUser(null);
-    setSetupNotice(null);
-    setAdminCardOrCode("");
-    setSetupForm(emptySetupForm);
-  };
-
-  const setupSessionExpired = useCallback(() => {
-    if (!setupToken || !setupExpiresAt) return false;
-    if (Date.now() < new Date(setupExpiresAt).getTime()) return false;
-    if (setupSessionTimer.current) {
-      clearInterval(setupSessionTimer.current);
-      setupSessionTimer.current = null;
-    }
-    adminSession.close();
-    setSetupStep("scan");
-    setSetupNotice({ tone: "error", text: "Setup session expired. Unlock again to continue." });
-    return true;
-  }, [setupToken, setupExpiresAt]);
-
-  const lookupCardForSetup = useCallback(
-    async (rawUid: string) => {
-      const normalizedUid = rawUid.trim();
-      if (!normalizedUid || !setupToken || setupBusy) return;
-      if (setupSessionExpired()) return;
-      if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
-      setSetupBusy(true);
-      setSetupNotice(null);
-      const response = await lookupSetupCard(normalizedUid, setupToken);
-      setSetupBusy(false);
-      if (!response.success) {
-        setSetupNotice({ tone: "error", text: response.error.message });
-        return;
-      }
-      setSetupUid(response.rfidUid);
-      setSetupUser(response.user);
-      setSetupForm(
-        response.user
-          ? {
-              cardType: response.user.cardType ?? "EMPLOYEE",
-              label: response.user.cardType === "ADMIN_ASSIST" ? response.user.fullName : "",
-              userId: response.user.userId,
-              fullName: response.user.fullName,
-              department: response.user.department ?? "",
-              status: response.user.status,
-              employeeType: response.user.employeeType ?? "INTERN",
-              gender: response.user.gender ?? "",
-              dailyRate:
-                response.user.dailyRate === null
-                  ? ""
-                  : String(response.user.dailyRate),
-              photoUrl: response.user.photoUrl ?? "",
-            }
-          : emptySetupForm,
-      );
-      setSetupStep("edit");
-    },
-    [setupBusy, setupToken, setupSessionExpired],
-  );
-
-  const handleSetupInput = useCallback(
-    (value: string) => {
-      setSetupUid(value);
-      if (setupIdleTimer.current) clearTimeout(setupIdleTimer.current);
-      if (value.trim())
-        setupIdleTimer.current = setTimeout(
-          () => void lookupCardForSetup(value),
-          config.rfidAutoSubmitDelayMs,
-        );
-    },
-    [config.rfidAutoSubmitDelayMs, lookupCardForSetup],
-  );
-
-  const submitSetupUser = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const isAssist = setupForm.cardType === "ADMIN_ASSIST";
-    if (
-      !setupToken ||
-      !(setupUid ?? "").trim() ||
-      (!isAssist && (!setupForm.userId.trim() || !setupForm.fullName.trim())) ||
-      setupBusy
-    )
-      return;
-    setSetupBusy(true);
-    setSetupNotice(null);
-    const cleanUid = (setupUid ?? "").trim().toUpperCase();
-    const response = await upsertSetupUser(
-      {
-        rfidUid: cleanUid,
-        userId: isAssist ? `ADMIN_CARD_${cleanUid}` : setupForm.userId.trim().toUpperCase(),
-        fullName: isAssist
-          ? (setupForm.label.trim() ? normalizeName(setupForm.label) : "Admin Assist Card")
-          : normalizeName(setupForm.fullName),
-        department: isAssist
-          ? "Admin"
-          : (setupForm.department.trim().replace(/\s+/g, " ") || undefined),
-        status: setupForm.status,
-        employeeType: "INTERN",
-        gender: isAssist ? null : (setupForm.gender || null),
-        dailyRate: null,
-        photoUrl: isAssist ? null : (setupForm.photoUrl || null),
-        cardType: setupForm.cardType,
-        label: setupForm.label.trim() || undefined,
-      },
-      setupToken,
-    );
-    setSetupBusy(false);
-    if (!response.success) {
-      setSetupNotice({ tone: "error", text: response.error.message });
-      return;
-    }
-    if (setupSessionExpired()) return;
-    setSetupUser(response.user);
-    setSetupNotice({ tone: "success", text: response.created ? "Card enrolled successfully." : "Card configuration updated successfully." });
-    setSetupStep("scan");
-    setSetupUid("");
-    setSetupForm(emptySetupForm);
-    window.setTimeout(focusSetupInput, 0);
-  };
-
-  const uploadSetupPhotoFile = async (file: File) => {
-    if (!setupToken || !setupForm.userId.trim()) {
-      setSetupNotice({ tone: "error", text: "Enter the User ID before uploading a photo." });
-      return;
-    }
-    if (setupSessionExpired()) return;
-    const isImage =
-      ["image/jpeg", "image/png", "image/webp", "image/jpg"].includes(
-        file.type.toLowerCase(),
-      ) || /\.(jpe?g|png|webp)$/i.test(file.name);
-    if (!isImage) {
-      setSetupNotice({ tone: "error", text: "Choose a JPEG, PNG, or WebP photo." });
-      return;
-    }
-    if (file.size > 25 * 1024 * 1024) {
-      setSetupNotice({ tone: "error", text: "Photo file must be under 25 MB." });
-      return;
-    }
-    setSetupBusy(true);
-    setSetupNotice({ tone: "info", text: "Preparing photo…" });
-    let dataUrl: string;
-    try {
-      dataUrl = await preparePhotoDataUrl(file);
-    } catch (error) {
-      setSetupBusy(false);
-      setSetupNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to prepare this photo." });
-      return;
-    }
-    setSetupNotice({ tone: "info", text: "Uploading photo…" });
-    const response = await uploadSetupPhoto(
-      setupForm.userId.trim().toUpperCase(),
-      dataUrl,
-      setupToken,
-    );
-    setSetupBusy(false);
-    if (!response.success) {
-      setSetupNotice({ tone: "error", text: response.error.message });
-      return;
-    }
-    setSetupForm((current) => ({ ...current, photoUrl: response.photoUrl }));
-    setSetupNotice({ tone: "success", text: "Photo uploaded and ready to save." });
-  };
 
   // Shared scan pipeline: normalize, dedupe, guard, and arm the request
   // controller identically for attendance and bathroom scans so the two paths
@@ -761,25 +499,6 @@ export default function App() {
     }
   };
 
-  // Latest scan-routing closure, re-assigned every render so the single native
-  // listener always uses fresh state without re-registering (which would risk
-  // duplicate listeners while config/setup state settles).
-  const scanHandlerRef = useRef<(value: string) => void>(() => {});
-  scanHandlerRef.current = (value) => {
-    if (adminAssistData) return;
-    if (setupDialogOpen && !setupToken) {
-      void unlockSetupWithCardOrCode(value);
-    } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
-      handleSetupInput(value);
-    } else if (!setupDialogOpen || !setupToken) {
-      if (kioskMode === "bathroom") {
-        void submitBathroom(value, "RFID");
-      } else {
-        void submit(value, "RFID");
-      }
-    }
-  };
-
   // Latest mode switch (assigned below, every render), so the wedge listener's 1/2 keys switch the same way as
   // the tabs without re-registering the listener.
   const switchKioskModeRef = useRef<(mode: "attendance" | "bathroom") => void>(() => {});
@@ -849,21 +568,15 @@ export default function App() {
     onStop: clearScanNoticeTimer,
   });
 
-  // Native scanner events: card taps arrive here from the Rust layer without
-  // any focused webview input. The listener also feeds the card-setup dialog
-  // while it is open and awaiting a scan.
+  // The reader's status from the Rust layer. Card taps do not come this way: the reader types them (`useCardReader`).
   useEffect(() => {
-    const stopScan = detachWhenDone(listenForGlobalRfid((value) => scanHandlerRef.current(value)));
     const stopStatus = detachWhenDone(listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus)));
     void getScannerStatus()
       .then((nextStatus) => setScannerStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
-    return () => {
-      stopScan();
-      stopStatus();
-    };
+    return stopStatus;
   }, []);
 
   // While the operator types (admin, setup PIN/form steps, manual entry) the
@@ -941,34 +654,8 @@ export default function App() {
       return { label: "Error", state: "error" as const, detail: "The scan did not go through" };
     if (!scannerStatus)
       return { label: "Connecting…", state: "scanning" as const, detail: "" };
-    switch (scannerStatus.state) {
-      case "connected":
-        return {
-          label: "Ready",
-          state: "connected" as const,
-          detail: scannerStatus.detail ?? scannerStatus.message,
-        };
-      case "scanning":
-        return {
-          label: "Scanning",
-          state: "scanning" as const,
-          detail: scannerStatus.message,
-        };
-      case "offline":
-        return {
-          label: "Offline",
-          state: "offline" as const,
-          detail: scannerStatus.detail ?? scannerStatus.message,
-        };
-      case "error":
-        return {
-          label: "Error",
-          state: "error" as const,
-          detail: scannerStatus.detail ?? scannerStatus.message,
-        };
-      default:
-        return { label: "Connecting…", state: "scanning" as const, detail: scannerStatus.message };
-    }
+    // The keyboard reader has one state of its own: ready.
+    return { label: "Ready", state: "connected" as const, detail: scannerStatus.detail ?? scannerStatus.message };
   })();
 
   const heroTitle =
@@ -1433,50 +1120,7 @@ export default function App() {
       <KioskDtrNotice snapshot={syncSnapshot} />
 
       {setupDialogOpen && (
-        <SetupDialog
-          token={setupToken}
-          step={setupStep}
-          busy={setupBusy}
-          notice={setupNotice}
-          cardOrCode={adminCardOrCode}
-          uid={setupUid}
-          user={setupUser}
-          form={setupForm}
-          inputRef={setupInputRef}
-          onCardOrCodeChange={setAdminCardOrCode}
-          onAccountStart={() => {
-            setSetupNotice(null);
-            setAdminCardOrCode("");
-          }}
-          onAccountUnlocked={() => {
-            setAdminCardOrCode("");
-            setSetupNotice(null);
-            setSetupStep("scan");
-            window.setTimeout(focusSetupInput, 0);
-          }}
-          onUnlock={handleUnlock}
-          onUidChange={handleSetupInput}
-          onScanAnother={() => {
-            setSetupStep("scan");
-            setSetupUid("");
-            setSetupUser(null);
-            setSetupNotice(null);
-            setSetupForm(emptySetupForm);
-            window.setTimeout(focusSetupInput, 0);
-          }}
-          onUidEnter={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void lookupCardForSetup(setupUid);
-            }
-          }}
-          onFormChange={(field, value) =>
-            setSetupForm((current) => ({ ...current, [field]: value }))
-          }
-          onPhotoFile={(file) => void uploadSetupPhotoFile(file)}
-          onUpsert={submitSetupUser}
-          onClose={closeSetup}
-        />
+        <SetupDialog {...setupDialog} />
       )}
 
       {adminAssistData && (

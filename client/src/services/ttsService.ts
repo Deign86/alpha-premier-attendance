@@ -9,7 +9,6 @@ import type {
   VoiceStudioConnection,
 } from '@rfid-attendance/shared';
 import { ATTENDANCE_TIMEZONE, hasWeeklyGrace } from '@rfid-attendance/shared';
-import { tauriApi } from '../tauri-api';
 import { nativeAdminSessionToken } from '../api';
 import {
   getClonedBeaAudioUrl,
@@ -34,7 +33,7 @@ export {
   setNameManifest,
   stopClonedBeaAudio,
 } from './clonedBeaVoice';
-import { runningInTauri } from '../transport';
+import { runningInTauri, transport } from '../transport';
 
 const TTS_STORAGE_KEY = 'alpha_premier_tts_settings';
 
@@ -80,7 +79,7 @@ export async function checkVoiceStudioConnection(baseUrl: string, pin?: string):
   // worker reads the same persisted host/PIN, so this tests the real path.
   if (runningInTauri()) {
     try {
-      return await tauriApi.checkVoicestudio(nativeAdminSessionToken(), baseUrl, pin ?? '');
+      return await transport().checkVoicestudio(nativeAdminSessionToken(), baseUrl, pin ?? '');
     } catch {
       // Fall through to direct fetch below.
     }
@@ -516,7 +515,7 @@ function beginAnnouncement(): number {
   const epoch = ++activePlaybackEpoch;
   stopClonedBeaAudio();
   if (runningInTauri()) {
-    void tauriApi.ttsStop().catch((error) => {
+    void transport().ttsStop().catch((error) => {
       console.warn('Failed to stop previous TTS speech:', error);
     });
   }
@@ -564,7 +563,7 @@ async function playNameWithPiperFallback(
   if (epoch !== activePlaybackEpoch) return false;
   try {
     stopClonedBeaAudio();
-    const result = await tauriApi.ttsSpeak(cleanName, {
+    const result = await transport().ttsSpeak(cleanName, {
       engine: 'piper',
       voiceModel: settings.voiceModel,
       rate: settings.rate,
@@ -960,7 +959,7 @@ export async function speakText(
     // In Tauri desktop environment, native Tauri TTS handles playback (cloned-bea, piper, SAPI) with native Rodio audio.
     if ('window' in globalThis && '__TAURI_INTERNALS__' in window) {
       try {
-        const result = await tauriApi.ttsSpeak(sanitized, options);
+        const result = await transport().ttsSpeak(sanitized, options);
         if (currentEpoch !== activePlaybackEpoch) return null;
         return result;
       } catch (error) {
@@ -1001,7 +1000,7 @@ export async function speakText(
 
       // Fall back gracefully to backend TTS (auto engine)
       try {
-        const fallbackResult = await tauriApi.ttsSpeak(sanitized, { ...options, engine: 'auto' });
+        const fallbackResult = await transport().ttsSpeak(sanitized, { ...options, engine: 'auto' });
         if (currentEpoch !== activePlaybackEpoch) return null;
         return fallbackResult;
       } catch (fallbackError) {
@@ -1017,7 +1016,7 @@ export async function speakText(
     if (currentEpoch !== activePlaybackEpoch) return null;
 
     try {
-      const result = await tauriApi.ttsSpeak(sanitized, options);
+      const result = await transport().ttsSpeak(sanitized, options);
       if (currentEpoch !== activePlaybackEpoch) return null;
       return result;
     } catch (error) {
@@ -1043,7 +1042,7 @@ export async function stopSpeech(): Promise<void> {
   activePlaybackEpoch++;
   stopClonedBeaAudio();
   try {
-    await tauriApi.ttsStop();
+    await transport().ttsStop();
   } catch (error) {
     console.warn('Failed to stop TTS speech:', error);
   }
@@ -1054,7 +1053,7 @@ export async function stopSpeech(): Promise<void> {
  */
 export async function getTtsStatus(): Promise<TtsStatusResponse | null> {
   try {
-    return await tauriApi.ttsStatus();
+    return await transport().ttsStatus();
   } catch {
     return null;
   }

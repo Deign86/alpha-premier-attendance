@@ -3,7 +3,7 @@ import { listenForScannerStatus, getScannerStatus, setScannerPaused, detachWhenD
 import { formatTime } from "./format";
 
 export type ScannerStatus = {
-  state: "connected" | "scanning" | "offline" | "error";
+  state: "connected";
   message: string;
   detail: string | null;
   mode: string;
@@ -50,11 +50,7 @@ function useReaderStatus(): ReaderState {
     ? browserMode
       ? { tone: "browser", word: "Browser mode", short: "Only in the desktop app" }
       : { tone: "checking", word: "Checking…", short: "Checking…" }
-    : status.state === "offline"
-      ? { tone: "missing", word: "Reader missing", short: "Not found" }
-      : status.state === "error"
-        ? { tone: "error", word: "Reader error", short: "Not working" }
-        : { tone: "ready", word: "Reader ready", short: "Ready" };
+    : { tone: "ready", word: "Reader ready", short: "Ready" };
   return { status, browserMode, reader };
 }
 
@@ -94,9 +90,6 @@ export function ScannerDiagnostics({ lastScanAt = null }: { lastScanAt?: string 
 
   const stateLabel = {
     connected: "Waiting for card",
-    scanning: "Scan received",
-    offline: "Scanner unavailable",
-    error: "Scan error",
   } satisfies Record<ScannerStatus["state"], string>;
 
   return (

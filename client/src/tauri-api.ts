@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
-import type { AdminAttendanceResponse, AdminUsersResponse, AttendanceListItem, AttendanceListResponse, InternPayrollReportResponse, PayrollCutoffsResponse, PayrollProfilesResponse, SetupErrorResponse, SetupLookupResponse, SetupUpsertResponse, AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanRequest, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, IdRegisterStatus, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
+import type { CodedOutcome, CutoffSaved, Outcome, Transport, Unlocked } from './transport';
+import type { AdminAttendanceResponse, AdminUsersResponse, AttendanceListItem, AttendanceListResponse, InternPayrollReportResponse, PayrollCutoffsResponse, PayrollProfilesResponse, SetupErrorResponse, SetupLookupResponse, SetupUpsertResponse, AdminSyncDtrResponse, AttendanceXlsxExportResponse, BathroomActionResponse, BathroomScanResponse, BathroomStatusResponse, BathroomUpdateRequest, DatabaseBackupResponse, DatabaseInfoResponse, InternPayslipImage, InternPayslipSaveResponse, InternPayslipsResponse, LanStatusResponse, PayrollPdfGenerateResponse, PayrollPdfListResponse, ScanRequest, ScanResponse, SafeConfigResponse, ScannerStatus, TtsSpeakOptions, TtsSpeakResult, TtsStatusResponse, VoiceClipState, IdRegisterStatus, VoiceStudioConnection, VoiceWorkerStatus } from '@rfid-attendance/shared';
 
 export interface NativeHealthResponse {
   success: boolean;
@@ -64,16 +65,11 @@ export interface NativeSyncStatusResponse {
   } | null;
 }
 
-type Outcome = { success: boolean; error?: { message?: string } };
-type CodedOutcome = { success: boolean; error?: { code?: string; message?: string } };
-type CutoffSaved = { success: boolean; payrollId?: string; netPay?: number };
-type Unlocked = { success: true; token: string; expiresAt: string };
-
 /**
- * The desktop transport: one member per Rust command. `http-api.ts` implements the same members against the legacy
- * Node server for browser development, and `transport.ts` picks one of the two.
+ * The desktop transport: `Transport` (see `transport.ts`) answered by the Rust commands. `http-api.ts` implements
+ * the same interface against the legacy Node server for browser development, and `transport.ts` picks one of the two.
  */
-export const tauriApi = {
+export const tauriApi: Transport = {
   getConfig: () => invoke<SafeConfigResponse>('get_config'),
   getHealth: () => invoke<NativeHealthResponse>('get_health'),
   generatePayrollPdf: (token: string, cutoffStart: string, cutoffEnd: string, payrollCutoffLabel: string, workerType: string) => invoke<PayrollPdfGenerateResponse>('generate_payroll_pdf', { token, cutoffStart, cutoffEnd, payrollCutoffLabel, workerType }),
@@ -82,8 +78,7 @@ export const tauriApi = {
   saveInternPayslipImages: (token: string, payrollCutoffLabel: string, images: InternPayslipImage[]) => invoke<InternPayslipSaveResponse>('save_intern_payslip_images', { token, payrollCutoffLabel, images }),
   getAttendance: (date?: string) => invoke<AttendanceListResponse>('get_attendance', { date }),
   bathroomGetStatus: (token?: string, date?: string) => invoke<BathroomStatusResponse>('bathroom_get_status', { token, date }),
-  /** `_request` is what the legacy server is sent (it also wants the source); the desktop command takes the card alone. */
-  bathroomScanRfid: (rfidUid: string, _request?: BathroomScanRequest) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),
+  bathroomScanRfid: (rfidUid: string) => invoke<BathroomScanResponse>('bathroom_scan_rfid', { rfidUid }),
   bathroomTimeOut: (token: string, userId: string, genderKey: 'MALE' | 'FEMALE', notes?: string) => invoke<BathroomActionResponse>('bathroom_time_out', { token, userId, genderKey, notes }),
   bathroomTimeIn: (token: string, logId: string, notes?: string) => invoke<BathroomActionResponse>('bathroom_time_in', { token, logId, notes }),
   bathroomUpdateLog: (token: string, logId: string, request: BathroomUpdateRequest) => invoke<BathroomActionResponse>('bathroom_update_log', { token, logId, request }),
@@ -94,8 +89,7 @@ export const tauriApi = {
   scanRfid: (request: ScanRequest) => invoke<ScanResponse>('scan_rfid', { request }),
   /** The command's argument is still named `pin` on the wire; it carries a card ID or the code IT set. */
   setupUnlock: (cardOrCode: string) => invoke<Unlocked | SetupErrorResponse>('setup_unlock', { pin: cardOrCode }),
-  /** The legacy server ends a setup session by its token; the desktop app has one session and ignores it. */
-  setupLock: (_setupToken?: string) => invoke<{ success: true }>('setup_lock'),
+  setupLock: () => invoke<{ success: true }>('setup_lock'),
   /** The Admin panel's unlock and lock. On the desktop they are the setup commands; the legacy server has its own routes. */
   adminUnlock: (cardOrCode: string): Promise<Unlocked | { success: false; error: { message: string } }> => tauriApi.setupUnlock(cardOrCode),
   adminLock: (): Promise<{ success: true }> => tauriApi.setupLock(),
@@ -106,12 +100,9 @@ export const tauriApi = {
   /** Rejects without asking when there is no token: no token, no session. */
   adminGetSession: (token: string) => (token ? invoke<{ success: true; expiresAt?: string }>('admin_get_session', { token }) : Promise.reject<{ success: true; expiresAt?: string }>('ADMIN_SESSION_EXPIRED')),
   adminUsers: (token: string) => invoke<AdminUsersResponse>('admin_users', { token }),
-  adminListUsers: (token: string) => invoke<{ success: true; users: unknown[] }>('admin_list_users', { token }),
-  /** `_existingUserId` tells the legacy server an update from a new user; the desktop command reads it from `user`. */
-  adminUpsertUser: <T extends object>(token: string, user: T, _existingUserId?: string) => invoke<Outcome>('admin_upsert_user', { token, user }),
+  adminUpsertUser: <T extends object>(token: string, user: T) => invoke<Outcome>('admin_upsert_user', { token, user }),
   adminDeleteUser: (token: string, userId: string) => invoke<Outcome>('admin_delete_user', { token, userId }),
   adminAttendance: (token: string, date: string) => invoke<AdminAttendanceResponse>('admin_attendance', { token, date }),
-  adminListAttendance: (token: string, date: string) => invoke('admin_list_attendance', { token, date }),
   adminUpdateAttendance: <T extends object>(token: string, attendanceId: string, payload: T) => invoke<CodedOutcome>('admin_update_attendance', { token, attendanceId, payload }),
   adminCreateBackdatedAttendance: <T extends object>(token: string, payload: T) => invoke<{ success: boolean; attendance?: AttendanceListItem; error?: { code?: string; message?: string } }>('admin_create_backdated_attendance', { token, payload }),
   adminDeleteAttendance: (token: string, attendanceId: string, date: string) => invoke<Outcome>('admin_delete_attendance', { token, attendanceId, date }),
@@ -163,8 +154,6 @@ export const tauriApi = {
   /** Asks where to save a copy of a backup (e.g. a USB drive); null when the dialog is cancelled. */
   pickBackupDestination: (fileName: string) => saveFileDialog({ defaultPath: fileName, filters: [{ name: 'Alpha Premier portable backup', extensions: ['apbackup', 'db'] }] }),
 };
-
-export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));
 
 export const notifyScanSuccess = (name: string) => invoke<void>('notify_scan_success', { fullName: name });
 

@@ -9,7 +9,7 @@ export const cardTypes = ['EMPLOYEE', 'ADMIN_ASSIST'] as const;
 export type CardType = (typeof cardTypes)[number];
 
 export type ScannerStatus = {
-  state: 'connected' | 'scanning' | 'offline' | 'error';
+  state: 'connected';
   message: string;
   detail: string | null;
   mode: 'keyboard';
