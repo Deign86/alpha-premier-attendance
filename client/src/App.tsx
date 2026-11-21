@@ -9,7 +9,7 @@ import { onNetworkStatusChange, getOfflineQueue, removeQueuedScan, isOnline } fr
 import "./styles.css";
 import { BathroomKioskView, ResultPortrait } from "./bathroom-kiosk-view";
 import type { BathroomScanResponse, BathroomStatusResponse } from "@rfid-attendance/shared";
-import { listenForGlobalRfid, listenForScannerStatus, listenForDtrSyncHealth, getScannerStatus, setScannerPaused, notifyScanSuccess, detachWhenDone } from "./tauri-api";
+import { listenForScannerStatus, listenForDtrSyncHealth, getScannerStatus, setScannerPaused, notifyScanSuccess, detachWhenDone } from "./tauri-api";
 import { dtrSyncHealthCopy, dtrSyncNoticeKind, setDtrSyncHealthSnapshot, useDtrSyncHealthSnapshot } from "./dtr-sync-guard";
 import type { DtrSyncHealthSnapshot, DtrSyncNoticeKind } from "./dtr-sync-guard";
 import { announceAdminAssist, announceAttendance, announceBathroom, announceScanError, loadNameManifest } from "./services/ttsService";
@@ -761,25 +761,6 @@ export default function App() {
     }
   };
 
-  // Latest scan-routing closure, re-assigned every render so the single native
-  // listener always uses fresh state without re-registering (which would risk
-  // duplicate listeners while config/setup state settles).
-  const scanHandlerRef = useRef<(value: string) => void>(() => {});
-  scanHandlerRef.current = (value) => {
-    if (adminAssistData) return;
-    if (setupDialogOpen && !setupToken) {
-      void unlockSetupWithCardOrCode(value);
-    } else if (shouldRouteGlobalRfidToSetup(setupDialogOpen, setupToken, setupStep)) {
-      handleSetupInput(value);
-    } else if (!setupDialogOpen || !setupToken) {
-      if (kioskMode === "bathroom") {
-        void submitBathroom(value, "RFID");
-      } else {
-        void submit(value, "RFID");
-      }
-    }
-  };
-
   // Latest mode switch (assigned below, every render), so the wedge listener's 1/2 keys switch the same way as
   // the tabs without re-registering the listener.
   const switchKioskModeRef = useRef<(mode: "attendance" | "bathroom") => void>(() => {});
@@ -849,21 +830,15 @@ export default function App() {
     onStop: clearScanNoticeTimer,
   });
 
-  // Native scanner events: card taps arrive here from the Rust layer without
-  // any focused webview input. The listener also feeds the card-setup dialog
-  // while it is open and awaiting a scan.
+  // The reader's status from the Rust layer. Card taps do not come this way: the reader types them (`useCardReader`).
   useEffect(() => {
-    const stopScan = detachWhenDone(listenForGlobalRfid((value) => scanHandlerRef.current(value)));
     const stopStatus = detachWhenDone(listenForScannerStatus((nextStatus) => setScannerStatus(nextStatus)));
     void getScannerStatus()
       .then((nextStatus) => setScannerStatus(nextStatus))
       .catch(() => {
         /* web mode */
       });
-    return () => {
-      stopScan();
-      stopStatus();
-    };
+    return stopStatus;
   }, []);
 
   // While the operator types (admin, setup PIN/form steps, manual entry) the
@@ -941,34 +916,8 @@ export default function App() {
       return { label: "Error", state: "error" as const, detail: "The scan did not go through" };
     if (!scannerStatus)
       return { label: "Connecting…", state: "scanning" as const, detail: "" };
-    switch (scannerStatus.state) {
-      case "connected":
-        return {
-          label: "Ready",
-          state: "connected" as const,
-          detail: scannerStatus.detail ?? scannerStatus.message,
-        };
-      case "scanning":
-        return {
-          label: "Scanning",
-          state: "scanning" as const,
-          detail: scannerStatus.message,
-        };
-      case "offline":
-        return {
-          label: "Offline",
-          state: "offline" as const,
-          detail: scannerStatus.detail ?? scannerStatus.message,
-        };
-      case "error":
-        return {
-          label: "Error",
-          state: "error" as const,
-          detail: scannerStatus.detail ?? scannerStatus.message,
-        };
-      default:
-        return { label: "Connecting…", state: "scanning" as const, detail: scannerStatus.message };
-    }
+    // The keyboard reader has one state of its own: ready.
+    return { label: "Ready", state: "connected" as const, detail: scannerStatus.detail ?? scannerStatus.message };
   })();
 
   const heroTitle =

@@ -155,8 +155,6 @@ export const tauriApi: Transport = {
   pickBackupDestination: (fileName: string) => saveFileDialog({ defaultPath: fileName, filters: [{ name: 'Alpha Premier portable backup', extensions: ['apbackup', 'db'] }] }),
 };
 
-export const listenForGlobalRfid = (handler: (uid: string) => void) => listen<string>('rfid-scan', (event) => handler(event.payload));
-
 export const notifyScanSuccess = (name: string) => invoke<void>('notify_scan_success', { fullName: name });
 
 /** Native scanner status changes (`scanner-status` events). */

@@ -1,8 +1,7 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import * as tauriApi from './tauri-api';
 import * as ttsService from './services/ttsService';
 
 beforeEach(() => {
@@ -21,19 +20,22 @@ afterEach(() => {
   window.history.pushState({}, '', '/');
 });
 
+/** A card tap as the keyboard-wedge reader sends it: the card's characters as key presses, then Enter, to whatever has the focus. */
+function tapCard(uid: string) {
+  const target = document.activeElement ?? document.body;
+  for (const key of [...uid, 'Enter']) fireEvent.keyDown(target, { key });
+}
+
 describe('kiosk feature gaps', () => {
-  it('normalizes and drops a duplicate native scan during the cooldown window', async () => {
+  it('normalizes and drops a duplicate card tap during the cooldown window', async () => {
     vi.spyOn(ttsService, 'announceAttendance').mockResolvedValue(null);
-    const handlers: Array<(uid: string) => void> = [];
-    vi.spyOn(tauriApi, 'listenForGlobalRfid').mockImplementation((handler) => {
-      handlers.push(handler);
-      return Promise.resolve(() => {});
-    });
+    // The reader only reads while the kiosk window has the focus.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url === '/api/config') {
         // SAFETY: Mock response supplies the config fields used by App.
-        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila' }) } as Response;
+        return { ok: true, json: async () => ({ success: true, timezone: 'Asia/Manila', scanner: { expectedLength: 0, characterSet: 'hex' } }) } as Response;
       }
       // SAFETY: Mock success response matches attendance scan result contract.
       return {
@@ -51,10 +53,11 @@ describe('kiosk feature gaps', () => {
 
     render(<App />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    act(() => handlers.forEach((handler) => handler('04A1B2C3')));
+    act(() => tapCard('04A1B2C3'));
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
 
-    act(() => handlers.forEach((handler) => handler(' 04a1b2c3 ')));
+    // The same card as a reader set to lower case sends it.
+    act(() => tapCard('04a1b2c3'));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
     expect(fetchSpy.mock.calls.filter(([input]) => String(input) === '/api/attendance/scan')).toHaveLength(1);
@@ -107,12 +110,7 @@ describe('kiosk feature gaps', () => {
     }
   });
 
-  it('uses the global RFID listener for card lookup in the active setup scan step', async () => {
-    const handlers: Array<(uid: string) => void> = [];
-    vi.spyOn(tauriApi, 'listenForGlobalRfid').mockImplementation((handler) => {
-      handlers.push(handler);
-      return Promise.resolve(() => {});
-    });
+  it('looks up a card tapped in the active setup scan step and records no attendance', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url === '/api/config') {
@@ -135,8 +133,10 @@ describe('kiosk feature gaps', () => {
     await user.click(await screen.findByRole('button', { name: /admin setup/i }));
     await user.type(screen.getByLabelText(/admin rfid card/i), '2468');
     await user.click(screen.getByRole('button', { name: /unlock setup/i }));
-    await screen.findByLabelText(/setup card id/i);
-    act(() => handlers.forEach((handler) => handler('ABCD1234')));
+    // The app focuses the card field on the next frame; the reader then types the card into it and presses Enter.
+    const cardField = await screen.findByLabelText(/setup card id/i);
+    await waitFor(() => expect(cardField).toHaveFocus());
+    await user.keyboard('ABCD1234{Enter}');
 
     expect(await screen.findByText('ABCD1234')).toBeInTheDocument();
     expect(fetchSpy.mock.calls.some(([input]) => String(input).startsWith('/api/setup/card?rfidUid='))).toBe(true);

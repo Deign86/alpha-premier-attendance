@@ -4,7 +4,6 @@ import type { LucideIcon } from "lucide-react";
 import type { AttendanceListItem, PayrollCutoffRecord } from "@rfid-attendance/shared";
 import { resolveOfficeDisplay } from "@rfid-attendance/shared";
 import { checkAdminSession, loadAdminAttendance, loadAdminUsers, loadPayrollCutoffs, lockAdmin, nukeSheetsResync, unlockAdmin } from "./api";
-import { listenForGlobalRfid, detachWhenDone } from "./tauri-api";
 import { VoiceSettingsPanel } from "./voice-settings-panel";
 import { UpdateBanner } from "./update-banner";
 import { useAdminSession } from "./admin-session";
@@ -227,14 +226,6 @@ export function AdminPanel() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [unlocked, guardUnsaved]);
-
-  // An admin card tap unlocks, but only once the session check is done, so a tap can't race its answer.
-  useEffect(() => {
-    if (unlocked || !sessionChecked) return;
-    return detachWhenDone(listenForGlobalRfid((scannedUid) => {
-      void unlockWithCardOrCode(scannedUid);
-    }));
-  }, [sessionChecked, unlocked, unlockWithCardOrCode]);
 
   const nukeSheets = async () => {
     setNukeConfirmOpen(false);
