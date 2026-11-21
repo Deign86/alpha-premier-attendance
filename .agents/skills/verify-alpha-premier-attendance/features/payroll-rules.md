@@ -7,7 +7,7 @@ input you can create and the exact result the app must show.
 
 ## Sub-features
 
-- `RULES-GRACE`: once per Manila Monday–Sunday week, the first arrival from 08:01:00 to 08:15:00 has no late deduction (days from 2026-11-16).
+- `RULES-GRACE`: withdrawn from 2026-11-20 (policy `V4_NO_GRACE`). Only days before 2026-10-01 and 2026-11-16 to 2026-11-19 can show `Grace`: once per Manila Monday–Sunday week, the first arrival from 08:01:00 to 08:15:00 had no late deduction.
 - `RULES-LATE`: from 08:01:00 every started hour late costs one hour of pay.
 - `RULES-UNDERTIME`: each short hour costs one hour of pay, counted from the end of the charged late hours.
 - `RULES-ADJUSTMENT`: a negative manual adjustment is shown under deductions; total earnings stay whole.
@@ -18,16 +18,16 @@ input you can create and the exact result the app must show.
 - Admin workspace → Payroll → Generate from attendance → Breakdown on a row: one line per graced, late or undertime day.
 - Payroll → Generate Intern Payslips: the payslip image.
 
-## Rubric (intern daily rate 80.00, hour 10.00, dates on or after 2026-11-16)
+## Rubric (intern daily rate 80.00, hour 10.00, dates on or after 2026-11-20)
 
 | Day | Arrival column | Breakdown lines | Day's deductions |
 |---|---|---|---|
 | 08:00 → 17:00 | On time | none | 0.00 |
-| 08:01 → 15:00, first late arrival of the week | Grace | Grace 0.00; Undertime 20.00 | 20.00 |
-| 08:05 → 17:00, grace already used that week | Late 5m | Late 10.00 | 10.00 |
-| 08:01 → 15:01, grace already used | Late 1m | Late 10.00; Undertime 20.00 | 30.00 |
-| 08:01 → 16:59, grace already used | Late 1m | Late 10.00; Undertime 10.00 | 20.00 |
-| 08:15:01 → 17:00, grace available | Late 16m | Late 10.00 | 10.00 |
+| 08:01 → 15:00, first late arrival of the week (no grace) | Late 1m | Late 10.00; Undertime 20.00 | 30.00 |
+| 08:05 → 17:00 | Late 5m | Late 10.00 | 10.00 |
+| 08:01 → 15:01 | Late 1m | Late 10.00; Undertime 20.00 | 30.00 |
+| 08:01 → 16:59 | Late 1m | Late 10.00; Undertime 10.00 | 20.00 |
+| 08:15:01 → 17:00 | Late 16m | Late 10.00 | 10.00 |
 | 13:00 → 17:00 | Late | Half-day 40.00 | 40.00 |
 
 Cutoff and payslip, for any mix of the rows above:
@@ -49,11 +49,11 @@ Same IPC route as `payroll-exports.md` (`window.__TAURI__.core.invoke`).
 
 The same rubric is pinned in tests that run anywhere:
 
-- `cargo test --manifest-path src-tauri/Cargo.toml --lib graced_undertime` (attendance → cutoff → Breakdown → payslip on a real SQLite file).
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib mock_first_cutoff` (attendance → cutoff → Breakdown → payslip on a real SQLite file, Dec 1-15 under `V4_NO_GRACE`).
 - `cargo test --manifest-path src-tauri/Cargo.toml --test payroll_hours_accuracy property_ differential_` (20,000 generated days each).
 
 ## Gotchas
 
-- A day before 2026-11-16 prices under an older policy version on purpose; do not use one to check the rows above.
+- A day before 2026-11-20 prices under an older policy version on purpose; do not use one to check the rows above.
 - A draft cutoff keeps its old Breakdown text until it is regenerated; a finalized cutoff never changes.
 - A time-out from 17:00:00 to 17:59:59 counts as worked; 18:00:00 or later is capped back to 17:00.

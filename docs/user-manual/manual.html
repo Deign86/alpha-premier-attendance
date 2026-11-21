@@ -284,7 +284,7 @@
     <h2>What's in this version</h2>
     <p>Version 0.2.14 is for <b>interns only</b>. Every person you register is paid as an intern at <b>PHP 80.00 per day</b>. The payroll documents are the <b>Intern Payroll PDF</b> and one payslip picture per intern (<b>Generate Intern Payslips</b>); older employee payslips and spreadsheet payroll exports are no longer part of the app.</p>
 
-    <div class="note info"><b>Note</b>The pay rules changed on <b>1 October 2026</b>: the old weekly 15-minute grace period was removed. It came back on <b>16 November 2026</b> (once a week, arrivals up to 8:15 AM). Each day keeps the rules of its date, so past pay never changes. See Chapter 14.</div>
+    <div class="note info"><b>Note</b>The pay rules changed on <b>1 October 2026</b>: the old weekly 15-minute grace period was removed. It came back on <b>16 November 2026</b> (once a week, arrivals up to 8:15 AM) and was removed again from <b>20 November 2026</b>. Each day keeps the rules of its date, so past pay never changes. See Chapter 14.</div>
   </div>
   <div class="folio"><span>Alpha Premier Attendance v0.2.14</span></div>
 </section>
@@ -844,7 +844,7 @@
     </figure>
     <table>
       <tr><th class="n">#</th><th style="width:25%">Part</th><th>Use</th></tr>
-      <tr><td><span class="pinref">1</span></td><td>Filter chips</td><td>All, Grace Period (GP), Late, Late Time-out, Working, Completed, Missed, Assisted, Backdated — each with a count. GP does not apply from 1 Oct to 15 Nov 2026.</td></tr>
+      <tr><td><span class="pinref">1</span></td><td>Filter chips</td><td>All, Grace Period (GP), Late, Late Time-out, Working, Completed, Missed, Assisted, Backdated — each with a count. GP applies only to days before 1 Oct 2026 and to 16–19 Nov 2026.</td></tr>
       <tr><td><span class="pinref">2</span></td><td>Date / Today</td><td>Choose the day to show.</td></tr>
       <tr><td><span class="pinref">3</span></td><td>Employee, Department</td><td>Narrow the list by name/ID or department.</td></tr>
       <tr><td><span class="pinref">4</span></td><td><b>Add missed attendance</b></td><td>Create a past day that was never tapped (next page).</td></tr>
@@ -1187,7 +1187,7 @@
       <tr><td>Lunch</td><td>12:00–1:00 PM is unpaid and never counted as work.</td></tr>
       <tr><td>Daily rate</td><td>PHP 80.00 per day (PHP 10.00 per hour).</td></tr>
       <tr><td>On time</td><td>Tapping in up to <b>8:00:59 AM</b>. Coming early earns nothing extra.</td></tr>
-      <tr><td>Late</td><td>From 8:01:00 AM, <b>every started hour</b> late costs PHP 10.00, counted from 8:00. 8:08 = 1 hour; 9:00:01 = 2 hours. From 16 November 2026, once per Monday–Sunday week the first arrival up to 8:15 AM is free ("Grace Period (GP)").</td></tr>
+      <tr><td>Late</td><td>From 8:01:00 AM, <b>every started hour</b> late costs PHP 10.00, counted from 8:00. 8:08 = 1 hour; 9:00:01 = 2 hours. From 16 to 19 November 2026 only, once per Monday–Sunday week the first arrival up to 8:15 AM was free ("Grace Period (GP)"); from 20 November 2026 there is no grace.</td></tr>
       <tr><td>Undertime</td><td>Each hour (or part) short of the 8-hour day costs PHP 10.00 — but hours already charged as late are not charged twice.</td></tr>
       <tr><td>Half day</td><td>Arriving at <b>12:00 PM or later</b>, or leaving by 1:00 PM, counts as a half day: PHP 40.00 is deducted as undertime, not late.</td></tr>
       <tr><td>Late time-out</td><td>Tapping out at <b>6:00 PM or later</b> marks the day LATE TIMEOUT for correction. Pay is worked out as if the time-out were 5:00 PM. No overtime.</td></tr>
