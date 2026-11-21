@@ -2623,3 +2623,26 @@ OWNS: `src-tauri/src/services/intern_payroll.rs` (new version, tests), `shared/s
 - [x] G4: Repo gates pass.
   CHECK: `npm run lint:oxlint && npm run typecheck && npm test`; `cd src-tauri && cargo test --no-fail-fast`
   EVIDENCE: oxlint exit 0 (2 warnings in untouched files), typecheck clean; shared 32, client 622, server 208; cargo lib 425 passed 0 failed, other targets 18/79/36/62/24/3 (2026-11-19). The desktop app was not run.
+
+## Untangle, round 3 (structural refactor and review fixes, 2026-11-21)
+
+OWNS: `src-tauri/src/services/attendance.rs` and what moved into it, `commands/*/tests.rs`, `client/src/use-card-setup.ts`, the reader path in `App.tsx` / `admin-panel.tsx` / `scanner-status.tsx`, `docs/untangle/decision-log.md`. Behaviour stays the same except the two display fixes (W1, W2).
+
+- [x] W1: A cutoff generated before v0.2.56 shows the clamped time-in chip on a late line again, from Rust's rule, without its stored JSON changing.
+  CHECK: `cd src-tauri && cargo test --lib a_cutoff_stored_before_the_payable_key`
+  EVIDENCE: `a_cutoff_stored_before_the_payable_key_is_read_with_the_clamped_time_in` and `a_stored_late_line_is_filled_only_where_the_days_policy_clamps` ok; cargo lib 427 passed 0 failed (2026-11-21).
+- [x] W2: Only an intern's attendance row carries a payable time-in.
+  CHECK: `cd src-tauri && cargo test --lib only_an_interns_row`
+  EVIDENCE: `only_an_interns_row_carries_a_payable_time_in` ok (2026-11-21).
+- [x] W3: No service imports the command layer.
+  CHECK: `grep -rn "crate::commands" src-tauri/src/services | wc -l`
+  EXPECT: 0
+  EVIDENCE: 0 (2026-11-21).
+- [x] W4: Card taps reach the kiosk only as key presses; nothing listens for an event Rust does not send.
+  CHECK: `grep -rn "listenForGlobalRfid\|emitRfidScan" client/src | wc -l`
+  EXPECT: 0
+  EVIDENCE: 0; client 622 passed in 26 files (2026-11-21).
+- [x] W5: Repo gates pass.
+  CHECK: `npm run lint:oxlint && npm run typecheck && npm test`; `cd src-tauri && cargo test --no-fail-fast`
+  EVIDENCE: oxlint exit 0 (2 warnings, both already on main), typecheck clean; shared 32, client 622 in 26 files, server 208; cargo lib 427 passed 0 failed, other targets 18/80/36/63/24/3 (2026-11-21). The desktop app was not run.
+

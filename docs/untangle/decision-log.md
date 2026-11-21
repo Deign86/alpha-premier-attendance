@@ -113,7 +113,7 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
     - H51: the 3,970-line test module moved with the code, each test to the module whose functions it calls; the fixtures several of them share are `commands/test_support.rs`.
     - N1 (rest): `services/users.rs` and the service tests import `commands::attendance::publish_attendance_change`, `commands::sync::enqueue_sync_on`, `commands::kiosk::scan_rfid_impl` by name instead of from the crate root.
     - Each module's `use super::…` lines name what it takes from the others, so the links between areas can be read at the top of each file.
-    - A stray `#[tauri::command]` on `delete_cutoff_record` (never registered, takes `&AppState`) was removed.
+    - A stray `#[tauri::command]` on `delete_cutoff_record` (never registered, takes `&AppState`) was removed, in `6f4928d` (the admin-guard commit), not in this pure move.
 - **One admin guard: `session::Admin::check`** (R2)
     - H42: 41 commands opened with a hand-written `if !admin_authorized … return Err("ADMIN_AUTH_REQUIRED")`, 8 used `require_admin`, and 3 returned another code. All 49 sites now call `Admin::check` (or `Admin::check_as` with the code they have always returned: `SETUP_AUTH_REQUIRED` twice, `ADMIN_SESSION_EXPIRED` once). `require_admin` is gone.
     - It cannot be forgotten silently: `commands::tests::every_command_checks_the_admin_session_or_is_listed_as_public` reads the command sources and fails for a command that neither checks nor is on the list of 27 public commands (checked by deleting one guard: the test failed and named the command).
@@ -190,3 +190,49 @@ Branch `refactor/untangle-2` (from main at `21b9891`), local commits only, owner
 12. **R7, the unlock form's HTML.** The Admin page's "Unlock admin" button now has `type="submit"` written out (it was the default). Nothing else in either form's markup changed: the kiosk's field keeps its `admin-pin` id and its separate label, the Admin page's label still wraps its field.
 13. **R7, the reader restarts on the same changes as before, with one narrowing.** The old effect restarted (dropping a half-read card) when anything in its dependency list changed, including the whole configuration object. The hook restarts when the kiosk's callbacks change (the same state as before) or the configuration's `scanner` part changes.
 14. **R7, tests start each case locked.** `client/src/test/setup.ts` calls `adminSession.close()` before each test, as a freshly opened page is. It uses the production `close()`, not a test-only hook.
+
+# Round 3, decision log
+
+Branch `refactor/untangle-3`, from main after round 2 (v0.2.56) and merged with main at v0.2.57 (weekly grace withdrawn from 2026-11-20). An independent review of round 2 (`17d3d7a..6f4928d` and the rest of PR #53) found no lost guard, no changed command, and two undeclared display regressions; this round fixes both and does the remaining items the review rated safe without the owner. Made while the owner was away, on his instruction to finish without waiting.
+
+## What the review of round 2 found
+
+- **MAJOR-1, undeclared in round 2**: the "clamped time-in" chip vanished from the breakdown of every cutoff generated before v0.2.56. The old client derived it from the stored late line; round 2's client shows it only when a line carries `payableTimeIn`, which Rust writes only at generation, and finalized cutoffs are never regenerated. Affected: July to September 2026 history (the clamp exists only before 2026-10-01). Display only: amounts, PDFs and payslips were unchanged.
+- **MINOR-1, undeclared in round 2**: the clamp chip, the sort and the CSV "Time in" stopped being intern-only on the attendance screens. It needs a non-intern row dated before 2026-10-01.
+- **MINOR-2**: round 2's log put the `delete_cutoff_record` attribute removal in the wrong commit. Corrected above.
+- Compared and equal: the 83 command names and signatures; all 1,183 Rust function bodies in the pure move; 49 guarded and 27 public commands; the 14 audit inserts; the four attendance tails; routes, scan flow, unlock and the card-reader hook on the desktop path.
+
+## Fixes
+
+- **Old cutoffs show the clamped time-in chip again** (`5a71690`, `fix:`)
+    - MAJOR-1: `payroll_cutoff_json` fills `payableTimeIn` on read for a stored late line that lacks it, with the same Rust rule payroll used (`intern_payroll::breakdown_with_payable_time_in`). The stored JSON is not touched. Fixture: an August 2026 stored breakdown (`commands/fixtures/stored_cutoff_breakdown_2026_08.json`).
+- **Only an intern's attendance row carries a payable time-in** (`4e35166`, `fix:`)
+    - MINOR-1: `arrival_fields` answers no payable time-in unless the person is an intern (`IS_INTERN_SQL`), as the old client did.
+- **Services no longer import the command layer** (`b03f3a1`)
+    - Review items 1, 2, 3: `enqueue_sync_on`, `flush_pending_sync`, `PendingSync`, `ensure_payroll_tx`, `attendance_changed`, `reconcile_attendance_payroll_range`, `enqueue_intern_dtr` and `arrival_fields` moved to `services/` (pure moves, same signatures); the two copies of the LAN "attendance updated" send are one `services::attendance::lan_notice`. `grep -rn crate::commands src-tauri/src/services` prints nothing.
+- **The four arrival keys and the grace-available SQL are each written once** (`bfa4192`)
+    - Review items 7, 8: one helper writes `arrivalStatus`, `minutesLate`, `graceUsed`, `payableTimeIn` (same keys and values); `GRACE_AVAILABLE_SQL` is one constant.
+- **The function behind an admin command takes `&Admin`** (`68a5f1e`)
+    - Review item 4: nine inner functions took the token and checked it themselves; they now take `&Admin`, which only `Admin::check` makes, so calling one without the check does not compile. Same refusal codes; no public command gained a check. `a_function_given_the_token_checks_it` is deleted (no function is given the token). The source-reading test `every_command_checks_the_admin_session_or_is_listed_as_public` is kept, not deleted as first planned: about forty commands do their work in their own body, where the type proves nothing.
+- **One session copy on the Admin page, an explicit `Transport`, `signal` as a parameter, voice through the transport** (`092a851`)
+    - Review items 9, 10, 11, 12: the Admin page derives unlocked and expiry from `useAdminSession()`; `Transport` is an interface both adapters implement; `withAbort`'s module global is gone; the voice panel, `ttsService` and `clonedBeaVoice` go through `api.ts` / `transport()`.
+- **Card taps arrive one way, as key presses** (`174ecac`)
+    - Review item 13 (S7, client half): Rust never emits `rfid-scan` and reports only the `connected` reader state, so `listenForGlobalRfid`, the kiosk's and the Admin page's handlers for it, and the `scanning` / `offline` / `error` labels could never run. Removed. The tests that fed the dead listener now type the card as key presses through `useCardReader`.
+- **The payroll and attendance command tests live in their own files** (`09ce3f4`)
+    - Review item 15: `commands/payroll.rs` 2,589 to 1,481 lines, `commands/attendance.rs` 1,469 to 649; each `mod tests` moved unchanged to `commands/<name>/tests.rs` (only two `include_str!` paths gained `../`). Library tests: 427 before and after.
+- **The card-setup dialog lives in `use-card-setup.ts`** (`86c729e`)
+    - Review item 14: the dialog's state, two timers, session-expiry check, unlock, lookup, save, photo upload and its thirteen inline callbacks moved unchanged into `useCardSetup`. `App.tsx` 1,505 to 1,200 lines.
+
+## Tests removed or rewritten in round 3
+
+- `a_function_given_the_token_checks_it`: no function is given the token any more; the two "wrong token is refused" tests now ask `Admin::check` directly.
+- The tests that stood a card tap in with `emitRfidScan` / a mocked `listenForGlobalRfid` now type the card's characters and Enter. One case lost its spaces: the duplicate-tap test sent `' 04a1b2c3 '` to the native listener; a keyboard reader cannot send spaces, so it now sends `04a1b2c3`.
+
+## Not done (needs the owner, or the production database)
+
+- **S26 to S30, S6**: the employee-scope branches and payroll profiles. Unreachable only while no `EMPLOYEE` row and no pre-migration employee cutoff exists; the production database cannot be read from here.
+- **The typed command boundary (R1)**: one struct per JSON shape and the TypeScript types generated from them. A large change to every command's answer; worth doing, with the owner.
+- **The backup's own schedule**: the backup still runs inside the ID-register pass, so signing the register out stops it. Whether that should change is a product decision.
+- **A screen for the weekly reconciliation report**, or removing the report: it runs every week and nothing reads it.
+- **Admin checks on `lan_start`, `lan_stop`, `autostart_set`, `db_info`, `dtr_recon_get_latest_report`**: public before and after every round. Adding a check changes who can do what at the kiosk: a sign-in decision.
+
